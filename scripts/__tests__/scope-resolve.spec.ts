@@ -277,10 +277,6 @@ describe("resolveScope — inert paths run nothing", () => {
     expectJobs(["README.md"], []);
   });
 
-  it("manual acceptance plan bookkeeping runs nothing", () => {
-    expectJobs(["acceptance/plans/google-productivity-suite.md"], []);
-  });
-
   it("inert + a real package change runs only the package (+ its cross-package edges)", () => {
     expectJobs(["docs/x.md", "site/src/x.ts"], ["site", "tests"]);
   });

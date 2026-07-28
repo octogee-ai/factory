@@ -262,7 +262,7 @@ export interface FleetCapabilities {
   needsStateDeps: boolean;
 }
 
-// The observability-vs-provisioning seam (OPERATOR-GATEWAY-DURABILITY-SPEC §4):
+// Operator gateways report local state but do not receive platform mutation authority:
 // operator gateways can run brokered local reconcile without platformState.
 // Firestore-backed reporting still gates on hasDb; brokered local reconcile does not.
 export function resolveFleetCapabilities(opts: {

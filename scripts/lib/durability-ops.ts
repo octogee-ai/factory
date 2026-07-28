@@ -1,7 +1,6 @@
 import type { Operation, OperationStatus } from "../../shared/types/glm.js";
 
-// Pure helpers for the secret-durability harness's Leg 1 (cattle restore).
-// The harness drives a real pod reroll the same way the admin Fleet panel
+// The durability harness drives a real pod reroll the same way the admin Fleet panel
 // would — by writing a `recycle-gateway` Operation into glmOperations and
 // waiting for Cowboy (glm-controller) to reconcile it (scale 0→1, fresh pod,
 // emptyDir cleared, boot-sync re-materializes). NOT `restart-gateway`, which

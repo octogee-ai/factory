@@ -322,7 +322,6 @@ export const GLOBAL_PREFIX: readonly string[] = ["shared/", "scripts/lib/scope/"
 // dir (e.g. site content) still falls to that package, never inert.
 export function isInert(path: string): boolean {
   if (path.startsWith("docs/")) return true;
-  if (path.startsWith("acceptance/plans/") && path.endsWith(".md")) return true;
   if (/^[^/]+\.md$/.test(path)) return true;
   return false;
 }

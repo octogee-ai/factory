@@ -4,8 +4,8 @@ slug: 11-testing
 order: 11
 part: Dev Workflow
 audience: [agent]
-description: Where tests live, Vitest-only rules, the import-graph coverage audit, live/emulator-spec discipline, and the scripts/ test-gate nuance.
-updated: 2026-07-08
+description: Where tests live and how to choose the smallest signal that catches the changed behavior.
+updated: 2026-07-28
 ---
 
 # Testing
@@ -15,9 +15,8 @@ npm test          # per-package; CI runs them in parallel (no root aggregator)
 npm run typecheck # tsc --noEmit per package
 ```
 
-Vitest everywhere. **No Playwright, no E2E harness.** Manual browser
-walkthroughs go through `app-octogee-test.web.app` + Chrome MCP (or headless
-Chrome screenshots).
+Vitest is the test runner. The site also has a Vitest browser project backed by
+Playwright. Manual signed-in product checks use TEST.
 
 ## Where tests live
 
@@ -40,14 +39,22 @@ a sibling package's `lib/` passes vitest locally but breaks CI's per-package
 `tests/` is for cross-package *pure logic* only. See
 [13 — Repo Conventions](13-repo-conventions.md).
 
-## Relaxed TDD for pure UI
+## Choose tests by behavior and risk
 
-For **pure presentation** changes (no new logic) skip preemptive tests — the
-operator verifies visually in the browser. If an existing UI test breaks because
-a visual detail changed (class name, DOM shape), **update the test to match the
-new design**; don't contort the component to keep old assertions green. Logic
-(hooks, reducers, resolvers, transforms, middleware, handlers) stays
-TDD-mandatory. Reusable primitives with a typed API still get a contract test.
+Start with a failing test for bugs, new logic, state transitions, authorization,
+parsers, handlers, and user interactions. One behavioral test may cover several
+files. Skip new tests for prose, pure deletion, formatting, mechanical renames,
+generated output, and declarative changes already checked by their owning
+parser or linter.
+
+For pure presentation changes, use the browser project or a visual check.
+Update brittle DOM/class assertions when the design intentionally changes.
+Do not add an implementation-detail test merely to satisfy a process ritual.
+
+Assert the behavior a dependency or image stage provides, not its current
+version string or digest. Exact-literal tests that must be updated beside an
+automated dependency bump duplicate the package manager or Docker parser and
+turn routine currency into a false gate.
 
 ## Deciding what to test next — use the tool, never a filename glob
 
@@ -126,16 +133,10 @@ path or `process.execPath`/`process.env.npm_execpath`, never a
 
 ## Verification discipline
 
-- **Never judge a test run through a pipe.** `npm test 2>&1 | grep -E "Tests"`
-  reports *grep's* exit status, not the suite's — a red suite whose output
-  matches the grep looks green. This shipped a broken rules test to CI on
-  #2145. Capture the real exit: `npm test > /tmp/x.log 2>&1; echo "exit: $?"`,
-  then read the log; or trust the summary COUNTS (`N failed`), never pipeline
-  status.
-- **Sweep sibling specs on every behavior flip.** When you change a default,
-  a shape, or a shared derivation, grep ALL specs pinning the old value
-  (including other packages) before running suites — config-pinning
-  assertions are deliberate here, and they will catch you if you don't.
+Use the real command's exit status; a pipe can hide a failing suite. When a
+shared default or shape changes, search for callers and assertions that encode
+the old contract. Run the focused suite and affected package typecheck; let CI
+cover the affected matrix once.
 
 ## The scripts/ test-gate carve-out is narrow
 
@@ -144,11 +145,11 @@ Judge by **blast radius, never the directory**:
 - **No test gate** — genuinely throwaway one-off operator tooling: hand-run
   diagnostics, one-shot migrations, `audit-coverage`, `ds-drift`, seed/reconcile
   helpers. The operator owns that risk.
-- **TDD-mandatory** — critical runtime code that merely *lives* under
+- **Behavioral coverage required** — critical runtime code that merely *lives* under
   `scripts/lib/` and is imported by services / shared across packages
   (`admin-fleet-router.ts`, `config.ts`, `provision-reconcile.ts`, `git.ts`,
   `customer-lifecycle.ts`, …). These are product code; the path grants zero
   exemption.
 
 Before invoking the carve-out, ask: "is this imported by a running service /
-shared across packages / does it mutate prod state?" If yes → TDD.
+shared across packages / does it mutate prod state?" If yes, cover the changed behavior.

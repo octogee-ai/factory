@@ -4,282 +4,72 @@ slug: 12-pr-and-effort-workflow
 order: 12
 part: Dev Workflow
 audience: [agent]
-description: Spec-first for larger efforts, fewer PRs off main, acceptance plans, per-PR review, severity-tiered fixups, and git hygiene.
-updated: 2026-07-23
+description: Small coherent changes, proportional validation, explicit merge authority, and safe git hygiene.
+updated: 2026-07-28
 ---
 
 # PR & Effort Workflow
 
-For one-file / one-bug changes, normal dev flow. This chapter is the process for
-work that **spans more than one PR or touches multiple subsystems**.
+Octogee is pre-customer and operated by one person. Optimize for dependable
+features reaching `main`, not for producing process artifacts.
 
-## Larger efforts
+## Default flow
 
-1. **Spec first** in `docs/specs/`. Lock decisions before coding; the operator
-   confirms the spec. If the spec needs a material change mid-implementation,
-   pause, update it, re-confirm — don't silently drift.
-2. **Fewer, larger, coherent PRs.** Each PR reviewable as one unit of thought.
-   Don't split gratuitously.
-3. **Each PR is a fresh branch off `main`** — never stacked. After a merge:
-   `git checkout main && git pull && git checkout -b <prefix>/<slug>`.
-   - **Exception — hard-dependency PRs must be git-stacked.** If PR B references
-     infra PR A creates *at deploy time* (a K8s Service by name, a Secret, an IAM
-     binding, an Ingress path), stack B on A so GitHub blocks early-merge. A
-     docstring "merge order:" note is not enough. Belt-and-braces: keep B draft
-     until A merges + smoke-validates.
-4. **Per-PR flow:**
-   - Code the feature per the spec (TDD for logic — see [10](10-engineering-principles.md)).
-   - Run the full suite + typecheck locally. Don't push if either is red.
-   - For customer/operator journeys needing live UI proof, add a Browser-driven Markdown
-     plan under [`acceptance/plans/`](../../acceptance/plans/README.md). Keep it at the
-     promise-and-evidence level; the Browser driver owns tool calls.
-   - Open the PR with a body: spec ref, architecture summary, TDD coverage,
-     acceptance-plan ref or concise acceptance steps, explicit non-goals.
-   - **Launch the review agent** (Agent tool, `general-purpose` subagent) using
-     the canonical prompt in [`review_prompt_template`](#review-prompt) — don't
-     re-derive it (criteria drift). Post the review as a PR comment.
-   - **Skip the review agent on fast-iteration / shipping days** — reserve it for
-     the final ship-ready PR. When unsure on a fast day, ask first.
-5. **Implement findings by severity:** **P0** always before requesting review;
-   **P1** if the full set is ≤30 min, else the top 2–3 with one-line deferral
-   each; **P2** defer by default (note in the PR comment).
-6. **Notify** with the PR URL + one-line status. **Do not self-merge** — the
-   operator merges.
-7. **After merge** the operator confirms; then tear down the local branch +
-   worktree (see Git hygiene).
+1. Make one coherent change on a branch from `origin/main`.
+2. Add or update the smallest test that proves changed behavior.
+3. Run that test plus the affected package's typecheck or build when relevant.
+4. Inspect the diff, push, and open one PR with what changed and how it was checked.
+5. The operator merges unless they explicitly delegate merge authority.
 
-## The single-cumulative-PR variant
+Do not create a spec, acceptance-plan document, review agent, council, receipt,
+baseline, rehearsal, or follow-up PR merely because a change touches several
+files. Those are tools for a demonstrated need, not default stages.
 
-When the operator wants to review a coherent multi-feature effort *at once* and
-keep momentum: ONE cumulative PR off `main`, opened early; each feature lands as
-its own green commit (TDD + full suite + tsc + eslint green before each commit);
-run the review agent **once at the end**, not per-feature. Used deliberately for
-the app-shell decomposition (#958). Still no self-merge.
+## When extra process is justified
 
-## Docs & small-config go direct to main
+Use a short spec only when the operator must choose between materially different
+designs or when independent subsystems cannot ship coherently in one PR.
 
-- Pure docs (`docs/`, `README.md`, code comments, CLAUDE.md, this handbook) and
-  small, easily-revertible ops/helm config (e.g. a chart default value) →
-  fresh branch, `git push origin HEAD:main`, **no PR**. Operator policy
-  (2026-07-08): PRs burn Copilot review minutes, which are reserved for final
-  code PRs. Known documentation-only paths are excluded from release CD; they
-  do not build or deploy anything when pushed to `main`.
-- **How this works with branch protection:** `main` requires a PR with status
-  checks (`gitleaks`/`osv-scanner`/`eslint`/`test-gate`) but has
-  `enforce_admins:false` — and agent sessions here run on the operator's admin
-  credentials, so the direct push is an admin bypass that works by design. It
-  skips every check; that's accepted for docs by operator policy. A non-admin
-  push would be rejected.
-- **Carve-out:** anything touching `cloudbuild*.yaml` / `oc-build-matrix.yaml` /
-  `Dockerfile.base` / `entrypoint.sh` goes via branch + PR — those auto-fire a
-  base-image build + TEST release, so a direct push is an unreviewed deploy
-  mutation. Production still requires a version tag. If unsure, PR.
+Ask for an independent review only for a genuinely hard-to-see risk: auth or
+tenant isolation, destructive data work, billing, fleet-wide mutation,
+cryptography, or a large unfamiliar refactor. One independent review is enough.
+CI plus the operator is the normal review path.
+
+Use a live TEST exercise only when the behavior cannot be represented locally
+or in an emulator, or when the requested task is itself an infrastructure/live
+operation. A live check observes the result; it does not become a permanent
+release gate.
+
+Split work into multiple PRs only when each PR is independently useful and the
+split reduces risk or review complexity. Do not invent dependency ceremonies.
+For release-path deletion work, follow the task's one-deletion-per-PR rule.
+
+## Proportional validation
+
+- Behavior change: focused red/green test, affected package typecheck, CI.
+- Cross-package contract: focused tests in each affected owner, affected
+  typechecks, CI.
+- Declarative config/workflow: the parser/linter and focused contract tests
+  that can catch the actual error class.
+- Docs-only: links, stale-reference grep, and diff check; no product test suite.
+- Generated output: regenerate and verify only the owning build's deterministic
+  diff.
+- High-risk mutation/auth/data work: add emulator or integration coverage at the
+  authority boundary and obtain one independent review.
+
+Do not run the entire repository locally when the focused checks already cover
+the change and CI will run the full affected matrix. Do not repeat the same
+suite after every commit. More repetitions of the same signal do not create
+independent confidence.
 
 ## Git hygiene
 
-- **Verify branch + clean status before any git write.** This repo is heavily
-  worktree'd and the operator switches the main checkout's branch mid-work — a
-  bundled verify+commit+push can land work on the wrong branch. Run
-  `git branch --show-current` + `git status --short` as a *separate* step first.
-  Prefer a dedicated worktree for agent PR work.
-- **Cut branches from a freshly-fetched `origin/main`, not local `main`.**
-  Local `main` in this repo is routinely AHEAD of `origin/main` with the
-  operator's unpushed, unrelated in-flight commits — branching off it silently
-  carries those commits into your PR (CI's per-PR lint/eslint runs the whole
-  tree, so an unrelated file can redden your PR). Prefer
-  `git worktree add -b <branch> <path> origin/main` from the start; if you
-  already branched off local main, `git fetch origin main && git rebase
-  --onto origin/main <old-local-main-sha>` and verify `git log --oneline
-  origin/main..HEAD` shows ONLY your commits before opening the PR.
-- **After the operator confirms a merge,** default to cleanup (don't ask):
-  `git checkout main && git pull --ff-only`, then `git branch -d <branch>`.
-  **This repo always squash-merges**, so `-d` will reliably refuse
-  "not fully merged" as a false positive (the branch's commits are never
-  literal ancestors of the squash commit) — that refusal is not evidence of
-  unmerged work. Independently confirm the squash landed
-  (`git log origin/main --oneline | grep '(#<PR>)'` and/or `git show
-  origin/main:<path>` contains the change), then `git branch -D <branch>` —
-  safe once confirmed (content is in `main` + the reflog). Then
-  `git worktree remove <path>` (no `--force`; a dirty tree refusing removal
-  means stop and look, don't force it). Never `-D`/`--force` *without* that
-  positive verification — if you can't confirm the squash landed, surface the
-  state and let the operator decide.
-- **Periodic multi-worktree/branch sweep** (when asked to "clean up local
-  worktrees and branches" — this repo accrues dozens from parallel agents):
-  `git fetch --prune origin` first (refreshes `[gone]` = squash-merged
-  signal). Remove worktrees with no live agent process attached (check via
-  `lsof`) and no uncommitted source edits; re-check liveness at removal time,
-  not just at sweep start. Delete branches that are an ancestor of
-  `origin/main`, `[gone]` upstream, or pushed-with-zero-ahead (all
-  recoverable). **Never** auto-delete a branch whose tip is absent from both
-  `origin/main` and any remote — that is the only truly unrecoverable
-  deletion; surface it and let the operator decide. Never touch a checked-out
-  branch's worktree or kill a live agent process.
-- **No CI sleep-polling.** After pushing, do at most one `gh pr checks` snapshot,
-  report, and stop. The operator drives the merge. For a genuine wait, use
-  ScheduleWakeup, not a foreground sleep loop.
+- Before a git write, check the current branch and `git status`.
+- Branch from freshly fetched `origin/main`; do not inherit unrelated local commits.
+- Preserve unrelated changes in shared worktrees. Prefer a dedicated worktree.
+- Never force-delete a dirty worktree or an unpushed branch.
+- After push, take one CI snapshot. Do not foreground-poll Actions.
+- After a confirmed squash merge, remove the dedicated worktree and branch.
 
-## Supervised subagents & the council of experts
-
-Larger efforts are delegated to coding subagents working under a supervisor,
-fanned out across **Sonnet 5** (Claude Agent tool) and **Codex gpt-5.5 at
-xhigh effort** (`codex exec --full-auto -m gpt-5.5 -c
-model_reasoning_effort="xhigh" --cd <worktree> "<task>"`) as work is spec'ed.
-Standing operator grant (2026-07-08): **auto-completion approved** — once the
-council review passes, the supervisor pushes the branch, opens the PR, and
-drives review fixups without waiting for operator sign-off. The operator
-still merges. The contract:
-
-- **Isolation:** every subagent works in its OWN git worktree on a fresh
-  branch off `origin/main` (`git worktree add .claude/worktrees/<name> -B
-  <branch> origin/main`). A subagent must verify it is not sitting in a shared
-  checkout before touching anything — two writers in one worktree trample each
-  other's branch state.
-- **No-push protocol:** the subagent implements with full TDD, commits
-  locally, and does NOT push or open a PR. Its final report is the
-  deliverable: what it built + deviations (with whys), UI states for visual
-  review, discoveries affecting future design passes, per-suite pass counts
-  with REAL exit codes, and commit hashes.
-- **Council of experts review:** the supervisor reviews every report twice —
-  once itself with full codebase context, and once via an independent Codex
-  CLI review from the agent's worktree:
-
-  ```
-  cd <agent worktree> && codex exec -m gpt-5.5 -c model_reasoning_effort="xhigh" "<review brief>" < /dev/null
-  ```
-
-  Invocation gotchas, learned the hard way: **always close stdin
-  (`< /dev/null`)** — `codex exec` appends piped stdin to the prompt and a
-  backgrounded shell's open stdin pipe makes it wait for EOF forever (four
-  council runs sat 2–3 hours doing nothing). Don't pipe its output through
-  `tail`/`grep` either — you lose live progress. The `codex exec review`
-  subcommand is unsuitable for council briefs: it rejects `--cd` and its
-  `--base` flag is mutually exclusive with a custom prompt; use plain
-  `codex exec` and have the brief run `git diff origin/main...HEAD` itself.
-
-  Pin the model and effort explicitly (`xhigh` is the CLI's max tier). The
-  operator's standing call: the expert second review is **almost always worth
-  it — time is the constraint, not tokens** — so default to running it on any
-  nontrivial diff (your own included), skipping only when wall-clock genuinely
-  forbids. Every finding from EITHER reviewer is re-verified against the code
-  before acting;
-  genuine disagreements go to the operator with both opinions, never a silent
-  tiebreak. Only after the council passes does the supervisor push and open
-  the PR (which then gets the normal per-PR review below).
-
-<a id="review-prompt"></a>
-## Review-agent prompt template
-
-The canonical per-PR review prompt. Use it verbatim (fill the {braces}) —
-re-deriving it each time causes criteria drift.
-
-```
-You are reviewing PR #{N} in the Octogee monorepo at {repo path}.
-
-Context:
-- Spec: {path to docs/ spec file}
-- This PR: {one-line description}
-- Branch: {branch-name}
-- Prior PRs on this epic: {list of merged PR numbers, or "none"}
-
-Your job: read the PR like a senior engineer who did not write it. Produce a
-review in three sections.
-
-1. **Findings**, each tagged with severity:
-   - **P0 — blocker**: correctness bug, security hole, broken invariant,
-     regression, spec violation that changes behavior.
-   - **P1 — should-fix**: maintainability issue, unclear code, missing test,
-     minor drift from spec, documentation gap.
-   - **P2 — nice-to-have**: style, naming, refactor suggestion, future
-     consideration.
-
-   For each finding: file:line reference, one-paragraph description, and
-   concrete suggested change.
-
-2. **What's right.** One paragraph. Not cheerleading — note genuinely good
-   decisions worth preserving. This calibrates the review and confirms you
-   actually read the code.
-
-3. **Summary verdict.** One of: "merge as-is", "merge after P0 fixes",
-   "merge after P0+P1 fixes", "needs redesign discussion."
-
-Review criteria, weighted by PR type — match the emphasis before reading:
-| PR type | Heavy weight | Light weight |
-|---|---|---|
-| Docs | Spec coherence, internal consistency, clarity | Security, scalability |
-| Pure deletion | Orphan references, coverage of removed surface, is anything still calling it, rules changes | Scalability, performance |
-| Refactor | Behavior preservation, test coverage, API stability for callers | New architecture concerns |
-| Feature | Completeness vs spec, security, scalability, maintainability, test coverage | (none — full review) |
-| Migration/provisioning | MM + Gitea + Secret Manager interaction correctness, idempotency, failure mode, rollback, telemetry | Style |
-
-All PR types: check prior-PR continuity — did this PR contradict or undo
-something from recent merged PRs?
-
-Fetch the diff:
-  gh pr diff {N}
-  gh pr view {N} --json body,commits,files
-
-Diff ONLY via `gh pr diff {N}` (merge-base / three-dot). NEVER a two-dot
-`git diff` against a possibly-drifted base — it renders commits that landed on
-main after the branch point as phantom reverts. Cross-check the file list with
-`gh pr view {N} --json files` before asserting any file is touched.
-
-Scope guardrails:
-- Read the full diff. Do not skim.
-- Check the spec at the referenced path — flag any drift.
-- Flag orphan references: grep for names/paths/functions deleted or renamed.
-- If the PR touches Firestore rules, confirm firestore-rules-tests/ covers
-  the new surface.
-- Server-trusted field on a client-writable doc ⇒ check the rules even if the
-  PR didn't touch them (the API write-gate is bypassable via a direct client
-  SDK write — an unprotected server-trusted field is a P0 confused-deputy).
-- A proposal to deny client READ of `users/{uid}/*` (own-uid path) is usually
-  the wrong fix, not a missing one — the data IS the user's own, they're
-  authenticated as themselves, and the actual secret material (API keys)
-  lives in Secret Manager, never Firestore. The right fix for an
-  over-exposed field (a key fingerprint, a secret name) is hiding it in the
-  UI render, not restricting the read at the rules layer.
-- New variant on a shared abstraction ⇒ audit EVERY consumer, not just the
-  changed files (sibling consumers silently accept the new variant and
-  mis-operate). Binary if/else branches over a widened union deserve special
-  attention.
-- Field RELOCATION ⇒ re-check read PRECEDENCE, not just presence — a value
-  that used to be absent (fallback fired) can become present-but-defaulted
-  and silently win in `a || b` resolution chains.
-- If the PR touches notifications / fan-out / any async pipeline, confirm
-  idempotency and the dedup story.
-- New internal broker endpoint (an in-process op relocated behind an HTTP
-  route) ⇒ treat it as a fresh trust boundary: does it re-validate every input
-  the in-process caller used to implicitly guarantee (e.g. an
-  already-slug-validated caller vs. a raw HTTP body)? Does it fail loud on
-  misconfiguration (never a silent 200 no-op)? Does the guarding credential's
-  reach match what's claimed, and does it carry BOTH its npm deps and its
-  env/secrets onto the new host (a relocated op can 200 while silently
-  no-op'ing if either is missing)?
-- New controller-side Kubernetes call (Cowboy/glm-controller, octogee-api)
-  ⇒ a live `kubectl` test from your own laptop context proves nothing about
-  RBAC — your context is cluster-admin, the controller runs under a
-  least-privilege Helm `Role`. Confirm the Role grants the exact
-  resource+subresource+verb (`pods/exec`, `deployments/scale`, `pods/log` are
-  each separate grants, not implied by the parent resource) via a
-  helm-template test, not a live probe.
-- Do not rewrite the PR. Suggest changes; don't produce replacement files.
-
-Return plain markdown, 400–1200 words depending on PR size. Don't pad.
-```
-
-**Fixup phase, by severity:** P0 always before requesting operator review.
-P1 if the full set is under ~30 minutes; else fix the most valuable 2–3 and
-defer the rest with one-line justifications. P2 deferred by default, captured
-in the PR comment ("noted, not addressing") with one-line reasons. Post a
-fixup-summary PR comment (P0 addressed / P1 addressed / Deferred), then notify
-the operator with the PR URL and a one-line status. Re-verify every review
-finding against the CURRENT branch head before acting — reviews of an earlier
-push go stale. After posting the PR, poll Copilot's review comments and
-address or answer each inline finding — but the near-universal
-`copilot-pull-request-reviewer` PR-level comment "unable to review... reached
-their quota limit" has no `comment_id` and nothing to act on; confirm zero
-real inline threads (`gh api repos/.../pulls/<n>/comments`) and move on rather
-than treating it as a finding.
-
-Related: [10 — Engineering Principles](10-engineering-principles.md), [11 — Testing](11-testing.md), [13 — Repo Conventions](13-repo-conventions.md).
+Related: [10 — Engineering Principles](10-engineering-principles.md),
+[11 — Testing](11-testing.md), [13 — Repo Conventions](13-repo-conventions.md).

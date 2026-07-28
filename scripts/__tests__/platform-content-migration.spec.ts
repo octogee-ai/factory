@@ -381,15 +381,4 @@ describe('platform content migration plan', () => {
     expect(source).not.toContain('PLATFORM_CONTENT_MIGRATION_COPY_IMAGE')
   })
 
-  it('documents deterministic image provenance for TEST and PROD plus the generated WEST context', () => {
-    const handbook = fs.readFileSync(path.join(process.cwd(), '../docs/handbook/40-credential-rotation.md'), 'utf8')
-    const environments = fs.readFileSync(path.join(process.cwd(), '../docs/handbook/20-environments.md'), 'utf8')
-
-    expect(handbook).toContain('exact-release operator image')
-    expect(handbook).toContain('test-central/test-west and prod-central/prod-west')
-    expect(handbook).not.toContain('PLATFORM_CONTENT_MIGRATION_COPY_IMAGE')
-    expect(environments).toContain('gke_octogee_us-west1_octogee-gateway')
-    expect(environments).toContain('Migration operators use the\n' +
-      'generated context from the deployment-target registry')
-  })
 })

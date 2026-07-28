@@ -229,12 +229,6 @@ describe("deployment target consumers", () => {
     ]) {
       expect(source(path), path).not.toContain(resetScript);
     }
-
-    const handbook = source("docs/handbook/40-credential-rotation.md");
-    expect(handbook).toContain("Platform-region migration only");
-    expect(handbook).toContain("reset-platform-builder-credentials.ts");
-    expect(handbook).toContain("ordinary gateway");
-    expect(handbook).toContain("content fingerprint");
   });
 
   it("loads setup and verification topology from the shell target contract", () => {
@@ -442,40 +436,6 @@ describe("deployment target consumers", () => {
     expect(controlPlane).toContain(
       'member  = "serviceAccount:${google_service_account.github_actions.email}"',
     );
-  });
-
-  it("documents Central snapshots and retired West recovery proofs", () => {
-    const handbook = source("docs/handbook/53-observability-and-data.md");
-    const security = source("docs/operations/SECURITY.md");
-
-    expect(handbook).toContain("reconcile-pvc-snapshot-schedules.sh");
-    expect(handbook).toContain("octogee-central-pvc-daily");
-    expect(handbook).toContain("Retired WEST recovery proofs");
-    expect(handbook).not.toContain("./scripts/ops/prove-west-pvc-restore.sh");
-    expect(handbook).not.toContain("./scripts/ops/prove-west-cloud-sql-recovery.sh");
-    expect(handbook).toContain("14-day retention");
-    expect(handbook).toContain("applies that retention window after source-disk deletion");
-    expect(handbook).not.toContain("Not yet automated (TODO):** daily scheduled snapshots");
-    expect(security).toContain("octogee-west-pvc-daily");
-    expect(security).toContain("Retired WEST recovery proof");
-    expect(security).not.toContain("scripts/ops/prove-west-pvc-restore.sh");
-    expect(security).not.toContain("Current:** Manual snapshots for durable PVCs only");
-  });
-
-  it("documents two-phase secret rotation with bounded superseded versions", () => {
-    const rotation = source("docs/handbook/40-credential-rotation.md");
-    const retention = source("docs/operations/DATA-RETENTION.md");
-
-    for (const contents of [rotation, retention]) {
-      expect(contents).toContain("prune-secret-manager-versions.sh");
-      expect(contents).toContain("provider-side");
-    }
-    expect(rotation).toContain("--project=octogee-data-test");
-    expect(rotation).toContain("--confirm=octogee/secret-versions/octogee-data-test");
-    expect(rotation.toLowerCase()).toContain("after every consumer has been verified");
-    expect(rotation).toContain("Builder-owned credentials are excluded");
-    expect(retention).toContain("Builder-owned credential versions are excluded");
-    expect(rotation).not.toContain("never part of teardown/rebuild");
   });
 
   it("keeps regional bootstrap state isolated after target activation", () => {

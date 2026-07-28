@@ -4,7 +4,7 @@ slug: 13-repo-conventions
 order: 13
 part: Dev Workflow
 audience: [agent]
-description: No npm workspaces, per-package build, the lint ratchet, fix-code-not-rules, CI per-workspace installs, verified open-source release currency, and GHAS-via-UI.
+description: Standalone package builds, internal package links, lint, dependencies, and repository settings.
 updated: 2026-07-11
 ---
 
@@ -59,55 +59,20 @@ stale installed package and must not change a lock. Dockerfiles copy each requir
 internal package's `package.json` and `dist/`, plus the consumer `.npmrc`, before
 installing dependencies.
 
-## Dependency currency — verified coverage, not configured intent
+## Dependencies
 
-The target is the newest published stable major/minor/patch for every directly
-controlled open-source component, with weekday discovery, immediate security work,
-immutable artifacts, human promotion, and an explicit TEST gate for dependency and
-stateful upgrades. The implementation contract is
-[`OSS-RELEASE-CURRENCY-SPEC.md`](../specs/OSS-RELEASE-CURRENCY-SPEC.md).
+Use a current stable version when adding or intentionally upgrading a
+dependency. Apply security updates promptly and batch routine currency work;
+do not create a standing ceremony or bump unrelated packages on touch.
+Stateful-service upgrades deserve a focused rollback check because their data
+may not roll back with the image.
 
-The current tools do **not** yet provide full coverage:
+## Lint
 
-- Dependabot handles most npm packages and GitHub Actions, but misses eight tracked
-  npm lockfile directories, four Dockerfile directories, and all Terraform providers.
-- Renovate is configured for only Mattermost/Gitea Helm pins and has not yet passed its
-  activation probe. Configuration without a Dependency Dashboard/test PR is not coverage.
-- OSV scans every committed npm lockfile and Trivy scans images/IaC, but detection alone
-  does not create or safely promote every update.
-
-Until the companion spec lands, do not describe the repository as fully update-managed.
-Stateful services remain isolated, human-reviewed changes because rollback requires a
-database restore, not a tag revert. A Gitea update will move as one verified pin group:
-chart/archive, explicit chart-appVersion image tag, and the matching rootless image digest.
-
-## Lint is the moat — fix the code, not the rule
-
-Lint rules (complexity, max-lines, nested-conditional, exhaustive-deps,
-no-dead-store) keep the codebase small enough for one operator to run lights-out
-and for agents to edit with fewer mistakes.
-
-- **Default: refactor the code.** Extract functions for complexity; early-returns
-  for nested ternaries; `unknown` + type guards instead of `any`.
-- **Never relax the rule or raise the threshold** to drop a warning count. (A
-  bulk rule-disable to go 1216→300 was rejected — the long-form refactor is the
-  path.) Only acceptable suppression: a per-line `eslint-disable-next-line` with
-  a specific reason, or a true false-positive where the rule's intent doesn't
-  apply. When unsure, ask before disabling.
-
-**Read the real lint ratchet — never assume it.** The eslint gate is
-`npm run lint -- --max-warnings=<N>` in `.github/workflows/lint.yml`, and **N
-ratchets down** over time. Before claiming the gate passes (or sizing a "is this
-small" judgment), `grep max-warnings .github/workflows/lint.yml` on the current
-branch and compare the real `eslint .` count against *that* number. If over by
-N, fix N warnings at the source — don't bump the ratchet up.
-
-**Lint the full changed-file set, not just the obvious source dir.** CI runs
-`eslint .` over every workspace, including build tooling (`.mjs` generators,
-`scripts/`) — not just `app/*.tsx`. Scoping a local lint pass to "the app
-source I touched" has missed a generated bundle and a `.mjs` generator's
-`sonarjs`/`security/*` warnings twice. Before pushing, lint every file you
-added or changed (or run the real `eslint .`), not a hand-picked subset.
+Run the owning package's lint when code changes. Fix new warnings in the code;
+do not weaken a rule or raise a threshold merely to make the count pass. A
+targeted suppression is acceptable for a real false positive with a short
+reason. CI owns the repository-wide lint pass.
 
 ## Platform settings via the GitHub UI
 

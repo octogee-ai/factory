@@ -9,7 +9,7 @@ Container image for the OpenClaw gateway + Firestore provisioner. Deployed to GK
 ## What it does
 
 - Runs the OpenClaw gateway hosting all customer AI agents
-- Connects to Mattermost for customer chat (via chat-proxy)
+- Connects to Mattermost for customer chat through gateway-edge
 - Watches Firestore — auto-provisions workspaces when customers sign up
 - No manual steps, no container restart needed for new customers
 
@@ -73,4 +73,4 @@ cd infra/gateway && ./setup.sh
 
 - [docs/architecture/GATEWAY-PLATFORM-SPEC.md](../../docs/architecture/GATEWAY-PLATFORM-SPEC.md) — gateway platform model
 - [docs/operations/RUNBOOK.md](../../docs/operations/RUNBOOK.md) — operations runbook (cluster map, deploy, troubleshooting)
-- [docs/operations/MATTERMOST.md](../../docs/operations/MATTERMOST.md) — chat-proxy + Mattermost architecture
+- [docs/operations/MATTERMOST.md](../../docs/operations/MATTERMOST.md) — gateway-edge + Mattermost architecture

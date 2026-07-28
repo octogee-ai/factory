@@ -4,7 +4,7 @@ slug: 10-engineering-principles
 order: 10
 part: Dev Workflow
 audience: [agent]
-description: How we write code here — TDD, no silent failures, fix root cause, greenfield (code vs. real user data), no narrative comments, paying down debt net-first, calibrated effort.
+description: Reliable code with risk-based tests, explicit failures, root-cause fixes, and proportional effort.
 updated: 2026-07-08
 ---
 
@@ -15,25 +15,23 @@ operator is on call for every silent failure.
 
 ## Core
 
-- **TDD is mandatory, not aspirational.** Every code change starts with a
-  failing test. RED → GREEN → refactor. Applies to logic, route handlers,
-  components, and bug fixes equally. For a bug fix: write the test that
-  reproduces the bug, watch it fail, fix, watch it pass.
+- **Test changed behavior, not files.** Start with a failing test for a bug,
+  new logic branch, state transition, authorization boundary, parser, handler,
+  or user interaction. One test may cover several implementation files. New
+  tests are not required for prose, generated output, pure deletion, mechanical renames,
+  formatting, or declarative changes already checked by the owning
+  parser/linter. Do not create an implementation-detail test to satisfy a ritual.
 - **No silent failures.** Every error path is explicit and observable — a log,
   a response code, or a thrown error. "If this fails, will I know immediately?"
   If not, add explicit handling.
-- **No defensive guards or fall-through patterns.** Don't code around a
-  double-firing trigger or mis-shaped data — fix the upstream bug. Guards are
-  acceptable only when they're a documented architectural pattern. Avoid
-  `config = a ? 'B' : c || 'D'` ternary chains.
+- **Do not mask upstream bugs.** Validate untrusted input and external-system
+  responses at trust boundaries. Inside owned code, fix double firing or
+  malformed state at its source instead of accumulating fallbacks that hide it.
 - **Fix root cause, not symptom.** Flaky test → find the race. Drifting config
   → fix the source.
 
-**Red flags that mean TDD was skipped** (stop and correct):
-- Implementation written first, "tests added after" — that's verification, not TDD.
-- "Too simple for a test" — if it's simple, the test is simple; write it.
-- "I type-checked it" — types catch signatures, not behavior.
-- "I verified it works" without naming a specific test — not actually verified.
+The question is not “did every file get a new test?” It is “what could this
+change break, and what is the cheapest signal that would catch that break?”
 
 ## Greenfield posture
 
@@ -68,22 +66,13 @@ Pre-broad-customer, breaking changes are cheap and correctness is the priority.
   (`if test then chat-test… else chat…`). Derive from K8s/Helm/env. Cattle, not
   pets.
 
-## Dependency posture — ride latest, fail loud
+## Dependency posture
 
-- New deps land at `^<latest>`; existing deps get bumped on touch. "Pinned to vN"
-  without a stated reason is a smell — pre-customer we trade dependency volatility
-  for fewer accumulated CVEs.
-- If `npm ci`/CI breaks on latest, **investigate why** — never pin back to silence
-  it. A red CI on a fresh install is a signal. (Verify a fresh install + test pass
-  for native/build-sensitive deps like node-pty before merging the bump.)
-- A green local install is **not** evidence for a native dep: npm 12 refuses a
-  dependency's install scripts unless `package.json`'s `allowScripts` names it, and
-  most CI jobs run the runner's bundled npm, which predates that gate. Only the
-  `scripts` job pins the gateway image's npm (read from `Dockerfile.base`), so it is
-  the one that fails on a missing decision; every other job would sail past it. Any
-  new dependency with an install script needs an `allowScripts` decision —
-  `scripts/.npmrc`'s `strict-allow-scripts` and the gateway image's
-  `verify-native-modules` gate are what make a missing one loud (#2834).
+Use a current stable version when adding or intentionally upgrading a
+dependency. Do not bump unrelated dependencies merely because a file was
+touched. Security updates are prompt; routine currency is batched. Native
+dependencies need a clean install/build check because install-script policy is
+part of their runtime contract.
 
 ## Paying down debt: net-first, then cut
 
@@ -92,23 +81,18 @@ coverage inversely correlated with churn × criticality. When tackling a
 tangled/high-blast-radius file, write the characterization test (pin the
 intended behavior, mock at the seams so it survives the refactor) for the
 highest churn×blast-radius file **first**; the refactor/split/lint cleanup
-falls out cheaply and safely once the net is in place. Don't fix latent bugs
-found *inside* a behavior-preserving refactor — queue them as separate
-root-cause PRs so the refactor stays reviewable as one unit of thought. Use
+falls out cheaply and safely once the net is in place. Do not let a refactor
+expand into an unrelated program. A nearby clear defect may be fixed in the
+same PR when it is small and covered; otherwise report it. Use
 the import-graph coverage audit ([11 — Testing](11-testing.md)) to find the
 next target — never a filename glob.
 
 ## Reusable atoms over inline one-offs
 
-When the same visual or interaction pattern (spinner, button variant, modal,
-empty state, …) appears a **third** time, stop and extract a reusable
-primitive instead of shipping a fourth inline copy — first and second
-occurrences are fine to leave inline. Sweep the existing call-sites onto the
-new primitive in the same PR; don't leave half the codebase on the old
-pattern. API shape: `size`/`tone`-style props for the ~90% case with
-`className` passthrough for outliers, not every internal knob exposed.
-Reusable primitives with a typed API still get a contract test even under
-the relaxed-TDD-for-UI rule ([11 — Testing](11-testing.md)).
+Extract a reusable primitive when repetition is causing drift or slowing the
+current change. There is no “third occurrence” mandate and no requirement to
+sweep every caller in the same PR. Prefer a small typed API when extraction
+actually earns its keep.
 
 ## Calibrated effort
 

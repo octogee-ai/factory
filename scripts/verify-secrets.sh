@@ -13,7 +13,7 @@ set -euo pipefail
 # that must fail closed before a release is considered operational:
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
 #   - gateway-edge/values.yaml          (optional: false)
-#   - chat-proxy/values.yaml             (optional: false)
+#   - gateway-edge/values.yaml           (optional: false)
 #   - gateway-edge/templates/cronjob-*  (secretKeyRef)
 #
 # Usage:
@@ -83,7 +83,6 @@ esac
 # Keep in sync with:
 #   helm/octogee/charts/gateway/templates/deployment.yaml
 #   helm/octogee/charts/gateway-edge/values.yaml
-#   helm/octogee/charts/chat-proxy/values.yaml
 #   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it
@@ -97,7 +96,7 @@ REQUIRED_SECRETS=(
   "connect-state-secret"     # octogee-api: OAuth state HMAC
   "gitea-token"             # octogee-api + glm-controller
   "approval-signing"        # gateway-edge activity bridge callback HMAC
-  "agent-control-signing"        # chat-proxy: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
+  "agent-control-signing"        # gateway-edge: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
   "agent-control-router"    # private Mattermost callback-router → gateway-edge HMAC
   "byot-sync-internal"      # octogee-api → gateway-edge BYOT sync HMAC
 )

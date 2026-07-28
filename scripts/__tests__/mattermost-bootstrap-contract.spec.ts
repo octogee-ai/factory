@@ -118,12 +118,6 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     ).toThrow("Plan contains an unauthorized change: google_secret_manager_secret_iam_member.unexpected");
   });
 
-  it("documents the foundation IAM apply required before the release can read the password", () => {
-    expect(read("docs/handbook/21-deploy-and-cicd.md")).toContain(
-      "apply the WEST foundation Terraform before tagging",
-    );
-  });
-
   it("makes the environment verifier prove the authenticated administrator contract", () => {
     const verify = read("scripts/verify-env.sh");
 
