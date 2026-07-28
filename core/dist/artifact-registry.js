@@ -276,7 +276,8 @@ function packagesBaseForCoordinates(coordinates) {
         `/locations/${coordinates.location}/repositories/${coordinates.repository}/packages`);
 }
 function versionResource(coordinates, packageName, digest) {
-    return `${packagesBaseForCoordinates(coordinates)}/${packageName}/versions/${digest}`;
+    return `projects/${coordinates.project}/locations/${coordinates.location}` +
+        `/repositories/${coordinates.repository}/packages/${packageName}/versions/${digest}`;
 }
 function digestFromVersion(value, description) {
     if (typeof value !== "string")

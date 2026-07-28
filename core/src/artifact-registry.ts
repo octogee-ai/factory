@@ -444,7 +444,8 @@ function versionResource(
   packageName: string,
   digest: string,
 ): string {
-  return `${packagesBaseForCoordinates(coordinates)}/${packageName}/versions/${digest}`;
+  return `projects/${coordinates.project}/locations/${coordinates.location}` +
+    `/repositories/${coordinates.repository}/packages/${packageName}/versions/${digest}`;
 }
 
 function digestFromVersion(value: unknown, description: string): string {

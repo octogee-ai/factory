@@ -366,6 +366,11 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     });
     expect(urls[2]).toContain("/v2/octogee/octogee/release-digest-manifest/blobs/");
     expect(urls[4]).toContain("tagId=aaaaaaa-oc2026.7.1");
+    expect(fetchMock.mock.calls[4]?.[1]).toMatchObject({
+      body: JSON.stringify({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/octogee-gateway/versions/${gatewayDigest}`,
+      }),
+    });
   });
 
   it("rejects an alias race when the persisted target is not the manifest digest", async () => {
