@@ -73,6 +73,25 @@ export interface GatewayRestartRequestResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayChannelOperationParams {
+  channel: string;
+  accountId: string;
+}
+
+export interface GatewayChannelStopResult {
+  channel: string;
+  accountId: string;
+  stopped: true;
+  [extra: string]: unknown;
+}
+
+export interface GatewayChannelStartResult {
+  channel: string;
+  accountId: string;
+  started: true;
+  [extra: string]: unknown;
+}
+
 export interface GatewaySessionSummary {
   key: string;
   agentId?: string;
@@ -133,7 +152,14 @@ export interface GatewayRpcClient {
     baseHash: string,
     opts?: { replacePaths?: readonly string[] },
   ): Promise<ConfigPatchResult>;
+  configPatchAndWaitForChange(
+    patch: object,
+    baseHash: string,
+    opts?: { replacePaths?: readonly string[] },
+  ): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
+  channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
+  channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string }): Promise<GatewaySessionsListResult>;
@@ -148,6 +174,88 @@ export interface GatewayRpcClient {
 }
 
 type GatewayRpcCall = (method: string, params: unknown) => Promise<unknown>;
+
+function configChangedHash(data: unknown): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      typeof data === "string"
+        ? data
+        : (data as { toString: (encoding?: string) => string }).toString("utf-8"),
+    );
+  } catch {
+    return null;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (parsed as { type?: unknown }).type !== "event" ||
+    (parsed as { event?: unknown }).event !== "config.changed"
+  ) {
+    return null;
+  }
+  const hash = (parsed as { payload?: { hash?: unknown } }).payload?.hash;
+  return typeof hash === "string" && hash.length > 0 ? hash : null;
+}
+
+function trackConfigChange(ws: WebSocket): {
+  waitFor: (hash: string, timeoutMs: number) => Promise<void>;
+  close: () => void;
+} {
+  const changedHashes = new Set<string>();
+  const waiters = new Map<string, Set<() => void>>();
+  const onMessage = (data: unknown) => {
+    const hash = configChangedHash(data);
+    if (!hash) return;
+    changedHashes.add(hash);
+    for (const resolve of waiters.get(hash) ?? []) resolve();
+    waiters.delete(hash);
+  };
+  ws.on("message", onMessage);
+  return {
+    waitFor(hash, timeoutMs) {
+      if (changedHashes.has(hash)) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              "timeout",
+              `config.changed for persisted hash ${hash} timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        const onClose = () => {
+          cleanup();
+          reject(
+            new OpenclawWireError(
+              "connect-failed",
+              `socket closed before config.changed published hash ${hash}`,
+            ),
+          );
+        };
+        const accepted = () => {
+          cleanup();
+          resolve();
+        };
+        function cleanup() {
+          clearTimeout(timer);
+          ws.removeListener("close", onClose);
+          waiters.get(hash)?.delete(accepted);
+        }
+        const hashWaiters = waiters.get(hash) ?? new Set();
+        hashWaiters.add(accepted);
+        waiters.set(hash, hashWaiters);
+        ws.on("close", onClose);
+        if (changedHashes.has(hash)) accepted();
+      });
+    },
+    close() {
+      ws.removeListener("message", onMessage);
+      waiters.clear();
+    },
+  };
+}
 
 async function writeConfig(
   call: GatewayRpcCall,
@@ -186,6 +294,123 @@ async function writeConfig(
   }
 }
 
+function formatConnectTrace(trace: ConnectTrace): string {
+  const phases = [
+    trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
+    trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
+    trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const outcome = trace.success
+    ? "OK"
+    : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
+  return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
+}
+
+function createDefaultConnectTraceHandler(
+  traceVerbose: boolean,
+  slowTraceMs: number,
+  failureSampleMs: number,
+): (trace: ConnectTrace) => void {
+  let lastFailureKey = "";
+  let lastFailureLogAt = 0;
+  let suppressedFailures = 0;
+
+  return (trace: ConnectTrace) => {
+    if (traceVerbose) {
+      defaultLog(formatConnectTrace(trace));
+      return;
+    }
+
+    if (trace.success) {
+      if (suppressedFailures > 0) {
+        defaultLog(`${formatConnectTrace(trace)} (recovered after ${suppressedFailures} suppressed failures)`);
+        suppressedFailures = 0;
+        lastFailureKey = "";
+      } else if (trace.totalMs >= slowTraceMs) {
+        defaultLog(formatConnectTrace(trace));
+      }
+      return;
+    }
+
+    const now = Date.now();
+    const failureKey = `${trace.stage}:${trace.errorCode}:${trace.errorMessage ?? ""}`;
+    const shouldLog =
+      failureKey !== lastFailureKey ||
+      lastFailureLogAt === 0 ||
+      now - lastFailureLogAt >= failureSampleMs;
+
+    if (shouldLog) {
+      const suffix = suppressedFailures > 0 ? ` (suppressed ${suppressedFailures} similar failures)` : "";
+      defaultLog(`${formatConnectTrace(trace)}${suffix}`);
+      lastFailureKey = failureKey;
+      lastFailureLogAt = now;
+      suppressedFailures = 0;
+    } else {
+      suppressedFailures++;
+    }
+  };
+}
+
+interface ConfigPatchConnectionOptions {
+  url: string;
+  auth: GatewayRpcAuth;
+  connectTimeoutMs: number;
+  callTimeoutMs: number;
+  identity: DeviceIdentity;
+  scopes: string[];
+  onConnectTrace: (trace: ConnectTrace) => void;
+}
+
+async function patchConfigAndWaitForChange(
+  connection: ConfigPatchConnectionOptions,
+  patch: object,
+  baseHash: string,
+  replacePaths?: readonly string[],
+): Promise<ConfigPatchResult> {
+  const ws = await openAndConnect({
+    url: connection.url,
+    ...connection.auth,
+    connectTimeoutMs: connection.connectTimeoutMs,
+    identity: connection.identity,
+    scopes: connection.scopes,
+    onConnectTrace: connection.onConnectTrace,
+  });
+  const change = trackConfigChange(ws);
+  const connectedCall: GatewayRpcCall = async (method, params) =>
+    await sendWsRequest({
+      ws,
+      id: randomUUID(),
+      method,
+      params,
+      timeoutMs: connection.callTimeoutMs,
+    });
+  try {
+    const result = await writeConfig(
+      connectedCall,
+      "config.patch",
+      patch,
+      baseHash,
+      replacePaths,
+    );
+    if (result.noop === true) return result;
+    if (!result.hash) {
+      throw new OpenclawWireError(
+        INVALID_RESPONSE,
+        "config.patch payload missing `hash` required for config.changed correlation",
+      );
+    }
+    await change.waitFor(result.hash, connection.callTimeoutMs);
+    return result;
+  } finally {
+    change.close();
+    try {
+      ws.close();
+    } catch { /* */ }
+  }
+}
+
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
   const url =
     opts.url ??
@@ -197,60 +422,10 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
   const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
   const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
-  let lastFailureKey = "";
-  let lastFailureLogAt = 0;
-  let suppressedFailures = 0;
-
-  function formatConnectTrace(trace: ConnectTrace): string {
-    const phases = [
-      trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
-      trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
-      trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const outcome = trace.success
-      ? "OK"
-      : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
-    return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
-  }
 
   const onConnectTrace =
     opts.onConnectTrace ??
-    ((trace: ConnectTrace) => {
-      if (traceVerbose) {
-        defaultLog(formatConnectTrace(trace));
-        return;
-      }
-
-      if (trace.success) {
-        if (suppressedFailures > 0) {
-          defaultLog(`${formatConnectTrace(trace)} (recovered after ${suppressedFailures} suppressed failures)`);
-          suppressedFailures = 0;
-          lastFailureKey = "";
-        } else if (trace.totalMs >= slowTraceMs) {
-          defaultLog(formatConnectTrace(trace));
-        }
-        return;
-      }
-
-      const now = Date.now();
-      const failureKey = `${trace.stage}:${trace.errorCode}:${trace.errorMessage ?? ""}`;
-      const shouldLog =
-        failureKey !== lastFailureKey ||
-        lastFailureLogAt === 0 ||
-        now - lastFailureLogAt >= failureSampleMs;
-
-      if (shouldLog) {
-        const suffix = suppressedFailures > 0 ? ` (suppressed ${suppressedFailures} similar failures)` : "";
-        defaultLog(`${formatConnectTrace(trace)}${suffix}`);
-        lastFailureKey = failureKey;
-        lastFailureLogAt = now;
-        suppressedFailures = 0;
-      } else {
-        suppressedFailures++;
-      }
-    });
+    createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
 
   let identity: DeviceIdentity | null = opts.identity ?? null;
   function resolveIdentity(): DeviceIdentity {
@@ -304,8 +479,55 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
     },
 
+    async configPatchAndWaitForChange(patch, baseHash, opts) {
+      return await patchConfigAndWaitForChange(
+        {
+          url,
+          auth,
+          connectTimeoutMs,
+          callTimeoutMs,
+          identity: resolveIdentity(),
+          scopes,
+          onConnectTrace,
+        },
+        patch,
+        baseHash,
+        opts?.replacePaths,
+      );
+    },
+
     async channelsStatus() {
       return await call("channels.status", {});
+    },
+
+    async channelsStop(params) {
+      const payload = await call("channels.stop", params);
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        (payload as { stopped?: unknown }).stopped !== true
+      ) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "channels.stop payload missing `stopped: true`",
+        );
+      }
+      return payload as GatewayChannelStopResult;
+    },
+
+    async channelsStart(params) {
+      const payload = await call("channels.start", params);
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        (payload as { started?: unknown }).started !== true
+      ) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "channels.start payload missing `started: true`",
+        );
+      }
+      return payload as GatewayChannelStartResult;
     },
 
     async gatewayRestartRequest(params) {

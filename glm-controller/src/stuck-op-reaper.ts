@@ -1,5 +1,9 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
+import {
+  GLM_OPERATIONS_COLLECTION,
+  isOperationAuditRow,
+  type Operation,
+} from "@octogee/shared/types/glm";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 
 export interface StuckOpReaperDeps {
@@ -36,21 +40,22 @@ export async function runStuckOpReaperTick(
   type StuckRow = { doc: (typeof snap.docs)[number]; data: Operation; ageMin: number };
   const stuck: StuckRow[] = [];
   for (const doc of snap.docs) {
-    const data = doc.data() as Operation | undefined;
-    if (!data) continue;
-    if (operationNeedsDurableRestartResume(data)) continue;
+    const data = doc.data() as unknown;
+    if (!data || isOperationAuditRow(data)) continue;
+    const operation = data as Operation;
+    if (operationNeedsDurableRestartResume(operation)) continue;
 
     // Liveness = the most recent of (last step progress, claim, creation). A long or
     // resumed roll that is still stepping keeps lastProgressAt fresh and is NOT reaped;
     // only an op with no progress and no recent (re)claim past the budget is stuck.
     const anchorMs = Math.max(
-      readMillis(data.lastProgressAt) ?? 0,
-      readMillis(data.startedAt) ?? 0,
-      readMillis(data.createdAt) ?? 0,
+      readMillis(operation.lastProgressAt) ?? 0,
+      readMillis(operation.startedAt) ?? 0,
+      readMillis(operation.createdAt) ?? 0,
     );
     if (anchorMs <= 0) continue;
     if (now - anchorMs < deps.stalenessMs) continue;
-    stuck.push({ doc, data, ageMin: Math.round((now - anchorMs) / 60_000) });
+    stuck.push({ doc, data: operation, ageMin: Math.round((now - anchorMs) / 60_000) });
   }
 
 const budgetMin = Math.round(deps.stalenessMs / 60_000);

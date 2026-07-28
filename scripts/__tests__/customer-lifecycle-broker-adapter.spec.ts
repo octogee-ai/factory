@@ -122,6 +122,22 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
   };
 }
 
+function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
+  return {
+    channelsStop: vi.fn(async ({ channel, accountId }) => ({
+      channel,
+      accountId,
+      stopped: true as const,
+    })),
+    channelsStart: vi.fn(async ({ channel, accountId }) => ({
+      channel,
+      accountId,
+      started: true as const,
+    })),
+    ...overrides,
+  } as GatewayRpcClient;
+}
+
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   let tempStateDir: string | null = null;
@@ -428,10 +444,279 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
+  it("restarts the customer Mattermost monitor after applying changed channel bindings", async () => {
+    const events: string[] = [];
+    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
+      events.push("config-patch");
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    const rpc = {
+      channelsStop: vi.fn(async () => {
+        events.push("channels-stop");
+        return { channel: "mattermost", accountId: "alice-coach", stopped: true };
+      }),
+      channelsStart: vi.fn(async () => {
+        events.push("channels-start");
+        return { channel: "mattermost", accountId: "alice-coach", started: true };
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [
+        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+      ],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    expect(rpc.channelsStop).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(events).toEqual(["config-patch", "channels-stop", "channels-start"]);
+  });
+
+  it("waits for the lifecycle config.changed hash before restarting Mattermost monitors", async () => {
+    const events: string[] = [];
+    let publishConfigChanged: (() => void) | undefined;
+    const configChanged = new Promise<void>((resolve) => {
+      publishConfigChanged = resolve;
+    });
+    const rpc = {
+      configPatch: vi.fn(async () => {
+        events.push("config-persisted");
+        return { ok: true as const, hash: "persisted-hash" };
+      }),
+      configPatchAndWaitForChange: vi.fn(async () => {
+        events.push("config-persisted");
+        await configChanged;
+        events.push("config-changed");
+        return { ok: true as const, hash: "persisted-hash" };
+      }),
+      channelsStop: vi.fn(async () => {
+        events.push("channels-stop");
+        return { channel: "mattermost", accountId: "alice-coach", stopped: true as const };
+      }),
+      channelsStart: vi.fn(async () => {
+        events.push("channels-start");
+        return { channel: "mattermost", accountId: "alice-coach", started: true as const };
+      }),
+    } as unknown as GatewayRpcClient;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
+      await options.rpc.configPatch({}, "base-hash");
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [
+        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+      ],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    const applying = adapter.applyAddCustomerConfigPatch(
+      snapshot,
+      { _coachPersonalToken: "pat-1" },
+    );
+    await vi.waitFor(() => expect(events).toEqual(["config-persisted"]));
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+
+    publishConfigChanged?.();
+    await applying;
+
+    expect(events).toEqual([
+      "config-persisted",
+      "config-changed",
+      "channels-stop",
+      "channels-start",
+    ]);
+    expect(rpc.configPatch).not.toHaveBeenCalled();
+    expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
+  });
+
+  it("restarts stale affected monitors when the lifecycle config patch is already a no-op", async () => {
+    const rpc = {
+      configPatchAndWaitForChange: vi.fn(),
+      channelsStop: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => ({
+        channel,
+        accountId,
+        stopped: true as const,
+      })),
+      channelsStart: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => ({
+        channel,
+        accountId,
+        started: true as const,
+      })),
+    } as unknown as GatewayRpcClient;
+    patchMocks.applyConfigPatch.mockResolvedValueOnce({
+      mode: "rpc",
+      attempts: 1,
+      noop: true,
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [
+        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+      ],
+      projects: [],
+      projectAgents: [
+        { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+      ],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await adapter.applyAddCustomerConfigPatch(
+      snapshot,
+      { _coachPersonalToken: "pat-1" },
+    );
+
+    expect(rpc.configPatchAndWaitForChange).not.toHaveBeenCalled();
+    expect(rpc.channelsStop).toHaveBeenCalledTimes(2);
+    expect(rpc.channelsStart).toHaveBeenCalledTimes(2);
+    expect(rpc.channelsStop).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(rpc.channelsStop).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-proj-orbit",
+    });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-proj-orbit",
+    });
+  });
+
+  it("attempts every coach and project monitor before aggregating restart failures", async () => {
+    const stopAccounts: string[] = [];
+    const startAccounts: string[] = [];
+    const rpc = {
+      channelsStop: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => {
+        stopAccounts.push(accountId);
+        if (accountId === "alice-proj-orbit") {
+          throw new Error("orbit stop failed");
+        }
+        return { channel, accountId, stopped: true as const };
+      }),
+      channelsStart: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => {
+        startAccounts.push(accountId);
+        return { channel, accountId, started: true as const };
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [
+        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+        { scope: "project", projectId: "nova", kind: "general", channelId: "nova-general" },
+      ],
+      projects: [],
+      projectAgents: [
+        { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+        { projectId: "nova", enabled: true, mmUserId: "mm-nova", token: "pat-nova" },
+      ],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    let caught: unknown;
+    try {
+      await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as Error).message).toContain("alice-proj-orbit");
+    expect(stopAccounts).toEqual([
+      "alice-coach",
+      "alice-proj-orbit",
+      "alice-proj-nova",
+    ]);
+    expect(startAccounts).toEqual([
+      "alice-coach",
+      "alice-proj-orbit",
+      "alice-proj-nova",
+    ]);
+  });
+
   it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     const snapshot: FleetBrokerUserSnapshot = {
@@ -503,7 +788,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   it("patches beta keyed entries with id-free values and removes stale project entries", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     const snapshot: FleetBrokerUserSnapshot = {
@@ -575,7 +860,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     const snapshot: FleetBrokerUserSnapshot = {
@@ -629,7 +914,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     };
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     adapter.seedUserSnapshotForMigration?.(snapshot);
@@ -645,7 +930,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   it("rebinds carried-forward coaches' shifted platform embedding refs to their OWN agent ids on mount", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     const snapshot: FleetBrokerUserSnapshot = {
@@ -927,7 +1212,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
   it("partitions bindings, includes active project agents, and nulls stale project accounts", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: {} as GatewayRpcClient,
+      rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
     const snapshot: FleetBrokerUserSnapshot = {

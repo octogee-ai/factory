@@ -13,6 +13,7 @@ import {
   gitLog,
   gitPush,
   gitStatus,
+  syncCleanWorkspaceToRemote,
   parseLog,
   parsePorcelain,
   resolveCustomerDir,
@@ -542,6 +543,71 @@ describe("commitAndPushWorkspace remote convergence", () => {
       if (originalGitSsh === undefined) delete process.env.GIT_SSH;
       else process.env.GIT_SSH = originalGitSsh;
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("syncCleanWorkspaceToRemote", () => {
+  it("fast-forwards a clean agent checkout immediately after a Canvas commit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ws-canvas-sync-"));
+    const remote = path.join(root, "remote.git");
+    const seed = path.join(root, "seed");
+    const agent = path.join(root, "agent");
+    const canvas = path.join(root, "canvas");
+    const testSsh = path.join(root, "test-ssh");
+    const originalGitSsh = process.env.GIT_SSH;
+    await fs.mkdir(seed);
+    git(root, ["init", "--bare", "--initial-branch=main", remote]);
+    git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "user.email", "seed@example.com"]);
+    git(seed, ["config", "user.name", "seed"]);
+    await fs.writeFile(path.join(seed, "README.md"), "before Canvas\n");
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-m", "seed"]);
+    git(seed, ["remote", "add", "origin", remote]);
+    git(seed, ["push", "-u", "origin", "main"]);
+    git(root, ["clone", remote, agent]);
+    git(root, ["clone", remote, canvas]);
+    await fs.writeFile(testSsh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");
+    await fs.chmod(testSsh, 0o755);
+    git(agent, ["remote", "set-url", "origin", `ssh://git@localhost${remote}`]);
+    process.env.GIT_SSH = testSsh;
+
+    try {
+      git(canvas, ["config", "user.email", "canvas@example.com"]);
+      git(canvas, ["config", "user.name", "canvas"]);
+      await fs.writeFile(path.join(canvas, "README.md"), "after Canvas\n");
+      git(canvas, ["add", "."]);
+      git(canvas, ["commit", "-m", "canvas update"]);
+      git(canvas, ["push", "origin", "main"]);
+
+      expect(await fs.readFile(path.join(agent, "README.md"), "utf8")).toBe("before Canvas\n");
+      await expect(syncCleanWorkspaceToRemote(agent)).resolves.toEqual({
+        ok: true,
+        result: { state: "fast-forwarded" },
+      });
+      expect(await fs.readFile(path.join(agent, "README.md"), "utf8")).toBe("after Canvas\n");
+    } finally {
+      if (originalGitSsh === undefined) delete process.env.GIT_SSH;
+      else process.env.GIT_SSH = originalGitSsh;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a dirty checkout untouched instead of overwriting agent work", async () => {
+    const repo = await makeRepo();
+    try {
+      await fs.writeFile(path.join(repo, "README.md"), "uncommitted agent work\n");
+
+      await expect(syncCleanWorkspaceToRemote(repo)).resolves.toEqual({
+        ok: true,
+        result: { state: "dirty" },
+      });
+      expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe(
+        "uncommitted agent work\n",
+      );
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
     }
   });
 });

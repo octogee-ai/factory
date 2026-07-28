@@ -10,6 +10,7 @@ import {
   projectGatewayReservation,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
+  shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
 } from "./admin-fleet-router.js";
 import {
@@ -65,6 +66,75 @@ describe("resolveFleetDeploymentSettings", () => {
     expect(() => resolveFleetDeploymentSettings("feat-alice")).toThrow(
       "Unknown deployment environment for fleet namespace: feat-alice",
     );
+  });
+});
+
+describe("shapeOperationsHistoryRecord", () => {
+  it("preserves an audit union member without projecting it as a command", () => {
+    expect(shapeOperationsHistoryRecord("audit-1", {
+      recordType: "audit",
+      schemaVersion: 1,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      idempotencyKey: "key",
+      mutationFingerprint: "fingerprint",
+      mutation: { action: "move-alias" },
+      actor: "fleet-cli:chris",
+      forced: true,
+      what: "move release alias",
+      why: "candidate verified in TEST",
+      target: { gatewayId: "bender" },
+      preActionStatus: { alias: "stable", target: "sha-old" },
+      aliasPlan: [],
+      createdAt: 1,
+      actionClaimId: "runner-1",
+      actionStartedAt: 1.5,
+      actionRecoveryCount: 0,
+      completedAt: 2,
+      outcome: "completed",
+    })).toEqual({
+      id: "audit-1",
+      recordType: "audit",
+      schemaVersion: 1,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      idempotencyKey: "key",
+      mutationFingerprint: "fingerprint",
+      mutation: { action: "move-alias" },
+      actor: "fleet-cli:chris",
+      forced: true,
+      what: "move release alias",
+      why: "candidate verified in TEST",
+      target: { gatewayId: "bender" },
+      preActionStatus: { alias: "stable", target: "sha-old" },
+      aliasPlan: [],
+      createdAt: 1,
+      actionClaimId: "runner-1",
+      actionStartedAt: 1.5,
+      actionRecoveryCount: 0,
+      completedAt: 2,
+      outcome: "completed",
+    });
+  });
+
+  it("projects malformed and future audit rows as safe invalid history records", () => {
+    expect(shapeOperationsHistoryRecord("audit-future", {
+      recordType: "audit",
+      schemaVersion: 2,
+      status: "recorded",
+      lifecycleStage: "intent-recorded",
+      createdAt: 5,
+    })).toEqual({
+      id: "audit-future",
+      recordType: "audit",
+      invalid: true,
+      schemaVersion: 2,
+      status: "invalid",
+      lifecycleStage: "invalid",
+      createdAt: 5,
+      completedAt: null,
+      error: "Unsupported or malformed operation audit record",
+    });
   });
 });
 
@@ -511,6 +581,9 @@ function mkCollection(
         if (!records[id]) throw new Error(`missing record ${id}`);
         applyDottedPatch(records[id], patch);
       }),
+      set: vi.fn(async (data: Record<string, unknown>) => {
+        records[id] = data;
+      }),
     })),
   });
   return query();
@@ -548,6 +621,11 @@ function mkAdminFleetRouteApp(opts: {
           })),
         };
       }
+      if (path === "config/glmMaintenance") {
+        return {
+          get: vi.fn(async () => ({ exists: false, data: () => undefined })),
+        };
+      }
       expect(path).toBe("config/orchestrator");
       return {
         get: vi.fn(async () => ({
@@ -570,6 +648,7 @@ function mkAdminFleetRouteApp(opts: {
     }),
     runTransaction: vi.fn(async (body: (transaction: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+      create: (ref: { set: (data: Record<string, unknown>) => Promise<void> }, data: Record<string, unknown>) => void;
       delete: (ref: { delete: () => Promise<void> }) => void;
       update: (
         ref: { update: (patch: Record<string, unknown>) => Promise<void> },
@@ -578,8 +657,12 @@ function mkAdminFleetRouteApp(opts: {
     }) => Promise<unknown>) => {
       const pendingDeletes: Array<() => Promise<void>> = [];
       const pendingUpdates: Array<() => Promise<void>> = [];
+      const pendingCreates: Array<() => Promise<void>> = [];
       const result = await body({
         get: (ref) => ref.get(),
+        create: (ref, data) => {
+          pendingCreates.push(() => ref.set(data));
+        },
         delete: (ref) => {
           pendingDeletes.push(() => ref.delete());
         },
@@ -587,6 +670,7 @@ function mkAdminFleetRouteApp(opts: {
           pendingUpdates.push(() => ref.update(patch));
         },
       });
+      for (const create of pendingCreates) await create();
       for (const update of pendingUpdates) await update();
       for (const remove of pendingDeletes) await remove();
       return result;
@@ -1458,6 +1542,20 @@ describe("manual disposable runtime return", () => {
       generation: 3,
       adopted: true,
     });
+    expect(
+      Object.values(state.operations).filter(
+        (operation) =>
+          operation.recordType === "audit" &&
+          (operation.mutation as Record<string, unknown> | undefined)?.kind ===
+            "return-activation-lease",
+      ),
+    ).toEqual([
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({
+        status: "failed",
+        error: "activation lease return was already requested",
+      }),
+    ]);
     expect(state.users["uid-alice"]).toMatchObject({
       provisioning: {
         openclaw: {
@@ -1562,6 +1660,10 @@ describe("manual disposable runtime return", () => {
       .post("/customers/uid-alice/activation-lease/terminate")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(202);
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/terminate")
+      .send({ leaseId: "lease-1", generation: 3 })
+      .expect(200);
 
     expect(state.users["uid-alice"]).toMatchObject({
       provisioning: {
@@ -1574,6 +1676,20 @@ describe("manual disposable runtime return", () => {
         },
       },
     });
+    expect(
+      Object.values(state.operations).filter(
+        (operation) =>
+          operation.recordType === "audit" &&
+          (operation.mutation as Record<string, unknown> | undefined)?.kind ===
+            "terminate-activation-lease",
+      ),
+    ).toEqual([
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({
+        status: "failed",
+        error: "activation lease termination was already requested",
+      }),
+    ]);
   });
 });
 
@@ -1841,6 +1957,16 @@ describe("onboarding placement (post-cohorts)", () => {
         source: "platform-default-change",
       },
     });
+    const migrationAudits = Object.values(state.operations).filter((operation) =>
+      (operation as { recordType?: unknown }).recordType === "audit" &&
+      (operation as { mutation?: { kind?: unknown } }).mutation?.kind === "migrate-customer",
+    );
+    expect(migrationAudits).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        target: { uid: "uid-shared", gatewayId: "gw-new" },
+      }),
+    ]);
   });
 
   it("ignores retired override data and exposes no override API", async () => {
@@ -2035,6 +2161,7 @@ describe("account deletion revokes connector grants at the provider first", () =
         }
         return queryCollection(name, false);
       },
+      doc: (path: string) => ref(path),
       collectionGroup: (name: string) => queryCollection(name, true),
       batch: () => ({
         update: (target: { path?: string }, data: Record<string, unknown>) => {
@@ -2069,7 +2196,7 @@ describe("account deletion revokes connector grants at the provider first", () =
             }
             throw new Error("unexpected transaction read");
           },
-          update: (target: { path: string }, data: Record<string, unknown>) => {
+        update: (target: { path: string }, data: Record<string, unknown>) => {
             calls.push(`batch:update:${target.path}`);
             added.push(data);
             if (target.path.startsWith("users/")) {
@@ -2077,9 +2204,14 @@ describe("account deletion revokes connector grants at the provider first", () =
               remaining[id] = { ...remaining[id], ...data };
             } else if (target.path in otherDocs) {
               otherDocs[target.path] = { ...otherDocs[target.path], ...data };
-            }
-          },
-          set: (target: { path: string }, data: Record<string, unknown>) => {
+          }
+        },
+        create: (target: { path: string }, data: Record<string, unknown>) => {
+          calls.push(`batch:create:${target.path.split("/")[0]}`);
+          added.push(data);
+          otherDocs[target.path] = data;
+        },
+        set: (target: { path: string }, data: Record<string, unknown>) => {
             calls.push(`batch:set:${target.path.split("/")[0]}`);
             added.push(data);
             otherDocs[target.path] = data;
@@ -2114,7 +2246,7 @@ describe("account deletion revokes connector grants at the provider first", () =
         calls.push(`revoke:${uid}`);
       }),
     });
-    return { app, calls, added, remaining };
+    return { app, calls, added, remaining, otherDocs };
   }
 
   it("schedules retention for a pre-provisioning account instead of deleting inline", async () => {
@@ -2123,8 +2255,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     const res = await request(app).post("/customer/u1/delete").expect(202);
 
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
-    expect(calls.at(-2)).toBe("suspend-auth:u1");
-    expect(calls.at(-1)).toBe("revoke:u1");
+    expect(calls).toContain("suspend-auth:u1");
+    expect(calls).toContain("revoke:u1");
   });
 
   it("queues independent suspension and delayed erasure operations", async () => {
@@ -2139,8 +2271,8 @@ describe("account deletion revokes connector grants at the provider first", () =
       expect.objectContaining({ kind: "suspend-customer", inputUid: "u2" }),
       expect.objectContaining({ kind: "erase-customer", inputUid: "u2" }),
     ]));
-    expect(calls.at(-2)).toBe("suspend-auth:u2");
-    expect(calls.at(-1)).toBe("revoke:u2");
+    expect(calls).toContain("suspend-auth:u2");
+    expect(calls).toContain("revoke:u2");
   });
 
   it("atomically admits one deletion when two requests race for the same user", async () => {
@@ -2187,6 +2319,41 @@ describe("account deletion revokes connector grants at the provider first", () =
     await request(app).post("/customer/ghost/delete").expect(404);
 
     expect(calls).toEqual([]);
+  });
+
+  it("rejects a frozen deletion before it records an audit or changes customer state", async () => {
+    const { app, calls, added } = makeDeleteApp(
+      { u2: { username: "acme", email: "c@d.co" } },
+      { "config/glmMaintenance": { mode: "frozen", reason: "incident" } },
+    );
+
+    await request(app).post("/customer/u2/delete").expect(409);
+
+    expect(calls).toEqual([]);
+    expect(added).toEqual([]);
+  });
+
+  it("marks a deletion admission conflict as a failed audit", async () => {
+    const { app, otherDocs } = makeDeleteApp(
+      { u2: { username: "acme", email: "c@d.co" } },
+      {
+        "glmOperations/existing": {
+          kind: "suspend-customer",
+          status: "pending",
+          inputUid: "u2",
+        },
+      },
+    );
+
+    await request(app).post("/customer/u2/delete").expect(409);
+
+    expect(Object.values(otherDocs)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recordType: "audit",
+        status: "failed",
+        lifecycleStage: "action-failed",
+      }),
+    ]));
   });
 
   it("moves an already scheduled erasure to now only after an explicit eraseNow request", async () => {

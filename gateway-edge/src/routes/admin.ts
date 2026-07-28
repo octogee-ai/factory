@@ -10,7 +10,10 @@ import { getResend } from "../lib/resend.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import { provisionGatewayAuthSecret } from "@octogee/core/secret-manager";
-import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import {
+  createCentralReleaseAuthority,
+  listGatewayBuilds,
+} from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
 import { disableAuthUserAndRevokeSessions } from "@octogee/core/firebase-auth-helpers";
@@ -45,6 +48,37 @@ router.use((_req, res, next) => {
 });
 router.use(requireAdmin);
 
+export function centralReleaseRouteDeps(
+  targetId = process.env.DEPLOYMENT_TARGET_ID,
+): {
+  releaseEnvironment: "test" | "prod" | null;
+  releaseAuthority?: ReturnType<typeof createCentralReleaseAuthority>;
+} {
+  if (targetId === "test-central") {
+    return {
+      releaseEnvironment: "test",
+      releaseAuthority: createCentralReleaseAuthority({
+        project: "octogee",
+        location: "us-central1",
+        repository: "octogee",
+      }),
+    };
+  }
+  if (targetId === "prod-central") {
+    return {
+      releaseEnvironment: "prod",
+      releaseAuthority: createCentralReleaseAuthority({
+        project: "octogee",
+        location: "us-central1",
+        repository: "octogee",
+      }),
+    };
+  }
+  return { releaseEnvironment: null };
+}
+
+const centralRelease = centralReleaseRouteDeps();
+
 addAdminCustomerRoutes(router, {
   db,
   FieldValue,
@@ -62,6 +96,7 @@ addAdminFleetRoutes(router, {
   workspaceSlugsForUser,
   provisionGatewayAuthSecret,
   listGatewayBuilds,
+  ...centralRelease,
   suspendAuthUser: async (uid: string) => {
     const { getAuth } = await import("firebase-admin/auth");
     await disableAuthUserAndRevokeSessions(uid, getAuth());

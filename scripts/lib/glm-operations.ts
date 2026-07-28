@@ -4,6 +4,9 @@ import {
   type OperationKind,
   type OperationStatus,
 } from "../../shared/types/glm.js";
+import type { OperationsDb } from "@octogee/core/operation-audit";
+
+export * from "@octogee/core/operation-audit";
 
 const TERMINAL_STATUSES: ReadonlySet<OperationStatus> = new Set([
   "succeeded",
@@ -13,25 +16,6 @@ const TERMINAL_STATUSES: ReadonlySet<OperationStatus> = new Set([
 
 export function isTerminalStatus(status: OperationStatus): boolean {
   return TERMINAL_STATUSES.has(status);
-}
-
-export interface OperationsDocSnapshot {
-  exists: boolean;
-  id: string;
-  data(): Record<string, unknown> | undefined;
-}
-
-export interface OperationsDocRef {
-  get(): Promise<OperationsDocSnapshot>;
-}
-
-export interface OperationsCollection {
-  add(data: Record<string, unknown>): Promise<{ id: string }>;
-  doc(id: string): OperationsDocRef;
-}
-
-export interface OperationsDb {
-  collection(name: string): OperationsCollection;
 }
 
 export interface EnqueueOperationInput {

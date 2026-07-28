@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/local/bin/node
 /**
  * OpenClaw exec SecretRef resolver → octogee-api byok broker → GCP Secret Manager.
  *
@@ -12,8 +12,7 @@
  *       "providers": {
  *         "gcp-secret-manager": {
  *           "source": "exec",
- *           "command": "/usr/local/bin/node",
- *           "args": ["/octogee/scripts/secret-resolver.mjs"],
+ *           "command": "/octogee/scripts/secret-resolver.mjs",
  *           "passEnv": ["FLEET_BROKER_URL", "OCTOGEE_API_URL", "OCTOGEE_API_SA_TOKEN_PATH", "INTERNAL_SERVICE_KEY", "OPENCLAW_AGENTS_DIR", "HOME"],
  *           "jsonOnly": true
  *         }

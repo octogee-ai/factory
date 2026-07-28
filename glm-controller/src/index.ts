@@ -9,11 +9,15 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isOperatorManaged,
+  isOperationAuditRow,
   operatorGatewayServiceAccountName,
+  resolveOperationOrigin,
   resolveGatewayClass,
   isGatewayClass,
   isGatewayProfile,
   type HelmInstancesMap,
+  type OperationAuditRecord,
   type Operation,
 } from "@octogee/shared/types/glm";
 import {
@@ -67,6 +71,8 @@ import {
   type AssignmentState,
 } from "@octogee/shared/types/gateway-releases";
 import {
+  cowboyMayMarkGatewayLive,
+  cowboyMayMutateGateway,
   gatewayUpsertOptsFromRelease,
   markLiveRuntimePatch,
   deploymentIntentFingerprintForComparison,
@@ -531,6 +537,7 @@ async function syncGatewayModelKeySecrets(
   if (!ensurer) return changedBrokerGateways;
 
   for (const gateway of gateways) {
+    if (!(await cowboyMayMutateGatewayNow(deps.db, gateway.gatewayId))) continue;
     const gatewayClass =
       gateway.desiredStatus === "retired" ? "shared" : gateway.gatewayClass;
     try {
@@ -563,6 +570,7 @@ async function syncGatewayModelKeySources(
   if (!issuer) return;
 
   for (const gateway of gateways) {
+    if (!(await cowboyMayMutateGatewayNow(deps.db, gateway.gatewayId))) continue;
     const gatewayClass = gateway.gatewayClass;
     try {
       await issuer.syncGatewayModelKeySource({
@@ -593,6 +601,7 @@ async function restartGatewayDeploymentsForModelKeyChanges(
       );
       continue;
     }
+    if (!(await cowboyMayMutateGatewayNow(deps.db, gatewayId))) continue;
     try {
       await deps.restartGatewayDeployment(gatewayId);
     } catch (err) {
@@ -600,6 +609,15 @@ async function restartGatewayDeploymentsForModelKeyChanges(
       throw new Error(`(source=model-key-secret) ${gatewayId}: rollout restart failed: ${message}`);
     }
   }
+}
+
+async function cowboyMayMutateGatewayNow(db: Firestore, gatewayId: string): Promise<boolean> {
+  const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const root = projectGatewayDesiredRootForGateway(
+    snap.exists ? snap.data() : undefined,
+    gatewayId,
+  );
+  return root !== null && cowboyMayMutateGateway(root);
 }
 
 async function syncFleetIngressIfConfigured(
@@ -806,7 +824,7 @@ function runtimeReportsDesiredBuild(
 }
 
 export async function refineGatewayConvergenceAction(input: {
-  passDeps: Pick<GatewayConvergencePassDeps, "reconcileSurgeHandoff">;
+  passDeps: Pick<GatewayConvergencePassDeps, "db" | "reconcileSurgeHandoff">;
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   runtime: GatewayRuntimeDoc | undefined;
@@ -823,8 +841,12 @@ export async function refineGatewayConvergenceAction(input: {
     desiredDeploymentIntentFingerprint,
     action,
   } = input;
+  if (!cowboyMayMutateGateway(gateway)) return { kind: "steady" };
   if (action.kind !== "steady" || !artifact || gateway.desiredStatus !== "running") {
     return action;
+  }
+  if (!(await cowboyMayMutateGatewayNow(passDeps.db, gateway.gatewayId))) {
+    return { kind: "steady" };
   }
   const handoff = await passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
@@ -873,7 +895,7 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
+  const { db } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = observedHelmInstance(instance);
   const artifact =
@@ -910,60 +932,93 @@ async function convergeOneGateway(
       return;
     case "hold-missing-release":
       throw new Error(action.error);
-    case "uninstall": {
-      log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
-      await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
+    case "uninstall":
+      await uninstallGateway(passDeps, gateway);
       return;
-    }
-    case "upsert": {
-      if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
-      const opts = desiredOpts;
-      log(
-        `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
-          `(${opts.imageTag}, replicas=${action.replicas})`,
-      );
-      await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(gateway.gatewayId)
-        .set(
-          provisioningRuntimeDoc({
-            gateway,
-            artifact: artifact as ReleasePayload,
-            existing: runtime ?? null,
-            now: Date.now(),
-          }) as unknown as Record<string, unknown>,
-          { merge: true },
-        );
-      await helm.upsertInstance(opts);
-      return;
-    }
-    case "mark-live": {
-      log(
-        `[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`,
-      );
-      await db.runTransaction(async (txn) => {
-        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-        const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-        const rootSnap = await txn.get(rootRef);
-        const root = projectGatewayDesiredRootForGateway(
-          rootSnap.exists ? rootSnap.data() : undefined,
-          gateway.gatewayId,
-        );
-        if (root === null || root.desiredRelease !== gateway.desiredRelease) {
-          return;
-        }
-        txn.set(
-          rootRef,
-          { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
-          { merge: true },
-        );
-        const runtimePatch = markLiveRuntimePatch(gateway);
-        if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
+    case "upsert":
+      await upsertGateway(passDeps, {
+        gateway,
+        artifact,
+        runtime,
+        desiredOpts,
+        replicas: action.replicas,
       });
       return;
-    }
+    case "mark-live":
+      await markGatewayLive(passDeps, gateway);
+      return;
   }
+}
+
+async function uninstallGateway(
+  passDeps: GatewayConvergencePassDeps,
+  gateway: DurableGateway,
+): Promise<void> {
+  const { db, helm, log } = passDeps;
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
+  await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
+}
+
+async function upsertGateway(
+  passDeps: GatewayConvergencePassDeps,
+  input: {
+    gateway: DurableGateway;
+    artifact: ReleasePayload | null;
+    runtime: GatewayRuntimeDoc | undefined;
+    desiredOpts: GatewayUpsertOpts | null;
+    replicas: number;
+  },
+): Promise<void> {
+  const { db, helm, log } = passDeps;
+  const { gateway, artifact, runtime, desiredOpts, replicas } = input;
+  if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  log(
+    `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
+      `(${desiredOpts.imageTag}, replicas=${replicas})`,
+  );
+  await db
+    .collection(GLM_GATEWAYS_COLLECTION)
+    .doc(gateway.gatewayId)
+    .set(
+      provisioningRuntimeDoc({
+        gateway,
+        artifact: artifact as ReleasePayload,
+        existing: runtime ?? null,
+        now: Date.now(),
+      }) as unknown as Record<string, unknown>,
+      { merge: true },
+    );
+  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  await helm.upsertInstance(desiredOpts);
+}
+
+async function markGatewayLive(
+  passDeps: GatewayConvergencePassDeps,
+  gateway: DurableGateway,
+): Promise<void> {
+  const { db, log } = passDeps;
+  log(`[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`);
+  await db.runTransaction(async (txn) => {
+    const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
+    const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
+    const rootSnap = await txn.get(rootRef);
+    const root = projectGatewayDesiredRootForGateway(
+      rootSnap.exists ? rootSnap.data() : undefined,
+      gateway.gatewayId,
+    );
+    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return;
+    txn.set(
+      rootRef,
+      { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
+      { merge: true },
+    );
+    const runtimePatch = markLiveRuntimePatch(gateway);
+    if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
+  });
 }
 
 function observedHelmInstance(
@@ -1031,7 +1086,10 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   const runtime = await readDurableRuntimeGateways(deps.db);
   assertDurableRuntimeState(runtime);
   await syncDurableImagePins(deps, runtime);
-  await syncDurableRuntimeDependencies(deps, runtime.gateways);
+  await syncDurableRuntimeDependencies(
+    deps,
+    runtime.gateways.filter(cowboyMayMutateGateway),
+  );
   await convergeGatewaysIfConfigured(deps);
   await syncFleetIngressIfConfigured(deps);
 }
@@ -1199,7 +1257,9 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
       async (snap) => {
         for (const change of snap.docChanges()) {
           if (change.type !== "added") continue;
-          const op = { ...(change.doc.data() as Operation), id: change.doc.id };
+          const data = change.doc.data();
+          if (isOperationAuditRow(data)) continue;
+          const op = { ...(data as Operation), id: change.doc.id };
           await processOperation(op, change.doc.ref, deps);
         }
       },
@@ -1225,6 +1285,83 @@ const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "erase-customer",
 ]);
 
+const AUTOMATIC_GATEWAY_MUTATION_KINDS: ReadonlySet<string> = new Set([
+  "add-gateway",
+  "retire-gateway",
+  "restart-gateway",
+  "recycle-gateway",
+  "rollout",
+  MIGRATE_CUSTOMER_KIND,
+]);
+
+const AUTOMATIC_BUILDER_MUTATION_KINDS: ReadonlySet<string> = new Set([
+  MIGRATE_CUSTOMER_KIND,
+  "deprovision-customer",
+  "suspend-customer",
+  "erase-customer",
+]);
+
+function operationIsAutomatic(op: Operation): boolean {
+  return resolveOperationOrigin(op.origin) === "automatic";
+}
+
+function automaticOperationGatewayIds(op: Operation): string[] {
+  if (!AUTOMATIC_GATEWAY_MUTATION_KINDS.has(op.kind)) return [];
+  return [...new Set([
+    op.input.gatewayId,
+    op.input.fromGatewayId,
+    op.input.toGatewayId,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0))];
+}
+
+async function automaticOperationFenceReason(
+  txn: FirebaseFirestore.Transaction,
+  db: Firestore,
+  op: Operation,
+): Promise<string | null> {
+  if (!operationIsAutomatic(op)) return null;
+  const gatewayIds = automaticOperationGatewayIds(op);
+  const uid = AUTOMATIC_BUILDER_MUTATION_KINDS.has(op.kind) &&
+    typeof op.input.uid === "string" && op.input.uid.length > 0
+    ? op.input.uid
+    : null;
+  const snapshots = await Promise.all([
+    ...gatewayIds.map((gatewayId) => txn.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId))),
+    ...(uid ? [txn.get(db.collection("users").doc(uid))] : []),
+  ]);
+  for (let index = 0; index < gatewayIds.length; index += 1) {
+    const snapshot = snapshots[index];
+    if (snapshot.exists && isOperatorManaged(snapshot.data()?.managedBy)) {
+      return `automatic ${op.kind} operation fenced: gateway ${gatewayIds[index]} is operator-managed`;
+    }
+  }
+  if (uid) {
+    const user = snapshots.at(-1);
+    if (isOperatorManaged(readPath(
+      user?.exists ? user.data() as Record<string, unknown> : undefined,
+      "provisioning.openclaw.managedBy",
+    ))) {
+      return `automatic ${op.kind} operation fenced: builder ${uid} is operator-managed`;
+    }
+  }
+  return null;
+}
+
+function failFencedOperation(
+  txn: FirebaseFirestore.Transaction,
+  ref: FirebaseFirestore.DocumentReference,
+  reason: string,
+  now: number,
+): void {
+  txn.update(ref, {
+    status: "failed",
+    completedAt: now,
+    error: reason,
+    waitingOn: FieldValue.delete(),
+    nextAttemptAt: FieldValue.delete(),
+  });
+}
+
 function operationIsRestartResumable(op: Operation): boolean {
   if (op.kind === "rollout") return true;
   return operationNeedsDurableRestartResume(op);
@@ -1241,7 +1378,7 @@ async function attemptClaimOrQueueOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
-): Promise<{ outcome: "claimed" | "queued" | "skipped"; fresh?: Operation }> {
+): Promise<{ outcome: "claimed" | "queued" | "skipped" | "fenced"; fresh?: Operation }> {
   try {
     return await deps.db.runTransaction(async (txn) => {
       if (deps.maintenanceGate) {
@@ -1250,8 +1387,14 @@ async function attemptClaimOrQueueOperation(
       }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return { outcome: "skipped" as const };
-      const data = fresh.data() as Operation | undefined;
-      if (!data) return { outcome: "skipped" as const };
+      const data = fresh.data() as unknown;
+      if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
+      const freshOperation = data as Operation;
+      const fenceReason = await automaticOperationFenceReason(txn, deps.db, freshOperation);
+      if (fenceReason) {
+        failFencedOperation(txn, ref, fenceReason, Date.now());
+        return { outcome: "fenced" as const };
+      }
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
@@ -1261,22 +1404,26 @@ async function attemptClaimOrQueueOperation(
           txn.get(operations.where("status", "==", "pending")),
         ]);
         runningOpsSameKind = runningSnap.docs.flatMap((d) => {
-          const runningData = d.data() as Operation;
-          return isSeriallyExclusiveKind(runningData.kind) ? [{
+          const runningData = d.data() as unknown;
+          if (isOperationAuditRow(runningData)) return [];
+          const runningOperation = runningData as Operation;
+          return isSeriallyExclusiveKind(runningOperation.kind) ? [{
             id: d.id,
-            kind: runningData.kind,
-            input: runningData.input,
-            customerMigrationV2: runningData.customerMigrationV2,
+            kind: runningOperation.kind,
+            input: runningOperation.input,
+            customerMigrationV2: runningOperation.customerMigrationV2,
           }] : [];
         });
         pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
-          const pendingData = d.data() as Operation;
-          return isSeriallyExclusiveKind(pendingData.kind) ? [{
+          const pendingData = d.data() as unknown;
+          if (isOperationAuditRow(pendingData)) return [];
+          const pendingOperation = pendingData as Operation;
+          return isSeriallyExclusiveKind(pendingOperation.kind) ? [{
             id: d.id,
-            kind: pendingData.kind,
-            input: pendingData.input,
-            createdAt: pendingData.createdAt,
-            customerMigrationV2: pendingData.customerMigrationV2,
+            kind: pendingOperation.kind,
+            input: pendingOperation.input,
+            createdAt: pendingOperation.createdAt,
+            customerMigrationV2: pendingOperation.customerMigrationV2,
           }] : [];
         });
       }
@@ -1285,11 +1432,11 @@ async function attemptClaimOrQueueOperation(
         op: {
           id: op.id,
           kind: op.kind,
-          status: data.status,
-          createdAt: data.createdAt,
-          nextAttemptAt: data.nextAttemptAt,
-          input: data.input,
-          customerMigrationV2: data.customerMigrationV2,
+          status: freshOperation.status,
+          createdAt: freshOperation.createdAt,
+          nextAttemptAt: freshOperation.nextAttemptAt,
+          input: freshOperation.input,
+          customerMigrationV2: freshOperation.customerMigrationV2,
         },
         now: Date.now(),
         runningOpsSameKind,
@@ -1298,7 +1445,7 @@ async function attemptClaimOrQueueOperation(
 
       if (decision.outcome === "skip") return { outcome: "skipped" as const };
       if (decision.outcome === "queue") {
-        if (data.waitingOn !== decision.waitingOn) {
+        if (freshOperation.waitingOn !== decision.waitingOn) {
           txn.update(ref, { waitingOn: decision.waitingOn });
         }
         return { outcome: "queued" as const };
@@ -1314,7 +1461,7 @@ async function attemptClaimOrQueueOperation(
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
       // worker snapshot can't reset the retry cap or drop history.
-      return { outcome: "claimed" as const, fresh: { ...data, id: op.id, startedAt: now } };
+      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, startedAt: now } };
     });
   } catch (err) {
     deps.log(
@@ -1325,18 +1472,24 @@ async function attemptClaimOrQueueOperation(
 }
 
 export async function processOperation(
-  op: Operation,
+  op: Operation | OperationAuditRecord,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  const claim = await attemptClaimOrQueueOperation(op, ref, deps);
+  if (isOperationAuditRow(op)) return;
+  const operation = op as Operation;
+  const claim = await attemptClaimOrQueueOperation(operation, ref, deps);
   if (claim.outcome === "queued") {
-    deps.log(`[glm-controller] op=${op.id} kind=${op.kind} queued — waiting on a conflicting op`);
+    deps.log(`[glm-controller] op=${operation.id} kind=${operation.kind} queued — waiting on a conflicting op`);
+    return;
+  }
+  if (claim.outcome === "fenced") {
+    deps.log(`[glm-controller] op=${op.id} failed — operator-managed target`);
     return;
   }
   if (claim.outcome !== "claimed" || !claim.fresh) return;
 
-  deps.log(`[glm-controller] claim op=${op.id} kind=${op.kind}`);
+  deps.log(`[glm-controller] claim op=${operation.id} kind=${operation.kind}`);
   await runClaimedOperation(claim.fresh, ref, deps);
 }
 
@@ -1352,7 +1505,11 @@ export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<
     .where("status", "==", "pending")
     .get();
   const ops = snap.docs
-    .map((doc) => ({ op: { ...(doc.data() as Operation), id: doc.id }, ref: doc.ref }))
+    .flatMap((doc) => {
+      const data = doc.data();
+      if (isOperationAuditRow(data)) return [];
+      return [{ op: { ...(data as Operation), id: doc.id }, ref: doc.ref }];
+    })
     .sort((a, b) => (a.op.createdAt ?? 0) - (b.op.createdAt ?? 0));
   for (const { op, ref } of ops) {
     await processOperation(op, ref, deps);
@@ -1397,15 +1554,17 @@ async function reAdoptAndRunOperation(
       }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return null;
-      const data = fresh.data() as Operation | undefined;
-      if (data?.status !== "running") return null;
+      const data = fresh.data() as unknown;
+      if (!data || isOperationAuditRow(data)) return null;
+      const freshOperation = data as Operation;
+      if (freshOperation.status !== "running") return null;
       const now = Date.now();
       txn.update(ref, {
         startedAt: now,
         lastProgressAt: now,
-        resumeCount: (typeof data.resumeCount === "number" ? data.resumeCount : 0) + 1,
+        resumeCount: (typeof freshOperation.resumeCount === "number" ? freshOperation.resumeCount : 0) + 1,
       });
-      return { ...data, id: op.id, startedAt: now };
+      return { ...freshOperation, id: op.id, startedAt: now };
     });
   } catch (err) {
     deps.log(
@@ -1430,6 +1589,20 @@ async function runClaimedOperation(
   deps: ControllerDeps,
 ): Promise<void> {
   if (await controllerWorkFrozen(deps, `operation ${op.id}`)) return;
+  const fenced = await deps.db.runTransaction(async (txn) => {
+    const fresh = await txn.get(ref);
+    if (!fresh.exists) return false;
+    const current = fresh.data() as Operation | undefined;
+    if (!current || current.status !== "running") return false;
+    const reason = await automaticOperationFenceReason(txn, deps.db, current);
+    if (!reason) return false;
+    failFencedOperation(txn, ref, reason, Date.now());
+    return true;
+  });
+  if (fenced) {
+    deps.log(`[glm-controller] op=${op.id} failed before execution — operator-managed target`);
+    return;
+  }
   const { ctx, steps } = createOperationContext({
     persist: async (next) => {
       await ref.update({ steps: next, lastProgressAt: Date.now() });
@@ -1686,7 +1859,7 @@ function startControllerBackgroundTasks({
     log,
   });
   const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
-    { db, now: () => Date.now(), log },
+    { db, now: () => Date.now(), log, maintenanceGate: deps.maintenanceGate },
     PREEMPTION_HANDOFF_SWEEP_MS,
   );
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
@@ -1698,6 +1871,7 @@ function startControllerBackgroundTasks({
       log,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
+      maintenanceGate: deps.maintenanceGate,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
   );
@@ -2170,6 +2344,7 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
         transaction.set(operationRef, {
           kind: "add-gateway",
           status: "pending",
+          origin: "automatic",
           createdBy,
           createdAt: now,
           startedAt: null,
@@ -2444,6 +2619,7 @@ async function buildHandlers(
             source: MIGRATE_CUSTOMER_KIND,
             updatedByOperationId: null,
           },
+          automatic: commit.automatic,
         },
       );
     },
@@ -2519,6 +2695,7 @@ async function buildHandlers(
             targetRelease: input.targetRelease,
             targetRootFence: input.targetRootFence,
           },
+          automatic: input.automatic,
         },
       );
     },
@@ -2577,6 +2754,28 @@ async function buildHandlers(
         now: Date.now(),
         updatedBy: "cowboy-retire-gateway",
       }),
+    assertAutomaticRetirementMayMutate: async (gatewayId) => {
+      await db.runTransaction(async (txn) => {
+        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+        const rootSnap = await txn.get(rootRef);
+        const root = projectGatewayDesiredRootForGateway(
+          rootSnap.exists ? rootSnap.data() : undefined,
+          gatewayId,
+        );
+        if (root === null) throw new Error(`gateway ${gatewayId} durable root is unavailable`);
+        if (isOperatorManaged(root.managedBy)) {
+          throw new Error(`gateway ${gatewayId} is operator-managed`);
+        }
+        if (!root.ownerUid) return;
+        const userSnap = await txn.get(db.collection("users").doc(root.ownerUid));
+        if (isOperatorManaged(readPath(
+          userSnap.exists ? userSnap.data() as Record<string, unknown> : undefined,
+          "provisioning.openclaw.managedBy",
+        ))) {
+          throw new Error(`builder ${root.ownerUid} is operator-managed`);
+        }
+      });
+    },
     readMountedCustomers: async (gatewayId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       const runtime = snap.exists ? snap.data() : undefined;

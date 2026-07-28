@@ -8,62 +8,56 @@ import { deploymentTargetSettings } from "./deployment-environment.js";
 import { renderDeploymentTargetHelmValues } from "./render-deployment-target-helm-values.js";
 
 describe("deployment target Helm values", () => {
-  it("renders every regional west override from one exact target", () => {
+  it("renders every active Central value from one exact target", () => {
     const rendered = renderDeploymentTargetHelmValues(
-      deploymentTargetSettings("test-west"),
+      deploymentTargetSettings("test-central"),
     );
 
-    expect(rendered).toContain('deploymentTargetId: "test-west"');
-    expect(rendered).toContain('deploymentProjectId: "octogee-data-test"');
+    expect(rendered).toContain('deploymentTargetId: "test-central"');
+    expect(rendered).toContain('deploymentProjectId: "octogee-test"');
     expect(rendered).not.toContain("platformComputeClass");
     expect(rendered).toContain(`networkPolicy:
-  enforceDefaultDeny: true
-  controlPlaneCidr: "172.20.16.16/28"
-  privateServicesCidr: "172.24.0.0/16"`);
-    expect(rendered).toContain('connectionName: "octogee:us-west1:octogee-pg-west"');
+  enforceDefaultDeny: false`);
+    expect(rendered).toContain('connectionName: "octogee:us-central1:octogee-pg"');
     expect(rendered).toContain(
-      'repository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-api"',
+      'repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-api"',
     );
     expect(rendered).toContain(
-      'OCTOGEE_KMS_KEY_NAME: "projects/octogee-data-test/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"',
+      'OCTOGEE_KMS_KEY_NAME: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"',
     );
     expect(rendered).toContain(
-      'gcpServiceAccount: "octogee-glm-controller@octogee-data-test.iam.gserviceaccount.com"',
+      'gcpServiceAccount: "octogee-glm-controller@octogee-test.iam.gserviceaccount.com"',
     );
     expect(rendered).toContain(
-      'MM_URL: "http://mattermost.octogee-test-west.svc.cluster.local:8065"',
+      'MM_URL: "http://mattermost.octogee-test.svc.cluster.local:8065"',
     );
     expect(rendered).toContain(
-      'MM_INTERNAL_URL: "http://mattermost.octogee-test-west.svc.cluster.local:8065"',
+      'MM_INTERNAL_URL: "http://mattermost.octogee-test.svc.cluster.local:8065"',
     );
     expect(rendered).toContain(
-      'loggingResourceName: "projects/octogee/locations/global/buckets/ops-agent-test-west/views/ops-agent"',
+      'loggingResourceName: "projects/octogee/locations/global/buckets/ops-agent-test/views/ops-agent"',
     );
     expect(rendered).toContain(`edgeIngress:
-  staticIpName: "workspace-api-ip-test-west"`);
+  staticIpName: "workspace-api-ip-test"`);
     expect(rendered).toContain(`gateway-edge:
   ingress:
-    staticIpName: "workspace-api-ip-test-west"`);
+    staticIpName: "workspace-api-ip-test"`);
     expect(rendered).toContain(`mattermost:
   ingress:
-    staticIpName: "workspace-api-ip-test-west"`);
+    staticIpName: "mattermost-ip-test"`);
     expect(rendered).toContain(`gitea:
   webIngress:
-    staticIpName: "workspace-api-ip-test-west"`);
+    staticIpName: "gitea-ip-test"`);
     expect(rendered).toContain(`gatewayFleet:
   previewIngress:
-    staticIpName: "workspace-api-ip-test-west"`);
-    expect(rendered).not.toContain("mattermost.octogee-test.svc.cluster.local");
-    expect(rendered).not.toContain("buckets/ops-agent-test/views/ops-agent");
-    expect(rendered).not.toContain("us-central1");
-    expect(rendered).not.toContain("@octogee-test.iam.gserviceaccount.com");
+    staticIpName: "preview-ip-test"`);
+    expect(rendered).not.toContain("us-west1");
+    expect(rendered).not.toContain("octogee-data-test");
   });
 
   it.each([
     ["prod-central", "workspace-api-ip", "mattermost-ip", "gitea-ip", "preview-ip"],
-    ["prod-west", "workspace-api-ip-west", "mattermost-ip-west", "gitea-ip-west", "preview-ip-west"],
     ["test-central", "workspace-api-ip-test", "mattermost-ip-test", "gitea-ip-test", "preview-ip-test"],
-    ["test-west", "workspace-api-ip-test-west", "workspace-api-ip-test-west", "workspace-api-ip-test-west", "workspace-api-ip-test-west"],
     ["build-week-central", "workspace-api-ip-build-week", "mattermost-ip-build-week", "gitea-ip-build-week", "preview-ip-build-week"],
   ])(
     "renders the canonical ingress identities for %s",
@@ -88,7 +82,7 @@ describe("deployment target Helm values", () => {
     },
   );
 
-  it.each(["prod-central", "prod-west", "test-central", "test-west", "build-week-central"])(
+  it.each(["prod-central", "test-central", "build-week-central"])(
     "emits no platform compute class for %s",
     (targetId) => {
       expect(renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId)))
@@ -104,11 +98,11 @@ describe("deployment target Helm values", () => {
       linkedEntrypoint,
     );
 
-    const result = spawnSync(process.execPath, [linkedEntrypoint, "--target=test-west"], {
+    const result = spawnSync(process.execPath, [linkedEntrypoint, "--target=test-central"], {
       encoding: "utf8",
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('deploymentTargetId: "test-west"');
+    expect(result.stdout).toContain('deploymentTargetId: "test-central"');
   });
 });

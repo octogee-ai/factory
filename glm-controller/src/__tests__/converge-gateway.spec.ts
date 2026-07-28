@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   gatewayDeploymentIntentFingerprint,
+  cowboyMayMarkGatewayLive,
   deploymentIntentFingerprintForComparison,
   gatewayUpsertOptsFromRelease,
   markLiveRuntimePatch,
@@ -138,6 +139,13 @@ describe("planGatewayConvergence", () => {
     });
   });
 
+  it("uses the transaction-time root ownership and release fence before marking a release live", () => {
+    expect(cowboyMayMarkGatewayLive(gateway({ managedBy: "operator" }), 2)).toBe(false);
+    expect(cowboyMayMarkGatewayLive(gateway(), 1)).toBe(false);
+    expect(cowboyMayMarkGatewayLive(gateway(), 2)).toBe(true);
+    expect(markLiveRuntimePatch(gateway())).toEqual({ lifecycle: "serving", release: 2 });
+  });
+
   it("marks the desired release live once the deployment is ready at the desired image", () => {
     expect(
       planGatewayConvergence({
@@ -181,6 +189,17 @@ describe("planGatewayConvergence", () => {
       planGatewayConvergence({
         gateway: gateway({ desiredStatus: "retired" }),
         artifact: null,
+        helm: null,
+        deploymentReady: false,
+      }),
+    ).toEqual({ kind: "steady" });
+  });
+
+  it("observes an operator-managed gateway without applying desired state", () => {
+    expect(
+      planGatewayConvergence({
+        gateway: gateway({ managedBy: "operator" }),
+        artifact: artifact(),
         helm: null,
         deploymentReady: false,
       }),
@@ -277,9 +296,9 @@ describe("gatewayUpsertOptsFromRelease", () => {
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
       kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
-      deploymentTargetId: "test-west",
-      deploymentProjectId: "octogee-data-test",
-      gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
+      deploymentTargetId: "test-central",
+      deploymentProjectId: "octogee-test",
+      gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
     });
     expect(opts).toMatchObject({
       gatewayId: "bender",
@@ -291,9 +310,9 @@ describe("gatewayUpsertOptsFromRelease", () => {
       kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
       gatewayEdgeImageRepository: EDGE_REPO,
       gatewayEdgeImageTag: "def5678",
-      deploymentTargetId: "test-west",
-      deploymentProjectId: "octogee-data-test",
-      gatewayServiceAccount: "octogee-gateway@octogee-data-test.iam.gserviceaccount.com",
+      deploymentTargetId: "test-central",
+      deploymentProjectId: "octogee-test",
+      gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       waitForReady: false,
       deploymentIntentFingerprint: expect.any(String),
     });
@@ -556,16 +575,16 @@ describe("gatewayUpsertOptsFromRelease", () => {
     ).toThrow(/W9/);
   });
 
-  it("accepts the digest-bound W9 TEST experiment in the west TEST target", () => {
+  it("accepts the digest-bound W9 TEST experiment in the active Central TEST target", () => {
     const imageTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
     const opts = gatewayUpsertOptsFromRelease({
-      namespace: "octogee-test-west",
+      namespace: "octogee-test",
       gateway: gateway(),
       artifact: artifact({
-        imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageRepository: REPO,
         imageTag,
         gatewayEdgeImage: {
-          imageRepository: "us-west1-docker.pkg.dev/octogee/octogee/gateway-edge",
+          imageRepository: EDGE_REPO,
           imageTag: `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`,
         },
         testExperiment: {

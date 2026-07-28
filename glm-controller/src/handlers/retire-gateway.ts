@@ -1,5 +1,5 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
-import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { isValidGatewayId, resolveOperationOrigin } from "@octogee/shared/types/glm";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 
 const UNKNOWN_ERROR = "unknown error";
@@ -12,6 +12,8 @@ export interface RetireGatewayDeps {
     operationId: string;
     version: number;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
+
+  assertAutomaticRetirementMayMutate?: (gatewayId: string) => Promise<void>;
 
   // Mounted-customer telemetry from the gateway's runtime doc — retirement
   // refuses while any customer is still mounted.
@@ -126,21 +128,19 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const mountedFailure = await assertNoMountedCustomers(deps, gatewayId);
     if (mountedFailure) return mountedFailure;
 
-    let verification: { ok: true } | { ok: false; error: string };
-    try {
-      verification = await deps.verifyRetirementClaim({
-        gatewayId,
-        operationId: op.id,
-        version: retirementClaimVersion,
-      });
-    } catch (error) {
-      return failure(
-        `gateway ${gatewayId} retirement claim unreadable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (!verification.ok) return failure(verification.error);
+    const claimFailure = await verifyRetirementClaim(
+      deps,
+      gatewayId,
+      op.id,
+      retirementClaimVersion,
+    );
+    if (claimFailure) return claimFailure;
+
+    const automaticMutationGuard = resolveOperationOrigin(op.origin) === "automatic"
+      ? deps.assertAutomaticRetirementMayMutate
+      : undefined;
+    const uninstallFenceFailure = await automaticRetirementFenceFailure(automaticMutationGuard, gatewayId);
+    if (uninstallFenceFailure) return uninstallFenceFailure;
 
     const uninstall = await runReportedStep(ctx, deps, "helm-uninstall", () =>
       deps.helmUninstallGateway(gatewayId),
@@ -149,27 +149,35 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       return failure(`helm uninstall failed: ${uninstall.error ?? UNKNOWN_ERROR}`);
     }
 
+    const teardownFenceFailure = await automaticRetirementFenceFailure(automaticMutationGuard, gatewayId);
+    if (teardownFenceFailure) return teardownFenceFailure;
+
     // Tear down the per-gateway resources. Steps are independent and
     // best-effort: every one is attempted even if a prior one failed, so a
     // single stuck resource cannot strand the rest. Records are NOT removed
     // until all gating teardown succeeds, so a partial failure leaves the
     // operation re-drivable.
-    const teardownErrors = await teardownResources(
+    const teardownErrors = await teardownResources({
       ctx,
       deps,
       gatewayId,
       retainData,
       retainServiceAccount,
-    );
+      automaticMutationGuard,
+    });
     if (teardownErrors.length > 0) {
       return failure(
         `teardown incomplete (records preserved for retry): ${teardownErrors.join("; ")}`,
       );
     }
 
+    const cleanupFenceFailure = await automaticRetirementFenceFailure(automaticMutationGuard, gatewayId);
+    if (cleanupFenceFailure) return cleanupFenceFailure;
     const cleanupFailure = await cleanupGatewayRecords(ctx, deps, gatewayId);
     if (cleanupFailure) return cleanupFailure;
 
+    const heartbeatFenceFailure = await automaticRetirementFenceFailure(automaticMutationGuard, gatewayId);
+    if (heartbeatFenceFailure) return heartbeatFenceFailure;
     await quiesceGatewayHeartbeat(ctx, deps, gatewayId);
 
     const ingressFailure = await syncFleetIngress(ctx, deps);
@@ -177,6 +185,41 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     return { steps: [], success: true };
   };
+}
+
+async function verifyRetirementClaim(
+  deps: RetireGatewayDeps,
+  gatewayId: string,
+  operationId: string,
+  version: number,
+): Promise<OperationResult | null> {
+  try {
+    const verification = await deps.verifyRetirementClaim({
+      gatewayId,
+      operationId,
+      version,
+    });
+    return verification.ok ? null : failure(verification.error);
+  } catch (error) {
+    return failure(
+      `gateway ${gatewayId} retirement claim unreadable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+async function automaticRetirementFenceFailure(
+  guard: ((gatewayId: string) => Promise<void>) | undefined,
+  gatewayId: string,
+): Promise<OperationResult | null> {
+  if (!guard) return null;
+  try {
+    await guard(gatewayId);
+    return null;
+  } catch (error) {
+    return failure(`automatic retirement fenced: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function assertNoMountedCustomers(
@@ -191,41 +234,66 @@ async function assertNoMountedCustomers(
   );
 }
 
-async function teardownResources(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-  retainData: boolean,
-  retainServiceAccount: boolean,
-): Promise<string[]> {
+interface TeardownResourcesInput {
+  ctx: OperationContext;
+  deps: RetireGatewayDeps;
+  gatewayId: string;
+  retainData: boolean;
+  retainServiceAccount: boolean;
+  automaticMutationGuard?: (gatewayId: string) => Promise<void>;
+}
+
+async function teardownResources(input: TeardownResourcesInput): Promise<string[]> {
+  const {
+    ctx,
+    deps,
+    gatewayId,
+    retainData,
+    retainServiceAccount,
+    automaticMutationGuard,
+  } = input;
   const errors: string[] = [];
 
   if (retainData) {
     deps.log(`[retire-gateway] retainData set — preserving PVC for ${gatewayId}`);
   } else {
     await collectTeardownError(ctx, deps, errors, "delete-pvc", () =>
-      deps.deleteGatewayPersistentVolumeClaim(gatewayId),
+      guardedAutomaticRetirementMutation(
+        automaticMutationGuard,
+        gatewayId,
+        () => deps.deleteGatewayPersistentVolumeClaim(gatewayId),
+      ),
     );
   }
 
   await collectTeardownError(ctx, deps, errors, "delete-kube-secret", () =>
-    deps.deleteGatewayKubeSecret(gatewayId),
+    guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () =>
+      deps.deleteGatewayKubeSecret(gatewayId),
+    ),
   );
   await collectTeardownError(ctx, deps, errors, "delete-sm-secret", () =>
-    deps.deleteAuthTokenSecret(gatewayId),
+    guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () =>
+      deps.deleteAuthTokenSecret(gatewayId),
+    ),
   );
   await collectTeardownError(ctx, deps, errors, "delete-ksa", () =>
-    deps.deleteGatewayServiceAccount(gatewayId),
+    guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () =>
+      deps.deleteGatewayServiceAccount(gatewayId),
+    ),
   );
   await collectTeardownError(
     ctx,
     deps,
     errors,
     "delete-model-key-kube-secret",
-    () => deps.deleteGatewayModelKeyKubeSecret(gatewayId),
+    () => guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () =>
+      deps.deleteGatewayModelKeyKubeSecret(gatewayId),
+    ),
   );
   await collectTeardownError(ctx, deps, errors, "delete-model-key-source", () =>
-    deps.deleteGatewayModelKeySource(gatewayId),
+    guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () =>
+      deps.deleteGatewayModelKeySource(gatewayId),
+    ),
   );
 
   // GSA teardown: a non-404 failure means a per-gateway GSA (a standing IAM
@@ -241,11 +309,20 @@ async function teardownResources(
     );
   } else if (teardownGsa) {
     await collectTeardownError(ctx, deps, errors, "teardown-gsa", () =>
-      teardownGsa(gatewayId),
+      guardedAutomaticRetirementMutation(automaticMutationGuard, gatewayId, () => teardownGsa(gatewayId)),
     );
   }
 
   return errors;
+}
+
+async function guardedAutomaticRetirementMutation(
+  guard: ((gatewayId: string) => Promise<void>) | undefined,
+  gatewayId: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  if (guard) await guard(gatewayId);
+  await action();
 }
 
 async function collectTeardownError(

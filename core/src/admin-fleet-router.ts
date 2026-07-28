@@ -15,6 +15,8 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isOperationAuditRecord,
+  isOperationAuditRow,
   GATEWAY_CLASSES,
   GATEWAY_IMAGE_PROFILES,
   GATEWAY_PROFILES,
@@ -22,6 +24,7 @@ import {
   defaultOperatorGatewayAccess,
   resolveUserGatewayShellState,
   OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  isValidGatewayId,
   isValidNewGatewayId,
   isGatewayClass,
   isGatewayProfile,
@@ -33,6 +36,9 @@ import {
   type GatewayImageProfile,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
+  type OperationAuditAliasPlan,
+  type OperationAuditTestProvenance,
+  type OperationAuditDocument,
   type OperatorGatewayAccessSpec,
 } from "@octogee/shared/types/glm";
 import {
@@ -101,6 +107,24 @@ import {
   buildCustomerDeletionSchedule,
 } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
+import {
+  assertNormalFleetMutationOpen,
+  assertNormalFleetMutationSnapshotOpen,
+  FleetMutationFrozenError,
+  FleetMutationIdempotencyError,
+  GLM_MAINTENANCE_DOC_PATH,
+  FleetMutationMaintenanceUnavailableError,
+  runNormalFleetMutation,
+  type NormalFleetMutationDb,
+  type NormalFleetMutationResult,
+} from "./normal-fleet-mutation.js";
+import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
+import {
+  type CentralReleaseAuthority,
+  ReleaseDigestAliasError,
+  type ReleaseDigestAliasOutcome,
+  type ReleaseDigestManifest,
+} from "./artifact-registry.js";
 
 export interface FleetLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -155,6 +179,8 @@ export interface FleetRouterDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
+  releaseEnvironment?: "test" | "prod" | null;
+  releaseAuthority?: CentralReleaseAuthority;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   readGatewayPodDiagnosticsBatch?: (
     gatewayIds: readonly string[],
@@ -168,6 +194,8 @@ type ActorRequest = Request & {
   uid?: string;
   user?: { email?: string | null };
 };
+
+class GatewayAuthSecretProvisionError extends Error {}
 
 function resolveSizingForResponse(
   glmDoc: Record<string, unknown> | undefined,
@@ -1179,6 +1207,18 @@ async function readDurableGatewayRuntime(
   return { root, runtime, heartbeat: runtimeHeartbeat(runtime) };
 }
 
+function builderPlacementTargetStatus(
+  target: DurableGatewayRuntime,
+): string | null {
+  if (target.root.desiredStatus !== "running") return target.root.desiredStatus;
+  if (typeof target.root.liveRelease !== "number") return "not-live";
+  if (target.runtime?.lifecycle !== "serving") {
+    return target.runtime?.lifecycle ?? "unknown";
+  }
+  const heartbeatStatus = asStringOrNull(target.heartbeat?.status);
+  return heartbeatStatus === "ready" ? null : heartbeatStatus ?? "unknown";
+}
+
 function gatewayRetirementBlocker(
   gatewayId: string,
   runtime: DurableGatewayRuntime,
@@ -1806,6 +1846,10 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
   "another operation is already pending or running for this gateway";
 const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const ERR_USER_NOT_FOUND = "user not found";
+const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
+const ERR_BUILDER_MIGRATION_IN_FLIGHT =
+  "a migration for this customer is pending or running";
+const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
   (["prod", "test", "build-week"] as const).flatMap((environment) =>
@@ -1875,6 +1919,7 @@ interface NewOperationInput {
     | "suspend-customer"
     | "erase-customer";
   createdBy: string;
+  origin?: "automatic" | "operator";
   input: Record<string, unknown>;
 }
 
@@ -2313,6 +2358,87 @@ function readUserGatewayId(
   return asStringOrNull(openclaw.gatewayId);
 }
 
+type BuilderPlacementCommand =
+  | { kind: "evict"; gatewayId: string }
+  | { kind: "park" }
+  | { kind: "place" };
+
+type BuilderPlacementMutationOutcome = {
+  status: number;
+  body: Record<string, unknown>;
+};
+
+function parseBuilderPlacementCommand(
+  body: unknown,
+): { ok: BuilderPlacementCommand } | { error: { status: number; body: Record<string, string> } } {
+  if (!isPlainRecord(body)) {
+    return { error: { status: 400, body: { error: "placement body must be an object" } } };
+  }
+  const keys = Object.keys(body);
+  if (body.managedBy === "cowboy" && keys.length === 1 && keys[0] === "managedBy") {
+    return { ok: { kind: "place" } };
+  }
+  if (
+    body.managedBy === "operator" &&
+    keys.length === 2 &&
+    keys.includes("managedBy") &&
+    keys.includes("gatewayId")
+  ) {
+    if (body.gatewayId === null) return { ok: { kind: "park" } };
+    if (isValidGatewayId(body.gatewayId)) {
+      return { ok: { kind: "evict", gatewayId: body.gatewayId } };
+    }
+    if (typeof body.gatewayId === "string") {
+      return {
+        error: {
+          status: 400,
+          body: { error: "placement gatewayId must be a valid gateway id" },
+        },
+      };
+    }
+  }
+  return {
+    error: {
+      status: 400,
+      body: {
+        error:
+          "placement body must be { managedBy: 'operator', gatewayId: string | null } or { managedBy: 'cowboy' }",
+      },
+    },
+  };
+}
+
+function classifyBuilderPlacementMutation(
+  result: BuilderPlacementMutationOutcome,
+): NormalFleetMutationResult {
+  if (result.status < 400) return { outcome: "completed" };
+  return {
+    outcome: "failed",
+    error: typeof result.body.error === "string"
+      ? result.body.error
+      : `builder placement returned ${result.status}`,
+  };
+}
+
+function builderServingAssignment(input: {
+  uid: string;
+  slug: string;
+  gatewayId: string;
+  epoch: number;
+  updatedAt: number;
+}): AssignmentDoc {
+  return {
+    uid: input.uid,
+    slug: input.slug,
+    gatewayId: input.gatewayId,
+    source: "repair",
+    state: "serving",
+    epoch: input.epoch,
+    updatedAt: input.updatedAt,
+    updatedByOperationId: null,
+  };
+}
+
 function resolveCustomerSlug(
   userData: Record<string, unknown>,
   workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"],
@@ -2480,6 +2606,98 @@ function shapeDrawerOperation(
   if (typeof data.error === "string") out.error = data.error;
   if (typeof data.rolledBack === "boolean") out.rolledBack = data.rolledBack;
   return out;
+}
+
+function shapeInvalidOperationAuditHistoryRecord(
+  id: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    id,
+    recordType: "audit",
+    invalid: true,
+    schemaVersion: typeof data.schemaVersion === "number" ? data.schemaVersion : null,
+    status: "invalid",
+    lifecycleStage: "invalid",
+    createdAt: typeof data.createdAt === "number" && Number.isFinite(data.createdAt)
+      ? data.createdAt
+      : 0,
+    completedAt: null,
+    error: "Unsupported or malformed operation audit record",
+  };
+}
+
+function shapeAuditHistoryPreCreatedAtFields(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(data.aliasOutcomes ? { aliasOutcomes: data.aliasOutcomes } : {}),
+    ...(data.releaseRollout ? { releaseRollout: data.releaseRollout } : {}),
+    ...(data.testProvenance ? { testProvenance: data.testProvenance } : {}),
+    ...(data.outcome ? { outcome: data.outcome } : {}),
+    ...(data.partialOutcome ? { partialOutcome: data.partialOutcome } : {}),
+  };
+}
+
+function shapeAuditHistoryActionFields(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(data.actionClaimId ? { actionClaimId: data.actionClaimId } : {}),
+    ...(data.actionStartedAt !== undefined ? { actionStartedAt: data.actionStartedAt } : {}),
+    ...(data.actionRecoveryCount !== undefined
+      ? { actionRecoveryCount: data.actionRecoveryCount }
+      : {}),
+  };
+}
+
+function shapeAuditHistoryErrorField(
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    ...(typeof data.error === "string" ? { error: data.error } : {}),
+  };
+}
+
+function shapeValidOperationAuditHistoryRecord(
+  id: string,
+  data: OperationAuditDocument,
+): Record<string, unknown> {
+  return {
+    id,
+    recordType: data.recordType,
+    schemaVersion: data.schemaVersion,
+    status: data.status,
+    lifecycleStage: data.lifecycleStage,
+    idempotencyKey: data.idempotencyKey,
+    mutationFingerprint: data.mutationFingerprint,
+    mutation: data.mutation,
+    actor: data.actor,
+    forced: data.forced,
+    what: data.what,
+    why: data.why,
+    target: data.target,
+    preActionStatus: data.preActionStatus,
+    aliasPlan: data.aliasPlan,
+    ...shapeAuditHistoryPreCreatedAtFields(data),
+    createdAt: data.createdAt,
+    ...shapeAuditHistoryActionFields(data),
+    completedAt: data.completedAt,
+    ...shapeAuditHistoryErrorField(data),
+  };
+}
+
+export function shapeOperationsHistoryRecord(
+  id: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
+    return shapeInvalidOperationAuditHistoryRecord(id, data);
+  }
+  if (isOperationAuditRecord(data)) {
+    return shapeValidOperationAuditHistoryRecord(id, data);
+  }
+  return { id, ...data };
 }
 
 function serializeCustomerLookup(doc: CustomerLookupDoc): {
@@ -2657,6 +2875,7 @@ async function convergeDefaultGatewayChange(input: {
   previousGatewayId: string | null;
   targetGatewayId: string;
   createdBy: string;
+  enqueueMigration: (input: Record<string, unknown>) => Promise<string>;
 }): Promise<AdminDefaultGatewayChange> {
   const [usersSnap, pendingOpsSnap] = await Promise.all([
     input.deps.db.collection("users").get(),
@@ -2703,16 +2922,12 @@ async function convergeDefaultGatewayChange(input: {
       result.adopted.push({ uid: user.id, operationId: decision.operationId });
       continue;
     }
-    const operationId = await createOperation(input.deps.db, {
-      kind: OP_KIND_MIGRATE_CUSTOMER,
-      createdBy: input.createdBy,
-      input: {
-        uid: user.id,
-        ...(decision.builderSlug ? { builderSlug: decision.builderSlug } : {}),
-        fromGatewayId: decision.currentGatewayId,
-        toGatewayId: input.targetGatewayId,
-        source: "platform-default-change",
-      },
+    const operationId = await input.enqueueMigration({
+      uid: user.id,
+      ...(decision.builderSlug ? { builderSlug: decision.builderSlug } : {}),
+      fromGatewayId: decision.currentGatewayId,
+      toGatewayId: input.targetGatewayId,
+      source: "platform-default-change",
     });
     result.enqueued.push({ uid: user.id, operationId });
   }
@@ -2730,6 +2945,7 @@ function operationDoc(
     kind: opts.kind,
     status: "pending",
     createdBy: opts.createdBy,
+    ...(opts.origin ? { origin: opts.origin } : {}),
     createdAt,
     startedAt: null,
     completedAt: null,
@@ -2766,6 +2982,176 @@ async function readRelease(
 
 function asReleaseArtifactPayload(artifact: GatewayArtifact): ReleasePayload {
   return { ...artifact } as ReleasePayload;
+}
+
+const CENTRAL_RELEASE_GATEWAY_ID = "default";
+const CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION = "centralTestReleaseReservations";
+const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
+const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const RELEASE_VERSION_PATTERN = new RegExp(
+  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
+    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
+);
+
+type CentralTestReleaseReservation = {
+  version: string;
+  sourceSha: string;
+  manifestDigest: string;
+  gatewayId: string;
+  release: number;
+  rolloutOperationId: string | null;
+};
+
+type CentralTestReleaseReservationInput = Pick<
+  CentralTestReleaseReservation,
+  "version" | "sourceSha" | "manifestDigest"
+>;
+
+class CentralTestReleaseVersionConflictError extends Error {
+  constructor(readonly version: string) {
+    super(`CENTRAL TEST version ${version} is already reserved for a different manifest`);
+  }
+}
+
+function centralTestReleaseReservationFromData(
+  data: Record<string, unknown> | undefined,
+  version: string,
+): CentralTestReleaseReservation {
+  if (
+    data?.version !== version ||
+    typeof data.sourceSha !== "string" ||
+    typeof data.manifestDigest !== "string" ||
+    typeof data.gatewayId !== "string" ||
+    typeof data.release !== "number" ||
+    !Number.isSafeInteger(data.release) ||
+    (typeof data.rolloutOperationId !== "string" && data.rolloutOperationId !== null)
+  ) {
+    throw new Error(`CENTRAL TEST reservation ${version} is malformed`);
+  }
+  return {
+    version,
+    sourceSha: data.sourceSha,
+    manifestDigest: data.manifestDigest,
+    gatewayId: data.gatewayId,
+    release: data.release,
+    rolloutOperationId: data.rolloutOperationId,
+  };
+}
+
+function centralTestReservationMatches(
+  reservation: CentralTestReleaseReservation,
+  input: CentralTestReleaseReservationInput,
+): boolean {
+  return reservation.sourceSha === input.sourceSha &&
+    reservation.manifestDigest === input.manifestDigest;
+}
+
+async function readCentralTestReleaseReservation(
+  db: Firestore,
+  version: string,
+): Promise<CentralTestReleaseReservation | null> {
+  const snapshot = await db
+    .collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION)
+    .doc(version)
+    .get();
+  if (!snapshot.exists) return null;
+  return centralTestReleaseReservationFromData(snapshot.data(), version);
+}
+
+function releaseVersionFromBody(value: unknown): string | null {
+  return typeof value === "string" && RELEASE_VERSION_PATTERN.test(value) ? value : null;
+}
+
+function releaseSourceShaFromBody(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
+}
+
+function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleasePayload {
+  const shortSha = manifest.sourceSha.slice(0, 7);
+  const tag = `${shortSha}-oc${manifest.openclawVersion}`;
+  const payload: ReleasePayload = {
+    imageRepository: `${manifest.repository}/octogee-gateway`,
+    imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
+    profileImages: {
+      operator: {
+        imageRepository: `${manifest.repository}/octogee-gateway-operator`,
+        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-operator"]}`,
+      },
+    },
+    gatewayEdgeImage: {
+      imageRepository: `${manifest.repository}/gateway-edge`,
+      imageTag: `${tag}@${manifest.surfaces.gateway["gateway-edge"]}`,
+    },
+  };
+  if (!isReleasePayload(payload)) {
+    throw new Error("CENTRAL release manifest cannot produce a valid gateway release payload");
+  }
+  return payload;
+}
+
+function centralReleaseAliasPlans(input: {
+  authority: CentralReleaseAuthority;
+  manifest: ReleaseDigestManifest;
+  version: string;
+  includeTestRecord: boolean;
+}): OperationAuditAliasPlan[] {
+  const aliases = input.authority.aliasesFor(input.manifest);
+  if (input.includeTestRecord) {
+    aliases.push(input.authority.testRecordAlias(input.version, input.manifest));
+  }
+  return aliases;
+}
+
+type CentralReleaseMutationResult = {
+  appended?: { release: number; operationId: string | null; reused?: boolean };
+  aliasOutcomes: ReleaseDigestAliasOutcome[];
+  failure?: {
+    error: unknown;
+    failedStep: "aliases" | "maintenance" | "release" | "test-record";
+  };
+};
+
+function aliasOutcomesFromError(error: unknown): ReleaseDigestAliasOutcome[] {
+  return error instanceof ReleaseDigestAliasError ? error.aliasOutcomes : [];
+}
+
+function classifyCentralReleaseMutation(input: {
+  gatewayId: string;
+  imageTag: string;
+}): (result: CentralReleaseMutationResult) => NormalFleetMutationResult {
+  return (result) => {
+    const releaseRollout = result.appended
+      ? {
+          releaseId: `${input.gatewayId}/${result.appended.release}`,
+          releaseTag: input.imageTag,
+          ...(result.appended.operationId
+            ? { rolloutOperationId: result.appended.operationId }
+            : {}),
+        }
+      : undefined;
+    if (result.failure) {
+      return {
+        outcome: "partial",
+        aliasOutcomes: result.aliasOutcomes,
+        ...(releaseRollout ? { releaseRollout } : {}),
+        partialOutcome: {
+          summary: "CENTRAL release mutation partially completed",
+          details: {
+            failedStep: result.failure.failedStep,
+            error: result.failure.error instanceof Error
+              ? result.failure.error.message
+              : String(result.failure.error),
+          },
+        },
+      };
+    }
+    if (!result.appended) throw new Error("CENTRAL release mutation has no release result");
+    return {
+      outcome: "completed",
+      aliasOutcomes: result.aliasOutcomes,
+      ...(releaseRollout ? { releaseRollout } : {}),
+    };
+  };
 }
 
 function artifactFromRelease(release: ReleaseDoc): GatewayArtifact | null {
@@ -2830,67 +3216,148 @@ function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
   );
 }
 
+type AppendGatewayReleaseArgs = {
+  gateway: GatewayDoc;
+  artifact: GatewayArtifact;
+  payload?: ReleasePayload;
+  createdBy: string;
+  now: number;
+  sourceRelease: number | null;
+  note: string | null;
+  centralTestReservation?: CentralTestReleaseReservationInput;
+  requireMaintenanceOpen?: boolean;
+};
+
+async function existingReservedGatewayRelease(
+  transaction: Transaction,
+  reservationRef: DocumentReference | null,
+  reservation: CentralTestReleaseReservationInput | undefined,
+): Promise<{ release: number; operationId: string | null; reused: true } | null> {
+  if (!reservationRef || !reservation) return null;
+  const snapshot = await transaction.get(reservationRef);
+  if (!snapshot.exists) return null;
+  const existing = centralTestReleaseReservationFromData(snapshot.data(), reservation.version);
+  if (!centralTestReservationMatches(existing, reservation)) {
+    throw new CentralTestReleaseVersionConflictError(reservation.version);
+  }
+  return {
+    release: existing.release,
+    operationId: existing.rolloutOperationId,
+    reused: true,
+  };
+}
+
+async function appendGatewayReleaseCurrentRoot(
+  transaction: Transaction,
+  db: Firestore,
+  gatewayRef: DocumentReference,
+  args: AppendGatewayReleaseArgs,
+): Promise<GatewayDoc> {
+  const snapshot = await transaction.get(gatewayRef);
+  const current = asDurableGatewayRoot(snapshot.data(), args.gateway.gatewayId);
+  if (!current) throw new InvalidGatewayRootError(args.gateway.gatewayId);
+  if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${args.gateway.gatewayId} has a current retirement claim`,
+    );
+  }
+  if (current.latestRelease !== args.gateway.latestRelease) {
+    throw new StaleGatewayReleaseError(
+      args.gateway.gatewayId,
+      args.gateway.latestRelease,
+      current.latestRelease,
+    );
+  }
+  const activeOperations = await transaction.get(
+    db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]),
+  );
+  const migrationConflict = findActiveGatewayMigration(
+    args.gateway.gatewayId,
+    activeOperations.docs.map((document) => {
+      const operation = document.data() as Record<string, unknown>;
+      return {
+        id: document.id,
+        kind: typeof operation.kind === "string" ? operation.kind : "",
+        status: typeof operation.status === "string" ? operation.status : "",
+        input: operation.input,
+        customerMigrationV2: operation.customerMigrationV2,
+      };
+    }),
+  );
+  if (migrationConflict) {
+    throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
+  }
+  return current;
+}
+
+async function assertGatewayReleaseIsNew(
+  transaction: Transaction,
+  gatewayRef: DocumentReference,
+  gatewayId: string,
+  release: number,
+): Promise<void> {
+  const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
+  if (await transaction.get(releaseRef).then((snapshot) => snapshot.exists)) {
+    throw new Error(
+      `appendGatewayRelease: gateways/${gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`,
+    );
+  }
+}
+
+function appendGatewayReleasePayload(args: AppendGatewayReleaseArgs): ReleasePayload {
+  const payload = args.payload ?? asReleaseArtifactPayload(args.artifact);
+  if (!isReleasePayload(payload)) {
+    throw new Error("appendGatewayRelease requires a valid immutable release payload");
+  }
+  return payload;
+}
+
+async function assertAppendGatewayReleaseMaintenance(
+  transaction: Transaction,
+  db: Firestore,
+  required: boolean | undefined,
+): Promise<void> {
+  if (!required) return;
+  const maintenanceSnapshot = await transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH));
+  assertNormalFleetMutationSnapshotOpen(maintenanceSnapshot);
+}
+
+function writeCentralTestReleaseReservation(
+  transaction: Transaction,
+  reservationRef: DocumentReference | null,
+  reservation: CentralTestReleaseReservationInput | undefined,
+  result: { gatewayId: string; release: number; operationId: string },
+): void {
+  if (!reservationRef || !reservation) return;
+  transaction.create(reservationRef, {
+    version: reservation.version,
+    sourceSha: reservation.sourceSha,
+    manifestDigest: reservation.manifestDigest,
+    gatewayId: result.gatewayId,
+    release: result.release,
+    rolloutOperationId: result.operationId,
+  });
+}
+
 async function appendGatewayRelease(
   db: Firestore,
-  args: {
-    gateway: GatewayDoc;
-    artifact: GatewayArtifact;
-    createdBy: string;
-    now: number;
-    sourceRelease: number | null;
-    note: string | null;
-  },
-): Promise<{ release: number; operationId: string | null }> {
+  args: AppendGatewayReleaseArgs,
+): Promise<{ release: number; operationId: string | null; reused?: boolean }> {
   const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
   const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+  const reservationRef = args.centralTestReservation
+    ? db.collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION).doc(args.centralTestReservation.version)
+    : null;
   return db.runTransaction(async (txn) => {
-    const snap = await txn.get(gwRef);
-    const current = asDurableGatewayRoot(snap.data(), args.gateway.gatewayId);
-    if (!current) {
-      throw new InvalidGatewayRootError(args.gateway.gatewayId);
-    }
-    if (current.desiredStatus === "retired" || current.retirementClaim != null) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${args.gateway.gatewayId} has a current retirement claim`,
-      );
-    }
-    if (current.latestRelease !== args.gateway.latestRelease) {
-      throw new StaleGatewayReleaseError(
-        args.gateway.gatewayId,
-        args.gateway.latestRelease,
-        current.latestRelease,
-      );
-    }
-    const activeOperations = await txn.get(
-      db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", ["pending", "running"]),
-    );
-    const migrationConflict = findActiveGatewayMigration(
-      args.gateway.gatewayId,
-      activeOperations.docs.map((doc) => {
-        const operation = doc.data() as Record<string, unknown>;
-        return {
-          id: doc.id,
-          kind: typeof operation.kind === "string" ? operation.kind : "",
-          status: typeof operation.status === "string" ? operation.status : "",
-          input: operation.input,
-          customerMigrationV2: operation.customerMigrationV2,
-        };
-      }),
-    );
-    if (migrationConflict) {
-      throw new GatewayMigrationInFlightError(args.gateway.gatewayId, migrationConflict.id);
-    }
+    const existing = await existingReservedGatewayRelease(txn, reservationRef, args.centralTestReservation);
+    if (existing) return existing;
+    const current = await appendGatewayReleaseCurrentRoot(txn, db, gwRef, args);
     const release = current.latestRelease + 1;
     const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-    const relExisting = await txn.get(relRef);
-    if (relExisting.exists) {
-      throw new Error(
-        `appendGatewayRelease: gateways/${args.gateway.gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`,
-      );
-    }
-    const payload = asReleaseArtifactPayload(args.artifact);
+    await assertGatewayReleaseIsNew(txn, gwRef, args.gateway.gatewayId, release);
+    const payload = appendGatewayReleasePayload(args);
+    const artifact = gatewayArtifactFromReleasePayload(payload);
+    await assertAppendGatewayReleaseMaintenance(txn, db, args.requireMaintenanceOpen);
     const releaseDoc: ReleaseDoc = {
       gatewayId: args.gateway.gatewayId,
       release,
@@ -2914,10 +3381,16 @@ async function appendGatewayRelease(
         {
           kind: "rollout",
           createdBy: args.createdBy,
-          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, args.artifact),
+          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, artifact),
         },
         args.now,
       ),
+    );
+    writeCentralTestReleaseReservation(
+      txn,
+      reservationRef,
+      args.centralTestReservation,
+      { gatewayId: args.gateway.gatewayId, release, operationId: operationRef.id },
     );
     return { release, operationId: operationRef.id };
   });
@@ -2943,6 +3416,10 @@ class InvalidGatewayRootError extends Error {
 }
 
 function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
+  if (error instanceof CentralTestReleaseVersionConflictError) {
+    res.status(409).json({ error: error.message });
+    return true;
+  }
   if (error instanceof GatewayRetirementConflictError) {
     res.status(409).json({ error: error.message });
     return true;
@@ -2970,6 +3447,129 @@ function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
     return true;
   }
   return false;
+}
+
+class CentralReleaseRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(typeof body.error === "string" ? body.error : "CENTRAL release request failed");
+  }
+}
+
+function rejectCentralReleaseRequest(status: number, body: Record<string, unknown>): never {
+  throw new CentralReleaseRequestError(status, body);
+}
+
+function centralReleaseAuthorityFor(
+  deps: FleetRouterDeps,
+  environment: "test" | "prod",
+): CentralReleaseAuthority {
+  if (deps.releaseEnvironment !== environment || !deps.releaseAuthority) {
+    rejectCentralReleaseRequest(404, {
+      error: `CENTRAL ${environment.toUpperCase()} release authority is unavailable`,
+    });
+  }
+  return deps.releaseAuthority;
+}
+
+function centralTestReleaseRequest(body: unknown): { version: string; sourceSha: string } {
+  if (
+    !isPlainRecord(body) ||
+    Object.keys(body).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(body, "version") ||
+    !Object.prototype.hasOwnProperty.call(body, "sourceSha")
+  ) {
+    rejectCentralReleaseRequest(400, { error: "release cut requires exactly version and sourceSha" });
+  }
+  const version = releaseVersionFromBody(body.version);
+  const sourceSha = releaseSourceShaFromBody(body.sourceSha);
+  if (!version || !sourceSha) {
+    rejectCentralReleaseRequest(400, {
+      error: "release cut requires a semantic version and full lowercase sourceSha",
+    });
+  }
+  return { version, sourceSha };
+}
+
+function centralPromotionRequest(version: unknown, body: unknown): string {
+  const parsedVersion = releaseVersionFromBody(version);
+  if (!parsedVersion) {
+    rejectCentralReleaseRequest(400, { error: "release promotion requires a v-prefixed semantic version" });
+  }
+  if (!isPlainRecord(body ?? {}) || Object.keys(body ?? {}).length !== 0) {
+    rejectCentralReleaseRequest(400, { error: "release promotion does not accept a request body" });
+  }
+  return parsedVersion;
+}
+
+async function centralManifestForSourceSha(
+  authority: CentralReleaseAuthority,
+  sourceSha: string,
+): Promise<ReleaseDigestManifest> {
+  const manifest = await authority.resolveManifest(sourceSha);
+  if (manifest.sourceSha !== sourceSha) {
+    rejectCentralReleaseRequest(409, {
+      error: "release manifest sourceSha does not match the requested SHA",
+    });
+  }
+  return manifest;
+}
+
+function assertCentralTestReleaseReservation(
+  existing: CentralTestReleaseReservation | null,
+  input: CentralTestReleaseReservationInput,
+): void {
+  if (existing && !centralTestReservationMatches(existing, input)) {
+    rejectCentralReleaseRequest(409, {
+      error: `CENTRAL TEST version ${input.version} is already reserved for a different manifest`,
+    });
+  }
+}
+
+async function centralReleaseGateway(
+  db: Firestore,
+  operation: "cut" | "promote",
+): Promise<GatewayDoc> {
+  const gateway = await readGatewayDoc(db, CENTRAL_RELEASE_GATEWAY_ID);
+  if (!gateway) {
+    rejectCentralReleaseRequest(404, {
+      error: ERR_GATEWAY_NOT_FOUND,
+      gatewayId: CENTRAL_RELEASE_GATEWAY_ID,
+    });
+  }
+  if (gateway.desiredStatus === "retired") {
+    rejectCentralReleaseRequest(409, {
+      error: `cannot ${operation} a release for a retired gateway`,
+      gatewayId: gateway.gatewayId,
+    });
+  }
+  return gateway;
+}
+
+async function assertNoCentralReleaseOperation(
+  db: Firestore,
+  gateway: GatewayDoc,
+  allowExistingReservation = false,
+): Promise<void> {
+  const conflict = await findConflictingGatewayOp(db, gateway.gatewayId);
+  if (conflict && !allowExistingReservation) {
+    rejectCentralReleaseRequest(409, {
+      error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
+      gatewayId: gateway.gatewayId,
+      operationId: conflict.id,
+      kind: conflict.kind,
+    });
+  }
+}
+
+function respondCentralReleaseError(res: Response, error: unknown): boolean {
+  if (error instanceof CentralReleaseRequestError) {
+    res.status(error.status).json(error.body);
+    return true;
+  }
+  return respondReleaseWriteConflict(res, error);
 }
 
 function rolloutOpInputFromArtifact(
@@ -3304,6 +3904,15 @@ function buildDurableGatewayPatch(args: {
   }
   const configPatch = mutableConfigPatchFromBody(args.body);
   const patch: Record<string, unknown> = { ...configPatch };
+  if (Object.prototype.hasOwnProperty.call(args.body, "managedBy")) {
+    const managedBy = args.body.managedBy;
+    if (managedBy !== "operator" && managedBy !== "cowboy") {
+      return {
+        error: { status: 400, body: { error: "managedBy must be operator or cowboy" } },
+      };
+    }
+    patch.managedBy = managedBy;
+  }
   if (args.body.desiredStatus !== undefined) {
     if (typeof args.body.desiredStatus !== "string") {
       return { error: { status: 400, body: { error: "desiredStatus must be a string" } } };
@@ -3620,23 +4229,29 @@ async function accelerateScheduledCustomerErasure(opts: {
   db: Firestore;
   userRef: DocumentReference;
   lifecycle: Record<string, unknown>;
-  res: Response;
-}): Promise<void> {
+}): Promise<
+  | { status: 202; body: Record<string, unknown> }
+  | { status: 409; body: Record<string, unknown> }
+> {
   const deletionId = asStringOrNull(opts.lifecycle.deletionId);
   if (!deletionId) {
-    opts.res.status(409).json({ error: "Scheduled deletion is missing its deletion id" });
-    return;
+    return {
+      status: 409,
+      body: { error: "Scheduled deletion is missing its deletion id" },
+    };
   }
   const deletionRef = opts.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
   const deletionSnap = await deletionRef.get();
   const deletion = deletionSnap.data() as Record<string, unknown> | undefined;
   const erasureOperationId = asStringOrNull(deletion?.erasureOperationId);
   if (!deletionSnap.exists || !erasureOperationId) {
-    opts.res.status(409).json({
-      error: "Scheduled deletion is missing its durable erasure operation",
-      deletionId,
-    });
-    return;
+    return {
+      status: 409,
+      body: {
+        error: "Scheduled deletion is missing its durable erasure operation",
+        deletionId,
+      },
+    };
   }
   const erasureRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc(erasureOperationId);
   const erasureSnap = await erasureRef.get();
@@ -3645,12 +4260,14 @@ async function accelerateScheduledCustomerErasure(opts: {
     erasure?.kind === "erase-customer" &&
     (erasure.status === "pending" || erasure.status === "running");
   if (!runnable) {
-    opts.res.status(409).json({
-      error: "Scheduled erasure operation is not runnable",
-      deletionId,
-      erasureOperationId,
-    });
-    return;
+    return {
+      status: 409,
+      body: {
+        error: "Scheduled erasure operation is not runnable",
+        deletionId,
+        erasureOperationId,
+      },
+    };
   }
   const now = Date.now();
   const batch = opts.db.batch();
@@ -3658,37 +4275,15 @@ async function accelerateScheduledCustomerErasure(opts: {
   batch.update(deletionRef, { eraseAfter: now, updatedAt: now });
   batch.update(erasureRef, { nextAttemptAt: now });
   await batch.commit();
-  opts.res.status(202).json({
-    status: "erasure_requested",
-    deletionId,
-    erasureOperationId,
-    eraseAfter: now,
-  });
-}
-
-async function handleExistingCustomerDeletion(opts: {
-  db: Firestore;
-  userRef: DocumentReference;
-  lifecycle: Record<string, unknown> | undefined;
-  eraseNow: boolean;
-  res: Response;
-}): Promise<boolean> {
-  const status = opts.lifecycle?.status;
-  if (status !== "deletion_scheduled" && status !== "erasing") return false;
-  if (status === "deletion_scheduled" && opts.eraseNow) {
-    await accelerateScheduledCustomerErasure({
-      db: opts.db,
-      userRef: opts.userRef,
-      lifecycle: opts.lifecycle!,
-      res: opts.res,
-    });
-    return true;
-  }
-  opts.res.status(409).json({
-    error: "Cleanup already in progress",
-    deletionId: opts.lifecycle?.deletionId ?? null,
-  });
-  return true;
+  return {
+    status: 202,
+    body: {
+      status: "erasure_requested",
+      deletionId,
+      erasureOperationId,
+      eraseAfter: now,
+    },
+  };
 }
 
 type CustomerDeletionAdmission =
@@ -3701,6 +4296,15 @@ type CustomerDeletionAdmission =
       erasureOperationId: string;
       eraseAfter: number;
       slug: string | null;
+    };
+
+type CustomerDeletionActionOutcome =
+  | CustomerDeletionAdmission
+  | {
+      kind: "partial";
+      failedStep: "suspend-auth" | "revoke-connector-grants";
+      claimed: Extract<CustomerDeletionAdmission, { kind: "created" }>;
+      error: Error;
     };
 
 async function claimCustomerDeletion(opts: {
@@ -3797,11 +4401,386 @@ async function claimCustomerDeletion(opts: {
   });
 }
 
+function classifyErasureAcceleration(
+  result: Awaited<ReturnType<typeof accelerateScheduledCustomerErasure>>,
+): NormalFleetMutationResult {
+  if (result.status < 400) return { outcome: "completed" };
+  return {
+    outcome: "failed",
+    error: typeof result.body.error === "string"
+      ? result.body.error
+      : `customer erasure acceleration returned ${result.status}`,
+  };
+}
+
+function eraseNowValueIsInvalid(value: unknown): boolean {
+  return value !== undefined && typeof value !== "boolean";
+}
+
+function customerDeletionIsActive(
+  lifecycle: Record<string, unknown> | undefined,
+): lifecycle is Record<string, unknown> {
+  return lifecycle?.status === "deletion_scheduled" ||
+    lifecycle?.status === "erasing";
+}
+
+function customerDeletionCanAccelerate(
+  lifecycleStatus: unknown,
+  eraseNow: unknown,
+): boolean {
+  return lifecycleStatus === "deletion_scheduled" && eraseNow === true;
+}
+
+function classifyCustomerDeletion(
+  result: CustomerDeletionActionOutcome,
+  uid: string,
+): NormalFleetMutationResult {
+  if (result.kind === "not-found") {
+    return { outcome: "failed", error: "User not found" };
+  }
+  if (result.kind === "conflict") {
+    return { outcome: "failed", error: "Cleanup already in progress" };
+  }
+  if (result.kind !== "partial") return { outcome: "completed" };
+  const summary = result.failedStep === "suspend-auth"
+    ? "customer deletion was scheduled but identity suspension failed"
+    : "customer deletion was scheduled but connector grant revocation failed";
+  return {
+    outcome: "partial",
+    partialOutcome: {
+      summary,
+      details: {
+        uid,
+        failedStep: result.failedStep,
+        deletionId: result.claimed.deletionId,
+        suspensionOperationId: result.claimed.suspensionOperationId,
+        erasureOperationId: result.claimed.erasureOperationId,
+      },
+    },
+  };
+}
+
+function respondToCustomerDeletionAdmission(
+  admission: CustomerDeletionActionOutcome,
+  res: Response,
+  logger: FleetLogger,
+  uid: string,
+): void {
+  if (admission.kind === "partial") throw admission.error;
+  if (admission.kind === "not-found") {
+    res.status(404).json({ error: "User not found", uid });
+    return;
+  }
+  if (admission.kind === "conflict") {
+    res.status(409).json({
+      error: "Cleanup already in progress",
+      ...(admission.deletionId ? { deletionId: admission.deletionId } : {}),
+      ...(admission.operationId ? { operationId: admission.operationId } : {}),
+    });
+    return;
+  }
+  logger.info(
+    `[admin-delete] scheduled deletion=${admission.deletionId} uid=${uid} eraseAfter=${admission.eraseAfter}`,
+  );
+  res.status(202).json({
+    status: "deletion_scheduled",
+    deletionId: admission.deletionId,
+    suspensionOperationId: admission.suspensionOperationId,
+    erasureOperationId: admission.erasureOperationId,
+    eraseAfter: admission.eraseAfter,
+    slug: admission.slug,
+  });
+}
+
+async function claimAndCleanupCustomerDeletion(opts: {
+  db: Firestore;
+  deps: Pick<
+    FleetRouterDeps,
+    "workspaceSlugsForUser" | "suspendAuthUser" | "revokeConnectorGrantsForUser"
+  >;
+  uid: string;
+  requestedBy: string;
+  eraseNow: boolean;
+}): Promise<CustomerDeletionActionOutcome> {
+  const claimed = await claimCustomerDeletion({
+    db: opts.db,
+    uid: opts.uid,
+    requestedBy: opts.requestedBy,
+    eraseNow: opts.eraseNow,
+    workspaceSlugsForUser: opts.deps.workspaceSlugsForUser,
+  });
+  if (claimed.kind !== "created") return claimed;
+  try {
+    await opts.deps.suspendAuthUser(opts.uid);
+  } catch (error) {
+    return {
+      kind: "partial",
+      failedStep: "suspend-auth",
+      claimed,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+  try {
+    await opts.deps.revokeConnectorGrantsForUser(opts.uid);
+  } catch (error) {
+    return {
+      kind: "partial",
+      failedStep: "revoke-connector-grants",
+      claimed,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+  return claimed;
+}
+
 type ActivationLeaseTerminationOutcome =
   | { kind: "not-found" }
   | { kind: "conflict"; reason: string }
   | { kind: "adopted" }
   | { kind: "requested" };
+
+type ActivationLeaseReturnOutcome =
+  | { kind: "not-found" }
+  | { kind: "conflict"; status: string | null }
+  | { kind: "adopted" }
+  | { kind: "requested" };
+
+function classifyActivationLeaseTermination(
+  result: ActivationLeaseTerminationOutcome,
+): NormalFleetMutationResult {
+  if (result.kind === "not-found") {
+    return { outcome: "failed", error: ERR_USER_NOT_FOUND };
+  }
+  if (result.kind === "conflict") {
+    return { outcome: "failed", error: result.reason };
+  }
+  if (result.kind === "adopted") {
+    return {
+      outcome: "failed",
+      error: "activation lease termination was already requested",
+    };
+  }
+  return { outcome: "completed" };
+}
+
+function classifyActivationLeaseReturn(
+  result: ActivationLeaseReturnOutcome,
+): NormalFleetMutationResult {
+  if (result.kind === "not-found") {
+    return { outcome: "failed", error: ERR_USER_NOT_FOUND };
+  }
+  if (result.kind === "conflict") {
+    return {
+      outcome: "failed",
+      error: "activation lease is not the requested active generation",
+    };
+  }
+  if (result.kind === "adopted") {
+    return {
+      outcome: "failed",
+      error: "activation lease return was already requested",
+    };
+  }
+  return { outcome: "completed" };
+}
+
+function projectOperationForMigrationLock(doc: {
+  id: string;
+  data(): Record<string, unknown>;
+}): {
+  id: string;
+  kind: string;
+  status: string;
+  input: unknown;
+  customerMigrationV2: unknown;
+} {
+  const operation = doc.data();
+  return {
+    id: doc.id,
+    kind: typeof operation.kind === "string" ? operation.kind : "",
+    status: typeof operation.status === "string" ? operation.status : "",
+    input: operation.input,
+    customerMigrationV2: operation.customerMigrationV2,
+  };
+}
+
+function isInFlightCustomerMigration(doc: {
+  data(): Record<string, unknown>;
+}): boolean {
+  const data = doc.data();
+  return data.kind === OP_KIND_MIGRATE_CUSTOMER &&
+    (data.status === "pending" || data.status === "running");
+}
+
+type AddGatewayMutationOutcome =
+  | { kind: "completed"; operationId: string }
+  | {
+      kind: "partial";
+      failedStep: "initial-release" | "rollout-operation";
+      error: Error;
+    };
+
+function gatewayCreationBodyError(
+  body: Record<string, unknown>,
+): RolloutBodyError | null {
+  const persistenceError = rejectPersistenceInBody(body);
+  if (persistenceError) return persistenceError;
+  if (!Object.prototype.hasOwnProperty.call(body, "byosub")) return null;
+  return {
+    status: 400,
+    body: {
+      error: "gateway credential references are user-scoped and cannot be created here",
+    },
+  };
+}
+
+function gatewayCreationRuntimeDefaults(
+  gatewayClass: GatewayClass,
+  gatewayId: string,
+  ownerUid: string | undefined,
+): {
+  operatorAccess?: OperatorGatewayAccessSpec;
+  serviceAccountName?: string;
+  serviceAccount?: GatewayServiceAccountSpec;
+} {
+  const defaults: {
+    operatorAccess?: OperatorGatewayAccessSpec;
+    serviceAccountName?: string;
+    serviceAccount?: GatewayServiceAccountSpec;
+  } = {};
+  if (gatewayClass === "builder" || gatewayClass === "operator") {
+    defaults.operatorAccess = defaultOperatorGatewayAccess(ownerUid);
+  }
+  if (gatewayClass === "operator") {
+    defaults.serviceAccountName = operatorGatewayServiceAccountName(gatewayId);
+    defaults.serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+  }
+  return defaults;
+}
+
+function respondToAddGatewayMutationError(
+  error: unknown,
+  res: Response,
+  gatewayId: string,
+): boolean {
+  if (error instanceof GatewayAuthSecretProvisionError) {
+    res.status(502).json({
+      error: "failed to provision gateway auth-token secret",
+      gatewayId,
+      detail: error.message,
+    });
+    return true;
+  }
+  if (error instanceof InitialGatewayReleaseConflictError) {
+    res.status(409).json({
+      error: "gateway already exists",
+      gatewayId: error.gatewayId,
+    });
+    return true;
+  }
+  return false;
+}
+
+function classifyAddGatewayMutation(
+  outcome: AddGatewayMutationOutcome,
+  gatewayId: string,
+  artifact: GatewayArtifact,
+): NormalFleetMutationResult {
+  if (outcome.kind === "completed") {
+    return {
+      outcome: "completed",
+      releaseRollout: {
+        releaseId: `${gatewayId}/1`,
+        releaseTag: artifact.imageTag,
+        rolloutOperationId: outcome.operationId,
+      },
+    };
+  }
+  if (outcome.failedStep === "initial-release") {
+    return {
+      outcome: "partial",
+      partialOutcome: {
+        summary: "gateway auth secret was provisioned but its initial release was not created",
+        details: { gatewayId, failedStep: outcome.failedStep },
+      },
+    };
+  }
+  return {
+    outcome: "partial",
+    partialOutcome: {
+      summary: "gateway release was created but its rollout operation could not be enqueued",
+      details: { gatewayId, release: 1, failedStep: outcome.failedStep },
+    },
+    releaseRollout: {
+      releaseId: `${gatewayId}/1`,
+      releaseTag: artifact.imageTag,
+    },
+  };
+}
+
+async function performAddGatewayMutation(opts: {
+  db: Firestore;
+  provisionGatewayAuthSecret: FleetRouterDeps["provisionGatewayAuthSecret"];
+  gatewayServiceAccount: string;
+  body: AddGatewayCreate;
+  gatewayClass: GatewayClass;
+  imageProfile: GatewayImageProfile;
+  owner: { ownerUid?: string; builderSlug?: string };
+  config: GatewayMutableConfig;
+  artifact: GatewayArtifact;
+  createdBy: string;
+  now: number;
+}): Promise<AddGatewayMutationOutcome> {
+  try {
+    await opts.provisionGatewayAuthSecret({
+      gatewayId: opts.body.gatewayId,
+      gatewayServiceAccount: opts.gatewayServiceAccount,
+    });
+  } catch (error) {
+    throw new GatewayAuthSecretProvisionError(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  try {
+    await writeInitialGatewayRelease(opts.db, {
+      gatewayId: opts.body.gatewayId,
+      createdBy: opts.createdBy,
+      now: opts.now,
+      desiredStatus: "running",
+      config: opts.config,
+      artifact: opts.artifact,
+    });
+  } catch (error) {
+    return {
+      kind: "partial",
+      failedStep: "initial-release",
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+  try {
+    const operationId = await createOperation(opts.db, {
+      kind: "add-gateway",
+      createdBy: opts.createdBy,
+      input: {
+        gatewayId: opts.body.gatewayId,
+        imageTag: opts.body.imageTag,
+        ...(opts.body.profile ? { profile: opts.body.profile } : {}),
+        gatewayClass: opts.gatewayClass,
+        ...(opts.imageProfile !== "standard" ? { imageProfile: opts.imageProfile } : {}),
+        ...(opts.body.sizingTier ? { sizingTier: opts.body.sizingTier } : {}),
+        ...(opts.owner.ownerUid ? { ownerUid: opts.owner.ownerUid } : {}),
+        ...(opts.owner.builderSlug ? { builderSlug: opts.owner.builderSlug } : {}),
+      },
+    });
+    return { kind: "completed", operationId };
+  } catch (error) {
+    return {
+      kind: "partial",
+      failedStep: "rollout-operation",
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
 
 function activationLeaseForTermination(
   data: GlmDoc,
@@ -3964,13 +4943,82 @@ export function addAdminFleetRoutes(
 ): Router {
   const { db, logger } = deps;
 
+  async function runAdminFleetMutation<T>(input: {
+    req: Request;
+    what: string;
+    why: string;
+    target: Record<string, unknown>;
+    preActionStatus: Record<string, unknown>;
+    mutation: Record<string, unknown>;
+    action: () => Promise<T>;
+    classifyResult?: (result: T) => NormalFleetMutationResult;
+    idempotencyScope?: string;
+    aliasPlan?: OperationAuditAliasPlan[];
+    testProvenance?: OperationAuditTestProvenance;
+  }): Promise<T> {
+    const actor = input.req as ActorRequest;
+    const headerKey = input.req.get("Idempotency-Key")?.trim();
+    return runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+      actor: actor.uid ?? "unknown",
+      forced: false,
+      what: input.what,
+      why: input.why,
+      target: input.target,
+      preActionStatus: input.preActionStatus,
+      mutation: input.mutation,
+      action: async () => input.action(),
+      classifyResult: input.classifyResult,
+      ...(input.aliasPlan ? { aliasPlan: input.aliasPlan } : {}),
+      ...(input.testProvenance ? { testProvenance: input.testProvenance } : {}),
+      ...(headerKey
+        ? { idempotencyKey: `${headerKey}:${input.idempotencyScope ?? input.what}` }
+      : {}),
+    });
+  }
+
+  async function handleActiveCustomerDeletion(input: {
+    req: Request;
+    res: Response;
+    uid: string;
+    userRef: DocumentReference;
+    lifecycle: Record<string, unknown> | undefined;
+    eraseNow: unknown;
+  }): Promise<boolean> {
+    const lifecycle = input.lifecycle;
+    if (!customerDeletionIsActive(lifecycle)) return false;
+    const lifecycleStatus = lifecycle.status;
+    if (!customerDeletionCanAccelerate(lifecycleStatus, input.eraseNow)) {
+      input.res.status(409).json({
+        error: "Cleanup already in progress",
+        deletionId: lifecycle.deletionId ?? null,
+      });
+      return true;
+    }
+    const acceleration = await runAdminFleetMutation({
+      req: input.req,
+      what: "accelerate scheduled customer erasure",
+      why: ADMIN_FLEET_REQUEST_REASON,
+      target: { uid: input.uid, deletionId: lifecycle.deletionId ?? null },
+      preActionStatus: { lifecycleStatus },
+      mutation: { kind: "accelerate-customer-erasure", uid: input.uid },
+      classifyResult: classifyErasureAcceleration,
+      action: async () => accelerateScheduledCustomerErasure({
+        db,
+        userRef: input.userRef,
+        lifecycle,
+      }),
+    });
+    input.res.status(acceleration.status).json(acceleration.body);
+    return true;
+  }
+
 router.post(
     "/customer/:uid/delete",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
         const body = (req.body ?? {}) as { eraseNow?: unknown };
-        if (body.eraseNow !== undefined && typeof body.eraseNow !== "boolean") {
+        if (eraseNowValueIsInvalid(body.eraseNow)) {
           res.status(400).json({ error: "eraseNow must be a boolean" });
           return;
         }
@@ -3984,48 +5032,34 @@ router.post(
         const existingLifecycle = userData.accountLifecycle as
           | Record<string, unknown>
           | undefined;
-        const handledExisting = await handleExistingCustomerDeletion({
-          db,
+        const existingStatus = existingLifecycle?.status;
+        const activeDeletionHandled = await handleActiveCustomerDeletion({
+          req,
+          res,
+          uid,
           userRef,
           lifecycle: existingLifecycle,
-          eraseNow: body.eraseNow === true,
-          res,
+          eraseNow: body.eraseNow,
         });
-        if (handledExisting) return;
+        if (activeDeletionHandled) return;
         const actor = req as ActorRequest;
-        const admission = await claimCustomerDeletion({
-          db,
-          uid,
-          requestedBy: actor.uid ?? "unknown",
-          eraseNow: body.eraseNow === true,
-          workspaceSlugsForUser: deps.workspaceSlugsForUser,
+        const admission = await runAdminFleetMutation({
+          req,
+          what: "schedule customer deletion",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid },
+          preActionStatus: { lifecycleStatus: existingStatus ?? null },
+          mutation: { kind: "schedule-customer-deletion", uid, eraseNow: body.eraseNow === true },
+          classifyResult: (result) => classifyCustomerDeletion(result, uid),
+          action: async () => claimAndCleanupCustomerDeletion({
+            db,
+            deps,
+            uid,
+            requestedBy: actor.uid ?? "unknown",
+            eraseNow: body.eraseNow === true,
+          }),
         });
-        if (admission.kind === "not-found") {
-          res.status(404).json({ error: "User not found", uid });
-          return;
-        }
-        if (admission.kind === "conflict") {
-          res.status(409).json({
-            error: "Cleanup already in progress",
-            ...(admission.deletionId ? { deletionId: admission.deletionId } : {}),
-            ...(admission.operationId ? { operationId: admission.operationId } : {}),
-          });
-          return;
-        }
-
-        await deps.suspendAuthUser(uid);
-        await deps.revokeConnectorGrantsForUser(uid);
-        logger.info(
-          `[admin-delete] scheduled deletion=${admission.deletionId} uid=${uid} eraseAfter=${admission.eraseAfter}`,
-        );
-        res.status(202).json({
-          status: "deletion_scheduled",
-          deletionId: admission.deletionId,
-          suspensionOperationId: admission.suspensionOperationId,
-          erasureOperationId: admission.erasureOperationId,
-          eraseAfter: admission.eraseAfter,
-          slug: admission.slug,
-        });
+        respondToCustomerDeletionAdmission(admission, res, logger, uid);
       } catch (e) {
         next(e);
       }
@@ -4202,20 +5236,58 @@ router.patch(
         }
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
-          {
-            defaultGatewayId: parsed.ok.defaultGatewayId,
-            placementUpdatedAt: Date.now(),
-            placementUpdatedBy: createdBy,
+        await runAdminFleetMutation({
+          req,
+          what: "set default gateway placement",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { gatewayId: parsed.ok.defaultGatewayId },
+          preActionStatus: { defaultGatewayId: config.defaultGatewayId || null },
+          mutation: {
+            kind: "set-default-gateway-placement",
+            gatewayId: parsed.ok.defaultGatewayId,
           },
-          { merge: true },
-        );
+          action: async () => {
+            await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(
+              {
+                defaultGatewayId: parsed.ok.defaultGatewayId,
+                placementUpdatedAt: Date.now(),
+                placementUpdatedBy: createdBy,
+              },
+              { merge: true },
+            );
+          },
+        });
         const defaultChange = await convergeDefaultGatewayChange({
           deps,
           gatewaysById,
           previousGatewayId: config.defaultGatewayId || null,
           targetGatewayId: parsed.ok.defaultGatewayId,
           createdBy,
+          enqueueMigration: async (input) => {
+            const uid = input.uid as string;
+            const fromGatewayId = input.fromGatewayId as string;
+            const toGatewayId = input.toGatewayId as string;
+            return runAdminFleetMutation({
+              req,
+              what: "migrate builder after default placement change",
+              why: ADMIN_FLEET_REQUEST_REASON,
+              target: { uid, gatewayId: toGatewayId },
+              preActionStatus: { gatewayId: fromGatewayId },
+              mutation: {
+                kind: OP_KIND_MIGRATE_CUSTOMER,
+                uid,
+                fromGatewayId,
+                toGatewayId,
+                source: "platform-default-change",
+              },
+              idempotencyScope: `default-placement-migration:${uid}`,
+              action: async () => createOperation(db, {
+                kind: OP_KIND_MIGRATE_CUSTOMER,
+                createdBy,
+                input,
+              }),
+            });
+          },
         });
         const response = await readAdminOnboardingPlacementResponse(deps);
         res.json({ ...response, defaultChange });
@@ -4259,7 +5331,7 @@ router.patch(
         }
         if (target.status !== "ready") {
           res.status(409).json({
-            error: "target gateway not ready",
+            error: ERR_TARGET_GATEWAY_NOT_READY,
             gatewayId: toGatewayId,
             status: target.status ?? "unknown",
           });
@@ -4275,7 +5347,6 @@ router.patch(
         const enqueued: Array<{ uid: string; operationId: string }> = [];
         const adopted: Array<{ uid: string; operationId: string }> = [];
         const rejected: Array<{ uid: string; reason: string; currentGatewayId?: string | null }> = [];
-
         for (const uid of [...new Set(uids)]) {
           const userSnap = await db.collection("users").doc(uid).get();
           if (!userSnap.exists) {
@@ -4308,16 +5379,32 @@ router.patch(
             adopted.push({ uid, operationId: existing.id });
             continue;
           }
-          const operationId = await createOperation(db, {
-            kind: OP_KIND_MIGRATE_CUSTOMER,
-            createdBy,
-            input: {
+          const operationInput = {
+            uid,
+            ...(builderSlug ? { builderSlug } : {}),
+            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+            toGatewayId,
+            source: "admin-bulk-repair",
+          };
+          const operationId = await runAdminFleetMutation({
+            req,
+            what: "migrate builder",
+            why: "Admin bulk migration request",
+            target: { uid, gatewayId: toGatewayId },
+            preActionStatus: { gatewayId: currentGatewayId ?? null },
+            mutation: {
+              kind: OP_KIND_MIGRATE_CUSTOMER,
               uid,
-              ...(builderSlug ? { builderSlug } : {}),
               ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
               toGatewayId,
               source: "admin-bulk-repair",
             },
+            idempotencyScope: `bulk-migration:${uid}`,
+            action: async () => createOperation(db, {
+              kind: OP_KIND_MIGRATE_CUSTOMER,
+              createdBy,
+              input: operationInput,
+            }),
           });
           enqueued.push({ uid, operationId });
         }
@@ -4512,6 +5599,7 @@ router.post(
           res.status(400).json({ error: "missing gatewayId in body" });
           return;
         }
+        const targetGatewayId = body.gatewayId;
         const userSnap = await db.collection("users").doc(uid).get();
         if (!userSnap.exists) {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
@@ -4520,18 +5608,18 @@ router.post(
         const userData = (userSnap.data() ?? {}) as {
           provisioning?: { openclaw?: { gatewayId?: string; gatewayProfile?: unknown } };
         };
-        const target = await readDurableGatewayRuntime(db, body.gatewayId);
+        const target = await readDurableGatewayRuntime(db, targetGatewayId);
         if (!target) {
           res.status(404).json({
             error: ERR_GATEWAY_NOT_FOUND,
-            gatewayId: body.gatewayId,
+            gatewayId: targetGatewayId,
           });
           return;
         }
         if (target.root.desiredStatus !== "running") {
           res.status(409).json({
-            error: "target gateway not ready",
-            gatewayId: body.gatewayId,
+            error: ERR_TARGET_GATEWAY_NOT_READY,
+            gatewayId: targetGatewayId,
             status: target.root.desiredStatus,
           });
           return;
@@ -4539,7 +5627,7 @@ router.post(
         const targetStatus = asStringOrNull(target.heartbeat?.status);
         if (targetStatus !== "ready") {
           res.status(409).json({
-            error: "target gateway not ready",
+            error: ERR_TARGET_GATEWAY_NOT_READY,
             gatewayId: body.gatewayId,
             status: targetStatus ?? "unknown",
           });
@@ -4570,32 +5658,48 @@ router.post(
           });
           return;
         }
-        const placement = await commitPlacementAtomic(db as unknown as PlacementFirestore, {
-          uid,
-          slug,
-          gatewayId: body.gatewayId,
-          source: "repair",
-          now: Date.now(),
-          assignmentWrite: currentGid === body.gatewayId ? "create-if-missing" : "upsert",
-          mirrorPatch: {
-            "provisioning.openclaw.gatewayId": body.gatewayId,
-            "provisioning.openclaw.gatewayProfile": gatewayProfile,
-            "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+        const placement = await runAdminFleetMutation({
+          req,
+          what: "assign builder to gateway",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, gatewayId: targetGatewayId },
+          preActionStatus: { gatewayId: currentGid ?? null },
+          mutation: {
+            kind: "assign-customer",
+            uid,
+            gatewayId: targetGatewayId,
+            assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
           },
+          classifyResult: (result) => result.kind === "rejected"
+            ? { outcome: "failed", error: `target revision not placeable: ${result.reason}` }
+            : { outcome: "completed" },
+          action: async () => commitPlacementAtomic(db as unknown as PlacementFirestore, {
+            uid,
+            slug,
+            gatewayId: targetGatewayId,
+            source: "repair",
+            now: Date.now(),
+            assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
+            mirrorPatch: {
+              "provisioning.openclaw.gatewayId": targetGatewayId,
+              "provisioning.openclaw.gatewayProfile": gatewayProfile,
+              "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+            },
+          }),
         });
         if (placement.kind === "rejected") {
           res.status(409).json({
             error: `target revision not placeable: ${placement.reason}`,
-            gatewayId: body.gatewayId,
+            gatewayId: targetGatewayId,
             reason: placement.reason,
           });
           return;
         }
-        res.status(currentGid === body.gatewayId ? 200 : 202).json({
+        res.status(currentGid === targetGatewayId ? 200 : 202).json({
           uid,
-          gatewayId: body.gatewayId,
+          gatewayId: targetGatewayId,
           gatewayProfile,
-          ...(currentGid === body.gatewayId ? { repaired: true } : {}),
+          ...(currentGid === targetGatewayId ? { repaired: true } : {}),
         });
       } catch (e) {
         next(e);
@@ -4629,16 +5733,25 @@ router.post(
           res.status(409).json({ error: "default gateway is unavailable" });
           return;
         }
-        const outcome = await db.runTransaction((transaction) =>
-          requestActivationLeaseTermination(db, transaction, {
-            uid,
-            leaseId,
-            generation,
-            defaultGatewayId,
-            requestedAt: now,
-            requestedBy: actor.uid ?? "unknown",
-          })
-        );
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "terminate builder activation lease",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, leaseId, generation },
+          preActionStatus: { defaultGatewayId },
+          mutation: { kind: "terminate-activation-lease", uid, leaseId, generation },
+          classifyResult: classifyActivationLeaseTermination,
+          action: async () => db.runTransaction((transaction) =>
+            requestActivationLeaseTermination(db, transaction, {
+              uid,
+              leaseId,
+              generation,
+              defaultGatewayId,
+              requestedAt: now,
+              requestedBy: actor.uid ?? "unknown",
+            })
+          ),
+        });
         if (outcome.kind === "not-found") {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
           return;
@@ -4678,32 +5791,46 @@ router.post(
         const actor = req as ActorRequest;
         const userRef = db.collection("users").doc(uid);
         const requestedAt = Date.now();
-        const outcome = await db.runTransaction(async (transaction) => {
-          const snapshot = await transaction.get(userRef);
-          if (!snapshot.exists) return { kind: "not-found" as const };
-          const data = snapshot.data() as Record<string, unknown>;
-          const resolved = activationLeaseFromUser(data);
-          const lease = resolved?.lease;
-          if (
-            !lease ||
-            lease.leaseId !== body.leaseId ||
-            lease.generation !== body.generation ||
-            lease.status !== "active"
-          ) {
-            return {
-              kind: "conflict" as const,
-              status: asStringOrNull(lease?.status),
-            };
-          }
-          if (toMillis(lease.returnRequestedAt) !== null) {
-            return { kind: "adopted" as const };
-          }
-          transaction.update(userRef, {
-            "provisioning.openclaw.activationLease.returnRequestedAt": requestedAt,
-            "provisioning.openclaw.activationLease.returnRequestedBy":
-              actor.uid ?? "unknown",
-          });
-          return { kind: "requested" as const };
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "return builder activation lease",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, leaseId: body.leaseId, generation: body.generation },
+          preActionStatus: {},
+          mutation: {
+            kind: "return-activation-lease",
+            uid,
+            leaseId: body.leaseId,
+            generation: body.generation,
+          },
+          classifyResult: classifyActivationLeaseReturn,
+          action: async () => db.runTransaction(async (transaction) => {
+            const snapshot = await transaction.get(userRef);
+            if (!snapshot.exists) return { kind: "not-found" as const };
+            const data = snapshot.data() as Record<string, unknown>;
+            const resolved = activationLeaseFromUser(data);
+            const lease = resolved?.lease;
+            if (
+              !lease ||
+              lease.leaseId !== body.leaseId ||
+              lease.generation !== body.generation ||
+              lease.status !== "active"
+            ) {
+              return {
+                kind: "conflict" as const,
+                status: asStringOrNull(lease?.status),
+              };
+            }
+            if (toMillis(lease.returnRequestedAt) !== null) {
+              return { kind: "adopted" as const };
+            }
+            transaction.update(userRef, {
+              "provisioning.openclaw.activationLease.returnRequestedAt": requestedAt,
+              "provisioning.openclaw.activationLease.returnRequestedBy":
+                actor.uid ?? "unknown",
+            });
+            return { kind: "requested" as const };
+          }),
         });
         if (outcome.kind === "not-found") {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
@@ -4756,16 +5883,35 @@ router.post(
           typeof assignmentData?.epoch === "number"
             ? assignmentData.epoch
             : undefined;
-        const result = await requestBuilderActivationLease({
-          db,
-          uid,
-          reportingGatewayId: reportingGatewayId ?? undefined,
-          assignmentEpoch,
-          eventKey: `manual:${createdBy}:${now}`,
-          cause: "manual",
-          observedAt: now,
-          createdBy,
-          now,
+        const result = await runAdminFleetMutation({
+          req,
+          what: "request builder activation lease",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid },
+          preActionStatus: {
+            gatewayId: reportingGatewayId ?? null,
+            assignmentEpoch: assignmentEpoch ?? null,
+          },
+          mutation: { kind: "request-activation-lease", uid },
+          classifyResult: (result) => result.statusCode >= 400
+            ? {
+                outcome: "failed",
+                error: typeof result.body.error === "string"
+                  ? result.body.error
+                  : `activation lease request returned ${result.statusCode}`,
+              }
+            : { outcome: "completed" },
+          action: async () => requestBuilderActivationLease({
+            db,
+            uid,
+            reportingGatewayId: reportingGatewayId ?? undefined,
+            assignmentEpoch,
+            eventKey: `manual:${createdBy}:${now}`,
+            cause: "manual",
+            observedAt: now,
+            createdBy,
+            now,
+          }),
         });
         res.status(result.statusCode).json(result.body);
       } catch (e) {
@@ -4774,26 +5920,19 @@ router.post(
     },
   );
 
-router.post(
+  router.post(
     "/gateways",
-    // eslint-disable-next-line complexity -- linear preflight: validate body, check uniqueness, provision GSA secret, write desired state. Each guard returns its own error response; flattening is clearer than threading.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const now = Date.now();
 
-        const persistenceError = rejectPersistenceInBody(
+        const bodyError = gatewayCreationBodyError(
           (req.body ?? {}) as Record<string, unknown>,
         );
-        if (persistenceError) {
-          res.status(persistenceError.status).json(persistenceError.body);
-          return;
-        }
-        if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "byosub")) {
-          res.status(400).json({
-            error: "gateway credential references are user-scoped and cannot be created here",
-          });
+        if (bodyError) {
+          res.status(bodyError.status).json(bodyError.body);
           return;
         }
 
@@ -4830,80 +5969,62 @@ router.post(
           });
           return;
         }
-        try {
-          await deps.provisionGatewayAuthSecret({
-            gatewayId: body.gatewayId,
-            gatewayServiceAccount,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({
-            error: "failed to provision gateway auth-token secret",
-            gatewayId: body.gatewayId,
-            detail: message,
-          });
-          return;
-        }
         const gatewayClass = resolveGatewayClass(body);
         const imageProfile = resolveGatewayImageProfile(body);
-        const ownerRuntimeDefaults: { operatorAccess?: OperatorGatewayAccessSpec } =
-          gatewayClass === "builder" || gatewayClass === "operator"
-            ? {
-                operatorAccess: defaultOperatorGatewayAccess(owner.ok.ownerUid),
-              }
-            : {};
-        const operatorDefaults: {
-          serviceAccountName?: string;
-          serviceAccount?: GatewayServiceAccountSpec;
-        } =
-          gatewayClass === "operator"
-            ? {
-                serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
-                serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-              }
-            : {};
+        const runtimeDefaults = gatewayCreationRuntimeDefaults(
+          gatewayClass,
+          body.gatewayId,
+          owner.ok.ownerUid,
+        );
+        const config = buildCreateGatewayConfig({
+          body,
+          gatewayClass,
+          imageProfile,
+          ownerUid: owner.ok.ownerUid,
+          builderSlug: owner.ok.builderSlug,
+          operatorAccess: runtimeDefaults.operatorAccess,
+          serviceAccountName: runtimeDefaults.serviceAccountName,
+          serviceAccount: runtimeDefaults.serviceAccount,
+        });
+        const artifact = buildCreateArtifact(body);
+        let operationId: string;
         try {
-          await writeInitialGatewayRelease(db, {
-            gatewayId: body.gatewayId,
-            createdBy,
-            now,
-            desiredStatus: "running",
-            config: buildCreateGatewayConfig({
+          const result = await runAdminFleetMutation({
+            req,
+            what: "add gateway",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: body.gatewayId },
+            preActionStatus: { exists: false },
+            mutation: {
+              kind: "add-gateway",
+              gatewayId: body.gatewayId,
+              imageTag: body.imageTag,
+              gatewayClass,
+              imageProfile,
+              desiredStatus: "running",
+            },
+            classifyResult: (outcome) =>
+              classifyAddGatewayMutation(outcome, body.gatewayId, artifact),
+            action: async () => performAddGatewayMutation({
+              db,
+              provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
+              gatewayServiceAccount,
               body,
               gatewayClass,
               imageProfile,
-              ownerUid: owner.ok.ownerUid,
-              builderSlug: owner.ok.builderSlug,
-              operatorAccess: ownerRuntimeDefaults.operatorAccess,
-              serviceAccountName: operatorDefaults.serviceAccountName,
-              serviceAccount: operatorDefaults.serviceAccount,
+              owner: owner.ok,
+              config,
+              artifact,
+              createdBy,
+              now,
             }),
-            artifact: buildCreateArtifact(body),
           });
+          if (result.kind === "partial") throw result.error;
+          operationId = result.operationId;
         } catch (e) {
-          if (e instanceof InitialGatewayReleaseConflictError) {
-            res.status(409).json({
-              error: "gateway already exists",
-              gatewayId: e.gatewayId,
-            });
-            return;
-          }
+          if (respondToAddGatewayMutationError(e, res, body.gatewayId)) return;
           throw e;
         }
-        const operationId = await createOperation(db, {
-          kind: "add-gateway",
-          createdBy,
-          input: {
-            gatewayId: body.gatewayId,
-            imageTag: body.imageTag,
-            ...(body.profile ? { profile: body.profile } : {}),
-            gatewayClass,
-            ...(imageProfile !== "standard" ? { imageProfile } : {}),
-            ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
-            ...(owner.ok.ownerUid ? { ownerUid: owner.ok.ownerUid } : {}),
-            ...(owner.ok.builderSlug ? { builderSlug: owner.ok.builderSlug } : {}),
-          },
-        });
         res
           .status(202)
           .json({ gatewayId: body.gatewayId, operationId });
@@ -4954,51 +6075,57 @@ router.post(
           return;
         }
         const updatedBy = (req as ActorRequest).uid ?? "unknown";
-        const patchResult = await db.runTransaction(async (txn) => {
-          const [currentSnap, activeOperations] = await Promise.all([
-            txn.get(rootRef),
-            txn.get(
-              db
-                .collection(GLM_OPERATIONS_COLLECTION)
-                .where("status", "in", ["pending", "running"]),
-            ),
-          ]);
-          const currentData = currentSnap.exists
-            ? (currentSnap.data() as Record<string, unknown> | undefined)
-            : undefined;
-          const current = asDurableGatewayRoot(currentData, id);
-          if (!current) return { ok: false as const, error: ERR_GATEWAY_NOT_FOUND };
-          if (current.desiredStatus === "retired" || current.retirementClaim != null) {
-            return {
-              ok: false as const,
-              error: "gateway has a current retirement claim",
-            };
-          }
-          const migrationConflict = findActiveGatewayMigration(
-            id,
-            activeOperations.docs.map((doc) => {
-              const operation = doc.data() as Record<string, unknown>;
+        const patchResult = await runAdminFleetMutation({
+          req,
+          what: "update gateway desired configuration",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { gatewayId: id },
+          preActionStatus: {
+            desiredStatus: root.desiredStatus,
+            desiredRelease: root.desiredRelease,
+            managedBy: root.managedBy ?? "cowboy",
+          },
+          mutation: { kind: "patch-gateway", gatewayId: id, patch: built.ok.patch },
+          classifyResult: (result) => result.ok
+            ? { outcome: "completed" }
+            : { outcome: "failed", error: result.error },
+          action: async () => db.runTransaction(async (txn) => {
+            const [currentSnap, activeOperations] = await Promise.all([
+              txn.get(rootRef),
+              txn.get(
+                db
+                  .collection(GLM_OPERATIONS_COLLECTION)
+                  .where("status", "in", ["pending", "running"]),
+              ),
+            ]);
+            const currentData = currentSnap.exists
+              ? (currentSnap.data() as Record<string, unknown> | undefined)
+              : undefined;
+            const current = asDurableGatewayRoot(currentData, id);
+            if (!current) return { ok: false as const, error: ERR_GATEWAY_NOT_FOUND };
+            if (current.desiredStatus === "retired" || current.retirementClaim != null) {
               return {
-                id: doc.id,
-                kind: typeof operation.kind === "string" ? operation.kind : "",
-                status: typeof operation.status === "string" ? operation.status : "",
-                input: operation.input,
-                customerMigrationV2: operation.customerMigrationV2,
+                ok: false as const,
+                error: "gateway has a current retirement claim",
               };
-            }),
-          );
-          if (migrationConflict) {
-            return {
-              ok: false as const,
-              error: `customer migration is in flight for gateway ${id}`,
-            };
-          }
-          txn.update(rootRef, {
-            ...built.ok.patch,
-            updatedAt: Date.now(),
-            updatedBy,
-          });
-          return { ok: true as const };
+            }
+            const migrationConflict = findActiveGatewayMigration(
+              id,
+              activeOperations.docs.map(projectOperationForMigrationLock),
+            );
+            if (migrationConflict) {
+              return {
+                ok: false as const,
+                error: `customer migration is in flight for gateway ${id}`,
+              };
+            }
+            txn.update(rootRef, {
+              ...built.ok.patch,
+              updatedAt: Date.now(),
+              updatedBy,
+            });
+            return { ok: true as const };
+          }),
         });
         if (!patchResult.ok) {
           res.status(409).json({ error: patchResult.error, gatewayId: id });
@@ -5071,27 +6198,43 @@ router.post(
         const operationId = opRef.id;
         const createdAt = Date.now();
         try {
-          await claimGatewayRetirementAtomic({
-            db,
-            gatewayId: id,
-            operationId,
-            operation: {
-              kind: "retire-gateway",
-              status: "pending",
-              createdBy,
-              createdAt,
-              startedAt: null,
-              completedAt: null,
-              input: {
-                gatewayId: id,
-                ...(retainData ? { retainData: true } : {}),
-                ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-              },
-              steps: [],
-              gatewayId: id,
+          await runAdminFleetMutation({
+            req,
+            what: "retire gateway",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: id },
+            preActionStatus: {
+              desiredStatus: runtime.root.desiredStatus,
+              desiredRelease: runtime.root.desiredRelease,
             },
-            now: createdAt,
-            updatedBy: createdBy,
+            mutation: {
+              kind: "retire-gateway",
+              gatewayId: id,
+              ...(retainData ? { retainData: true } : {}),
+              ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+            },
+            action: async () => claimGatewayRetirementAtomic({
+              db,
+              gatewayId: id,
+              operationId,
+              operation: {
+                kind: "retire-gateway",
+                status: "pending",
+                createdBy,
+                createdAt,
+                startedAt: null,
+                completedAt: null,
+                input: {
+                  gatewayId: id,
+                  ...(retainData ? { retainData: true } : {}),
+                  ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+                },
+                steps: [],
+                gatewayId: id,
+              },
+              now: createdAt,
+              updatedBy: createdBy,
+            }),
           });
         } catch (error) {
           if (error instanceof GatewayRetirementConflictError) {
@@ -5146,11 +6289,21 @@ router.post(
           return;
         }
 
-        const actor = req as ActorRequest;
-        const operationId = await createOperation(db, {
-          kind: "restart-gateway",
-          createdBy: actor.uid ?? "unknown",
-          input: { gatewayId: id },
+        const operationId = await runAdminFleetMutation({
+          req,
+          what: "restart gateway",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { gatewayId: id },
+          preActionStatus: {
+            desiredStatus: gateway.desiredStatus,
+            desiredRelease: gateway.desiredRelease,
+          },
+          mutation: { kind: "restart-gateway", gatewayId: id },
+          action: async () => createOperation(db, {
+            kind: "restart-gateway",
+            createdBy: (req as ActorRequest).uid ?? "unknown",
+            input: { gatewayId: id },
+          }),
         });
         res.status(202).json({ gatewayId: id, operationId });
       } catch (e) {
@@ -5242,10 +6395,27 @@ router.post(
         if (imageRepository) patch.imageRepository = imageRepository;
         let recorded: { release?: number; operationId: string };
         try {
-          recorded = await recordRolloutRelease(db, {
-            gateway: rolloutGateway,
-            patch,
-            createdBy: actor.uid ?? "unknown",
+          recorded = await runAdminFleetMutation({
+            req,
+            what: "roll out gateway image",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: id },
+            preActionStatus: {
+              desiredStatus: rolloutGateway.desiredStatus,
+              desiredRelease: rolloutGateway.desiredRelease,
+              imageTag: current.artifact.imageTag,
+            },
+            mutation: {
+              kind: "rollout-gateway",
+              gatewayId: id,
+              imageTag: artifact.imageTag,
+              imageRepository: artifact.imageRepository,
+            },
+            action: async () => recordRolloutRelease(db, {
+              gateway: rolloutGateway,
+              patch,
+              createdBy: actor.uid ?? "unknown",
+            }),
           });
         } catch (e) {
           if (respondReleaseWriteConflict(res, e)) return;
@@ -5256,6 +6426,256 @@ router.post(
           .json({ gatewayId: id, operationId: recorded.operationId, ...(recorded.release ? { release: recorded.release } : {}) });
       } catch (e) {
         next(e);
+      }
+    },
+  );
+
+  router.post(
+    "/releases/cut",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authority = centralReleaseAuthorityFor(deps, "test");
+        const { version, sourceSha } = centralTestReleaseRequest(req.body);
+        const manifest = await centralManifestForSourceSha(authority, sourceSha);
+        const existingReservation = await readCentralTestReleaseReservation(db, version);
+        assertCentralTestReleaseReservation(existingReservation, {
+          version,
+          sourceSha,
+          manifestDigest: manifest.manifestDigest,
+        });
+        const gateway = await centralReleaseGateway(db, "cut");
+        await assertNoCentralReleaseOperation(db, gateway, existingReservation !== null);
+        const payload = centralGatewayReleasePayload(manifest);
+        const aliasPlan = centralReleaseAliasPlans({
+          authority,
+          manifest,
+          version,
+          includeTestRecord: true,
+        });
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const testProvenance: OperationAuditTestProvenance = {
+          environment: "test",
+          sourceCommit: sourceSha,
+          verifiedBy: createdBy,
+          verifiedAt: Date.now(),
+        };
+        let result: CentralReleaseMutationResult;
+        try {
+          result = await runAdminFleetMutation({
+            req,
+            what: "cut CENTRAL TEST release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: gateway.gatewayId, version, sourceSha },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "cut-central-test-release",
+              gatewayId: gateway.gatewayId,
+              version,
+              sourceSha,
+              manifestDigest: manifest.manifestDigest,
+            },
+            aliasPlan,
+            testProvenance,
+            ...(existingReservation
+              ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
+              : {}),
+            classifyResult: classifyCentralReleaseMutation({
+              gatewayId: gateway.gatewayId,
+              imageTag: payload.imageTag,
+            }),
+            action: async () => {
+              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
+              try {
+                aliasOutcomes = await authority.ensureAliases(
+                  authority.aliasesFor(manifest),
+                );
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
+                };
+              }
+              try {
+                await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "maintenance" },
+                };
+              }
+              let appended: { release: number; operationId: string | null; reused?: boolean };
+              try {
+                appended = await appendGatewayRelease(db, {
+                  gateway,
+                  artifact: gatewayArtifactFromReleasePayload(payload),
+                  payload,
+                  createdBy,
+                  now: Date.now(),
+                  sourceRelease: gateway.latestRelease,
+                  note: `CENTRAL TEST ${version} ${sourceSha}`,
+                  centralTestReservation: { version, sourceSha, manifestDigest: manifest.manifestDigest },
+                  requireMaintenanceOpen: true,
+                });
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "release" },
+                };
+              }
+              try {
+                const testRecordOutcomes = await authority.ensureAliases([
+                  authority.testRecordAlias(version, manifest),
+                ]);
+                return { appended, aliasOutcomes: [...aliasOutcomes, ...testRecordOutcomes] };
+              } catch (error) {
+                return {
+                  appended,
+                  aliasOutcomes: [...aliasOutcomes, ...aliasOutcomesFromError(error)],
+                  failure: { error, failedStep: "test-record" },
+                };
+              }
+            },
+          });
+        } catch (error) {
+          if (respondCentralReleaseError(res, error)) return;
+          throw error;
+        }
+        if (result.failure) {
+          if (respondCentralReleaseError(res, result.failure.error)) return;
+          throw result.failure.error;
+        }
+        if (!result.appended) throw new Error("CENTRAL TEST release mutation has no release result");
+        res.status(202).json({
+          version,
+          sourceSha,
+          gatewayId: gateway.gatewayId,
+          release: result.appended.release,
+          operationId: result.appended.operationId,
+        });
+      } catch (error) {
+        if (respondCentralReleaseError(res, error)) return;
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/releases/:version/promote",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authority = centralReleaseAuthorityFor(deps, "prod");
+        const version = centralPromotionRequest(req.params.version, req.body);
+        const testManifest = await authority.resolveTestManifest(version);
+        const manifest = await authority.resolveManifest(testManifest.sourceSha);
+        if (manifest.manifestDigest !== testManifest.manifestDigest) {
+          rejectCentralReleaseRequest(409, {
+            error: "CENTRAL TEST record does not identify the exact release manifest",
+          });
+        }
+        const gateway = await centralReleaseGateway(db, "promote");
+        await assertNoCentralReleaseOperation(db, gateway);
+        const payload = centralGatewayReleasePayload(manifest);
+        const aliasPlan = centralReleaseAliasPlans({
+          authority,
+          manifest,
+          version,
+          includeTestRecord: false,
+        });
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+        const testProvenance: OperationAuditTestProvenance = {
+          environment: "test",
+          sourceCommit: manifest.sourceSha,
+          verifiedBy: createdBy,
+          verifiedAt: Date.now(),
+        };
+        let result: CentralReleaseMutationResult;
+        try {
+          result = await runAdminFleetMutation({
+            req,
+            what: "promote CENTRAL release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: gateway.gatewayId, version, sourceSha: manifest.sourceSha },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "promote-central-release",
+              gatewayId: gateway.gatewayId,
+              version,
+              sourceSha: manifest.sourceSha,
+              manifestDigest: manifest.manifestDigest,
+            },
+            aliasPlan,
+            testProvenance,
+            classifyResult: classifyCentralReleaseMutation({
+              gatewayId: gateway.gatewayId,
+              imageTag: payload.imageTag,
+            }),
+            action: async () => {
+              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
+              try {
+                aliasOutcomes = await authority.ensureAliases(
+                  authority.aliasesFor(manifest),
+                );
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
+                };
+              }
+              try {
+                await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "maintenance" },
+                };
+              }
+              try {
+                const appended = await appendGatewayRelease(db, {
+                  gateway,
+                  artifact: gatewayArtifactFromReleasePayload(payload),
+                  payload,
+                  createdBy,
+                  now: Date.now(),
+                  sourceRelease: gateway.latestRelease,
+                  note: `CENTRAL PROD ${version} ${manifest.sourceSha}`,
+                  requireMaintenanceOpen: true,
+                });
+                return { appended, aliasOutcomes };
+              } catch (error) {
+                return {
+                  aliasOutcomes,
+                  failure: { error, failedStep: "release" },
+                };
+              }
+            },
+          });
+        } catch (error) {
+          if (respondCentralReleaseError(res, error)) return;
+          throw error;
+        }
+        if (result.failure) {
+          if (respondCentralReleaseError(res, result.failure.error)) return;
+          throw result.failure.error;
+        }
+        if (!result.appended) throw new Error("CENTRAL PROD release mutation has no release result");
+        res.status(202).json({
+          version,
+          sourceSha: manifest.sourceSha,
+          gatewayId: gateway.gatewayId,
+          release: result.appended.release,
+          operationId: result.appended.operationId,
+        });
+      } catch (error) {
+        if (respondCentralReleaseError(res, error)) return;
+        next(error);
       }
     },
   );
@@ -5374,13 +6794,30 @@ router.post(
         const note = typeof body.note === "string" ? body.note : null;
         let appended: { release: number; operationId: string | null };
         try {
-          appended = await appendGatewayRelease(db, {
-            gateway,
-            artifact,
-            createdBy,
-            now,
-            sourceRelease: gateway.latestRelease,
-            note,
+          appended = await runAdminFleetMutation({
+            req,
+            what: "cut gateway release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: id },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "cut-gateway-release",
+              gatewayId: id,
+              sourceRelease: gateway.latestRelease,
+              artifact,
+              note,
+            },
+            action: async () => appendGatewayRelease(db, {
+              gateway,
+              artifact,
+              createdBy,
+              now,
+              sourceRelease: gateway.latestRelease,
+              note,
+            }),
           });
         } catch (e) {
           if (respondReleaseWriteConflict(res, e)) return;
@@ -5415,13 +6852,30 @@ router.post(
         const { gateway, artifact, release, note } = resolved.ok;
         let appended: { release: number; operationId: string | null };
         try {
-          appended = await appendGatewayRelease(db, {
-            gateway,
-            artifact,
-            createdBy,
-            now,
-            sourceRelease: release,
-            note,
+          appended = await runAdminFleetMutation({
+            req,
+            what: "roll back gateway release",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId: id, release },
+            preActionStatus: {
+              latestRelease: gateway.latestRelease,
+              desiredRelease: gateway.desiredRelease,
+            },
+            mutation: {
+              kind: "rollback-gateway-release",
+              gatewayId: id,
+              sourceRelease: release,
+              artifact,
+              note,
+            },
+            action: async () => appendGatewayRelease(db, {
+              gateway,
+              artifact,
+              createdBy,
+              now,
+              sourceRelease: release,
+              note,
+            }),
           });
         } catch (e) {
           if (respondReleaseWriteConflict(res, e)) return;
@@ -5483,6 +6937,356 @@ router.get(
     return doc ? { id: doc.id } : null;
   }
 
+  router.patch(
+    "/customers/:uid/placement",
+    // eslint-disable-next-line max-lines-per-function
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const command = parseBuilderPlacementCommand(req.body);
+        if ("error" in command) {
+          res.status(command.error.status).json(command.error.body);
+          return;
+        }
+        const uid = req.params.uid as string;
+        const userRef = db.collection("users").doc(uid);
+        const userBefore = await userRef.get();
+        if (!userBefore.exists) {
+          res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+          return;
+        }
+        const userData = (userBefore.data() ?? {}) as Record<string, unknown>;
+        const currentGatewayId = readUserGatewayId(userData);
+        const currentManagedBy = readUserOpenclaw(userData).managedBy === "operator"
+          ? "operator"
+          : "cowboy";
+        const builderSlug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
+        const actor = req as ActorRequest;
+        const createdBy = actor.uid ?? "unknown";
+
+        if (command.ok.kind === "place") {
+          const outcome = await runAdminFleetMutation({
+            req,
+            what: "place builder",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { uid },
+            preActionStatus: {
+              gatewayId: currentGatewayId,
+              managedBy: currentManagedBy,
+            },
+            mutation: { kind: "place-builder", uid },
+            classifyResult: classifyBuilderPlacementMutation,
+            action: async () => db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
+              const [userSnap, operationsSnap] = await Promise.all([
+                txn.get(userRef),
+                txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid)),
+              ]);
+              if (!userSnap.exists) {
+                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+              }
+              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
+              if (inFlight) {
+                return {
+                  status: 409,
+                  body: {
+                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
+                    operationId: inFlight.id,
+                    uid,
+                  },
+                };
+              }
+              txn.update(userRef, { "provisioning.openclaw.managedBy": "cowboy" });
+              return { status: 200, body: { uid, managedBy: "cowboy" } };
+            }),
+          });
+          res.status(outcome.status).json(outcome.body);
+          return;
+        }
+
+        if (command.ok.kind === "park") {
+          const outcome = await runAdminFleetMutation({
+            req,
+            what: "park builder",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { uid },
+            preActionStatus: {
+              gatewayId: currentGatewayId,
+              managedBy: currentManagedBy,
+            },
+            mutation: {
+              kind: "park-builder",
+              uid,
+              ...(currentGatewayId ? { gatewayId: currentGatewayId } : {}),
+            },
+            classifyResult: classifyBuilderPlacementMutation,
+            action: async () => db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
+              const userSnap = await txn.get(userRef);
+              if (!userSnap.exists) {
+                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+              }
+              const data = userSnap.data() as Record<string, unknown> | undefined;
+              const gatewayId = readUserGatewayId(data);
+              const operationsSnap = await txn.get(
+                db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid),
+              );
+              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
+              if (inFlight) {
+                return {
+                  status: 409,
+                  body: {
+                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
+                    operationId: inFlight.id,
+                    uid,
+                  },
+                };
+              }
+              if (gatewayId) {
+                const assignmentRef = db
+                  .collection(GATEWAYS_COLLECTION)
+                  .doc(gatewayId)
+                  .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+                  .doc(uid);
+                const assignmentSnap = await txn.get(assignmentRef);
+                const assignment = parseAssignmentDoc(
+                  uid,
+                  assignmentSnap.exists ? assignmentSnap.data() : undefined,
+                );
+                if (assignment && assignment.state !== "serving") {
+                  return {
+                    status: 409,
+                    body: {
+                      error: `customer is mid-migration (roster state ${assignment.state}) — cannot park until the migration settles`,
+                      uid,
+                      state: assignment.state,
+                    },
+                  };
+                }
+                txn.delete(assignmentRef);
+              }
+              txn.update(userRef, {
+                "provisioning.openclaw.managedBy": "operator",
+                "provisioning.openclaw.gatewayId": FieldValue.delete(),
+                "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
+                "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
+                "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+              });
+              return { status: 200, body: { uid, parked: true } };
+            }),
+          });
+          res.status(outcome.status).json(outcome.body);
+          return;
+        }
+
+        if (!builderSlug) {
+          res.status(409).json({ error: "customer has no canonical slug", uid });
+          return;
+        }
+        const target = await readDurableGatewayRuntime(db, command.ok.gatewayId);
+        if (!target) {
+          res.status(404).json({
+            error: ERR_GATEWAY_NOT_FOUND,
+            gatewayId: command.ok.gatewayId,
+          });
+          return;
+        }
+        const targetStatus = builderPlacementTargetStatus(target);
+        if (targetStatus !== null) {
+          res.status(409).json({
+            error: ERR_TARGET_GATEWAY_NOT_READY,
+            gatewayId: command.ok.gatewayId,
+            status: targetStatus,
+          });
+          return;
+        }
+        const targetGatewayId = command.ok.gatewayId;
+        const targetRootRef = db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId);
+        const targetRuntimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(targetGatewayId);
+        const targetAssignmentRef = targetRootRef
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(uid);
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "evict builder to gateway",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, gatewayId: targetGatewayId },
+          preActionStatus: {
+            gatewayId: currentGatewayId,
+            managedBy: currentManagedBy,
+          },
+          mutation: {
+            kind: "evict-builder-to-gateway",
+            uid,
+            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+            toGatewayId: targetGatewayId,
+          },
+          classifyResult: classifyBuilderPlacementMutation,
+          action: async () => {
+            const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
+            // eslint-disable-next-line complexity
+            return db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
+              const [
+                userSnap,
+                operationsSnap,
+                targetRootSnap,
+                targetRuntimeSnap,
+                targetAssignmentSnap,
+              ] = await Promise.all([
+                txn.get(userRef),
+                txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid)),
+                txn.get(targetRootRef),
+                txn.get(targetRuntimeRef),
+                txn.get(targetAssignmentRef),
+              ]);
+              if (!userSnap.exists) {
+                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+              }
+              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
+              if (inFlight) {
+                return {
+                  status: 409,
+                  body: {
+                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
+                    operationId: inFlight.id,
+                    uid,
+                  },
+                };
+              }
+
+              const targetRoot = targetRootSnap.exists
+                ? asDurableGatewayRoot(targetRootSnap.data(), targetGatewayId)
+                : null;
+              if (!targetRoot) {
+                return {
+                  status: 404,
+                  body: { error: ERR_GATEWAY_NOT_FOUND, gatewayId: targetGatewayId },
+                };
+              }
+              const targetRuntime = targetRuntimeSnap.exists
+                ? exactRuntimeDoc(targetRoot, targetRuntimeSnap.data())
+                : null;
+              const liveTarget = {
+                root: targetRoot,
+                runtime: targetRuntime,
+                heartbeat: runtimeHeartbeat(targetRuntime),
+              };
+              const liveTargetStatus = builderPlacementTargetStatus(liveTarget);
+              if (liveTargetStatus !== null) {
+                return {
+                  status: 409,
+                  body: {
+                    error: ERR_TARGET_GATEWAY_NOT_READY,
+                    gatewayId: targetGatewayId,
+                    status: liveTargetStatus,
+                  },
+                };
+              }
+
+              const liveUser = userSnap.data() as Record<string, unknown>;
+              const current = readUserGatewayId(liveUser);
+              const liveBuilderSlug = resolveCustomerSlug(liveUser, deps.workspaceSlugsForUser);
+              if (!liveBuilderSlug) {
+                return { status: 409, body: { error: "customer has no canonical slug", uid } };
+              }
+              const targetAssignment = parseAssignmentDoc(
+                uid,
+                targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined,
+              );
+              if (
+                targetAssignmentSnap.exists &&
+                (
+                  !targetAssignment ||
+                  targetAssignment.state !== "serving" ||
+                  targetAssignment.gatewayId !== targetGatewayId ||
+                  targetAssignment.slug !== liveBuilderSlug
+                )
+              ) {
+                return {
+                  status: 409,
+                  body: {
+                    error: "target assignment does not match serving builder placement",
+                    uid,
+                    gatewayId: targetGatewayId,
+                  },
+                };
+              }
+              if (current === targetGatewayId) {
+                txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
+                if (!targetAssignment) {
+                  txn.set(targetAssignmentRef, builderServingAssignment({
+                    uid,
+                    slug: liveBuilderSlug,
+                    gatewayId: targetGatewayId,
+                    epoch: 0,
+                    updatedAt: Date.now(),
+                  }));
+                }
+                return {
+                  status: 200,
+                  body: {
+                    uid,
+                    gatewayId: targetGatewayId,
+                    managedBy: "operator",
+                    ...(!targetAssignment ? { repaired: true } : {}),
+                  },
+                };
+              }
+
+              if (!current) {
+                const shellState = resolveUserGatewayShellState(
+                  {
+                    gatewayClass: targetRoot.gatewayClass,
+                    profile: targetRoot.profile ?? undefined,
+                    imageProfile: targetRoot.imageProfile,
+                    ownerUid: targetRoot.ownerUid ?? undefined,
+                    operatorAccess: targetRoot.operatorAccess ?? undefined,
+                  },
+                  uid,
+                );
+                txn.update(userRef, {
+                  "provisioning.openclaw.gatewayId": targetGatewayId,
+                  "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
+                  "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+                  "provisioning.openclaw.managedBy": "operator",
+                });
+                txn.set(targetAssignmentRef, builderServingAssignment({
+                  uid,
+                  slug: liveBuilderSlug,
+                  gatewayId: targetGatewayId,
+                  epoch: targetAssignment?.epoch ?? 0,
+                  updatedAt: Date.now(),
+                }));
+                return {
+                  status: 202,
+                  body: { uid, gatewayId: targetGatewayId, managedBy: "operator" },
+                };
+              }
+
+              txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
+              txn.create(operationRef, operationDoc({
+                kind: OP_KIND_MIGRATE_CUSTOMER,
+                createdBy,
+                origin: "operator",
+                input: {
+                  uid,
+                  builderSlug: liveBuilderSlug,
+                  fromGatewayId: current,
+                  toGatewayId: targetGatewayId,
+                  source: "operator-builder-evict",
+                },
+              }, Date.now()));
+              return {
+                status: 202,
+                body: { uid, gatewayId: targetGatewayId, operationId: operationRef.id },
+              };
+            });
+          },
+        });
+        res.status(outcome.status).json(outcome.body);
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
   router.post(
     "/customers/:uid/migrate",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -5517,7 +7321,7 @@ router.get(
         }
         if (target.status !== "ready") {
           res.status(409).json({
-            error: "target gateway not ready",
+            error: ERR_TARGET_GATEWAY_NOT_READY,
             gatewayId: body.to,
             status: target.status ?? "unknown",
           });
@@ -5539,15 +7343,28 @@ router.get(
         }
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        const operationId = await createOperation(db, {
-          kind: OP_KIND_MIGRATE_CUSTOMER,
-          createdBy,
-          input: {
+        const operationId = await runAdminFleetMutation({
+          req,
+          what: "migrate builder",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, gatewayId: body.to },
+          preActionStatus: { gatewayId: currentGatewayId ?? null },
+          mutation: {
+            kind: OP_KIND_MIGRATE_CUSTOMER,
             uid,
-            ...(builderSlug ? { builderSlug } : {}),
             ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
             toGatewayId: body.to,
           },
+          action: async () => createOperation(db, {
+            kind: OP_KIND_MIGRATE_CUSTOMER,
+            createdBy,
+            input: {
+              uid,
+              ...(builderSlug ? { builderSlug } : {}),
+              ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+              toGatewayId: body.to,
+            },
+          }),
         });
         res.status(202).json({ operationId });
       } catch (e) {
@@ -5570,11 +7387,34 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
-        const outcome = await db.runTransaction<{
-          status: number;
-          body: Record<string, unknown>;
-          from?: string;
-        }>(async (txn) => {
+        const userBefore = await db.collection("users").doc(uid).get();
+        const preActionGatewayId = userBefore.exists
+          ? readUserGatewayId(userBefore.data() as Record<string, unknown> | undefined)
+          : null;
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "unassign builder from gateway",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid },
+          preActionStatus: { gatewayId: preActionGatewayId },
+          mutation: {
+            kind: "unassign-customer",
+            uid,
+            ...(preActionGatewayId ? { gatewayId: preActionGatewayId } : {}),
+          },
+          classifyResult: (result) => result.status >= 400
+            ? {
+                outcome: "failed",
+                error: typeof result.body.error === "string"
+                  ? result.body.error
+                  : `unassign returned ${result.status}`,
+              }
+            : { outcome: "completed" },
+          action: async () => db.runTransaction<{
+            status: number;
+            body: Record<string, unknown>;
+            from?: string;
+          }>(async (txn) => {
           const userRef = db.collection("users").doc(uid);
           const userSnap = await txn.get(userRef);
           if (!userSnap.exists) {
@@ -5595,13 +7435,7 @@ router.get(
           const opsSnap = await txn.get(
             db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid),
           );
-          const inFlight = opsSnap.docs.find((d) => {
-            const data = d.data() as { kind?: unknown; status?: unknown };
-            return (
-              data.kind === OP_KIND_MIGRATE_CUSTOMER &&
-              (data.status === "pending" || data.status === "running")
-            );
-          });
+          const inFlight = opsSnap.docs.find(isInFlightCustomerMigration);
           if (inFlight) {
             return {
               status: 409,
@@ -5646,6 +7480,7 @@ router.get(
             },
             from: currentGatewayId,
           };
+          }),
         });
         if (outcome.status === 200) {
           const actor = (req as ActorRequest).uid ?? "unknown";
@@ -5684,13 +7519,25 @@ router.get(
         }
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        const operationId = await createOperation(db, {
-          kind: "rollout",
-          createdBy,
-          input: {
+        const operationId = await runAdminFleetMutation({
+          req,
+          what: "roll out gateway image",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { gatewayId: body.gatewayId },
+          preActionStatus: {},
+          mutation: {
+            kind: "rollout",
             gatewayId: body.gatewayId,
             imageTag: body.imageTag,
           },
+          action: async () => createOperation(db, {
+            kind: "rollout",
+            createdBy,
+            input: {
+              gatewayId: body.gatewayId,
+              imageTag: body.imageTag,
+            },
+          }),
         });
         res.status(202).json({ operationId });
       } catch (e) {
@@ -5758,16 +7605,42 @@ router.get(
           .orderBy("createdAt", "desc")
           .limit(limit)
           .get();
-        const operations = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
+        const operations = snap.docs.map((doc) =>
+          shapeOperationsHistoryRecord(doc.id, doc.data() as Record<string, unknown>),
+        );
         res.json({ operations, generatedAt: new Date().toISOString() });
       } catch (e) {
         next(e);
       }
     },
   );
+
+  router.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (error instanceof FleetMutationFrozenError) {
+      res.status(409).json({ error: error.message });
+      return;
+    }
+    if (error instanceof FleetMutationMaintenanceUnavailableError) {
+      res.status(503).json({ error: error.message });
+      return;
+    }
+    if (error instanceof FleetMutationIdempotencyError) {
+      res.status(409).json({
+        error: error.message,
+        auditId: error.auditId,
+        status: error.status,
+      });
+      return;
+    }
+    if (error instanceof OperationAuditIdempotencyConflictError) {
+      res.status(409).json({
+        error: error.message,
+        auditId: error.auditId,
+      });
+      return;
+    }
+    next(error);
+  });
 
   return router;
 }

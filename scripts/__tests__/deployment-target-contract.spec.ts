@@ -56,6 +56,34 @@ describe("deployment target consumers", () => {
     }
   });
 
+  it("keeps only Central release targets and no WEST release credential routes", () => {
+    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
+      activeTargets: Record<string, string>;
+      targets: Record<string, unknown>;
+    };
+
+    expect(targets.activeTargets).toEqual({
+      prod: "prod-central",
+      test: "test-central",
+      "build-week": "build-week-central",
+    });
+    expect(Object.keys(targets.targets).sort()).toEqual([
+      "build-week-central",
+      "prod-central",
+      "test-central",
+    ]);
+
+    for (const workflow of [
+      ".github/workflows/releasev2.yml",
+      ".github/workflows/gateway-build-operator-base.yml",
+      ".github/workflows/site.yml",
+    ]) {
+      const contents = source(workflow);
+      expect(contents, workflow).not.toMatch(/\b(?:test|prod)-west\b/);
+      expect(contents, workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
+    }
+  });
+
   it("rejects retired candidate targets from release workflows while retaining an exact target handoff", () => {
     const targetAction = source(".github/actions/resolve-deployment-target/action.yml");
     expect(targetAction).toContain("--reject-candidate-target");
@@ -152,19 +180,23 @@ describe("deployment target consumers", () => {
     expect(script).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
   });
 
-  it("selects public Firebase credentials by exact deployment target", () => {
+  it("selects public Firebase credentials by exact registered target", () => {
     const workflow = source(".github/workflows/site.yml");
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
 
     expect(workflow).toContain('case "${{ steps.target.outputs.target_id }}" in');
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST_WEST");
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_PROD_WEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST_WEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_PROD_WEST");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST_WEST");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_PROD_WEST");
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST");
+    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_BUILD_WEEK");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
+    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_BUILD_WEEK");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST");
+    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST");
+    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
+    expect(workflow).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
+    expect(gateway).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
+    expect(workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
+    expect(gateway).not.toMatch(/(?:TEST|PROD)_WEST/);
     expect(workflow).toContain(
       "for value_name in api_key app_id sender_id mm_team_id; do",
     );
@@ -412,20 +444,21 @@ describe("deployment target consumers", () => {
     );
   });
 
-  it("documents the automated Central and WEST snapshot and tested restore operator paths", () => {
+  it("documents Central snapshots and retired West recovery proofs", () => {
     const handbook = source("docs/handbook/53-observability-and-data.md");
     const security = source("docs/operations/SECURITY.md");
 
     expect(handbook).toContain("reconcile-pvc-snapshot-schedules.sh");
     expect(handbook).toContain("octogee-central-pvc-daily");
-    expect(handbook).toContain("prove-west-pvc-restore.sh");
-    expect(handbook).toContain("prove-west-cloud-sql-recovery.sh");
-    expect(handbook).toContain("--confirm=octogee/test-west/cloud-sql/gitea");
+    expect(handbook).toContain("Retired WEST recovery proofs");
+    expect(handbook).not.toContain("./scripts/ops/prove-west-pvc-restore.sh");
+    expect(handbook).not.toContain("./scripts/ops/prove-west-cloud-sql-recovery.sh");
     expect(handbook).toContain("14-day retention");
     expect(handbook).toContain("applies that retention window after source-disk deletion");
     expect(handbook).not.toContain("Not yet automated (TODO):** daily scheduled snapshots");
     expect(security).toContain("octogee-west-pvc-daily");
-    expect(security).toContain("prove-west-pvc-restore.sh");
+    expect(security).toContain("Retired WEST recovery proof");
+    expect(security).not.toContain("scripts/ops/prove-west-pvc-restore.sh");
     expect(security).not.toContain("Current:** Manual snapshots for durable PVCs only");
   });
 

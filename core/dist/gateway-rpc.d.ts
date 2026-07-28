@@ -42,6 +42,22 @@ export interface SecretsReloadResult {
 export interface GatewayRestartRequestResult {
     [extra: string]: unknown;
 }
+export interface GatewayChannelOperationParams {
+    channel: string;
+    accountId: string;
+}
+export interface GatewayChannelStopResult {
+    channel: string;
+    accountId: string;
+    stopped: true;
+    [extra: string]: unknown;
+}
+export interface GatewayChannelStartResult {
+    channel: string;
+    accountId: string;
+    started: true;
+    [extra: string]: unknown;
+}
 export interface GatewaySessionSummary {
     key: string;
     agentId?: string;
@@ -106,7 +122,12 @@ export interface GatewayRpcClient {
     configPatch(patch: object, baseHash: string, opts?: {
         replacePaths?: readonly string[];
     }): Promise<ConfigPatchResult>;
+    configPatchAndWaitForChange(patch: object, baseHash: string, opts?: {
+        replacePaths?: readonly string[];
+    }): Promise<ConfigPatchResult>;
     channelsStatus(): Promise<unknown>;
+    channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
+    channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;
     gatewayRestartRequest(params: {
         reason: string;

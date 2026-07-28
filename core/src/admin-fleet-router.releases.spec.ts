@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
-import request from "supertest";
 import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
+import request from "supertest";
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
+import { ReleaseDigestAliasError } from "./artifact-registry.js";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -28,10 +30,29 @@ function valueAtPath(data: Record<string, unknown>, path: string): unknown {
   return cursor;
 }
 
+function applyDottedPatch(target: Record<string, unknown>, patch: Record<string, unknown>): void {
+  for (const [path, value] of Object.entries(patch)) {
+    const parts = path.split(".");
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      const current = cursor[part];
+      if (!current || typeof current !== "object" || Array.isArray(current)) {
+        cursor[part] = {};
+      }
+      cursor = cursor[part] as Record<string, unknown>;
+    }
+    const key = parts.at(-1)!;
+    if (value === FieldValue.delete()) delete cursor[key];
+    else cursor[key] = value;
+  }
+}
+
 interface TestRouterOptions {
   synchronizeFirstTwoReadsOf?: string;
   failTransactions?: boolean;
   beforeFirstTransaction?: (store: Map<string, Record<string, unknown>>) => void;
+  releaseEnvironment?: "test" | "prod" | null;
+  releaseAuthority?: Record<string, unknown>;
   provisionGatewayAuthSecret?: (input: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -86,7 +107,10 @@ function makeDb(
       },
       update: async (data: Record<string, unknown>) => {
         if (!store.has(path)) throw new Error(`update of non-existent doc ${path}`);
-        store.set(path, { ...store.get(path), ...data });
+        applyDottedPatch(store.get(path)!, data);
+      },
+      delete: async () => {
+        store.delete(path);
       },
       collection: (name: string) => collectionRef(`${path}/${name}`),
     };
@@ -145,8 +169,10 @@ function makeDb(
   async function runTransaction<T>(
     body: (txn: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
+      create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => void;
       set: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown, opts?: unknown) => void;
       update: (ref: { update: (d: unknown) => Promise<void> }, data: unknown) => void;
+      delete: (ref: { delete: () => Promise<void> }) => void;
     }) => Promise<T>,
   ): Promise<T> {
     const run = txnLock.then(async () => {
@@ -160,11 +186,19 @@ function makeDb(
       const writes: Array<() => Promise<void>> = [];
       const txn = {
         get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => {
+          writes.push(async () => {
+            await ref.set(data);
+          });
+        },
         set: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown, opts?: unknown) => {
           writes.push(() => ref.set(data, opts));
         },
         update: (ref: { update: (d: unknown) => Promise<void> }, data: unknown) => {
           writes.push(() => ref.update(data));
+        },
+        delete: (ref: { delete: () => Promise<void> }) => {
+          writes.push(() => ref.delete());
         },
       };
       const result = await body(txn as never);
@@ -219,6 +253,8 @@ function mkApp(
       ? vi.fn((input) => opts.provisionGatewayAuthSecret!(input))
       : vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
+    releaseEnvironment: opts?.releaseEnvironment ?? "test",
+    releaseAuthority: opts?.releaseAuthority,
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });
@@ -230,6 +266,13 @@ function opsIn(store: Map<string, Record<string, unknown>>, kind: string) {
     .filter(([path]) => path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`))
     .map(([, data]) => data)
     .filter((d) => d.kind === kind);
+}
+
+function auditsIn(store: Map<string, Record<string, unknown>>) {
+  return [...store.entries()]
+    .filter(([path]) => path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`))
+    .map(([, data]) => data)
+    .filter((data) => data.recordType === "audit");
 }
 
 // Seeds a gateway already on the durable root + immutable release schema.
@@ -282,6 +325,362 @@ function seedNewSchemaGateway(
     },
   };
 }
+
+describe("normal fleet mutation admission", () => {
+  it("rejects a frozen gateway restart before it creates an audit or operation", async () => {
+    const seed = {
+      ...seedNewSchemaGateway("beta", sharedPayload()),
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app).post("/gateways/beta/restart").expect(409).expect({
+      error: "maintenance freeze blocks fleet mutation: incident",
+    });
+
+    expect(auditsIn(store)).toHaveLength(0);
+    expect(opsIn(store, "restart-gateway")).toHaveLength(0);
+  });
+
+  it("journals a gateway restart with its pre-action state", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
+
+    await request(app).post("/gateways/beta/restart").expect(202);
+
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      actor: "unknown",
+      forced: false,
+      what: "restart gateway",
+      why: "Admin fleet request",
+      target: { gatewayId: "beta" },
+      preActionStatus: { desiredStatus: "running", desiredRelease: 1 },
+      mutation: { kind: "restart-gateway", gatewayId: "beta" },
+    }));
+  });
+});
+
+describe("POST /releases/cut and POST /releases/:version/promote", () => {
+  const sourceSha = "a".repeat(40);
+  const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const gatewayDigest = `sha256:${"c".repeat(64)}`;
+  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const edgeDigest = `sha256:${"e".repeat(64)}`;
+
+  function releaseManifest(overrides: Partial<{
+    sourceSha: string;
+    manifestDigest: string;
+  }> = {}) {
+    return {
+      sourceSha: overrides.sourceSha ?? sourceSha,
+      manifestDigest: overrides.manifestDigest ?? manifestDigest,
+      openclawVersion: "2026.7.1",
+      repository: "us-central1-docker.pkg.dev/octogee/octogee",
+      surfaces: {
+        gateway: {
+          "gateway-edge": edgeDigest,
+          "octogee-gateway": gatewayDigest,
+          "octogee-gateway-operator": operatorDigest,
+        },
+        platform: {
+          "artifact-worker": `sha256:${"1".repeat(64)}`,
+          "glm-controller": `sha256:${"2".repeat(64)}`,
+          "octogee-api": `sha256:${"3".repeat(64)}`,
+          "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+        },
+      },
+    };
+  }
+
+  function releaseAuthority(manifest = releaseManifest()) {
+    return {
+      resolveManifest: vi.fn(async () => manifest),
+      resolveTestManifest: vi.fn(async () => manifest),
+      aliasesFor: vi.fn(() => [{
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:aaaaaaa-oc2026.7.1",
+        intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
+      }]),
+      testRecordAlias: vi.fn(() => ({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest:test-v0.4.0",
+        intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest@${manifestDigest}`,
+      })),
+      ensureAliases: vi.fn(async (aliases: Array<{ alias: string; intendedTarget: string }>) =>
+        aliases.map((alias) => ({
+          alias: alias.alias,
+          status: "applied",
+          observedTarget: alias.intendedTarget,
+        })),
+      ),
+    };
+  }
+
+  it("cuts a CENTRAL TEST release from the exact manifest, journals aliases, and records TEST authority", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      version: "v0.4.0",
+      sourceSha,
+      gatewayId: "default",
+      release: 2,
+    });
+    expect((store.get("gateways/default/releases/2")?.payload as ReleasePayload)).toEqual({
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: `aaaaaaa-oc2026.7.1@${gatewayDigest}`,
+      profileImages: {
+        operator: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
+          imageTag: `aaaaaaa-oc2026.7.1@${operatorDigest}`,
+        },
+      },
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `aaaaaaa-oc2026.7.1@${edgeDigest}`,
+      },
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "cut CENTRAL TEST release",
+      testProvenance: expect.objectContaining({ environment: "test", sourceCommit: sourceSha }),
+    }));
+  });
+
+  it("rejects a conflicting durable TEST version before aliases or desired state change", async () => {
+    const conflictingSourceSha = "f".repeat(40);
+    const authority = releaseAuthority(releaseManifest({ sourceSha: conflictingSourceSha }));
+    const { app, store } = mkApp({
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      "centralTestReleaseReservations/v0.4.0": {
+        version: "v0.4.0",
+        sourceSha,
+        manifestDigest,
+        gatewayId: "default",
+        release: 2,
+        rolloutOperationId: "rollout-existing",
+      },
+    }, { releaseAuthority: authority });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha: conflictingSourceSha })
+      .expect(409)
+      .expect({ error: "CENTRAL TEST version v0.4.0 is already reserved for a different manifest" });
+
+    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
+  it("reuses a matching durable TEST version without changing desired state", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      "centralTestReleaseReservations/v0.4.0": {
+        version: "v0.4.0",
+        sourceSha,
+        manifestDigest,
+        gatewayId: "default",
+        release: 2,
+        rolloutOperationId: "rollout-existing",
+      },
+    }, { releaseAuthority: authority });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(response.body).toMatchObject({ release: 2, operationId: "rollout-existing" });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes concurrent matching TEST cuts through one durable reservation", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+      synchronizeFirstTwoReadsOf: "centralTestReleaseReservations/v0.4.0",
+    });
+
+    const [first, second] = await Promise.all([
+      request(app).post("/releases/cut").send({ version: "v0.4.0", sourceSha }),
+      request(app).post("/releases/cut").send({ version: "v0.4.0", sourceSha }),
+    ]);
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect([first.body.release, second.body.release]).toEqual([2, 2]);
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({
+      sourceSha,
+      manifestDigest,
+      release: 2,
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+  });
+
+  it("journals aliases as partial when maintenance freezes before desired state append", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    authority.ensureAliases.mockImplementationOnce(async (aliases: Array<{ alias: string; intendedTarget: string }>) => {
+      store.set("config/glmMaintenance", { mode: "frozen", reason: "incident" });
+      return aliases.map((alias) => ({
+        alias: alias.alias,
+        status: "applied",
+        observedTarget: alias.intendedTarget,
+      }));
+    });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      lifecycleStage: "action-partial",
+      outcome: "partial",
+      aliasOutcomes: expect.arrayContaining([expect.objectContaining({ status: "applied" })]),
+      partialOutcome: expect.any(Object),
+    }));
+  });
+
+  it("journals completed aliases and rollout when the TEST authorization marker fails", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    authority.ensureAliases
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "applied",
+        observedTarget: "source-target",
+      }])
+      .mockRejectedValueOnce(new ReleaseDigestAliasError([{
+        alias: "test-record-alias",
+        status: "failed",
+        error: "marker collision",
+      }], new Error("marker collision")));
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(500);
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({ release: 2 });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      lifecycleStage: "action-partial",
+      outcome: "partial",
+      aliasOutcomes: [
+        expect.objectContaining({ alias: "source-alias", status: "applied" }),
+        expect.objectContaining({ alias: "test-record-alias", status: "failed" }),
+      ],
+      releaseRollout: expect.objectContaining({ releaseId: "default/2" }),
+      partialOutcome: expect.objectContaining({
+        details: expect.objectContaining({ failedStep: "test-record" }),
+      }),
+    }));
+  });
+
+  it("retries a partial TEST marker with the deterministic cut key without another desired release", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+    const idempotencyKey = `release-cut:v0.4.0:${sourceSha}`;
+    authority.ensureAliases
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "applied",
+        observedTarget: "source-target",
+      }])
+      .mockRejectedValueOnce(new ReleaseDigestAliasError([{
+        alias: "test-record-alias",
+        status: "failed",
+        error: "marker collision",
+      }], new Error("marker collision")))
+      .mockResolvedValueOnce([{
+        alias: "source-alias",
+        status: "already-applied",
+        observedTarget: "source-target",
+      }])
+      .mockResolvedValueOnce([{
+        alias: "test-record-alias",
+        status: "applied",
+        observedTarget: "test-record-target",
+      }]);
+
+    await request(app)
+      .post("/releases/cut")
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(500);
+
+    const retry = await request(app)
+      .post("/releases/cut")
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(retry.body).toEqual(expect.objectContaining({ release: 2 }));
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(auditsIn(store)).toHaveLength(2);
+  });
+
+  it.each(["v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-01", "v1.2.3-alpha.01"])(
+    "rejects non-semver release version %s before CENTRAL authority calls",
+    async (version) => {
+      const authority = releaseAuthority();
+      const { app } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+        releaseAuthority: authority,
+      });
+
+      await request(app)
+        .post("/releases/cut")
+        .send({ version, sourceSha })
+        .expect(400);
+
+      expect(authority.resolveManifest).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires an identical durable TEST manifest record before a CENTRAL PROD promotion", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseEnvironment: "prod",
+      releaseAuthority: authority,
+    });
+
+    await request(app).post("/releases/v0.4.0/promote").send({}).expect(202);
+
+    expect(authority.resolveTestManifest).toHaveBeenCalledWith("v0.4.0");
+    expect((store.get("gateways/default/releases/2")?.payload as ReleasePayload).imageTag)
+      .toBe(`aaaaaaa-oc2026.7.1@${gatewayDigest}`);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "promote CENTRAL release",
+      testProvenance: expect.objectContaining({ environment: "test", sourceCommit: sourceSha }),
+    }));
+  });
+});
 
 function sharedPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
@@ -343,6 +742,452 @@ function seedServingGateway(
   return seed;
 }
 
+function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<string, unknown> {
+  return {
+    username: "alice",
+    provisioning: {
+      openclaw: {
+        slug: "alice",
+        ...(gatewayId ? {
+          gatewayId,
+          gatewayAssignedAt: 1,
+          gatewayProfile: "standard",
+          shellsEnabled: true,
+        } : {}),
+        managedBy,
+      },
+    },
+  };
+}
+
+describe("PATCH /customers/:uid/placement", () => {
+  it("rejects malformed placement commands before journaling or writing", async () => {
+    const { app, store } = mkApp({ "users/uid-alice": builderUser("source") });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator" })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy", gatewayId: null })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target", unexpected: true })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "a/../b" })
+      .expect(400)
+      .expect({ error: "placement gatewayId must be a valid gateway id" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("atomically marks an assigned Builder operator-managed and queues its explicit migration", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    const response = await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      uid: "uid-alice",
+      gatewayId: "target",
+      operationId: expect.any(String),
+    });
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { gatewayId: "source", managedBy: "operator" } },
+    });
+    expect(store.get(`glmOperations/${response.body.operationId}`)).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      origin: "operator",
+      inputUid: "uid-alice",
+      gatewayId: "target",
+      input: {
+        uid: "uid-alice",
+        builderSlug: "alice",
+        fromGatewayId: "source",
+        toGatewayId: "target",
+        source: "operator-builder-evict",
+      },
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      target: { uid: "uid-alice", gatewayId: "target" },
+      mutation: {
+        kind: "evict-builder-to-gateway",
+        uid: "uid-alice",
+        fromGatewayId: "source",
+        toGatewayId: "target",
+      },
+    }));
+  });
+
+  it("repairs a missing serving assignment while taking ownership on the current target", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(200)
+      .expect({
+        uid: "uid-alice",
+        gatewayId: "target",
+        managedBy: "operator",
+        repaired: true,
+      });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { gatewayId: "target", managedBy: "operator" } },
+    });
+    expect(store.get("gateways/target/assignments/uid-alice")).toMatchObject({
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "target",
+      source: "repair",
+      state: "serving",
+    });
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+  });
+
+  it("rejects ownership transfer while the current target assignment is mid-migration", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+      "gateways/target/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "target",
+        source: "migrate-customer",
+        state: "quiescing",
+        epoch: 2,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("target"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects ownership transfer for a serving assignment with foreign identity", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+      "gateways/target/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "somebody-else",
+        gatewayId: "other",
+        source: "repair",
+        state: "serving",
+        epoch: 2,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("target"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an eviction while another migration owns the Builder", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-alice",
+      },
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(1);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("places an unassigned Builder directly while atomically taking operator ownership", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(202);
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: {
+        openclaw: {
+          gatewayId: "target",
+          gatewayProfile: "standard",
+          shellsEnabled: false,
+          managedBy: "operator",
+        },
+      },
+    });
+    expect(store.get("gateways/target/assignments/uid-alice")).toMatchObject({
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "target",
+      source: "repair",
+      state: "serving",
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "evict-builder-to-gateway", uid: "uid-alice", toGatewayId: "target" },
+    }));
+  });
+
+  it("rejects an eviction when the target is deleted after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => store.delete("gateways/target"),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(404)
+      .expect({ error: "gateway not found", gatewayId: "target" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an eviction when the target runtime fails after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => {
+        store.set(`${GLM_GATEWAYS_COLLECTION}/target`, {
+          ...store.get(`${GLM_GATEWAYS_COLLECTION}/target`)!,
+          lifecycle: "failed",
+        });
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({ error: "target gateway not ready", gatewayId: "target", status: "failed" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an unassigned Builder eviction when a migration starts after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => {
+        store.set("glmOperations/migration-1", {
+          kind: "migrate-customer",
+          status: "pending",
+          inputUid: "uid-alice",
+        });
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({
+        error: "a migration for this customer is pending or running",
+        operationId: "migration-1",
+        uid: "uid-alice",
+      });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser(null));
+    expect(store.get("gateways/target/assignments/uid-alice")).toBeUndefined();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("parks atomically with operator ownership after deleting the serving assignment", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "gateways/source/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "source",
+        source: "repair",
+        state: "serving",
+        epoch: 0,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(200)
+      .expect({ uid: "uid-alice", parked: true });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { managedBy: "operator" } },
+    });
+    const openclaw = (store.get("users/uid-alice")?.provisioning as Record<string, unknown>)
+      .openclaw as Record<string, unknown>;
+    expect(openclaw).not.toHaveProperty("gatewayId");
+    expect(openclaw).not.toHaveProperty("gatewayAssignedAt");
+    expect(openclaw).not.toHaveProperty("gatewayProfile");
+    expect(openclaw).not.toHaveProperty("shellsEnabled");
+    expect(store.get("gateways/source/assignments/uid-alice")).toBeUndefined();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "park-builder", uid: "uid-alice", gatewayId: "source" },
+    }));
+  });
+
+  it("rejects a park while a migration owns the Builder", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "running",
+        inputUid: "uid-alice",
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects a missing or not-ready target before journaling or changing placement", async () => {
+    const missing = mkApp({ "users/uid-alice": builderUser("source") });
+
+    await request(missing.app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "missing" })
+      .expect(404);
+
+    expect(missing.store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(missing.store)).toHaveLength(0);
+
+    const notReady = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedNewSchemaGateway("target", sharedPayload()),
+    });
+
+    await request(notReady.app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(notReady.store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(notReady.store)).toHaveLength(0);
+  });
+
+  it("releases a parked Builder to Cowboy without waiting for live placement", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null, "operator"),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(200)
+      .expect({ uid: "uid-alice", managedBy: "cowboy" });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { managedBy: "cowboy" } },
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "place-builder", uid: "uid-alice" },
+    }));
+  });
+
+  it("rejects release to Cowboy while an explicit migration is active", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source", "operator"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-alice",
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source", "operator"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("reports missing Builders for park and place without creating a journal row", async () => {
+    const { app, store } = mkApp();
+
+    await request(app)
+      .patch("/customers/uid-missing/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(404)
+      .expect({ error: "user not found", uid: "uid-missing" });
+    await request(app)
+      .patch("/customers/uid-missing/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(404)
+      .expect({ error: "user not found", uid: "uid-missing" });
+
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("blocks a frozen eviction before journaling or mutating Builder placement", async () => {
+    const { app, store } = mkApp({
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+});
+
 beforeEach(() => vi.stubEnv("GATEWAY_SERVICE_ACCOUNT", "gw@octogee.iam.gserviceaccount.com"));
 afterEach(() => vi.unstubAllEnvs());
 
@@ -392,6 +1237,31 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(rel?.payloadHash).toBe(releasePayloadHash(rel?.payload as ReleasePayload));
 
     expect(opsIn(store, "add-gateway")).toHaveLength(1);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "add gateway",
+      target: { gatewayId: "alpha" },
+    }));
+  });
+
+  it("records a failed audit when gateway secret provisioning fails", async () => {
+    const { app, store } = mkApp({}, {
+      provisionGatewayAuthSecret: async () => {
+        throw new Error("secret manager unavailable");
+      },
+    });
+
+    await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(502);
+
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "failed",
+      what: "add gateway",
+      error: "secret manager unavailable",
+    }));
+    expect(store.get("gateways/alpha")).toBeUndefined();
   });
 
   it("does not leave a bare desired doc when durable-root creation fails atomically", async () => {
@@ -1114,6 +1984,70 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" }).expect(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
     expect(store.get("gateways/zeta")?.desiredStatus).toBe("paused");
+  });
+
+  it.each(["operator", "cowboy"] as const)(
+    "persists managedBy=%s on the durable root and journals the completed mutation",
+    async (managedBy) => {
+      const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
+
+      await request(app)
+        .patch("/gateways/zeta")
+        .send({ managedBy })
+        .expect(202)
+        .expect({ gatewayId: "zeta", updated: ["managedBy"] });
+
+      expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
+      expect(store.get("gateways/zeta")?.managedBy).toBe(managedBy);
+      expect(auditsIn(store)).toEqual([
+        expect.objectContaining({
+          status: "completed",
+          forced: false,
+          what: "update gateway desired configuration",
+          target: { gatewayId: "zeta" },
+          preActionStatus: {
+            desiredStatus: "running",
+            desiredRelease: 1,
+            managedBy: "cowboy",
+          },
+          mutation: {
+            kind: "patch-gateway",
+            gatewayId: "zeta",
+            patch: { managedBy },
+          },
+        }),
+      ]);
+    },
+  );
+
+  it("rejects an invalid managedBy value before it writes or journals", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
+
+    await request(app)
+      .patch("/gateways/zeta")
+      .send({ managedBy: "manual" })
+      .expect(400)
+      .expect({ error: "managedBy must be operator or cowboy" });
+
+    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("does not mutate or journal managedBy while maintenance is frozen", async () => {
+    const seed = {
+      ...seedNewSchemaGateway("zeta", sharedPayload()),
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .patch("/gateways/zeta")
+      .send({ managedBy: "operator" })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
+    expect(auditsIn(store)).toHaveLength(0);
   });
 
   it("refuses a malformed durable root rather than mutating it", async () => {

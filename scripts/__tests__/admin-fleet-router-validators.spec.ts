@@ -58,10 +58,7 @@ describe("validateRolloutBody", () => {
     if ("error" in r) {
       expect(r.error.status).toBe(400);
       expect(r.error.body).toMatchObject({
-        expectedPrefixes: expect.arrayContaining([
-          "us-central1-docker.pkg.dev/octogee/octogee/",
-          "us-west1-docker.pkg.dev/octogee/octogee/",
-        ]),
+        expectedPrefixes: ["us-central1-docker.pkg.dev/octogee/octogee/"],
       });
     }
   });
@@ -90,10 +87,14 @@ describe("validateRolloutBody", () => {
     }
   });
 
-  it("accepts the fresh west target's canonical AR repo", () => {
+  it("rejects a retired target's Artifact Registry repo", () => {
     const repo = "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway";
     const r = validateRolloutBody({ imageTag: "abc1234", imageRepository: repo });
-    expect(r).toMatchObject({ ok: { imageRepository: repo } });
+    expect("error" in r).toBe(true);
+    if ("error" in r) {
+      expect(r.error.status).toBe(400);
+      expect(r.error.body.error).toContain("canonical Octogee Artifact Registry repo");
+    }
   });
 
   it("accepts a pinned-bundle tag like <sha>-oc<version>", () => {

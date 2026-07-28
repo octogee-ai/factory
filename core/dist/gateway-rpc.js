@@ -9,6 +9,74 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+function configChangedHash(data) {
+    let parsed;
+    try {
+        parsed = JSON.parse(typeof data === "string"
+            ? data
+            : data.toString("utf-8"));
+    }
+    catch {
+        return null;
+    }
+    if (!parsed ||
+        typeof parsed !== "object" ||
+        parsed.type !== "event" ||
+        parsed.event !== "config.changed") {
+        return null;
+    }
+    const hash = parsed.payload?.hash;
+    return typeof hash === "string" && hash.length > 0 ? hash : null;
+}
+function trackConfigChange(ws) {
+    const changedHashes = new Set();
+    const waiters = new Map();
+    const onMessage = (data) => {
+        const hash = configChangedHash(data);
+        if (!hash)
+            return;
+        changedHashes.add(hash);
+        for (const resolve of waiters.get(hash) ?? [])
+            resolve();
+        waiters.delete(hash);
+    };
+    ws.on("message", onMessage);
+    return {
+        waitFor(hash, timeoutMs) {
+            if (changedHashes.has(hash))
+                return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new OpenclawWireError("timeout", `config.changed for persisted hash ${hash} timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+                const onClose = () => {
+                    cleanup();
+                    reject(new OpenclawWireError("connect-failed", `socket closed before config.changed published hash ${hash}`));
+                };
+                const accepted = () => {
+                    cleanup();
+                    resolve();
+                };
+                function cleanup() {
+                    clearTimeout(timer);
+                    ws.removeListener("close", onClose);
+                    waiters.get(hash)?.delete(accepted);
+                }
+                const hashWaiters = waiters.get(hash) ?? new Set();
+                hashWaiters.add(accepted);
+                waiters.set(hash, hashWaiters);
+                ws.on("close", onClose);
+                if (changedHashes.has(hash))
+                    accepted();
+            });
+        },
+        close() {
+            ws.removeListener("message", onMessage);
+            waiters.clear();
+        },
+    };
+}
 async function writeConfig(call, method, config, baseHash, replacePaths) {
     try {
         const payload = await call(method, {
@@ -40,6 +108,91 @@ async function writeConfig(call, method, config, baseHash, replacePaths) {
         throw err;
     }
 }
+function formatConnectTrace(trace) {
+    const phases = [
+        trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
+        trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
+        trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
+    ]
+        .filter(Boolean)
+        .join(" ");
+    const outcome = trace.success
+        ? "OK"
+        : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
+    return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
+}
+function createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs) {
+    let lastFailureKey = "";
+    let lastFailureLogAt = 0;
+    let suppressedFailures = 0;
+    return (trace) => {
+        if (traceVerbose) {
+            defaultLog(formatConnectTrace(trace));
+            return;
+        }
+        if (trace.success) {
+            if (suppressedFailures > 0) {
+                defaultLog(`${formatConnectTrace(trace)} (recovered after ${suppressedFailures} suppressed failures)`);
+                suppressedFailures = 0;
+                lastFailureKey = "";
+            }
+            else if (trace.totalMs >= slowTraceMs) {
+                defaultLog(formatConnectTrace(trace));
+            }
+            return;
+        }
+        const now = Date.now();
+        const failureKey = `${trace.stage}:${trace.errorCode}:${trace.errorMessage ?? ""}`;
+        const shouldLog = failureKey !== lastFailureKey ||
+            lastFailureLogAt === 0 ||
+            now - lastFailureLogAt >= failureSampleMs;
+        if (shouldLog) {
+            const suffix = suppressedFailures > 0 ? ` (suppressed ${suppressedFailures} similar failures)` : "";
+            defaultLog(`${formatConnectTrace(trace)}${suffix}`);
+            lastFailureKey = failureKey;
+            lastFailureLogAt = now;
+            suppressedFailures = 0;
+        }
+        else {
+            suppressedFailures++;
+        }
+    };
+}
+async function patchConfigAndWaitForChange(connection, patch, baseHash, replacePaths) {
+    const ws = await openAndConnect({
+        url: connection.url,
+        ...connection.auth,
+        connectTimeoutMs: connection.connectTimeoutMs,
+        identity: connection.identity,
+        scopes: connection.scopes,
+        onConnectTrace: connection.onConnectTrace,
+    });
+    const change = trackConfigChange(ws);
+    const connectedCall = async (method, params) => await sendWsRequest({
+        ws,
+        id: randomUUID(),
+        method,
+        params,
+        timeoutMs: connection.callTimeoutMs,
+    });
+    try {
+        const result = await writeConfig(connectedCall, "config.patch", patch, baseHash, replacePaths);
+        if (result.noop === true)
+            return result;
+        if (!result.hash) {
+            throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `hash` required for config.changed correlation");
+        }
+        await change.waitFor(result.hash, connection.callTimeoutMs);
+        return result;
+    }
+    finally {
+        change.close();
+        try {
+            ws.close();
+        }
+        catch { /* */ }
+    }
+}
 export function createGatewayRpc(opts = {}) {
     const url = opts.url ??
         `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
@@ -50,55 +203,8 @@ export function createGatewayRpc(opts = {}) {
     const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
     const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
     const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
-    let lastFailureKey = "";
-    let lastFailureLogAt = 0;
-    let suppressedFailures = 0;
-    function formatConnectTrace(trace) {
-        const phases = [
-            trace.wsOpenMs !== undefined ? `wsOpen=${trace.wsOpenMs}ms` : null,
-            trace.challengeMs !== undefined ? `challenge=${trace.challengeMs}ms` : null,
-            trace.connectMs !== undefined ? `connect=${trace.connectMs}ms` : null,
-        ]
-            .filter(Boolean)
-            .join(" ");
-        const outcome = trace.success
-            ? "OK"
-            : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
-        return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
-    }
     const onConnectTrace = opts.onConnectTrace ??
-        ((trace) => {
-            if (traceVerbose) {
-                defaultLog(formatConnectTrace(trace));
-                return;
-            }
-            if (trace.success) {
-                if (suppressedFailures > 0) {
-                    defaultLog(`${formatConnectTrace(trace)} (recovered after ${suppressedFailures} suppressed failures)`);
-                    suppressedFailures = 0;
-                    lastFailureKey = "";
-                }
-                else if (trace.totalMs >= slowTraceMs) {
-                    defaultLog(formatConnectTrace(trace));
-                }
-                return;
-            }
-            const now = Date.now();
-            const failureKey = `${trace.stage}:${trace.errorCode}:${trace.errorMessage ?? ""}`;
-            const shouldLog = failureKey !== lastFailureKey ||
-                lastFailureLogAt === 0 ||
-                now - lastFailureLogAt >= failureSampleMs;
-            if (shouldLog) {
-                const suffix = suppressedFailures > 0 ? ` (suppressed ${suppressedFailures} similar failures)` : "";
-                defaultLog(`${formatConnectTrace(trace)}${suffix}`);
-                lastFailureKey = failureKey;
-                lastFailureLogAt = now;
-                suppressedFailures = 0;
-            }
-            else {
-                suppressedFailures++;
-            }
-        });
+        createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
     let identity = opts.identity ?? null;
     function resolveIdentity() {
         if (identity)
@@ -149,8 +255,37 @@ export function createGatewayRpc(opts = {}) {
         async configPatch(patch, baseHash, opts) {
             return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
         },
+        async configPatchAndWaitForChange(patch, baseHash, opts) {
+            return await patchConfigAndWaitForChange({
+                url,
+                auth,
+                connectTimeoutMs,
+                callTimeoutMs,
+                identity: resolveIdentity(),
+                scopes,
+                onConnectTrace,
+            }, patch, baseHash, opts?.replacePaths);
+        },
         async channelsStatus() {
             return await call("channels.status", {});
+        },
+        async channelsStop(params) {
+            const payload = await call("channels.stop", params);
+            if (!payload ||
+                typeof payload !== "object" ||
+                payload.stopped !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
+            }
+            return payload;
+        },
+        async channelsStart(params) {
+            const payload = await call("channels.start", params);
+            if (!payload ||
+                typeof payload !== "object" ||
+                payload.started !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
+            }
+            return payload;
         },
         async gatewayRestartRequest(params) {
             const payload = await call("gateway.restart.request", params);

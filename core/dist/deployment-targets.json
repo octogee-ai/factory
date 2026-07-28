@@ -56,60 +56,6 @@
             "gatewayValuesFile": "values.prod.yaml",
             "pinEnvironment": "prod"
         },
-        "prod-west": {
-            "environment": "prod",
-            "promotionSourceTargetId": "test-west",
-            "lifecycle": "candidate",
-            "secretNameSuffix": "prod-west",
-            "clusterProjectId": "octogee",
-            "firebaseProjectId": "octogee-data-prod",
-            "hostingProjectId": "octogee",
-            "region": "us-west1",
-            "clusterName": "octogee-gateway",
-            "namespace": "octogee-west",
-            "artifactRegistry": {
-                "projectId": "octogee",
-                "location": "us-west1",
-                "repository": "octogee"
-            },
-            "cloudSql": {
-                "projectId": "octogee",
-                "region": "us-west1",
-                "instance": "octogee-pg-west",
-                "mattermostPasswordSecret": "MM_DB_PASSWORD-octogee-pg-west",
-                "giteaPasswordSecret": "gitea-db-password-octogee-pg-west",
-                "connectionNameSecret": "cloud-sql-connection-name-octogee-pg-west",
-                "pointInTimeRecoveryEnabled": true
-            },
-            "kms": {
-                "projectId": "octogee-data-prod",
-                "location": "us-west1",
-                "keyRing": "octogee-creds",
-                "key": "integrations-at-rest"
-            },
-            "storage": {
-                "projectId": "octogee-data-prod",
-                "location": "us-west1"
-            },
-            "ingress": {
-                "edgeStaticIpName": "workspace-api-ip-west",
-                "mattermostStaticIpName": "mattermost-ip-west",
-                "giteaStaticIpName": "gitea-ip-west",
-                "previewStaticIpName": "preview-ip-west"
-            },
-            "networkBoundary": {
-                "controlPlaneCidr": "172.20.16.16/28",
-                "privateServicesCidr": "172.24.0.0/16"
-            },
-            "siteOrigin": "https://octogee.com",
-            "appOrigin": "https://app.octogee.com",
-            "apiOrigin": "https://api.octogee.com",
-            "gitOrigin": "https://git.octogee.com",
-            "mattermostOrigin": "https://mattermost.octogee.com",
-            "previewOrigin": "https://preview.octogee.com",
-            "gatewayValuesFile": "values.prod.yaml",
-            "pinEnvironment": "prod"
-        },
         "test-central": {
             "environment": "test",
             "lifecycle": "active",
@@ -149,59 +95,6 @@
                 "mattermostStaticIpName": "mattermost-ip-test",
                 "giteaStaticIpName": "gitea-ip-test",
                 "previewStaticIpName": "preview-ip-test"
-            },
-            "siteOrigin": "https://octogee-test.web.app",
-            "appOrigin": "https://app-octogee-test.web.app",
-            "apiOrigin": "https://api-test.octogee.com",
-            "gitOrigin": "https://git-test.octogee.com",
-            "mattermostOrigin": "https://mattermost-test.octogee.com",
-            "previewOrigin": "https://preview-test.octogee.com",
-            "gatewayValuesFile": "values.test.yaml",
-            "pinEnvironment": "test"
-        },
-        "test-west": {
-            "environment": "test",
-            "lifecycle": "candidate",
-            "secretNameSuffix": "test-west",
-            "clusterProjectId": "octogee",
-            "firebaseProjectId": "octogee-data-test",
-            "hostingProjectId": "octogee-test",
-            "region": "us-west1",
-            "clusterName": "octogee-gateway",
-            "namespace": "octogee-test-west",
-            "artifactRegistry": {
-                "projectId": "octogee",
-                "location": "us-west1",
-                "repository": "octogee"
-            },
-            "cloudSql": {
-                "projectId": "octogee",
-                "region": "us-west1",
-                "instance": "octogee-pg-west",
-                "mattermostPasswordSecret": "MM_DB_PASSWORD-octogee-pg-west",
-                "giteaPasswordSecret": "gitea-db-password-octogee-pg-west",
-                "connectionNameSecret": "cloud-sql-connection-name-octogee-pg-west",
-                "pointInTimeRecoveryEnabled": true
-            },
-            "kms": {
-                "projectId": "octogee-data-test",
-                "location": "us-west1",
-                "keyRing": "octogee-creds",
-                "key": "integrations-at-rest"
-            },
-            "storage": {
-                "projectId": "octogee-data-test",
-                "location": "us-west1"
-            },
-            "ingress": {
-                "edgeStaticIpName": "workspace-api-ip-test-west",
-                "mattermostStaticIpName": "workspace-api-ip-test-west",
-                "giteaStaticIpName": "workspace-api-ip-test-west",
-                "previewStaticIpName": "workspace-api-ip-test-west"
-            },
-            "networkBoundary": {
-                "controlPlaneCidr": "172.20.16.16/28",
-                "privateServicesCidr": "172.24.0.0/16"
             },
             "siteOrigin": "https://octogee-test.web.app",
             "appOrigin": "https://app-octogee-test.web.app",

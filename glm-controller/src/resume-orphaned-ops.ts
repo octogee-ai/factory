@@ -1,5 +1,9 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
+import {
+  GLM_OPERATIONS_COLLECTION,
+  isOperationAuditRow,
+  type Operation,
+} from "@octogee/shared/types/glm";
 
 export interface ResumeOrphanedOpsDeps {
   db: Firestore;
@@ -36,8 +40,8 @@ export async function resumeOrphanedRunningOps(
     .get();
   let resumed = 0;
   for (const doc of snap.docs) {
-    const data = doc.data() as Operation | undefined;
-    if (!data) continue;
+    const data = doc.data() as unknown;
+    if (!data || isOperationAuditRow(data)) continue;
     const op = { ...data, id: doc.id } as Operation;
     if (!deps.resumableKinds.has(op.kind)) continue;
     if (deps.resumableOperation && !deps.resumableOperation(op)) continue;

@@ -5,6 +5,7 @@ import type {
   OperationStep,
   StepStatus,
 } from "@octogee/shared/types/glm";
+import { resolveOperationOrigin } from "@octogee/shared/types/glm";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
@@ -49,7 +50,7 @@ export interface MigrateCustomerDeps {
 
   readUserSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
 
-  commitCutover: (commit: CutoverCommit) => Promise<void>;
+  commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
   resolveGatewayUrl: (gatewayId: string) => Promise<string>;
 
@@ -66,6 +67,7 @@ export interface MigrateCustomerDeps {
     epoch?: number;
     updatedByOperationId?: string;
     createIfMissing?: boolean;
+    automatic?: boolean;
   }) => Promise<void>;
 
   readGatewayRootFence: (
@@ -75,6 +77,7 @@ export interface MigrateCustomerDeps {
   commitV2Cutover: (input: CustomerMigrationV2CutoverFence & {
     uid: string;
     slug: string;
+    automatic?: boolean;
   }) => Promise<void>;
 
   // Durable (V2) migration for builder/operator classes; the legacy runner
@@ -304,7 +307,11 @@ async function runOrdinaryV2Iteration(
     if (execution.state.phase === "initialized") {
       await assertV2InitialBindings(execution.state, execution.input.deps);
     }
-    const driverDeps = await buildV2DriverDeps(execution.state, execution.input.deps);
+    const driverDeps = await buildV2DriverDeps(
+      execution.state,
+      execution.input.deps,
+      resolveOperationOrigin(execution.input.op.origin) === "automatic",
+    );
     const next = await advanceCustomerMigrationV2(execution.state, driverDeps);
     if (next === execution.state) return "stop";
     execution.state = next;
@@ -372,6 +379,7 @@ function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
 async function buildV2DriverDeps(
   state: CustomerMigrationV2State,
   deps: MigrateCustomerDeps,
+  automatic: boolean,
 ) {
   const transportIds = new Set([
     ...v2PhaseTransportIds(state),
@@ -408,9 +416,10 @@ async function buildV2DriverDeps(
         epoch: state.sourceEpoch,
         updatedByOperationId: state.operationId,
         createIfMissing: state.sourceAssignmentMode === "unassigned-live",
+        automatic,
       }),
     commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
-      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug }),
+      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug, automatic }),
     now: deps.now,
   };
 }
@@ -492,13 +501,15 @@ function buildRunnerDeps(
     deps: MigrateCustomerDeps;
     client: MigrationClient;
     ctx: OperationContext;
+    automatic: boolean;
   },
 ): MigrationRunnerDeps {
   const { deps, client, ctx } = input;
   return {
     client,
-    commitCutover: deps.commitCutover,
-    setAssignmentState: deps.setAssignmentState,
+    commitCutover: (commit) => deps.commitCutover({ ...commit, automatic: input.automatic }),
+    setAssignmentState: (assignment) =>
+      deps.setAssignmentState({ ...assignment, automatic: input.automatic }),
     log: deps.log,
     reportStep: async (rep: ReportedStep) => {
       await ctx.reportStep(reportedToOperationStep(rep, deps.now()));
@@ -695,6 +706,7 @@ async function executeMigration(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   prepared: PreparedMigration,
+  automatic: boolean,
 ): Promise<OperationResult> {
   const client = deps.buildClient((transportId) => {
     const url = prepared.urls.get(transportId);
@@ -715,7 +727,7 @@ async function executeMigration(
       restoreSnapshot: prepared.restoreSnapshot,
       includeActivationManifest: true,
     },
-    buildRunnerDeps({ deps, client, ctx }),
+    buildRunnerDeps({ deps, client, ctx, automatic }),
   );
   return {
     steps: [],
@@ -737,6 +749,11 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     const prepared = await prepareMigration(deps, op, ctx, input, request);
     if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
     if ("result" in prepared) return prepared.result;
-    return executeMigration(deps, ctx, prepared);
+    return executeMigration(
+      deps,
+      ctx,
+      prepared,
+      resolveOperationOrigin(op.origin) === "automatic",
+    );
   };
 }

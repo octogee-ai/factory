@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN, isW9CandidateImageTag, } from "./image-tag.js";
-import { GLM_GATEWAYS_COLLECTION } from "./glm.js";
+import { GLM_GATEWAYS_COLLECTION, isOperatorManaged, } from "./glm.js";
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
 // (gateways/{id}) + immutable releases (releases/{n}) + ONE stable-name
 // realization per gateway (glmGateways/{gatewayId} runtime doc). A roll is a
@@ -243,6 +243,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "preemption",
     "allocation",
     "desiredStatus",
+    "managedBy",
     "preemptionHandoff",
     "liveRelease",
     "retireAfter",
@@ -268,6 +269,16 @@ function placementRuntimeRejectReason(snap, gatewayId) {
     }
     return data.lifecycle === "serving" ? null : "gateway-not-serving";
 }
+function builderIsOperatorManaged(data) {
+    const provisioning = data?.provisioning;
+    if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) {
+        return false;
+    }
+    const openclaw = provisioning.openclaw;
+    if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw))
+        return false;
+    return isOperatorManaged(openclaw.managedBy);
+}
 async function preserveExistingAssignment(txn, assignmentRef, userRef, params) {
     if (params.assignmentWrite !== "create-if-missing")
         return false;
@@ -286,6 +297,12 @@ export async function commitPlacementAtomic(db, params) {
     return db.runTransaction(async (txn) => {
         const gatewaySnap = await txn.get(gatewayRef);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+        if (params.automatic) {
+            const userSnap = await txn.get(userRef);
+            if (builderIsOperatorManaged(userSnap.exists ? userSnap.data() : undefined)) {
+                return { kind: "rejected", reason: "builder-operator-managed" };
+            }
+        }
         if (!gatewaySnap.exists) {
             if (params.requireDurableGateway) {
                 return { kind: "rejected", reason: "gateway-root-invalid" };
@@ -295,6 +312,9 @@ export async function commitPlacementAtomic(db, params) {
         }
         if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
             return { kind: "rejected", reason: "gateway-root-invalid" };
+        }
+        if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
+            return { kind: "rejected", reason: "gateway-operator-managed" };
         }
         if (gatewayData.desiredStatus !== "running") {
             return { kind: "rejected", reason: "gateway-not-running" };

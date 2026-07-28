@@ -4,6 +4,7 @@ import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types
 import {
   drainPendingOperationsOnce,
   processOperation,
+  startOperationWorker,
   startOperationQueueDrain,
   OPERATION_QUEUE_DRAIN_MS_DEFAULT,
 } from "../index";
@@ -13,6 +14,10 @@ type FakeQuery = {
   where: (field: string, op: "==", value: unknown) => FakeQuery;
   orderBy: (field: string, direction?: "asc" | "desc") => FakeQuery;
   get: () => Promise<{ docs: FakeDocSnap[] }>;
+  onSnapshot: (
+    next: (snapshot: { docChanges: () => Array<{ type: string; doc: FakeDocSnap }> }) => void,
+    error: (err: unknown) => void,
+  ) => () => void;
 };
 
 interface FakeDocSnap {
@@ -46,7 +51,12 @@ function applyUpdate(current: Record<string, unknown>, patch: Record<string, unk
 // reconciler.spec.ts (defer txn writes, apply after body() resolves).
 function createFakeGlmOperationsDb(
   initial: Record<string, Record<string, unknown>>,
-  opts: { orderByThrows?: boolean } = {},
+  opts: {
+    orderByThrows?: boolean;
+    gateways?: Record<string, Record<string, unknown>>;
+    users?: Record<string, Record<string, unknown>>;
+    snapshotChangeIds?: string[];
+  } = {},
 ) {
   const store = new Map<string, Record<string, unknown>>(Object.entries(initial));
   const writeLog: Array<{ id: string; data: Record<string, unknown> }> = [];
@@ -99,6 +109,27 @@ function createFakeGlmOperationsDb(
           })),
         };
       },
+      onSnapshot: (next, _error) => {
+        queueMicrotask(() => {
+          next({
+            docChanges: () =>
+              (opts.snapshotChangeIds ?? []).flatMap((id) => {
+                const data = store.get(id);
+                if (!data) return [];
+                return [{
+                  type: "added",
+                  doc: {
+                    id,
+                    exists: true,
+                    data: () => data,
+                    ref: docRef(id),
+                  },
+                }];
+              }),
+          });
+        });
+        return () => undefined;
+      },
     };
   }
 
@@ -110,6 +141,22 @@ function createFakeGlmOperationsDb(
 
   const db = {
     collection: (name: string) => {
+      if (name === "gateways" || name === "users") {
+        const docs = name === "gateways" ? opts.gateways ?? {} : opts.users ?? {};
+        return {
+          doc: (id: string) => ({
+            id,
+            get: async () => ({
+              id,
+              exists: docs[id] !== undefined,
+              data: () => docs[id],
+              ref: undefined,
+            }),
+          }),
+          where: () => buildQuery([]),
+          get: async () => ({ docs: [] }),
+        };
+      }
       if (name !== GLM_OPERATIONS_COLLECTION) {
         return { doc: () => docRef("unused"), where: () => buildQuery([]), get: async () => ({ docs: [] }) };
       }
@@ -166,6 +213,69 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
+  it("fails an already-queued automatic operation when its transaction sees an operator-managed gateway", async () => {
+    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-bender": baseOp({
+        id: "op-bender",
+        origin: "automatic",
+        input: { gatewayId: "bender" },
+      }),
+    }, {
+      gateways: { bender: { managedBy: "operator" } },
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
+
+    expect(store.get("op-bender")).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("operator-managed"),
+    });
+    expect(rolloutHandler).not.toHaveBeenCalled();
+  });
+
+  it("does not execute an audit record from a pending scan or snapshot", async () => {
+    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb(
+      {
+        "audit-pending": {
+          recordType: "audit",
+          status: "recorded",
+          actor: "operator",
+          createdAt: 1,
+        },
+      },
+      { snapshotChangeIds: ["audit-pending"] },
+    );
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
+    const stop = startOperationWorker(buildDeps(db, { rollout: rolloutHandler }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stop();
+
+    expect(rolloutHandler).not.toHaveBeenCalled();
+    expect(store.get("audit-pending")?.status).toBe("recorded");
+  });
+
+  it("does not let an audit-shaped row participate in serial command conflicts", async () => {
+    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "audit-running": {
+        recordType: "audit",
+        status: "running",
+        kind: "rollout",
+        createdAt: 1,
+      },
+      "op-rollout": baseOp({ id: "op-rollout", createdAt: 2, input: { gatewayId: "bender" } }),
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
+
+    expect(rolloutHandler).toHaveBeenCalledOnce();
+    expect(store.get("op-rollout")?.status).toBe("succeeded");
+    expect(store.get("audit-running")?.status).toBe("running");
+  });
+
   it("admits a pending durable cleanup retry while release admission drains", async () => {
     const migrationHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createFakeGlmOperationsDb({

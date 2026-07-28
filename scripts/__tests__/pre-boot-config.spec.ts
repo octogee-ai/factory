@@ -42,7 +42,7 @@ describe("applyPreBootPatches — platform model catalog", () => {
 });
 
 describe("applyOpenClawBeta5CompatibilityPatch", () => {
-  it("removes beta.5-rejected legacy fields while preserving executable secret providers", () => {
+  it("migrates the root-owned Node SecretRef command to the node-owned resolver executable", () => {
     const config: any = {
       meta: { lastTouchedVersion: "2026.4.14", lastTouchedAt: "2026-04-17T01:04:39.966Z" },
       commands: { native: "auto", ownerDisplay: "raw" },
@@ -69,8 +69,7 @@ describe("applyOpenClawBeta5CompatibilityPatch", () => {
         providers: {
           "gcp-secret-manager": {
             source: "exec",
-            command: "/usr/local/bin/node",
-            args: ["/octogee/scripts/secret-resolver.mjs"],
+            command: "/octogee/scripts/secret-resolver.mjs",
             passEnv: ["HOME"],
             jsonOnly: true,
             timeoutMs: 5000,

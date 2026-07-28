@@ -69,9 +69,17 @@ vi.mock("../lib/db", () => {
             const data = usersDocs[docId];
             return { exists: data !== undefined, data: () => data };
           }
+          if (name === "glmOperations") {
+            const entry = glmOperationsDocs.find((candidate) => candidate.id === docId);
+            return { exists: entry !== undefined, data: () => entry?.data };
+          }
           return { exists: false, data: () => undefined };
         },
         collection: (sub: string) => collection(sub),
+        set: async (data: Record<string, unknown>) => {
+          fsCalls.push({ collection: name, op: "batch.set", docId, data });
+          if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
+        },
         delete: async () => {
           fsCalls.push({ collection: name, op: "doc.delete", docId });
           if (name === "users") delete usersDocs[docId];
@@ -93,7 +101,10 @@ vi.mock("../lib/db", () => {
     db: {
       collection,
       collectionGroup: (name: string) => whereChain(name),
-      doc: () => ({}),
+      doc: (path: string) => {
+        const [name, id] = path.split("/");
+        return collection(name).doc(id);
+      },
       getAll: async () => [],
       runTransaction: <T>(callback: (transaction: {
         get: (target: any) => Promise<any>;
@@ -117,11 +128,22 @@ vi.mock("../lib/db", () => {
               glmOperationsDocs.unshift({ id: ref.id, data });
             }
           },
+          create: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
+            const collectionName = ref.__collection ?? "unknown";
+            fsCalls.push({ collection: collectionName, op: "batch.set", docId: ref.id, data });
+            if (collectionName === "glmOperations") {
+              glmOperationsDocs.unshift({ id: ref.id, data });
+            }
+          },
           update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
             const collectionName = ref.__collection ?? "unknown";
             fsCalls.push({ collection: collectionName, op: "batch.update", docId: ref.id, data });
             if (collectionName === "users") {
               usersDocs[ref.id] = { ...usersDocs[ref.id], ...data };
+            }
+            if (collectionName === "glmOperations") {
+              const entry = glmOperationsDocs.find((candidate) => candidate.id === ref.id);
+              if (entry) entry.data = { ...entry.data, ...data };
             }
           },
           delete: (ref: { id: string; __collection?: string }) => {
@@ -316,12 +338,33 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
     authNextError = e;
     const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
     expect(res.status).toBe(500);
+    expect(glmOperationsDocs.map((entry) => entry.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recordType: "audit",
+        status: "completed",
+        lifecycleStage: "action-partial",
+        partialOutcome: expect.objectContaining({
+          summary: "customer deletion was scheduled but identity suspension failed",
+          details: expect.objectContaining({
+            uid: "uid-bob",
+            failedStep: "suspend-auth",
+            deletionId: expect.any(String),
+            suspensionOperationId: expect.any(String),
+            erasureOperationId: expect.any(String),
+          }),
+        }),
+      }),
+    ]));
   });
 
   it("enqueues lifecycle operations even when provisioning never produced a slug", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
-    expect(fsCalls.filter((c) => c.collection === "glmOperations" && c.op === "batch.set")).toHaveLength(2);
+    expect(fsCalls.filter(
+      (c) => c.collection === "glmOperations" &&
+        c.op === "batch.set" &&
+        typeof c.data?.kind === "string",
+    )).toHaveLength(2);
   });
 });
 

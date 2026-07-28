@@ -1,5 +1,10 @@
 import type { SizingTier } from "./sizing.js";
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
+export declare const MANAGED_BY_VALUES: readonly ["cowboy", "operator"];
+export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
+export declare const DEFAULT_MANAGED_BY: ManagedBy;
+export declare function resolveManagedBy(value: unknown): ManagedBy;
+export declare function isOperatorManaged(value: unknown): boolean;
 export declare const GATEWAY_PROFILES: readonly ["standard", "operator"];
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 export declare const GATEWAY_CLASSES: readonly ["shared", "builder", "operator"];
@@ -105,6 +110,77 @@ export declare function resolveUserGatewayShellState(data: {
 };
 export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
+export declare const OPERATION_ORIGINS: readonly ["automatic", "operator"];
+export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];
+export declare function resolveOperationOrigin(value: unknown): OperationOrigin;
+export declare const OPERATION_AUDIT_RECORD_TYPE: "audit";
+export declare const OPERATION_AUDIT_SCHEMA_VERSION: 1;
+export declare const OPERATION_AUDIT_LIFECYCLE_STAGES: readonly ["intent-recorded", "action-started", "action-completed", "action-partial", "action-failed"];
+export type OperationAuditLifecycleStage = (typeof OPERATION_AUDIT_LIFECYCLE_STAGES)[number];
+export type OperationAuditStatus = "recorded" | "in-progress" | "completed" | "failed";
+export type OperationAuditOutcome = "completed" | "partial" | "failed";
+export interface OperationAuditAliasPlan {
+    alias: string;
+    expectedTarget?: string | null;
+    intendedTarget: string;
+}
+export type OperationAuditAliasOutcomeStatus = "applied" | "already-applied" | "skipped" | "failed";
+export interface OperationAuditAliasOutcome {
+    alias: string;
+    status: OperationAuditAliasOutcomeStatus;
+    observedTarget?: string | null;
+    error?: string;
+}
+export interface OperationAuditReleaseRolloutLinkage {
+    releaseId?: string;
+    releaseTag?: string;
+    rolloutOperationId?: string;
+}
+export interface OperationAuditTestProvenance {
+    environment: "test";
+    sourceCommit?: string;
+    verifiedBy?: string;
+    verifiedAt?: number;
+}
+export interface OperationAuditPartialOutcome {
+    summary: string;
+    details?: Record<string, unknown>;
+}
+export interface OperationAuditDocument {
+    recordType: typeof OPERATION_AUDIT_RECORD_TYPE;
+    schemaVersion: typeof OPERATION_AUDIT_SCHEMA_VERSION;
+    status: OperationAuditStatus;
+    lifecycleStage: OperationAuditLifecycleStage;
+    idempotencyKey: string;
+    mutationFingerprint: string;
+    mutation: Record<string, unknown>;
+    actor: string;
+    forced: boolean;
+    what: string;
+    why: string;
+    target: Record<string, unknown>;
+    preActionStatus: Record<string, unknown>;
+    aliasPlan: OperationAuditAliasPlan[];
+    aliasOutcomes?: OperationAuditAliasOutcome[];
+    releaseRollout?: OperationAuditReleaseRolloutLinkage;
+    testProvenance?: OperationAuditTestProvenance;
+    outcome?: OperationAuditOutcome;
+    partialOutcome?: OperationAuditPartialOutcome;
+    createdAt: number;
+    actionClaimId?: string;
+    actionStartedAt?: number;
+    actionRecoveryCount?: number;
+    completedAt: number | null;
+    error?: string;
+}
+export interface OperationAuditRecord extends OperationAuditDocument {
+    id: string;
+}
+export type GlmOperationRecord = Operation | OperationAuditRecord;
+export declare function isOperationAuditRow(value: unknown): value is Record<string, unknown> & {
+    recordType: typeof OPERATION_AUDIT_RECORD_TYPE;
+};
+export declare function isOperationAuditRecord(value: unknown): value is OperationAuditDocument;
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface OperationStep {
     name: string;
@@ -118,6 +194,7 @@ export interface Operation {
     kind: OperationKind;
     status: OperationStatus;
     createdBy: string;
+    origin?: OperationOrigin;
     createdAt: number;
     startedAt: number | null;
     completedAt: number | null;

@@ -2,6 +2,18 @@ import type { SizingTier } from "./sizing.js";
 
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
+export const MANAGED_BY_VALUES = ["cowboy", "operator"] as const;
+export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
+export const DEFAULT_MANAGED_BY: ManagedBy = "cowboy";
+
+export function resolveManagedBy(value: unknown): ManagedBy {
+  return value === "operator" ? "operator" : DEFAULT_MANAGED_BY;
+}
+
+export function isOperatorManaged(value: unknown): boolean {
+  return resolveManagedBy(value) === "operator";
+}
+
 export const GATEWAY_PROFILES = ["standard", "operator"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
@@ -266,6 +278,252 @@ export type OperationStatus =
   | "failed"
   | "rolled-back";
 
+export const OPERATION_ORIGINS = ["automatic", "operator"] as const;
+export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];
+
+export function resolveOperationOrigin(value: unknown): OperationOrigin {
+  return value === "automatic" ? "automatic" : "operator";
+}
+
+export const OPERATION_AUDIT_RECORD_TYPE = "audit" as const;
+export const OPERATION_AUDIT_SCHEMA_VERSION = 1 as const;
+
+export const OPERATION_AUDIT_LIFECYCLE_STAGES = [
+  "intent-recorded",
+  "action-started",
+  "action-completed",
+  "action-partial",
+  "action-failed",
+] as const;
+export type OperationAuditLifecycleStage =
+  (typeof OPERATION_AUDIT_LIFECYCLE_STAGES)[number];
+
+export type OperationAuditStatus = "recorded" | "in-progress" | "completed" | "failed";
+export type OperationAuditOutcome = "completed" | "partial" | "failed";
+
+export interface OperationAuditAliasPlan {
+  alias: string;
+  expectedTarget?: string | null;
+  intendedTarget: string;
+}
+
+export type OperationAuditAliasOutcomeStatus =
+  | "applied"
+  | "already-applied"
+  | "skipped"
+  | "failed";
+
+export interface OperationAuditAliasOutcome {
+  alias: string;
+  status: OperationAuditAliasOutcomeStatus;
+  observedTarget?: string | null;
+  error?: string;
+}
+
+export interface OperationAuditReleaseRolloutLinkage {
+  releaseId?: string;
+  releaseTag?: string;
+  rolloutOperationId?: string;
+}
+
+export interface OperationAuditTestProvenance {
+  environment: "test";
+  sourceCommit?: string;
+  verifiedBy?: string;
+  verifiedAt?: number;
+}
+
+export interface OperationAuditPartialOutcome {
+  summary: string;
+  details?: Record<string, unknown>;
+}
+
+export interface OperationAuditDocument {
+  recordType: typeof OPERATION_AUDIT_RECORD_TYPE;
+  schemaVersion: typeof OPERATION_AUDIT_SCHEMA_VERSION;
+  status: OperationAuditStatus;
+  lifecycleStage: OperationAuditLifecycleStage;
+  idempotencyKey: string;
+  mutationFingerprint: string;
+  mutation: Record<string, unknown>;
+  actor: string;
+  forced: boolean;
+  what: string;
+  why: string;
+  target: Record<string, unknown>;
+  preActionStatus: Record<string, unknown>;
+  aliasPlan: OperationAuditAliasPlan[];
+  aliasOutcomes?: OperationAuditAliasOutcome[];
+  releaseRollout?: OperationAuditReleaseRolloutLinkage;
+  testProvenance?: OperationAuditTestProvenance;
+  outcome?: OperationAuditOutcome;
+  partialOutcome?: OperationAuditPartialOutcome;
+  createdAt: number;
+  actionClaimId?: string;
+  actionStartedAt?: number;
+  actionRecoveryCount?: number;
+  completedAt: number | null;
+  error?: string;
+}
+
+export interface OperationAuditRecord extends OperationAuditDocument {
+  id: string;
+}
+
+export type GlmOperationRecord = Operation | OperationAuditRecord;
+
+function isAuditObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isNonEmptyAuditString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isFiniteAuditNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isAuditAliasPlan(value: unknown): value is OperationAuditAliasPlan[] {
+  return Array.isArray(value) && value.every((entry) =>
+    isAuditObject(entry) &&
+    isNonEmptyAuditString(entry.alias) &&
+    isNonEmptyAuditString(entry.intendedTarget) &&
+    (entry.expectedTarget === undefined || entry.expectedTarget === null ||
+      typeof entry.expectedTarget === "string")
+  );
+}
+
+function isAuditAliasOutcomes(value: unknown): value is OperationAuditAliasOutcome[] {
+  const statuses: ReadonlySet<string> = new Set([
+    "applied",
+    "already-applied",
+    "skipped",
+    "failed",
+  ]);
+  return Array.isArray(value) && value.every((entry) =>
+    isAuditObject(entry) &&
+    isNonEmptyAuditString(entry.alias) &&
+    typeof entry.status === "string" && statuses.has(entry.status) &&
+    (entry.observedTarget === undefined || entry.observedTarget === null ||
+      typeof entry.observedTarget === "string") &&
+    (entry.error === undefined || typeof entry.error === "string")
+  );
+}
+
+function isAuditReleaseRollout(value: unknown): boolean {
+  return isAuditObject(value) &&
+    (value.releaseId === undefined || isNonEmptyAuditString(value.releaseId)) &&
+    (value.releaseTag === undefined || isNonEmptyAuditString(value.releaseTag)) &&
+    (value.rolloutOperationId === undefined || isNonEmptyAuditString(value.rolloutOperationId));
+}
+
+function isAuditTestProvenance(value: unknown): boolean {
+  return isAuditObject(value) && value.environment === "test" &&
+    (value.sourceCommit === undefined || isNonEmptyAuditString(value.sourceCommit)) &&
+    (value.verifiedBy === undefined || isNonEmptyAuditString(value.verifiedBy)) &&
+    (value.verifiedAt === undefined || isFiniteAuditNumber(value.verifiedAt));
+}
+
+function isAuditPartialOutcome(value: unknown): boolean {
+  return isAuditObject(value) && isNonEmptyAuditString(value.summary) &&
+    (value.details === undefined || isAuditObject(value.details));
+}
+
+function hasAuditClaim(value: Record<string, unknown>): boolean {
+  return isNonEmptyAuditString(value.actionClaimId) && isFiniteAuditNumber(value.actionStartedAt) &&
+    typeof value.actionRecoveryCount === "number" &&
+    Number.isInteger(value.actionRecoveryCount) && value.actionRecoveryCount >= 0;
+}
+
+function hasRecordedAuditState(value: Record<string, unknown>): boolean {
+  return value.lifecycleStage === "intent-recorded" && value.completedAt === null &&
+    value.actionClaimId === undefined && value.actionStartedAt === undefined &&
+    value.outcome === undefined && value.partialOutcome === undefined && value.error === undefined;
+}
+
+function hasInProgressAuditState(value: Record<string, unknown>): boolean {
+  return value.lifecycleStage === "action-started" && value.completedAt === null &&
+    hasAuditClaim(value) && value.outcome === undefined &&
+    value.partialOutcome === undefined && value.error === undefined;
+}
+
+function hasCompletedAuditState(value: Record<string, unknown>): boolean {
+  if (!hasAuditClaim(value) || !isFiniteAuditNumber(value.completedAt)) return false;
+  if (value.error !== undefined) return false;
+  if (value.lifecycleStage === "action-completed") {
+    return value.outcome === "completed" && value.partialOutcome === undefined;
+  }
+  return value.lifecycleStage === "action-partial" && value.outcome === "partial" &&
+    isAuditObject(value.partialOutcome) && isNonEmptyAuditString(value.partialOutcome.summary);
+}
+
+function hasFailedAuditState(value: Record<string, unknown>): boolean {
+  return value.lifecycleStage === "action-failed" && value.outcome === "failed" &&
+    hasAuditClaim(value) && isFiniteAuditNumber(value.completedAt) &&
+    isNonEmptyAuditString(value.error);
+}
+
+function hasLegalAuditState(value: Record<string, unknown>): boolean {
+  if (value.status === "recorded") return hasRecordedAuditState(value);
+  if (value.status === "in-progress") return hasInProgressAuditState(value);
+  if (value.status === "completed") return hasCompletedAuditState(value);
+  return value.status === "failed" && hasFailedAuditState(value);
+}
+
+export function isOperationAuditRow(value: unknown): value is Record<string, unknown> & {
+  recordType: typeof OPERATION_AUDIT_RECORD_TYPE;
+} {
+  return (
+    isAuditObject(value) && value.recordType === OPERATION_AUDIT_RECORD_TYPE
+  );
+}
+
+function hasRequiredAuditRecordMetadata(value: Record<string, unknown>): boolean {
+  return value.schemaVersion === OPERATION_AUDIT_SCHEMA_VERSION &&
+    isNonEmptyAuditString(value.idempotencyKey) &&
+    isNonEmptyAuditString(value.mutationFingerprint) &&
+    isAuditObject(value.mutation) &&
+    isNonEmptyAuditString(value.actor) &&
+    typeof value.forced === "boolean" &&
+    isNonEmptyAuditString(value.what) &&
+    isNonEmptyAuditString(value.why) &&
+    isAuditObject(value.target) &&
+    isAuditObject(value.preActionStatus) &&
+    isAuditAliasPlan(value.aliasPlan) &&
+    isFiniteAuditNumber(value.createdAt);
+}
+
+function isOptionalAuditField(
+  value: unknown,
+  validator: (value: unknown) => boolean,
+): boolean {
+  return value === undefined || validator(value);
+}
+
+function hasValidOptionalAuditRecordFields(value: Record<string, unknown>): boolean {
+  return isOptionalAuditField(value.aliasOutcomes, isAuditAliasOutcomes) &&
+    isOptionalAuditField(value.releaseRollout, isAuditReleaseRollout) &&
+    isOptionalAuditField(value.testProvenance, isAuditTestProvenance) &&
+    isOptionalAuditField(value.partialOutcome, isAuditPartialOutcome);
+}
+
+function hasValidOptionalAuditRecoveryCount(value: Record<string, unknown>): boolean {
+  return value.actionRecoveryCount === undefined ||
+    (typeof value.actionRecoveryCount === "number" &&
+      Number.isInteger(value.actionRecoveryCount) && value.actionRecoveryCount >= 0);
+}
+
+export function isOperationAuditRecord(value: unknown): value is OperationAuditDocument {
+  if (!isOperationAuditRow(value)) return false;
+  return hasRequiredAuditRecordMetadata(value) &&
+    hasValidOptionalAuditRecordFields(value) &&
+    hasValidOptionalAuditRecoveryCount(value) &&
+    hasLegalAuditState(value);
+}
+
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface OperationStep {
@@ -281,6 +539,7 @@ export interface Operation {
   kind: OperationKind;
   status: OperationStatus;
   createdBy: string;
+  origin?: OperationOrigin;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;

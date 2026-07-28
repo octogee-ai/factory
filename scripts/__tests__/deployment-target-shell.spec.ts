@@ -13,22 +13,22 @@ function bash(command: string) {
 }
 
 describe("deployment target shell loader", () => {
-  it("loads a west target without reconstructing regional resource paths", () => {
+  it("loads a Central target without reconstructing regional resource paths", () => {
     const result = bash(`
       source "${helper}"
-      octogee_load_deployment_target --target=prod-west
+      octogee_load_deployment_target --target=prod-central
       printf '%s\n' "$TARGET_ID" "$TARGET_REGION" "$TARGET_KUBE_CONTEXT" "$TARGET_AR_REPOSITORY" "$TARGET_CLOUD_SQL_CONNECTION" "$TARGET_CLOUD_SQL_PITR_ENABLED" "$TARGET_KMS_KEY_NAME"
     `);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
-      "prod-west",
-      "us-west1",
-      "gke_octogee_us-west1_octogee-gateway",
-      "us-west1-docker.pkg.dev/octogee/octogee",
-      "octogee:us-west1:octogee-pg-west",
-      "true",
-      "projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
+      "prod-central",
+      "us-central1",
+      "gke_octogee_us-central1_octogee-gateway",
+      "us-central1-docker.pkg.dev/octogee/octogee",
+      "octogee:us-central1:octogee-pg",
+      "false",
+      "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
     ]);
   });
 
@@ -46,7 +46,7 @@ describe("deployment target shell loader", () => {
     const result = bash(`
       node() { return 0; }
       source "${helper}"
-      octogee_load_deployment_target --target=prod-west
+      octogee_load_deployment_target --target=prod-central
     `);
 
     expect(result.status).not.toBe(0);

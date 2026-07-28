@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -24,12 +24,18 @@ describe("tagged gateway release desired-state workflow", () => {
       /update-environment-desired-state:\n\s+needs: \[matrix-setup, alias-with-oc-version, promotion-authority\]/,
     );
   });
+
+  it("does not retain the now-uninvoked convergence-baseline capture entrypoint", () => {
+    expect(existsSync(path.resolve(__dirname, "../ops/capture-release-convergence-baseline.ts"))).toBe(false);
+  });
 });
 
 describe("verify-env configured default selection", () => {
   it("selects the configured default gateway instead of the first Deployment", () => {
     expect(verifyEnv).toContain("config/orchestrator");
-    expect(verifyEnv).toContain('gateway-instance=$DEFAULT_GATEWAY_ID"');
+    expect(verifyEnv).toContain(
+      'octogee_resolve_default_gateway_deployment "$DEFAULT_GATEWAY_ID"',
+    );
     expect(verifyEnv).not.toContain("-l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}'");
   });
 });

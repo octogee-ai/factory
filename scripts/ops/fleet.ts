@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 
 import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -10,12 +11,24 @@ import {
   type GatewayStatus,
   GATEWAYS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
-import { type GatewayProfile } from "../../shared/types/glm.js";
+import {
+  GLM_OPERATIONS_COLLECTION,
+  isValidGatewayId,
+  type GatewayProfile,
+} from "../../shared/types/glm.js";
+import { projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
 import {
   readGatewayAuthorization,
   readGatewayRuntimeHeartbeat,
 } from "@octogee/core/gateway-live-release";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import {
+  assertNormalFleetMutationSnapshotOpen,
+  GLM_MAINTENANCE_DOC_PATH,
+  runNormalFleetMutation,
+  type NormalFleetMutationDb,
+  type NormalFleetMutationInput,
+} from "@octogee/core/normal-fleet-mutation";
 import {
   type MigrationState,
   fullPlan,
@@ -27,6 +40,13 @@ import {
   awaitOperation,
   type OperationsDb,
 } from "../lib/glm-operations.js";
+import { readReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
+import {
+  createAdminFleetClient,
+  exchangeAdminFleetCustomToken,
+  type AdminFleetClient,
+  type AdminFleetRequest,
+} from "../lib/admin-fleet-client.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -51,6 +71,7 @@ const cyan = (s: string) => `${c.cyan}${s}${c.reset}`;
 const CHECK = COLOR_ENABLED ? "✓" : "[ok]";
 const CROSS = COLOR_ENABLED ? "✗" : "[x]";
 const ARROW = COLOR_ENABLED ? "→" : "->";
+const GIT_EXECUTABLE = "/usr/bin/git";
 
 const VERSION = readVersion();
 
@@ -119,6 +140,157 @@ const VERBS: readonly VerbHelp[] = [
     writes: false,
   },
   {
+    verb: "release status",
+    summary: "Show Cowboy's one-shot release convergence view.",
+    args: "",
+    description:
+      "Reads Firestore desired roots, selected immutable release payloads, and Cowboy runtime observations once. Reports desired/live/runtime release state and heartbeat status/version; it never waits for convergence or changes fleet state.",
+    examples: ["fleet --env=test release status"],
+    writes: false,
+  },
+  {
+    verb: "release cut",
+    summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
+    args: "<version> [--sha=<sha>] [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the desired release, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test release cut v0.4.0",
+      "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "release promote",
+    summary: "Promote an identical CENTRAL TEST manifest to PROD.",
+    args: "<version> [--idempotency-key=<key>] [--apply]",
+    description:
+      "Sends one Admin API request. The server requires the durable CENTRAL TEST manifest record and promotes those exact bytes through the PROD desired-state release path. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=prod release promote v0.4.0",
+      "fleet --env=prod release promote v0.4.0 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw ls",
+    summary: "List gateways (alias for ls gateways).",
+    args: "",
+    description:
+      "Alias for `ls gateways`, retaining the established Firestore and Kubernetes diagnostic read.",
+    examples: ["fleet --env=prod gw ls"],
+    writes: false,
+  },
+  {
+    verb: "gw inspect",
+    summary: "Inspect one gateway (alias for inspect gateway).",
+    args: "<gw-id>",
+    description:
+      "Alias for `inspect gateway <gw-id>`, including durable state, heartbeat, and pod diagnostics.",
+    examples: ["fleet --env=prod gw inspect default"],
+    writes: false,
+  },
+  {
+    verb: "gw add",
+    summary: "Add a gateway through the Admin API.",
+    args: "--gateway-id=<id> --image-tag=<tag> [--image-repository=<repo>] [--gateway-class=<class>] [--apply]",
+    description:
+      "Uses POST /api/admin/gateways so maintenance and the operations journal match the Admin UI. imageRepository defaults to the selected environment's canonical /octogee-gateway image. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234",
+      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw roll",
+    summary: "Request a gateway image rollout through the Admin API.",
+    args: "<gw-id> --image-tag=<tag> [--image-repository=<repo>] [--apply]",
+    description:
+      "Uses POST /api/admin/gateways/:id/rollout so maintenance and the operations journal match the Admin UI. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw roll canary --image-tag=abc1234",
+      "fleet --env=test gw roll canary --image-tag=abc1234 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw park",
+    summary: "Pause a gateway through the Admin API.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with desiredStatus=paused. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw park canary", "fleet --env=test gw park canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw retire",
+    summary: "Retire an empty gateway through the Admin API.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses DELETE /api/admin/gateways/:id. The Admin API enforces retirement preconditions, maintenance, and journaling. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw retire canary", "fleet --env=test gw retire canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw restart",
+    summary: "Restart a gateway through the Admin API, or force-delete its exact pod.",
+    args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
+    description:
+      "Normally uses POST /api/admin/gateways/:id/restart so maintenance and the operations journal match the Admin UI. With --force --apply, it journals a break-glass operation, hands the gateway to the operator lane, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting. Dry-run by default.",
+    examples: [
+      "fleet --env=test gw restart canary",
+      "fleet --env=test gw restart canary --apply",
+      "fleet --env=test gw restart canary --force --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw override",
+    summary: "Hand a gateway to the operator management lane.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with managedBy=operator. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw override canary", "fleet --env=test gw override canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw release-to-cowboy",
+    summary: "Return a gateway to Cowboy management.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with managedBy=cowboy. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw release-to-cowboy canary",
+      "fleet --env=test gw release-to-cowboy canary --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "builder evict",
+    summary: "Move a Builder to a gateway or park them through the Admin API.",
+    args: "<slug> (--to=<gw-id> | --park) [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves the Builder slug to its UID, then asks the Admin API to set operator-owned placement desired state. A cross-gateway move uses the API's migration path; parking removes placement. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test builder evict alice --to=canary",
+      "fleet --env=test builder evict alice --park --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "builder place",
+    summary: "Return a Builder to Cowboy placement.",
+    args: "<slug> [--idempotency-key=<key>] [--apply]",
+    description:
+      "Resolves the Builder slug to its UID, then asks the Admin API to release the Builder from the operator management lane. Cowboy chooses the next placement; the CLI returns after the desired-state response and never waits for convergence. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test builder place alice",
+      "fleet --env=test builder place alice --apply",
+    ],
+    writes: true,
+  },
+  {
     verb: "add-customer",
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
@@ -154,6 +326,9 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
   kubeContext: string;
 } {
   const target = deploymentEnvironmentSettings(environment);
+  if (target.targetId !== `${environment}-central` || target.region !== "us-central1") {
+    throw new Error(`fleet only supports the active CENTRAL target for ${environment}`);
+  }
   return {
     projectId: target.firebaseProjectId,
     namespace: target.namespace,
@@ -161,16 +336,17 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
   };
 }
 
-function parsedVerb(args: ParsedFleetArgs): VerbHelp | null {
+export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
   const [verb, sub] = args.positional;
   return verbsByName.get(`${verb ?? ""} ${sub ?? ""}`.trim()) ?? verbsByName.get(verb ?? "") ?? null;
 }
 
 export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
-  const verb = parsedVerb(args);
-  return verb?.writes === true && args.flags.apply === true
-    ? "application-default"
-    : "service-account-key";
+  const verb = resolveFleetVerb(args);
+  if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
+  return args.positional[0] === "gw" || args.positional[0] === "builder" || args.positional[0] === "release"
+    ? "service-account-key"
+    : "application-default";
 }
 
 function renderTopHelp(): string {
@@ -233,10 +409,35 @@ export interface ParsedFleetArgs {
   flags: Record<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["env", "to", "gateway"]);
+const VALUE_FLAGS = new Set([
+  "env",
+  "to",
+  "gateway",
+  "gateway-id",
+  "image-repository",
+  "image-tag",
+  "profile",
+  "gateway-class",
+  "image-profile",
+  "sizing-tier",
+  "owner-uid",
+  "builder-slug",
+  "idempotency-key",
+  "sha",
+]);
 
 export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
   const out: ParsedFleetArgs = { env: "", positional: [], flags: {} };
+  const seenFlags = new Set<string>();
+  const setFlag = (name: string, value: string | true) => {
+    if (seenFlags.has(name)) throw new Error(`duplicate --${name} flag`);
+    seenFlags.add(name);
+    if (name === "env") {
+      out.env = typeof value === "string" ? value as "test" | "prod" : "";
+      return;
+    }
+    out.flags[name] = value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) {
@@ -247,21 +448,716 @@ export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
     if (eq > 0) {
       const k = a.slice(2, eq);
       const v = a.slice(eq + 1);
-      if (k === "env") out.env = v as "test" | "prod";
-      else out.flags[k] = v;
+      setFlag(k, v);
       continue;
     }
     const k = a.slice(2);
 
 if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
       const v = argv[++i];
-      if (k === "env") out.env = v as "test" | "prod";
-      else out.flags[k] = v;
+      setFlag(k, v);
       continue;
     }
-    out.flags[k] = true;
+    setFlag(k, true);
   }
   return out;
+}
+
+function stringFlag(args: ParsedFleetArgs, name: string): string | undefined {
+  const value = args.flags[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requiredFlag(
+  args: ParsedFleetArgs,
+  name: string,
+  command: string,
+  valueName: string,
+): string {
+  const value = stringFlag(args, name);
+  if (!value) throw new Error(`${command} requires --${name}=<${valueName}>`);
+  return value;
+}
+
+function requiredGatewayId(args: ParsedFleetArgs, command: string): string {
+  const gatewayId = args.positional[2];
+  if (!gatewayId) throw new Error(`${command} requires <gw-id>`);
+  if (!isValidGatewayId(gatewayId)) {
+    throw new Error(`${command} received an invalid gateway id: ${gatewayId}`);
+  }
+  return gatewayId;
+}
+
+export interface FleetGatewayRestart {
+  gatewayId: string;
+  force: boolean;
+  apply: boolean;
+  idempotencyKey?: string;
+}
+
+export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayRestart {
+  if (
+    args.positional.length !== 3 ||
+    args.positional[0] !== "gw" ||
+    args.positional[1] !== "restart"
+  ) {
+    throw new Error("gw restart requires exactly <gw-id> and no extra positional arguments");
+  }
+  const allowedFlags = new Set(["force", "apply", "idempotency-key"]);
+  for (const name of Object.keys(args.flags)) {
+    if (!allowedFlags.has(name)) {
+      throw new Error(`gw restart does not accept --${name}`);
+    }
+  }
+  if (args.flags.force !== undefined && args.flags.force !== true) {
+    throw new Error("gw restart --force must be a bare flag");
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error("gw restart --apply must be a bare flag");
+  }
+  const idempotency = args.flags["idempotency-key"];
+  if (
+    idempotency !== undefined &&
+    (typeof idempotency !== "string" || idempotency.length === 0)
+  ) {
+    throw new Error("gw restart --idempotency-key requires a non-empty value");
+  }
+  return {
+    gatewayId: requiredGatewayId(args, "gw restart"),
+    force: args.flags.force === true,
+    apply: args.flags.apply === true,
+    ...(typeof idempotency === "string" ? { idempotencyKey: idempotency } : {}),
+  };
+}
+
+function canonicalGatewayRepository(args: ParsedFleetArgs, command: string): string {
+  if (!args.env) throw new Error(`${command} requires --env=test|prod`);
+  const canonical =
+    `${deploymentEnvironmentSettings(args.env).artifactRegistryRepository}/octogee-gateway`;
+  const requested = stringFlag(args, "image-repository");
+  if (requested && requested !== canonical) {
+    throw new Error(`${command} requires the selected environment repository: ${canonical}`);
+  }
+  return canonical;
+}
+
+export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRequest {
+  const action = args.positional[1];
+  const idempotencyKey = stringFlag(args, "idempotency-key");
+  const withIdempotency = (request: Omit<AdminFleetRequest, "idempotencyKey">): AdminFleetRequest => ({
+    ...request,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  });
+  switch (action) {
+    case "add": {
+      const command = "gw add";
+      const body: Record<string, unknown> = {
+        gatewayId: requiredFlag(args, "gateway-id", command, "id"),
+        imageRepository: canonicalGatewayRepository(args, command),
+        imageTag: requiredFlag(args, "image-tag", command, "tag"),
+      };
+      const optionalFields: ReadonlyArray<readonly [string, string]> = [
+        ["profile", "profile"],
+        ["gateway-class", "gatewayClass"],
+        ["image-profile", "imageProfile"],
+        ["sizing-tier", "sizingTier"],
+        ["owner-uid", "ownerUid"],
+        ["builder-slug", "builderSlug"],
+      ];
+      for (const [flag, field] of optionalFields) {
+        const value = stringFlag(args, flag);
+        if (value) body[field] = value;
+      }
+      return withIdempotency({ method: "POST", path: "/api/admin/gateways", body });
+    }
+    case "roll": {
+      const gatewayId = requiredGatewayId(args, "gw roll");
+      const imageRepository = stringFlag(args, "image-repository");
+      if (imageRepository) canonicalGatewayRepository(args, "gw roll");
+      return withIdempotency({
+        method: "POST",
+        path: `/api/admin/gateways/${gatewayId}/rollout`,
+        body: {
+          imageTag: requiredFlag(args, "image-tag", "gw roll", "tag"),
+          ...(imageRepository ? { imageRepository } : {}),
+        },
+      });
+    }
+    case "park": {
+      const gatewayId = requiredGatewayId(args, "gw park");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { desiredStatus: "paused" },
+      });
+    }
+    case "retire": {
+      const gatewayId = requiredGatewayId(args, "gw retire");
+      return withIdempotency({ method: "DELETE", path: `/api/admin/gateways/${gatewayId}` });
+    }
+    case "restart": {
+      const restart = resolveFleetGatewayRestart(args);
+      if (restart.force) {
+        throw new Error("gw restart --force bypasses the Admin API");
+      }
+      return withIdempotency({
+        method: "POST",
+        path: `/api/admin/gateways/${restart.gatewayId}/restart`,
+      });
+    }
+    case "override": {
+      const gatewayId = requiredGatewayId(args, "gw override");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { managedBy: "operator" },
+      });
+    }
+    case "release-to-cowboy": {
+      const gatewayId = requiredGatewayId(args, "gw release-to-cowboy");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { managedBy: "cowboy" },
+      });
+    }
+    default:
+      throw new Error(`Unknown gateway mutation: gw ${action ?? ""}`.trim());
+  }
+}
+
+const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
+const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const RELEASE_VERSION_PATTERN = new RegExp(
+  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
+    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
+);
+const SOURCE_SHA_PATTERN = /^[a-f0-9]{40}$/;
+
+function releaseIdempotencyRequest(
+  request: Omit<AdminFleetRequest, "idempotencyKey">,
+  args: ParsedFleetArgs,
+  defaultIdempotencyKey: string,
+): AdminFleetRequest {
+  const idempotencyKey = stringFlag(args, "idempotency-key");
+  if (args.flags["idempotency-key"] !== undefined && !idempotencyKey) {
+    throw new Error("release mutation requires --idempotency-key=<key>");
+  }
+  return { ...request, idempotencyKey: idempotencyKey ?? defaultIdempotencyKey };
+}
+
+function requiredReleaseVersion(args: ParsedFleetArgs, command: string): string {
+  const version = args.positional[2];
+  if (!version || !RELEASE_VERSION_PATTERN.test(version)) {
+    throw new Error(`${command} requires a v-prefixed semantic version`);
+  }
+  if (args.positional.length !== 3) {
+    throw new Error(`${command} accepts exactly one <version>`);
+  }
+  return version;
+}
+
+function validateReleaseFlags(args: ParsedFleetArgs, command: string, allowed: readonly string[]): void {
+  const accepted = new Set(["apply", "idempotency-key", ...allowed]);
+  const unsupported = Object.keys(args.flags).filter((flag) => !accepted.has(flag));
+  if (unsupported.length > 0) {
+    throw new Error(`${command} does not accept --${unsupported.join(", --")}`);
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error(`${command} accepts --apply without a value`);
+  }
+}
+
+export function resolveFleetReleaseMutation(
+  args: ParsedFleetArgs,
+  defaultSourceSha?: string,
+): AdminFleetRequest {
+  const action = args.positional[1];
+  if (action === "cut") {
+    if (args.env !== "test") throw new Error("release cut requires --env=test");
+    validateReleaseFlags(args, "release cut", ["sha"]);
+    const version = requiredReleaseVersion(args, "release cut");
+    const explicitSourceSha = stringFlag(args, "sha");
+    if (args.flags.sha !== undefined && !explicitSourceSha) {
+      throw new Error("release cut requires a full lowercase --sha");
+    }
+    const sourceSha = explicitSourceSha ?? defaultSourceSha;
+    if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw new Error(explicitSourceSha
+        ? "release cut requires a full lowercase --sha"
+        : "release cut requires a full lowercase source SHA");
+    }
+    return releaseIdempotencyRequest({
+      method: "POST",
+      path: "/api/admin/releases/cut",
+      body: { version, sourceSha },
+    }, args, `release-cut:${version}:${sourceSha}`);
+  }
+  if (action === "promote") {
+    if (args.env !== "prod") throw new Error("release promote requires --env=prod");
+    validateReleaseFlags(args, "release promote", []);
+    const version = requiredReleaseVersion(args, "release promote");
+    return releaseIdempotencyRequest({
+      method: "POST",
+      path: `/api/admin/releases/${encodeURIComponent(version)}/promote`,
+    }, args, `release-promote:${version}`);
+  }
+  throw new Error(`Unknown release mutation: release ${action ?? ""}`.trim());
+}
+
+export type FleetBuilderMutation =
+  | {
+      kind: "evict";
+      slug: string;
+      target: { kind: "gateway"; gatewayId: string } | { kind: "park" };
+    }
+  | { kind: "place"; slug: string };
+
+function requiredBuilderSlug(args: ParsedFleetArgs, command: string): string {
+  const slug = args.positional[2];
+  if (!slug) throw new Error(`${command} requires <slug>`);
+  if (args.positional.length !== 3) {
+    throw new Error(`${command} accepts exactly one <slug>`);
+  }
+  return slug;
+}
+
+function validateBuilderFlags(
+  args: ParsedFleetArgs,
+  command: string,
+  actionFlags: readonly string[],
+): void {
+  const allowed = new Set(["apply", "idempotency-key", ...actionFlags]);
+  const unsupported = Object.keys(args.flags).filter((flag) => !allowed.has(flag));
+  if (unsupported.length > 0) {
+    throw new Error(`${command} does not accept --${unsupported.join(", --")}`);
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error(`${command} accepts --apply without a value`);
+  }
+  if (
+    args.flags["idempotency-key"] !== undefined &&
+    stringFlag(args, "idempotency-key") === undefined
+  ) {
+    throw new Error(`${command} requires --idempotency-key=<key>`);
+  }
+}
+
+function hasBuilderParkFlag(args: ParsedFleetArgs): boolean {
+  const park = args.flags.park;
+  if (park !== undefined && park !== true) {
+    throw new Error("builder evict accepts --park without a value");
+  }
+  return park === true;
+}
+
+function builderTargetGatewayId(args: ParsedFleetArgs): string | undefined {
+  const to = stringFlag(args, "to");
+  if (args.flags.to !== undefined && !to) {
+    throw new Error("builder evict requires --to=<gw-id>");
+  }
+  if (to && !isValidGatewayId(to)) {
+    throw new Error(`builder evict received an invalid gateway id: ${to}`);
+  }
+  return to;
+}
+
+export function resolveFleetBuilderMutation(args: ParsedFleetArgs): FleetBuilderMutation {
+  const action = args.positional[1];
+  switch (action) {
+    case "evict": {
+      const slug = requiredBuilderSlug(args, "builder evict");
+      validateBuilderFlags(args, "builder evict", ["to", "park"]);
+      const to = builderTargetGatewayId(args);
+      const park = hasBuilderParkFlag(args);
+      if (to && park) {
+        throw new Error("builder evict accepts exactly one of --to=<gw-id> or --park");
+      }
+      if (!to && !park) {
+        throw new Error("builder evict requires exactly one of --to=<gw-id> or --park");
+      }
+      return {
+        kind: "evict",
+        slug,
+        target: to ? { kind: "gateway", gatewayId: to } : { kind: "park" },
+      };
+    }
+    case "place": {
+      const slug = requiredBuilderSlug(args, "builder place");
+      if (args.flags.to !== undefined || args.flags.park !== undefined) {
+        throw new Error("builder place does not accept --to or --park");
+      }
+      validateBuilderFlags(args, "builder place", []);
+      return { kind: "place", slug };
+    }
+    default:
+      throw new Error(`Unknown Builder mutation: builder ${action ?? ""}`.trim());
+  }
+}
+
+export function resolveFleetBuilderMutationRequest(
+  mutation: FleetBuilderMutation,
+  uid: string,
+  idempotencyKey?: string,
+): AdminFleetRequest {
+  const request: AdminFleetRequest = {
+    method: "PATCH",
+    path: `/api/admin/customers/${encodeURIComponent(uid)}/placement`,
+    body: mutation.kind === "place"
+      ? { managedBy: "cowboy" }
+      : mutation.target.kind === "park"
+        ? { managedBy: "operator", gatewayId: null }
+        : { managedBy: "operator", gatewayId: mutation.target.gatewayId },
+  };
+  return idempotencyKey ? { ...request, idempotencyKey } : request;
+}
+
+export async function executeFleetAdminMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  if (!apply) return { applied: false, response: null };
+  return { applied: true, response: await client.request(request) };
+}
+
+export async function executeFleetGatewayMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  return executeFleetAdminMutation(client, request, apply);
+}
+
+export async function executeFleetReleaseMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  return executeFleetGatewayMutation(client, request, apply);
+}
+
+export interface ForceRestartPod {
+  name: string;
+  uid: string;
+}
+
+interface ForceRestartPodDocument {
+  metadata?: {
+    name?: unknown;
+    uid?: unknown;
+    deletionTimestamp?: unknown;
+  };
+}
+
+interface ForceRestartPodList {
+  items?: ForceRestartPodDocument[];
+}
+
+export interface FleetKubectlResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}
+
+export type FleetKubectlRunner = (args: string[], input?: string) => FleetKubectlResult;
+
+export type ForcedGatewayRestartMutationRunner = <T>(
+  input: NormalFleetMutationInput<T>,
+) => Promise<T>;
+
+export interface ForcedGatewayRestartInput {
+  db: Firestore;
+  kubeContext: string;
+  namespace: string;
+  gatewayId: string;
+  idempotencyKey?: string;
+  now?: () => number;
+  runKubectl?: FleetKubectlRunner;
+  runMutation?: ForcedGatewayRestartMutationRunner;
+}
+
+function forceRestartKubectlFailure(
+  action: string,
+  result: FleetKubectlResult,
+): Error {
+  const detail = result.error?.message || result.stderr.trim() || result.stdout.trim();
+  return new Error(`kubectl ${action} failed${detail ? `: ${detail}` : ""}`);
+}
+
+function parseForceRestartJson(raw: string): ForceRestartPodList {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("not an object");
+    }
+    return value as ForceRestartPodList;
+  } catch {
+    throw new Error("kubectl returned invalid pod JSON");
+  }
+}
+
+export function parseForceRestartPodList(raw: string, gatewayId: string): ForceRestartPod {
+  const parsed = parseForceRestartJson(raw);
+  if (!Array.isArray(parsed.items) || parsed.items.length !== 1) {
+    const count = Array.isArray(parsed.items) ? parsed.items.length : 0;
+    throw new Error(`force restart expected exactly one pod for ${gatewayId}, found ${count}`);
+  }
+  const metadata = parsed.items[0]?.metadata;
+  if (typeof metadata?.name !== "string" || metadata.name.length === 0) {
+    throw new Error(`force restart pod for ${gatewayId} is missing metadata.name`);
+  }
+  if (typeof metadata.uid !== "string" || metadata.uid.length === 0) {
+    throw new Error(`force restart pod for ${gatewayId} is missing metadata.uid`);
+  }
+  if (metadata.deletionTimestamp !== undefined && metadata.deletionTimestamp !== null) {
+    throw new Error(`force restart pod ${metadata.name} is already terminating`);
+  }
+  const expectedPrefix = `octogee-gateway-${gatewayId}-`;
+  if (!metadata.name.startsWith(expectedPrefix)) {
+    throw new Error(`force restart pod ${metadata.name} does not belong to ${gatewayId}`);
+  }
+  return { name: metadata.name, uid: metadata.uid };
+}
+
+function assertForceRestartPodUnchanged(
+  raw: string,
+  expected: ForceRestartPod,
+): void {
+  const metadata = (parseForceRestartJson(raw) as ForceRestartPodDocument).metadata;
+  if (metadata?.name !== expected.name) {
+    throw new Error(`force restart pod name changed from ${expected.name}`);
+  }
+  if (metadata.uid !== expected.uid) {
+    throw new Error(`force restart pod UID changed for ${expected.name}`);
+  }
+  if (metadata.deletionTimestamp !== undefined && metadata.deletionTimestamp !== null) {
+    throw new Error(`force restart pod ${expected.name} is already terminating`);
+  }
+}
+
+function localFleetKubectl(args: string[], input?: string): FleetKubectlResult {
+  const result = spawnSync(
+    // eslint-disable-next-line sonarjs/no-os-command-from-path
+    "kubectl",
+    args,
+    {
+      encoding: "utf-8",
+      input,
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    },
+  );
+  return {
+    status: result.status,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+function runForceRestartKubectl(
+  runKubectl: FleetKubectlRunner,
+  action: string,
+  args: string[],
+  input?: string,
+): string {
+  const result = runKubectl(args, input);
+  if (result.error || result.status !== 0) throw forceRestartKubectlFailure(action, result);
+  return result.stdout;
+}
+
+async function markForcedGatewayRestartOperatorManaged(
+  db: Firestore,
+  gatewayId: string,
+  now: number,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  await db.runTransaction(async (transaction) => {
+    const [maintenance, gateway] = await Promise.all([
+      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
+      transaction.get(gatewayRef),
+    ]);
+    assertNormalFleetMutationSnapshotOpen(maintenance as never);
+    const durableGateway = projectGatewayDesiredRootForGateway(
+      gateway.exists ? gateway.data() : undefined,
+      gatewayId,
+    );
+    if (!durableGateway) {
+      throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
+    }
+    if (durableGateway.desiredStatus === "retired") {
+      throw new Error(`cannot force restart a retired gateway: ${gatewayId}`);
+    }
+    transaction.update(gatewayRef, {
+      managedBy: "operator",
+      updatedAt: now,
+      updatedBy: "operator",
+    });
+  });
+}
+
+async function recordForcedGatewayRestartPod(
+  db: Firestore,
+  claim: { auditId: string; claimId: string },
+  gatewayId: string,
+  pod: ForceRestartPod,
+): Promise<void> {
+  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(auditRef);
+    const data = snapshot.data() as Record<string, unknown> | undefined;
+    if (
+      !snapshot.exists ||
+      data?.status !== "in-progress" ||
+      data.actionClaimId !== claim.claimId ||
+      data.target === null ||
+      typeof data.target !== "object" ||
+      Array.isArray(data.target)
+    ) {
+      throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
+    }
+    transaction.update(auditRef, {
+      target: {
+        ...(data.target as Record<string, unknown>),
+        gatewayId,
+        podName: pod.name,
+        podUid: pod.uid,
+      },
+    });
+  });
+}
+
+async function assertForcedGatewayRestartDeleteFence(
+  db: Firestore,
+  claim: { auditId: string; claimId: string },
+  gatewayId: string,
+  pod: ForceRestartPod,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
+  await db.runTransaction(async (transaction) => {
+    const [maintenance, gateway, audit] = await Promise.all([
+      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
+      transaction.get(gatewayRef),
+      transaction.get(auditRef),
+    ]);
+    assertNormalFleetMutationSnapshotOpen(maintenance as never);
+    const durableGateway = projectGatewayDesiredRootForGateway(
+      gateway.exists ? gateway.data() : undefined,
+      gatewayId,
+    );
+    if (!durableGateway) {
+      throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
+    }
+    if (durableGateway.desiredStatus === "retired") {
+      throw new Error(`cannot force restart a retired gateway: ${gatewayId}`);
+    }
+    if (durableGateway.managedBy !== "operator") {
+      throw new Error(`gateway ${gatewayId} is no longer operator-managed`);
+    }
+    const data = audit.data() as Record<string, unknown> | undefined;
+    const target = data?.target;
+    const targetRecord = target !== null && typeof target === "object" && !Array.isArray(target)
+      ? target as Record<string, unknown>
+      : null;
+    const targetKeys = targetRecord ? Object.keys(targetRecord).sort() : [];
+    if (
+      !audit.exists ||
+      data?.status !== "in-progress" ||
+      data.actionClaimId !== claim.claimId ||
+      targetRecord === null ||
+      targetKeys.join(",") !== "gatewayId,podName,podUid" ||
+      targetRecord.gatewayId !== gatewayId ||
+      targetRecord.podName !== pod.name ||
+      targetRecord.podUid !== pod.uid
+    ) {
+      throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
+    }
+  });
+}
+
+function forceRestartKubectlArgs(input: {
+  kubeContext: string;
+  namespace: string;
+  gatewayId: string;
+}): string[] {
+  return [
+    "--context", input.kubeContext,
+    "-n", input.namespace,
+  ];
+}
+
+export async function runForcedGatewayRestart(
+  input: ForcedGatewayRestartInput,
+): Promise<{ auditId: string; podName: string; podUid: string }> {
+  const now = input.now ?? Date.now;
+  const runKubectl = input.runKubectl ?? localFleetKubectl;
+  const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
+    ((mutation) => runNormalFleetMutation(
+      input.db as unknown as NormalFleetMutationDb,
+      mutation,
+    ));
+  return runMutation({
+    actor: "operator",
+    forced: true,
+    what: "force restart gateway pod",
+    why: "operator requested break-glass pod restart",
+    target: { gatewayId: input.gatewayId },
+    preActionStatus: {},
+    mutation: {
+      kind: "restart-gateway",
+      gatewayId: input.gatewayId,
+      mode: "force-pod-delete",
+    },
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    action: async (claim) => {
+      await markForcedGatewayRestartOperatorManaged(input.db, input.gatewayId, now());
+      const base = forceRestartKubectlArgs(input);
+      const pod = parseForceRestartPodList(
+        runForceRestartKubectl(runKubectl, "list pods", [
+          ...base,
+          "get", "pods",
+          "-l", `app=octogee-gateway,gateway-instance=${input.gatewayId}`,
+          "-o", "json",
+        ]),
+        input.gatewayId,
+      );
+      await recordForcedGatewayRestartPod(input.db, claim, input.gatewayId, pod);
+      assertForceRestartPodUnchanged(
+        runForceRestartKubectl(runKubectl, "get pod", [
+          ...base,
+          "get", "pod", pod.name,
+          "-o", "json",
+        ]),
+        pod,
+      );
+      await assertForcedGatewayRestartDeleteFence(
+        input.db,
+        claim,
+        input.gatewayId,
+        pod,
+      );
+      runForceRestartKubectl(
+        runKubectl,
+        "delete pod",
+        [
+          ...base,
+          "delete",
+          `--raw=/api/v1/namespaces/${encodeURIComponent(input.namespace)}/pods/${
+            encodeURIComponent(pod.name)
+          }`,
+          "-f", "-",
+        ],
+        JSON.stringify({
+          apiVersion: "v1",
+          kind: "DeleteOptions",
+          preconditions: { uid: pod.uid },
+        }),
+      );
+      return { auditId: claim.auditId, podName: pod.name, podUid: pod.uid };
+    },
+  });
 }
 
 let args: ParsedFleetArgs = parseFleetArgs([]);
@@ -307,6 +1203,10 @@ function initializeFleetCli(argv: string[]): void {
     process.exit(1);
   }
 
+  if (args.positional[0] === "gw" && args.positional[1] === "restart") {
+    resolveFleetGatewayRestart(args);
+  }
+
   const credentialMode = resolveFleetCredentialMode(args);
   const target = resolveFleetDeploymentTarget(args.env);
   const projectId = target.projectId;
@@ -333,6 +1233,26 @@ function initializeFleetCli(argv: string[]): void {
   db = getFirestore();
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
+}
+
+function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for fleet Admin API mutations`);
+  return value;
+}
+
+function fleetAdminClient(): AdminFleetClient {
+  if (!args.env) throw new Error("fleet environment must be selected before creating an Admin API client");
+  const operatorUid = fleetAdminEnvironment("OPERATOR_UID");
+  const webApiKey = fleetAdminEnvironment("FIREBASE_WEB_API_KEY");
+  return createAdminFleetClient({
+    apiOrigin: deploymentEnvironmentSettings(args.env).apiOrigin,
+    getIdToken: async () => exchangeAdminFleetCustomToken({
+      operatorUid,
+      webApiKey,
+      createCustomToken: (uid) => getAuth().createCustomToken(uid),
+    }),
+  });
 }
 
 let KUBE_CONTEXT = resolveFleetDeploymentTarget("test").kubeContext;
@@ -698,6 +1618,123 @@ const pods = allGatewayPods();
   }))));
 }
 
+async function runFleetGatewayMutation(apply: boolean): Promise<void> {
+  const request = resolveFleetGatewayMutation(args);
+  console.log(bold(`GW ${args.positional[1]?.toUpperCase() ?? ""}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetGatewayMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API request accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
+async function runFleetBuilderMutation(apply: boolean): Promise<void> {
+  const mutation = resolveFleetBuilderMutation(args);
+  const user = await findUserBySlug(mutation.slug);
+  if (!user) {
+    console.error(red(`${CROSS} No user found with slug or username '${mutation.slug}'.`));
+    process.exit(1);
+  }
+  const request = resolveFleetBuilderMutationRequest(
+    mutation,
+    user.uid,
+    stringFlag(args, "idempotency-key"),
+  );
+  console.log(bold(`BUILDER ${mutation.kind.toUpperCase()} ${mutation.slug}`));
+  console.log(dim(`  uid: ${user.uid}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetAdminMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API desired state accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
+function currentSourceSha(): string {
+  const result = spawnSync(GIT_EXECUTABLE, ["rev-parse", "--verify", "HEAD"], {
+    encoding: "utf8",
+  });
+  const sourceSha = result.stdout.trim();
+  if (result.status !== 0 || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+    throw new Error("release cut could not resolve a full lowercase source SHA from local HEAD");
+  }
+  return sourceSha;
+}
+
+async function runFleetReleaseMutation(apply: boolean): Promise<void> {
+  const sourceSha = args.positional[1] === "cut" && args.flags.sha === undefined
+    ? currentSourceSha()
+    : undefined;
+  const request = resolveFleetReleaseMutation(args, sourceSha);
+  console.log(bold(`RELEASE ${args.positional[1]?.toUpperCase() ?? ""} ${args.positional[2] ?? ""}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetReleaseMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API release request accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
+async function runFleetGatewayRestart(): Promise<void> {
+  const restart = resolveFleetGatewayRestart(args);
+  if (!restart.force) return runFleetGatewayMutation(restart.apply);
+  console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
+  console.log(dim(`  delete exactly one pod selected by gateway-instance=${restart.gatewayId}`));
+  if (!restart.apply) {
+    console.log(dim("--- DRY RUN (re-run with --force --apply to journal and delete the exact pod) ---"));
+    return;
+  }
+  const result = await runForcedGatewayRestart({
+    db,
+    kubeContext: KUBE_CONTEXT,
+    namespace: KUBE_NS,
+    gatewayId: restart.gatewayId,
+    ...(restart.idempotencyKey
+      ? { idempotencyKey: restart.idempotencyKey }
+      : {}),
+  });
+  console.log(green(`${CHECK} Force restart requested`));
+  console.log(JSON.stringify(result, null, 2));
+}
+
+export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<string, string | number>> {
+  return status.gateways.map((gateway) => ({
+    gatewayId: gateway.gatewayId,
+    default: gateway.isDefault ? "*" : "",
+    desired: gateway.desiredRelease ?? "-",
+    live: gateway.liveRelease ?? "-",
+    runtime: gateway.runtimeRelease ?? "-",
+    lifecycle: gateway.runtimeLifecycle ?? "-",
+    heartbeat: gateway.heartbeatStatus ?? "-",
+    heartbeatAt: gateway.lastHeartbeatAt === null
+      ? "-"
+      : new Date(gateway.lastHeartbeatAt).toISOString(),
+    tag: gateway.desiredImageTag ?? "-",
+    version: gateway.heartbeatVersion ?? "-",
+    status: gateway.observation,
+  }));
+}
+
+async function releaseStatus(): Promise<void> {
+  const status = await readReleaseStatus(db);
+  const defaultLabel = status.defaultGatewayId || (
+    status.defaultSelection === "invalid" ? "(invalid)" : "(unconfigured)"
+  );
+  console.log(
+    bold("RELEASE STATUS") + dim(
+      `  default=${defaultLabel} (${status.defaultSelection})`,
+    ),
+  );
+  console.log(table(releaseStatusRows(status)));
+}
+
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
@@ -918,6 +1955,7 @@ async function main(): Promise<void> {
 
   switch (`${verb} ${sub}`.trim()) {
     case "ls gateways":
+    case "gw ls":
       return lsGateways();
     case "ls customers":
       return lsCustomers();
@@ -931,9 +1969,24 @@ async function main(): Promise<void> {
         return missingArg("inspect gateway");
       }
       return inspectGateway(args.positional[2]);
+    case "gw inspect":
+      if (!args.positional[2]) {
+        return missingArg("gw inspect");
+      }
+      return inspectGateway(args.positional[2]);
+    case "release status":
+      return releaseStatus();
+    case "gw restart":
+      return runFleetGatewayRestart();
   }
 
   switch (verb) {
+    case "release":
+      return runFleetReleaseMutation(apply);
+    case "gw":
+      return runFleetGatewayMutation(apply);
+    case "builder":
+      return runFleetBuilderMutation(apply);
     case "add-customer": {
 
 const to = typeof args.flags.to === "string" ? args.flags.to : undefined;

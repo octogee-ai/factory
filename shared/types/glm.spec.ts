@@ -10,7 +10,30 @@ import {
   resolveGatewayImageProfile,
   resolveUserGatewayShellState,
   isGatewayClassControlUiAccessEnabled,
+  isOperatorManaged,
+  resolveManagedBy,
+  resolveOperationOrigin,
+  isOperationAuditRecord,
+  isOperationAuditRow,
+  OPERATION_AUDIT_RECORD_TYPE,
+  OPERATION_AUDIT_SCHEMA_VERSION,
 } from "./glm";
+
+describe("managedBy ownership", () => {
+  it("defaults absent and invalid values to Cowboy while recognizing an operator override", () => {
+    expect(resolveManagedBy(undefined)).toBe("cowboy");
+    expect(resolveManagedBy("unknown")).toBe("cowboy");
+    expect(resolveManagedBy("operator")).toBe("operator");
+    expect(isOperatorManaged(undefined)).toBe(false);
+    expect(isOperatorManaged("operator")).toBe(true);
+  });
+
+  it("treats operations without an origin as manual", () => {
+    expect(resolveOperationOrigin(undefined)).toBe("operator");
+    expect(resolveOperationOrigin("operator")).toBe("operator");
+    expect(resolveOperationOrigin("automatic")).toBe("automatic");
+  });
+});
 
 describe("deriveGatewayIdentity", () => {
   it("uses the explicit gateway field when present", () => {
@@ -235,5 +258,72 @@ describe("resolveUserGatewayShellState", () => {
         "uid-chris",
       ).shellsEnabled,
     ).toBe(false);
+  });
+});
+
+describe("operation audit record discriminator", () => {
+  const valid = {
+      recordType: OPERATION_AUDIT_RECORD_TYPE,
+      schemaVersion: OPERATION_AUDIT_SCHEMA_VERSION,
+      status: "recorded",
+      lifecycleStage: "intent-recorded",
+      idempotencyKey: "release-v1",
+      mutationFingerprint: "abc123",
+      mutation: { action: "move-alias" },
+      actor: "fleet-cli:operator",
+      forced: true,
+      what: "move alias",
+      why: "TEST verified",
+      target: { alias: "stable" },
+      preActionStatus: { target: "old" },
+      aliasPlan: [],
+      createdAt: 1,
+      completedAt: null,
+    };
+
+  it("recognizes a complete current-schema audit without treating commands as audits", () => {
+    expect(isOperationAuditRecord(valid)).toBe(true);
+    expect(isOperationAuditRecord({ kind: "rollout", status: "pending" })).toBe(false);
+    expect(isOperationAuditRecord(null)).toBe(false);
+  });
+
+  it("quarantines malformed and future audit rows by discriminator while rejecting their schema", () => {
+    for (const row of [
+      { ...valid, schemaVersion: 2 },
+      { ...valid, actor: undefined },
+      { ...valid, mutation: [] },
+      { ...valid, status: "completed", lifecycleStage: "intent-recorded" },
+    ]) {
+      expect(isOperationAuditRow(row)).toBe(true);
+      expect(isOperationAuditRecord(row)).toBe(false);
+    }
+  });
+
+  it("accepts only legal status and lifecycle pairs with their required claim and outcome fields", () => {
+    expect(isOperationAuditRecord({
+      ...valid,
+      status: "in-progress",
+      lifecycleStage: "action-started",
+      actionClaimId: "runner-1",
+      actionStartedAt: 2,
+      actionRecoveryCount: 0,
+    })).toBe(true);
+    expect(isOperationAuditRecord({
+      ...valid,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      actionClaimId: "runner-1",
+      actionStartedAt: 2,
+      actionRecoveryCount: 0,
+      outcome: "completed",
+      completedAt: 3,
+    })).toBe(true);
+    expect(isOperationAuditRecord({
+      ...valid,
+      status: "completed",
+      lifecycleStage: "action-completed",
+      outcome: "completed",
+      completedAt: 3,
+    })).toBe(false);
   });
 });

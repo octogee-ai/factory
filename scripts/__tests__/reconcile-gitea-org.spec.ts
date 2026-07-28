@@ -31,11 +31,11 @@ describe("parseReconcileArgs", () => {
 });
 
 describe("resolveReconcileFirebaseProject", () => {
-  it("uses the exact candidate target selected by the shell runner", () => {
+  it("uses the exact active target selected by the shell runner", () => {
     expect(resolveReconcileFirebaseProject("test", {
-      K8S_NAMESPACE: "octogee-test-west",
-      DEPLOYMENT_TARGET_ID: "test-west",
-    })).toBe("octogee-data-test");
+      K8S_NAMESPACE: "octogee-test",
+      DEPLOYMENT_TARGET_ID: "test-central",
+    })).toBe("octogee-test");
   });
 });
 
