@@ -537,7 +537,15 @@ export function createCentralReleaseAuthority(
     const manifestResponse = await fetch(
       `https://${coordinates.location}-docker.pkg.dev/v2/${coordinates.project}/${coordinates.repository}` +
       `/release-digest-manifest/manifests/${manifestDigest}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.oci.image.manifest.v1+json" } },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: [
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+          ].join(", "),
+        },
+      },
     );
     const ociManifest = await requireJson(manifestResponse, "release digest manifest OCI lookup");
     const layers = ociManifest.layers;

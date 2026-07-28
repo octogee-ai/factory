@@ -356,6 +356,14 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls[0]).toContain("/packages/release-digest-manifest/tags/");
     expect(urls[1]).toContain(`/v2/octogee/octogee/release-digest-manifest/manifests/${manifestDigest}`);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: {
+        Accept: [
+          "application/vnd.oci.image.manifest.v1+json",
+          "application/vnd.docker.distribution.manifest.v2+json",
+        ].join(", "),
+      },
+    });
     expect(urls[2]).toContain("/v2/octogee/octogee/release-digest-manifest/blobs/");
     expect(urls[4]).toContain("tagId=aaaaaaa-oc2026.7.1");
   });
