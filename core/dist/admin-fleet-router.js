@@ -1111,6 +1111,7 @@ const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT = "another operation is already pending or running for this gateway";
 const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const ERR_USER_NOT_FOUND = "user not found";
+const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test", "build-week"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
@@ -2652,6 +2653,285 @@ async function claimCustomerDeletion(opts) {
         };
     });
 }
+function classifyErasureAcceleration(result) {
+    if (result.status < 400)
+        return { outcome: "completed" };
+    return {
+        outcome: "failed",
+        error: typeof result.body.error === "string"
+            ? result.body.error
+            : `customer erasure acceleration returned ${result.status}`,
+    };
+}
+function eraseNowValueIsInvalid(value) {
+    return value !== undefined && typeof value !== "boolean";
+}
+function customerDeletionIsActive(lifecycle) {
+    return lifecycle?.status === "deletion_scheduled" ||
+        lifecycle?.status === "erasing";
+}
+function customerDeletionCanAccelerate(lifecycleStatus, eraseNow) {
+    return lifecycleStatus === "deletion_scheduled" && eraseNow === true;
+}
+function classifyCustomerDeletion(result, uid) {
+    if (result.kind === "not-found") {
+        return { outcome: "failed", error: "User not found" };
+    }
+    if (result.kind === "conflict") {
+        return { outcome: "failed", error: "Cleanup already in progress" };
+    }
+    if (result.kind !== "partial")
+        return { outcome: "completed" };
+    const summary = result.failedStep === "suspend-auth"
+        ? "customer deletion was scheduled but identity suspension failed"
+        : "customer deletion was scheduled but connector grant revocation failed";
+    return {
+        outcome: "partial",
+        partialOutcome: {
+            summary,
+            details: {
+                uid,
+                failedStep: result.failedStep,
+                deletionId: result.claimed.deletionId,
+                suspensionOperationId: result.claimed.suspensionOperationId,
+                erasureOperationId: result.claimed.erasureOperationId,
+            },
+        },
+    };
+}
+function respondToCustomerDeletionAdmission(admission, res, logger, uid) {
+    if (admission.kind === "partial")
+        throw admission.error;
+    if (admission.kind === "not-found") {
+        res.status(404).json({ error: "User not found", uid });
+        return;
+    }
+    if (admission.kind === "conflict") {
+        res.status(409).json({
+            error: "Cleanup already in progress",
+            ...(admission.deletionId ? { deletionId: admission.deletionId } : {}),
+            ...(admission.operationId ? { operationId: admission.operationId } : {}),
+        });
+        return;
+    }
+    logger.info(`[admin-delete] scheduled deletion=${admission.deletionId} uid=${uid} eraseAfter=${admission.eraseAfter}`);
+    res.status(202).json({
+        status: "deletion_scheduled",
+        deletionId: admission.deletionId,
+        suspensionOperationId: admission.suspensionOperationId,
+        erasureOperationId: admission.erasureOperationId,
+        eraseAfter: admission.eraseAfter,
+        slug: admission.slug,
+    });
+}
+async function claimAndCleanupCustomerDeletion(opts) {
+    const claimed = await claimCustomerDeletion({
+        db: opts.db,
+        uid: opts.uid,
+        requestedBy: opts.requestedBy,
+        eraseNow: opts.eraseNow,
+        workspaceSlugsForUser: opts.deps.workspaceSlugsForUser,
+    });
+    if (claimed.kind !== "created")
+        return claimed;
+    try {
+        await opts.deps.suspendAuthUser(opts.uid);
+    }
+    catch (error) {
+        return {
+            kind: "partial",
+            failedStep: "suspend-auth",
+            claimed,
+            error: error instanceof Error ? error : new Error(String(error)),
+        };
+    }
+    try {
+        await opts.deps.revokeConnectorGrantsForUser(opts.uid);
+    }
+    catch (error) {
+        return {
+            kind: "partial",
+            failedStep: "revoke-connector-grants",
+            claimed,
+            error: error instanceof Error ? error : new Error(String(error)),
+        };
+    }
+    return claimed;
+}
+function classifyActivationLeaseTermination(result) {
+    if (result.kind === "not-found") {
+        return { outcome: "failed", error: ERR_USER_NOT_FOUND };
+    }
+    if (result.kind === "conflict") {
+        return { outcome: "failed", error: result.reason };
+    }
+    if (result.kind === "adopted") {
+        return {
+            outcome: "failed",
+            error: "activation lease termination was already requested",
+        };
+    }
+    return { outcome: "completed" };
+}
+function classifyActivationLeaseReturn(result) {
+    if (result.kind === "not-found") {
+        return { outcome: "failed", error: ERR_USER_NOT_FOUND };
+    }
+    if (result.kind === "conflict") {
+        return {
+            outcome: "failed",
+            error: "activation lease is not the requested active generation",
+        };
+    }
+    if (result.kind === "adopted") {
+        return {
+            outcome: "failed",
+            error: "activation lease return was already requested",
+        };
+    }
+    return { outcome: "completed" };
+}
+function projectOperationForMigrationLock(doc) {
+    const operation = doc.data();
+    return {
+        id: doc.id,
+        kind: typeof operation.kind === "string" ? operation.kind : "",
+        status: typeof operation.status === "string" ? operation.status : "",
+        input: operation.input,
+        customerMigrationV2: operation.customerMigrationV2,
+    };
+}
+function isInFlightCustomerMigration(doc) {
+    const data = doc.data();
+    return data.kind === OP_KIND_MIGRATE_CUSTOMER &&
+        (data.status === "pending" || data.status === "running");
+}
+function gatewayCreationBodyError(body) {
+    const persistenceError = rejectPersistenceInBody(body);
+    if (persistenceError)
+        return persistenceError;
+    if (!Object.prototype.hasOwnProperty.call(body, "byosub"))
+        return null;
+    return {
+        status: 400,
+        body: {
+            error: "gateway credential references are user-scoped and cannot be created here",
+        },
+    };
+}
+function gatewayCreationRuntimeDefaults(gatewayClass, gatewayId, ownerUid) {
+    const defaults = {};
+    if (gatewayClass === "builder" || gatewayClass === "operator") {
+        defaults.operatorAccess = defaultOperatorGatewayAccess(ownerUid);
+    }
+    if (gatewayClass === "operator") {
+        defaults.serviceAccountName = operatorGatewayServiceAccountName(gatewayId);
+        defaults.serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+    }
+    return defaults;
+}
+function respondToAddGatewayMutationError(error, res, gatewayId) {
+    if (error instanceof GatewayAuthSecretProvisionError) {
+        res.status(502).json({
+            error: "failed to provision gateway auth-token secret",
+            gatewayId,
+            detail: error.message,
+        });
+        return true;
+    }
+    if (error instanceof InitialGatewayReleaseConflictError) {
+        res.status(409).json({
+            error: "gateway already exists",
+            gatewayId: error.gatewayId,
+        });
+        return true;
+    }
+    return false;
+}
+function classifyAddGatewayMutation(outcome, gatewayId, artifact) {
+    if (outcome.kind === "completed") {
+        return {
+            outcome: "completed",
+            releaseRollout: {
+                releaseId: `${gatewayId}/1`,
+                releaseTag: artifact.imageTag,
+                rolloutOperationId: outcome.operationId,
+            },
+        };
+    }
+    if (outcome.failedStep === "initial-release") {
+        return {
+            outcome: "partial",
+            partialOutcome: {
+                summary: "gateway auth secret was provisioned but its initial release was not created",
+                details: { gatewayId, failedStep: outcome.failedStep },
+            },
+        };
+    }
+    return {
+        outcome: "partial",
+        partialOutcome: {
+            summary: "gateway release was created but its rollout operation could not be enqueued",
+            details: { gatewayId, release: 1, failedStep: outcome.failedStep },
+        },
+        releaseRollout: {
+            releaseId: `${gatewayId}/1`,
+            releaseTag: artifact.imageTag,
+        },
+    };
+}
+async function performAddGatewayMutation(opts) {
+    try {
+        await opts.provisionGatewayAuthSecret({
+            gatewayId: opts.body.gatewayId,
+            gatewayServiceAccount: opts.gatewayServiceAccount,
+        });
+    }
+    catch (error) {
+        throw new GatewayAuthSecretProvisionError(error instanceof Error ? error.message : String(error));
+    }
+    try {
+        await writeInitialGatewayRelease(opts.db, {
+            gatewayId: opts.body.gatewayId,
+            createdBy: opts.createdBy,
+            now: opts.now,
+            desiredStatus: "running",
+            config: opts.config,
+            artifact: opts.artifact,
+        });
+    }
+    catch (error) {
+        return {
+            kind: "partial",
+            failedStep: "initial-release",
+            error: error instanceof Error ? error : new Error(String(error)),
+        };
+    }
+    try {
+        const operationId = await createOperation(opts.db, {
+            kind: "add-gateway",
+            createdBy: opts.createdBy,
+            input: {
+                gatewayId: opts.body.gatewayId,
+                imageTag: opts.body.imageTag,
+                ...(opts.body.profile ? { profile: opts.body.profile } : {}),
+                gatewayClass: opts.gatewayClass,
+                ...(opts.imageProfile !== "standard" ? { imageProfile: opts.imageProfile } : {}),
+                ...(opts.body.sizingTier ? { sizingTier: opts.body.sizingTier } : {}),
+                ...(opts.owner.ownerUid ? { ownerUid: opts.owner.ownerUid } : {}),
+                ...(opts.owner.builderSlug ? { builderSlug: opts.owner.builderSlug } : {}),
+            },
+        });
+        return { kind: "completed", operationId };
+    }
+    catch (error) {
+        return {
+            kind: "partial",
+            failedStep: "rollout-operation",
+            error: error instanceof Error ? error : new Error(String(error)),
+        };
+    }
+}
 function activationLeaseForTermination(data, leaseId, generation) {
     const resolved = activationLeaseFromUser(data);
     if (!resolved ||
@@ -2781,11 +3061,40 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
+    async function handleActiveCustomerDeletion(input) {
+        const lifecycle = input.lifecycle;
+        if (!customerDeletionIsActive(lifecycle))
+            return false;
+        const lifecycleStatus = lifecycle.status;
+        if (!customerDeletionCanAccelerate(lifecycleStatus, input.eraseNow)) {
+            input.res.status(409).json({
+                error: "Cleanup already in progress",
+                deletionId: lifecycle.deletionId ?? null,
+            });
+            return true;
+        }
+        const acceleration = await runAdminFleetMutation({
+            req: input.req,
+            what: "accelerate scheduled customer erasure",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { uid: input.uid, deletionId: lifecycle.deletionId ?? null },
+            preActionStatus: { lifecycleStatus },
+            mutation: { kind: "accelerate-customer-erasure", uid: input.uid },
+            classifyResult: classifyErasureAcceleration,
+            action: async () => accelerateScheduledCustomerErasure({
+                db,
+                userRef: input.userRef,
+                lifecycle,
+            }),
+        });
+        input.res.status(acceleration.status).json(acceleration.body);
+        return true;
+    }
     router.post("/customer/:uid/delete", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const body = (req.body ?? {});
-            if (body.eraseNow !== undefined && typeof body.eraseNow !== "boolean") {
+            if (eraseNowValueIsInvalid(body.eraseNow)) {
                 res.status(400).json({ error: "eraseNow must be a boolean" });
                 return;
             }
@@ -2798,131 +3107,34 @@ export function addAdminFleetRoutes(router, deps) {
             const userData = userSnap.data() ?? {};
             const existingLifecycle = userData.accountLifecycle;
             const existingStatus = existingLifecycle?.status;
-            if (existingLifecycle &&
-                (existingStatus === "deletion_scheduled" || existingStatus === "erasing")) {
-                if (existingStatus !== "deletion_scheduled" || body.eraseNow !== true) {
-                    res.status(409).json({
-                        error: "Cleanup already in progress",
-                        deletionId: existingLifecycle?.deletionId ?? null,
-                    });
-                    return;
-                }
-                const acceleration = await runAdminFleetMutation({
-                    req,
-                    what: "accelerate scheduled customer erasure",
-                    why: "Admin fleet request",
-                    target: { uid, deletionId: existingLifecycle.deletionId ?? null },
-                    preActionStatus: { lifecycleStatus: existingStatus },
-                    mutation: { kind: "accelerate-customer-erasure", uid },
-                    classifyResult: (result) => result.status >= 400
-                        ? {
-                            outcome: "failed",
-                            error: typeof result.body.error === "string"
-                                ? result.body.error
-                                : `customer erasure acceleration returned ${result.status}`,
-                        }
-                        : { outcome: "completed" },
-                    action: async () => accelerateScheduledCustomerErasure({
-                        db,
-                        userRef,
-                        lifecycle: existingLifecycle,
-                    }),
-                });
-                res.status(acceleration.status).json(acceleration.body);
+            const activeDeletionHandled = await handleActiveCustomerDeletion({
+                req,
+                res,
+                uid,
+                userRef,
+                lifecycle: existingLifecycle,
+                eraseNow: body.eraseNow,
+            });
+            if (activeDeletionHandled)
                 return;
-            }
             const actor = req;
             const admission = await runAdminFleetMutation({
                 req,
                 what: "schedule customer deletion",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid },
                 preActionStatus: { lifecycleStatus: existingStatus ?? null },
                 mutation: { kind: "schedule-customer-deletion", uid, eraseNow: body.eraseNow === true },
-                classifyResult: (result) => {
-                    if (result.kind === "not-found") {
-                        return { outcome: "failed", error: "User not found" };
-                    }
-                    if (result.kind === "conflict") {
-                        return { outcome: "failed", error: "Cleanup already in progress" };
-                    }
-                    if (result.kind === "partial") {
-                        return {
-                            outcome: "partial",
-                            partialOutcome: {
-                                summary: result.failedStep === "suspend-auth"
-                                    ? "customer deletion was scheduled but identity suspension failed"
-                                    : "customer deletion was scheduled but connector grant revocation failed",
-                                details: {
-                                    uid,
-                                    failedStep: result.failedStep,
-                                    deletionId: result.claimed.deletionId,
-                                    suspensionOperationId: result.claimed.suspensionOperationId,
-                                    erasureOperationId: result.claimed.erasureOperationId,
-                                },
-                            },
-                        };
-                    }
-                    return { outcome: "completed" };
-                },
-                action: async () => {
-                    const claimed = await claimCustomerDeletion({
-                        db,
-                        uid,
-                        requestedBy: actor.uid ?? "unknown",
-                        eraseNow: body.eraseNow === true,
-                        workspaceSlugsForUser: deps.workspaceSlugsForUser,
-                    });
-                    if (claimed.kind === "created") {
-                        try {
-                            await deps.suspendAuthUser(uid);
-                        }
-                        catch (error) {
-                            return {
-                                kind: "partial",
-                                failedStep: "suspend-auth",
-                                claimed,
-                                error: error instanceof Error ? error : new Error(String(error)),
-                            };
-                        }
-                        try {
-                            await deps.revokeConnectorGrantsForUser(uid);
-                        }
-                        catch (error) {
-                            return {
-                                kind: "partial",
-                                failedStep: "revoke-connector-grants",
-                                claimed,
-                                error: error instanceof Error ? error : new Error(String(error)),
-                            };
-                        }
-                    }
-                    return claimed;
-                },
+                classifyResult: (result) => classifyCustomerDeletion(result, uid),
+                action: async () => claimAndCleanupCustomerDeletion({
+                    db,
+                    deps,
+                    uid,
+                    requestedBy: actor.uid ?? "unknown",
+                    eraseNow: body.eraseNow === true,
+                }),
             });
-            if (admission.kind === "partial")
-                throw admission.error;
-            if (admission.kind === "not-found") {
-                res.status(404).json({ error: "User not found", uid });
-                return;
-            }
-            if (admission.kind === "conflict") {
-                res.status(409).json({
-                    error: "Cleanup already in progress",
-                    ...(admission.deletionId ? { deletionId: admission.deletionId } : {}),
-                    ...(admission.operationId ? { operationId: admission.operationId } : {}),
-                });
-                return;
-            }
-            logger.info(`[admin-delete] scheduled deletion=${admission.deletionId} uid=${uid} eraseAfter=${admission.eraseAfter}`);
-            res.status(202).json({
-                status: "deletion_scheduled",
-                deletionId: admission.deletionId,
-                suspensionOperationId: admission.suspensionOperationId,
-                erasureOperationId: admission.erasureOperationId,
-                eraseAfter: admission.eraseAfter,
-                slug: admission.slug,
-            });
+            respondToCustomerDeletionAdmission(admission, res, logger, uid);
         }
         catch (e) {
             next(e);
@@ -3059,7 +3271,7 @@ export function addAdminFleetRoutes(router, deps) {
             await runAdminFleetMutation({
                 req,
                 what: "set default gateway placement",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: parsed.ok.defaultGatewayId },
                 preActionStatus: { defaultGatewayId: config.defaultGatewayId || null },
                 mutation: {
@@ -3087,7 +3299,7 @@ export function addAdminFleetRoutes(router, deps) {
                     return runAdminFleetMutation({
                         req,
                         what: "migrate builder after default placement change",
-                        why: "Admin fleet request",
+                        why: ADMIN_FLEET_REQUEST_REASON,
                         target: { uid, gatewayId: toGatewayId },
                         preActionStatus: { gatewayId: fromGatewayId },
                         mutation: {
@@ -3424,7 +3636,7 @@ export function addAdminFleetRoutes(router, deps) {
             const placement = await runAdminFleetMutation({
                 req,
                 what: "assign builder to gateway",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, gatewayId: targetGatewayId },
                 preActionStatus: { gatewayId: currentGid ?? null },
                 mutation: {
@@ -3494,20 +3706,11 @@ export function addAdminFleetRoutes(router, deps) {
             const outcome = await runAdminFleetMutation({
                 req,
                 what: "terminate builder activation lease",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, leaseId, generation },
                 preActionStatus: { defaultGatewayId },
                 mutation: { kind: "terminate-activation-lease", uid, leaseId, generation },
-                classifyResult: (result) => result.kind === "not-found"
-                    ? { outcome: "failed", error: ERR_USER_NOT_FOUND }
-                    : result.kind === "conflict"
-                        ? { outcome: "failed", error: result.reason }
-                        : result.kind === "adopted"
-                            ? {
-                                outcome: "failed",
-                                error: "activation lease termination was already requested",
-                            }
-                            : { outcome: "completed" },
+                classifyResult: classifyActivationLeaseTermination,
                 action: async () => db.runTransaction((transaction) => requestActivationLeaseTermination(db, transaction, {
                     uid,
                     leaseId,
@@ -3554,7 +3757,7 @@ export function addAdminFleetRoutes(router, deps) {
             const outcome = await runAdminFleetMutation({
                 req,
                 what: "return builder activation lease",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, leaseId: body.leaseId, generation: body.generation },
                 preActionStatus: {},
                 mutation: {
@@ -3563,16 +3766,7 @@ export function addAdminFleetRoutes(router, deps) {
                     leaseId: body.leaseId,
                     generation: body.generation,
                 },
-                classifyResult: (result) => result.kind === "not-found"
-                    ? { outcome: "failed", error: ERR_USER_NOT_FOUND }
-                    : result.kind === "conflict"
-                        ? { outcome: "failed", error: "activation lease is not the requested active generation" }
-                        : result.kind === "adopted"
-                            ? {
-                                outcome: "failed",
-                                error: "activation lease return was already requested",
-                            }
-                            : { outcome: "completed" },
+                classifyResult: classifyActivationLeaseReturn,
                 action: async () => db.runTransaction(async (transaction) => {
                     const snapshot = await transaction.get(userRef);
                     if (!snapshot.exists)
@@ -3645,7 +3839,7 @@ export function addAdminFleetRoutes(router, deps) {
             const result = await runAdminFleetMutation({
                 req,
                 what: "request builder activation lease",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid },
                 preActionStatus: {
                     gatewayId: reportingGatewayId ?? null,
@@ -3678,22 +3872,14 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/gateways", 
-    // eslint-disable-next-line complexity -- linear preflight: validate body, check uniqueness, provision GSA secret, write desired state. Each guard returns its own error response; flattening is clearer than threading.
-    async (req, res, next) => {
+    router.post("/gateways", async (req, res, next) => {
         try {
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
             const now = Date.now();
-            const persistenceError = rejectPersistenceInBody((req.body ?? {}));
-            if (persistenceError) {
-                res.status(persistenceError.status).json(persistenceError.body);
-                return;
-            }
-            if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "byosub")) {
-                res.status(400).json({
-                    error: "gateway credential references are user-scoped and cannot be created here",
-                });
+            const bodyError = gatewayCreationBodyError((req.body ?? {}));
+            if (bodyError) {
+                res.status(bodyError.status).json(bodyError.body);
                 return;
             }
             const parsed = validateAddGatewayBody(req.body);
@@ -3727,26 +3913,16 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const gatewayClass = resolveGatewayClass(body);
             const imageProfile = resolveGatewayImageProfile(body);
-            const ownerRuntimeDefaults = gatewayClass === "builder" || gatewayClass === "operator"
-                ? {
-                    operatorAccess: defaultOperatorGatewayAccess(owner.ok.ownerUid),
-                }
-                : {};
-            const operatorDefaults = gatewayClass === "operator"
-                ? {
-                    serviceAccountName: operatorGatewayServiceAccountName(body.gatewayId),
-                    serviceAccount: OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-                }
-                : {};
+            const runtimeDefaults = gatewayCreationRuntimeDefaults(gatewayClass, body.gatewayId, owner.ok.ownerUid);
             const config = buildCreateGatewayConfig({
                 body,
                 gatewayClass,
                 imageProfile,
                 ownerUid: owner.ok.ownerUid,
                 builderSlug: owner.ok.builderSlug,
-                operatorAccess: ownerRuntimeDefaults.operatorAccess,
-                serviceAccountName: operatorDefaults.serviceAccountName,
-                serviceAccount: operatorDefaults.serviceAccount,
+                operatorAccess: runtimeDefaults.operatorAccess,
+                serviceAccountName: runtimeDefaults.serviceAccountName,
+                serviceAccount: runtimeDefaults.serviceAccount,
             });
             const artifact = buildCreateArtifact(body);
             let operationId;
@@ -3754,7 +3930,7 @@ export function addAdminFleetRoutes(router, deps) {
                 const result = await runAdminFleetMutation({
                     req,
                     what: "add gateway",
-                    why: "Admin fleet request",
+                    why: ADMIN_FLEET_REQUEST_REASON,
                     target: { gatewayId: body.gatewayId },
                     preActionStatus: { exists: false },
                     mutation: {
@@ -3765,120 +3941,28 @@ export function addAdminFleetRoutes(router, deps) {
                         imageProfile,
                         desiredStatus: "running",
                     },
-                    classifyResult: (outcome) => {
-                        if (outcome.kind === "partial") {
-                            if (outcome.failedStep === "initial-release") {
-                                return {
-                                    outcome: "partial",
-                                    partialOutcome: {
-                                        summary: "gateway auth secret was provisioned but its initial release was not created",
-                                        details: {
-                                            gatewayId: body.gatewayId,
-                                            failedStep: outcome.failedStep,
-                                        },
-                                    },
-                                };
-                            }
-                            return {
-                                outcome: "partial",
-                                partialOutcome: {
-                                    summary: "gateway release was created but its rollout operation could not be enqueued",
-                                    details: {
-                                        gatewayId: body.gatewayId,
-                                        release: 1,
-                                        failedStep: outcome.failedStep,
-                                    },
-                                },
-                                releaseRollout: {
-                                    releaseId: `${body.gatewayId}/1`,
-                                    releaseTag: artifact.imageTag,
-                                },
-                            };
-                        }
-                        return {
-                            outcome: "completed",
-                            releaseRollout: {
-                                releaseId: `${body.gatewayId}/1`,
-                                releaseTag: artifact.imageTag,
-                                rolloutOperationId: outcome.operationId,
-                            },
-                        };
-                    },
-                    action: async () => {
-                        try {
-                            await deps.provisionGatewayAuthSecret({
-                                gatewayId: body.gatewayId,
-                                gatewayServiceAccount,
-                            });
-                        }
-                        catch (error) {
-                            throw new GatewayAuthSecretProvisionError(error instanceof Error ? error.message : String(error));
-                        }
-                        try {
-                            await writeInitialGatewayRelease(db, {
-                                gatewayId: body.gatewayId,
-                                createdBy,
-                                now,
-                                desiredStatus: "running",
-                                config,
-                                artifact,
-                            });
-                        }
-                        catch (error) {
-                            return {
-                                kind: "partial",
-                                failedStep: "initial-release",
-                                error: error instanceof Error ? error : new Error(String(error)),
-                            };
-                        }
-                        try {
-                            return {
-                                kind: "completed",
-                                operationId: await createOperation(db, {
-                                    kind: "add-gateway",
-                                    createdBy,
-                                    input: {
-                                        gatewayId: body.gatewayId,
-                                        imageTag: body.imageTag,
-                                        ...(body.profile ? { profile: body.profile } : {}),
-                                        gatewayClass,
-                                        ...(imageProfile !== "standard" ? { imageProfile } : {}),
-                                        ...(body.sizingTier ? { sizingTier: body.sizingTier } : {}),
-                                        ...(owner.ok.ownerUid ? { ownerUid: owner.ok.ownerUid } : {}),
-                                        ...(owner.ok.builderSlug ? { builderSlug: owner.ok.builderSlug } : {}),
-                                    },
-                                }),
-                            };
-                        }
-                        catch (error) {
-                            return {
-                                kind: "partial",
-                                failedStep: "rollout-operation",
-                                error: error instanceof Error ? error : new Error(String(error)),
-                            };
-                        }
-                    },
+                    classifyResult: (outcome) => classifyAddGatewayMutation(outcome, body.gatewayId, artifact),
+                    action: async () => performAddGatewayMutation({
+                        db,
+                        provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
+                        gatewayServiceAccount,
+                        body,
+                        gatewayClass,
+                        imageProfile,
+                        owner: owner.ok,
+                        config,
+                        artifact,
+                        createdBy,
+                        now,
+                    }),
                 });
                 if (result.kind === "partial")
                     throw result.error;
                 operationId = result.operationId;
             }
             catch (e) {
-                if (e instanceof GatewayAuthSecretProvisionError) {
-                    res.status(502).json({
-                        error: "failed to provision gateway auth-token secret",
-                        gatewayId: body.gatewayId,
-                        detail: e.message,
-                    });
+                if (respondToAddGatewayMutationError(e, res, body.gatewayId))
                     return;
-                }
-                if (e instanceof InitialGatewayReleaseConflictError) {
-                    res.status(409).json({
-                        error: "gateway already exists",
-                        gatewayId: e.gatewayId,
-                    });
-                    return;
-                }
                 throw e;
             }
             res
@@ -3931,7 +4015,7 @@ export function addAdminFleetRoutes(router, deps) {
             const patchResult = await runAdminFleetMutation({
                 req,
                 what: "update gateway desired configuration",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: id },
                 preActionStatus: {
                     desiredStatus: root.desiredStatus,
@@ -3960,16 +4044,7 @@ export function addAdminFleetRoutes(router, deps) {
                             error: "gateway has a current retirement claim",
                         };
                     }
-                    const migrationConflict = findActiveGatewayMigration(id, activeOperations.docs.map((doc) => {
-                        const operation = doc.data();
-                        return {
-                            id: doc.id,
-                            kind: typeof operation.kind === "string" ? operation.kind : "",
-                            status: typeof operation.status === "string" ? operation.status : "",
-                            input: operation.input,
-                            customerMigrationV2: operation.customerMigrationV2,
-                        };
-                    }));
+                    const migrationConflict = findActiveGatewayMigration(id, activeOperations.docs.map(projectOperationForMigrationLock));
                     if (migrationConflict) {
                         return {
                             ok: false,
@@ -4049,7 +4124,7 @@ export function addAdminFleetRoutes(router, deps) {
                 await runAdminFleetMutation({
                     req,
                     what: "retire gateway",
-                    why: "Admin fleet request",
+                    why: ADMIN_FLEET_REQUEST_REASON,
                     target: { gatewayId: id },
                     preActionStatus: {
                         desiredStatus: runtime.root.desiredStatus,
@@ -4133,7 +4208,7 @@ export function addAdminFleetRoutes(router, deps) {
             const operationId = await runAdminFleetMutation({
                 req,
                 what: "restart gateway",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: id },
                 preActionStatus: {
                     desiredStatus: gateway.desiredStatus,
@@ -4225,7 +4300,7 @@ export function addAdminFleetRoutes(router, deps) {
                 recorded = await runAdminFleetMutation({
                     req,
                     what: "roll out gateway image",
-                    why: "Admin fleet request",
+                    why: ADMIN_FLEET_REQUEST_REASON,
                     target: { gatewayId: id },
                     preActionStatus: {
                         desiredStatus: rolloutGateway.desiredStatus,
@@ -4370,7 +4445,7 @@ export function addAdminFleetRoutes(router, deps) {
                 appended = await runAdminFleetMutation({
                     req,
                     what: "cut gateway release",
-                    why: "Admin fleet request",
+                    why: ADMIN_FLEET_REQUEST_REASON,
                     target: { gatewayId: id },
                     preActionStatus: {
                         latestRelease: gateway.latestRelease,
@@ -4427,7 +4502,7 @@ export function addAdminFleetRoutes(router, deps) {
                 appended = await runAdminFleetMutation({
                     req,
                     what: "roll back gateway release",
-                    why: "Admin fleet request",
+                    why: ADMIN_FLEET_REQUEST_REASON,
                     target: { gatewayId: id, release },
                     preActionStatus: {
                         latestRelease: gateway.latestRelease,
@@ -4558,7 +4633,7 @@ export function addAdminFleetRoutes(router, deps) {
             const operationId = await runAdminFleetMutation({
                 req,
                 what: "migrate builder",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, gatewayId: body.to },
                 preActionStatus: { gatewayId: currentGatewayId ?? null },
                 mutation: {
@@ -4603,7 +4678,7 @@ export function addAdminFleetRoutes(router, deps) {
             const outcome = await runAdminFleetMutation({
                 req,
                 what: "unassign builder from gateway",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid },
                 preActionStatus: { gatewayId: preActionGatewayId },
                 mutation: {
@@ -4636,11 +4711,7 @@ export function addAdminFleetRoutes(router, deps) {
                         .doc(uid);
                     const assignmentSnap = await txn.get(assignmentRef);
                     const opsSnap = await txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid));
-                    const inFlight = opsSnap.docs.find((d) => {
-                        const data = d.data();
-                        return (data.kind === OP_KIND_MIGRATE_CUSTOMER &&
-                            (data.status === "pending" || data.status === "running"));
-                    });
+                    const inFlight = opsSnap.docs.find(isInFlightCustomerMigration);
                     if (inFlight) {
                         return {
                             status: 409,
@@ -4715,7 +4786,7 @@ export function addAdminFleetRoutes(router, deps) {
             const operationId = await runAdminFleetMutation({
                 req,
                 what: "roll out gateway image",
-                why: "Admin fleet request",
+                why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: body.gatewayId },
                 preActionStatus: {},
                 mutation: {

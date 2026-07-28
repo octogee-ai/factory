@@ -21,7 +21,11 @@ export interface NormalFleetMutationDb extends OperationsDb {
 
 export class FleetMutationFrozenError extends Error {
   constructor(readonly reason: string | null) {
-    super(`maintenance freeze blocks fleet mutation${reason ? `: ${reason}` : ""}`);
+    super(
+      reason
+        ? `maintenance freeze blocks fleet mutation: ${reason}`
+        : "maintenance freeze blocks fleet mutation",
+    );
     this.name = "FleetMutationFrozenError";
   }
 }

@@ -4,7 +4,9 @@ export const GLM_MAINTENANCE_DOC_PATH = "config/glmMaintenance";
 export class FleetMutationFrozenError extends Error {
     reason;
     constructor(reason) {
-        super(`maintenance freeze blocks fleet mutation${reason ? `: ${reason}` : ""}`);
+        super(reason
+            ? `maintenance freeze blocks fleet mutation: ${reason}`
+            : "maintenance freeze blocks fleet mutation");
         this.reason = reason;
         this.name = "FleetMutationFrozenError";
     }
