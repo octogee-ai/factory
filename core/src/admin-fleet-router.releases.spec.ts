@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
-import request from "supertest";
 import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
+import request from "supertest";
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
 import {
@@ -26,6 +27,23 @@ function valueAtPath(data: Record<string, unknown>, path: string): unknown {
     cursor = (cursor as Record<string, unknown>)[part];
   }
   return cursor;
+}
+
+function applyDottedPatch(target: Record<string, unknown>, patch: Record<string, unknown>): void {
+  for (const [path, value] of Object.entries(patch)) {
+    const parts = path.split(".");
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      const current = cursor[part];
+      if (!current || typeof current !== "object" || Array.isArray(current)) {
+        cursor[part] = {};
+      }
+      cursor = cursor[part] as Record<string, unknown>;
+    }
+    const key = parts.at(-1)!;
+    if (value === FieldValue.delete()) delete cursor[key];
+    else cursor[key] = value;
+  }
 }
 
 interface TestRouterOptions {
@@ -86,7 +104,10 @@ function makeDb(
       },
       update: async (data: Record<string, unknown>) => {
         if (!store.has(path)) throw new Error(`update of non-existent doc ${path}`);
-        store.set(path, { ...store.get(path), ...data });
+        applyDottedPatch(store.get(path)!, data);
+      },
+      delete: async () => {
+        store.delete(path);
       },
       collection: (name: string) => collectionRef(`${path}/${name}`),
     };
@@ -148,6 +169,7 @@ function makeDb(
       create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => void;
       set: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown, opts?: unknown) => void;
       update: (ref: { update: (d: unknown) => Promise<void> }, data: unknown) => void;
+      delete: (ref: { delete: () => Promise<void> }) => void;
     }) => Promise<T>,
   ): Promise<T> {
     const run = txnLock.then(async () => {
@@ -171,6 +193,9 @@ function makeDb(
         },
         update: (ref: { update: (d: unknown) => Promise<void> }, data: unknown) => {
           writes.push(() => ref.update(data));
+        },
+        delete: (ref: { delete: () => Promise<void> }) => {
+          writes.push(() => ref.delete());
         },
       };
       const result = await body(txn as never);
@@ -389,6 +414,452 @@ function seedServingGateway(
   };
   return seed;
 }
+
+function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<string, unknown> {
+  return {
+    username: "alice",
+    provisioning: {
+      openclaw: {
+        slug: "alice",
+        ...(gatewayId ? {
+          gatewayId,
+          gatewayAssignedAt: 1,
+          gatewayProfile: "standard",
+          shellsEnabled: true,
+        } : {}),
+        managedBy,
+      },
+    },
+  };
+}
+
+describe("PATCH /customers/:uid/placement", () => {
+  it("rejects malformed placement commands before journaling or writing", async () => {
+    const { app, store } = mkApp({ "users/uid-alice": builderUser("source") });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator" })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy", gatewayId: null })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target", unexpected: true })
+      .expect(400);
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "a/../b" })
+      .expect(400)
+      .expect({ error: "placement gatewayId must be a valid gateway id" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("atomically marks an assigned Builder operator-managed and queues its explicit migration", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    const response = await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      uid: "uid-alice",
+      gatewayId: "target",
+      operationId: expect.any(String),
+    });
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { gatewayId: "source", managedBy: "operator" } },
+    });
+    expect(store.get(`glmOperations/${response.body.operationId}`)).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      origin: "operator",
+      inputUid: "uid-alice",
+      gatewayId: "target",
+      input: {
+        uid: "uid-alice",
+        builderSlug: "alice",
+        fromGatewayId: "source",
+        toGatewayId: "target",
+        source: "operator-builder-evict",
+      },
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      target: { uid: "uid-alice", gatewayId: "target" },
+      mutation: {
+        kind: "evict-builder-to-gateway",
+        uid: "uid-alice",
+        fromGatewayId: "source",
+        toGatewayId: "target",
+      },
+    }));
+  });
+
+  it("repairs a missing serving assignment while taking ownership on the current target", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(200)
+      .expect({
+        uid: "uid-alice",
+        gatewayId: "target",
+        managedBy: "operator",
+        repaired: true,
+      });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { gatewayId: "target", managedBy: "operator" } },
+    });
+    expect(store.get("gateways/target/assignments/uid-alice")).toMatchObject({
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "target",
+      source: "repair",
+      state: "serving",
+    });
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+  });
+
+  it("rejects ownership transfer while the current target assignment is mid-migration", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+      "gateways/target/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "target",
+        source: "migrate-customer",
+        state: "quiescing",
+        epoch: 2,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("target"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects ownership transfer for a serving assignment with foreign identity", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("target"),
+      ...seedServingGateway("target", sharedPayload()),
+      "gateways/target/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "somebody-else",
+        gatewayId: "other",
+        source: "repair",
+        state: "serving",
+        epoch: 2,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("target"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an eviction while another migration owns the Builder", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-alice",
+      },
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(1);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("places an unassigned Builder directly while atomically taking operator ownership", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(202);
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: {
+        openclaw: {
+          gatewayId: "target",
+          gatewayProfile: "standard",
+          shellsEnabled: false,
+          managedBy: "operator",
+        },
+      },
+    });
+    expect(store.get("gateways/target/assignments/uid-alice")).toMatchObject({
+      uid: "uid-alice",
+      slug: "alice",
+      gatewayId: "target",
+      source: "repair",
+      state: "serving",
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "evict-builder-to-gateway", uid: "uid-alice", toGatewayId: "target" },
+    }));
+  });
+
+  it("rejects an eviction when the target is deleted after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => store.delete("gateways/target"),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(404)
+      .expect({ error: "gateway not found", gatewayId: "target" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an eviction when the target runtime fails after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => {
+        store.set(`${GLM_GATEWAYS_COLLECTION}/target`, {
+          ...store.get(`${GLM_GATEWAYS_COLLECTION}/target`)!,
+          lifecycle: "failed",
+        });
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({ error: "target gateway not ready", gatewayId: "target", status: "failed" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects an unassigned Builder eviction when a migration starts after preflight", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null),
+      ...seedServingGateway("target", sharedPayload()),
+    }, {
+      beforeFirstTransaction: (store) => {
+        store.set("glmOperations/migration-1", {
+          kind: "migrate-customer",
+          status: "pending",
+          inputUid: "uid-alice",
+        });
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({
+        error: "a migration for this customer is pending or running",
+        operationId: "migration-1",
+        uid: "uid-alice",
+      });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser(null));
+    expect(store.get("gateways/target/assignments/uid-alice")).toBeUndefined();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("parks atomically with operator ownership after deleting the serving assignment", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "gateways/source/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "source",
+        source: "repair",
+        state: "serving",
+        epoch: 0,
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(200)
+      .expect({ uid: "uid-alice", parked: true });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { managedBy: "operator" } },
+    });
+    const openclaw = (store.get("users/uid-alice")?.provisioning as Record<string, unknown>)
+      .openclaw as Record<string, unknown>;
+    expect(openclaw).not.toHaveProperty("gatewayId");
+    expect(openclaw).not.toHaveProperty("gatewayAssignedAt");
+    expect(openclaw).not.toHaveProperty("gatewayProfile");
+    expect(openclaw).not.toHaveProperty("shellsEnabled");
+    expect(store.get("gateways/source/assignments/uid-alice")).toBeUndefined();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "park-builder", uid: "uid-alice", gatewayId: "source" },
+    }));
+  });
+
+  it("rejects a park while a migration owns the Builder", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "running",
+        inputUid: "uid-alice",
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("rejects a missing or not-ready target before journaling or changing placement", async () => {
+    const missing = mkApp({ "users/uid-alice": builderUser("source") });
+
+    await request(missing.app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "missing" })
+      .expect(404);
+
+    expect(missing.store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(missing.store)).toHaveLength(0);
+
+    const notReady = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedNewSchemaGateway("target", sharedPayload()),
+    });
+
+    await request(notReady.app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409);
+
+    expect(notReady.store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(auditsIn(notReady.store)).toHaveLength(0);
+  });
+
+  it("releases a parked Builder to Cowboy without waiting for live placement", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser(null, "operator"),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(200)
+      .expect({ uid: "uid-alice", managedBy: "cowboy" });
+
+    expect(store.get("users/uid-alice")).toMatchObject({
+      provisioning: { openclaw: { managedBy: "cowboy" } },
+    });
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      mutation: { kind: "place-builder", uid: "uid-alice" },
+    }));
+  });
+
+  it("rejects release to Cowboy while an explicit migration is active", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source", "operator"),
+      "glmOperations/migration-1": {
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-alice",
+      },
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(409);
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source", "operator"));
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("reports missing Builders for park and place without creating a journal row", async () => {
+    const { app, store } = mkApp();
+
+    await request(app)
+      .patch("/customers/uid-missing/placement")
+      .send({ managedBy: "operator", gatewayId: null })
+      .expect(404)
+      .expect({ error: "user not found", uid: "uid-missing" });
+    await request(app)
+      .patch("/customers/uid-missing/placement")
+      .send({ managedBy: "cowboy" })
+      .expect(404)
+      .expect({ error: "user not found", uid: "uid-missing" });
+
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("blocks a frozen eviction before journaling or mutating Builder placement", async () => {
+    const { app, store } = mkApp({
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("target", sharedPayload()),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "target" })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+});
 
 beforeEach(() => vi.stubEnv("GATEWAY_SERVICE_ACCOUNT", "gw@octogee.iam.gserviceaccount.com"));
 afterEach(() => vi.unstubAllEnvs());
