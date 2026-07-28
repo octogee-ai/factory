@@ -21,21 +21,16 @@ describe("deployment target resolver", () => {
     });
   });
 
-  it("allows the explicit candidate west target", () => {
-    expect(resolveDeploymentTargetArguments(["--target=test-west"])).toMatchObject({
-      name: "test",
-      targetId: "test-west",
-      lifecycle: "candidate",
-      firebaseProjectId: "octogee-data-test",
-      region: "us-west1",
-    });
-  });
-
-  it("rejects a retired candidate target when a release or build requires a non-candidate target", () => {
-    expect(() => runDeploymentTargetResolver([
-      "--target=test-west",
-      "--reject-candidate-target",
-    ])).toThrow("Deployment target test-west is a candidate and cannot be used for release or build automation");
+  it("rejects retired WEST targets and permits frozen Build Week", () => {
+    for (const targetId of ["test-west", "prod-west"]) {
+      expect(() => resolveDeploymentTargetArguments([`--target=${targetId}`])).toThrow(
+        `Unknown deployment target: ${targetId}`,
+      );
+      expect(() => runDeploymentTargetResolver([
+        `--target=${targetId}`,
+        "--reject-candidate-target",
+      ])).toThrow(`Unknown deployment target: ${targetId}`);
+    }
 
     expect(JSON.parse(runDeploymentTargetResolver([
       "--environment=build-week",
@@ -50,7 +45,7 @@ describe("deployment target resolver", () => {
     );
     expect(() => resolveDeploymentTargetArguments([
       "--environment=prod",
-      "--target=prod-west",
+      "--target=prod-central",
     ])).toThrow("Exactly one of --environment or --target is required");
   });
 
@@ -63,36 +58,36 @@ describe("deployment target resolver", () => {
     );
   });
 
-  it("emits every regional value needed by workflows and shell tooling", () => {
+  it("emits every Central value needed by workflows and shell tooling", () => {
     const output = formatDeploymentTargetOutput(
-      resolveDeploymentTargetArguments(["--target=prod-west"]),
+      resolveDeploymentTargetArguments(["--target=prod-central"]),
       "github",
     );
 
-    expect(output).toContain("target_id=prod-west\n");
-    expect(output).toContain("region=us-west1\n");
-    expect(output).toContain("kube_context=gke_octogee_us-west1_octogee-gateway\n");
+    expect(output).toContain("target_id=prod-central\n");
+    expect(output).toContain("region=us-central1\n");
+    expect(output).toContain("kube_context=gke_octogee_us-central1_octogee-gateway\n");
     expect(output).toContain(
-      "artifact_registry_repository=us-west1-docker.pkg.dev/octogee/octogee\n",
+      "artifact_registry_repository=us-central1-docker.pkg.dev/octogee/octogee\n",
     );
-    expect(output).toContain("cloud_sql_connection_name=octogee:us-west1:octogee-pg-west\n");
+    expect(output).toContain("cloud_sql_connection_name=octogee:us-central1:octogee-pg\n");
     expect(output).toContain(
-      "cloud_sql_mattermost_password_secret_name=MM_DB_PASSWORD-octogee-pg-west\n",
-    );
-    expect(output).toContain(
-      "cloud_sql_gitea_password_secret_name=gitea-db-password-octogee-pg-west\n",
+      "cloud_sql_mattermost_password_secret_name=MM_DB_PASSWORD\n",
     );
     expect(output).toContain(
-      "cloud_sql_connection_name_secret_name=cloud-sql-connection-name-octogee-pg-west\n",
+      "cloud_sql_gitea_password_secret_name=gitea-db-password\n",
     );
-    expect(output).toContain("secret_name_suffix=prod-west\n");
-    expect(output).toContain("cloud_sql_point_in_time_recovery_enabled=true\n");
+    expect(output).toContain(
+      "cloud_sql_connection_name_secret_name=cloud-sql-connection-name\n",
+    );
+    expect(output).toContain("secret_name_suffix=prod\n");
+    expect(output).toContain("cloud_sql_point_in_time_recovery_enabled=false\n");
     expect(output).not.toContain("compute_class");
-    expect(output).toContain("network_policy_enforce_default_deny=true\n");
-    expect(output).toContain("network_policy_control_plane_cidr=172.20.16.16/28\n");
-    expect(output).toContain("network_policy_private_services_cidr=172.24.0.0/16\n");
+    expect(output).toContain("network_policy_enforce_default_deny=false\n");
+    expect(output).toContain("network_policy_control_plane_cidr=\n");
+    expect(output).toContain("network_policy_private_services_cidr=\n");
     expect(output).toContain(
-      "kms_key_name=projects/octogee-data-prod/locations/us-west1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest\n",
+      "kms_key_name=projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest\n",
     );
   });
 
@@ -111,9 +106,9 @@ describe("deployment target resolver", () => {
 
   it("parses CLI output format without weakening selector validation", () => {
     expect(JSON.parse(runDeploymentTargetResolver([
-      "--target=test-west",
+      "--target=test-central",
       "--format=json",
-    ]))).toMatchObject({ target_id: "test-west", region: "us-west1" });
+    ]))).toMatchObject({ target_id: "test-central", region: "us-central1" });
     expect(() => runDeploymentTargetResolver([
       "--environment=test",
       "--format=dotenv",

@@ -21,14 +21,13 @@ function executable(file: string, source: string): void {
 }
 
 function runReconciler(options: RunOptions = {}) {
-  const temp = mkdtempSync(path.join(tmpdir(), "octogee-west-pvc-snapshots-"));
+  const temp = mkdtempSync(path.join(tmpdir(), "octogee-central-pvc-snapshots-"));
   const log = path.join(temp, "calls.log");
   writeFileSync(log, "");
-  const target = options.target ?? "test-west";
-  const central = target.endsWith("-central");
-  const region = central ? "us-central1" : "us-west1";
-  const namespace = central ? "octogee-test" : "octogee-test-west";
-  const policyName = central ? "octogee-central-pvc-daily" : "octogee-west-pvc-daily";
+  const target = options.target ?? "test-central";
+  const region = "us-central1";
+  const namespace = "octogee-test";
+  const policyName = "octogee-central-pvc-daily";
 
   executable(path.join(temp, "kubectl"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -124,21 +123,6 @@ describe("durable PVC snapshot schedule reconciliation", () => {
     expect(result.calls.filter((call) => call.includes("disks describe"))).toHaveLength(2);
     expect(result.calls.some((call) => call.includes("add-resource-policies"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      target: "test-west",
-      namespace: "octogee-test-west",
-      mode: "verify",
-      disks: [
-        { pvc: "gitea-shared-storage", disk: "disk-gitea", attachedThisRun: false },
-        { pvc: "mattermost-data", disk: "disk-mattermost", attachedThisRun: false },
-      ],
-    });
-  });
-
-  it("verifies Central's exact schedule and PVC disks without mutation", () => {
-    const result = runReconciler({ target: "test-central", policy: "expected" });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
       target: "test-central",
       namespace: "octogee-test",
       mode: "verify",
@@ -147,10 +131,6 @@ describe("durable PVC snapshot schedule reconciliation", () => {
         { pvc: "mattermost-data", disk: "disk-mattermost", attachedThisRun: false },
       ],
     });
-    expect(result.calls).toContain(
-      "gcloud compute resource-policies describe octogee-central-pvc-daily --project=octogee --region=us-central1 --format=json",
-    );
-    expect(result.calls.some((call) => call.includes("octogee-west-pvc-daily"))).toBe(false);
   });
 
   it("attaches Central's exact schedule to both fresh PVC disks", () => {
@@ -219,7 +199,7 @@ describe("durable PVC snapshot schedule reconciliation", () => {
     const result = runReconciler({ apply: true, target: "build-week-central" });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("requires test-central, prod-central, test-west, or prod-west");
+    expect(result.stderr).toContain("received build-week-central");
     expect(result.calls).toEqual([]);
   });
 });

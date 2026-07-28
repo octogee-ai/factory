@@ -168,14 +168,14 @@ describe("listGatewayBuilds — Artifact Registry adapter", () => {
     );
   });
 
-  it("targets the exact candidate registry when the runtime target is explicit", async () => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee-west");
-    vi.stubEnv("DEPLOYMENT_TARGET_ID", "prod-west");
+  it("targets the exact Central registry when the runtime target is explicit", async () => {
+    vi.stubEnv("K8S_NAMESPACE", "octogee-test");
+    vi.stubEnv("DEPLOYMENT_TARGET_ID", "test-central");
     fetchMock.mockResolvedValueOnce(makeArResponse([]));
     await listGatewayBuilds({ service: "octogee-gateway" });
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain(
-      "/v1/projects/octogee/locations/us-west1/repositories/octogee/dockerImages",
+      "/v1/projects/octogee/locations/us-central1/repositories/octogee/dockerImages",
     );
   });
 

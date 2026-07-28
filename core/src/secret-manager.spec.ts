@@ -68,10 +68,10 @@ describe("secret-manager replication policy follows the exact deployment project
     });
   });
 
-  it("pins the fresh prod data project to Oregon", () => {
-    expect(secretReplicationPolicy("octogee-data-prod")).toEqual({
-      userManaged: { replicas: [{ location: "us-west1" }] },
-    });
+  it("rejects the retired prod data project", () => {
+    expect(() => secretReplicationPolicy("octogee-data-prod")).toThrow(
+      "Unknown Firebase deployment project: octogee-data-prod",
+    );
   });
 
   it("writeSecret creates the secret single-region", async () => {
