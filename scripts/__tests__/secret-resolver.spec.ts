@@ -77,6 +77,12 @@ describe("secret-resolver — defense-in-depth", () => {
     };
   }
 
+  it("uses an absolute Node interpreter when OpenClaw executes the resolver directly", () => {
+    expect(fs.readFileSync(RESOLVER, "utf8").split("\n")[0]).toBe(
+      "#!/usr/local/bin/node",
+    );
+  });
+
   it("rejects ids that don't match the byok-{slug}-{provider} grammar", async () => {
     const stdin = JSON.stringify({
       protocolVersion: 1,

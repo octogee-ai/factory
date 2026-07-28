@@ -121,7 +121,18 @@ describe("customer lifecycle config patch agent directories", () => {
       );
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
-        rpc: {} as GatewayRpcClient,
+        rpc: {
+          channelsStop: vi.fn(async ({ channel, accountId }) => ({
+            channel,
+            accountId,
+            stopped: true as const,
+          })),
+          channelsStart: vi.fn(async ({ channel, accountId }) => ({
+            channel,
+            accountId,
+            started: true as const,
+          })),
+        } as GatewayRpcClient,
         log: vi.fn(),
       });
 

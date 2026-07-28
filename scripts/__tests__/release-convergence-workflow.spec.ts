@@ -33,7 +33,9 @@ describe("tagged gateway release desired-state workflow", () => {
 describe("verify-env configured default selection", () => {
   it("selects the configured default gateway instead of the first Deployment", () => {
     expect(verifyEnv).toContain("config/orchestrator");
-    expect(verifyEnv).toContain('gateway-instance=$DEFAULT_GATEWAY_ID"');
+    expect(verifyEnv).toContain(
+      'octogee_resolve_default_gateway_deployment "$DEFAULT_GATEWAY_ID"',
+    );
     expect(verifyEnv).not.toContain("-l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}'");
   });
 });

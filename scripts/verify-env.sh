@@ -30,6 +30,8 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 # shellcheck source=scripts/lib/ready-assigned-gateway-probe.sh
 source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
+# shellcheck source=scripts/lib/default-gateway-deployment.sh
+source "$SCRIPT_DIR/lib/default-gateway-deployment.sh"
 # shellcheck source=scripts/lib/iap-endpoint-health.sh
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 # shellcheck source=scripts/lib/gateway-image-bundle.sh
@@ -170,13 +172,16 @@ else
     -e "s/.*defaultGatewayId is '([a-z0-9-]+)'.*/\1/p" | head -1)
 fi
 
-GW_DEPLOYMENT=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
-  -l "app.kubernetes.io/name=octogee-gateway,gateway-instance=$DEFAULT_GATEWAY_ID" \
-  -o json 2>/dev/null | python3 -c '
-import json, sys
-items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
-print(items[0]["metadata"]["name"] if items else "")
-' 2>/dev/null || echo "")
+GW_DEPLOYMENTS=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+  -l "app.kubernetes.io/name=octogee-gateway" -o json 2>/dev/null || echo '{"items":[]}')
+GW_RESOLUTION=$(octogee_resolve_default_gateway_deployment "$DEFAULT_GATEWAY_ID" \
+  <<< "$GW_DEPLOYMENTS" 2>/dev/null || echo "")
+GW_DEPLOYMENT=""
+GW_INSTANCE_ID=""
+GW_SELECTION_SOURCE=""
+if [[ -n "$GW_RESOLUTION" ]]; then
+  IFS=$'\t' read -r GW_DEPLOYMENT GW_INSTANCE_ID GW_SELECTION_SOURCE <<< "$GW_RESOLUTION"
+fi
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
@@ -371,13 +376,21 @@ set_section infra
 header "5. Gateway"
 
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  fail "No current Cowboy gateway deployment found for default gateway $DEFAULT_GATEWAY_ID."
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
-    echo -e "  ${YELLOW}FIX:${NC} kubectl get glmgateways or read config/orchestrator.defaultGatewayId in Firestore"
+  if [[ -z "$DEFAULT_GATEWAY_ID" ]]; then
+    warn "Gateway deployment check inconclusive: orchestrator config probe failed and no sole Ready shared deployment could be selected"
+  else
+    fail "No current Cowboy gateway deployment found for default gateway $DEFAULT_GATEWAY_ID."
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
+      echo -e "  ${YELLOW}FIX:${NC} kubectl get glmgateways or read config/orchestrator.defaultGatewayId in Firestore"
+    fi
   fi
 else
-  info "Gateway deployment: $GW_DEPLOYMENT"
+  if [[ "$GW_SELECTION_SOURCE" == "sole-ready-shared" ]]; then
+    info "Gateway deployment: $GW_DEPLOYMENT (sole Ready shared fallback; orchestrator config probe unavailable)"
+  else
+    info "Gateway deployment: $GW_DEPLOYMENT"
+  fi
   GW_DESIRED=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
     -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
   GW_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
@@ -411,7 +424,7 @@ else
     fi
     # Check for crash loop
     GW_RESTARTS=$(kubectl get pods -n "$NAMESPACE" \
-      -l "gateway-class,gateway-instance=$DEFAULT_GATEWAY_ID" \
+      -l "gateway-class,gateway-instance=$GW_INSTANCE_ID" \
       -o json 2>/dev/null | python3 -c '
 import json, sys
 items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
@@ -438,7 +451,7 @@ print(next((status.get("restartCount", 0) for status in statuses if status.get("
   else
     fail "Gateway not ready (readyReplicas=${GW_READY:-0}, desired=${GW_DESIRED:-0})"
     GW_POD_STATUS=$(kubectl get pods -n "$NAMESPACE" \
-      -l "gateway-class,gateway-instance=$DEFAULT_GATEWAY_ID" \
+      -l "gateway-class,gateway-instance=$GW_INSTANCE_ID" \
       -o json 2>/dev/null | python3 -c '
 import json, sys
 items = [item for item in json.load(sys.stdin).get("items", []) if not item["metadata"].get("deletionTimestamp")]
@@ -458,7 +471,7 @@ if [[ "$ENV" != "prod" ]]; then
   info "Production-only placement policy check — skipping"
 elif [[ -z "$GW_DEPLOYMENT" ]]; then
   info "Skipping protected placement check — default gateway deployment is absent"
-elif PLACEMENT_RESULT=$(octogee_verify_protected_gateway_placement "$K8S_CONTEXT" "$NAMESPACE" "$GW_DEPLOYMENT" "$DEFAULT_GATEWAY_ID" 2>&1); then
+elif PLACEMENT_RESULT=$(octogee_verify_protected_gateway_placement "$K8S_CONTEXT" "$NAMESPACE" "$GW_DEPLOYMENT" "$GW_INSTANCE_ID" 2>&1); then
   pass "$PLACEMENT_RESULT"
 else
   fail "Protected gateway placement: ${PLACEMENT_RESULT:-verification failed}"

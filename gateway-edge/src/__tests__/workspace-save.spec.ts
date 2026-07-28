@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { isBrokeredWritablePath } from "../routes/workspace/helpers.js";
-import { validatedSaveRequest } from "../routes/workspace/save.js";
+import {
+  syncSavedGiteaCheckout,
+  validatedSaveRequest,
+} from "../routes/workspace/save.js";
 
 describe("workspace save helpers", () => {
   it("validates text save requests while preserving empty string content", () => {
@@ -54,5 +57,36 @@ describe("workspace save helpers", () => {
     });
     expect(isBrokeredWritablePath(".octogee/canvas.json", "README.md")).toBe(true);
     expect(isBrokeredWritablePath(".octogee/other.json", "README.md")).toBe(false);
+  });
+
+  it("converges the project checkout selected by a successful Canvas Gitea save", async () => {
+    const syncCleanWorkspaceToRemote = vi.fn(async () => ({
+      ok: true as const,
+      result: { state: "fast-forwarded" as const },
+    }));
+    const resolveProjectDir = vi.fn(async () => "/customers/alice/projects/lantern");
+
+    await expect(
+      syncSavedGiteaCheckout(
+        {
+          slug: "alice",
+          projectSlug: "lantern",
+          provider: "gitea",
+          org: "alice",
+          repoName: "lantern",
+          gcsPrefix: "customers/alice/projects/lantern",
+        },
+        {
+          customersRoot: "/customers",
+          resolveCustomerDir: vi.fn(async () => null),
+          resolveProjectDir,
+          syncCleanWorkspaceToRemote,
+        },
+      ),
+    ).resolves.toBe("fast-forwarded");
+    expect(resolveProjectDir).toHaveBeenCalledWith("/customers", "alice", "lantern");
+    expect(syncCleanWorkspaceToRemote).toHaveBeenCalledWith(
+      "/customers/alice/projects/lantern",
+    );
   });
 });

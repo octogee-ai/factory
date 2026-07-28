@@ -290,6 +290,49 @@ function materializeCoachBrokerProfiles(
   }
 }
 
+async function restartMattermostRoutingMonitors(
+  ctx: BrokerCtx,
+  slug: string,
+  accountIds: readonly string[],
+): Promise<void> {
+  const failures: Error[] = [];
+  const failedAccounts = new Set<string>();
+  for (const accountId of new Set(accountIds)) {
+    const failureCountBefore = failures.length;
+    try {
+      await ctx.rpc.channelsStop({ channel: "mattermost", accountId });
+    } catch (error) {
+      failedAccounts.add(accountId);
+      failures.push(
+        new Error(
+          `${accountId} stop failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        ),
+      );
+    }
+    try {
+      await ctx.rpc.channelsStart({ channel: "mattermost", accountId });
+    } catch (error) {
+      failedAccounts.add(accountId);
+      failures.push(
+        new Error(
+          `${accountId} start failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        ),
+      );
+    }
+    if (failures.length === failureCountBefore) {
+      ctx.log(`[add:${slug}] restarted Mattermost account ${accountId} with current bindings`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `[add:${slug}] Mattermost monitor restart failed for ${[...failedAccounts].join(", ")}`,
+    );
+  }
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -365,6 +408,14 @@ async function applyAddCustomerConfigPatch(
     },
   ]);
   const startedAt = Date.now();
+  const convergedRpc = {
+    ...ctx.rpc,
+    configPatch: (
+      patch: object,
+      baseHash: string,
+      options?: { replacePaths?: readonly string[] },
+    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
+  };
   await applyConfigPatch(
     {
       buildPatch: (current) => {
@@ -404,12 +455,16 @@ async function applyAddCustomerConfigPatch(
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
-      rpc: ctx.rpc,
+      rpc: convergedRpc,
       cache: ctx.configCache,
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
       signal: callOpts?.signal,
     },
   );
+  await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
+    accountId,
+    ...Object.keys(projectAccounts),
+  ]);
   return {
     elapsedMs: Date.now() - startedAt,
     ...(brokerSnapshot
