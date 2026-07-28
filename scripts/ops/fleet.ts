@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 
 import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -10,7 +11,7 @@ import {
   type GatewayStatus,
   GATEWAYS_COLLECTION,
 } from "../../shared/types/fleet-controller.js";
-import { type GatewayProfile } from "../../shared/types/glm.js";
+import { isValidGatewayId, type GatewayProfile } from "../../shared/types/glm.js";
 import {
   readGatewayAuthorization,
   readGatewayRuntimeHeartbeat,
@@ -28,6 +29,12 @@ import {
   type OperationsDb,
 } from "../lib/glm-operations.js";
 import { readReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
+import {
+  createAdminFleetClient,
+  exchangeAdminFleetCustomToken,
+  type AdminFleetClient,
+  type AdminFleetRequest,
+} from "../lib/admin-fleet-client.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -129,6 +136,87 @@ const VERBS: readonly VerbHelp[] = [
     writes: false,
   },
   {
+    verb: "gw ls",
+    summary: "List gateways (alias for ls gateways).",
+    args: "",
+    description:
+      "Alias for `ls gateways`, retaining the established Firestore and Kubernetes diagnostic read.",
+    examples: ["fleet --env=prod gw ls"],
+    writes: false,
+  },
+  {
+    verb: "gw inspect",
+    summary: "Inspect one gateway (alias for inspect gateway).",
+    args: "<gw-id>",
+    description:
+      "Alias for `inspect gateway <gw-id>`, including durable state, heartbeat, and pod diagnostics.",
+    examples: ["fleet --env=prod gw inspect default"],
+    writes: false,
+  },
+  {
+    verb: "gw add",
+    summary: "Add a gateway through the Admin API.",
+    args: "--gateway-id=<id> --image-tag=<tag> [--image-repository=<repo>] [--gateway-class=<class>] [--apply]",
+    description:
+      "Uses POST /api/admin/gateways so maintenance and the operations journal match the Admin UI. imageRepository defaults to the selected environment's canonical /octogee-gateway image. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234",
+      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw roll",
+    summary: "Request a gateway image rollout through the Admin API.",
+    args: "<gw-id> --image-tag=<tag> [--image-repository=<repo>] [--apply]",
+    description:
+      "Uses POST /api/admin/gateways/:id/rollout so maintenance and the operations journal match the Admin UI. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw roll canary --image-tag=abc1234",
+      "fleet --env=test gw roll canary --image-tag=abc1234 --apply",
+    ],
+    writes: true,
+  },
+  {
+    verb: "gw park",
+    summary: "Pause a gateway through the Admin API.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with desiredStatus=paused. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw park canary", "fleet --env=test gw park canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw retire",
+    summary: "Retire an empty gateway through the Admin API.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses DELETE /api/admin/gateways/:id. The Admin API enforces retirement preconditions, maintenance, and journaling. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw retire canary", "fleet --env=test gw retire canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw override",
+    summary: "Hand a gateway to the operator management lane.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with managedBy=operator. Dry-run by default; pass --apply to send the request.",
+    examples: ["fleet --env=test gw override canary", "fleet --env=test gw override canary --apply"],
+    writes: true,
+  },
+  {
+    verb: "gw release-to-cowboy",
+    summary: "Return a gateway to Cowboy management.",
+    args: "<gw-id> [--apply]",
+    description:
+      "Uses PATCH /api/admin/gateways/:id with managedBy=cowboy. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw release-to-cowboy canary",
+      "fleet --env=test gw release-to-cowboy canary --apply",
+    ],
+    writes: true,
+  },
+  {
     verb: "add-customer",
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
@@ -178,9 +266,8 @@ export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
 
 export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
   const verb = resolveFleetVerb(args);
-  return verb?.writes === true && args.flags.apply === true
-    ? "application-default"
-    : "service-account-key";
+  if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
+  return args.positional[0] === "gw" ? "service-account-key" : "application-default";
 }
 
 function renderTopHelp(): string {
@@ -243,7 +330,21 @@ export interface ParsedFleetArgs {
   flags: Record<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["env", "to", "gateway"]);
+const VALUE_FLAGS = new Set([
+  "env",
+  "to",
+  "gateway",
+  "gateway-id",
+  "image-repository",
+  "image-tag",
+  "profile",
+  "gateway-class",
+  "image-profile",
+  "sizing-tier",
+  "owner-uid",
+  "builder-slug",
+  "idempotency-key",
+]);
 
 export function parseFleetArgs(argv: readonly string[]): ParsedFleetArgs {
   const out: ParsedFleetArgs = { env: "", positional: [], flags: {} };
@@ -272,6 +373,126 @@ if (VALUE_FLAGS.has(k) && i + 1 < argv.length && !argv[i + 1].startsWith("--")) 
     out.flags[k] = true;
   }
   return out;
+}
+
+function stringFlag(args: ParsedFleetArgs, name: string): string | undefined {
+  const value = args.flags[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requiredFlag(
+  args: ParsedFleetArgs,
+  name: string,
+  command: string,
+  valueName: string,
+): string {
+  const value = stringFlag(args, name);
+  if (!value) throw new Error(`${command} requires --${name}=<${valueName}>`);
+  return value;
+}
+
+function requiredGatewayId(args: ParsedFleetArgs, command: string): string {
+  const gatewayId = args.positional[2];
+  if (!gatewayId) throw new Error(`${command} requires <gw-id>`);
+  if (!isValidGatewayId(gatewayId)) {
+    throw new Error(`${command} received an invalid gateway id: ${gatewayId}`);
+  }
+  return gatewayId;
+}
+
+function canonicalGatewayRepository(args: ParsedFleetArgs, command: string): string {
+  if (!args.env) throw new Error(`${command} requires --env=test|prod`);
+  const canonical =
+    `${deploymentEnvironmentSettings(args.env).artifactRegistryRepository}/octogee-gateway`;
+  const requested = stringFlag(args, "image-repository");
+  if (requested && requested !== canonical) {
+    throw new Error(`${command} requires the selected environment repository: ${canonical}`);
+  }
+  return canonical;
+}
+
+export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRequest {
+  const action = args.positional[1];
+  const idempotencyKey = stringFlag(args, "idempotency-key");
+  const withIdempotency = (request: Omit<AdminFleetRequest, "idempotencyKey">): AdminFleetRequest => ({
+    ...request,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  });
+  switch (action) {
+    case "add": {
+      const command = "gw add";
+      const body: Record<string, unknown> = {
+        gatewayId: requiredFlag(args, "gateway-id", command, "id"),
+        imageRepository: canonicalGatewayRepository(args, command),
+        imageTag: requiredFlag(args, "image-tag", command, "tag"),
+      };
+      const optionalFields: ReadonlyArray<readonly [string, string]> = [
+        ["profile", "profile"],
+        ["gateway-class", "gatewayClass"],
+        ["image-profile", "imageProfile"],
+        ["sizing-tier", "sizingTier"],
+        ["owner-uid", "ownerUid"],
+        ["builder-slug", "builderSlug"],
+      ];
+      for (const [flag, field] of optionalFields) {
+        const value = stringFlag(args, flag);
+        if (value) body[field] = value;
+      }
+      return withIdempotency({ method: "POST", path: "/api/admin/gateways", body });
+    }
+    case "roll": {
+      const gatewayId = requiredGatewayId(args, "gw roll");
+      const imageRepository = stringFlag(args, "image-repository");
+      if (imageRepository) canonicalGatewayRepository(args, "gw roll");
+      return withIdempotency({
+        method: "POST",
+        path: `/api/admin/gateways/${gatewayId}/rollout`,
+        body: {
+          imageTag: requiredFlag(args, "image-tag", "gw roll", "tag"),
+          ...(imageRepository ? { imageRepository } : {}),
+        },
+      });
+    }
+    case "park": {
+      const gatewayId = requiredGatewayId(args, "gw park");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { desiredStatus: "paused" },
+      });
+    }
+    case "retire": {
+      const gatewayId = requiredGatewayId(args, "gw retire");
+      return withIdempotency({ method: "DELETE", path: `/api/admin/gateways/${gatewayId}` });
+    }
+    case "override": {
+      const gatewayId = requiredGatewayId(args, "gw override");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { managedBy: "operator" },
+      });
+    }
+    case "release-to-cowboy": {
+      const gatewayId = requiredGatewayId(args, "gw release-to-cowboy");
+      return withIdempotency({
+        method: "PATCH",
+        path: `/api/admin/gateways/${gatewayId}`,
+        body: { managedBy: "cowboy" },
+      });
+    }
+    default:
+      throw new Error(`Unknown gateway mutation: gw ${action ?? ""}`.trim());
+  }
+}
+
+export async function executeFleetGatewayMutation(
+  client: Pick<AdminFleetClient, "request">,
+  request: AdminFleetRequest,
+  apply: boolean,
+): Promise<{ applied: boolean; response: unknown }> {
+  if (!apply) return { applied: false, response: null };
+  return { applied: true, response: await client.request(request) };
 }
 
 let args: ParsedFleetArgs = parseFleetArgs([]);
@@ -343,6 +564,26 @@ function initializeFleetCli(argv: string[]): void {
   db = getFirestore();
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
+}
+
+function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for fleet Admin API mutations`);
+  return value;
+}
+
+function fleetAdminClient(): AdminFleetClient {
+  if (!args.env) throw new Error("fleet environment must be selected before creating an Admin API client");
+  const operatorUid = fleetAdminEnvironment("OPERATOR_UID");
+  const webApiKey = fleetAdminEnvironment("FIREBASE_WEB_API_KEY");
+  return createAdminFleetClient({
+    apiOrigin: deploymentEnvironmentSettings(args.env).apiOrigin,
+    getIdToken: async () => exchangeAdminFleetCustomToken({
+      operatorUid,
+      webApiKey,
+      createCustomToken: (uid) => getAuth().createCustomToken(uid),
+    }),
+  });
 }
 
 let KUBE_CONTEXT = resolveFleetDeploymentTarget("test").kubeContext;
@@ -708,6 +949,19 @@ const pods = allGatewayPods();
   }))));
 }
 
+async function runFleetGatewayMutation(apply: boolean): Promise<void> {
+  const request = resolveFleetGatewayMutation(args);
+  console.log(bold(`GW ${args.positional[1]?.toUpperCase() ?? ""}`));
+  console.log(dim(`  ${request.method} ${request.path}`));
+  if (!apply) {
+    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
+    return;
+  }
+  const result = await executeFleetGatewayMutation(fleetAdminClient(), request, true);
+  console.log(green(`${CHECK} Admin API request accepted`));
+  console.log(JSON.stringify(result.response, null, 2));
+}
+
 export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<string, string | number>> {
   return status.gateways.map((gateway) => ({
     gatewayId: gateway.gatewayId,
@@ -959,6 +1213,7 @@ async function main(): Promise<void> {
 
   switch (`${verb} ${sub}`.trim()) {
     case "ls gateways":
+    case "gw ls":
       return lsGateways();
     case "ls customers":
       return lsCustomers();
@@ -972,11 +1227,18 @@ async function main(): Promise<void> {
         return missingArg("inspect gateway");
       }
       return inspectGateway(args.positional[2]);
+    case "gw inspect":
+      if (!args.positional[2]) {
+        return missingArg("gw inspect");
+      }
+      return inspectGateway(args.positional[2]);
     case "release status":
       return releaseStatus();
   }
 
   switch (verb) {
+    case "gw":
+      return runFleetGatewayMutation(apply);
     case "add-customer": {
 
 const to = typeof args.flags.to === "string" ? args.flags.to : undefined;

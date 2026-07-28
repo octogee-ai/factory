@@ -21,8 +21,10 @@ import {
 } from "../ops/assign-customer-gateway.js";
 import {
   buildFleetMigrateOperationInput,
+  executeFleetGatewayMutation,
   parseFleetArgs,
   releaseStatusRows,
+  resolveFleetGatewayMutation,
   resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
@@ -416,6 +418,11 @@ describe("fleet CLI args", () => {
       namespace: "octogee-test",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
     });
+    expect(resolveFleetDeploymentTarget("prod")).toEqual({
+      projectId: "octogee",
+      namespace: "octogee",
+      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+    });
   });
 
   it("binds migration operations to the source and target gateways before enqueue", () => {
@@ -521,5 +528,140 @@ describe("fleet CLI args", () => {
         parseFleetArgs(["--env=prod", "migrate-customer", "alice", "--to=canary"]),
       ),
     ).toBe("service-account-key");
+  });
+
+  it("uses the environment service-account key to sign Admin API tokens", () => {
+    expect(
+      resolveFleetCredentialMode(
+        parseFleetArgs(["--env=prod", "gw", "park", "canary", "--apply"]),
+      ),
+    ).toBe("service-account-key");
+  });
+
+  it("parses normal gateway mutations through the gw command family", () => {
+    const args = parseFleetArgs([
+      "--env=test",
+      "gw",
+      "add",
+      "--gateway-id=canary",
+      "--image-tag=abc1234",
+      "--gateway-class=shared",
+      "--idempotency-key=add-canary",
+    ]);
+
+    expect(resolveFleetVerb(args)).toMatchObject({ verb: "gw add", writes: true });
+    expect(resolveFleetGatewayMutation(args)).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways",
+      body: {
+        gatewayId: "canary",
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: "abc1234",
+        gatewayClass: "shared",
+      },
+      idempotencyKey: "add-canary",
+    });
+  });
+
+  it("treats gw list and inspect as aliases for the existing read commands", () => {
+    expect(resolveFleetVerb(parseFleetArgs(["--env=test", "gw", "ls"]))).toMatchObject({
+      verb: "gw ls",
+      writes: false,
+    });
+    expect(resolveFleetVerb(parseFleetArgs([
+      "--env=test", "gw", "inspect", "canary",
+    ]))).toMatchObject({
+      verb: "gw inspect",
+      writes: false,
+    });
+  });
+
+  it("maps each existing Admin gateway action to its API request", () => {
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "roll", "canary", "--image-tag=abc1234",
+    ]))).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways/canary/rollout",
+      body: { imageTag: "abc1234" },
+    });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "park", "canary",
+    ]))).toEqual({
+      method: "PATCH",
+      path: "/api/admin/gateways/canary",
+      body: { desiredStatus: "paused" },
+    });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "retire", "canary",
+    ]))).toEqual({
+      method: "DELETE",
+      path: "/api/admin/gateways/canary",
+    });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "override", "canary",
+    ]))).toEqual({
+      method: "PATCH",
+      path: "/api/admin/gateways/canary",
+      body: { managedBy: "operator" },
+    });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "release-to-cowboy", "canary",
+    ]))).toEqual({
+      method: "PATCH",
+      path: "/api/admin/gateways/canary",
+      body: { managedBy: "cowboy" },
+    });
+  });
+
+  it("rejects incomplete gateway mutation input before any request", () => {
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "roll", "canary",
+    ]))).toThrow("gw roll requires --image-tag=<tag>");
+  });
+
+  it("rejects cross-environment image repositories and unsafe gateway paths", () => {
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test",
+      "gw",
+      "add",
+      "--gateway-id=canary",
+      "--image-tag=abc1234",
+      "--image-repository=us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    ]))).toThrow("gw add requires the selected environment repository");
+
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "park", "a/../b",
+    ]))).toThrow("gw park received an invalid gateway id");
+  });
+
+  it("does not make a normal gateway mutation request without --apply", async () => {
+    const request = vi.fn(async () => ({ operationId: "op-1" }));
+    const mutation = resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "park", "canary",
+    ]));
+
+    await expect(executeFleetGatewayMutation({ request }, mutation, false)).resolves.toEqual({
+      applied: false,
+      response: null,
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("executes the normal gateway mutation through the Admin API with --apply", async () => {
+    const request = vi.fn(async () => ({ gatewayId: "canary", updated: ["desiredStatus"] }));
+    const mutation = resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "park", "canary", "--idempotency-key=park-canary",
+    ]));
+
+    await expect(executeFleetGatewayMutation({ request }, mutation, true)).resolves.toEqual({
+      applied: true,
+      response: { gatewayId: "canary", updated: ["desiredStatus"] },
+    });
+    expect(request).toHaveBeenCalledWith({
+      method: "PATCH",
+      path: "/api/admin/gateways/canary",
+      body: { desiredStatus: "paused" },
+      idempotencyKey: "park-canary",
+    });
   });
 });

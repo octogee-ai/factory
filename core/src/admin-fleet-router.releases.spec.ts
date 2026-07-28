@@ -1188,6 +1188,70 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(store.get("gateways/zeta")?.desiredStatus).toBe("paused");
   });
 
+  it.each(["operator", "cowboy"] as const)(
+    "persists managedBy=%s on the durable root and journals the completed mutation",
+    async (managedBy) => {
+      const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
+
+      await request(app)
+        .patch("/gateways/zeta")
+        .send({ managedBy })
+        .expect(202)
+        .expect({ gatewayId: "zeta", updated: ["managedBy"] });
+
+      expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
+      expect(store.get("gateways/zeta")?.managedBy).toBe(managedBy);
+      expect(auditsIn(store)).toEqual([
+        expect.objectContaining({
+          status: "completed",
+          forced: false,
+          what: "update gateway desired configuration",
+          target: { gatewayId: "zeta" },
+          preActionStatus: {
+            desiredStatus: "running",
+            desiredRelease: 1,
+            managedBy: "cowboy",
+          },
+          mutation: {
+            kind: "patch-gateway",
+            gatewayId: "zeta",
+            patch: { managedBy },
+          },
+        }),
+      ]);
+    },
+  );
+
+  it("rejects an invalid managedBy value before it writes or journals", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
+
+    await request(app)
+      .patch("/gateways/zeta")
+      .send({ managedBy: "manual" })
+      .expect(400)
+      .expect({ error: "managedBy must be operator or cowboy" });
+
+    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
+  it("does not mutate or journal managedBy while maintenance is frozen", async () => {
+    const seed = {
+      ...seedNewSchemaGateway("zeta", sharedPayload()),
+      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .patch("/gateways/zeta")
+      .send({ managedBy: "operator" })
+      .expect(409)
+      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
+
+    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
+    expect(auditsIn(store)).toHaveLength(0);
+  });
+
   it("refuses a malformed durable root rather than mutating it", async () => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
     seed["gateways/zeta"] = { ...seed["gateways/zeta"], gatewayId: "other" };
