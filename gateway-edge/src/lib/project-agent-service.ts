@@ -7,7 +7,7 @@ import {
   projectAgentSecretDocId,
   type ProjectAgentDeps,
 } from "@octogee/core/mattermost/project-agent";
-import { isValidProjectId } from "@octogee/shared/types/identity";
+import { isValidProjectId, projectAgentId } from "@octogee/shared/types/identity";
 import { isPaidTier } from "./billing-tier.js";
 import { addActivityPairMember, mapActivityPairError } from "./activityPair.js";
 
@@ -141,6 +141,32 @@ async function enableProjectAgent(
   }
   logger.info(`[project-agent] enabled + minted ${workspaceId}/${project}`, { uid: actor.uid });
   return { status: 200, body: { success: true, enabled: true, provisioned: true } };
+}
+
+// Deletion-time convergence: the toggle's disable path plus roster cleanup.
+// The secret doc is config demand for the owner's gateway, so it must be gone
+// before the roster id is removed — an unrostered agent that is still in the
+// config wedges the whole pod. A throw here therefore leaves the roster entry
+// in place (a lingering superset is safe; the caller retries).
+export async function retireProjectAgentForDeletion(
+  uid: string,
+  workspaceId: string,
+  project: string,
+): Promise<void> {
+  const secretRef = db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(project)}`);
+  const secretSnap = await secretRef.get();
+  const mmUserId = secretSnap.data()?.mmUserId;
+  if (typeof mmUserId === "string" && mmUserId) {
+    await retireProjectAgentBot(coreDeps(), { uid, project, mmUserId });
+  } else if (secretSnap.exists) {
+    logger.warn(
+      `[project-agent] dropping ${workspaceId}/${project} secret without an mmUserId — PAT not revoked`,
+    );
+    await secretRef.delete();
+  }
+  await db.doc(`users/${uid}`).update({
+    "provisioning.openclaw.agentIds": FieldValue.arrayRemove(projectAgentId(workspaceId, project)),
+  });
 }
 
 async function disableProjectAgent(
