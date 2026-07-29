@@ -1256,15 +1256,35 @@ export function resolveFleetOperatorUidFromUserConfigs(
     .map((config) => config.uid);
   if (operatorUids.length !== 1) {
     throw new Error(
-      `OPERATOR_UID is required when Firebase Auth does not identify exactly one enabled Firestore admin (found ${operatorUids.length})`,
+      `OPERATOR_UID or OPERATOR_EMAIL is required when Firebase Auth does not identify exactly one enabled Firestore admin (found ${operatorUids.length})`,
     );
   }
   return operatorUids[0]!;
 }
 
+export function resolveExplicitFleetOperatorUid(input: {
+  uid: string;
+  role: unknown;
+  disabled: boolean;
+}): string {
+  if (input.disabled) throw new Error("configured Fleet admin is disabled");
+  if (input.role !== "admin") throw new Error("configured Fleet admin does not have the admin role");
+  return input.uid;
+}
+
 async function fleetOperatorUid(): Promise<string> {
   const explicit = process.env.OPERATOR_UID;
   if (explicit) return explicit;
+  const explicitEmail = process.env.OPERATOR_EMAIL;
+  if (explicitEmail) {
+    const authUser = await getAuth().getUserByEmail(explicitEmail);
+    const config = await db.doc(`users/${authUser.uid}/system/config`).get();
+    return resolveExplicitFleetOperatorUid({
+      uid: authUser.uid,
+      role: config.get("role"),
+      disabled: authUser.disabled,
+    });
+  }
   if (!resolvedOperatorUid) {
     resolvedOperatorUid = (async () => {
       const users = await db.collection("users").get();

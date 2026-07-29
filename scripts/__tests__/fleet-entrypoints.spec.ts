@@ -36,6 +36,7 @@ import {
   resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
+  resolveExplicitFleetOperatorUid,
   resolveFleetOperatorUidFromUserConfigs,
 } from "../ops/fleet.js";
 
@@ -882,7 +883,7 @@ describe("fleet CLI args", () => {
     });
   });
 
-  it("discovers the sole Firestore admin without a collection-group index", () => {
+  it("uses the sole enabled Firestore admin only as the unspecified-actor fallback", () => {
     expect(resolveFleetOperatorUidFromUserConfigs([
       { uid: "builder", role: "builder", disabled: false },
       { uid: "retired-operator", role: "admin", disabled: true },
@@ -893,6 +894,24 @@ describe("fleet CLI args", () => {
       { uid: "operator-a", role: "admin", disabled: false },
       { uid: "operator-b", role: "admin", disabled: false },
     ])).toThrow(/found 2/);
+  });
+
+  it("accepts an explicit enabled admin when other active admins exist", () => {
+    expect(resolveExplicitFleetOperatorUid({
+      uid: "operator-selected-by-email",
+      role: "admin",
+      disabled: false,
+    })).toBe("operator-selected-by-email");
+    expect(() => resolveExplicitFleetOperatorUid({
+      uid: "retired-operator",
+      role: "admin",
+      disabled: true,
+    })).toThrow(/disabled/);
+    expect(() => resolveExplicitFleetOperatorUid({
+      uid: "builder",
+      role: "builder",
+      disabled: false,
+    })).toThrow(/admin role/);
   });
 
   it("preserves an explicit release idempotency key over its deterministic default", () => {
