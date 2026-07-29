@@ -861,7 +861,16 @@ describe("fleet CLI args", () => {
       method: "POST",
       path: "/api/admin/releases/cut",
       body: { version: "v0.4.0", sourceSha },
-      idempotencyKey: `release-cut:v0.4.0:${sourceSha}`,
+      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:shared`,
+    });
+    expect(resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--gateway-scope=all"]),
+      sourceSha,
+    )).toEqual({
+      method: "POST",
+      path: "/api/admin/releases/cut",
+      body: { version: "v0.4.0", sourceSha, gatewayScope: "all" },
+      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:all`,
     });
     expect(resolveFleetReleaseMutation(
       parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
