@@ -8,12 +8,7 @@ metadata:
     app: octogee-gateway
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
-  {{- $gatewayClass := include "octogee-gateway.gatewayClass" . }}
-  {{- if has $gatewayClass (.Values.availability.protectedClasses | default list) }}
-  minAvailable: {{ .Values.pdb.minAvailable }}
-  {{- else }}
   maxUnavailable: {{ .Values.pdb.maxUnavailable }}
-  {{- end }}
   selector:
     matchLabels:
       app: octogee-gateway

@@ -34,7 +34,6 @@ gateway-router Service to the selected gateway's internal services.
   "/api/admin/onboarding-placement/*"
   "/api/admin/onboarding-placement"
   "/api/admin/gateway-migrations/*"
-  "/api/admin/builder-candidates"
   "/api/admin/customer-distribution"
   "/api/admin/customers/by-slug/*"
   "/api/admin/customer/*"

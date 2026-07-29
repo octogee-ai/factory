@@ -192,7 +192,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       imageProfile: "operator",
       ownerUid: "",
       builderSlug: "",
-    })).toThrow(/ownerUid and builderSlug are required for dedicated gateways/);
+    })).toThrow(/ownerUid and builderSlug are required for owner-bound disposable gateways/);
 
     const owned = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",

@@ -68,7 +68,7 @@ export function isValidNewGatewayId(id) {
 // Resolves the durable gateway identity for an instance: the explicit
 // `gateway` field when present, else a naming-convention fallback that
 // strips a trailing -blue/-green roll-role suffix. Instance ids without that
-// suffix are their own bare identity (dedicated gateways, never rolled).
+// suffix are their own bare identity (for example, a shared root or one-off runtime).
 export function deriveGatewayIdentity(gatewayId, explicitGateway) {
     if (typeof explicitGateway === "string" && explicitGateway.length > 0) {
         return explicitGateway;

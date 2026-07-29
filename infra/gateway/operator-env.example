@@ -1,6 +1,6 @@
 # infra/gateway/operator-env.example
 #
-# Operator-customization env file for personal / dedicated gateways.
+# Operator-customization env file for owner-bound disposable runtimes.
 #
 # Copy this to /home/node/.openclaw/secrets/operator.env on a running
 # gateway (mode 600) only for temporary local credentials. It is emptyDir

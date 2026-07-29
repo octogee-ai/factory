@@ -281,7 +281,6 @@ export function mergeGatewayConfigWithArtifact(
     builderSlug: config.builderSlug,
     openclawOverrides: config.openclawOverrides,
     modelBrokerLimits: config.modelBrokerLimits,
-    preemption: config.preemption,
     ...artifact,
   };
 }

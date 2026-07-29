@@ -435,59 +435,6 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toBe(desired.deploymentIntentFingerprint);
   });
 
-  it("rolls an existing PROD shared gateway onto protected availability despite chart suppression", () => {
-    const desired = gatewayUpsertOptsFromRelease({
-      namespace: "octogee",
-      gateway: gateway(),
-      artifact: artifact(),
-      replicas: 1,
-      chartPath: "/charts/octogee-gateway",
-      chartFingerprint: "chart-b",
-    });
-    const {
-      availabilityProtected: _availabilityProtected,
-      deploymentIntentFingerprint: _deploymentIntentFingerprint,
-      ...currentIntent
-    } = desired;
-    const legacyFingerprint = gatewayDeploymentIntentFingerprint({
-      ...currentIntent,
-      chartFingerprint: "chart-a",
-    });
-
-    expect(desired.availabilityProtected).toBe(true);
-    expect(deploymentIntentFingerprintForComparison({
-      desired,
-      observedChartFingerprint: "chart-a",
-      observedDeploymentIntentFingerprint: legacyFingerprint,
-      autoRollOnChartDrift: false,
-    })).not.toBe(legacyFingerprint);
-  });
-
-  it("keeps TEST shared and PROD dedicated gateways on the evictable Spot policy", () => {
-    const testShared = gatewayUpsertOptsFromRelease({
-      namespace: "octogee-test",
-      gateway: gateway(),
-      artifact: artifact(),
-      replicas: 1,
-      chartPath: "/charts/octogee-gateway",
-    });
-    const prodOperator = gatewayUpsertOptsFromRelease({
-      namespace: "octogee",
-      gateway: gateway({
-        gatewayClass: "operator",
-        imageProfile: "operator",
-        ownerUid: "uid-operator",
-        builderSlug: "operator",
-      }),
-      artifact: artifact(),
-      replicas: 1,
-      chartPath: "/charts/octogee-gateway",
-    });
-
-    expect(testShared.availabilityProtected).toBeUndefined();
-    expect(prodOperator.availabilityProtected).toBeUndefined();
-  });
-
   it("retains owner drift in PROD when chart-only drift is suppressed", () => {
     const observed = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
@@ -524,7 +471,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).not.toBe(observed.deploymentIntentFingerprint);
   });
 
-  it("does not turn a missing legacy intent fingerprint into a shared PROD fleet roll", () => {
+  it("upserts a missing legacy intent fingerprint in PROD", () => {
     const desired = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
       gateway: gateway(),
@@ -539,7 +486,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       observedChartFingerprint: undefined,
       observedDeploymentIntentFingerprint: undefined,
       autoRollOnChartDrift: false,
-    })).toBeUndefined();
+    })).toBe(desired.deploymentIntentFingerprint);
   });
 
   it("resolves operator access for builder/operator classes from the owner", () => {

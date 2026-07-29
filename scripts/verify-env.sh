@@ -36,8 +36,8 @@ source "$SCRIPT_DIR/lib/default-gateway-deployment.sh"
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 # shellcheck source=scripts/lib/gateway-image-bundle.sh
 source "$SCRIPT_DIR/lib/gateway-image-bundle.sh"
-# shellcheck source=scripts/lib/protected-gateway-placement.sh
-source "$SCRIPT_DIR/lib/protected-gateway-placement.sh"
+# shellcheck source=scripts/lib/gateway-spot-placement.sh
+source "$SCRIPT_DIR/lib/gateway-spot-placement.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -484,19 +484,15 @@ print(items[0].get("status", {}).get("phase", "unknown") if items else "unknown"
   fi
 fi
 
-# ── 5a. Protected gateway placement ──────────────────────────────────────────
+# ── 5a. Gateway Spot placement ───────────────────────────────────────────────
 set_section infra
-header "5a. Protected gateway placement"
-if [[ "$ENV" != "prod" ]]; then
-  info "Production-only placement policy check — skipping"
-elif [[ -z "$GW_DEPLOYMENT" ]]; then
-  info "Skipping protected placement check — default gateway deployment is absent"
-elif PLACEMENT_RESULT=$(octogee_verify_protected_gateway_placement "$K8S_CONTEXT" "$NAMESPACE" "$GW_DEPLOYMENT" "$GW_INSTANCE_ID" 2>&1); then
-  pass "$PLACEMENT_RESULT"
+header "5a. Gateway Spot placement"
+if SPOT_PLACEMENT_ERRORS=$(octogee_verify_gateway_spot_placement "$K8S_CONTEXT" "$NAMESPACE" 2>&1); then
+  pass "$SPOT_PLACEMENT_ERRORS"
 else
-  fail "Protected gateway placement: ${PLACEMENT_RESULT:-verification failed}"
+  fail "gateway Spot placement is invalid: $SPOT_PLACEMENT_ERRORS"
   if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} reconcile the default shared gateway through Cowboy; do not manually patch its Deployment or PDB"
+    echo -e "  ${YELLOW}FIX:${NC} reconcile the affected Cowboy gateway release, then rerun this verifier"
   fi
 fi
 

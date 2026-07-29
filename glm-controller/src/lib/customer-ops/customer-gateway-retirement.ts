@@ -24,7 +24,7 @@ function retirementOperationId(deletionId: string, gatewayId: string): string {
   return `delete-retire-${deletionId}-${gatewayId}`;
 }
 
-export async function ensureOwnedDedicatedGatewaysRetired(
+export async function ensureOwnedGatewaysRetired(
   input: OwnedGatewayRetirementInput,
 ): Promise<OwnedGatewayRetirementOutcome> {
   const claimRetirement = input.claimRetirement ?? claimGatewayRetirementAtomic;
@@ -33,7 +33,10 @@ export async function ensureOwnedDedicatedGatewaysRetired(
     .where("ownerUid", "==", input.uid)
     .get();
   const owned = snapshot.docs
-    .filter((doc) => doc.data().gatewayClass !== "shared")
+    .filter((doc) => {
+      const root = doc.data() as Record<string, unknown>;
+      return root.gatewayClass === "builder" || root.gatewayClass === "operator";
+    })
     .sort((a, b) => a.id.localeCompare(b.id));
   if (owned.length === 0) return "not-owned";
 
@@ -105,7 +108,7 @@ async function finishCompletedGatewayRetirement(
   const operation = operationSnap.data() as Record<string, unknown> | undefined;
   if (operation?.status === "failed") {
     throw new Error(
-      `dedicated gateway ${doc.id} retirement failed: ${String(operation.error ?? "unknown")}`,
+      `owned gateway ${doc.id} retirement failed: ${String(operation.error ?? "unknown")}`,
     );
   }
   if (operation?.status !== "succeeded") return true;
@@ -151,7 +154,7 @@ async function assertAutomaticRetirementCleanupAllowed(
   ]);
   const root = rootSnap.exists ? rootSnap.data() : undefined;
   if (isOperatorManaged(root?.managedBy)) {
-    throw new Error(`dedicated gateway ${gatewayId} is operator-managed`);
+    throw new Error(`owned gateway ${gatewayId} is operator-managed`);
   }
   const openclaw = userSnap.data()?.provisioning?.openclaw;
   if (

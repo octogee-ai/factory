@@ -41,7 +41,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).not.toMatch(/GATEWAY_REVISION_ID/);
   });
 
-  it("restores dedicated gateway system_config before OpenClaw starts", () => {
+  it("restores owner-bound runtime system_config before OpenClaw starts", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     expect(restoreIdx).toBeGreaterThan(-1);
     const openclawStartIdx = entrypoint.indexOf("openclaw gateway run");
@@ -59,7 +59,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 
   it("gates system_config restore on non-shared class and explicit builder slug", () => {
     const restoreBlock = entrypoint.slice(
-      entrypoint.indexOf("Dedicated gateway system_config restore"),
+      entrypoint.indexOf("Owner-bound runtime system_config restore"),
       entrypoint.indexOf("apply-gateway-class-policy.mjs"),
     );
     expect(restoreBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
@@ -67,7 +67,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
   });
 
-  it("requires a builder slug for every dedicated gateway", () => {
+  it("requires a builder slug for every owner-bound runtime", () => {
     const identityBlock = entrypoint.slice(
       entrypoint.indexOf("GATEWAY_ID is set by the deployment's env block"),
       entrypoint.indexOf("BuilderShell comes up before the durable restore"),

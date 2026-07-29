@@ -182,7 +182,7 @@ elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Builder-shell disabled: runtime shell access is not enabled"
 fi
 
-# ── Dedicated gateway system_config restore ─────────────────────────────────
+# ── Owner-bound runtime system_config restore ───────────────────────────────
 # Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).

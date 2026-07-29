@@ -109,10 +109,35 @@ describe("resolveContinuousBuilderPlacement", () => {
         gatewayId: "builder-alice",
         gatewayClass: "operator",
         ownerUid: "uid-alice",
+        disposable: true,
         desiredStatus: "running",
         ready: false,
       },
       now: new Date(1_000),
     })).toEqual({ targetGatewayId: "builder-alice", ownedGatewayId: "builder-alice" });
+  });
+
+  it("does not route an active lease to a non-disposable owner gateway", () => {
+    expect(resolveContinuousBuilderPlacement({
+      uid: "uid-alice",
+      userData: {
+        ...trialBuilder,
+        provisioning: {
+          openclaw: {
+            activationLease: { status: "active", targetGatewayId: "builder-alice" },
+          },
+        },
+      },
+      currentGatewayId: "builder-alice",
+      defaultGatewayId: "shared-blue",
+      ownedGateway: {
+        gatewayId: "builder-alice",
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        desiredStatus: "running",
+        ready: true,
+      },
+      now: new Date(1_000),
+    })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: "builder-alice" });
   });
 });

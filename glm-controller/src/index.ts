@@ -229,10 +229,11 @@ import {
   listLiveStripeSubscriptionIds,
   listOpenStripeCheckoutSessionIds,
   listStripeCustomerIdsForUid,
-  pauseOwnedDedicatedGateways,
   revokeOwnerModelBrokerTokens,
 } from "./lib/customer-ops/customer-suspension-runtime.js";
-import { ensureOwnedDedicatedGatewaysRetired } from "./lib/customer-ops/customer-gateway-retirement.js";
+import {
+  ensureOwnedGatewaysRetired,
+} from "./lib/customer-ops/customer-gateway-retirement.js";
 import {
   ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
   CUSTOMER_DELETION_JOBS_COLLECTION,
@@ -245,10 +246,6 @@ import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import { completeHealthyBootstrapAddGatewayOperations } from "./bootstrap-add-gateway-recovery.js";
-import {
-  PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
-  startPreemptionHandoffSweeper,
-} from "./preemption-handoff-sweeper.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
@@ -309,10 +306,6 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
 const requestReconcileTickRef: { fire?: () => void } = {};
-const PREEMPTION_HANDOFF_SWEEP_MS = parseNonNegativeInt(
-  process.env.PREEMPTION_HANDOFF_SWEEP_MS,
-  PREEMPTION_HANDOFF_SWEEP_MS_DEFAULT,
-);
 const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -1858,10 +1851,6 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const stopPreemptionHandoffSweeper = startPreemptionHandoffSweeper(
-    { db, now: () => Date.now(), log, maintenanceGate: deps.maintenanceGate },
-    PREEMPTION_HANDOFF_SWEEP_MS,
-  );
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
@@ -1912,7 +1901,6 @@ function startControllerBackgroundTasks({
     stopReaper,
     stopStuckOpReaper,
     stopHelmRecoverySweeper,
-    stopPreemptionHandoffSweeper,
     stopPlacementPolicyReconciler,
     stopHttp,
   ];
@@ -2337,7 +2325,6 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
         builderSlug: null,
         openclawOverrides: null,
         modelBrokerLimits: null,
-        preemption: null,
       },
       artifact,
       writeAdditional: (transaction) => {
@@ -3074,8 +3061,8 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         updatedAt: Date.now(),
       }, { merge: true });
     },
-    ensureDedicatedGatewayRetired: (cleanup, deletionId) =>
-      ensureOwnedDedicatedGatewaysRetired({
+    ensureOwnedGatewayRetired: (cleanup, deletionId) =>
+      ensureOwnedGatewaysRetired({
         db,
         uid: cleanup.uid,
         deletionId,
@@ -3256,8 +3243,13 @@ function buildSuspendCustomerHandler(
       for (const docPath of docPaths) batch.delete(db.doc(docPath));
       await batch.commit();
     },
-    pauseOwnedDedicatedGateways: (uid) =>
-      pauseOwnedDedicatedGateways(db, uid, Date.now()),
+    ensureOwnedGatewaysRetired: (uid, deletionId) =>
+      ensureOwnedGatewaysRetired({
+        db,
+        uid,
+        deletionId,
+        now: Date.now(),
+      }),
     markSuspended: async (deletionId) => {
       await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
         { status: "hibernating", suspendedAt: Date.now(), updatedAt: Date.now() },

@@ -47,27 +47,11 @@ export interface GatewayDesiredState {
     builderSlug?: string;
     sizingTier?: SizingTier;
     modelBrokerLimits?: GatewayModelBrokerLimits;
-    preemption?: GatewayPreemptionSpec;
-    preemptionHandoff?: GatewayPreemptionHandoffSpec;
 }
 export interface GatewayModelBrokerLimits {
     spendWindowUsd?: number | null;
     spendWeekUsd?: number | null;
     requestsPerMinute?: number | null;
-}
-export interface GatewayPreemptionSpec {
-    warmTargetGatewayId?: string;
-}
-export interface GatewayPreemptionHandoffSpec {
-    status?: "requested" | "waking-target" | "queued" | "failed" | "ignored";
-    sourceGatewayId?: string;
-    targetGatewayId?: string;
-    reason?: string;
-    requestedAt?: unknown;
-    queuedAt?: unknown;
-    operationId?: string;
-    flushCompletedAt?: unknown;
-    flushOk?: boolean;
 }
 export interface GatewayServiceAccountSpec {
     create?: boolean;

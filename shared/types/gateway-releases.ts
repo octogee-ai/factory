@@ -13,7 +13,6 @@ import {
   isOperatorManaged,
 } from "./glm.js";
 import type {
-  GatewayPreemptionHandoffSpec,
   ManagedBy,
 } from "./glm.js";
 
@@ -58,7 +57,6 @@ export interface GatewayDoc {
   liveRelease: number | null;
   desiredStatus: GatewayLifecycleStatus;
   managedBy?: ManagedBy;
-  preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
   retireAfter?: number | null;
   retirementVersion?: number;
   retirementClaim?: GatewayRetirementClaim | null;
@@ -515,11 +513,9 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "builderSlug",
   "openclawOverrides",
   "modelBrokerLimits",
-  "preemption",
   "allocation",
   "desiredStatus",
   "managedBy",
-  "preemptionHandoff",
   "liveRelease",
   "retireAfter",
 ] as const;

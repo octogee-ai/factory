@@ -33,7 +33,6 @@ function mutableConfigHash(config) {
         builderSlug: config.builderSlug,
         openclawOverrides: config.openclawOverrides,
         modelBrokerLimits: config.modelBrokerLimits,
-        preemption: config.preemption,
     });
     return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

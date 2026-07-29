@@ -240,11 +240,9 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "builderSlug",
     "openclawOverrides",
     "modelBrokerLimits",
-    "preemption",
     "allocation",
     "desiredStatus",
     "managedBy",
-    "preemptionHandoff",
     "liveRelease",
     "retireAfter",
 ];

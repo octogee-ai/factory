@@ -72,31 +72,12 @@ export interface GatewayDesiredState {
 
   modelBrokerLimits?: GatewayModelBrokerLimits;
 
-  preemption?: GatewayPreemptionSpec;
-
-  preemptionHandoff?: GatewayPreemptionHandoffSpec;
 }
 
 export interface GatewayModelBrokerLimits {
   spendWindowUsd?: number | null;
   spendWeekUsd?: number | null;
   requestsPerMinute?: number | null;
-}
-
-export interface GatewayPreemptionSpec {
-  warmTargetGatewayId?: string;
-}
-
-export interface GatewayPreemptionHandoffSpec {
-  status?: "requested" | "waking-target" | "queued" | "failed" | "ignored";
-  sourceGatewayId?: string;
-  targetGatewayId?: string;
-  reason?: string;
-  requestedAt?: unknown;
-  queuedAt?: unknown;
-  operationId?: string;
-  flushCompletedAt?: unknown;
-  flushOk?: boolean;
 }
 
 export interface GatewayServiceAccountSpec {
@@ -187,7 +168,7 @@ export function isValidNewGatewayId(id: unknown): id is string {
 // Resolves the durable gateway identity for an instance: the explicit
 // `gateway` field when present, else a naming-convention fallback that
 // strips a trailing -blue/-green roll-role suffix. Instance ids without that
-// suffix are their own bare identity (dedicated gateways, never rolled).
+// suffix are their own bare identity (for example, a shared root or one-off runtime).
 export function deriveGatewayIdentity(
   gatewayId: string,
   explicitGateway?: unknown,

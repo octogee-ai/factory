@@ -357,24 +357,3 @@ export async function disableCreditAutoTopUp(
     { merge: true },
   );
 }
-
-export async function pauseOwnedDedicatedGateways(
-  db: Pick<Firestore, "collection">,
-  uid: string,
-  now: number,
-): Promise<void> {
-  const snapshot = await db.collection("gateways").where("ownerUid", "==", uid).get();
-  for (const doc of snapshot.docs) {
-    const data = doc.data() as Record<string, unknown>;
-    const coOwners = Array.isArray(data.coOwnerUids) ? data.coOwnerUids : [];
-    if (coOwners.length > 0 || data.gatewayClass === "shared") continue;
-    await doc.ref.set(
-      {
-        desiredStatus: "paused",
-        updatedAt: now,
-        updatedBy: "customer-deletion-lifecycle",
-      },
-      { merge: true },
-    );
-  }
-}

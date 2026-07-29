@@ -7,7 +7,6 @@ import {
   type GatewayClass,
   type GatewayImageProfile,
   type GatewayModelBrokerLimits,
-  type GatewayPreemptionSpec,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
   type OperatorGatewayAccessSpec,
@@ -45,7 +44,7 @@ export interface GatewayMutableConfig {
   builderSlug: string | null;
   openclawOverrides: Record<string, unknown> | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
-  preemption: GatewayPreemptionSpec | null;
+  preemption?: null;
   allocation?: DisposableBuilderGatewayAllocation | null;
 }
 
@@ -120,15 +119,6 @@ function isNullableServiceAccount(value: unknown): value is GatewayServiceAccoun
     (annotations === undefined ||
       (isRecord(annotations) &&
         Object.values(annotations).every((entry) => typeof entry === "string")))
-  );
-}
-
-function isNullablePreemption(value: unknown): value is GatewayPreemptionSpec | null {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  return (
-    value.warmTargetGatewayId === undefined ||
-    (typeof value.warmTargetGatewayId === "string" && value.warmTargetGatewayId.length > 0)
   );
 }
 
@@ -216,7 +206,7 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableString(value.builderSlug) &&
     isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
-    isNullablePreemption(value.preemption) &&
+    (value.preemption === undefined || value.preemption === null) &&
     isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
     hasLegalOwnershipAndAllocation(value)
   );

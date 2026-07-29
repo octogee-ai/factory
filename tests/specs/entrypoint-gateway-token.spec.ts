@@ -186,7 +186,7 @@ describe("infra/gateway/entrypoint.sh — operator mutation runtime boundary", (
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
   const earlyStart = src.indexOf("# BuilderShell comes up before the durable restore");
-  const earlyEnd = src.indexOf("# ── Dedicated gateway system_config restore", earlyStart);
+  const earlyEnd = src.indexOf("# ── Owner-bound runtime system_config restore", earlyStart);
   const start = src.indexOf("# ── In-pod runners:");
   const end = src.indexOf("# ── Runner metrics exporter", start);
   if (earlyStart < 0 || earlyEnd < 0 || start < 0 || end < 0) {

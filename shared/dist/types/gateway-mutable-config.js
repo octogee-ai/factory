@@ -68,14 +68,6 @@ function isNullableServiceAccount(value) {
             (isRecord(annotations) &&
                 Object.values(annotations).every((entry) => typeof entry === "string"))));
 }
-function isNullablePreemption(value) {
-    if (value === null)
-        return true;
-    if (!isRecord(value))
-        return false;
-    return (value.warmTargetGatewayId === undefined ||
-        (typeof value.warmTargetGatewayId === "string" && value.warmTargetGatewayId.length > 0));
-}
 function isNullableModelBrokerLimits(value) {
     if (value === null)
         return true;
@@ -149,7 +141,7 @@ export function isGatewayMutableConfig(value) {
         isNullableString(value.builderSlug) &&
         isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
-        isNullablePreemption(value.preemption) &&
+        (value.preemption === undefined || value.preemption === null) &&
         isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
         hasLegalOwnershipAndAllocation(value));
 }

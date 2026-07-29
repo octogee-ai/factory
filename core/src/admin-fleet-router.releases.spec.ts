@@ -1188,6 +1188,58 @@ describe("PATCH /customers/:uid/placement", () => {
   });
 });
 
+describe("PATCH /customers/:uid/placement", () => {
+  it("rejects direct owner placement without creating a migration", async () => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        builderSlug: "alice",
+      }),
+    });
+
+    await request(app)
+      .patch("/customers/uid-alice/placement")
+      .send({ managedBy: "operator", gatewayId: "legacy-owner" })
+      .expect(400)
+      .expect({
+        error: "owner-only gateway placement is managed by the disposable lifecycle",
+        gatewayId: "legacy-owner",
+      });
+
+    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+  });
+});
+
+describe("manual gateway migrations", () => {
+  it.each([
+    ["/customers/uid-alice/migrate", { to: "legacy-owner" }],
+    ["/gateway-migrations/bulk", { uids: ["uid-alice"], toGatewayId: "legacy-owner" }],
+  ])("rejects an owner runtime target for %s", async (path, body) => {
+    const { app, store } = mkApp({
+      "users/uid-alice": builderUser("source"),
+      ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
+        gatewayClass: "operator",
+        ownerUid: "uid-alice",
+        builderSlug: "alice",
+      }),
+    });
+
+    await request(app)
+      .post(path)
+      .send(body)
+      .expect(400)
+      .expect({
+        error: "manual migration target must be a shared gateway",
+        gatewayId: "legacy-owner",
+      });
+
+    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+  });
+});
+
 beforeEach(() => vi.stubEnv("GATEWAY_SERVICE_ACCOUNT", "gw@octogee.iam.gserviceaccount.com"));
 afterEach(() => vi.unstubAllEnvs());
 
@@ -1297,7 +1349,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(res.body.error).toMatch(/credential|BYOSUB/i);
   });
 
-  it("rejects a dedicated gateway without an owner before provisioning any runtime state", async () => {
+  it("rejects a manual owner-only gateway before provisioning any runtime state", async () => {
     const { app, store } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "operator",
@@ -1305,30 +1357,11 @@ describe("POST /gateways — creates only the durable root and immutable release
       imageTag: "abc1234",
       gatewayClass: "operator",
       imageProfile: "operator",
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/ownerUid/);
-    expect(store.get("gateways/operator")).toBeUndefined();
-  });
-
-  it("rejects a dedicated owner and builder slug that do not identify the same workspace", async () => {
-    const { app, store } = mkApp({
-      "users/uid-owner": { username: "owner" },
-      "workspaces/claimed": { ownerUid: "uid-other", slug: "claimed" },
-    });
-    const res = await request(app).post("/gateways").send({
-      gatewayId: "operator",
-      imageRepository: REPO,
-      imageTag: "abc1234",
-      gatewayClass: "operator",
-      imageProfile: "operator",
       ownerUid: "uid-owner",
-      builderSlug: "claimed",
     });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/workspace owner/);
+    expect(res.body.error).toMatch(/disposable lifecycle/);
     expect(store.get("gateways/operator")).toBeUndefined();
   });
 });
@@ -1350,7 +1383,7 @@ describe("admin target resolution", () => {
     expect(res.status).toBe(404);
   });
 
-  it("uses the durable root class and its exact live revision for manual assignment", async () => {
+  it("rejects a manual owner-only target so the disposable lifecycle owns placement", async () => {
     const { app, store } = mkApp({
       ...seedServingGateway(
         "operator",
@@ -1370,13 +1403,11 @@ describe("admin target resolution", () => {
 
     const res = await request(app)
       .post("/customers/uid-alice/assign")
-      .send({ gatewayId: "operator" })
-      .expect(202);
+      .send({ gatewayId: "operator" });
 
-    expect(res.body).toMatchObject({ gatewayProfile: "operator" });
-    expect(store.get("gateways/operator/assignments/uid-alice")).toMatchObject({
-      gatewayId: "operator",
-    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/disposable lifecycle/);
+    expect(store.get("gateways/operator/assignments/uid-alice")).toBeUndefined();
   });
 
   it("does not use a legacy bare heartbeat doc when no runtime realization exists", async () => {
@@ -1627,52 +1658,17 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     expect(res.status).toBe(400);
   });
 
-  it("404s when a root config PATCH names a non-existent builder owner uid", async () => {
-    const { app } = mkApp(
-      seedNewSchemaGateway(
-        "bench",
-        sharedPayload(),
-        { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
-      ),
-    );
-    const res = await request(app)
-      .patch("/gateways/bench")
-      .send({ ownerUid: "uid-ghost", builderSlug: "ghost" });
-    expect(res.status).toBe(404);
-  });
-
-  it("requires ownerUid and builderSlug to change atomically on a dedicated gateway", async () => {
-    const { app } = mkApp(seedNewSchemaGateway(
-      "bench",
-      sharedPayload(),
-      { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
-    ));
+  it("rejects direct ownership PATCHes so they cannot create a standing owner gateway", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("bench", sharedPayload()));
 
     const res = await request(app)
       .patch("/gateways/bench")
-      .send({ ownerUid: "uid-new" });
+      .send({ gatewayClass: "operator", ownerUid: "uid-new", builderSlug: "new" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/ownerUid and builderSlug/);
-  });
-
-  it("rejects an atomic owner pair PATCH when the workspace belongs to another user", async () => {
-    const { app } = mkApp({
-      ...seedNewSchemaGateway(
-        "bench",
-        sharedPayload(),
-        { gatewayClass: "builder", ownerUid: "uid-old", builderSlug: "old" },
-      ),
-      "users/uid-new": { username: "new" },
-      "workspaces/claimed": { ownerUid: "uid-other", slug: "claimed" },
-    });
-
-    const res = await request(app)
-      .patch("/gateways/bench")
-      .send({ ownerUid: "uid-new", builderSlug: "claimed" });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/workspace owner/);
+    expect(res.body.error).toMatch(/disposable lifecycle/);
+    expect(res.body.fields).toEqual(["gatewayClass", "ownerUid", "builderSlug"]);
+    expect(store.get("gateways/bench")).toMatchObject({ gatewayClass: "shared" });
   });
 });
 

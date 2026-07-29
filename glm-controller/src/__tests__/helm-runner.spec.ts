@@ -165,22 +165,6 @@ describe("helm-runner helpers", () => {
     expect(args).not.toContain("env.mmInternalUrl=http://mattermost.octogee.svc.cluster.local:8065");
   });
 
-  it("passes protected availability as one class-scoped Helm value", () => {
-    const args = buildUpgradeArgs({
-      release: "octogee-gw-default",
-      chartPath: "/charts/octogee-gateway",
-      namespace: "octogee",
-      gatewayId: "default",
-      imageTag: "abc1234",
-      imageRepository: REPO,
-      upgradeTimeout: "10m",
-      gatewayClass: "shared",
-      availabilityProtected: true,
-    });
-
-    expect(args).toContain('availability.protectedClasses=["shared"]');
-  });
-
   it("clears a previous trial claim identity when the gateway returns to ownerless prewarm", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-trial-op-000001",

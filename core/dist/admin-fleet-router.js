@@ -1,5 +1,5 @@
 import { FieldValue, } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, defaultOperatorGatewayAccess, resolveUserGatewayShellState, OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, operatorGatewayServiceAccountName, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayShellState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -333,6 +333,8 @@ function activationPolicyGatewayId(input) {
                 ownerUid: asStringOrNull(gateway.ownerUid),
                 desiredStatus: projectDesiredStatus(gateway) ?? "invalid",
                 ready: asStringOrNull(effectiveHeartbeatDoc(candidate, gateway)?.data()?.status) === "ready",
+                disposable: isPlainRecord(gateway.allocation) &&
+                    gateway.allocation.kind === "disposable-builder",
             }
             : null,
     });
@@ -746,6 +748,7 @@ async function readGatewayRegistrationReadiness(db, gatewayId) {
     const runtime = await readDurableGatewayRuntime(db, gatewayId);
     return {
         registered: runtime !== null,
+        gatewayClass: runtime?.root.gatewayClass ?? null,
         status: runtime?.root.desiredStatus === "running"
             ? asStringOrNull(runtime.heartbeat?.status)
             : null,
@@ -1066,7 +1069,6 @@ export function projectDisposableFleetCapacity(gateways, builderRuntimes = [], p
     return {
         disposableInstances: disposables.length,
         stagedInstances: 0,
-        namedReservations: 0,
         byTier,
         parkedBuilders,
         byLifecycle,
@@ -1121,7 +1123,6 @@ function rollupFleetStats(gateways) {
 }
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT = "another operation is already pending or running for this gateway";
-const ERR_OWNER_USER_NOT_FOUND = "owner user not found";
 const ERR_USER_NOT_FOUND = "user not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ERR_BUILDER_MIGRATION_IN_FLIGHT = "a migration for this customer is pending or running";
@@ -1385,56 +1386,22 @@ function validateAddGatewaySizing(body) {
         ok: body.sizingTier ? { sizingTier: body.sizingTier } : {},
     };
 }
-function validateAddGatewayOwnerFields(body, gatewayClass) {
-    if (body.ownerUid !== undefined && !isNonEmptyString(body.ownerUid)) {
+function validateSharedGatewayCreate(body, gatewayClass) {
+    if (gatewayClass !== "shared") {
         return {
-            error: {
-                status: 400,
-                body: { error: "ownerUid must be a non-empty string" },
+            status: 400,
+            body: {
+                error: "owner-only gateways are created by the disposable lifecycle",
             },
         };
     }
-    if (body.builderSlug !== undefined && !isNonEmptyString(body.builderSlug)) {
+    if (body.ownerUid !== undefined || body.builderSlug !== undefined) {
         return {
-            error: {
-                status: 400,
-                body: { error: "builderSlug must be a non-empty string" },
-            },
+            status: 400,
+            body: { error: "shared gateway creation does not accept owner fields" },
         };
     }
-    if ((body.ownerUid !== undefined || body.builderSlug !== undefined) &&
-        gatewayClass === "shared") {
-        return {
-            error: {
-                status: 400,
-                body: {
-                    error: "dedicated gateway ownership requires gatewayClass=builder or gatewayClass=operator",
-                },
-            },
-        };
-    }
-    if (gatewayClass !== "shared" && body.ownerUid === undefined) {
-        return {
-            error: {
-                status: 400,
-                body: { error: "dedicated gateway requires ownerUid" },
-            },
-        };
-    }
-    if (body.builderSlug !== undefined && body.ownerUid === undefined) {
-        return {
-            error: {
-                status: 400,
-                body: { error: "builderSlug requires ownerUid" },
-            },
-        };
-    }
-    return {
-        ok: {
-            ...(body.ownerUid ? { ownerUid: body.ownerUid } : {}),
-            ...(body.builderSlug ? { builderSlug: body.builderSlug } : {}),
-        },
-    };
+    return null;
 }
 function validateAddGatewayBody(body) {
     const required = validateAddGatewayRequiredFields(body);
@@ -1447,9 +1414,9 @@ function validateAddGatewayBody(body) {
     const sizing = validateAddGatewaySizing(body);
     if ("error" in sizing)
         return sizing;
-    const owner = validateAddGatewayOwnerFields(body, gatewayClass);
-    if ("error" in owner)
-        return owner;
+    const ownershipError = validateSharedGatewayCreate(body, gatewayClass);
+    if (ownershipError)
+        return { error: ownershipError };
     const artifactError = validateArtifact(required.ok);
     if (artifactError)
         return { error: artifactError };
@@ -1460,7 +1427,6 @@ function validateAddGatewayBody(body) {
             gatewayClass,
             imageProfile: resolveGatewayImageProfile(profile.ok),
             ...sizing.ok,
-            ...owner.ok,
         },
     };
 }
@@ -1797,8 +1763,10 @@ function defaultGatewayUserDecision(input) {
     if (!currentGateway) {
         return { kind: "blocked", reason: "current-gateway-missing", currentGatewayId };
     }
-    if (currentGateway.gatewayClass !== "shared")
-        return { kind: "dedicated" };
+    if (currentGateway.gatewayClass !== "shared" &&
+        currentGateway.allocation?.kind === "disposable-builder") {
+        return { kind: "owned-runtime" };
+    }
     if (currentGatewayId === input.targetGatewayId)
         return { kind: "already-on-target" };
     if (input.pending?.toGatewayId === input.targetGatewayId) {
@@ -1850,7 +1818,7 @@ async function convergeDefaultGatewayChange(input) {
         enqueued: [],
         adopted: [],
         blocked: [],
-        dedicatedUntouched: 0,
+        ownedRuntimeUntouched: 0,
     };
     const users = [...usersSnap.docs].sort((a, b) => a.id.localeCompare(b.id));
     for (const user of users) {
@@ -1864,8 +1832,8 @@ async function convergeDefaultGatewayChange(input) {
         });
         if (decision.kind === "ignore" || decision.kind === "already-on-target")
             continue;
-        if (decision.kind === "dedicated") {
-            result.dedicatedUntouched += 1;
+        if (decision.kind === "owned-runtime") {
+            result.ownedRuntimeUntouched += 1;
             continue;
         }
         if (decision.kind === "blocked") {
@@ -2384,7 +2352,6 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
     "builderSlug",
     "openclawOverrides",
     "modelBrokerLimits",
-    "preemption",
 ];
 function mutableConfigPatchFromBody(body) {
     const patch = {};
@@ -2468,47 +2435,6 @@ function validateArtifact(artifact) {
     }
     return null;
 }
-async function validateGatewayConfigOwner(db, previous, next) {
-    if (next.gatewayClass !== "builder" && next.gatewayClass !== "operator") {
-        return null;
-    }
-    const candidates = new Set();
-    if (next.ownerUid && next.ownerUid !== previous.ownerUid) {
-        candidates.add(next.ownerUid);
-    }
-    for (const uid of candidates) {
-        const snap = await db.collection("users").doc(uid).get();
-        if (!snap.exists) {
-            return { status: 404, body: { error: ERR_OWNER_USER_NOT_FOUND, ownerUid: uid } };
-        }
-    }
-    if (next.ownerUid !== previous.ownerUid
-        || next.builderSlug !== previous.builderSlug) {
-        return validateBuilderWorkspaceOwner(db, next.ownerUid, next.builderSlug);
-    }
-    return null;
-}
-async function validateBuilderWorkspaceOwner(db, ownerUid, builderSlug) {
-    if (!builderSlug)
-        return builderWorkspaceOwnerError(ownerUid, builderSlug, undefined);
-    const workspace = await db.collection("workspaces").doc(builderSlug).get();
-    return builderWorkspaceOwnerError(ownerUid, builderSlug, workspace.exists ? workspace.data() : undefined);
-}
-function builderWorkspaceOwnerError(ownerUid, builderSlug, workspace) {
-    if (!ownerUid || !builderSlug) {
-        return { status: 400, body: { error: "dedicated gateway requires ownerUid and builderSlug" } };
-    }
-    return workspace?.ownerUid === ownerUid
-        ? null
-        : {
-            status: 400,
-            body: {
-                error: "builderSlug workspace owner does not match ownerUid",
-                builderSlug,
-                ownerUid,
-            },
-        };
-}
 function buildCreateGatewayConfig(args) {
     return {
         configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -2518,14 +2444,13 @@ function buildCreateGatewayConfig(args) {
         sizingTier: args.body.sizingTier ?? null,
         gcpProject: null,
         gatewayContainerSecurityContext: null,
-        serviceAccountName: args.serviceAccountName ?? null,
-        serviceAccount: args.serviceAccount ?? null,
-        operatorAccess: args.operatorAccess ?? null,
-        ownerUid: args.ownerUid ?? null,
-        builderSlug: args.builderSlug ?? null,
+        serviceAccountName: null,
+        serviceAccount: null,
+        operatorAccess: null,
+        ownerUid: null,
+        builderSlug: null,
         openclawOverrides: null,
         modelBrokerLimits: null,
-        preemption: null,
     };
 }
 function buildCreateArtifact(body) {
@@ -2613,14 +2538,15 @@ function buildDurableGatewayPatch(args) {
             },
         };
     }
-    const ownerUidPatched = Object.prototype.hasOwnProperty.call(args.body, "ownerUid");
-    const builderSlugPatched = Object.prototype.hasOwnProperty.call(args.body, "builderSlug");
-    if (args.current.gatewayClass !== "shared"
-        && ownerUidPatched !== builderSlugPatched) {
+    const lifecycleOwnedFields = ["gatewayClass", "ownerUid", "builderSlug"].filter((field) => Object.prototype.hasOwnProperty.call(args.body, field));
+    if (lifecycleOwnedFields.length > 0) {
         return {
             error: {
                 status: 400,
-                body: { error: "ownerUid and builderSlug must be updated together" },
+                body: {
+                    error: "gateway ownership is managed by the disposable lifecycle",
+                    fields: lifecycleOwnedFields,
+                },
             },
         };
     }
@@ -2804,73 +2730,6 @@ async function ensureGatewayCreateIsUnique(db, body) {
         };
     }
     return { ok: true };
-}
-async function resolveDedicatedGatewayOwner(opts) {
-    const { body } = opts;
-    const gatewayClass = resolveGatewayClass(body);
-    if ((gatewayClass !== "builder" && gatewayClass !== "operator") ||
-        body.ownerUid === undefined) {
-        return { ok: {} };
-    }
-    const ownerSnap = await opts.db.collection("users").doc(body.ownerUid).get();
-    if (!ownerSnap.exists) {
-        return {
-            error: {
-                status: 404,
-                body: {
-                    error: ERR_OWNER_USER_NOT_FOUND,
-                    ownerUid: body.ownerUid,
-                },
-            },
-        };
-    }
-    const userData = (ownerSnap.data() ?? {});
-    const builderSlug = body.builderSlug ?? resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
-    if (!builderSlug) {
-        return {
-            error: {
-                status: 400,
-                body: {
-                    error: "builderSlug is required when owner user has no resolvable workspace slug",
-                    ownerUid: body.ownerUid,
-                },
-            },
-        };
-    }
-    const workspaceOwnerError = await validateBuilderWorkspaceOwner(opts.db, body.ownerUid, builderSlug);
-    if (workspaceOwnerError)
-        return { error: workspaceOwnerError };
-    return {
-        ok: {
-            ownerUid: body.ownerUid,
-            builderSlug,
-        },
-    };
-}
-export function buildBuilderCandidates(opts) {
-    const assigned = new Set();
-    for (const doc of opts.gatewayRoots) {
-        const root = asDurableGatewayRoot(doc.data(), doc.id);
-        if (!root)
-            continue;
-        const ownerUid = asStringOrNull(root.ownerUid);
-        if (ownerUid)
-            assigned.add(ownerUid);
-    }
-    const candidates = opts.users.map((doc) => {
-        const data = doc.data();
-        return {
-            uid: doc.id,
-            username: asStringOrNull(data.username) ?? "",
-            email: asStringOrNull(data.email) ?? "",
-            slug: resolveCustomerSlug(data, opts.workspaceSlugsForUser),
-            assigned: assigned.has(doc.id),
-        };
-    });
-    candidates.sort((a, b) => (a.username || a.email).localeCompare(b.username || b.email, undefined, {
-        sensitivity: "base",
-    }));
-    return candidates;
 }
 async function accelerateScheduledCustomerErasure(opts) {
     const deletionId = asStringOrNull(opts.lifecycle.deletionId);
@@ -3173,17 +3032,6 @@ function gatewayCreationBodyError(body) {
         },
     };
 }
-function gatewayCreationRuntimeDefaults(gatewayClass, gatewayId, ownerUid) {
-    const defaults = {};
-    if (gatewayClass === "builder" || gatewayClass === "operator") {
-        defaults.operatorAccess = defaultOperatorGatewayAccess(ownerUid);
-    }
-    if (gatewayClass === "operator") {
-        defaults.serviceAccountName = operatorGatewayServiceAccountName(gatewayId);
-        defaults.serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
-    }
-    return defaults;
-}
 function respondToAddGatewayMutationError(error, res, gatewayId) {
     if (error instanceof GatewayAuthSecretProvisionError) {
         res.status(502).json({
@@ -3272,8 +3120,6 @@ async function performAddGatewayMutation(opts) {
                 gatewayClass: opts.gatewayClass,
                 ...(opts.imageProfile !== "standard" ? { imageProfile: opts.imageProfile } : {}),
                 ...(opts.body.sizingTier ? { sizingTier: opts.body.sizingTier } : {}),
-                ...(opts.owner.ownerUid ? { ownerUid: opts.owner.ownerUid } : {}),
-                ...(opts.owner.builderSlug ? { builderSlug: opts.owner.builderSlug } : {}),
             },
         });
         return { kind: "completed", operationId };
@@ -3706,6 +3552,13 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(404).json({ error: "target gateway not registered", gatewayId: toGatewayId });
                 return;
             }
+            if (target.gatewayClass !== "shared") {
+                res.status(400).json({
+                    error: "manual migration target must be a shared gateway",
+                    gatewayId: toGatewayId,
+                });
+                return;
+            }
             if (target.status !== "ready") {
                 res.status(409).json({
                     error: ERR_TARGET_GATEWAY_NOT_READY,
@@ -3909,23 +3762,6 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/builder-candidates", async (_req, res, next) => {
-        try {
-            const [usersSnap, gatewaySnap] = await Promise.all([
-                db.collection("users").get(),
-                db.collection(GATEWAYS_COLLECTION).get(),
-            ]);
-            const candidates = buildBuilderCandidates({
-                users: usersSnap.docs,
-                gatewayRoots: gatewaySnap.docs,
-                workspaceSlugsForUser: deps.workspaceSlugsForUser,
-            });
-            res.json({ candidates, generatedAt: new Date().toISOString() });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
     router.post("/customers/:uid/assign", 
     // eslint-disable-next-line complexity -- linear request validation and one repair fast-path; each branch returns its own operator-facing response.
     async (req, res, next) => {
@@ -3947,6 +3783,13 @@ export function addAdminFleetRoutes(router, deps) {
             if (!target) {
                 res.status(404).json({
                     error: ERR_GATEWAY_NOT_FOUND,
+                    gatewayId: targetGatewayId,
+                });
+                return;
+            }
+            if (target.root.gatewayClass !== "shared") {
+                res.status(400).json({
+                    error: "owner-only gateway placement is managed by the disposable lifecycle",
                     gatewayId: targetGatewayId,
                 });
                 return;
@@ -4249,17 +4092,6 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(uniqueness.error.status).json(uniqueness.error.body);
                 return;
             }
-            const owner = await resolveDedicatedGatewayOwner({
-                db,
-                body,
-                createdBy,
-                now,
-                workspaceSlugsForUser: deps.workspaceSlugsForUser,
-            });
-            if ("error" in owner) {
-                res.status(owner.error.status).json(owner.error.body);
-                return;
-            }
             const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
             if (!gatewayServiceAccount) {
                 res.status(500).json({
@@ -4269,16 +4101,10 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const gatewayClass = resolveGatewayClass(body);
             const imageProfile = resolveGatewayImageProfile(body);
-            const runtimeDefaults = gatewayCreationRuntimeDefaults(gatewayClass, body.gatewayId, owner.ok.ownerUid);
             const config = buildCreateGatewayConfig({
                 body,
                 gatewayClass,
                 imageProfile,
-                ownerUid: owner.ok.ownerUid,
-                builderSlug: owner.ok.builderSlug,
-                operatorAccess: runtimeDefaults.operatorAccess,
-                serviceAccountName: runtimeDefaults.serviceAccountName,
-                serviceAccount: runtimeDefaults.serviceAccount,
             });
             const artifact = buildCreateArtifact(body);
             let operationId;
@@ -4305,7 +4131,6 @@ export function addAdminFleetRoutes(router, deps) {
                         body,
                         gatewayClass,
                         imageProfile,
-                        owner: owner.ok,
                         config,
                         artifact,
                         createdBy,
@@ -4360,11 +4185,6 @@ export function addAdminFleetRoutes(router, deps) {
             });
             if ("error" in built) {
                 res.status(built.error.status).json(built.error.body);
-                return;
-            }
-            const ownerError = await validateGatewayConfigOwner(db, root, built.ok.config);
-            if (ownerError) {
-                res.status(ownerError.status).json(ownerError.body);
                 return;
             }
             const updatedBy = req.uid ?? "unknown";
@@ -5333,6 +5153,13 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
+            if (target.root.gatewayClass !== "shared") {
+                res.status(400).json({
+                    error: "owner-only gateway placement is managed by the disposable lifecycle",
+                    gatewayId: command.ok.gatewayId,
+                });
+                return;
+            }
             const targetStatus = builderPlacementTargetStatus(target);
             if (targetStatus !== null) {
                 res.status(409).json({
@@ -5536,6 +5363,13 @@ export function addAdminFleetRoutes(router, deps) {
             if (!target.registered) {
                 res.status(404).json({
                     error: "target gateway not registered",
+                    gatewayId: body.to,
+                });
+                return;
+            }
+            if (target.gatewayClass !== "shared") {
+                res.status(400).json({
+                    error: "manual migration target must be a shared gateway",
                     gatewayId: body.to,
                 });
                 return;

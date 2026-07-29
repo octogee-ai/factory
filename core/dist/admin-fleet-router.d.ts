@@ -168,7 +168,6 @@ export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gateway
 export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, builderRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectBuilderRuntime>>>, parkedBuilders?: number): {
     disposableInstances: number;
     stagedInstances: 0;
-    namedReservations: 0;
     byTier: Record<string, number>;
     parkedBuilders: number;
     byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number>;
@@ -210,21 +209,5 @@ export declare function validateRolloutBody(body: Partial<{
     ok: RolloutBodyOk;
 };
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
-export interface BuilderCandidate {
-    uid: string;
-    username: string;
-    email: string;
-    slug: string | null;
-    assigned: boolean;
-}
-interface BuilderCandidateDoc {
-    id: string;
-    data: () => Record<string, unknown>;
-}
-export declare function buildBuilderCandidates(opts: {
-    users: BuilderCandidateDoc[];
-    gatewayRoots: BuilderCandidateDoc[];
-    workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
-}): BuilderCandidate[];
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;
 export {};

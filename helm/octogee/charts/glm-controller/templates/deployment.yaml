@@ -89,8 +89,6 @@ spec:
                   key: secret_key
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
-            - name: PREEMPTION_HANDOFF_SWEEP_MS
-              value: {{ (.Values.preemptionHandoff).sweepMs | default "15000" | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_MS
               value: {{ (.Values.disposableGateway).idleMs | default "1800000" | quote }}
             # Single source of truth: parent `.Values.global.fleetControllerPort`.

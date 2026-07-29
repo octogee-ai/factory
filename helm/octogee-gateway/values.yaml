@@ -23,7 +23,7 @@ revisionId: ""
 
 ownerUid: ""
 
-# Dedicated builder/operator owner slug. Shared gateways leave this empty.
+# Owner-bound disposable builder/operator slug. Shared gateways leave this empty.
 # When present on builder/operator classes, the gateway restores durable
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw
 # starts.
@@ -46,7 +46,7 @@ serviceAccount:
   annotations: {}
 operatorAccess:
   # Locked by default. Cowboy may enable this only after a customer has a
-  # tenant-owned operator gateway boundary (billing/reservation + scoped
+  # tenant-owned disposable operator runtime (activation lifecycle + scoped
   # platform credentials) and the app/user mirror has been updated.
   shellsEnabled: false
   controlUiEnabled: false
@@ -74,9 +74,6 @@ replicas: 1
 # maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
 # surge for stable-name gateway releases (GATEWAY-SIMPLE-ROLL-SPEC).
 rollStrategy: recreate
-
-availability:
-  protectedClasses: []
 
 # Spot/preemption drain budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below
@@ -284,7 +281,6 @@ probes:
 
 pdb:
   enabled: true
-  minAvailable: 1
   maxUnavailable: 1
 
 

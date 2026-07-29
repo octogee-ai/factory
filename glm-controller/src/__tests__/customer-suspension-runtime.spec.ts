@@ -10,7 +10,6 @@ import {
   listOpenStripeCheckoutSessionIds,
   listLiveStripeSubscriptionIds,
   listStripeCustomerIdsForUid,
-  pauseOwnedDedicatedGateways,
   revokeOwnerModelBrokerTokens,
 } from "../lib/customer-ops/customer-suspension-runtime.js";
 
@@ -320,39 +319,4 @@ describe("Firestore suspension fences", () => {
     }, { merge: true });
   });
 
-  it("pauses every owner-only dedicated gateway even when the customer is currently on shared", async () => {
-    const dedicatedSet = vi.fn(async () => undefined);
-    const sharedSet = vi.fn(async () => undefined);
-    const coOwnedSet = vi.fn(async () => undefined);
-    const db = {
-      collection: () => ({
-        where: () => ({
-          get: async () => ({
-            docs: [
-              {
-                data: () => ({ ownerUid: "uid-1", coOwnerUids: [], gatewayClass: "operator" }),
-                ref: { set: dedicatedSet },
-              },
-              {
-                data: () => ({ ownerUid: "uid-1", coOwnerUids: [], gatewayClass: "shared" }),
-                ref: { set: sharedSet },
-              },
-              {
-                data: () => ({ ownerUid: "uid-1", coOwnerUids: ["uid-2"], gatewayClass: "builder" }),
-                ref: { set: coOwnedSet },
-              },
-            ],
-          }),
-        }),
-      }),
-    };
-    await pauseOwnedDedicatedGateways(db as never, "uid-1", 70);
-    expect(dedicatedSet).toHaveBeenCalledWith({
-      desiredStatus: "paused",
-      updatedAt: 70,
-      updatedBy: "customer-deletion-lifecycle",
-    }, { merge: true });
-    expect(sharedSet).not.toHaveBeenCalled();
-    expect(coOwnedSet).not.toHaveBeenCalled();
-  });
 });

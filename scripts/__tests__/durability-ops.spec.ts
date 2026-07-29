@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildRecycleOperation,
-  buildMigrateOperation,
   classifyOperation,
   isTerminal,
 } from "../lib/durability-ops.js";
@@ -30,42 +29,6 @@ describe("buildRecycleOperation", () => {
   it("carries only gatewayId in input — no credential material", () => {
     const op = buildRecycleOperation({ id: "x", gatewayId: "default", createdBy: "h", now: 0 });
     expect(Object.keys(op.input)).toEqual(["gatewayId"]);
-  });
-});
-
-describe("buildMigrateOperation", () => {
-  it("builds a pending migrate-customer op relocating uid to the target gateway", () => {
-    const op = buildMigrateOperation({
-      id: "dur-migrate-xyz",
-      uid: "u-fixture",
-      fromGatewayId: "default",
-      toGatewayId: "operator-1",
-      createdBy: "durability-harness",
-      now: 1_700_000_000_000,
-    });
-    expect(op).toMatchObject({
-      id: "dur-migrate-xyz",
-      kind: "migrate-customer",
-      status: "pending",
-      createdBy: "durability-harness",
-      createdAt: 1_700_000_000_000,
-      startedAt: null,
-      completedAt: null,
-      input: { uid: "u-fixture", fromGatewayId: "default", toGatewayId: "operator-1" },
-    });
-    expect(op.steps).toEqual([]);
-  });
-
-  it("carries only uid + source/target gateway ids in input — no credential material", () => {
-    const op = buildMigrateOperation({
-      id: "x",
-      uid: "u",
-      fromGatewayId: "operator-1",
-      toGatewayId: "default",
-      createdBy: "h",
-      now: 0,
-    });
-    expect(Object.keys(op.input).sort()).toEqual(["fromGatewayId", "toGatewayId", "uid"]);
   });
 });
 

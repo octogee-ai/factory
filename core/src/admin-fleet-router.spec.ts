@@ -483,7 +483,6 @@ describe("projectDisposableFleetCapacity", () => {
     expect(projectDisposableFleetCapacity(gateways)).toEqual({
       disposableInstances: 1,
       stagedInstances: 0,
-      namedReservations: 0,
       byTier: { xs: 1 },
       parkedBuilders: 0,
       byLifecycle: {
@@ -847,7 +846,6 @@ describe("fleet gateway projection", () => {
     expect(fleet.body.disposableCapacity).toEqual({
       disposableInstances: 1,
       stagedInstances: 0,
-      namedReservations: 0,
       byTier: { xs: 1 },
       parkedBuilders: 1,
       byLifecycle: {
@@ -1859,7 +1857,7 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("PATCH validates the target and queues active shared Builders without moving dedicated Builders", async () => {
+  it("PATCH validates the target and queues shared Builders without moving active disposable Builders", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "gw-old" },
       users: {
@@ -1867,9 +1865,9 @@ describe("onboarding placement (post-cohorts)", () => {
           username: "shared-builder",
           provisioning: { openclaw: { slug: "shared-builder", gatewayId: "gw-old" } },
         },
-        "uid-dedicated": {
-          username: "dedicated-builder",
-          provisioning: { openclaw: { slug: "dedicated-builder", gatewayId: "gw-operator" } },
+        "uid-active": {
+          username: "active-builder",
+          provisioning: { openclaw: { slug: "active-builder", gatewayId: "run-active" } },
         },
         "uid-adopted": {
           username: "adopted-builder",
@@ -1900,11 +1898,25 @@ describe("onboarding placement (post-cohorts)", () => {
           gatewayClass: "builder",
           ownerUid: "uid-builder",
           builderSlug: "builder",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-builder",
+            generation: 1,
+            claimedByUid: "uid-builder",
+          },
         }),
-        "gw-operator": durableGatewayRoot("gw-operator", {
+        "run-active": durableGatewayRoot("run-active", {
           gatewayClass: "operator",
-          ownerUid: "uid-dedicated",
-          builderSlug: "dedicated-builder",
+          ownerUid: "uid-active",
+          builderSlug: "active-builder",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-active",
+            generation: 1,
+            claimedByUid: "uid-active",
+          },
         }),
       },
       operations: {
@@ -1944,7 +1956,7 @@ describe("onboarding placement (post-cohorts)", () => {
       enqueued: [{ uid: "uid-shared", operationId: "operation-1" }],
       adopted: [{ uid: "uid-adopted", operationId: "existing-migration" }],
       blocked: [],
-      dedicatedUntouched: 1,
+      ownedRuntimeUntouched: 1,
     });
     expect(state.operations["operation-1"]).toMatchObject({
       kind: "migrate-customer",
@@ -1967,6 +1979,58 @@ describe("onboarding placement (post-cohorts)", () => {
         target: { uid: "uid-shared", gatewayId: "gw-new" },
       }),
     ]);
+  });
+
+  it("moves a legacy non-disposable owner root to the new shared default", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "gw-old" },
+      users: {
+        "uid-legacy": {
+          username: "legacy-builder",
+          provisioning: { openclaw: { slug: "legacy-builder", gatewayId: "legacy-owner" } },
+        },
+      },
+      glmGateways: {
+        "gw-new": {
+          docKind: "runtime",
+          gatewayId: "gw-new",
+          release: 1,
+          lifecycle: "serving",
+          helm: { imageRepository: "gateway", imageTag: "1234567" },
+          heartbeat: { status: "ready", mountedCustomers: [] },
+          lastError: { message: null, at: null },
+        },
+      },
+      gateways: {
+        "gw-old": durableGatewayRoot("gw-old"),
+        "gw-new": durableGatewayRoot("gw-new"),
+        "legacy-owner": durableGatewayRoot("legacy-owner", {
+          gatewayClass: "operator",
+          ownerUid: "uid-legacy",
+          builderSlug: "legacy-builder",
+        }),
+      },
+    });
+
+    const response = await request(app)
+      .patch("/onboarding-placement")
+      .send({ defaultGatewayId: "gw-new" })
+      .expect(200);
+
+    expect(response.body.defaultChange).toMatchObject({
+      enqueued: [{ uid: "uid-legacy", operationId: "operation-1" }],
+      ownedRuntimeUntouched: 0,
+    });
+    expect(state.operations["operation-1"]).toMatchObject({
+      kind: "migrate-customer",
+      input: {
+        uid: "uid-legacy",
+        builderSlug: "legacy-builder",
+        fromGatewayId: "legacy-owner",
+        toGatewayId: "gw-new",
+        source: "platform-default-change",
+      },
+    });
   });
 
   it("ignores retired override data and exposes no override API", async () => {
@@ -1999,7 +2063,7 @@ describe("onboarding placement (post-cohorts)", () => {
     await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(404);
   });
 
-  it("does not report pointer drift for an operator-owned dedicated gateway outside onboarding placement", async () => {
+  it("does not report pointer drift for an active disposable operator runtime outside onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default-blue" },
       users: {
@@ -2031,6 +2095,13 @@ describe("onboarding placement (post-cohorts)", () => {
           desiredStatus: "running",
           ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-one",
+            generation: 1,
+            claimedByUid: "uid-ceckert",
+          },
           // Readiness/mounted telemetry relocated to glmGateways/{id}.heartbeat
           // (cutover step 2); the flat gateways/{id} writer is contracted.
           heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
@@ -2055,7 +2126,7 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("targets the Platform default when a stale dedicated assignment has no live entitlement", async () => {
+  it("targets the Platform default when a stale owner-runtime assignment has no live lease", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default-blue" },
       users: {
@@ -2072,6 +2143,13 @@ describe("onboarding placement (post-cohorts)", () => {
           desiredStatus: "running",
           ownerUid: "uid-stale",
           builderSlug: "stale",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-stale",
+            generation: 1,
+            claimedByUid: "uid-stale",
+          },
           heartbeat: { status: "ready", mountedCustomers: ["stale"] },
         },
       },

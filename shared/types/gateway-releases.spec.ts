@@ -303,7 +303,6 @@ describe("classifyGatewayField", () => {
   it("classifies every gateway-doc lifecycle field from the spec as gateway-mutable", () => {
     for (const field of [
       "desiredStatus",
-      "preemptionHandoff",
       "liveRelease",
       "retireAfter",
     ]) {

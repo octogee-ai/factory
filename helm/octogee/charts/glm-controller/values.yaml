@@ -78,8 +78,5 @@ backendConfig:
     path: /healthz
     port: 8080
 
-preemptionHandoff:
-  sweepMs: "15000"
-
 disposableGateway:
   idleMs: "1800000"

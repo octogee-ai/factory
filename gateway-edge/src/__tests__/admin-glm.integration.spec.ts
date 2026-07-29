@@ -771,19 +771,12 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     }
   });
 
-  it("persists sizingTier and profile when supplied in the body", async () => {
-    usersDocs["uid-operator"] = {
-      username: "operator",
-      provisioning: { openclaw: { slug: "operator" } },
-    };
-    workspacesDocs.operator = { ownerUid: "uid-operator", slug: "operator" };
+  it("persists sizingTier for a shared gateway", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "created-operator",
+      gatewayId: "created-shared",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
-      profile: "operator",
-      ownerUid: "uid-operator",
       sizingTier: "l",
     });
     expect(res.status).toBe(202);
@@ -791,106 +784,47 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       (c) => c.collection === "gateways" && c.op === "doc.set",
     );
     expect(gwWrite?.data).toMatchObject({
-      profile: "operator",
-      gatewayClass: "operator",
-      imageProfile: "operator",
-      sizingTier: "l",
-      operatorAccess: {
-        shellsEnabled: true,
-        reason: "owned-runtime-gateway",
-      },
-      serviceAccountName: "octogee-gw-created-operator",
-      serviceAccount: {
-        create: true,
-      },
-    });
-  });
-
-  it("reserves an operator gateway for a real owner and enables BuilderShell", async () => {
-    usersDocs["uid-jack"] = {
-      username: "jack",
-      provisioning: { openclaw: { slug: "jack" } },
-    };
-    workspacesDocs.jack = { ownerUid: "uid-jack", slug: "jack" };
-    const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "jack",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
-      profile: "operator",
-      ownerUid: "uid-jack",
-    });
-    expect(res.status).toBe(202);
-
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite?.data).toMatchObject({
-      gatewayId: "jack",
-      profile: "operator",
-      ownerUid: "uid-jack",
-      builderSlug: "jack",
-      operatorAccess: {
-        shellsEnabled: true,
-        reason: "owned-runtime-gateway",
-      },
-    });
-    expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
-
-    const opWrite = commandOperationCall();
-    expect(opWrite?.data?.input).toMatchObject({
-      gatewayId: "jack",
-      profile: "operator",
-      ownerUid: "uid-jack",
-      builderSlug: "jack",
-    });
-  });
-
-  it("creates a builder-class standard gateway for a real owner with runtime access state", async () => {
-    usersDocs["uid-jack"] = {
-      username: "jack",
-      provisioning: { openclaw: { slug: "jack" } },
-    };
-    workspacesDocs.jack = { ownerUid: "uid-jack", slug: "jack" };
-    const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "jack",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
-      gatewayClass: "builder",
-      ownerUid: "uid-jack",
-    });
-    expect(res.status).toBe(202);
-
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite?.data).toMatchObject({
-      gatewayId: "jack",
-      gatewayClass: "builder",
-      ownerUid: "uid-jack",
-      builderSlug: "jack",
-      operatorAccess: {
-        shellsEnabled: true,
-        reason: "owned-runtime-gateway",
-      },
-    });
-    expect(gwWrite?.data).toMatchObject({
+      profile: null,
+      gatewayClass: "shared",
       imageProfile: "standard",
+      sizingTier: "l",
+      operatorAccess: null,
       serviceAccountName: null,
-    });
-    expect(gwWrite?.data).not.toHaveProperty("operatorReservation");
-
-    const opWrite = commandOperationCall();
-    expect(opWrite?.data?.input).toMatchObject({
-      gatewayId: "jack",
-      gatewayClass: "builder",
-      ownerUid: "uid-jack",
-      builderSlug: "jack",
+      serviceAccount: null,
     });
   });
 
-  it("rejects builder-class gateways without an owner before side effects", async () => {
+  it("rejects manually creating an owner operator gateway before side effects", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "jack",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      profile: "operator",
+      ownerUid: "uid-jack",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(provisionerCalls).toEqual([]);
+    expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
+  });
+
+  it("rejects manually creating an owner builder gateway before side effects", async () => {
+    const app = buildApp();
+    const res = await request(app).post("/api/admin/gateways").send({
+      gatewayId: "jack",
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: "abc1234",
+      gatewayClass: "builder",
+      ownerUid: "uid-jack",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(provisionerCalls).toEqual([]);
+    expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
+  });
+
+  it("rejects manually creating owner gateways without an owner before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
@@ -899,7 +833,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayClass: "builder",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/ownerUid/);
+    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
@@ -916,7 +850,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/gatewayClass=builder or gatewayClass=operator/);
+    expect(res.body.error).toMatch(/shared gateway creation does not accept owner fields/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
@@ -924,7 +858,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(gwWrite).toBeUndefined();
   });
 
-  it("rejects reservations for missing owner users before provisioning gateway auth", async () => {
+  it("rejects owner gateway creation before looking up a supplied owner", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "ghost",
@@ -933,8 +867,8 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       profile: "operator",
       ownerUid: "uid-ghost",
     });
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/owner user/i);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
@@ -2040,7 +1974,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     });
   });
 
-  it("does not grant shell access when assigning to an operator-profile gateway", async () => {
+  it("rejects assigning a Builder to an owner gateway", async () => {
     seedDurableGateway("gw-operator", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
@@ -2062,7 +1996,8 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     const res = await request(app)
       .post("/api/admin/customers/uid-dave/assign")
       .send({ gatewayId: "gw-operator" });
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/owner-only gateway placement is managed by the disposable lifecycle/);
 
     const grant = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.update" && c.docId === "gw-operator",
@@ -2071,11 +2006,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     const userUpdate = calls.find(
       (c) => c.collection === "users" && c.op === "doc.update" && c.docId === "uid-dave",
     );
-    expect(userUpdate?.data).toMatchObject({
-      "provisioning.openclaw.gatewayId": "gw-operator",
-      "provisioning.openclaw.gatewayProfile": "operator",
-      "provisioning.openclaw.shellsEnabled": false,
-    });
+    expect(userUpdate).toBeUndefined();
   });
 
   it("returns 400 when gatewayId is missing", async () => {

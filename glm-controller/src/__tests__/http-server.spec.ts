@@ -905,7 +905,7 @@ describe("createHttpServer — admin gateway routes", () => {
     ).not.toHaveProperty("targetGatewayId");
   });
 
-  it("does not wake a legacy paused dedicated gateway when recording demand", async () => {
+  it("does not wake a legacy paused owner runtime when recording demand", async () => {
     store.users["uid-alice"] = {
       username: "alice",
       builderSubscription: { tier: "pro", status: "active" },

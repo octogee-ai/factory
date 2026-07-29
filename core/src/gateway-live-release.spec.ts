@@ -419,9 +419,6 @@ describe("gateway durable configuration authorization", () => {
     expect(isGatewayMutableConfig(mutableConfig({ ownerUid: null }))).toBe(false);
     expect(isGatewayMutableConfig(mutableConfig({ coOwnerUids: [""] }))).toBe(false);
     expect(
-      isGatewayMutableConfig(mutableConfig({ preemption: { warmTargetGatewayId: "" } })),
-    ).toBe(false);
-    expect(
       isGatewayMutableConfig(mutableConfig({ modelBrokerLimits: { spendWeekUsd: -1 } })),
     ).toBe(false);
     expect(isGatewayMutableConfig({ ...mutableConfig(), byosub: {} })).toBe(false);

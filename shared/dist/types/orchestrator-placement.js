@@ -32,6 +32,7 @@ export function resolveContinuousBuilderPlacement(input) {
         gateway.gatewayId === ownedGatewayId &&
         gateway.gatewayClass !== "shared" &&
         gateway.ownerUid === input.uid &&
+        gateway.disposable === true &&
         gateway.desiredStatus === "running" &&
         input.currentGatewayId === ownedGatewayId;
     return {

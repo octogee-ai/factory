@@ -22,7 +22,7 @@ export interface EraseCustomerDeps {
   deleteStripeCustomer: (customerId: string) => Promise<void>;
   discoverStripeCustomerIds: (uid: string) => Promise<string[]>;
   persistStripeCustomerIds: (deletionId: string, customerIds: string[]) => Promise<void>;
-  ensureDedicatedGatewayRetired: (
+  ensureOwnedGatewayRetired: (
     cleanup: CustomerCleanupContext,
     deletionId: string,
   ) => Promise<"not-owned" | "retirement-pending" | "retired">;
@@ -184,18 +184,18 @@ async function runEraseCustomer(
     const stripeFailure = await eraseStripeCustomers(loaded.context, ctx, deps);
     if (stripeFailure) return stripeFailure;
 
-    const retirement = await deps.ensureDedicatedGatewayRetired(cleanup, deletionId);
+    const retirement = await deps.ensureOwnedGatewayRetired(cleanup, deletionId);
     if (retirement === "retirement-pending") {
-      await report(ctx, deps, { name: "retire-dedicated-gateway", status: "running" });
+      await report(ctx, deps, { name: "retire-owned-gateway", status: "running" });
       return {
         steps: [],
         success: false,
-        error: "dedicated gateway retirement pending",
+        error: "owned gateway retirement pending",
         output: { retirementFencePending: { deletionId } },
       };
     }
     await report(ctx, deps, {
-      name: "retire-dedicated-gateway",
+      name: "retire-owned-gateway",
       status: retirement === "not-owned" ? "skipped" : "done",
     });
 

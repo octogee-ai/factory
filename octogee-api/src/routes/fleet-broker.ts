@@ -550,13 +550,6 @@ function isDurableGatewayRoot(
   );
 }
 
-function warmTargetGatewayId(data: GatewayMutableConfig): string | null {
-  const warmTargetGatewayId = data.preemption?.warmTargetGatewayId;
-  return typeof warmTargetGatewayId === "string" && warmTargetGatewayId.length > 0
-    ? warmTargetGatewayId
-    : null;
-}
-
 function isProvisioningStatus(value: unknown): value is Exclude<FleetBrokerProvisioningStatus, ""> {
   return value === "provisioning" || value === "complete";
 }
@@ -1732,42 +1725,6 @@ function installGatewayOpsRoutes(
           { merge: true },
         );
 
-        const gatewayClass = gatewayData.gatewayClass;
-        const targetGatewayId = warmTargetGatewayId(gatewayData);
-        if (
-          event.phase === "started" &&
-          (gatewayClass === "builder" || gatewayClass === "operator") &&
-          targetGatewayId
-        ) {
-          txn.set(
-            gatewayRef,
-            {
-              preemptionHandoff: {
-                status: "requested",
-                requestedAt: FieldValue.serverTimestamp(),
-                sourceGatewayId: bound.gatewayId,
-                targetGatewayId,
-                reason: "spot-prestop",
-                gatewayClass,
-              },
-            },
-            { merge: true },
-          );
-        }
-        const hasExistingHandoff =
-          typeof gatewayData.preemptionHandoff?.status === "string";
-        if (event.phase === "completed" && (targetGatewayId || hasExistingHandoff)) {
-          txn.set(
-            gatewayRef,
-            {
-              preemptionHandoff: {
-                flushCompletedAt: FieldValue.serverTimestamp(),
-                flushOk: event.result?.ok === true,
-              },
-            },
-            { merge: true },
-          );
-        }
         return true;
       });
       if (!accepted) {

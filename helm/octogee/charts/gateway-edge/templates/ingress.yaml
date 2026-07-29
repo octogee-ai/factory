@@ -160,13 +160,6 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/builder-candidates
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $glm }}
-                port:
-                  name: http
           - path: /api/admin/customer-distribution
             pathType: ImplementationSpecific
             backend:

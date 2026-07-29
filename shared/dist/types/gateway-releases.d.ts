@@ -1,5 +1,5 @@
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
-import type { GatewayPreemptionHandoffSpec, ManagedBy } from "./glm.js";
+import type { ManagedBy } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export type GatewayLifecycleStatus = "running" | "paused" | "retired";
@@ -27,7 +27,6 @@ export interface GatewayDoc {
     liveRelease: number | null;
     desiredStatus: GatewayLifecycleStatus;
     managedBy?: ManagedBy;
-    preemptionHandoff?: GatewayPreemptionHandoffSpec | null;
     retireAfter?: number | null;
     retirementVersion?: number;
     retirementClaim?: GatewayRetirementClaim | null;
@@ -156,7 +155,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "preemption", "allocation", "desiredStatus", "managedBy", "preemptionHandoff", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "managedBy", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;

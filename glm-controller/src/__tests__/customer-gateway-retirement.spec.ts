@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ensureOwnedDedicatedGatewaysRetired } from "../lib/customer-ops/customer-gateway-retirement.js";
+import { ensureOwnedGatewaysRetired } from "../lib/customer-ops/customer-gateway-retirement.js";
 
 interface Root {
   ownerUid: string | null;
   gatewayClass: "shared" | "builder" | "operator";
   desiredStatus: "running" | "paused" | "retired";
   managedBy?: "operator";
+  allocation?: { kind: string };
 }
 
 function harness(
@@ -55,14 +56,19 @@ function harness(
 }
 
 describe("owned customer gateway retirement", () => {
-  it("retires the owned Operator gateway while the user's current placement is shared", async () => {
+  it("retires the owned disposable Operator gateway while the user's current placement is shared", async () => {
     const { db } = harness({
       default: { ownerUid: null, gatewayClass: "shared", desiredStatus: "running" },
-      "builder-alice": { ownerUid: "uid-1", gatewayClass: "operator", desiredStatus: "running" },
+      "builder-alice": {
+        ownerUid: "uid-1",
+        gatewayClass: "operator",
+        desiredStatus: "running",
+        allocation: { kind: "disposable-builder" },
+      },
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
-    await expect(ensureOwnedDedicatedGatewaysRetired({
+    await expect(ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -78,11 +84,16 @@ describe("owned customer gateway retirement", () => {
 
   it("stamps customer-deletion retirement work as automatic", async () => {
     const { db } = harness({
-      "builder-alice": { ownerUid: "uid-1", gatewayClass: "operator", desiredStatus: "running" },
+      "builder-alice": {
+        ownerUid: "uid-1",
+        gatewayClass: "operator",
+        desiredStatus: "running",
+        allocation: { kind: "disposable-builder" },
+      },
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
-    await ensureOwnedDedicatedGatewaysRetired({
+    await ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -95,17 +106,46 @@ describe("owned customer gateway retirement", () => {
     }));
   });
 
+  it("retires a disposable root during suspension cleanup", async () => {
+    const { db } = harness({
+      "run-alice": {
+        ownerUid: "uid-1",
+        gatewayClass: "operator",
+        desiredStatus: "running",
+        allocation: { kind: "disposable-builder" },
+      },
+    });
+    const claimRetirement = vi.fn(async () => ({ version: 1 }));
+
+    await expect(ensureOwnedGatewaysRetired({
+      db: db as never,
+      uid: "uid-1",
+      deletionId: "delete-1",
+      now: 100,
+      claimRetirement: claimRetirement as never,
+    })).resolves.toBe("retirement-pending");
+
+    expect(claimRetirement).toHaveBeenCalledTimes(1);
+    expect(claimRetirement).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "run-alice",
+    }));
+  });
 
   it("deletes every durable gateway root only after its retirement operation succeeds", async () => {
     const operationId = "delete-retire-delete-1-builder-alice";
     const { db, deleted } = harness(
       {
-        "builder-alice": { ownerUid: "uid-1", gatewayClass: "operator", desiredStatus: "retired" },
+        "builder-alice": {
+          ownerUid: "uid-1",
+          gatewayClass: "operator",
+          desiredStatus: "retired",
+          allocation: { kind: "disposable-builder" },
+        },
       },
       { [operationId]: { status: "succeeded", origin: "automatic" } },
     );
 
-    await expect(ensureOwnedDedicatedGatewaysRetired({
+    await expect(ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -128,12 +168,13 @@ describe("owned customer gateway retirement", () => {
           gatewayClass: "operator",
           desiredStatus: "retired",
           managedBy: "operator",
+          allocation: { kind: "disposable-builder" },
         },
       },
       { [operationId]: { status: "succeeded", origin: "automatic" } },
     );
 
-    await expect(ensureOwnedDedicatedGatewaysRetired({
+    await expect(ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -153,12 +194,13 @@ describe("owned customer gateway retirement", () => {
           gatewayClass: "operator",
           desiredStatus: "retired",
           managedBy: "operator",
+          allocation: { kind: "disposable-builder" },
         },
       },
       { [operationId]: { status: "succeeded" } },
     );
 
-    await expect(ensureOwnedDedicatedGatewaysRetired({
+    await expect(ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -169,13 +211,13 @@ describe("owned customer gateway retirement", () => {
     expect(deleted).toEqual(["gateways/builder-alice", `glmOperations/${operationId}`]);
   });
 
-  it("leaves shared gateways alone even if malformed ownership data points at the customer", async () => {
+  it("leaves a shared gateway alone even if malformed ownership data points at the customer", async () => {
     const { db } = harness({
       default: { ownerUid: "uid-1", gatewayClass: "shared", desiredStatus: "running" },
     });
     const claimRetirement = vi.fn();
 
-    await expect(ensureOwnedDedicatedGatewaysRetired({
+    await expect(ensureOwnedGatewaysRetired({
       db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
@@ -183,5 +225,28 @@ describe("owned customer gateway retirement", () => {
       claimRetirement: claimRetirement as never,
     })).resolves.toBe("not-owned");
     expect(claimRetirement).not.toHaveBeenCalled();
+  });
+
+  it("retires a legacy owner root without a disposable allocation", async () => {
+    const { db } = harness({
+      "legacy-operator": {
+        ownerUid: "uid-1",
+        gatewayClass: "operator",
+        desiredStatus: "running",
+      },
+    });
+    const claimRetirement = vi.fn(async () => ({ version: 1 }));
+
+    await expect(ensureOwnedGatewaysRetired({
+      db: db as never,
+      uid: "uid-1",
+      deletionId: "delete-1",
+      now: 100,
+      claimRetirement: claimRetirement as never,
+    })).resolves.toBe("retirement-pending");
+
+    expect(claimRetirement).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "legacy-operator",
+    }));
   });
 });

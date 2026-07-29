@@ -66,11 +66,10 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig({ ...validConfig(), byosub: {} })).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null }))).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ builderSlug: null }))).toBe(false);
-    expect(
-      isGatewayMutableConfig(
-        validConfig({ preemption: { warmTargetGatewayId: "" } }),
-      ),
-    ).toBe(false);
+    expect(isGatewayMutableConfig({
+      ...validConfig(),
+      preemption: { warmTargetGatewayId: "owner-warm" },
+    })).toBe(false);
   });
 
   it("projects only an empty retired co-owner mirror out of a desired-root read", () => {
