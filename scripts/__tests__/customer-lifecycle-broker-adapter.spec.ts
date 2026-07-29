@@ -444,7 +444,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("restarts the customer Mattermost monitor after applying changed channel bindings", async () => {
+  it("relies on config hot reload after applying changed channel bindings", async () => {
     const events: string[] = [];
     patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");
@@ -487,18 +487,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
 
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(events).toEqual(["config-patch", "channels-stop", "channels-start"]);
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(events).toEqual(["config-patch"]);
   });
 
-  it("waits for the lifecycle config.changed hash before restarting Mattermost monitors", async () => {
+  it("waits for the lifecycle config.changed hash before completing the changed patch", async () => {
     const events: string[] = [];
     let publishConfigChanged: (() => void) | undefined;
     const configChanged = new Promise<void>((resolve) => {
@@ -563,12 +557,9 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual([
-      "config-persisted",
-      "config-changed",
-      "channels-stop",
-      "channels-start",
-    ]);
+    expect(events).toEqual(["config-persisted", "config-changed"]);
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
   });
@@ -662,6 +653,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         return { channel, accountId, started: true as const };
       }),
     } as unknown as GatewayRpcClient;
+    patchMocks.applyConfigPatch.mockResolvedValueOnce({
+      mode: "rpc",
+      attempts: 1,
+      noop: true,
+    });
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
       rpc,

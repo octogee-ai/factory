@@ -416,7 +416,7 @@ async function applyAddCustomerConfigPatch(
       options?: { replacePaths?: readonly string[] },
     ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
   };
-  await applyConfigPatch(
+  const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
@@ -461,10 +461,12 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
-    accountId,
-    ...Object.keys(projectAccounts),
-  ]);
+  if (configPatch.noop) {
+    await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
+      accountId,
+      ...Object.keys(projectAccounts),
+    ]);
+  }
   return {
     elapsedMs: Date.now() - startedAt,
     ...(brokerSnapshot
