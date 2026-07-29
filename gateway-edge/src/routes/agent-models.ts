@@ -120,7 +120,7 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
     res.json({
       modelAccess: plan.modelAccess,
       tier: plan.tier,
-      builderTools: plan.builderTier !== null || plan.tier === "builder" || plan.tier === "operator",
+      builderTools: plan.builderTools,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
       byosub: hasActiveByosub(sysData),
       catalog: catalogPayload(),
