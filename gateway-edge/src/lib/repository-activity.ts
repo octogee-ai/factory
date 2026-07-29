@@ -86,9 +86,13 @@ function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function dayStartUtc(day: string): string {
+  return `${day}T00:00:00Z`;
+}
+
 function rangeBounds(range: RepositoryActivityRange): { since: number; until: number } {
-  const since = Date.parse(`${range.since}T00:00:00Z`);
-  const until = Date.parse(`${range.until}T00:00:00Z`);
+  const since = Date.parse(dayStartUtc(range.since));
+  const until = Date.parse(dayStartUtc(range.until));
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) {
     throw new Error(`Invalid repository activity range: ${range.since}..${range.until}`);
   }
@@ -207,7 +211,7 @@ function githubActivityApi(
           githubRepoUrl(
             target.org,
             target.repoName,
-            `/commits?since=${range.since}T00:00:00Z&until=${range.until}T00:00:00Z&per_page=${PAGE_SIZE}&page=${page}`,
+            `/commits?since=${dayStartUtc(range.since)}&until=${dayStartUtc(range.until)}&per_page=${PAGE_SIZE}&page=${page}`,
           ),
           token,
         ));
@@ -221,7 +225,7 @@ function githubActivityApi(
           githubRepoUrl(
             target.org,
             target.repoName,
-            `/issues?state=all&since=${encodeURIComponent(`${range.since}T00:00:00Z`)}` +
+            `/issues?state=all&since=${encodeURIComponent(dayStartUtc(range.since))}` +
               `&per_page=${PAGE_SIZE}&page=${page}`,
           ),
           token,
@@ -281,7 +285,7 @@ function giteaActivityApi(
       const raw = await collectPages(`${repo} merged pull requests`, (page) =>
         request(
           `${target.repoName}/issues?state=closed&type=pulls` +
-            `&since=${encodeURIComponent(`${range.since}T00:00:00Z`)}` +
+            `&since=${encodeURIComponent(dayStartUtc(range.since))}` +
             `&limit=${PAGE_SIZE}&page=${page}`,
         ));
       return raw
@@ -293,8 +297,8 @@ function giteaActivityApi(
     async commits(range) {
       const raw = await collectPages(`${repo} commits`, (page) =>
         request(
-          `${target.repoName}/commits?since=${encodeURIComponent(`${range.since}T00:00:00Z`)}` +
-            `&until=${encodeURIComponent(`${range.until}T00:00:00Z`)}` +
+          `${target.repoName}/commits?since=${encodeURIComponent(dayStartUtc(range.since))}` +
+            `&until=${encodeURIComponent(dayStartUtc(range.until))}` +
             `&stat=false&verification=false&files=false&limit=${PAGE_SIZE}&page=${page}`,
         ));
       return raw.map(normalizeCommit).filter((item) => inRange(item.committedAt, range));
@@ -304,7 +308,7 @@ function giteaActivityApi(
       const raw = await collectPages(`${repo} issue activity`, (page) =>
         request(
           `${target.repoName}/issues?state=all&type=issues` +
-            `&since=${encodeURIComponent(`${range.since}T00:00:00Z`)}` +
+            `&since=${encodeURIComponent(dayStartUtc(range.since))}` +
             `&limit=${PAGE_SIZE}&page=${page}`,
         ));
       return raw
