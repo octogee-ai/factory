@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getIdTokenForUid,
@@ -16,15 +16,16 @@ vi.mock("../lib/mattermost-context", () => ({
   getWorkspaceMmContext: (...args: unknown[]) => mockGetWorkspaceMmContext(...args),
 }));
 
-const mockCreateProjectGiteaRepo = vi.fn();
-const mockGiteaWriteFile = vi.fn();
-const mockGiteaWriteFiles = vi.fn();
-const mockGiteaApi = vi.fn();
+const mockInternalFetch = vi.fn();
+vi.mock("../lib/internal-fetch", () => ({
+  internalFetch: (...args: unknown[]) => mockInternalFetch(...args),
+}));
+
 vi.mock("../lib/gitea", () => ({
-  giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
-  createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
-  giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
-  giteaWriteFiles: (...args: unknown[]) => mockGiteaWriteFiles(...args),
+  giteaApi: vi.fn(),
+  createProjectGiteaRepo: vi.fn(),
+  giteaWriteFile: vi.fn(),
+  giteaWriteFiles: vi.fn(),
 }));
 
 import { createApp } from "../index.js";
@@ -78,6 +79,7 @@ async function ssrReadProject(workspaceSlug: string, projectSlug: string): Promi
 
 const CALLER_UID = "project-owner-uid";
 const USERNAME = "projowner";
+const ORIGINAL_FLEET_BROKER_URL = process.env.FLEET_BROKER_URL;
 
 async function seedCaller(): Promise<void> {
   await db.collection("workspaces").doc(USERNAME).set({
@@ -193,15 +195,16 @@ let token = "";
 beforeEach(async () => {
   mockMmApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
-  mockCreateProjectGiteaRepo.mockReset();
-  mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
-  mockGiteaWriteFile.mockReset();
-  mockGiteaWriteFile.mockResolvedValue(undefined);
-  mockGiteaWriteFiles.mockReset();
-  mockGiteaWriteFiles.mockResolvedValue(undefined);
-  mockGiteaApi.mockReset();
+  mockInternalFetch.mockReset();
+  mockInternalFetch.mockResolvedValue(new Response(JSON.stringify({ created: true }), { status: 200 }));
+  process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
   await seedCaller();
   token = await getIdTokenForUid(CALLER_UID);
+});
+
+afterEach(() => {
+  if (ORIGINAL_FLEET_BROKER_URL === undefined) delete process.env.FLEET_BROKER_URL;
+  else process.env.FLEET_BROKER_URL = ORIGINAL_FLEET_BROKER_URL;
 });
 
 describe("project create ↔ SSR project page read contract", () => {
@@ -292,7 +295,7 @@ describe("github-backed project create", () => {
     expect(snap.exists).toBe(false);
   });
 
-  it("for an admin: stores repoSource and still provisions the Gitea system repo + chat", async () => {
+  it("for an admin: stores repoSource and provisions the repo through the broker + chat", async () => {
     await promoteToAdmin();
     mockMmContextOk();
     const app = createApp();
@@ -308,7 +311,11 @@ describe("github-backed project create", () => {
     expect(typeof p.giteaRepoName).toBe("string");
     expect(p.provisioningState).toBe("active");
 
-    expect(mockCreateProjectGiteaRepo).toHaveBeenCalled();
+    expect(mockInternalFetch).toHaveBeenCalledWith(
+      "http://octogee-api.test:3001/internal/gitea/provision-project-repo",
+      expect.objectContaining({ method: "POST" }),
+      { requireProjectedToken: true },
+    );
     expect(mockMmApi).toHaveBeenCalled();
   });
 

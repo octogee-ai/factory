@@ -28,6 +28,11 @@ import {
   systemConfigRepoName,
   workspaceRepoName,
 } from "../../lib/gitea-naming.js";
+import {
+  deleteProjectGiteaRepo,
+  ensureProjectGiteaRepo,
+  ProjectRepoProvisioningError,
+} from "../projects/provisioning.js";
 
 // Gitea ADMIN broker for the in-pod provisioner. The provisioner runs in the shell-bearing
 // openclaw container and no longer holds the admin token; it calls octogee-api with its
@@ -69,6 +74,64 @@ function validRepoName(value: unknown): value is string {
     value === systemConfigRepoName() ||
     isValidProjectId(value)
   );
+}
+
+interface ProjectRepoProvisionRequest {
+  workspaceId: string;
+  slug: string;
+  name: string;
+  tagline: string;
+  projectType: string | null;
+  visibility: "private" | "public" | "unlisted";
+}
+
+function validProjectRepoName(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 200;
+}
+
+function validProjectRepoTagline(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 500;
+}
+
+function validProjectRepoType(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && value.length <= 100);
+}
+
+function validProjectRepoVisibility(value: unknown): value is ProjectRepoProvisionRequest["visibility"] {
+  return value === "private" || value === "public" || value === "unlisted";
+}
+
+function validProjectRepoProvisionRequest(
+  res: Response,
+  value: unknown,
+): value is ProjectRepoProvisionRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    res.status(400).json({ error: "project repo provisioning input is required" });
+    return false;
+  }
+  const input = value as Record<string, unknown>;
+  if (!validSlug(res, input.workspaceId)) return false;
+  if (!isValidProjectId(input.slug)) {
+    res.status(400).json({ error: "slug must be a valid project id" });
+    return false;
+  }
+  if (!validProjectRepoName(input.name)) {
+    res.status(400).json({ error: "name must be 1-200 characters" });
+    return false;
+  }
+  if (!validProjectRepoTagline(input.tagline)) {
+    res.status(400).json({ error: "tagline must be at most 500 characters" });
+    return false;
+  }
+  if (!validProjectRepoType(input.projectType)) {
+    res.status(400).json({ error: "projectType must be null or at most 100 characters" });
+    return false;
+  }
+  if (!validProjectRepoVisibility(input.visibility)) {
+    res.status(400).json({ error: "visibility must be private, public, or unlisted" });
+    return false;
+  }
+  return true;
 }
 
 interface GatewayCaller {
@@ -224,6 +287,33 @@ router.post("/ensure-project-repo", async (req: Request, res: Response) => {
   }
   if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-project-repo", () => ensureProjectRepo(slug, projectName));
+});
+
+router.post("/provision-project-repo", async (req: Request, res: Response) => {
+  const input = req.body;
+  if (!validProjectRepoProvisionRequest(res, input)) return;
+  if (!(await requireAssignedHere(req, res, input.workspaceId))) return;
+  try {
+    const result = await ensureProjectGiteaRepo(input);
+    res.json(result);
+  } catch (err) {
+    logger.error("internal/gitea provision-project-repo failed", { err });
+    res.status(502).json({
+      error: err instanceof Error ? err.message : String(err),
+      created: err instanceof ProjectRepoProvisioningError && err.created,
+    });
+  }
+});
+
+router.post("/delete-project-repo", async (req: Request, res: Response) => {
+  const { workspaceId, slug } = (req.body ?? {}) as { workspaceId?: unknown; slug?: unknown };
+  if (!validSlug(res, workspaceId)) return;
+  if (!isValidProjectId(slug)) {
+    res.status(400).json({ error: "slug must be a valid project id" });
+    return;
+  }
+  if (!(await requireAssignedHere(req, res, workspaceId))) return;
+  await broker(res, "delete-project-repo", () => deleteProjectGiteaRepo({ workspaceId, slug }));
 });
 
 router.get("/repo-exists", async (req: Request, res: Response) => {

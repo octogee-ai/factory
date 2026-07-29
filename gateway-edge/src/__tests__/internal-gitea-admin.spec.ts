@@ -112,6 +112,17 @@ vi.mock("../lib/gitea-admin.js", () => ({
   archiveRepo: vi.fn(async () => {}),
 }));
 
+const projectProvisioning = vi.hoisted(() => ({
+  ensureProjectGiteaRepo: vi.fn(async () => ({ created: true })),
+  deleteProjectGiteaRepo: vi.fn(async () => {}),
+}));
+
+vi.mock("../routes/projects/provisioning.js", () => ({
+  ensureProjectGiteaRepo: (...args: unknown[]) => projectProvisioning.ensureProjectGiteaRepo(...args),
+  deleteProjectGiteaRepo: (...args: unknown[]) => projectProvisioning.deleteProjectGiteaRepo(...args),
+  ProjectRepoProvisioningError: class ProjectRepoProvisioningError extends Error {},
+}));
+
 function app(
   boundGatewayId: string | null = "bender",
   podGatewayId: string | null = "bender",
@@ -182,6 +193,8 @@ describe("internal gitea-admin route", () => {
     mocks.state.gateways.clear();
     vi.mocked(hasRunningInboundMigrationForSlug).mockResolvedValue(false);
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValue(["acme"]);
+    projectProvisioning.ensureProjectGiteaRepo.mockReset().mockResolvedValue({ created: true });
+    projectProvisioning.deleteProjectGiteaRepo.mockReset().mockResolvedValue(undefined);
   });
 
   it("rejects requests without a bound gateway identity (401)", async () => {
@@ -432,6 +445,35 @@ describe("internal gitea-admin route", () => {
     });
     expect(res.status).toBe(204);
     expect(giteaAdmin.ensureProjectRepo).toHaveBeenCalledWith("acme", "mygame");
+  });
+
+  it("provision-project-repo seeds through the assigned gateway's API broker", async () => {
+    const input = {
+      workspaceId: "acme",
+      slug: "mygame",
+      name: "My game",
+      tagline: "Ship it",
+      projectType: "web",
+      visibility: "private",
+    };
+    const res = await authed(request(app()).post("/internal/gitea/provision-project-repo")).send(input);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ created: true });
+    expect(projectProvisioning.ensureProjectGiteaRepo).toHaveBeenCalledWith(input);
+  });
+
+  it("delete-project-repo is scoped to the assigned workspace", async () => {
+    const res = await authed(request(app()).post("/internal/gitea/delete-project-repo")).send({
+      workspaceId: "acme",
+      slug: "mygame",
+    });
+
+    expect(res.status).toBe(204);
+    expect(projectProvisioning.deleteProjectGiteaRepo).toHaveBeenCalledWith({
+      workspaceId: "acme",
+      slug: "mygame",
+    });
   });
 
   it("repo-exists → 200 { exists }", async () => {

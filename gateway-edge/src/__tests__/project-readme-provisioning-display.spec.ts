@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   createProjectGiteaRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
   giteaWriteFiles: vi.fn(),
+  internalFetch: vi.fn(),
   readProject: vi.fn(),
   renderReadmeTemplate: vi.fn(),
   readWorkspace: vi.fn(),
@@ -28,6 +29,10 @@ vi.mock("../lib/gitea.js", () => ({
   createProjectGiteaRepo: (...args: unknown[]) => h.createProjectGiteaRepo(...args),
   giteaWriteFile: (...args: unknown[]) => h.giteaWriteFile(...args),
   giteaWriteFiles: (...args: unknown[]) => h.giteaWriteFiles(...args),
+}));
+
+vi.mock("../lib/internal-fetch.js", () => ({
+  internalFetch: (...args: unknown[]) => h.internalFetch(...args),
 }));
 
 vi.mock("../lib/firestoreReads.js", () => ({
@@ -82,6 +87,8 @@ beforeEach(() => {
   h.createProjectGiteaRepo.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFile.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFiles.mockReset().mockResolvedValue(undefined);
+  h.internalFetch.mockReset();
+  process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
   h.readProject.mockReset();
   h.renderReadmeTemplate.mockReset().mockReturnValue("# Orbit\n");
   h.readWorkspace.mockReset();
@@ -250,7 +257,7 @@ describe("project provisioning helpers", () => {
     h.giteaWriteFiles.mockRejectedValueOnce(new Error("gitea 500"));
 
     await expect(
-      provisionProjectRepo({
+      ensureProjectGiteaRepo({
         workspaceId: "mira",
         slug: "orbit",
         name: "Orbit",
@@ -258,10 +265,11 @@ describe("project provisioning helpers", () => {
         projectType: null,
         visibility: "private",
       }),
-    ).resolves.toBe("gitea 500");
+    ).rejects.toThrow("gitea 500");
   });
 
-  it("returns null on successful provisioning and an error string on failure", async () => {
+  it("provisions through the tenant-bound API broker and returns its failure loudly", async () => {
+    h.internalFetch.mockResolvedValueOnce(new Response(JSON.stringify({ created: true }), { status: 200 }));
     await expect(
       provisionProjectRepo({
         workspaceId: "mira",
@@ -272,8 +280,13 @@ describe("project provisioning helpers", () => {
         visibility: "private",
       }),
     ).resolves.toBeNull();
+    expect(h.internalFetch).toHaveBeenCalledWith(
+      "http://octogee-api.test:3001/internal/gitea/provision-project-repo",
+      expect.objectContaining({ method: "POST" }),
+      { requireProjectedToken: true },
+    );
 
-    h.createProjectGiteaRepo.mockRejectedValueOnce(new Error("repo exists"));
+    h.internalFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "repo exists" }), { status: 502 }));
     await expect(
       provisionProjectRepo({
         workspaceId: "mira",
@@ -283,7 +296,7 @@ describe("project provisioning helpers", () => {
         projectType: null,
         visibility: "private",
       }),
-    ).resolves.toBe("repo exists");
+    ).resolves.toBe("repo exists (HTTP 502)");
   });
 });
 
