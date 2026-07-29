@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchGithubWindow, fetchPulseReport } from "../lib/pulse-ingest.js";
+import { fetchPulseReport, fetchPulseWindow } from "../lib/pulse-ingest.js";
 import { computeDxCore4, pctDelta } from "../lib/pulse-metrics.js";
 import type { FileTarget } from "../lib/fileTarget.js";
 
@@ -23,8 +23,8 @@ describe.skipIf(!RUN_LIVE || !process.env.GITHUB_TOKEN)("Pulse — live dogfood 
   it("scores DX Core 4 for this week vs last", async () => {
     const tgt = octogee();
     const [thisW, lastW] = await Promise.all([
-      fetchGithubWindow(tgt, "2026-06-19", "2026-06-26"),
-      fetchGithubWindow(tgt, "2026-06-12", "2026-06-19"),
+      fetchPulseWindow(tgt, "2026-06-19", "2026-06-26"),
+      fetchPulseWindow(tgt, "2026-06-12", "2026-06-19"),
     ]);
     const cur = computeDxCore4(thisW);
     const prev = computeDxCore4(lastW);

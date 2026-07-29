@@ -55,16 +55,14 @@ describe("workspace Pulse route", () => {
     expect(h.fetchPulseReport).not.toHaveBeenCalled();
   });
 
-  it("rejects non-GitHub-backed targets with the documented 501 response", async () => {
+  it("returns the fetched Pulse report for Gitea projects", async () => {
     h.target = target({ provider: "gitea" });
+    h.fetchPulseReport.mockResolvedValue({ week: { until: "2026-06-30" } });
 
-    const res = await request(app()).get("/api/workspace/pulse").expect(501);
+    const res = await request(app()).get("/api/workspace/pulse").expect(200);
 
-    expect(res.body).toEqual({
-      error: "Pulse currently supports GitHub-backed projects",
-      code: "GITHUB_ONLY",
-    });
-    expect(h.fetchPulseReport).not.toHaveBeenCalled();
+    expect(h.fetchPulseReport).toHaveBeenCalledWith(h.target, expect.any(Number));
+    expect(res.body).toEqual({ week: { until: "2026-06-30" } });
   });
 
   it("returns the fetched Pulse report for GitHub projects", async () => {
