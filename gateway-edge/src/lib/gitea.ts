@@ -134,6 +134,37 @@ export async function giteaDeleteRepo(org: string, repo: string): Promise<void> 
   await giteaApiAllowNotFound(org, encodeURIComponent(repo), "DELETE");
 }
 
+export async function giteaGetRepo(org: string, repo: string): Promise<unknown | null> {
+  return giteaApiAllowNotFound(org, encodeURIComponent(repo));
+}
+
+export async function giteaDeleteVerifiedRepo(org: string, repo: string): Promise<void> {
+  const existing = await giteaGetRepo(org, repo);
+  if (existing === null) return;
+  assertExpectedRepo(existing, org, repo);
+
+  await giteaDeleteRepo(org, repo);
+
+  const remaining = await giteaGetRepo(org, repo);
+  if (remaining !== null) {
+    throw new Error(`Gitea repo ${org}/${repo} still exists after deletion`);
+  }
+}
+
+function assertExpectedRepo(value: unknown, org: string, repo: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Gitea returned an invalid repo for ${org}/${repo}`);
+  }
+  const record = value as Record<string, unknown>;
+  const owner = record.owner;
+  const ownerName = owner && typeof owner === "object" && !Array.isArray(owner)
+    ? (owner as Record<string, unknown>).login ?? (owner as Record<string, unknown>).username
+    : undefined;
+  if (record.name !== repo || ownerName !== org) {
+    throw new Error(`Gitea repo binding mismatch for ${org}/${repo}`);
+  }
+}
+
 async function giteaAdminFetch(
   method: string,
   url: string,
@@ -168,7 +199,7 @@ export async function createProjectGiteaRepo(
   repoName: string,
   description: string,
   privateRepo: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const url = `${GITEA_URL}/api/v1/orgs/${org}/repos`;
   try {
     await giteaAdminFetch("POST", url, {
@@ -178,8 +209,9 @@ export async function createProjectGiteaRepo(
       auto_init: true,
       default_branch: "main",
     }, false);
+    return true;
   } catch (err) {
-    if ((err as Error & { status?: number })?.status === 409) return;
+    if ((err as Error & { status?: number })?.status === 409) return false;
     throw err;
   }
 }

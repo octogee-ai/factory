@@ -22,11 +22,13 @@ const mockCreateProjectGiteaRepo = vi.fn();
 const mockGiteaWriteFile = vi.fn();
 const mockGiteaWriteFiles = vi.fn();
 const mockGiteaApi = vi.fn();
+const mockGiteaDeleteVerifiedRepo = vi.fn();
 vi.mock("../lib/gitea", () => ({
   giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
   createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
   giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
   giteaWriteFiles: (...args: unknown[]) => mockGiteaWriteFiles(...args),
+  giteaDeleteVerifiedRepo: (...args: unknown[]) => mockGiteaDeleteVerifiedRepo(...args),
 }));
 
 import { createApp } from "../index.js";
@@ -189,6 +191,8 @@ beforeEach(async () => {
   mockGiteaWriteFiles.mockReset();
   mockGiteaWriteFiles.mockResolvedValue(undefined);
   mockGiteaApi.mockReset();
+  mockGiteaDeleteVerifiedRepo.mockReset();
+  mockGiteaDeleteVerifiedRepo.mockResolvedValue(undefined);
 });
 
 describe("POST /internal/project/publish (octogee_publish tool endpoint, no-auth in-pod)", () => {
@@ -847,7 +851,9 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     const doc = await getProject("alice", "mygame");
     expect(doc?.provisioningState).toBe("failed");
     expect(String(doc?.provisioningError)).toMatch(/owner has no Mattermost userId/i);
-    expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
+      mattermost: { channelId: "ch-noowner-1" },
+    });
   });
 
   it("returns 502 + marks failed when callerCtx.coachUserId is null (agent not provisioned)", async () => {

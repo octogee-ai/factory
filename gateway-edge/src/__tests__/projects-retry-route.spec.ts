@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   } as Project,
   projectUpdates: [] as ProjectUpdate[],
   channelWrites: [] as Array<{ path: string; data: ProjectUpdate; options?: ProjectUpdate }>,
+  generalChannel: undefined as ProjectUpdate | undefined,
   userData: { username: "mira" } as ProjectUpdate,
   mmContext: {
     teamId: "team-1",
@@ -41,8 +42,13 @@ function projectRef() {
     },
     collection: (name: string) => ({
       doc: (id: string) => ({
+        get: async () => ({
+          exists: h.generalChannel !== undefined,
+          data: () => h.generalChannel,
+        }),
         set: async (data: ProjectUpdate, options?: ProjectUpdate) => {
           h.channelWrites.push({ path: `${name}/${id}`, data, options });
+          h.generalChannel = data;
         },
       }),
     }),
@@ -88,6 +94,7 @@ vi.mock("../lib/db.js", () => ({
   },
   FieldValue: {
     serverTimestamp: () => "SERVER_TS",
+    delete: () => "DELETE_FIELD",
   },
 }));
 
@@ -135,6 +142,7 @@ beforeEach(() => {
   };
   h.projectUpdates.length = 0;
   h.channelWrites.length = 0;
+  h.generalChannel = undefined;
   h.userData = { username: "mira" };
   h.mmContext = {
     teamId: "team-1",
@@ -201,7 +209,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
           id: "general",
           kind: "general",
           name: "general",
-          mattermost: { channelId: "channel-1" },
+          mattermost: {
+            channelId: "channel-1",
+            activityChannelId: "DELETE_FIELD",
+            activityPair: "DELETE_FIELD",
+          },
           createdAt: "SERVER_TS",
         },
         options: { merge: true },
@@ -267,5 +279,43 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(h.logger.error).toHaveBeenCalledWith(
       "[projects] Gitea reconcile failed for mira/orbit: Gitea unreachable",
     );
+  });
+
+  it("restores the verified archived primary recorded by failed provisioning", async () => {
+    h.generalChannel = {
+      mattermost: {
+        channelId: "archived-channel",
+        activityChannelId: "archived-activity",
+        activityPair: { generation: 1, desired: "archived", status: "active" },
+      },
+    };
+    h.mmApi.mockImplementation(async (path: string, method?: string) => {
+      if (path === "/channels/archived-channel" && method === undefined) {
+        return {
+          id: "archived-channel",
+          name: "mira-proj-orbit-general",
+          team_id: "team-1",
+          type: "P",
+          delete_at: 1,
+        };
+      }
+      if (path === "/channels/archived-channel/restore" && method === "POST") return { ok: true };
+      if (method === "POST" && path === "/channels/archived-channel/members") return { ok: true };
+      throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
+    });
+
+    await request(app())
+      .post("/api/projects/mira/orbit/retry-provisioning")
+      .expect(200, { success: true, channelId: "archived-channel" });
+
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/archived-channel/restore", "POST");
+    expect(h.mmApi).not.toHaveBeenCalledWith(
+      "/teams/team-1/channels/name/mira-proj-orbit-general",
+    );
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels", "POST", expect.anything());
+    expect(h.channelWrites[0]?.data).toMatchObject({
+      mattermost: { channelId: "archived-channel" },
+    });
+    expect(h.channelWrites[0]?.data.mattermost).not.toHaveProperty("activityPair");
   });
 });

@@ -46,10 +46,16 @@ describe("gateway-edge gitea client — per-workspace org", () => {
   it("createProjectGiteaRepo posts to /orgs/{org}/repos", async () => {
     fetchMock.mockResolvedValueOnce(res(201, {}));
     const { createProjectGiteaRepo } = await import("../lib/gitea.js");
-    await createProjectGiteaRepo("alice", "my-game", "desc", true);
+    await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).resolves.toBe(true);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://gitea.test:3000/api/v1/orgs/alice/repos",
     );
+  });
+
+  it("reports that a 409 repo was not created by this attempt", async () => {
+    fetchMock.mockResolvedValueOnce(res(409, { message: "already exists" }));
+    const { createProjectGiteaRepo } = await import("../lib/gitea.js");
+    await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).resolves.toBe(false);
   });
 
   it("giteaDeleteRepo deletes {org}/{repo}", async () => {
@@ -59,6 +65,26 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://gitea.test:3000/api/v1/repos/alice/my-game");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("giteaDeleteVerifiedRepo checks the tenant binding before deletion and confirms absence after", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(200, { name: "my-game", owner: { login: "alice" } }))
+      .mockResolvedValueOnce(res(204))
+      .mockResolvedValueOnce(res(404));
+
+    const { giteaDeleteVerifiedRepo } = await import("../lib/gitea.js");
+    await giteaDeleteVerifiedRepo("alice", "my-game");
+
+    expect(fetchMock.mock.calls.map(([, init]) => init.method)).toEqual(["GET", "DELETE", "GET"]);
+  });
+
+  it("giteaDeleteVerifiedRepo refuses a repo that is not bound to the expected tenant", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { name: "my-game", owner: { login: "victim" } }));
+
+    const { giteaDeleteVerifiedRepo } = await import("../lib/gitea.js");
+    await expect(giteaDeleteVerifiedRepo("alice", "my-game")).rejects.toThrow(/binding mismatch/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not export a GITEA_ORG constant (no shared-org fallback)", async () => {

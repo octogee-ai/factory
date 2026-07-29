@@ -27,6 +27,11 @@ interface RetryActivityInput {
   mmChannelId: string;
 }
 
+interface RetryChannel {
+  id: string;
+  resetActivityPair: boolean;
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -82,14 +87,70 @@ async function ensureRetryChannel(ctx: ProjectCtx, teamId: string, channelName: 
   return createRetryChannel(teamId, channelName, ctx.project.name || ctx.pid);
 }
 
+async function restoreStoredRetryChannel(
+  ctx: ProjectCtx,
+  teamId: string,
+  channelName: string,
+): Promise<string | null> {
+  const stored = await ctx.projectRef.collection("channels").doc("general").get();
+  const channelId = storedChannelId(stored.data()?.mattermost);
+  if (!channelId) return null;
+  const channel = await loadStoredRetryChannel(channelId);
+  if (!channel) return null;
+  assertStoredRetryChannelBinding(channel, channelId, teamId, channelName, ctx);
+  await restoreArchivedRetryChannel(channel, channelId);
+  return channelId;
+}
+
+function storedChannelId(mattermost: unknown): string | null {
+  if (!mattermost || typeof mattermost !== "object") return null;
+  const { channelId } = mattermost as Record<string, unknown>;
+  return typeof channelId === "string" && channelId ? channelId : null;
+}
+
+async function loadStoredRetryChannel(channelId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await mmApi(`/channels/${channelId}`);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Mattermost returned an invalid channel for ${channelId}`);
+    }
+    return raw as Record<string, unknown>;
+  } catch (error) {
+    if ((error as { status?: unknown } | null)?.status === 404) return null;
+    throw error;
+  }
+}
+
+function assertStoredRetryChannelBinding(
+  channel: Record<string, unknown>,
+  channelId: string,
+  teamId: string,
+  channelName: string,
+  ctx: ProjectCtx,
+): void {
+  const bindingMatches = channel.id === channelId
+    && channel.name === channelName
+    && channel.team_id === teamId
+    && channel.type === "P";
+  if (!bindingMatches) throw new Error(`Stored project channel binding mismatch for ${ctx.wid}/${ctx.pid}`);
+}
+
+async function restoreArchivedRetryChannel(channel: Record<string, unknown>, channelId: string): Promise<void> {
+  if (typeof channel.delete_at === "number" && channel.delete_at > 0) {
+    await mmApi(`/channels/${channelId}/restore`, "POST");
+  }
+}
+
 async function retryChannelId(
   ctx: ProjectCtx,
   res: Response,
   teamId: string,
   channelName: string,
-): Promise<string | null> {
+): Promise<RetryChannel | null> {
   try {
-    return await ensureRetryChannel(ctx, teamId, channelName);
+    const restored = await restoreStoredRetryChannel(ctx, teamId, channelName);
+    if (restored) return { id: restored, resetActivityPair: false };
+    return { id: await ensureRetryChannel(ctx, teamId, channelName), resetActivityPair: true };
   } catch (err) {
     const message = errorMessage(err);
     await markRetryFailed(ctx.projectRef, message);
@@ -162,12 +223,22 @@ async function provisionRetryActivityOrFail(input: RetryActivityInput): Promise<
   }
 }
 
-async function writeRetryGeneralChannel(ctx: ProjectCtx, mmChannelId: string): Promise<void> {
+async function writeRetryGeneralChannel(
+  ctx: ProjectCtx,
+  mmChannelId: string,
+  resetActivityPair: boolean,
+): Promise<void> {
   await ctx.projectRef.collection("channels").doc("general").set({
     id: "general",
     kind: "general",
     name: "general",
-    mattermost: { channelId: mmChannelId },
+    mattermost: {
+      channelId: mmChannelId,
+      ...(resetActivityPair ? {
+        activityChannelId: FieldValue.delete(),
+        activityPair: FieldValue.delete(),
+      } : {}),
+    },
     createdAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 }
@@ -210,18 +281,18 @@ async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise
   if (!callerCtx) return;
 
   const channelName = projectGeneralChannelName(ctx.wid, ctx.pid);
-  const mmChannelId = await retryChannelId(ctx, res, callerCtx.teamId, channelName);
-  if (!mmChannelId) return;
+  const channel = await retryChannelId(ctx, res, callerCtx.teamId, channelName);
+  if (!channel) return;
 
   const members = retryMembers(callerCtx);
-  if (!(await addRetryMembersOrFail(ctx, res, mmChannelId, members))) return;
-  await writeRetryGeneralChannel(ctx, mmChannelId);
+  if (!(await addRetryMembersOrFail(ctx, res, channel.id, members))) return;
+  await writeRetryGeneralChannel(ctx, channel.id, channel.resetActivityPair);
   if (!(await provisionRetryActivityOrFail({
     ctx,
     res,
     teamId: callerCtx.teamId,
     channelName,
-    mmChannelId,
+    mmChannelId: channel.id,
   }))) return;
 
   const visibility = restoredVisibility(ctx);
@@ -229,7 +300,7 @@ async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise
   await activateRetriedProject(ctx, visibility);
 
   logger.info(`[projects] Retry provisioning succeeded for ${ctx.wid}/${ctx.pid}`);
-  res.json({ success: true, channelId: mmChannelId });
+  res.json({ success: true, channelId: channel.id });
 }
 
 router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Request, res: Response) => {
