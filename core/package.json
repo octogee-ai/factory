@@ -620,7 +620,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@google-cloud/secret-manager": "^6.2.0",
+    "@google-cloud/secret-manager": "^6.3.0",
     "express": "^5.2.1",
     "firebase-admin": "^14.2.0",
     "google-auth-library": "^10.7.0",
