@@ -63,7 +63,7 @@ export async function ensureProjectGiteaRepo(input: {
         siteId: hostingSiteId,
         url: `https://${hostingSiteId}.web.app`,
       },
-      runtime: { recipe: "astro-static" },
+      runtime: { recipe: "static-site" },
       collaborators: [],
       createdAt: new Date().toISOString(),
     };

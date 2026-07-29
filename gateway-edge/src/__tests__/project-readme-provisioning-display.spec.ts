@@ -221,7 +221,7 @@ describe("project provisioning helpers", () => {
         siteId: "octogee-mira-orbit",
         url: "https://octogee-mira-orbit.web.app",
       },
-      runtime: { recipe: "astro-static" },
+      runtime: { recipe: "static-site" },
       collaborators: [],
     });
   });
