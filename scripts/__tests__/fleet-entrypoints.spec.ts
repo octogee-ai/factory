@@ -36,6 +36,7 @@ import {
   resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
+  resolveFleetOperatorUidFromUserConfigs,
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
@@ -879,6 +880,18 @@ describe("fleet CLI args", () => {
       path: "/api/admin/releases/v0.4.0/promote",
       idempotencyKey: "release-promote:v0.4.0",
     });
+  });
+
+  it("discovers the sole Firestore admin without a collection-group index", () => {
+    expect(resolveFleetOperatorUidFromUserConfigs([
+      { uid: "builder", role: "builder" },
+      { uid: "operator", role: "admin" },
+    ])).toBe("operator");
+    expect(() => resolveFleetOperatorUidFromUserConfigs([])).toThrow(/found 0/);
+    expect(() => resolveFleetOperatorUidFromUserConfigs([
+      { uid: "operator-a", role: "admin" },
+      { uid: "operator-b", role: "admin" },
+    ])).toThrow(/found 2/);
   });
 
   it("preserves an explicit release idempotency key over its deterministic default", () => {

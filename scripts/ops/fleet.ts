@@ -1248,24 +1248,33 @@ function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): s
   return value;
 }
 
+export function resolveFleetOperatorUidFromUserConfigs(
+  configs: readonly { uid: string; role: unknown }[],
+): string {
+  const operatorUids = configs
+    .filter((config) => config.role === "admin")
+    .map((config) => config.uid);
+  if (operatorUids.length !== 1) {
+    throw new Error(
+      `OPERATOR_UID is required when Firestore does not identify exactly one admin (found ${operatorUids.length})`,
+    );
+  }
+  return operatorUids[0]!;
+}
+
 async function fleetOperatorUid(): Promise<string> {
   const explicit = process.env.OPERATOR_UID;
   if (explicit) return explicit;
   if (!resolvedOperatorUid) {
     resolvedOperatorUid = (async () => {
-      const snapshots = await db.collectionGroup("config").where("role", "==", "admin").get();
-      const operatorUids = snapshots.docs
-        .map((snapshot) => snapshot.ref.path.split("/"))
-        .filter((segments) =>
-          segments.length === 4 && segments[0] === "users" && segments[2] === "system",
-        )
-        .map((segments) => segments[1]);
-      if (operatorUids.length !== 1) {
-        throw new Error(
-          `OPERATOR_UID is required when Firestore does not identify exactly one admin (found ${operatorUids.length})`,
-        );
-      }
-      return operatorUids[0];
+      const users = await db.collection("users").get();
+      const configs = await Promise.all(
+        users.docs.map((user) => user.ref.collection("system").doc("config").get()),
+      );
+      return resolveFleetOperatorUidFromUserConfigs(configs.map((config, index) => ({
+        uid: users.docs[index]!.id,
+        role: config.get("role"),
+      })));
     })();
   }
   return resolvedOperatorUid;
