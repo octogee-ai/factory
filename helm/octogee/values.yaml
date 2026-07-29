@@ -101,12 +101,11 @@ mattermost:
     iap:
       enabled: false
       oauthClientCredentialsSecretName: ""
-  # Memory stays 2Gi on both sides: the prior 500m/512Mi request OOM'd once a
-  # few users joined, and Autopilot pins limits.memory == requests.memory for
-  # this pod. CPU request is a floor, not the workload: measured peak is
-  # ~125m over 3 days at F&F scale, and Autopilot's 1:6.5 CPU:memory ratio
-  # requires ≥315m alongside 2Gi — 350m satisfies it; bursts ride the 2000m
-  # limit.
+  # MM's published minimum is 1 vCPU / 2 GiB; the prior 500m/512Mi request
+  # would OOM as soon as a few users joined. Autopilot requires
+  # limits.memory == requests.memory for non-bursty pods, so memory is
+  # fixed at 2Gi on both sides. CPU can burst to 2000m on the general
+  # compute class.
   resources:
     requests:
       cpu: "350m"
@@ -329,8 +328,6 @@ artifactWorker:
       cpu: 500m
       memory: 512Mi
       ephemeral-storage: 128Mi
-  # Parser is idle between conversion jobs; requests bill the idle floor and
-  # conversions burst into the unchanged limits.
   parserResources:
     requests:
       cpu: 50m
