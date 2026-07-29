@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
   sets: [] as Array<{ path: string; data: Record<string, unknown>; options?: Record<string, unknown> }>,
+  updates: [] as Array<{ path: string; data: Record<string, unknown> }>,
+  deletes: [] as string[],
   mmApi: vi.fn(),
   addActivityPairMember: vi.fn(),
   createProjectAgentBot: vi.fn(),
   retireProjectAgentBot: vi.fn(),
-  logger: { error: vi.fn(), info: vi.fn() },
+  logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
 
 function docRef(path: string) {
@@ -18,6 +20,13 @@ function docRef(path: string) {
     },
     set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
       h.sets.push({ path, data, options });
+    },
+    update: async (data: Record<string, unknown>) => {
+      h.updates.push({ path, data });
+    },
+    delete: async () => {
+      h.deletes.push(path);
+      h.docs.delete(path);
     },
     collection: (name: string) => collectionRef(`${path}/${name}`),
   };
@@ -36,7 +45,10 @@ function collectionRef(path: string) {
 
 vi.mock("../lib/db.js", () => ({
   db: { doc: (path: string) => docRef(path), collection: (name: string) => collectionRef(name) },
-  FieldValue: { serverTimestamp: () => "SERVER_TS" },
+  FieldValue: {
+    serverTimestamp: () => "SERVER_TS",
+    arrayRemove: (...values: unknown[]) => ({ arrayRemove: values }),
+  },
 }));
 
 vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
@@ -59,7 +71,9 @@ vi.mock("@octogee/core/mattermost/project-agent", () => ({
   projectAgentSecretDocId: (pid: string) => `projectAgentMattermost-${pid}`,
 }));
 
-const { setProjectAgentEnabled } = await import("../lib/project-agent-service.js");
+const { setProjectAgentEnabled, retireProjectAgentForDeletion } = await import(
+  "../lib/project-agent-service.js"
+);
 
 function actor(overrides: Record<string, unknown> = {}) {
   return {
@@ -85,12 +99,15 @@ function seedProject(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   h.docs.clear();
   h.sets.length = 0;
+  h.updates.length = 0;
+  h.deletes.length = 0;
   h.mmApi.mockReset();
   h.addActivityPairMember.mockReset().mockResolvedValue(undefined);
   h.createProjectAgentBot.mockReset().mockResolvedValue({ mmUserId: "bot-1", token: "pat-1" });
   h.retireProjectAgentBot.mockReset().mockResolvedValue(undefined);
   h.logger.error.mockReset();
   h.logger.info.mockReset();
+  h.logger.warn.mockReset();
 });
 
 describe("setProjectAgentEnabled — enable", () => {
@@ -314,5 +331,57 @@ describe("setProjectAgentEnabled — disable", () => {
       status: 200,
       body: { success: true, enabled: false, provisioned: false },
     });
+  });
+});
+
+const SECRET_PATH = "users/owner-1/secrets/projectAgentMattermost-orbit";
+const ROSTER_REMOVAL = {
+  path: "users/owner-1",
+  data: {
+    "provisioning.openclaw.agentIds": { arrayRemove: ["octogee-mira-proj-orbit-coach"] },
+  },
+};
+
+describe("retireProjectAgentForDeletion", () => {
+  it("retires the minted bot, then removes the roster id", async () => {
+    h.docs.set(SECRET_PATH, { mmUserId: "bot-1", personalToken: "pat-1" });
+
+    await retireProjectAgentForDeletion("owner-1", "mira", "orbit");
+
+    expect(h.retireProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
+      uid: "owner-1",
+      project: "orbit",
+      mmUserId: "bot-1",
+    });
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+  });
+
+  it("removes a stale roster id even when no bot secret exists", async () => {
+    await retireProjectAgentForDeletion("owner-1", "mira", "orbit");
+
+    expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+  });
+
+  it("drops a secret without an mmUserId so config demand cannot outlive the project", async () => {
+    h.docs.set(SECRET_PATH, { personalToken: "pat-1" });
+
+    await retireProjectAgentForDeletion("owner-1", "mira", "orbit");
+
+    expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
+    expect(h.deletes).toEqual([SECRET_PATH]);
+    expect(h.logger.warn).toHaveBeenCalled();
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+  });
+
+  it("keeps the roster id when retiring fails — the roster must stay a superset of config demand", async () => {
+    h.docs.set(SECRET_PATH, { mmUserId: "bot-1", personalToken: "pat-1" });
+    h.retireProjectAgentBot.mockRejectedValue(new Error("MM down"));
+
+    await expect(retireProjectAgentForDeletion("owner-1", "mira", "orbit")).rejects.toThrow(
+      "MM down",
+    );
+
+    expect(h.updates).toEqual([]);
   });
 });
