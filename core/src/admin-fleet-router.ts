@@ -6194,6 +6194,83 @@ router.post(
     },
   );
 
+  type CentralTestRolloutOutcome = {
+    gatewayId: string;
+    release: number;
+    operationId: string | null;
+    reused?: boolean;
+  };
+
+  async function centralTestGatewayRolloutFanout(input: {
+    req: Request;
+    gateways: DurableGatewayRoot[];
+    primary: DurableGatewayRoot;
+    payload: ReleasePayload;
+    note: string;
+    manifestDigest: string;
+    version: string;
+    sourceSha: string;
+    gatewayScope: CentralTestGatewayScope;
+    testProvenance: OperationAuditTestProvenance;
+    createdBy: string;
+  }): Promise<CentralTestRolloutOutcome[]> {
+    const {
+      req, gateways, primary, payload, note, manifestDigest,
+      version, sourceSha, gatewayScope, testProvenance, createdBy,
+    } = input;
+    const rollouts: CentralTestRolloutOutcome[] = [];
+    for (const targetGateway of gateways) {
+      if (targetGateway.gatewayId === primary.gatewayId) continue;
+      const existing = await existingCentralTestGatewayRollout(db, targetGateway, payload, note);
+      if (existing) {
+        rollouts.push({
+          gatewayId: targetGateway.gatewayId,
+          release: existing.release,
+          operationId: existing.operationId,
+          reused: true,
+        });
+        continue;
+      }
+      const appended = await runAdminFleetMutation({
+        req,
+        what: "cut CENTRAL TEST gateway rollout",
+        why: ADMIN_FLEET_REQUEST_REASON,
+        target: { gatewayId: targetGateway.gatewayId, gatewayScope, version, sourceSha },
+        preActionStatus: {
+          latestRelease: targetGateway.latestRelease,
+          desiredRelease: targetGateway.desiredRelease,
+        },
+        mutation: {
+          kind: "cut-central-test-gateway-rollout",
+          gatewayId: targetGateway.gatewayId,
+          gatewayScope,
+          version,
+          sourceSha,
+          manifestDigest,
+        },
+        testProvenance,
+        idempotencyScope: `cut-central-test-release:${version}:${targetGateway.gatewayId}`,
+        action: async () => appendGatewayRelease(db, {
+          gateway: targetGateway,
+          artifact: gatewayArtifactFromReleasePayload(payload),
+          payload,
+          createdBy,
+          now: Date.now(),
+          sourceRelease: targetGateway.latestRelease,
+          note,
+          requireMaintenanceOpen: true,
+        }),
+      });
+      rollouts.push({
+        gatewayId: targetGateway.gatewayId,
+        release: appended.release,
+        operationId: appended.operationId,
+        ...(appended.reused ? { reused: true } : {}),
+      });
+    }
+    return rollouts;
+  }
+
   router.post(
     "/releases/cut",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -6322,61 +6399,27 @@ router.post(
         }
         if (!result.appended) throw new Error("CENTRAL TEST release mutation has no release result");
         const note = `CENTRAL TEST ${version} ${sourceSha}`;
-        const rollouts = [{
-          gatewayId: gateway.gatewayId,
-          release: result.appended.release,
-          operationId: result.appended.operationId,
-          ...(result.appended.reused ? { reused: true } : {}),
-        }];
-        for (const targetGateway of gateways) {
-          if (targetGateway.gatewayId === gateway.gatewayId) continue;
-          const existing = await existingCentralTestGatewayRollout(db, targetGateway, payload, note);
-          if (existing) {
-            rollouts.push({
-              gatewayId: targetGateway.gatewayId,
-              release: existing.release,
-              operationId: existing.operationId,
-              reused: true,
-            });
-            continue;
-          }
-          const appended = await runAdminFleetMutation({
+        const rollouts = [
+          {
+            gatewayId: gateway.gatewayId,
+            release: result.appended.release,
+            operationId: result.appended.operationId,
+            ...(result.appended.reused ? { reused: true } : {}),
+          },
+          ...await centralTestGatewayRolloutFanout({
             req,
-            what: "cut CENTRAL TEST gateway rollout",
-            why: ADMIN_FLEET_REQUEST_REASON,
-            target: { gatewayId: targetGateway.gatewayId, gatewayScope, version, sourceSha },
-            preActionStatus: {
-              latestRelease: targetGateway.latestRelease,
-              desiredRelease: targetGateway.desiredRelease,
-            },
-            mutation: {
-              kind: "cut-central-test-gateway-rollout",
-              gatewayId: targetGateway.gatewayId,
-              gatewayScope,
-              version,
-              sourceSha,
-              manifestDigest: manifest.manifestDigest,
-            },
+            gateways,
+            primary: gateway,
+            payload,
+            note,
+            manifestDigest: manifest.manifestDigest,
+            version,
+            sourceSha,
+            gatewayScope,
             testProvenance,
-            idempotencyScope: `cut-central-test-release:${version}:${targetGateway.gatewayId}`,
-            action: async () => appendGatewayRelease(db, {
-              gateway: targetGateway,
-              artifact: gatewayArtifactFromReleasePayload(payload),
-              payload,
-              createdBy,
-              now: Date.now(),
-              sourceRelease: targetGateway.latestRelease,
-              note,
-              requireMaintenanceOpen: true,
-            }),
-          });
-          rollouts.push({
-            gatewayId: targetGateway.gatewayId,
-            release: appended.release,
-            operationId: appended.operationId,
-            ...(appended.reused ? { reused: true } : {}),
-          });
-        }
+            createdBy,
+          }),
+        ];
         res.status(202).json({
           version,
           sourceSha,
