@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   dbDoc: vi.fn((path: string) => ({ path })),
   giteaApi: vi.fn(),
   createProjectGiteaRepo: vi.fn(),
+  giteaDeleteVerifiedRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
   giteaWriteFiles: vi.fn(),
   internalFetch: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("../lib/db.js", () => ({
 vi.mock("../lib/gitea.js", () => ({
   giteaApi: (...args: unknown[]) => h.giteaApi(...args),
   createProjectGiteaRepo: (...args: unknown[]) => h.createProjectGiteaRepo(...args),
+  giteaDeleteVerifiedRepo: (...args: unknown[]) => h.giteaDeleteVerifiedRepo(...args),
   giteaWriteFile: (...args: unknown[]) => h.giteaWriteFile(...args),
   giteaWriteFiles: (...args: unknown[]) => h.giteaWriteFiles(...args),
 }));
@@ -55,6 +57,7 @@ vi.mock("@octogee/core/templates/project-readmes", () => ({
 const { default: readmeRoutes } = await import("../routes/projects/readme.js");
 const {
   ensureProjectGiteaRepo,
+  deleteProjectRepo,
   provisionProjectRepo,
 } = await import("../routes/projects/provisioning.js");
 const { default: displayNameRoutes } = await import("../routes/workspace/display-name.js");
@@ -85,9 +88,11 @@ beforeEach(() => {
   h.dbDoc.mockClear();
   h.giteaApi.mockReset();
   h.createProjectGiteaRepo.mockReset().mockResolvedValue(undefined);
+  h.giteaDeleteVerifiedRepo.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFile.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFiles.mockReset().mockResolvedValue(undefined);
   h.internalFetch.mockReset();
+  delete process.env.GITEA_TOKEN;
   process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
   h.readProject.mockReset();
   h.renderReadmeTemplate.mockReset().mockReturnValue("# Orbit\n");
@@ -297,6 +302,33 @@ describe("project provisioning helpers", () => {
         visibility: "private",
       }),
     ).resolves.toBe("repo exists (HTTP 502)");
+  });
+
+  it("uses the local Gitea admin credential when mounted by octogee-api", async () => {
+    process.env.GITEA_TOKEN = "platform-gitea-token";
+
+    await expect(
+      provisionProjectRepo({
+        workspaceId: "mira",
+        slug: "orbit",
+        name: "Orbit",
+        tagline: "",
+        projectType: null,
+        visibility: "private",
+      }),
+    ).resolves.toBeNull();
+
+    expect(h.createProjectGiteaRepo).toHaveBeenCalledWith("mira", "orbit", "Octogee project: Orbit", true);
+    expect(h.internalFetch).not.toHaveBeenCalled();
+  });
+
+  it("deletes directly when octogee-api holds the Gitea admin credential", async () => {
+    process.env.GITEA_TOKEN = "platform-gitea-token";
+
+    await deleteProjectRepo({ workspaceId: "mira", slug: "orbit" });
+
+    expect(h.giteaDeleteVerifiedRepo).toHaveBeenCalledWith("mira", "orbit");
+    expect(h.internalFetch).not.toHaveBeenCalled();
   });
 });
 
