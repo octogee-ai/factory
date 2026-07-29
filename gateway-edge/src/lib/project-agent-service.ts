@@ -106,6 +106,18 @@ export async function setProjectAgentEnabled(
     { merge: true },
   );
 
+  // Roster follows the flag, not the mint/retire outcome: the byok broker
+  // refuses tokens for unrostered agent ids, and an unresolvable boot-time
+  // SecretRef probe-kills the whole gateway pod. Keying on the flag keeps the
+  // roster a superset of every agent the gateway config can demand, whatever
+  // partial-failure state the toggle lands in.
+  const agentId = projectAgentId(workspaceId, project);
+  await db.doc(`users/${actor.uid}`).update({
+    "provisioning.openclaw.agentIds": enabled
+      ? FieldValue.arrayUnion(agentId)
+      : FieldValue.arrayRemove(agentId),
+  });
+
   return enabled
     ? enableProjectAgent(actor, workspaceId, project)
     : disableProjectAgent(actor, workspaceId, project);
