@@ -111,6 +111,33 @@ describe("setProjectAgentEnabled — enable", () => {
     expect(h.sets).toEqual([]);
   });
 
+  it("allows an active Builder Signup Offer to enable a project agent", async () => {
+    seedProject();
+    const result = await setProjectAgentEnabled(
+      actor({
+        userData: {
+          username: "mira",
+          tier: "personal_free",
+          trialGrant: {
+            schemaVersion: 3,
+            offerId: "builder-signup",
+            offerVersion: 1,
+            personalTier: "personal",
+            builderTier: "hobby",
+            configHash: "config-a",
+            claimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+            endsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000),
+          },
+        },
+      }),
+      "orbit",
+      true,
+    );
+
+    expect(result.status).toBe(200);
+    expect(h.createProjectAgentBot).toHaveBeenCalled();
+  });
+
   it("an active paid subscription wins over a stale free selection (billing precedence)", async () => {
     seedProject();
     const result = await setProjectAgentEnabled(
