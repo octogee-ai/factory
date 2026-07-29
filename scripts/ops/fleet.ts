@@ -1249,14 +1249,14 @@ function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): s
 }
 
 export function resolveFleetOperatorUidFromUserConfigs(
-  configs: readonly { uid: string; role: unknown }[],
+  configs: readonly { uid: string; role: unknown; disabled: boolean }[],
 ): string {
   const operatorUids = configs
-    .filter((config) => config.role === "admin")
+    .filter((config) => config.role === "admin" && !config.disabled)
     .map((config) => config.uid);
   if (operatorUids.length !== 1) {
     throw new Error(
-      `OPERATOR_UID is required when Firestore does not identify exactly one admin (found ${operatorUids.length})`,
+      `OPERATOR_UID is required when Firebase Auth does not identify exactly one enabled Firestore admin (found ${operatorUids.length})`,
     );
   }
   return operatorUids[0]!;
@@ -1271,9 +1271,11 @@ async function fleetOperatorUid(): Promise<string> {
       const configs = await Promise.all(
         users.docs.map((user) => user.ref.collection("system").doc("config").get()),
       );
+      const authUsers = await Promise.all(users.docs.map((user) => getAuth().getUser(user.id)));
       return resolveFleetOperatorUidFromUserConfigs(configs.map((config, index) => ({
         uid: users.docs[index]!.id,
         role: config.get("role"),
+        disabled: authUsers[index]!.disabled,
       })));
     })();
   }

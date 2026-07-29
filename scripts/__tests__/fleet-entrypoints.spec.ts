@@ -884,13 +884,14 @@ describe("fleet CLI args", () => {
 
   it("discovers the sole Firestore admin without a collection-group index", () => {
     expect(resolveFleetOperatorUidFromUserConfigs([
-      { uid: "builder", role: "builder" },
-      { uid: "operator", role: "admin" },
+      { uid: "builder", role: "builder", disabled: false },
+      { uid: "retired-operator", role: "admin", disabled: true },
+      { uid: "operator", role: "admin", disabled: false },
     ])).toBe("operator");
     expect(() => resolveFleetOperatorUidFromUserConfigs([])).toThrow(/found 0/);
     expect(() => resolveFleetOperatorUidFromUserConfigs([
-      { uid: "operator-a", role: "admin" },
-      { uid: "operator-b", role: "admin" },
+      { uid: "operator-a", role: "admin", disabled: false },
+      { uid: "operator-b", role: "admin", disabled: false },
     ])).toThrow(/found 2/);
   });
 
