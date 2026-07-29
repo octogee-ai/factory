@@ -108,7 +108,7 @@ mattermost:
   # compute class.
   resources:
     requests:
-      cpu: "1000m"
+      cpu: "350m"
       memory: "2Gi"
       ephemeral-storage: "1Gi"
     limits:
@@ -224,8 +224,8 @@ gateway-edge:
     K8S_NAMESPACE: "octogee"
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 50m
+      memory: 192Mi
     limits:
       cpu: 500m
       memory: 512Mi
@@ -304,8 +304,8 @@ llmBroker:
     optional: true
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 50m
+      memory: 192Mi
     limits:
       cpu: 500m
       memory: 512Mi
@@ -321,8 +321,8 @@ artifactWorker:
   serviceAccountName: octogee-artifact-worker
   supervisorResources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 50m
+      memory: 128Mi
       ephemeral-storage: 64Mi
     limits:
       cpu: 500m
@@ -330,8 +330,8 @@ artifactWorker:
       ephemeral-storage: 128Mi
   parserResources:
     requests:
-      cpu: 500m
-      memory: 768Mi
+      cpu: 50m
+      memory: 128Mi
       ephemeral-storage: 512Mi
     limits:
       cpu: "2"
