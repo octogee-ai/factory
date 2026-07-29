@@ -20,7 +20,7 @@ import type {
   ActivityMattermostPost,
   MattermostUploadSession,
 } from "./mm-client.js";
-import { redactSecrets } from "./redact-secrets.js";
+import { redactSecrets } from "@octogee/shared/types/secret-redaction";
 
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
