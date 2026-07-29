@@ -37,7 +37,7 @@ export declare const DEFAULT_PLATFORM_CONNECT_CONFIG: PlatformConnectConfig;
 export declare function parsePlatformConnectConfig(value: unknown): PlatformConnectConfig | null;
 export declare function googleConnectAllowed(config: PlatformConnectConfig | null, uid: string): boolean;
 export declare const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
-export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
+export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
 export interface PlatformModelConfig {
     freeTierModelRef: string;
     opsAgentModelRef: string;
