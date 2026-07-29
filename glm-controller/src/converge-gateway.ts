@@ -69,7 +69,7 @@ function classKnobs(gateway: DurableGateway): {
   };
 }
 
-function gatewayImageFor(
+export function gatewayImageFor(
   gateway: DurableGateway,
   artifact: ReleasePayload,
 ): { imageRepository: string; imageTag: string } {

@@ -5,6 +5,7 @@ import { refineGatewayConvergenceAction } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+const operatorRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
 
 function gateway(): DurableGateway {
   return {
@@ -102,6 +103,52 @@ describe("gateway convergence surge wiring", () => {
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "steady" });
+  });
+
+  it("uses the operator image receipt for operator gateway handoff and readiness", async () => {
+    const standardImageTag = `def5678-oc2026.7.1@sha256:${"a".repeat(64)}`;
+    const operatorImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
+    const operatorGateway = {
+      ...gateway(),
+      gatewayClass: "operator" as const,
+      profile: "operator" as const,
+      imageProfile: "operator" as const,
+      ownerUid: "uid-bender",
+      builderSlug: "bender",
+    };
+    const operatorArtifact: ReleasePayload = {
+      ...artifact,
+      imageTag: standardImageTag,
+      profileImages: {
+        operator: {
+          imageRepository: operatorRepository,
+          imageTag: operatorImageTag,
+        },
+      },
+    };
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, operatorGateway),
+      gateway: operatorGateway,
+      artifact: operatorArtifact,
+      runtime: runtime(operatorImageTag),
+      helmObserved: {
+        imageRepository: operatorRepository,
+        imageTag: operatorImageTag,
+        replicas: 1,
+        ownerUid: "uid-bender",
+        builderSlug: "bender",
+      },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
+      gatewayId: "bender",
+      desiredImageTag: operatorImageTag,
+      requiresCustomerMigration: true,
+      ownerlessOperatorPrewarm: false,
+    });
   });
 
   it("does not mark a qualified release live from an ambiguous legacy SHA heartbeat", async () => {

@@ -73,6 +73,7 @@ import {
 import {
   cowboyMayMarkGatewayLive,
   cowboyMayMutateGateway,
+  gatewayImageFor,
   gatewayUpsertOptsFromRelease,
   markLiveRuntimePatch,
   deploymentIntentFingerprintForComparison,
@@ -807,12 +808,12 @@ interface GatewayConvergencePassDeps {
 // would count the old pod during a surge overlap.
 function runtimeReportsDesiredBuild(
   runtime: GatewayRuntimeDoc | undefined,
-  artifact: ReleasePayload,
+  desiredImageTag: string,
 ): boolean {
   if (!runtime) return false;
   return (
     runtime.heartbeat.status === "ready" &&
-    gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, artifact.imageTag)
+    gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, desiredImageTag)
   );
 }
 
@@ -841,9 +842,10 @@ export async function refineGatewayConvergenceAction(input: {
   if (!(await cowboyMayMutateGatewayNow(passDeps.db, gateway.gatewayId))) {
     return { kind: "steady" };
   }
+  const desiredImage = gatewayImageFor(gateway, artifact);
   const handoff = await passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
-    desiredImageTag: artifact.imageTag,
+    desiredImageTag: desiredImage.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
     ownerlessOperatorPrewarm: false,
   });
@@ -852,7 +854,7 @@ export async function refineGatewayConvergenceAction(input: {
     artifact,
     helm: helmObserved,
     desiredDeploymentIntentFingerprint,
-    deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, artifact),
+    deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, desiredImage.imageTag),
   });
 }
 
