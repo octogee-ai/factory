@@ -18,22 +18,24 @@ vi.mock("../lib/mattermost-context", () => ({
   getWorkspaceMmContext: (...args: unknown[]) => mockGetWorkspaceMmContext(...args),
 }));
 
-const mockCreateProjectGiteaRepo = vi.fn();
-const mockGiteaWriteFile = vi.fn();
-const mockGiteaWriteFiles = vi.fn();
+const mockInternalFetch = vi.fn();
+vi.mock("../lib/internal-fetch", () => ({
+  internalFetch: (...args: unknown[]) => mockInternalFetch(...args),
+}));
+
 const mockGiteaApi = vi.fn();
-const mockGiteaDeleteVerifiedRepo = vi.fn();
 vi.mock("../lib/gitea", () => ({
   giteaApi: (...args: unknown[]) => mockGiteaApi(...args),
-  createProjectGiteaRepo: (...args: unknown[]) => mockCreateProjectGiteaRepo(...args),
-  giteaWriteFile: (...args: unknown[]) => mockGiteaWriteFile(...args),
-  giteaWriteFiles: (...args: unknown[]) => mockGiteaWriteFiles(...args),
-  giteaDeleteVerifiedRepo: (...args: unknown[]) => mockGiteaDeleteVerifiedRepo(...args),
+  createProjectGiteaRepo: vi.fn(),
+  giteaWriteFile: vi.fn(),
+  giteaWriteFiles: vi.fn(),
+  giteaDeleteVerifiedRepo: vi.fn(),
 }));
 
 import { createApp } from "../index.js";
 
 const CALLER_UID = "caller-uid";
+const ORIGINAL_FLEET_BROKER_URL = process.env.FLEET_BROKER_URL;
 
 async function authHeader(uid: string = CALLER_UID): Promise<{ Authorization: string }> {
   const token = await getIdTokenForUid(uid);
@@ -85,6 +87,14 @@ async function getProjectChannel(
     .doc(channelId)
     .get();
   return snap.data();
+}
+
+function projectRepoProvisionInput(): Record<string, unknown> {
+  const call = mockInternalFetch.mock.calls.find(([url]) => (
+    String(url).endsWith("/internal/gitea/provision-project-repo")
+  ));
+  expect(call).toBeDefined();
+  return JSON.parse(String((call![1] as RequestInit).body));
 }
 
 interface ProjectPairMattermostFixture {
@@ -184,15 +194,27 @@ setupEmulatorTest();
 beforeEach(async () => {
   mockMmApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
-  mockCreateProjectGiteaRepo.mockReset();
-  mockCreateProjectGiteaRepo.mockResolvedValue(undefined);
-  mockGiteaWriteFile.mockReset();
-  mockGiteaWriteFile.mockResolvedValue(undefined);
-  mockGiteaWriteFiles.mockReset();
-  mockGiteaWriteFiles.mockResolvedValue(undefined);
   mockGiteaApi.mockReset();
-  mockGiteaDeleteVerifiedRepo.mockReset();
-  mockGiteaDeleteVerifiedRepo.mockResolvedValue(undefined);
+  mockInternalFetch.mockReset();
+  mockInternalFetch.mockImplementation(async (
+    url: RequestInfo | URL,
+    init?: RequestInit,
+    options?: { internalServiceKey?: string },
+  ) => {
+    if (String(url).endsWith("/internal/gitea/provision-project-repo")) {
+      return new Response(JSON.stringify({ created: true }), { status: 200 });
+    }
+    const headers = new Headers(init?.headers);
+    const internalServiceKey = options?.internalServiceKey ?? process.env.INTERNAL_SERVICE_KEY;
+    if (internalServiceKey) headers.set("X-Internal-Service-Key", internalServiceKey);
+    return globalThis.fetch(url, { ...init, headers });
+  });
+  process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
+});
+
+afterEach(() => {
+  if (ORIGINAL_FLEET_BROKER_URL === undefined) delete process.env.FLEET_BROKER_URL;
+  else process.env.FLEET_BROKER_URL = ORIGINAL_FLEET_BROKER_URL;
 });
 
 describe("POST /internal/project/publish (octogee_publish tool endpoint, no-auth in-pod)", () => {
@@ -777,19 +799,12 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       "POST",
       { user_id: "mock-mm-coach" },
     );
-    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice",
-      "mygame",
-      expect.any(String),
-      false,
-    );
-    expect(mockGiteaWriteFile).toHaveBeenCalledWith(
-      "alice",
-      "mygame",
-      "README.md",
-      expect.stringContaining("My Game"),
-      expect.any(String),
-    );
+    expect(projectRepoProvisionInput()).toMatchObject({
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "public",
+    });
   });
 
   it("creates under the server-managed workspace slug when mutable identity fields are forged", async () => {
@@ -921,7 +936,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     expect(String(doc?.provisioningError)).toMatch(/Add owner.*gateway timeout/i);
   });
 
-  it("passes private=true to Gitea when the requested visibility is private", async () => {
+  it("passes private visibility to the project repo broker", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
       ownerUid: CALLER_UID,
       slug: "alice",
@@ -941,12 +956,11 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       .send({ name: "Private Thing", slug: "privthing", visibility: "private" });
 
     expect(res.status).toBe(200);
-    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice",
-      "privthing",
-      expect.any(String),
-      true,
-    );
+    expect(projectRepoProvisionInput()).toMatchObject({
+      workspaceId: "alice",
+      slug: "privthing",
+      visibility: "private",
+    });
   });
 
   it("returns 502 + marks failed when Gitea repo creation throws", async () => {
@@ -961,7 +975,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       primaryId: "ch-new-999",
       primaryName: "alice-proj-mygame-general",
     });
-    mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea down"));
+    mockInternalFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Gitea down" }), { status: 502 }));
 
     const app = createApp();
     const res = await request(app)
@@ -1050,19 +1064,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       "POST",
       expect.objectContaining({ team_id: "team-abc", name: "alice-proj-mygame-general" }),
     );
-    expect(mockCreateProjectGiteaRepo).toHaveBeenCalledWith(
-      "alice",
-      "mygame",
-      expect.any(String),
-      false,
-    );
-    expect(mockGiteaWriteFile).toHaveBeenCalledWith(
-      "alice",
-      "mygame",
-      "README.md",
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(projectRepoProvisionInput()).toMatchObject({
+      workspaceId: "alice",
+      slug: "mygame",
+      name: "My Game",
+      visibility: "public",
+    });
   });
 
   it("flips to failed with a Gitea-specific error when the Gitea reconcile throws during retry", async () => {
@@ -1087,7 +1094,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       primaryId: "ch-retry-gitea-fail",
       primaryName: "alice-proj-mygame-general",
     });
-    mockCreateProjectGiteaRepo.mockRejectedValue(new Error("Gitea unreachable"));
+    mockInternalFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Gitea unreachable" }), { status: 502 }));
 
     const app = createApp();
     const res = await request(app)

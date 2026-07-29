@@ -1,4 +1,10 @@
-import { createProjectGiteaRepo, giteaWriteFile, giteaWriteFiles } from "../../lib/gitea.js";
+import {
+  createProjectGiteaRepo,
+  giteaDeleteVerifiedRepo,
+  giteaWriteFile,
+  giteaWriteFiles,
+} from "../../lib/gitea.js";
+import { internalFetch } from "../../lib/internal-fetch.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
 import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
@@ -8,7 +14,7 @@ export interface ProjectRepoProvisioningResult {
   error: string | null;
 }
 
-class ProjectRepoProvisioningError extends Error {
+export class ProjectRepoProvisioningError extends Error {
   constructor(
     message: string,
     readonly created: boolean,
@@ -87,13 +93,22 @@ export async function provisionProjectRepoResult(
   input: Parameters<typeof ensureProjectGiteaRepo>[0],
 ): Promise<ProjectRepoProvisioningResult> {
   try {
-    const { created } = await ensureProjectGiteaRepo(input);
-    return { created, error: null };
-  } catch (error) {
+    const response = await internalFetch(`${giteaBrokerBase()}/internal/gitea/provision-project-repo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(30_000),
+    }, { requireProjectedToken: true });
+    const body = await response.json().catch(() => null);
+    if (response.ok) {
+      return { created: isCreatedResult(body), error: null };
+    }
     return {
-      created: error instanceof ProjectRepoProvisioningError && error.created,
-      error: errorMessage(error),
+      created: isCreatedResult(body),
+      error: brokerError(response.status, body),
     };
+  } catch (error) {
+    return { created: false, error: errorMessage(error) };
   }
 }
 
@@ -101,6 +116,47 @@ export async function provisionProjectRepo(
   input: Parameters<typeof ensureProjectGiteaRepo>[0],
 ): Promise<string | null> {
   return (await provisionProjectRepoResult(input)).error;
+}
+
+export async function deleteProjectRepo(input: {
+  workspaceId: string;
+  slug: string;
+}): Promise<void> {
+  const response = await internalFetch(`${giteaBrokerBase()}/internal/gitea/delete-project-repo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(30_000),
+  }, { requireProjectedToken: true });
+  if (response.ok) return;
+  const body = await response.json().catch(() => null);
+  throw new Error(brokerError(response.status, body));
+}
+
+export async function deleteProjectGiteaRepo(input: {
+  workspaceId: string;
+  slug: string;
+}): Promise<void> {
+  await giteaDeleteVerifiedRepo(workspaceGiteaOrg(input.workspaceId), projectRepoName(input.slug));
+}
+
+function giteaBrokerBase(): string {
+  const base = process.env.FLEET_BROKER_URL ?? process.env.OPENCLAW_RUNTIME_BROKER_URL;
+  if (!base) throw new Error("Gitea provisioning broker is not configured");
+  let trimmed = base;
+  while (trimmed.endsWith("/")) trimmed = trimmed.slice(0, -1);
+  return trimmed;
+}
+
+function isCreatedResult(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as { created?: unknown }).created === true;
+}
+
+function brokerError(status: number, body: unknown): string {
+  const error = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+    ? (body as { error: string }).error
+    : "Gitea provisioning broker request failed";
+  return `${error} (HTTP ${status})`;
 }
 
 function errorMessage(error: unknown): string {

@@ -8,9 +8,8 @@ import {
   PROJECT_ID_MIN_LENGTH,
   PROJECT_ID_MAX_LENGTH,
 } from "@octogee/shared/types/identity";
-import { projectRepoName, workspaceGiteaOrg } from "./gitea-naming.js";
-import { giteaDeleteVerifiedRepo } from "./gitea.js";
-import { provisionProjectRepoResult } from "../routes/projects/provisioning.js";
+import { projectRepoName } from "./gitea-naming.js";
+import { deleteProjectRepo, provisionProjectRepoResult } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
@@ -535,7 +534,7 @@ async function cleanupProjectProvisioning(
   }
   if (artifacts.repoCreated) {
     try {
-      await giteaDeleteVerifiedRepo(workspaceGiteaOrg(plan.workspaceId), plan.giteaRepoName);
+      await deleteProjectRepo({ workspaceId: plan.workspaceId, slug: plan.slug });
     } catch (error) {
       failures.push(`Gitea cleanup: ${errorMessage(error)}`);
     }
