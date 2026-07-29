@@ -454,6 +454,38 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     }));
   });
 
+  it("rolls every non-retired gateway when the CENTRAL TEST scope is all", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("shared-blue", sharedPayload()),
+      ...seedNewSchemaGateway("paused", sharedPayload(), { desiredStatus: "paused" }),
+      ...seedNewSchemaGateway("retired", sharedPayload(), { desiredStatus: "retired" }),
+    }, { releaseAuthority: authority });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha, gatewayScope: "all" })
+      .expect(202);
+
+    expect(response.body.rollouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "default", release: 2 }),
+      expect.objectContaining({ gatewayId: "shared-blue", release: 2 }),
+      expect.objectContaining({ gatewayId: "paused", release: 2 }),
+    ]));
+    expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "retired" }),
+    ]));
+    expect(store.get("gateways/default")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/shared-blue")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/paused")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/retired")).toMatchObject({ desiredRelease: 1 });
+    expect(auditsIn(store)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ what: "cut CENTRAL TEST release" }),
+      expect.objectContaining({ what: "cut CENTRAL TEST gateway rollout", target: { gatewayId: "shared-blue", gatewayScope: "all", version: "v0.4.0", sourceSha } }),
+    ]));
+  });
+
   it("rejects a conflicting durable TEST version before aliases or desired state change", async () => {
     const conflictingSourceSha = "f".repeat(40);
     const authority = releaseAuthority(releaseManifest({ sourceSha: conflictingSourceSha }));

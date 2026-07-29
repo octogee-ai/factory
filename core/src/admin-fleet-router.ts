@@ -2921,7 +2921,7 @@ function operationDoc(
 async function readGatewayDoc(
   db: Firestore,
   gatewayId: string,
-): Promise<GatewayDoc | null> {
+): Promise<DurableGatewayRoot | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
   return asDurableGatewayRoot(snap.data(), gatewayId);
@@ -3436,14 +3436,24 @@ function centralReleaseAuthorityFor(
   return deps.releaseAuthority;
 }
 
-function centralTestReleaseRequest(body: unknown): { version: string; sourceSha: string } {
+type CentralTestGatewayScope = "shared" | "all";
+
+function centralTestReleaseRequest(body: unknown): {
+  version: string;
+  sourceSha: string;
+  gatewayScope: CentralTestGatewayScope;
+} {
   if (
     !isPlainRecord(body) ||
-    Object.keys(body).length !== 2 ||
+    (Object.keys(body).length !== 2 && Object.keys(body).length !== 3) ||
     !Object.prototype.hasOwnProperty.call(body, "version") ||
-    !Object.prototype.hasOwnProperty.call(body, "sourceSha")
+    !Object.prototype.hasOwnProperty.call(body, "sourceSha") ||
+    (Object.prototype.hasOwnProperty.call(body, "gatewayScope") &&
+      (body.gatewayScope !== "shared" && body.gatewayScope !== "all"))
   ) {
-    rejectCentralReleaseRequest(400, { error: "release cut requires exactly version and sourceSha" });
+    rejectCentralReleaseRequest(400, {
+      error: "release cut requires version, sourceSha, and an optional gatewayScope of shared or all",
+    });
   }
   const version = releaseVersionFromBody(body.version);
   const sourceSha = releaseSourceShaFromBody(body.sourceSha);
@@ -3452,7 +3462,11 @@ function centralTestReleaseRequest(body: unknown): { version: string; sourceSha:
       error: "release cut requires a semantic version and full lowercase sourceSha",
     });
   }
-  return { version, sourceSha };
+  return {
+    version,
+    sourceSha,
+    gatewayScope: body.gatewayScope === "all" ? "all" : "shared",
+  };
 }
 
 function centralPromotionRequest(version: unknown, body: unknown): string {
@@ -3493,7 +3507,7 @@ function assertCentralTestReleaseReservation(
 async function centralReleaseGateway(
   db: Firestore,
   operation: "cut" | "promote",
-): Promise<GatewayDoc> {
+): Promise<DurableGatewayRoot> {
   const gateway = await readGatewayDoc(db, CENTRAL_RELEASE_GATEWAY_ID);
   if (!gateway) {
     rejectCentralReleaseRequest(404, {
@@ -3508,6 +3522,35 @@ async function centralReleaseGateway(
     });
   }
   return gateway;
+}
+
+async function centralTestReleaseGateways(
+  db: Firestore,
+  gatewayScope: CentralTestGatewayScope,
+): Promise<DurableGatewayRoot[]> {
+  const sharedGateway = await centralReleaseGateway(db, "cut");
+  if (gatewayScope === "shared") return [sharedGateway];
+  const snapshot = await db.collection(GATEWAYS_COLLECTION).get();
+  const gateways = snapshot.docs
+    .map((document) => asDurableGatewayRoot(document.data(), document.id))
+    .filter((gateway): gateway is DurableGatewayRoot => gateway !== null && gateway.desiredStatus !== "retired")
+    .sort((left, right) => left.gatewayId.localeCompare(right.gatewayId));
+  if (!gateways.some((gateway) => gateway.gatewayId === sharedGateway.gatewayId)) {
+    throw new Error(`CENTRAL shared gateway ${sharedGateway.gatewayId} is absent from durable gateway roots`);
+  }
+  return gateways;
+}
+
+async function existingCentralTestGatewayRollout(
+  db: Firestore,
+  gateway: GatewayDoc,
+  payload: ReleasePayload,
+  note: string,
+): Promise<{ release: number; operationId: null; reused: true } | null> {
+  const latest = await readRelease(db, gateway.gatewayId, gateway.latestRelease);
+  if (!latest || latest.note !== note || !isReleasePayload(latest.payload)) return null;
+  if (releasePayloadHash(latest.payload) !== releasePayloadHash(payload)) return null;
+  return { release: latest.release, operationId: null, reused: true };
 }
 
 async function assertNoCentralReleaseOperation(
@@ -6151,12 +6194,89 @@ router.post(
     },
   );
 
+  type CentralTestRolloutOutcome = {
+    gatewayId: string;
+    release: number;
+    operationId: string | null;
+    reused?: boolean;
+  };
+
+  async function centralTestGatewayRolloutFanout(input: {
+    req: Request;
+    gateways: DurableGatewayRoot[];
+    primary: DurableGatewayRoot;
+    payload: ReleasePayload;
+    note: string;
+    manifestDigest: string;
+    version: string;
+    sourceSha: string;
+    gatewayScope: CentralTestGatewayScope;
+    testProvenance: OperationAuditTestProvenance;
+    createdBy: string;
+  }): Promise<CentralTestRolloutOutcome[]> {
+    const {
+      req, gateways, primary, payload, note, manifestDigest,
+      version, sourceSha, gatewayScope, testProvenance, createdBy,
+    } = input;
+    const rollouts: CentralTestRolloutOutcome[] = [];
+    for (const targetGateway of gateways) {
+      if (targetGateway.gatewayId === primary.gatewayId) continue;
+      const existing = await existingCentralTestGatewayRollout(db, targetGateway, payload, note);
+      if (existing) {
+        rollouts.push({
+          gatewayId: targetGateway.gatewayId,
+          release: existing.release,
+          operationId: existing.operationId,
+          reused: true,
+        });
+        continue;
+      }
+      const appended = await runAdminFleetMutation({
+        req,
+        what: "cut CENTRAL TEST gateway rollout",
+        why: ADMIN_FLEET_REQUEST_REASON,
+        target: { gatewayId: targetGateway.gatewayId, gatewayScope, version, sourceSha },
+        preActionStatus: {
+          latestRelease: targetGateway.latestRelease,
+          desiredRelease: targetGateway.desiredRelease,
+        },
+        mutation: {
+          kind: "cut-central-test-gateway-rollout",
+          gatewayId: targetGateway.gatewayId,
+          gatewayScope,
+          version,
+          sourceSha,
+          manifestDigest,
+        },
+        testProvenance,
+        idempotencyScope: `cut-central-test-release:${version}:${targetGateway.gatewayId}`,
+        action: async () => appendGatewayRelease(db, {
+          gateway: targetGateway,
+          artifact: gatewayArtifactFromReleasePayload(payload),
+          payload,
+          createdBy,
+          now: Date.now(),
+          sourceRelease: targetGateway.latestRelease,
+          note,
+          requireMaintenanceOpen: true,
+        }),
+      });
+      rollouts.push({
+        gatewayId: targetGateway.gatewayId,
+        release: appended.release,
+        operationId: appended.operationId,
+        ...(appended.reused ? { reused: true } : {}),
+      });
+    }
+    return rollouts;
+  }
+
   router.post(
     "/releases/cut",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const authority = centralReleaseAuthorityFor(deps, "test");
-        const { version, sourceSha } = centralTestReleaseRequest(req.body);
+        const { version, sourceSha, gatewayScope } = centralTestReleaseRequest(req.body);
         const manifest = await centralManifestForSourceSha(authority, sourceSha);
         const existingReservation = await readCentralTestReleaseReservation(db, version);
         assertCentralTestReleaseReservation(existingReservation, {
@@ -6164,8 +6284,15 @@ router.post(
           sourceSha,
           manifestDigest: manifest.manifestDigest,
         });
-        const gateway = await centralReleaseGateway(db, "cut");
-        await assertNoCentralReleaseOperation(db, gateway, existingReservation !== null);
+        const gateways = await centralTestReleaseGateways(db, gatewayScope);
+        const gateway = gateways.find((candidate) => candidate.gatewayId === CENTRAL_RELEASE_GATEWAY_ID)!;
+        for (const candidate of gateways) {
+          await assertNoCentralReleaseOperation(
+            db,
+            candidate,
+            existingReservation !== null && candidate.gatewayId === gateway.gatewayId,
+          );
+        }
         const payload = centralGatewayReleasePayload(manifest);
         const aliasPlan = centralReleaseAliasPlans({
           authority,
@@ -6187,7 +6314,7 @@ router.post(
             req,
             what: "cut CENTRAL TEST release",
             why: ADMIN_FLEET_REQUEST_REASON,
-            target: { gatewayId: gateway.gatewayId, version, sourceSha },
+            target: { gatewayId: gateway.gatewayId, gatewayScope, version, sourceSha },
             preActionStatus: {
               latestRelease: gateway.latestRelease,
               desiredRelease: gateway.desiredRelease,
@@ -6195,6 +6322,7 @@ router.post(
             mutation: {
               kind: "cut-central-test-release",
               gatewayId: gateway.gatewayId,
+              gatewayScope,
               version,
               sourceSha,
               manifestDigest: manifest.manifestDigest,
@@ -6270,12 +6398,36 @@ router.post(
           throw result.failure.error;
         }
         if (!result.appended) throw new Error("CENTRAL TEST release mutation has no release result");
+        const note = `CENTRAL TEST ${version} ${sourceSha}`;
+        const rollouts = [
+          {
+            gatewayId: gateway.gatewayId,
+            release: result.appended.release,
+            operationId: result.appended.operationId,
+            ...(result.appended.reused ? { reused: true } : {}),
+          },
+          ...await centralTestGatewayRolloutFanout({
+            req,
+            gateways,
+            primary: gateway,
+            payload,
+            note,
+            manifestDigest: manifest.manifestDigest,
+            version,
+            sourceSha,
+            gatewayScope,
+            testProvenance,
+            createdBy,
+          }),
+        ];
         res.status(202).json({
           version,
           sourceSha,
+          gatewayScope,
           gatewayId: gateway.gatewayId,
           release: result.appended.release,
           operationId: result.appended.operationId,
+          rollouts,
         });
       } catch (error) {
         if (respondCentralReleaseError(res, error)) return;

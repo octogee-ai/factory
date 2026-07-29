@@ -63,7 +63,7 @@ export async function ensureProjectGiteaRepo(input: {
         siteId: hostingSiteId,
         url: `https://${hostingSiteId}.web.app`,
       },
-      runtime: { recipe: "astro-static" },
+      runtime: { recipe: "static-site" },
       collaborators: [],
       createdAt: new Date().toISOString(),
     };
@@ -92,6 +92,16 @@ export async function ensureProjectGiteaRepo(input: {
 export async function provisionProjectRepoResult(
   input: Parameters<typeof ensureProjectGiteaRepo>[0],
 ): Promise<ProjectRepoProvisioningResult> {
+  if (process.env.GITEA_TOKEN) {
+    try {
+      return { ...(await ensureProjectGiteaRepo(input)), error: null };
+    } catch (error) {
+      return {
+        created: error instanceof ProjectRepoProvisioningError && error.created,
+        error: errorMessage(error),
+      };
+    }
+  }
   try {
     const response = await internalFetch(`${giteaBrokerBase()}/internal/gitea/provision-project-repo`, {
       method: "POST",
@@ -122,6 +132,10 @@ export async function deleteProjectRepo(input: {
   workspaceId: string;
   slug: string;
 }): Promise<void> {
+  if (process.env.GITEA_TOKEN) {
+    await deleteProjectGiteaRepo(input);
+    return;
+  }
   const response = await internalFetch(`${giteaBrokerBase()}/internal/gitea/delete-project-repo`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -36,6 +36,8 @@ import {
   resolveFleetVerb,
   resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
+  resolveExplicitFleetOperatorUid,
+  resolveFleetOperatorUidFromUserConfigs,
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
@@ -861,7 +863,16 @@ describe("fleet CLI args", () => {
       method: "POST",
       path: "/api/admin/releases/cut",
       body: { version: "v0.4.0", sourceSha },
-      idempotencyKey: `release-cut:v0.4.0:${sourceSha}`,
+      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:shared`,
+    });
+    expect(resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--gateway-scope=all"]),
+      sourceSha,
+    )).toEqual({
+      method: "POST",
+      path: "/api/admin/releases/cut",
+      body: { version: "v0.4.0", sourceSha, gatewayScope: "all" },
+      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:all`,
     });
     expect(resolveFleetReleaseMutation(
       parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
@@ -870,6 +881,37 @@ describe("fleet CLI args", () => {
       path: "/api/admin/releases/v0.4.0/promote",
       idempotencyKey: "release-promote:v0.4.0",
     });
+  });
+
+  it("uses the sole enabled Firestore admin only as the unspecified-actor fallback", () => {
+    expect(resolveFleetOperatorUidFromUserConfigs([
+      { uid: "builder", role: "builder", disabled: false },
+      { uid: "retired-operator", role: "admin", disabled: true },
+      { uid: "operator", role: "admin", disabled: false },
+    ])).toBe("operator");
+    expect(() => resolveFleetOperatorUidFromUserConfigs([])).toThrow(/found 0/);
+    expect(() => resolveFleetOperatorUidFromUserConfigs([
+      { uid: "operator-a", role: "admin", disabled: false },
+      { uid: "operator-b", role: "admin", disabled: false },
+    ])).toThrow(/found 2/);
+  });
+
+  it("accepts an explicit enabled admin when other active admins exist", () => {
+    expect(resolveExplicitFleetOperatorUid({
+      uid: "operator-selected-by-email",
+      role: "admin",
+      disabled: false,
+    })).toBe("operator-selected-by-email");
+    expect(() => resolveExplicitFleetOperatorUid({
+      uid: "retired-operator",
+      role: "admin",
+      disabled: true,
+    })).toThrow(/disabled/);
+    expect(() => resolveExplicitFleetOperatorUid({
+      uid: "builder",
+      role: "builder",
+      disabled: false,
+    })).toThrow(/admin role/);
   });
 
   it("preserves an explicit release idempotency key over its deterministic default", () => {

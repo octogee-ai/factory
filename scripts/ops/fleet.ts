@@ -151,12 +151,13 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "release cut",
     summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
-    args: "<version> [--sha=<sha>] [--idempotency-key=<key>] [--apply]",
+    args: "<version> [--sha=<sha>] [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
     description:
-      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the desired release, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the selected shared or all-gateway desired releases, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test release cut v0.4.0",
       "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
+      "fleet --env=test release cut v0.4.0 --gateway-scope=all --apply",
     ],
     writes: true,
   },
@@ -675,7 +676,7 @@ export function resolveFleetReleaseMutation(
   const action = args.positional[1];
   if (action === "cut") {
     if (args.env !== "test") throw new Error("release cut requires --env=test");
-    validateReleaseFlags(args, "release cut", ["sha"]);
+    validateReleaseFlags(args, "release cut", ["sha", "gateway-scope"]);
     const version = requiredReleaseVersion(args, "release cut");
     const explicitSourceSha = stringFlag(args, "sha");
     if (args.flags.sha !== undefined && !explicitSourceSha) {
@@ -687,11 +688,15 @@ export function resolveFleetReleaseMutation(
         ? "release cut requires a full lowercase --sha"
         : "release cut requires a full lowercase source SHA");
     }
+    const gatewayScope = stringFlag(args, "gateway-scope");
+    if (gatewayScope !== undefined && gatewayScope !== "shared" && gatewayScope !== "all") {
+      throw new Error("release cut --gateway-scope must be shared or all");
+    }
     return releaseIdempotencyRequest({
       method: "POST",
       path: "/api/admin/releases/cut",
-      body: { version, sourceSha },
-    }, args, `release-cut:${version}:${sourceSha}`);
+      body: { version, sourceSha, ...(gatewayScope === "all" ? { gatewayScope } : {}) },
+    }, args, `release-cut:${version}:${sourceSha}:${gatewayScope ?? "shared"}`);
   }
   if (action === "promote") {
     if (args.env !== "prod") throw new Error("release promote requires --env=prod");
@@ -1162,6 +1167,7 @@ export async function runForcedGatewayRestart(
 
 let args: ParsedFleetArgs = parseFleetArgs([]);
 let db: ReturnType<typeof getFirestore>;
+let resolvedOperatorUid: Promise<string> | null = null;
 
 function initializeFleetCli(argv: string[]): void {
   args = parseFleetArgs(argv);
@@ -1215,16 +1221,17 @@ function initializeFleetCli(argv: string[]): void {
     process.env.HOME ?? "",
     `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
   );
-  if (credentialMode === "service-account-key" && !fs.existsSync(saPath)) {
+  const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || saPath;
+  if (credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
     console.error(red(`${CROSS} SA key not found at ${saPath}`));
-    console.error(dim(`  Expected file used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
+    console.error(dim(`  Set GOOGLE_APPLICATION_CREDENTIALS or provide the local key used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
     process.exit(1);
   }
   initializeApp({
     credential:
       credentialMode === "application-default"
         ? applicationDefault()
-        : cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
+        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
     projectId,
   });
   if (credentialMode === "application-default") {
@@ -1241,14 +1248,67 @@ function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): s
   return value;
 }
 
+export function resolveFleetOperatorUidFromUserConfigs(
+  configs: readonly { uid: string; role: unknown; disabled: boolean }[],
+): string {
+  const operatorUids = configs
+    .filter((config) => config.role === "admin" && !config.disabled)
+    .map((config) => config.uid);
+  if (operatorUids.length !== 1) {
+    throw new Error(
+      `OPERATOR_UID or OPERATOR_EMAIL is required when Firebase Auth does not identify exactly one enabled Firestore admin (found ${operatorUids.length})`,
+    );
+  }
+  return operatorUids[0]!;
+}
+
+export function resolveExplicitFleetOperatorUid(input: {
+  uid: string;
+  role: unknown;
+  disabled: boolean;
+}): string {
+  if (input.disabled) throw new Error("configured Fleet admin is disabled");
+  if (input.role !== "admin") throw new Error("configured Fleet admin does not have the admin role");
+  return input.uid;
+}
+
+async function fleetOperatorUid(): Promise<string> {
+  const explicit = process.env.OPERATOR_UID;
+  if (explicit) return explicit;
+  const explicitEmail = process.env.OPERATOR_EMAIL;
+  if (explicitEmail) {
+    const authUser = await getAuth().getUserByEmail(explicitEmail);
+    const config = await db.doc(`users/${authUser.uid}/system/config`).get();
+    return resolveExplicitFleetOperatorUid({
+      uid: authUser.uid,
+      role: config.get("role"),
+      disabled: authUser.disabled,
+    });
+  }
+  if (!resolvedOperatorUid) {
+    resolvedOperatorUid = (async () => {
+      const users = await db.collection("users").get();
+      const configs = await Promise.all(
+        users.docs.map((user) => user.ref.collection("system").doc("config").get()),
+      );
+      const authUsers = await Promise.all(users.docs.map((user) => getAuth().getUser(user.id)));
+      return resolveFleetOperatorUidFromUserConfigs(configs.map((config, index) => ({
+        uid: users.docs[index]!.id,
+        role: config.get("role"),
+        disabled: authUsers[index]!.disabled,
+      })));
+    })();
+  }
+  return resolvedOperatorUid;
+}
+
 function fleetAdminClient(): AdminFleetClient {
   if (!args.env) throw new Error("fleet environment must be selected before creating an Admin API client");
-  const operatorUid = fleetAdminEnvironment("OPERATOR_UID");
   const webApiKey = fleetAdminEnvironment("FIREBASE_WEB_API_KEY");
   return createAdminFleetClient({
     apiOrigin: deploymentEnvironmentSettings(args.env).apiOrigin,
     getIdToken: async () => exchangeAdminFleetCustomToken({
-      operatorUid,
+      operatorUid: await fleetOperatorUid(),
       webApiKey,
       createCustomToken: (uid) => getAuth().createCustomToken(uid),
     }),
