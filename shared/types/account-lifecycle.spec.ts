@@ -37,6 +37,9 @@ describe("account deletion lifecycle", () => {
   it("admits only closed-set PII-free operational model dimensions", () => {
     expect(isAnonymousOperationalModelDimension("anthropic", "sonnet")).toBe(true);
     expect(isAnonymousOperationalModelDimension("openai", "openai:unknown-fallback")).toBe(true);
+    expect(
+      isAnonymousOperationalModelDimension("openrouter", "openrouter:openai/gpt-5.6-luna"),
+    ).toBe(true);
     expect(isAnonymousOperationalModelDimension("alice@example.com", "sonnet")).toBe(false);
     expect(isAnonymousOperationalModelDimension("anthropic", "alice@example.com")).toBe(false);
   });

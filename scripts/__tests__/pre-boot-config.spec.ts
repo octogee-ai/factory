@@ -36,6 +36,7 @@ describe("applyPreBootPatches — platform model catalog", () => {
       "platform-openrouter/z-ai/glm-5.2": {},
       "platform-openrouter/minimax/minimax-m3": {},
       "platform-openrouter/deepseek/deepseek-v4-pro": {},
+      "platform-openrouter/openai/gpt-5.6-luna": {},
       "platform-openai/gpt-5.4-mini": {},
     });
   });

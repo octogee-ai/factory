@@ -2,6 +2,38 @@ import { describe, expect, it } from "vitest";
 import { buildAnonymousOperationalArchive } from "../lib/customer-ops/deletion-archive.js";
 
 describe("buildAnonymousOperationalArchive", () => {
+  it("keeps GPT-5.6 Luna as a closed OpenRouter billing dimension", () => {
+    const archive = buildAnonymousOperationalArchive({
+      archivedAt: Date.UTC(2026, 6, 30),
+      createdAt: Date.UTC(2026, 6, 1),
+      deletionRequestedAt: Date.UTC(2026, 6, 29),
+      environment: "test",
+      planTier: "builder",
+      gatewayClass: "builder",
+      rollup: {
+        models: {
+          luna: {
+            provider: "openrouter",
+            model: "openai/gpt-5.6-luna",
+            costUsd: 0.71,
+            totalTokens: 2_000_000,
+            requestCount: 4,
+          },
+        },
+      },
+    });
+
+    expect(archive.models).toEqual([
+      {
+        provider: "openrouter",
+        model: "openrouter:openai/gpt-5.6-luna",
+        costUsd: 0.71,
+        totalTokens: 2_000_000,
+        requestCount: 4,
+      },
+    ]);
+  });
+
   it("keeps aggregate operational costs while excluding every identifying input", () => {
     const archive = buildAnonymousOperationalArchive({
       archivedAt: Date.UTC(2026, 6, 19),

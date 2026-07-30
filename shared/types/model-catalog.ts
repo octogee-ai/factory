@@ -66,6 +66,14 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     reasoningEfforts: [],
   },
   {
+    provider: "openrouter",
+    id: "openai/gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
+    source: "openrouter",
+    contextTokens: 1_050_000,
+    reasoningEfforts: ["high", "xhigh"],
+  },
+  {
     provider: "openai",
     id: "gpt-5.4-mini",
     label: "GPT-5.4 Mini",

@@ -366,5 +366,9 @@ describe("openRouterCatalogInputForBaseUrl", () => {
       modelCatalogForProvider("openrouter").map((e) => e.id),
     );
     expect(input.models[0]).toEqual({ model: "z-ai/glm-5.2", contextTokens: 1_048_576 });
+    expect(input.models).toContainEqual({
+      model: "openai/gpt-5.6-luna",
+      contextTokens: 1_050_000,
+    });
   });
 });

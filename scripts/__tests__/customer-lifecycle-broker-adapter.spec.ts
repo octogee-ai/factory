@@ -763,7 +763,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const rebuiltCoach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach") as
       | { model?: string; memorySearch?: unknown }
       | undefined;
-    expect(rebuiltCoach?.model).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(rebuiltCoach?.model).toBe("platform-openrouter/openai/gpt-5.6-luna");
     expect(rebuiltCoach?.memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
@@ -829,7 +829,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const patch = args.buildPatch(current);
     expect(patch.agents.entries["octogee-alice-proj-old-coach"]).toBeNull();
     expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openrouter/openai/gpt-5.6-luna",
       memory: {
         search: platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"),
       },
