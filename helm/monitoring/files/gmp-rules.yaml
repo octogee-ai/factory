@@ -43,6 +43,59 @@ spec:
           annotations:
             summary: "Desired-running gateway {{ $labels.gateway_id }} has no available pod"
             description: "Cowboy expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
+        - alert: GatewayOnDemandFallback
+          expr: |
+            kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+            * on(node) group_left()
+            kube_node_labels{label_cloud_google_com_gke_spot!="true"}
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Gateway {{ $labels.pod }} is running on on-demand capacity"
+            description: "The regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available; active migration will keep trying to return this gateway to Spot."
+        - alert: SharedGatewayPoolDegraded
+          expr: |
+            (
+              count by (namespace) (
+                (kube_pod_status_ready{namespace=~"octogee|octogee-test",condition="true"} == 1)
+                * on(namespace,pod) group_left()
+                kube_pod_labels{label_gateway_class="shared"}
+              )
+              or on(namespace)
+              (0 * kube_namespace_created{namespace=~"octogee|octogee-test"})
+            ) < 2
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
+            description: "Fewer than two Ready shared gateway pods are available. Cowboy cannot retain the shared pool's independent recovery capacity; inspect gateway pods, node capacity, and recovery operations."
+        - alert: SharedGatewayZoneDiversityLost
+          expr: |
+            (
+              count by (namespace) (
+                count by (namespace, label_topology_kubernetes_io_zone) (
+                  (
+                    (kube_pod_status_ready{namespace=~"octogee|octogee-test",condition="true"} == 1)
+                    * on(namespace,pod) group_left(node)
+                    kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+                    * on(namespace,pod) group_left()
+                    kube_pod_labels{label_gateway_class="shared"}
+                    * on(node) group_left(label_topology_kubernetes_io_zone)
+                    kube_node_labels{label_topology_kubernetes_io_zone!=""}
+                  )
+                )
+              )
+              or on(namespace)
+              (0 * kube_namespace_created{namespace=~"octogee|octogee-test"})
+            ) < 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Shared gateway pool lost zone diversity in {{ $labels.namespace }}"
+            description: "Ready shared gateway pods occupy fewer than two Central zones. Capacity remains available, but a zonal disruption can now remove the entire shared pool."
         - alert: GlmControllerReconcileStalled
           expr: (time() - glm_reconcile_last_success_timestamp_seconds) > 600
           for: 5m

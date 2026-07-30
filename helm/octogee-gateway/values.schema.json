@@ -53,6 +53,11 @@
       "maximum": 1,
       "description": "Replica count for the gateway Deployment. 0 = paused (Cowboy sets this for desiredStatus=paused); 1 = running. HPA / multi-replica is GATEWAY-PLATFORM-SPEC §Phase 6, out of scope here."
     },
+    "computeClass": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Environment-owned regional Spot-first ComputeClass selected by every gateway pod."
+    },
     "sizingTier": {
       "type": "string",
       "enum": ["", "xs", "s", "m", "l"],

@@ -241,6 +241,10 @@ gateway-edge:
 # preview Ingress. Defaults below are overridden
 # per env in values.{test,prod}.yaml.
 gatewayFleet:
+  computeClass:
+    enabled: true
+    name: octogee-gateway
+    zones: []
   # NOTE: the fleet-controller HTTP port now lives at
   # `.Values.global.fleetControllerPort`. Both the templates here and
   # the glm-controller subchart's Deployment env read from there so a

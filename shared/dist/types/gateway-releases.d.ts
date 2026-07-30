@@ -141,11 +141,19 @@ export interface GatewayRuntimeDoc {
     createdByOperationId: string | null;
     helm: GatewayHelmObservation;
     heartbeat: GatewayHeartbeatObservation;
+    kubernetes?: GatewayKubernetesObservation;
     lastError: {
         message: string | null;
         at: number | null;
     };
 }
+export interface GatewayKubernetesObservation {
+    status: "ready" | "not-ready" | "missing" | "unknown";
+    totalPods: number;
+    readyPods: number;
+    observedAt: number;
+}
+export declare function hasFreshReadyKubernetesObservation(runtime: GatewayRuntimeDoc, nowMs: number, maxAgeMs: number): boolean;
 export declare function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc;
 export declare function isGatewayDesiredDoc(data: unknown): data is GatewayDoc;
 export declare function projectGatewayDesiredRootForGateway(value: unknown, gatewayId: string): (GatewayDoc & GatewayMutableConfig) | null;
@@ -184,6 +192,13 @@ export interface PlacementFirestore {
     };
     runTransaction: <T>(body: (txn: PlacementTxn) => Promise<T>) => Promise<T>;
 }
+export interface PlacementTargetValidationContext {
+    txn: PlacementTxn;
+    gatewayRef: PlacementDocRef;
+    assignmentRef: PlacementDocRef;
+    gateway: GatewayDoc & GatewayMutableConfig;
+    runtime: Record<string, unknown>;
+}
 export interface CommitPlacementParams {
     uid: string;
     slug: string;
@@ -195,8 +210,9 @@ export interface CommitPlacementParams {
     assignmentWrite?: "upsert" | "create-if-missing";
     requireDurableGateway?: boolean;
     automatic?: boolean;
+    validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
 }
-export type PlacementRejectReason = "gateway-root-invalid" | "gateway-operator-managed" | "builder-operator-managed" | "gateway-not-running" | "gateway-not-serving";
+export type PlacementRejectReason = "gateway-root-invalid" | "gateway-operator-managed" | "builder-operator-managed" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {

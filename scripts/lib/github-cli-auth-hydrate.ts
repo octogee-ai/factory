@@ -20,6 +20,7 @@ interface FetchResponse {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  headers?: { get: (name: string) => string | null };
 }
 
 interface GithubCliAuthHydrateDeps {
@@ -169,6 +170,18 @@ function materializeFailureMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function retryAfterMs(value: string | null, now: number): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    const milliseconds = seconds * 1_000;
+    return Number.isSafeInteger(milliseconds) ? milliseconds : null;
+  }
+  const retryAt = Date.parse(trimmed);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - now) : null;
+}
+
 function resolveHydrateContext(deps: GithubCliAuthHydrateDeps): HydrateContext {
   const env = deps.env ?? process.env;
   const doFetch = deps.fetch ?? (globalThis.fetch as unknown as GithubCliAuthHydrateDeps["fetch"]);
@@ -206,14 +219,17 @@ async function fetchMaterializedGithubAuth(
 
   while (true) {
     attempts += 1;
+    let serverRetryAfterMs: number | null = null;
     try {
       const resp = await doFetch(url, {
         method: "GET",
         headers: { "X-K8s-Sa-Token": gatewayToken },
       });
       const body = await resp.json().catch(() => undefined);
-      if (resp.ok || resp.status < 500) return { resp, body };
+      const retryable = resp.status === 429 || resp.status >= 500;
+      if (resp.ok || !retryable) return { resp, body };
       lastFailure = `HTTP ${resp.status}`;
+      serverRetryAfterMs = retryAfterMs(resp.headers?.get("retry-after") ?? null, opts.now());
     } catch (err) {
       lastFailure = materializeFailureMessage(err);
     }
@@ -224,7 +240,7 @@ async function fetchMaterializedGithubAuth(
         `GitHub connector materialize failed after ${attempts} attempt(s): ${lastFailure}`,
       );
     }
-    const delayMs = Math.min(opts.retryIntervalMs, remainingMs);
+    const delayMs = Math.min(serverRetryAfterMs ?? opts.retryIntervalMs, remainingMs);
     opts.log(`materialize unavailable (${lastFailure}); retrying in ${delayMs}ms`);
     await opts.wait(delayMs);
   }

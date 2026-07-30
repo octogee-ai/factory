@@ -1,0 +1,29 @@
+{{- if .Values.gatewayFleet.computeClass.enabled }}
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: {{ required "gatewayFleet.computeClass.name is required" .Values.gatewayFleet.computeClass.name }}
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  autopilot:
+    enabled: true
+  priorities:
+    - podFamily: general-purpose
+      spot: true
+      location:
+        zones:
+          {{- toYaml .Values.gatewayFleet.computeClass.zones | nindent 10 }}
+        locationPolicy: ANY
+    - podFamily: general-purpose
+      spot: false
+      location:
+        zones:
+          {{- toYaml .Values.gatewayFleet.computeClass.zones | nindent 10 }}
+        locationPolicy: ANY
+  activeMigration:
+    optimizeRulePriority: true
+  nodePoolAutoCreation:
+    enabled: true
+  whenUnsatisfiable: DoNotScaleUp
+{{- end }}

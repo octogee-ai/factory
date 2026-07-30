@@ -535,6 +535,7 @@ describe("Admin onboarding placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
     configDocs.orchestrator = {
       defaultGatewayId: "gw-target",
+      sharedGatewayIds: ["gw-target"],
     };
     seedDurableGateway("gw-source", {
       imageTag: "oldsha1",
@@ -559,7 +560,10 @@ describe("Admin onboarding placement", () => {
     const res = await request(buildApp()).get("/api/admin/onboarding-placement");
 
     expect(res.status).toBe(200);
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-target" });
+    expect(res.body.config).toEqual({
+      defaultGatewayId: "gw-target",
+      sharedGatewayIds: ["gw-target"],
+    });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.customers).toEqual([
       expect.objectContaining({
@@ -592,7 +596,11 @@ describe("Admin onboarding placement", () => {
   });
 
   it("persists a validated ready default gateway and rejects retired override endpoints", async () => {
-    configDocs.orchestrator = { defaultGatewayId: "gw-old" };
+    configDocs.orchestrator = {
+      defaultGatewayId: "gw-old",
+      sharedGatewayIds: ["gw-old", "gw-new"],
+    };
+    seedRetirableGateway("gw-old");
     seedRetirableGateway("gw-new");
     usersDocs = {
       "uid-alice": {
@@ -605,7 +613,10 @@ describe("Admin onboarding placement", () => {
       .patch("/api/admin/onboarding-placement")
       .send({ defaultGatewayId: "gw-new" });
     expect(patched.status).toBe(200);
-    expect(configDocs.orchestrator).toMatchObject({ defaultGatewayId: "gw-new" });
+    expect(configDocs.orchestrator).toMatchObject({
+      defaultGatewayId: "gw-new",
+      sharedGatewayIds: ["gw-new", "gw-old"],
+    });
 
     const retiredPut = await request(buildApp())
       .put("/api/admin/onboarding-placement/overrides/uid-alice")
@@ -619,7 +630,10 @@ describe("Admin onboarding placement", () => {
   });
 
   it("rejects a default gateway pointed at a dedicated (non-shared) gateway", async () => {
-    configDocs.orchestrator = { defaultGatewayId: "gw-old" };
+    configDocs.orchestrator = {
+      defaultGatewayId: "gw-old",
+      sharedGatewayIds: ["gw-old", "gw-builder"],
+    };
     seedDurableGateway("gw-builder", {
       root: {
         gatewayClass: "builder",

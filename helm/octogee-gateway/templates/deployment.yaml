@@ -77,7 +77,23 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       nodeSelector:
-        cloud.google.com/gke-spot: "true"
+        cloud.google.com/compute-class: {{ required "computeClass is required" .Values.computeClass | quote }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: octogee-gateway
+              namespaceSelector: {}
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: octogee-gateway
+                namespaceSelector: {}
+                topologyKey: topology.kubernetes.io/zone
       serviceAccountName: {{ include "octogee-gateway.serviceAccountName" . }}
       {{- if eq $gatewayClass "builder" }}
       runtimeClassName: gvisor

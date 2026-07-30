@@ -11,8 +11,12 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
+  hasFreshReadyKubernetesObservation,
+  isGatewayRuntimeDoc,
+  projectGatewayDesiredRootForGateway,
   type AssignmentSource,
   type AssignmentState,
+  type GatewayRuntimeDoc,
 } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
@@ -422,6 +426,413 @@ function updateAssignment(
   if (params.fromGatewayId !== params.toGatewayId) {
     txn.delete(assignmentRef(db, params.fromGatewayId, params.uid));
   }
+}
+
+export interface UnavailableGatewayRecoveryParams {
+  operationId: string;
+  kind: "recover-shared-customer" | "recover-disposable-customer";
+  uid: string;
+  slug: string;
+  fromGatewayId: string;
+  toGatewayId: string;
+  expectedSourceEpoch: number;
+  sharedGatewayIds: readonly string[];
+  targetHeartbeatMaxAgeMs: number;
+  validateTarget?: (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void>;
+  disposableLease?: {
+    leaseId: string;
+    generation: number;
+  };
+}
+
+export interface UnavailableGatewayRecoveryTargetValidationContext {
+  txn: FleetStateTxn;
+  targetGatewayId: string;
+  targetRoot: Record<string, unknown>;
+  targetRuntime: Record<string, unknown>;
+}
+
+type ProjectedGatewayRoot = NonNullable<
+  ReturnType<typeof projectGatewayDesiredRootForGateway>
+>;
+
+function millisFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    const result = (value as { toMillis: () => unknown }).toMillis();
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  }
+  return null;
+}
+
+function recoveryOperationMatches(
+  operation: Record<string, unknown> | undefined,
+  params: UnavailableGatewayRecoveryParams,
+): boolean {
+  const input = recordOrEmpty(operation?.input);
+  const recordedLease = input.disposableLease === null
+    ? null
+    : recordOrEmpty(input.disposableLease);
+  const leaseMatches = params.disposableLease
+    ? recordedLease !== null &&
+      recordedLease.leaseId === params.disposableLease.leaseId &&
+      recordedLease.generation === params.disposableLease.generation
+    : recordedLease === null;
+  const operationMatches = [
+    operation?.kind === "migrate-customer",
+    operation?.status === "succeeded",
+    operation?.origin === "automatic",
+    operation?.createdBy === "glm-controller-placement-policy",
+    operation?.gatewayId === params.toGatewayId,
+    operation?.inputUid === params.uid,
+    input.uid === params.uid,
+    input.slug === params.slug,
+    input.recoveryKind === params.kind,
+    input.fromGatewayId === params.fromGatewayId,
+    input.toGatewayId === params.toGatewayId,
+    input.sourceEpoch === params.expectedSourceEpoch,
+  ].every(Boolean);
+  return leaseMatches && operationMatches;
+}
+
+function recoveryAlreadyCommitted(input: {
+  params: UnavailableGatewayRecoveryParams;
+  operation: Record<string, unknown> | undefined;
+  user: Record<string, unknown> | undefined;
+  targetRootData: Record<string, unknown> | undefined;
+  sourceAssignmentExists: boolean;
+  targetAssignment: Record<string, unknown> | undefined;
+}): boolean {
+  const openclaw = recordOrEmpty(recordOrEmpty(input.user?.provisioning).openclaw);
+  const targetRoot = projectGatewayDesiredRootForGateway(
+    input.targetRootData,
+    input.params.toGatewayId,
+  );
+  const shellState = resolveUserGatewayShellState(
+    targetRoot
+      ? { ...targetRoot, operatorAccess: targetRoot.operatorAccess ?? undefined }
+      : undefined,
+    input.params.uid,
+  );
+  const targetAssignmentExact = [
+    input.targetAssignment?.uid === input.params.uid,
+    input.targetAssignment?.slug === input.params.slug,
+    input.targetAssignment?.gatewayId === input.params.toGatewayId,
+    input.targetAssignment?.source === "repair",
+    input.targetAssignment?.state === "serving",
+    input.targetAssignment?.epoch === input.params.expectedSourceEpoch + 1,
+    input.targetAssignment?.updatedByOperationId === input.params.operationId,
+  ].every(Boolean);
+  const operationAt = millisFromUnknown(input.operation?.completedAt);
+  const operationTimingExact = [
+    operationAt !== null,
+    input.operation?.createdAt === operationAt,
+    input.operation?.startedAt === operationAt,
+    input.targetAssignment?.updatedAt === operationAt,
+  ].every(Boolean);
+  const disposableLeaseExact = returningLeaseMatches(openclaw, input.params, operationAt);
+  return [
+    recoveryOperationMatches(input.operation, input.params),
+    !input.sourceAssignmentExists,
+    openclaw.gatewayId === input.params.toGatewayId,
+    millisFromUnknown(openclaw.gatewayAssignedAt) === operationAt,
+    openclaw.gatewayProfile === shellState.gatewayProfile,
+    openclaw.shellsEnabled === shellState.shellsEnabled,
+    targetAssignmentExact,
+    operationTimingExact,
+    disposableLeaseExact,
+  ].every(Boolean);
+}
+
+function returningLeaseMatches(
+  openclaw: Record<string, unknown>,
+  params: UnavailableGatewayRecoveryParams,
+  operationAt: number | null,
+): boolean {
+  if (!params.disposableLease) return true;
+  const lease = recordOrEmpty(openclaw.activationLease);
+  return [
+    lease.leaseId === params.disposableLease.leaseId,
+    lease.generation === params.disposableLease.generation,
+    lease.status === "returning",
+    lease.targetGatewayId === params.fromGatewayId,
+    lease.returnReason === "source-unavailable",
+    lease.returnOperationId === params.operationId,
+    lease.returningAt === operationAt,
+  ].every(Boolean);
+}
+
+function recoveryTargetRootReady(
+  root: ProjectedGatewayRoot | null,
+  params: UnavailableGatewayRecoveryParams,
+): root is ProjectedGatewayRoot {
+  if (root === null) return false;
+  return [
+    params.sharedGatewayIds.includes(params.toGatewayId),
+    root.gatewayClass === "shared",
+    root.desiredStatus === "running",
+    root.liveRelease !== null,
+    root.desiredRelease === root.liveRelease,
+    !isOperatorManaged(root.managedBy),
+  ].every(Boolean);
+}
+
+function recoveryTargetRuntimeReady(
+  runtime: GatewayRuntimeDoc | null,
+  root: ProjectedGatewayRoot,
+  params: UnavailableGatewayRecoveryParams,
+  nowMs: number,
+): boolean {
+  if (runtime === null) return false;
+  const heartbeatAt = millisFromUnknown(runtime.heartbeat.lastHeartbeatAt);
+  const heartbeatFresh = heartbeatAt === null
+    ? false
+    : nowMs - heartbeatAt <= params.targetHeartbeatMaxAgeMs;
+  return [
+    runtime.gatewayId === params.toGatewayId,
+    runtime.release === root.liveRelease,
+    runtime.lifecycle === "serving",
+    runtime.heartbeat.status === "ready",
+    heartbeatFresh,
+    hasFreshReadyKubernetesObservation(runtime, nowMs, params.targetHeartbeatMaxAgeMs),
+  ].every(Boolean);
+}
+
+function assertRecoveryTargetReady(input: {
+  params: UnavailableGatewayRecoveryParams;
+  targetRootData: Record<string, unknown> | undefined;
+  targetRuntimeData: Record<string, unknown> | undefined;
+  nowMs: number;
+}): void {
+  const { params, targetRootData, targetRuntimeData, nowMs } = input;
+  const root = projectGatewayDesiredRootForGateway(targetRootData, params.toGatewayId);
+  const runtime = isGatewayRuntimeDoc(targetRuntimeData) ? targetRuntimeData : null;
+  if (
+    !recoveryTargetRootReady(root, params) ||
+    !recoveryTargetRuntimeReady(runtime, root, params, nowMs)
+  ) {
+    throw new Error(`recovery target runtime is not freshly ready: ${params.toGatewayId}`);
+  }
+}
+
+function assertRecoverySourceIdentity(
+  root: ProjectedGatewayRoot | null,
+  openclaw: Record<string, unknown>,
+  sourceAssignment: Record<string, unknown> | undefined,
+  params: UnavailableGatewayRecoveryParams,
+): asserts root is ProjectedGatewayRoot {
+  if (!root || !sourceAssignment) {
+    throw new Error("unavailable gateway recovery source changed before cutover");
+  }
+  const exact = [
+    !isOperatorManaged(root.managedBy),
+    !isOperatorManaged(openclaw.managedBy),
+    openclaw.gatewayId === params.fromGatewayId,
+    sourceAssignment.uid === params.uid,
+    sourceAssignment.slug === params.slug,
+    sourceAssignment.gatewayId === params.fromGatewayId,
+    sourceAssignment.state === "serving",
+    sourceAssignment.epoch === params.expectedSourceEpoch,
+  ].every(Boolean);
+  if (!exact) throw new Error("unavailable gateway recovery source changed before cutover");
+}
+
+function assertSharedRecoverySource(
+  root: ProjectedGatewayRoot,
+  params: UnavailableGatewayRecoveryParams,
+): void {
+  const invalid = [
+    root.gatewayClass !== "shared",
+    root.desiredStatus !== "running",
+    !params.sharedGatewayIds.includes(params.fromGatewayId),
+    params.disposableLease !== undefined,
+  ].some(Boolean);
+  if (invalid) throw new Error("shared gateway recovery source is not an active pool member");
+}
+
+function disposableRecoveryLease(
+  root: ProjectedGatewayRoot,
+  openclaw: Record<string, unknown>,
+  params: UnavailableGatewayRecoveryParams,
+): Record<string, unknown> {
+  if (!params.disposableLease) {
+    throw new Error("disposable gateway recovery lease or allocation changed before cutover");
+  }
+  const lease = recordOrEmpty(openclaw.activationLease);
+  const allocation = recordOrEmpty(root.allocation);
+  const exact = [
+    root.gatewayClass !== "shared",
+    root.ownerUid === params.uid,
+    allocation.kind === "disposable-builder",
+    allocation.claimedByUid === params.uid,
+    allocation.leaseId === params.disposableLease.leaseId,
+    allocation.generation === params.disposableLease.generation,
+    lease.leaseId === params.disposableLease.leaseId,
+    lease.generation === params.disposableLease.generation,
+    lease.status === "active",
+    lease.targetGatewayId === params.fromGatewayId,
+  ].every(Boolean);
+  if (!exact) {
+    throw new Error("disposable gateway recovery lease or allocation changed before cutover");
+  }
+  return lease;
+}
+
+function assertRecoverySource(input: {
+  params: UnavailableGatewayRecoveryParams;
+  sourceRootData: Record<string, unknown> | undefined;
+  user: Record<string, unknown> | undefined;
+  sourceAssignment: Record<string, unknown> | undefined;
+}): Record<string, unknown> | null {
+  const { params, sourceRootData, user, sourceAssignment } = input;
+  const root = projectGatewayDesiredRootForGateway(sourceRootData, params.fromGatewayId);
+  const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+  assertRecoverySourceIdentity(root, openclaw, sourceAssignment, params);
+
+  if (params.kind === "recover-shared-customer") {
+    assertSharedRecoverySource(root, params);
+    return null;
+  }
+  return disposableRecoveryLease(root, openclaw, params);
+}
+
+export async function commitUnavailableGatewayRecoveryAtomic(
+  deps: FleetStateDeps,
+  params: UnavailableGatewayRecoveryParams,
+): Promise<{ operationId: string }> {
+  if (
+    !params.operationId ||
+    !Number.isSafeInteger(params.expectedSourceEpoch) ||
+    params.expectedSourceEpoch < 0 ||
+    params.fromGatewayId === params.toGatewayId
+  ) {
+    throw new Error("unavailable gateway recovery parameters are invalid");
+  }
+  const operationRef = deps.db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .doc(params.operationId);
+  const sourceAssignmentRef = assignmentRef(deps.db, params.fromGatewayId, params.uid);
+  const targetAssignmentRef = assignmentRef(deps.db, params.toGatewayId, params.uid);
+  const userRef = deps.db.collection("users").doc(params.uid);
+  const nowMs = deps.now ? deps.now().getTime() : Date.now();
+
+  await deps.db.runTransaction(async (txn) => {
+    const [
+      operationSnapshot,
+      userSnapshot,
+      sourceRootSnapshot,
+      targetRootSnapshot,
+      targetRuntimeSnapshot,
+      sourceAssignmentSnapshot,
+      targetAssignmentSnapshot,
+    ] = await Promise.all([
+      txn.get(operationRef),
+      txn.get(userRef),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId)),
+      txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId)),
+      txn.get(sourceAssignmentRef),
+      txn.get(targetAssignmentRef),
+    ]);
+    const operation = operationSnapshot.exists ? operationSnapshot.data() : undefined;
+    const user = userSnapshot.exists ? userSnapshot.data() : undefined;
+    const targetAssignment = targetAssignmentSnapshot.exists
+      ? targetAssignmentSnapshot.data()
+      : undefined;
+    if (recoveryAlreadyCommitted({
+      params,
+      operation,
+      user,
+      targetRootData: targetRootSnapshot.exists ? targetRootSnapshot.data() : undefined,
+      sourceAssignmentExists: sourceAssignmentSnapshot.exists,
+      targetAssignment,
+    })) {
+      return;
+    }
+    if (operationSnapshot.exists) {
+      throw new Error(`recovery operation ${params.operationId} conflicts with current authority`);
+    }
+    assertRecoveryTargetReady({
+      params,
+      targetRootData: targetRootSnapshot.exists ? targetRootSnapshot.data() : undefined,
+      targetRuntimeData: targetRuntimeSnapshot.exists ? targetRuntimeSnapshot.data() : undefined,
+      nowMs,
+    });
+    if (!params.validateTarget) {
+      throw new Error("unavailable gateway recovery requires an atomic target admission fence");
+    }
+    await params.validateTarget({
+      txn,
+      targetGatewayId: params.toGatewayId,
+      targetRoot: targetRootSnapshot.data()!,
+      targetRuntime: targetRuntimeSnapshot.data()!,
+    });
+    const lease = assertRecoverySource({
+      params,
+      sourceRootData: sourceRootSnapshot.exists ? sourceRootSnapshot.data() : undefined,
+      user,
+      sourceAssignment: sourceAssignmentSnapshot.exists
+        ? sourceAssignmentSnapshot.data()
+        : undefined,
+    });
+    const targetRoot = targetRootSnapshot.data();
+    const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+    txn.update(userRef, {
+      "provisioning.openclaw.gatewayId": params.toGatewayId,
+      "provisioning.openclaw.gatewayAssignedAt": nowMs,
+      "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
+      "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+      ...(lease
+        ? {
+            "provisioning.openclaw.activationLease": {
+              ...lease,
+              status: "returning",
+              returnReason: "source-unavailable",
+              returnOperationId: params.operationId,
+              returningAt: nowMs,
+            },
+          }
+        : {}),
+    });
+    txn.set(targetAssignmentRef, {
+      uid: params.uid,
+      slug: params.slug,
+      gatewayId: params.toGatewayId,
+      source: "repair",
+      state: "serving" satisfies AssignmentState,
+      epoch: params.expectedSourceEpoch + 1,
+      updatedAt: nowMs,
+      updatedByOperationId: params.operationId,
+    });
+    txn.delete(sourceAssignmentRef);
+    txn.set(operationRef, {
+      kind: "migrate-customer",
+      status: "succeeded",
+      origin: "automatic",
+      createdBy: "glm-controller-placement-policy",
+      createdAt: nowMs,
+      startedAt: nowMs,
+      completedAt: nowMs,
+      input: {
+        uid: params.uid,
+        slug: params.slug,
+        recoveryKind: params.kind,
+        fromGatewayId: params.fromGatewayId,
+        toGatewayId: params.toGatewayId,
+        sourceEpoch: params.expectedSourceEpoch,
+        disposableLease: params.disposableLease ?? null,
+      },
+      steps: [],
+      gatewayId: params.toGatewayId,
+      inputUid: params.uid,
+    });
+  });
+  return { operationId: params.operationId };
 }
 
 export interface MarkAssignmentStateParams {

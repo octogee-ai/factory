@@ -142,6 +142,10 @@
       "types": "./dist/types/orchestrator-placement.d.ts",
       "default": "./dist/types/orchestrator-placement.js"
     },
+    "./types/shared-gateway-pool": {
+      "types": "./dist/types/shared-gateway-pool.d.ts",
+      "default": "./dist/types/shared-gateway-pool.js"
+    },
     "./types/model-credentials": {
       "types": "./dist/types/model-credentials.d.ts",
       "default": "./dist/types/model-credentials.js"
@@ -301,6 +305,9 @@
       ],
       "types/orchestrator-placement": [
         "dist/types/orchestrator-placement.d.ts"
+      ],
+      "types/shared-gateway-pool": [
+        "dist/types/shared-gateway-pool.d.ts"
       ],
       "types/model-credentials": [
         "dist/types/model-credentials.d.ts"

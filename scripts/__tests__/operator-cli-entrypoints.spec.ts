@@ -47,6 +47,7 @@ describe("seed-orchestrator-config args", () => {
     expect(parseSeedOrchestratorConfigArgs([
       "--env=test",
       "--default-gateway=canary",
+      "--shared-gateways=canary,default,default-b",
       "--force",
       "--dry-run",
     ])).toEqual({
@@ -56,6 +57,7 @@ describe("seed-orchestrator-config args", () => {
         deploymentTargetId: "test-central",
         firebaseProjectId: "octogee-test",
         defaultGateway: "canary",
+        sharedGateways: ["canary", "default", "default-b"],
         force: true,
         dryRun: true,
         check: false,

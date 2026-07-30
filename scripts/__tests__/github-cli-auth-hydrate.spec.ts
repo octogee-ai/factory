@@ -8,7 +8,12 @@ import {
   upsertGithubHost,
 } from "../lib/github-cli-auth-hydrate.js";
 
-type MaterializeResponse = { ok: boolean; status: number; body: unknown };
+type MaterializeResponse = {
+  ok: boolean;
+  status: number;
+  body: unknown;
+  headers?: Record<string, string>;
+};
 type MaterializeStep = MaterializeResponse | Error;
 
 function makeDeps(
@@ -73,6 +78,9 @@ function makeDeps(
           ok: step.ok,
           status: step.status,
           json: async () => step.body,
+          headers: {
+            get: (name: string) => step.headers?.[name.toLowerCase()] ?? null,
+          },
         };
       }),
     },
@@ -184,6 +192,75 @@ describe("GitHub CLI native auth hydration", () => {
       DEFAULT_GITHUB_CLI_AUTH_RETRY_INTERVAL_MS,
     ]);
     expect(h.writes[0].data).toContain("oauth_token: gho_late");
+  });
+
+  it("honors numeric Retry-After hints from a transient materialize response", async () => {
+    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
+      { ok: false, status: 503, body: { status: "starting" }, headers: { "retry-after": "12" } },
+      {
+        ok: true,
+        status: 200,
+        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+      },
+    ]);
+
+    await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
+
+    expect(h.waits).toEqual([12_000]);
+  });
+
+  it("honors Retry-After on rate limiting as well as server failures", async () => {
+    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
+      { ok: false, status: 429, body: { status: "busy" }, headers: { "retry-after": "3" } },
+      {
+        ok: true,
+        status: 200,
+        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+      },
+    ]);
+
+    await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
+
+    expect(h.waits).toEqual([3_000]);
+  });
+
+  it("honors HTTP-date Retry-After hints within the materialize deadline", async () => {
+    const h = makeDeps({
+      GATEWAY_CLASS: "builder",
+      HOME: "/home/node",
+      GITHUB_CLI_AUTH_RETRY_TIMEOUT_MS: "5000",
+    }, [
+      {
+        ok: false,
+        status: 503,
+        body: { status: "starting" },
+        headers: { "retry-after": new Date(20_000).toUTCString() },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+      },
+    ]);
+
+    await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
+
+    expect(h.waits).toEqual([5_000]);
+  });
+
+  it("falls back to the local retry interval for an invalid Retry-After hint", async () => {
+    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
+      { ok: false, status: 503, body: { status: "starting" }, headers: { "retry-after": "tomorrow" } },
+      {
+        ok: true,
+        status: 200,
+        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+      },
+    ]);
+
+    await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
+
+    expect(h.waits).toEqual([DEFAULT_GITHUB_CLI_AUTH_RETRY_INTERVAL_MS]);
   });
 
   it("clears stale github.com auth when materialize is forbidden for the gateway", async () => {

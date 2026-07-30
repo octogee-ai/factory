@@ -51,6 +51,7 @@ interface TestRouterOptions {
   synchronizeFirstTwoReadsOf?: string;
   failTransactions?: boolean;
   beforeFirstTransaction?: (store: Map<string, Record<string, unknown>>) => void;
+  failFirstTransactionReadOf?: string;
   releaseEnvironment?: "test" | "prod" | null;
   releaseAuthority?: Record<string, unknown>;
   provisionGatewayAuthSecret?: (input: {
@@ -85,6 +86,7 @@ function makeDb(
   function docRef(path: string): Record<string, unknown> {
     const id = path.split("/").pop() as string;
     return {
+      __path: path,
       id,
       get: async () => {
         if (path === opts.synchronizeFirstTwoReadsOf && synchronizedReads < 2) {
@@ -166,6 +168,7 @@ function makeDb(
   // completes (a throw leaves the store untouched — all-or-nothing).
   let txnLock: Promise<unknown> = Promise.resolve();
   let firstTransactionStarted = false;
+  let failedTransactionRead = false;
   async function runTransaction<T>(
     body: (txn: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
@@ -185,7 +188,17 @@ function makeDb(
       }
       const writes: Array<() => Promise<void>> = [];
       const txn = {
-        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        get: (ref: { get: () => Promise<unknown>; __path?: string }) => {
+          if (
+            !failedTransactionRead &&
+            opts.failFirstTransactionReadOf &&
+            ref.__path === opts.failFirstTransactionReadOf
+          ) {
+            failedTransactionRead = true;
+            throw new Error(`simulated transaction read failure: ${ref.__path}`);
+          }
+          return ref.get();
+        },
         create: (ref: { set: (d: unknown, o?: unknown) => Promise<void> }, data: unknown) => {
           writes.push(async () => {
             await ref.set(data);
@@ -242,7 +255,10 @@ function mkApp(
   seed?: Record<string, Record<string, unknown>>,
   opts?: TestRouterOptions,
 ) {
-  const { db, store } = makeDb(seed, opts);
+  const releaseConfig = opts?.releaseAuthority && seed?.["config/orchestrator"] === undefined
+    ? { "config/orchestrator": { defaultGatewayId: "default", sharedGatewayIds: ["default"] } }
+    : {};
+  const { db, store } = makeDb({ ...releaseConfig, ...seed }, opts);
   const app = express();
   app.use(express.json());
   addAdminFleetRoutes(app, {
@@ -486,18 +502,74 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     ]));
   });
 
+  it("fans a CENTRAL TEST shared release to every configured pool member and excludes isolated gateways", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      "config/orchestrator": {
+        defaultGatewayId: "default",
+        sharedGatewayIds: ["default", "default-b"],
+      },
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("default-b", sharedPayload()),
+      ...seedNewSchemaGateway("isolated", sharedPayload()),
+    }, { releaseAuthority: authority });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(202);
+
+    expect(response.body.rollouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "default", release: 2 }),
+      expect.objectContaining({ gatewayId: "default-b", release: 2 }),
+    ]));
+    expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "isolated" }),
+    ]));
+    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/isolated")).toMatchObject({ desiredRelease: 1 });
+  });
+
+  it("rejects a CENTRAL release when any configured shared member is not running", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      "config/orchestrator": {
+        defaultGatewayId: "default",
+        sharedGatewayIds: ["default", "default-b"],
+      },
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("default-b", sharedPayload(), { desiredStatus: "paused" }),
+    }, { releaseAuthority: authority });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(409)
+      .expect({
+        error: "configured shared gateway must be running to cut a release",
+        gatewayId: "default-b",
+      });
+
+    expect(store.get("gateways/default")).toMatchObject({ desiredRelease: 1 });
+    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 1 });
+  });
+
   it("rejects a conflicting durable TEST version before aliases or desired state change", async () => {
     const conflictingSourceSha = "f".repeat(40);
     const authority = releaseAuthority(releaseManifest({ sourceSha: conflictingSourceSha }));
     const { app, store } = mkApp({
       ...seedNewSchemaGateway("default", sharedPayload()),
-      "centralTestReleaseReservations/v0.4.0": {
+      "centralReleaseFanouts/v0.4.0": {
         version: "v0.4.0",
         sourceSha,
         manifestDigest,
-        gatewayId: "default",
-        release: 2,
-        rolloutOperationId: "rollout-existing",
+        environment: "test",
+        gatewayScope: "shared",
+        gatewayIds: ["default"],
+        status: "complete",
+        rollouts: {
+          default: { release: 2, rolloutOperationId: "rollout-existing" },
+        },
       },
     }, { releaseAuthority: authority });
 
@@ -505,7 +577,9 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       .post("/releases/cut")
       .send({ version: "v0.4.0", sourceSha: conflictingSourceSha })
       .expect(409)
-      .expect({ error: "CENTRAL TEST version v0.4.0 is already reserved for a different manifest" });
+      .expect({
+        error: "CENTRAL release version v0.4.0 is already reserved for a different pool or manifest",
+      });
 
     expect(authority.ensureAliases).not.toHaveBeenCalled();
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
@@ -516,13 +590,17 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp({
       ...seedNewSchemaGateway("default", sharedPayload()),
-      "centralTestReleaseReservations/v0.4.0": {
+      "centralReleaseFanouts/v0.4.0": {
         version: "v0.4.0",
         sourceSha,
         manifestDigest,
-        gatewayId: "default",
-        release: 2,
-        rolloutOperationId: "rollout-existing",
+        environment: "test",
+        gatewayScope: "shared",
+        gatewayIds: ["default"],
+        status: "complete",
+        rollouts: {
+          default: { release: 2, rolloutOperationId: "rollout-existing" },
+        },
       },
     }, { releaseAuthority: authority });
 
@@ -541,7 +619,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
       releaseAuthority: authority,
-      synchronizeFirstTwoReadsOf: "centralTestReleaseReservations/v0.4.0",
+      synchronizeFirstTwoReadsOf: "centralReleaseFanouts/v0.4.0",
     });
 
     const [first, second] = await Promise.all([
@@ -553,10 +631,13 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(second.status).toBe(202);
     expect([first.body.release, second.body.release]).toEqual([2, 2]);
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
-    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({
+    expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
       sourceSha,
       manifestDigest,
-      release: 2,
+      status: "complete",
+      rollouts: {
+        default: { release: 2 },
+      },
     });
     expect(opsIn(store, "rollout")).toHaveLength(1);
   });
@@ -615,7 +696,10 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       .expect(500);
 
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
-    expect(store.get("centralTestReleaseReservations/v0.4.0")).toMatchObject({ release: 2 });
+    expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
+      status: "pending",
+      rollouts: { default: { release: 2 } },
+    });
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
       status: "completed",
       lifecycleStage: "action-partial",
@@ -711,6 +795,95 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       what: "promote CENTRAL release",
       testProvenance: expect.objectContaining({ environment: "test", sourceCommit: sourceSha }),
     }));
+  });
+
+  it("fans CENTRAL PROD promotion to the configured shared pool and excludes isolated gateways", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      "config/orchestrator": {
+        defaultGatewayId: "default",
+        sharedGatewayIds: ["default", "default-b"],
+      },
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("default-b", sharedPayload()),
+      ...seedNewSchemaGateway("isolated", sharedPayload()),
+    }, {
+      releaseEnvironment: "prod",
+      releaseAuthority: authority,
+    });
+
+    const response = await request(app).post("/releases/v0.4.0/promote").send({}).expect(202);
+
+    expect(response.body).toMatchObject({ gatewayScope: "shared" });
+    expect(response.body.rollouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "default", release: 2 }),
+      expect.objectContaining({ gatewayId: "default-b", release: 2 }),
+    ]));
+    expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "isolated" }),
+    ]));
+    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/isolated")).toMatchObject({ desiredRelease: 1 });
+    expect(auditsIn(store)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ what: "promote CENTRAL PROD gateway rollout" }),
+    ]));
+  });
+
+  it("resumes an interrupted PROD pool fanout without cutting another primary release", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      "config/orchestrator": {
+        defaultGatewayId: "default",
+        sharedGatewayIds: ["default", "default-b"],
+      },
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("default-b", sharedPayload()),
+    }, {
+      releaseEnvironment: "prod",
+      releaseAuthority: authority,
+      failFirstTransactionReadOf: "gateways/default-b",
+    });
+
+    await request(app).post("/releases/v0.4.0/promote").send({}).expect(500);
+
+    expect(store.get("gateways/default")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 2,
+    });
+    expect(store.get("gateways/default-b")).toMatchObject({
+      latestRelease: 1,
+      desiredRelease: 1,
+    });
+    expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
+      status: "pending",
+      rollouts: { default: { release: 2 } },
+    });
+
+    const resumed = await request(app)
+      .post("/releases/v0.4.0/promote")
+      .send({})
+      .expect(202);
+
+    expect(resumed.body.rollouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ gatewayId: "default", release: 2, reused: true }),
+      expect.objectContaining({ gatewayId: "default-b", release: 2 }),
+    ]));
+    expect(store.get("gateways/default")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 2,
+    });
+    expect(store.get("gateways/default-b")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 2,
+    });
+    expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
+      status: "complete",
+      rollouts: {
+        default: { release: 2 },
+        "default-b": { release: 2 },
+      },
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(2);
   });
 });
 

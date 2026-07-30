@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+
+const h = vi.hoisted(() => ({
+  createGatewayRpc: vi.fn(),
+}));
+
+vi.mock("./gateway-rpc.js", async (importActual) => {
+  const actual = await importActual<typeof import("./gateway-rpc.js")>();
+  return { ...actual, createGatewayRpc: h.createGatewayRpc };
+});
+
 import {
   applyConfigPatch,
   configPatchRetryPlan,
@@ -49,6 +59,21 @@ afterEach(() => {
 });
 
 describe("applyConfigPatch — RPC happy path", () => {
+  it("uses a 60-second RPC call timeout without changing a caller's 90-second deadline", async () => {
+    const rpc = makeFakeRpc();
+    h.createGatewayRpc.mockReturnValue(rpc);
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ totalDeadlineMs: 90_000 }) },
+    );
+
+    expect(h.createGatewayRpc).toHaveBeenCalledWith({
+      allowLegacyGatewayTokenFallback: true,
+      callTimeoutMs: 60_000,
+    });
+  });
+
   it("calls configGet then configPatch with the hash returned by the server", async () => {
     const getFn = vi.fn(async () => ({ config: { bindings: [] }, hash: "abc" }));
     const patchFn = vi.fn(async () => ({ ok: true as const, path: "/x" }));

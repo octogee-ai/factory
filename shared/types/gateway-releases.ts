@@ -395,7 +395,31 @@ export interface GatewayRuntimeDoc {
   createdByOperationId: string | null;
   helm: GatewayHelmObservation;
   heartbeat: GatewayHeartbeatObservation;
+  kubernetes?: GatewayKubernetesObservation;
   lastError: { message: string | null; at: number | null };
+}
+
+export interface GatewayKubernetesObservation {
+  status: "ready" | "not-ready" | "missing" | "unknown";
+  totalPods: number;
+  readyPods: number;
+  observedAt: number;
+}
+
+export function hasFreshReadyKubernetesObservation(
+  runtime: GatewayRuntimeDoc,
+  nowMs: number,
+  maxAgeMs: number,
+): boolean {
+  const observation = runtime.kubernetes;
+  return observation?.status === "ready" &&
+    Number.isSafeInteger(observation.totalPods) &&
+    observation.totalPods > 0 &&
+    Number.isSafeInteger(observation.readyPods) &&
+    observation.readyPods > 0 &&
+    Number.isFinite(observation.observedAt) &&
+    nowMs >= observation.observedAt &&
+    nowMs - observation.observedAt <= maxAgeMs;
 }
 
 export function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc {
@@ -574,6 +598,14 @@ export interface PlacementFirestore {
   runTransaction: <T>(body: (txn: PlacementTxn) => Promise<T>) => Promise<T>;
 }
 
+export interface PlacementTargetValidationContext {
+  txn: PlacementTxn;
+  gatewayRef: PlacementDocRef;
+  assignmentRef: PlacementDocRef;
+  gateway: GatewayDoc & GatewayMutableConfig;
+  runtime: Record<string, unknown>;
+}
+
 export interface CommitPlacementParams {
   uid: string;
   slug: string;
@@ -590,6 +622,9 @@ export interface CommitPlacementParams {
   assignmentWrite?: "upsert" | "create-if-missing";
   requireDurableGateway?: boolean;
   automatic?: boolean;
+  validateTarget?: (
+    context: PlacementTargetValidationContext,
+  ) => Promise<PlacementRejectReason | null>;
 }
 
 export type PlacementRejectReason =
@@ -597,7 +632,8 @@ export type PlacementRejectReason =
   | "gateway-operator-managed"
   | "builder-operator-managed"
   | "gateway-not-running"
-  | "gateway-not-serving";
+  | "gateway-not-serving"
+  | "gateway-target-not-accepting";
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
@@ -648,6 +684,30 @@ async function preserveExistingAssignment(
   return true;
 }
 
+async function automaticBuilderRejectReason(
+  txn: PlacementTxn,
+  userRef: PlacementDocRef,
+  params: CommitPlacementParams,
+): Promise<PlacementRejectReason | null> {
+  if (!params.automatic) return null;
+  const userSnap = await txn.get(userRef);
+  const userData = userSnap.exists ? userSnap.data() : undefined;
+  return builderIsOperatorManaged(userData)
+    ? "builder-operator-managed"
+    : null;
+}
+
+function placementGatewayRejectReason(
+  gatewayData: Record<string, unknown> | undefined,
+  params: CommitPlacementParams,
+): PlacementRejectReason | null {
+  if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) return "gateway-root-invalid";
+  if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
+    return "gateway-operator-managed";
+  }
+  return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -660,12 +720,8 @@ export async function commitPlacementAtomic(
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-    if (params.automatic) {
-      const userSnap = await txn.get(userRef);
-      if (builderIsOperatorManaged(userSnap.exists ? userSnap.data() : undefined)) {
-        return { kind: "rejected", reason: "builder-operator-managed" };
-      }
-    }
+    const builderRejectReason = await automaticBuilderRejectReason(txn, userRef, params);
+    if (builderRejectReason) return { kind: "rejected", reason: builderRejectReason };
 
     if (!gatewaySnap.exists) {
       if (params.requireDurableGateway) {
@@ -674,24 +730,11 @@ export async function commitPlacementAtomic(
       txn.update(userRef, params.mirrorPatch);
       return { kind: "mirror-only" };
     }
+    const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
+    if (gatewayRejectReason) return { kind: "rejected", reason: gatewayRejectReason };
     if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
       return { kind: "rejected", reason: "gateway-root-invalid" };
     }
-    if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
-      return { kind: "rejected", reason: "gateway-operator-managed" };
-    }
-    if (gatewayData.desiredStatus !== "running") {
-      return { kind: "rejected", reason: "gateway-not-running" };
-    }
-    if (await preserveExistingAssignment(
-      txn,
-      assignmentRef,
-      userRef,
-      params,
-    )) {
-      return { kind: "assignment-preserved" };
-    }
-
     const runtimeSnap = await txn.get(
       db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId),
     );
@@ -702,9 +745,29 @@ export async function commitPlacementAtomic(
     if (runtimeRejectReason) {
       return { kind: "rejected", reason: runtimeRejectReason };
     }
+    const runtimeData = runtimeSnap.data();
+    if (!runtimeData) {
+      return { kind: "rejected", reason: "gateway-not-serving" };
+    }
+    if (params.validateTarget) {
+      const targetRejectReason = await params.validateTarget({
+        txn,
+        gatewayRef,
+        assignmentRef,
+        gateway: gatewayData,
+        runtime: runtimeData,
+      });
+      if (targetRejectReason) return { kind: "rejected", reason: targetRejectReason };
+    }
+    if (await preserveExistingAssignment(
+      txn,
+      assignmentRef,
+      userRef,
+      params,
+    )) {
+      return { kind: "assignment-preserved" };
+    }
 
-    // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
-    // (the steady baseline before any migration cutover bumps the epoch).
     txn.update(userRef, params.mirrorPatch);
     const assignmentDoc: AssignmentDoc = {
       uid: params.uid,

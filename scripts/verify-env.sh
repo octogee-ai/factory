@@ -36,8 +36,8 @@ source "$SCRIPT_DIR/lib/default-gateway-deployment.sh"
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 # shellcheck source=scripts/lib/gateway-image-bundle.sh
 source "$SCRIPT_DIR/lib/gateway-image-bundle.sh"
-# shellcheck source=scripts/lib/gateway-spot-placement.sh
-source "$SCRIPT_DIR/lib/gateway-spot-placement.sh"
+# shellcheck source=scripts/lib/gateway-capacity-placement.sh
+source "$SCRIPT_DIR/lib/gateway-capacity-placement.sh"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -162,14 +162,19 @@ kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
 ORCH_OUTPUT=""
 DEFAULT_GATEWAY_ID=""
+SHARED_GATEWAY_IDS=""
 if [[ "$ENV" == "custom" ]]; then
   DEFAULT_GATEWAY_ID="default"
+  SHARED_GATEWAY_IDS="default"
 else
   ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
   DEFAULT_GATEWAY_ID=$(echo "$ORCH_OUTPUT" | sed -nE \
+    -e 's/.*shared gateway pool = [a-z0-9,-]+ \(primary=([a-z0-9-]+).*/\1/p' \
     -e 's/.*defaultGatewayId = ([a-z0-9-]+).*/\1/p' \
     -e 's/.*already seeded with ([a-z0-9-]+).*/\1/p' \
     -e "s/.*defaultGatewayId is '([a-z0-9-]+)'.*/\1/p" | head -1)
+  SHARED_GATEWAY_IDS=$(echo "$ORCH_OUTPUT" | sed -nE \
+    -e 's/.*shared gateway pool = ([a-z0-9,-]+) \(primary=.*/\1/p' | head -1)
 fi
 
 GW_DEPLOYMENTS=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
@@ -395,6 +400,20 @@ fi
 set_section infra
 header "5. Gateway"
 
+if [[ -n "$SHARED_GATEWAY_IDS" ]]; then
+  IFS=',' read -r -a SHARED_GATEWAY_IDS_ARRAY <<< "$SHARED_GATEWAY_IDS"
+  for SHARED_GATEWAY_ID in "${SHARED_GATEWAY_IDS_ARRAY[@]}"; do
+    SHARED_GW_RESOLUTION=$(octogee_resolve_default_gateway_deployment "$SHARED_GATEWAY_ID" \
+      <<< "$GW_DEPLOYMENTS" 2>/dev/null || echo "")
+    if [[ -z "$SHARED_GW_RESOLUTION" ]]; then
+      fail "No current Cowboy gateway deployment found for configured shared gateway $SHARED_GATEWAY_ID."
+      continue
+    fi
+    IFS=$'\t' read -r SHARED_GW_DEPLOYMENT _ _ <<< "$SHARED_GW_RESOLUTION"
+    pass "configured shared gateway $SHARED_GATEWAY_ID resolves to $SHARED_GW_DEPLOYMENT"
+  done
+fi
+
 if [[ -z "$GW_DEPLOYMENT" ]]; then
   if [[ -z "$DEFAULT_GATEWAY_ID" ]]; then
     warn "Gateway deployment check inconclusive: orchestrator config probe failed and no sole Ready shared deployment could be selected"
@@ -484,13 +503,13 @@ print(items[0].get("status", {}).get("phase", "unknown") if items else "unknown"
   fi
 fi
 
-# ── 5a. Gateway Spot placement ───────────────────────────────────────────────
+# ── 5a. Gateway capacity placement ───────────────────────────────────────────
 set_section infra
-header "5a. Gateway Spot placement"
-if SPOT_PLACEMENT_ERRORS=$(octogee_verify_gateway_spot_placement "$K8S_CONTEXT" "$NAMESPACE" 2>&1); then
-  pass "$SPOT_PLACEMENT_ERRORS"
+header "5a. Gateway capacity placement"
+if CAPACITY_PLACEMENT_ERRORS=$(octogee_verify_gateway_capacity_placement "$K8S_CONTEXT" "$NAMESPACE" 2>&1); then
+  pass "$CAPACITY_PLACEMENT_ERRORS"
 else
-  fail "gateway Spot placement is invalid: $SPOT_PLACEMENT_ERRORS"
+  fail "gateway capacity placement is invalid: $CAPACITY_PLACEMENT_ERRORS"
   if $FIX; then
     echo -e "  ${YELLOW}FIX:${NC} reconcile the affected Cowboy gateway release, then rerun this verifier"
   fi
@@ -886,14 +905,10 @@ else
 fi
 
 # ── 8b. Orchestrator Config (Firestore) ──────────────────────────────────────
-# `config/orchestrator.defaultGatewayId` is what onCustomerAssignGateway reads
-# to place every new signup. There is no hardcoded fallback — if the doc is
-# missing the trigger returns `not-ready` with reason: "config-missing" and
-# the customer's gatewayId never gets set. This bit PROD on 2026-04-28 (first
-# setup, never seeded) and 2026-04-29 (--full teardown wiped Firestore, the
-# manual rebuild path forgot to reseed). The controller deliberately does not
-# infer placement defaults, so verify-env checks the explicit bootstrap record
-# before a builder is assigned.
+# `config/orchestrator` is the strict shared-pool placement authority. There
+# is no hardcoded fallback: an absent, malformed, or primary-mismatched pool
+# leaves new signup placement not-ready rather than silently collapsing back to
+# one default gateway.
 #
 set_section bootstrap
 header "8b. Orchestrator Config"
@@ -901,10 +916,10 @@ header "8b. Orchestrator Config"
 if [[ "$ENV" == "custom" ]]; then
   info "Custom namespaces don't use config/orchestrator — skipping"
 else
-  if [[ -n "$DEFAULT_GATEWAY_ID" ]]; then
-    pass "config/orchestrator.defaultGatewayId = $DEFAULT_GATEWAY_ID"
-  elif echo "$ORCH_OUTPUT" | grep -q "defaultGatewayId is missing or invalid"; then
-    fail "config/orchestrator missing — every new signup will stall with reason 'config-missing'"
+  if [[ -n "$DEFAULT_GATEWAY_ID" && -n "$SHARED_GATEWAY_IDS" ]]; then
+    pass "config/orchestrator shared gateway pool = $SHARED_GATEWAY_IDS (primary=$DEFAULT_GATEWAY_ID)"
+  elif echo "$ORCH_OUTPUT" | grep -Eq "shared gateway pool (is missing or invalid|drifts from the declared pool)"; then
+    fail "config/orchestrator shared gateway pool is missing, invalid, or drifts from the declared Helm pool — every new signup will stall with reason 'config-missing'"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
       echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
