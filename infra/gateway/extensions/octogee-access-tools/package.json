@@ -3,7 +3,7 @@
   "private": true,
   "license": "UNLICENSED",
   "dependencies": {
-    "typebox": "^1.3.2"
+    "typebox": "^1.3.7"
   },
   "devDependencies": {
     "vitest": "^4.1.9"
