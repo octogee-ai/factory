@@ -621,6 +621,44 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect(store.get("op-flaky")?.attempts).toBe(3);
     expect((store.get("op-flaky")?.attemptHistory as unknown[]).length).toBe(3);
   });
+
+  it("keeps an automatic Builder return pending after a transient failure beyond the generic cap", async () => {
+    vi.setSystemTime(1_000_000);
+    const handler: OperationHandler = vi.fn(async () => ({
+      steps: [],
+      success: false,
+      error: "/restore/default transport failed: fetch failed",
+    }));
+    const priorAttempts = [
+      { attempt: 1, startedAt: 1, completedAt: 2, error: "fetch failed", classification: "transient", steps: [] },
+      { attempt: 2, startedAt: 3, completedAt: 4, error: "fetch failed", classification: "transient", steps: [] },
+      { attempt: 3, startedAt: 5, completedAt: 6, error: "fetch failed", classification: "transient", steps: [] },
+    ];
+    const { db, store } = createFakeGlmOperationsDb({
+      "builder-return-run-alice": baseOp({
+        id: "builder-return-run-alice",
+        kind: "migrate-customer",
+        origin: "automatic",
+        createdAt: 1,
+        input: {
+          source: "builder-activation-lease",
+          fromGatewayId: "run-alice",
+          toGatewayId: "default",
+        },
+        attempts: 3,
+        attemptHistory: priorAttempts,
+      }),
+    });
+    const deps = buildDeps(db, { "migrate-customer": handler });
+
+    await drainPendingOperationsOnce(deps);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(store.get("builder-return-run-alice")?.status).toBe("pending");
+    expect(store.get("builder-return-run-alice")?.attempts).toBe(4);
+    expect(store.get("builder-return-run-alice")?.nextAttemptAt).toBe(1_000_000 + 480_000);
+    expect((store.get("builder-return-run-alice")?.attemptHistory as unknown[]).length).toBe(4);
+  });
 });
 
 describe("startOperationQueueDrain", () => {

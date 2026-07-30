@@ -400,6 +400,43 @@ describe("surge customer handoff", () => {
     });
   });
 
+  it("reclaims the completed prior handoff when its target becomes the next Ready source", async () => {
+    const priorTargetUid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const priorTarget = {
+      ...oldPod,
+      uid: priorTargetUid,
+      name: "gateway-prior-target",
+    };
+    const priorOperationId = `surge-default-${priorTargetUid}`;
+    const h = harness({
+      pods: [priorTarget, targetPod],
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: priorOperationId,
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:serving",
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      `digest:${priorTargetUid}:alice`,
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.assignments()[0]).toMatchObject({
+      state: "quiescing",
+      updatedByOperationId: h.operationId,
+    });
+  });
+
   it("reopens an abandoned surge gate while Kubernetes replaces the missing target", async () => {
     const h = harness({
       pods: [oldPod],

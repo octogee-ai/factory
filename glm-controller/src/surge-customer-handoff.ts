@@ -195,6 +195,7 @@ async function restoreAbandonedSurgeAssignments(
   assignments: readonly SurgeAssignment[],
   ownedBy: string | null,
   observedPodUids: readonly string[],
+  reclaimableOwners: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   const liveSurgeOwners = new Set(observedPodUids.map((uid) => operationId(gatewayId, uid)));
   for (const assignment of assignments) {
@@ -204,7 +205,7 @@ async function restoreAbandonedSurgeAssignments(
       priorOwner === null ||
       priorOwner === ownedBy ||
       !isSurgeOwnerForGateway(priorOwner, gatewayId) ||
-      liveSurgeOwners.has(priorOwner)
+      (liveSurgeOwners.has(priorOwner) && !reclaimableOwners.has(priorOwner))
     ) {
       continue;
     }
@@ -364,6 +365,7 @@ async function migrateAssignmentsAndReleaseTarget(
     assignments,
     ownedBy,
     observedPodUids,
+    new Set([operationId(input.gatewayId, sourcePod.uid)]),
   );
   assertAssignmentsAvailable(assignments, ownedBy);
   try {

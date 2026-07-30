@@ -35,6 +35,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /retirement config freeze failed/i,
   /system config writer lock is busy/i,
   /system config mutation unavailable: writer-lock-busy/i,
+  /fleet will retry/i,
 ];
 
 export function classifyOperationFailure(
@@ -92,7 +93,10 @@ export function supersededRollMigrationAction(op: {
 
 export interface OperationCompletionInput {
   op: {
+    id?: string;
     kind?: string;
+    origin?: string;
+    input?: Record<string, unknown>;
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
@@ -159,6 +163,15 @@ function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
     recordOutput(result.output?.deletionCleanupRetry) ||
     op.kind === "suspend-customer" ||
     op.kind === "erase-customer";
+}
+
+function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): boolean {
+  const fromGatewayId = op.input?.fromGatewayId;
+  return op.kind === "migrate-customer" &&
+    op.origin === "automatic" &&
+    op.input?.source === "builder-activation-lease" &&
+    typeof fromGatewayId === "string" &&
+    op.id === `builder-return-${fromGatewayId}`;
 }
 
 interface FailureCompletionContext {
@@ -247,12 +260,14 @@ export function buildOperationCompletionUpdate(
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);
+  const retryBeyondCap =
+    failure.levelTriggeredFence || isLevelTriggeredBuilderReturn(op);
   const retry = shouldRetry(
     op,
     result,
     failure.classification,
     attempts,
-    failure.levelTriggeredFence,
+    retryBeyondCap,
   );
   return retry
     ? pendingCompletion(input, attempts, failure)
@@ -264,7 +279,7 @@ function shouldRetry(
   result: OperationResult,
   classification: OperationFailureClassification,
   attempts: number,
-  hasLevelTriggeredFence: boolean,
+  retryBeyondCap: boolean,
 ): boolean {
   if (classification !== "transient") return false;
   const hasDurableCleanup =
@@ -276,6 +291,6 @@ function shouldRetry(
     activeMigration.phase !== "aborted";
   return attempts < MAX_OPERATION_ATTEMPTS ||
     hasDurableCleanup ||
-    hasLevelTriggeredFence ||
+    retryBeyondCap ||
     hasActiveCustomerMigrationV2;
 }

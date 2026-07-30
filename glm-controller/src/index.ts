@@ -1082,17 +1082,49 @@ async function convergeGatewaysIfConfigured(
   }
 }
 
+export function serializeGatewayConvergence(
+  convergeGateways: (gatewayIds?: readonly string[]) => Promise<void>,
+): (gatewayIds?: readonly string[]) => Promise<void> {
+  let tail = Promise.resolve();
+  return (gatewayIds) => {
+    const work = tail.then(() => convergeGateways(gatewayIds));
+    tail = work.catch(() => undefined);
+    return work;
+  };
+}
+
+async function runReconcilePhase<T>(
+  deps: ControllerDeps,
+  phase: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  deps.log(`[glm-controller] reconcile phase=${phase} started`);
+  try {
+    return await work();
+  } finally {
+    deps.log(
+      `[glm-controller] reconcile phase=${phase} completed durationMs=${Math.max(0, Date.now() - startedAt)}`,
+    );
+  }
+}
+
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   if (await controllerWorkFrozen(deps, "reconcile")) return;
-  const runtime = await readDurableRuntimeGateways(deps.db);
-  assertDurableRuntimeState(runtime);
-  await syncDurableImagePins(deps, runtime);
-  await syncDurableRuntimeDependencies(
-    deps,
-    runtime.gateways.filter(cowboyMayMutateGateway),
+  const runtime = await runReconcilePhase(deps, "durable-state", async () => {
+    const state = await readDurableRuntimeGateways(deps.db);
+    assertDurableRuntimeState(state);
+    return state;
+  });
+  await runReconcilePhase(deps, "image-pins", () => syncDurableImagePins(deps, runtime));
+  await runReconcilePhase(deps, "runtime-dependencies", () =>
+    syncDurableRuntimeDependencies(
+      deps,
+      runtime.gateways.filter(cowboyMayMutateGateway),
+    )
   );
-  await convergeGatewaysIfConfigured(deps);
-  await syncFleetIngressIfConfigured(deps);
+  await runReconcilePhase(deps, "convergence", () => convergeGatewaysIfConfigured(deps));
+  await runReconcilePhase(deps, "fleet-ingress", () => syncFleetIngressIfConfigured(deps));
 }
 
 function clearTimer(timer: NodeJS.Timeout | null): null {
@@ -1653,7 +1685,10 @@ async function runClaimedOperation(
     if (!shouldPersistClaimedOperationCompletion(status)) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
+        id: ref.id,
         kind: freshOp?.kind,
+        origin: freshOp?.origin,
+        input: freshOp?.input,
         attempts: freshOp?.attempts,
         attemptHistory: freshOp?.attemptHistory,
         startedAt: freshOp?.startedAt,
@@ -2111,7 +2146,7 @@ async function createControllerRuntime(
     log,
   };
 
-  const convergeGateways = (gatewayIds?: readonly string[]) =>
+  const runGatewayConvergence = (gatewayIds?: readonly string[]) =>
     runGatewayConvergencePass({
       db,
       helm,
@@ -2121,6 +2156,7 @@ async function createControllerRuntime(
       reconcileSurgeHandoff: (input) => reconcileSurgeCustomerHandoff(surgeHandoffDeps, input),
       log,
     }, gatewayIds);
+  const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
 
   const deps: ControllerDeps = {
     db,
@@ -2165,14 +2201,17 @@ async function main(): Promise<void> {
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
-  await runSharedGatewayPoolReconcile({
+  const sharedGatewayPoolDeps = {
     db,
     namespace: NAMESPACE,
     declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
     ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
+    convergeGateways: deps.convergeGateways,
+    workFrozen: () => controllerWorkFrozen(deps, "shared pool reconcile"),
     log: deps.log,
     now: () => Date.now(),
-  }, "startup");
+  };
+  await runSharedGatewayPoolReconcile(sharedGatewayPoolDeps, "startup");
 
   if (await controllerWorkFrozen(deps, "orphan-op resume")) {
     holdFrozenController(maintenanceGate, log);
@@ -2223,14 +2262,7 @@ async function main(): Promise<void> {
     fleetControllerPrivateKey,
   });
   stoppers.push(
-    startSharedGatewayPoolReconciler({
-      db,
-      namespace: NAMESPACE,
-      declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
-      ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
-      log: deps.log,
-      now: () => Date.now(),
-    }, SHARED_GATEWAY_POOL_RECONCILE_MS),
+    startSharedGatewayPoolReconciler(sharedGatewayPoolDeps, SHARED_GATEWAY_POOL_RECONCILE_MS),
   );
   stoppers.push(
     startMaintenanceRestartWatcher({
