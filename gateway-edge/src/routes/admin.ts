@@ -122,52 +122,73 @@ const platformCatalog = MODEL_CATALOG.map((entry) => ({
   provider: entry.provider,
 }));
 
+function validCatalogRef(value: unknown): value is string {
+  return typeof value === "string" && resolveFreeTierModel(value) !== null;
+}
+
+function resolvedFallbackDial(value: unknown): string | null {
+  if (value === null) return null;
+  return validCatalogRef(value) ? value : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+}
+
+// Field-tolerant read of the stored dial doc: each invalid field defaults
+// independently so one bad ref never blanks the whole Admin panel.
+function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
+  freeTierModelRef: string;
+  opsAgentModelRef: string;
+  builderAgentModelRef: string;
+  builderAgentFallbackModelRef: string | null;
+  invalidFields: boolean;
+} {
+  const freeTierModelRef = validCatalogRef(data?.freeTierModelRef)
+    ? data.freeTierModelRef
+    : DEFAULT_FREE_TIER_MODEL_REF;
+  const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
+    resolveOpsAgentModel(data.opsAgentModelRef)
+    ? data.opsAgentModelRef
+    : DEFAULT_OPS_AGENT_MODEL_REF;
+  const builderAgentModelRef = validCatalogRef(data?.builderAgentModelRef)
+    ? data.builderAgentModelRef
+    : DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const builderAgentFallbackModelRef = resolvedFallbackDial(data?.builderAgentFallbackModelRef);
+  const invalidFields = [
+    ["freeTierModelRef", freeTierModelRef],
+    ["opsAgentModelRef", opsAgentModelRef],
+    ["builderAgentModelRef", builderAgentModelRef],
+    ["builderAgentFallbackModelRef", builderAgentFallbackModelRef],
+  ].some(([field, resolved]) =>
+    data?.[field as string] !== undefined && resolved !== data[field as string],
+  );
+  return {
+    freeTierModelRef,
+    opsAgentModelRef,
+    builderAgentModelRef,
+    builderAgentFallbackModelRef,
+    invalidFields,
+  };
+}
+
 router.get("/platform-config", async (_req, res) => {
   try {
     const snap = await platformModelDoc().get();
     const data = snap.data() as Record<string, unknown> | undefined;
-    const freeTierModelRef = typeof data?.freeTierModelRef === "string" &&
-      resolveFreeTierModel(data.freeTierModelRef)
-      ? data.freeTierModelRef
-      : DEFAULT_FREE_TIER_MODEL_REF;
-    const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
-      resolveOpsAgentModel(data.opsAgentModelRef)
-      ? data.opsAgentModelRef
-      : DEFAULT_OPS_AGENT_MODEL_REF;
-    const builderAgentModelRef = typeof data?.builderAgentModelRef === "string" &&
-      resolveFreeTierModel(data.builderAgentModelRef)
-      ? data.builderAgentModelRef
-      : DEFAULT_BUILDER_AGENT_MODEL_REF;
-    const builderAgentFallbackModelRef = data?.builderAgentFallbackModelRef === null
-      ? null
-      : typeof data?.builderAgentFallbackModelRef === "string" &&
-          resolveFreeTierModel(data.builderAgentFallbackModelRef)
-        ? data.builderAgentFallbackModelRef
-        : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
-    const invalidFreeTierDial = data?.freeTierModelRef !== undefined &&
-      freeTierModelRef !== data.freeTierModelRef;
-    const invalidOpsDial = data?.opsAgentModelRef !== undefined &&
-      opsAgentModelRef !== data.opsAgentModelRef;
-    const invalidBuilderAgentDial = (data?.builderAgentModelRef !== undefined &&
-      builderAgentModelRef !== data.builderAgentModelRef) ||
-      (data?.builderAgentFallbackModelRef !== undefined &&
-        builderAgentFallbackModelRef !== data.builderAgentFallbackModelRef);
-    if (invalidFreeTierDial || invalidOpsDial || invalidBuilderAgentDial) {
+    const dials = resolvePlatformModelDials(data);
+    if (dials.invalidFields) {
       logger.warn("[admin] platformConfig/models carries an invalid model ref — defaulting invalid fields", {
-        freeTierModelRef: data.freeTierModelRef,
-        opsAgentModelRef: data.opsAgentModelRef,
-        builderAgentModelRef: data.builderAgentModelRef,
-        builderAgentFallbackModelRef: data.builderAgentFallbackModelRef,
+        freeTierModelRef: data?.freeTierModelRef,
+        opsAgentModelRef: data?.opsAgentModelRef,
+        builderAgentModelRef: data?.builderAgentModelRef,
+        builderAgentFallbackModelRef: data?.builderAgentFallbackModelRef,
       });
     }
     res.json({
-      freeTierModelRef,
+      freeTierModelRef: dials.freeTierModelRef,
       defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
-      opsAgentModelRef,
+      opsAgentModelRef: dials.opsAgentModelRef,
       defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
-      builderAgentModelRef,
+      builderAgentModelRef: dials.builderAgentModelRef,
       defaultBuilderAgentModelRef: DEFAULT_BUILDER_AGENT_MODEL_REF,
-      builderAgentFallbackModelRef,
+      builderAgentFallbackModelRef: dials.builderAgentFallbackModelRef,
       defaultBuilderAgentFallbackModelRef: DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
       catalog: platformCatalog,
       opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),

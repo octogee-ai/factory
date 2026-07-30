@@ -223,6 +223,10 @@ export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
   runtimeModelRef: string;
 }
 
+function catalogRefOrNull(value: unknown): string | null {
+  return typeof value === "string" && resolveFreeTierModel(value) !== null ? value : null;
+}
+
 export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const config = value as {
@@ -231,36 +235,24 @@ export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | 
     builderAgentModelRef?: unknown;
     builderAgentFallbackModelRef?: unknown;
   };
-  if (
-    typeof config.freeTierModelRef !== "string" ||
-    resolveFreeTierModel(config.freeTierModelRef) === null
-  ) {
-    return null;
-  }
+  const freeTierModelRef = catalogRefOrNull(config.freeTierModelRef);
+  if (freeTierModelRef === null) return null;
   const opsAgentModelRef = config.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF;
   if (typeof opsAgentModelRef !== "string" || resolveOpsAgentModel(opsAgentModelRef) === null) {
     return null;
   }
-  const builderAgentModelRef = config.builderAgentModelRef ?? DEFAULT_BUILDER_AGENT_MODEL_REF;
-  if (
-    typeof builderAgentModelRef !== "string" ||
-    resolveFreeTierModel(builderAgentModelRef) === null
-  ) {
-    return null;
-  }
-  const builderAgentFallbackModelRef =
+  const builderAgentModelRef = catalogRefOrNull(
+    config.builderAgentModelRef ?? DEFAULT_BUILDER_AGENT_MODEL_REF,
+  );
+  if (builderAgentModelRef === null) return null;
+  const fallbackInput =
     config.builderAgentFallbackModelRef === undefined
       ? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF
       : config.builderAgentFallbackModelRef;
-  if (
-    builderAgentFallbackModelRef !== null &&
-    (typeof builderAgentFallbackModelRef !== "string" ||
-      resolveFreeTierModel(builderAgentFallbackModelRef) === null)
-  ) {
-    return null;
-  }
+  const builderAgentFallbackModelRef = fallbackInput === null ? null : catalogRefOrNull(fallbackInput);
+  if (fallbackInput !== null && builderAgentFallbackModelRef === null) return null;
   return {
-    freeTierModelRef: config.freeTierModelRef,
+    freeTierModelRef,
     opsAgentModelRef,
     builderAgentModelRef,
     builderAgentFallbackModelRef,
@@ -275,17 +267,10 @@ export function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentMode
     builderAgentModelRef?: unknown;
     builderAgentFallbackModelRef?: unknown;
   };
-  const primary =
-    typeof raw.builderAgentModelRef === "string" &&
-    resolveFreeTierModel(raw.builderAgentModelRef)
-      ? raw.builderAgentModelRef
-      : DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const primary = catalogRefOrNull(raw.builderAgentModelRef) ?? DEFAULT_BUILDER_AGENT_MODEL_REF;
   const fallbackRef = raw.builderAgentFallbackModelRef === null
     ? null
-    : typeof raw.builderAgentFallbackModelRef === "string" &&
-        resolveFreeTierModel(raw.builderAgentFallbackModelRef)
-      ? raw.builderAgentFallbackModelRef
-      : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+    : catalogRefOrNull(raw.builderAgentFallbackModelRef) ?? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
   return {
     primary,
     fallbacks: fallbackRef !== null && fallbackRef !== primary ? [fallbackRef] : [],
