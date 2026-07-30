@@ -25,7 +25,7 @@ octogee_verify_gateway_capacity_placement() {
     return 2
   fi
   if ! pdbs_json=$(kubectl --context "$context" get poddisruptionbudgets -n "$namespace" \
-    -l "app=octogee-gateway" -o json); then
+    -o json); then
     echo "could not read gateway PodDisruptionBudgets" >&2
     return 2
   fi
@@ -70,12 +70,55 @@ live_pdbs = [
     if not item.get("metadata", {}).get("deletionTimestamp")
 ]
 selected_classes = set()
+shared_instances = {
+    item.get("metadata", {}).get("labels", {}).get("gateway-instance")
+    for item in live_deployments
+    if item.get("metadata", {}).get("labels", {}).get("gateway-class") == "shared"
+}
+shared_instances.discard(None)
+shared_pool_pdbs = [
+    item for item in live_pdbs
+    if (
+        item.get("spec", {})
+        .get("selector", {})
+        .get("matchLabels", {})
+        .get("gateway-class")
+    ) == "shared"
+]
+if shared_instances:
+    if len(shared_pool_pdbs) != 1:
+        errors.append(f"expected exactly one shared pool PDB, found {len(shared_pool_pdbs)}")
+    else:
+        pool_expressions = [
+            expression
+            for expression in (
+                shared_pool_pdbs[0]
+                .get("spec", {})
+                .get("selector", {})
+                .get("matchExpressions", [])
+            )
+            if expression.get("key") == "gateway-instance"
+        ]
+        pool_instances = (
+            set(pool_expressions[0].get("values") or [])
+            if len(pool_expressions) == 1 and pool_expressions[0].get("operator") == "In"
+            else set()
+        )
+        if pool_instances != shared_instances:
+            errors.append("shared pool PDB gateway-instance membership must exactly match shared Deployments")
 
 for deployment in live_deployments:
     metadata = deployment.get("metadata", {})
     name = metadata.get("name", "unnamed")
     labels = metadata.get("labels", {})
     instance = labels.get("gateway-instance")
+    gateway_class = labels.get("gateway-class")
+    pod_labels = (
+        deployment.get("spec", {})
+        .get("template", {})
+        .get("metadata", {})
+        .get("labels", {})
+    )
     pod_spec = deployment.get("spec", {}).get("template", {}).get("spec", {})
     node_selector = pod_spec.get("nodeSelector") or {}
     compute_class = node_selector.get(compute_class_label)
@@ -88,18 +131,60 @@ for deployment in live_deployments:
     if not instance:
         errors.append(f"Deployment {name} has no gateway-instance label")
         continue
+    if gateway_class not in ("shared", "builder", "operator"):
+        errors.append(f"Deployment {name} has invalid gateway-class label")
+        continue
     matching_pdbs = [
         item for item in live_pdbs
-        if item.get("metadata", {}).get("labels", {}).get("gateway-instance") == instance
+        if all(
+            pod_labels.get(key) == value
+            for key, value in (
+                item.get("spec", {})
+                .get("selector", {})
+                .get("matchLabels", {})
+            ).items()
+        ) and all(
+            (
+                expression.get("operator") == "In"
+                and pod_labels.get(expression.get("key")) in (expression.get("values") or [])
+            )
+            for expression in (
+                item.get("spec", {})
+                .get("selector", {})
+                .get("matchExpressions", [])
+            )
+        )
     ]
     if len(matching_pdbs) != 1:
-        errors.append(f"Deployment {name} expected exactly one PDB, found {len(matching_pdbs)}")
+        errors.append(f"Deployment {name} expected exactly one matching PDB, found {len(matching_pdbs)}")
         continue
     pdb_spec = matching_pdbs[0].get("spec", {})
-    if "minAvailable" in pdb_spec:
-        errors.append(f"PDB for Deployment {name} must not set minAvailable")
-    if str(pdb_spec.get("maxUnavailable")) != "1":
-        errors.append(f"PDB for Deployment {name} must set maxUnavailable=1")
+    pdb_selector = pdb_spec.get("selector", {})
+    if gateway_class == "shared":
+        if str(pdb_spec.get("minAvailable")) != "1":
+            errors.append(f"shared pool PDB for Deployment {name} must set minAvailable=1")
+        if "maxUnavailable" in pdb_spec:
+            errors.append(f"shared pool PDB for Deployment {name} must not set maxUnavailable")
+        if (pdb_selector.get("matchLabels") or {}).get("gateway-class") != "shared":
+            errors.append(f"shared pool PDB for Deployment {name} must select gateway-class=shared")
+        instance_expressions = [
+            expression
+            for expression in (pdb_selector.get("matchExpressions") or [])
+            if expression.get("key") == "gateway-instance"
+        ]
+        if (
+            len(instance_expressions) != 1
+            or instance_expressions[0].get("operator") != "In"
+            or instance not in (instance_expressions[0].get("values") or [])
+        ):
+            errors.append(f"shared pool PDB for Deployment {name} must explicitly include its gateway-instance")
+    else:
+        if "minAvailable" in pdb_spec:
+            errors.append(f"PDB for Deployment {name} must not set minAvailable")
+        if str(pdb_spec.get("maxUnavailable")) != "1":
+            errors.append(f"PDB for Deployment {name} must set maxUnavailable=1")
+        if (pdb_selector.get("matchLabels") or {}).get("gateway-instance") != instance:
+            errors.append(f"PDB for Deployment {name} must select its gateway-instance")
 
 classes_by_name = {
     item.get("metadata", {}).get("name"): item
