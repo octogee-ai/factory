@@ -5,8 +5,10 @@ import {
   DEFAULT_OPS_AGENT_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
+  builderAgentModelDefaultFromDoc,
   resolveFreeTierModel,
   resolveOpsAgentModel,
+  type BuilderAgentModelDefault,
   type ResolvedFreeTierModel,
   type ResolvedOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
@@ -15,6 +17,7 @@ const DEFAULT_TTL_MS = 60_000;
 
 export type FreeTierModelResolver = () => Promise<ResolvedFreeTierModel>;
 export type OpsAgentModelResolver = () => Promise<ResolvedOpsAgentModel>;
+export type BuilderAgentDefaultResolver = () => Promise<BuilderAgentModelDefault>;
 
 function mustResolve(ref: string): ResolvedFreeTierModel {
   const resolved = resolveFreeTierModel(ref);
@@ -73,6 +76,37 @@ export function createCachedFreeTierModelResolver(opts: {
           );
         }
       }
+      cached = { value, resolvedAt: at };
+      return value;
+    } catch (err) {
+      opts.onError?.(err);
+      return cached?.value ?? fallback;
+    }
+  };
+}
+
+// Same contract as the free-tier resolver: the field-tolerant doc read means
+// an unreadable or invalid doc serves the last-known (else compiled) default.
+export function createCachedBuilderAgentDefaultResolver(opts: {
+  db: Pick<Firestore, "collection">;
+  ttlMs?: number;
+  now?: () => number;
+  onError?: (err: unknown) => void;
+}): BuilderAgentDefaultResolver {
+  const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+  const now = opts.now ?? Date.now;
+  const fallback = builderAgentModelDefaultFromDoc(undefined);
+  let cached: { value: BuilderAgentModelDefault; resolvedAt: number } | null = null;
+
+  return async () => {
+    const at = now();
+    if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
+    try {
+      const snap = await opts.db
+        .collection(PLATFORM_CONFIG_COLLECTION)
+        .doc(PLATFORM_MODEL_CONFIG_DOC)
+        .get();
+      const value = builderAgentModelDefaultFromDoc(snap.data());
       cached = { value, resolvedAt: at };
       return value;
     } catch (err) {

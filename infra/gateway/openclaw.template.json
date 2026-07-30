@@ -45,6 +45,9 @@
   "agents": {
     "defaults": {
       "models": {
+        "platform-openrouter/deepseek/deepseek-v4-pro": {
+          "alias": "deepseek"
+        },
         "platform-openrouter/z-ai/glm-5.2": {
           "alias": "glm",
           "params": {

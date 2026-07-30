@@ -195,9 +195,22 @@ export function googleConnectAllowed(
 export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
 export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
 
+// The platform default every Builder's Agent starts on until they pick their
+// own model in Account → Models. Fallback ref null = no fallback.
+export const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null =
+  "platform-openrouter/z-ai/glm-5.2";
+
+export interface BuilderAgentModelDefault {
+  primary: string;
+  fallbacks: string[];
+}
+
 export interface PlatformModelConfig {
   freeTierModelRef: string;
   opsAgentModelRef: string;
+  builderAgentModelRef: string;
+  builderAgentFallbackModelRef: string | null;
 }
 
 export interface ResolvedFreeTierModel {
@@ -210,20 +223,74 @@ export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
   runtimeModelRef: string;
 }
 
+function catalogRefOrNull(value: unknown): string | null {
+  return typeof value === "string" && resolveFreeTierModel(value) !== null ? value : null;
+}
+
 export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const config = value as { freeTierModelRef?: unknown; opsAgentModelRef?: unknown };
-  if (
-    typeof config.freeTierModelRef !== "string" ||
-    resolveFreeTierModel(config.freeTierModelRef) === null
-  ) {
-    return null;
-  }
+  const config = value as {
+    freeTierModelRef?: unknown;
+    opsAgentModelRef?: unknown;
+    builderAgentModelRef?: unknown;
+    builderAgentFallbackModelRef?: unknown;
+  };
+  const freeTierModelRef = catalogRefOrNull(config.freeTierModelRef);
+  if (freeTierModelRef === null) return null;
   const opsAgentModelRef = config.opsAgentModelRef ?? DEFAULT_OPS_AGENT_MODEL_REF;
   if (typeof opsAgentModelRef !== "string" || resolveOpsAgentModel(opsAgentModelRef) === null) {
     return null;
   }
-  return { freeTierModelRef: config.freeTierModelRef, opsAgentModelRef };
+  const builderAgentModelRef = catalogRefOrNull(
+    config.builderAgentModelRef ?? DEFAULT_BUILDER_AGENT_MODEL_REF,
+  );
+  if (builderAgentModelRef === null) return null;
+  const fallbackInput =
+    config.builderAgentFallbackModelRef === undefined
+      ? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF
+      : config.builderAgentFallbackModelRef;
+  const builderAgentFallbackModelRef = fallbackInput === null ? null : catalogRefOrNull(fallbackInput);
+  if (fallbackInput !== null && builderAgentFallbackModelRef === null) return null;
+  return {
+    freeTierModelRef,
+    opsAgentModelRef,
+    builderAgentModelRef,
+    builderAgentFallbackModelRef,
+  };
+}
+
+// The {primary, fallbacks} selection every Builder Agent inherits, from the
+// stored platformConfig/models doc. Field-tolerant: an absent or invalid ref
+// falls back to the compiled default so a bad doc can never blank the fleet.
+export function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentModelDefault {
+  const raw = (data ?? {}) as {
+    builderAgentModelRef?: unknown;
+    builderAgentFallbackModelRef?: unknown;
+  };
+  const primary = catalogRefOrNull(raw.builderAgentModelRef) ?? DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const fallbackRef = raw.builderAgentFallbackModelRef === null
+    ? null
+    : catalogRefOrNull(raw.builderAgentFallbackModelRef) ?? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+  return {
+    primary,
+    fallbacks: fallbackRef !== null && fallbackRef !== primary ? [fallbackRef] : [],
+  };
+}
+
+// Strict payload validation for the untrusted side of the sync wire: the pod
+// applies the default only when the trusted stamp arrives whole and every ref
+// resolves in the catalog; anything else means "leave the config default".
+export function parseBuilderAgentModelDefault(value: unknown): BuilderAgentModelDefault | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as { primary?: unknown; fallbacks?: unknown };
+  if (typeof raw.primary !== "string" || resolveFreeTierModel(raw.primary) === null) return null;
+  if (!Array.isArray(raw.fallbacks)) return null;
+  const fallbacks: string[] = [];
+  for (const ref of raw.fallbacks) {
+    if (typeof ref !== "string" || resolveFreeTierModel(ref) === null) return null;
+    fallbacks.push(ref);
+  }
+  return { primary: raw.primary, fallbacks };
 }
 
 // Split a catalog model ref into what each dial consumer needs: the broker

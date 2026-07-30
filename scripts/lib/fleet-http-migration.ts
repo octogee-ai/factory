@@ -450,6 +450,9 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     ...pickPlanInputs(snapshot),
     freeTierModelRef:
       typeof snapshot.freeTierModelRef === "string" ? snapshot.freeTierModelRef : undefined,
+    builderAgentDefault: isRecord(snapshot.builderAgentDefault)
+      ? (snapshot.builderAgentDefault as UserSnapshot["builderAgentDefault"])
+      : undefined,
     byotActive: snapshot.byotActive === true,
     systemConfig: isRecord(snapshot.systemConfig)
       ? (snapshot.systemConfig as UserSnapshot["systemConfig"])

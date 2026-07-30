@@ -147,6 +147,20 @@ describe("snapshotConfigFingerprint", () => {
     ).not.toBe(base);
   });
 
+  it("changes when the operator flips the Builder Agent default dial", () => {
+    const base = snapshotConfigFingerprint(snap());
+    expect(
+      snapshotConfigFingerprint(
+        snap({
+          builderAgentDefault: {
+            primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+            fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+          },
+        }),
+      ),
+    ).not.toBe(base);
+  });
+
   it("changes when a project flips provisioning→active — the clone only ever runs for active projects", () => {
     const provisioning = snap({
       projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "provisioning" }],

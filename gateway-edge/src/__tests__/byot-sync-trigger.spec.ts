@@ -96,10 +96,14 @@ describe("model credential sync trigger", () => {
       userData,
       env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
     });
-    // No dial doc → the compiled default rides along; the pod-side derive must
+    // No dial doc → the compiled defaults ride along; the pod-side derive must
     // never fall back to its constant on a push while the fleet is dialed away.
     const enriched = {
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      builderAgentDefault: {
+        primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+        fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+      },
       ...userData,
     };
     expect(internalFetchSpy).toHaveBeenCalledWith(
@@ -132,6 +136,25 @@ describe("model credential sync trigger", () => {
     expect(body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
   });
 
+  it("carries the operator's dialed Builder Agent default on every push payload", async () => {
+    platformModelDoc = {
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      builderAgentModelRef: "anthropic/claude-sonnet-4-6",
+      builderAgentFallbackModelRef: null,
+    };
+    internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+    await postGatewayModelCredentialSync({
+      gatewayId: "bender",
+      userData,
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+    });
+    const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
+    expect(body.builderAgentDefault).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: [],
+    });
+  });
+
   it("keeps the free-tier dial when the independent Ops dial is invalid", async () => {
     platformModelDoc = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",
@@ -160,7 +183,11 @@ describe("model credential sync trigger", () => {
     });
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
     expect(body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
-    expect(warns.join("\n")).toContain("free-tier dial");
+    expect(body.builderAgentDefault).toEqual({
+      primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    });
+    expect(warns.join("\n")).toContain("platform model dial");
   });
 
   it("fails before network I/O when no BYOT sync signing secret or legacy service key is configured", async () => {

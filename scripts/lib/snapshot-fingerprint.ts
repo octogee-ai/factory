@@ -115,6 +115,9 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     // The operator's free-tier dial: a flip must re-ensure every mounted
     // house-only customer, not wait for the next roll.
     freeTierModelRef: snapshot.freeTierModelRef ?? null,
+    // The Builder Agent default dial: a flip must re-ensure every mounted
+    // catalog customer running the platform default.
+    builderAgentDefault: snapshot.builderAgentDefault ?? null,
   };
   return fnv1a64Hex(stableStringify(configSlice));
 }

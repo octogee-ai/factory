@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
 import {
   CREW_IDENTITY,
   CREW_ROLES,
@@ -12,7 +13,8 @@ describe("crew constants", () => {
   it("defines the coach identity and tier access matrix", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
-    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(CREW_IDENTITY.coach.model).toBe(DEFAULT_BUILDER_AGENT_MODEL_REF);
+    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
     for (const tier of TIERS) {
       expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);

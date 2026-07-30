@@ -22,6 +22,8 @@ import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connec
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
+  DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
+  DEFAULT_BUILDER_AGENT_MODEL_REF,
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_FREE_CONFIG,
@@ -120,33 +122,74 @@ const platformCatalog = MODEL_CATALOG.map((entry) => ({
   provider: entry.provider,
 }));
 
+function validCatalogRef(value: unknown): value is string {
+  return typeof value === "string" && resolveFreeTierModel(value) !== null;
+}
+
+function resolvedFallbackDial(value: unknown): string | null {
+  if (value === null) return null;
+  return validCatalogRef(value) ? value : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+}
+
+// Field-tolerant read of the stored dial doc: each invalid field defaults
+// independently so one bad ref never blanks the whole Admin panel.
+function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
+  freeTierModelRef: string;
+  opsAgentModelRef: string;
+  builderAgentModelRef: string;
+  builderAgentFallbackModelRef: string | null;
+  invalidFields: boolean;
+} {
+  const freeTierModelRef = validCatalogRef(data?.freeTierModelRef)
+    ? data.freeTierModelRef
+    : DEFAULT_FREE_TIER_MODEL_REF;
+  const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
+    resolveOpsAgentModel(data.opsAgentModelRef)
+    ? data.opsAgentModelRef
+    : DEFAULT_OPS_AGENT_MODEL_REF;
+  const builderAgentModelRef = validCatalogRef(data?.builderAgentModelRef)
+    ? data.builderAgentModelRef
+    : DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const builderAgentFallbackModelRef = resolvedFallbackDial(data?.builderAgentFallbackModelRef);
+  const invalidFields = [
+    ["freeTierModelRef", freeTierModelRef],
+    ["opsAgentModelRef", opsAgentModelRef],
+    ["builderAgentModelRef", builderAgentModelRef],
+    ["builderAgentFallbackModelRef", builderAgentFallbackModelRef],
+  ].some(([field, resolved]) =>
+    data?.[field as string] !== undefined && resolved !== data[field as string],
+  );
+  return {
+    freeTierModelRef,
+    opsAgentModelRef,
+    builderAgentModelRef,
+    builderAgentFallbackModelRef,
+    invalidFields,
+  };
+}
+
 router.get("/platform-config", async (_req, res) => {
   try {
     const snap = await platformModelDoc().get();
     const data = snap.data() as Record<string, unknown> | undefined;
-    const freeTierModelRef = typeof data?.freeTierModelRef === "string" &&
-      resolveFreeTierModel(data.freeTierModelRef)
-      ? data.freeTierModelRef
-      : DEFAULT_FREE_TIER_MODEL_REF;
-    const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
-      resolveOpsAgentModel(data.opsAgentModelRef)
-      ? data.opsAgentModelRef
-      : DEFAULT_OPS_AGENT_MODEL_REF;
-    const invalidFreeTierDial = data?.freeTierModelRef !== undefined &&
-      freeTierModelRef !== data.freeTierModelRef;
-    const invalidOpsDial = data?.opsAgentModelRef !== undefined &&
-      opsAgentModelRef !== data.opsAgentModelRef;
-    if (invalidFreeTierDial || invalidOpsDial) {
+    const dials = resolvePlatformModelDials(data);
+    if (dials.invalidFields) {
       logger.warn("[admin] platformConfig/models carries an invalid model ref — defaulting invalid fields", {
-        freeTierModelRef: data.freeTierModelRef,
-        opsAgentModelRef: data.opsAgentModelRef,
+        freeTierModelRef: data?.freeTierModelRef,
+        opsAgentModelRef: data?.opsAgentModelRef,
+        builderAgentModelRef: data?.builderAgentModelRef,
+        builderAgentFallbackModelRef: data?.builderAgentFallbackModelRef,
       });
     }
     res.json({
-      freeTierModelRef,
+      freeTierModelRef: dials.freeTierModelRef,
       defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
-      opsAgentModelRef,
+      opsAgentModelRef: dials.opsAgentModelRef,
       defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
+      builderAgentModelRef: dials.builderAgentModelRef,
+      defaultBuilderAgentModelRef: DEFAULT_BUILDER_AGENT_MODEL_REF,
+      builderAgentFallbackModelRef: dials.builderAgentFallbackModelRef,
+      defaultBuilderAgentFallbackModelRef: DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
       catalog: platformCatalog,
       opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),
     });
@@ -167,6 +210,8 @@ router.put("/platform-config", async (req, res) => {
       {
         freeTierModelRef: parsed.freeTierModelRef,
         opsAgentModelRef: parsed.opsAgentModelRef,
+        builderAgentModelRef: parsed.builderAgentModelRef,
+        builderAgentFallbackModelRef: parsed.builderAgentFallbackModelRef,
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: req.uid ?? null,
       },
@@ -175,12 +220,16 @@ router.put("/platform-config", async (req, res) => {
     logger.info("[admin] platform model dials set", {
       freeTierModelRef: parsed.freeTierModelRef,
       opsAgentModelRef: parsed.opsAgentModelRef,
+      builderAgentModelRef: parsed.builderAgentModelRef,
+      builderAgentFallbackModelRef: parsed.builderAgentFallbackModelRef,
       updatedBy: req.uid,
     });
     res.json({
       ok: true,
       freeTierModelRef: parsed.freeTierModelRef,
       opsAgentModelRef: parsed.opsAgentModelRef,
+      builderAgentModelRef: parsed.builderAgentModelRef,
+      builderAgentFallbackModelRef: parsed.builderAgentFallbackModelRef,
     });
   } catch (err) {
     logger.error("[admin] platform-config write failed", { err });

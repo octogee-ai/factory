@@ -15,6 +15,12 @@ import {
 } from "@octogee/shared/types/agent-models";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { pickPlanInputs, resolveBillingProfile } from "@octogee/shared/types/billing";
+import {
+  PLATFORM_CONFIG_COLLECTION,
+  PLATFORM_MODEL_CONFIG_DOC,
+  builderAgentModelDefaultFromDoc,
+  type BuilderAgentModelDefault,
+} from "@octogee/shared/types/platform-config";
 
 const router = Router();
 
@@ -38,6 +44,27 @@ function gatewayIdFromRequest(req: Request): string | null {
 async function readSystemConfig(uid: string): Promise<Record<string, unknown>> {
   const snap = await db.doc(`users/${uid}/system/config`).get();
   return snap.data() ?? {};
+}
+
+// The operator's Builder Agent default dial — what an agent with no explicit
+// pick runs, so the picker can show the effective selection instead of an
+// empty "Choose a model…". An unreadable doc serves the compiled default.
+async function platformAgentModelDefault(
+  logWarn: (msg: string) => void,
+): Promise<BuilderAgentModelDefault> {
+  try {
+    const snap = await db
+      .doc(`${PLATFORM_CONFIG_COLLECTION}/${PLATFORM_MODEL_CONFIG_DOC}`)
+      .get();
+    return builderAgentModelDefaultFromDoc(snap.data());
+  } catch (err) {
+    logWarn(
+      `[agent-models] platform default dial read failed — serving the compiled default: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return builderAgentModelDefaultFromDoc(undefined);
+  }
 }
 
 // BYOSUB = a live OAUTH subscription credential (claude-cli, codex). A static
@@ -114,7 +141,10 @@ function triggerAgentModelSync(args: {
 router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
-    const sysData = await readSystemConfig(uid);
+    const [sysData, platformDefault] = await Promise.all([
+      readSystemConfig(uid),
+      platformAgentModelDefault((m) => logger.warn(m)),
+    ]);
     const plan = resolveBillingProfile(req.user ?? {});
     const slug = slugFromRequest(req);
     res.json({
@@ -125,6 +155,7 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       byosub: hasActiveByosub(sysData),
       catalog: catalogPayload(),
       selections: parseAgentModelSelections(sysData.agentModels),
+      platformDefault,
     });
   } catch (e) { next(e); }
 });

@@ -7,7 +7,9 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   PLATFORM_CONFIG_COLLECTION,
   PLATFORM_MODEL_CONFIG_DOC,
+  builderAgentModelDefaultFromDoc,
   resolveFreeTierModel,
+  type BuilderAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
 
 export interface ModelCredentialSyncUserData {
@@ -20,6 +22,9 @@ export interface ModelCredentialSyncUserData {
   // fleet; the snapshot fingerprint wouldn't change, so reconcile can't repair
   // the drift until the next mount/roll.
   freeTierModelRef?: string;
+  // The operator's Builder Agent default dial, stamped alongside the free-tier
+  // dial: the {primary, fallbacks} a catalog coach runs with no explicit pick.
+  builderAgentDefault?: BuilderAgentModelDefault;
   // Plan inputs travel as-is (pickPlanInputs); the resolver tolerates non-string
   // shapes, so they mirror subscription/builderSubscription as `unknown`.
   selectedTier?: unknown;
@@ -70,23 +75,33 @@ export function gatewayModelCredentialSyncUrl(
   return `${trimTrailingSlash(base)}/api/g/${encodeURIComponent(gatewayId)}/internal/model-credential-sync`;
 }
 
-async function freeTierModelRefForSync(logWarn: (msg: string) => void): Promise<string> {
+async function platformModelDialsForSync(logWarn: (msg: string) => void): Promise<{
+  freeTierModelRef: string;
+  builderAgentDefault: BuilderAgentModelDefault;
+}> {
   try {
     const snap = await db
       .collection(PLATFORM_CONFIG_COLLECTION)
       .doc(PLATFORM_MODEL_CONFIG_DOC)
       .get();
-    const configured = (snap.data() as { freeTierModelRef?: unknown } | undefined)?.freeTierModelRef;
-    return typeof configured === "string" && resolveFreeTierModel(configured)
-      ? configured
-      : DEFAULT_FREE_TIER_MODEL_REF;
+    const data = snap.data() as { freeTierModelRef?: unknown } | undefined;
+    const configured = data?.freeTierModelRef;
+    return {
+      freeTierModelRef: typeof configured === "string" && resolveFreeTierModel(configured)
+        ? configured
+        : DEFAULT_FREE_TIER_MODEL_REF,
+      builderAgentDefault: builderAgentModelDefaultFromDoc(data),
+    };
   } catch (err) {
     logWarn(
-      `free-tier dial read failed for model credential sync — sending the compiled default: ${
+      `platform model dial read failed for model credential sync — sending the compiled defaults: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
-    return DEFAULT_FREE_TIER_MODEL_REF;
+    return {
+      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      builderAgentDefault: builderAgentModelDefaultFromDoc(undefined),
+    };
   }
 }
 
@@ -105,7 +120,7 @@ export async function postGatewayModelCredentialSync(args: {
   }
   const logWarn = args.logWarn ?? ((m: string) => logger.warn(m));
   const userData: ModelCredentialSyncUserData = {
-    freeTierModelRef: await freeTierModelRefForSync(logWarn),
+    ...(await platformModelDialsForSync(logWarn)),
     ...args.userData,
   };
   const body = JSON.stringify(userData);

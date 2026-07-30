@@ -119,6 +119,10 @@ export interface FleetBrokerUserSnapshot {
     trialGrant?: unknown;
     signupOfferConvertedAt?: unknown;
     freeTierModelRef?: string;
+    builderAgentDefault?: {
+        primary: string;
+        fallbacks: string[];
+    };
     ownerName: string;
     email: string;
     displayName: string;

@@ -37,6 +37,9 @@ export interface UserSnapshot {
   // The operator's free-tier model dial, stamped by the fleet broker; drives
   // the house pin and the BYOK fallback baseline at mount-time reassert.
   freeTierModelRef?: string;
+  // The operator's Builder Agent default dial: the {primary, fallbacks} a
+  // catalog coach with no explicit pick converges to at mount-time reassert.
+  builderAgentDefault?: { primary: string; fallbacks: string[] };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };
     agentModels?: AgentModelSelections;
@@ -793,6 +796,7 @@ function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknow
     systemConfig: snapshot.systemConfig,
     tier: snapshot.tier,
     freeTierModelRef: snapshot.freeTierModelRef,
+    builderAgentDefault: snapshot.builderAgentDefault,
     // Full plan-input set: the reassert's resolveBillingProfile must see the same
     // plan the trusted side resolved, or a trial/builder user's agent-model picks
     // defer to house_only on every mount/roll.

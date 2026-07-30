@@ -23,6 +23,10 @@ export interface UserSnapshot {
     trialGrant?: unknown;
     signupOfferConvertedAt?: unknown;
     freeTierModelRef?: string;
+    builderAgentDefault?: {
+        primary: string;
+        fallbacks: string[];
+    };
     systemConfig?: {
         byot?: {
             provider?: string;
