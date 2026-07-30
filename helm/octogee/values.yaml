@@ -88,16 +88,17 @@ mattermost:
   pvc:
     size: 20Gi
     storageClass: standard-rwo
-  # Single public ingress for Mattermost. Pre-Option-C this was IAP-gated
-  # for ops-only access; Option C drops IAP so the browser app can hit MM
-  # directly with a per-user PAT (no Google OAuth in the data path).
-  # Admin login still requires the MM admin password; Cloud Armor rate-limits.
+  # Direct operator/admin ingress. Deployed environments enable IAP; product
+  # REST and WebSocket traffic reaches Mattermost through gateway-edge.
   ingress:
     enabled: false
     host: ""
     staticIpName: ""
     certName: ""
     backendConfigName: mattermost-backend
+    cloudArmor:
+      enabled: false
+      policyName: octogee-waf
     iap:
       enabled: false
       oauthClientCredentialsSecretName: ""
@@ -156,6 +157,9 @@ gitea:
     staticIpName: ""
     certName: ""
     backendConfigName: gitea-backend
+    cloudArmor:
+      enabled: false
+      policyName: octogee-waf
     iap:
       enabled: false
       oauthClientCredentialsSecretName: ""

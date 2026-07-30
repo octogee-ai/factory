@@ -8,6 +8,9 @@ port: 3001
 
 backendConfig:
   name: octogee-api-backend
+  cloudArmor:
+    enabled: false
+    policyName: octogee-waf
   healthCheck:
     path: /health
     port: 3001

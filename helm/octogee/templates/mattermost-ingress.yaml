@@ -13,6 +13,10 @@ spec:
   timeoutSec: 3600
   connectionDraining:
     drainingTimeoutSec: 300
+  {{- if .Values.mattermost.ingress.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.mattermost.ingress.cloudArmor.policyName }}
+  {{- end }}
   # GKE BackendConfig controller treats `iap` field absent as "leave the
   # GCP backend service's IAP setting alone" — which means `if iap.enabled`
   # blocks silently fail to disable IAP after a previous enable. Render

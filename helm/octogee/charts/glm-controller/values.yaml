@@ -73,6 +73,9 @@ http:
 
 backendConfig:
   name: glm-controller-backend
+  cloudArmor:
+    enabled: false
+    policyName: octogee-waf
   timeoutSec: 3600
   healthCheck:
     path: /healthz

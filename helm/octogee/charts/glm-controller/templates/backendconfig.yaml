@@ -4,6 +4,10 @@ metadata:
   name: {{ .Values.backendConfig.name | default "glm-controller-backend" }}
   namespace: {{ .Release.Namespace }}
 spec:
+  {{- if .Values.backendConfig.cloudArmor.enabled }}
+  securityPolicy:
+    name: {{ .Values.backendConfig.cloudArmor.policyName }}
+  {{- end }}
   healthCheck:
     type: HTTP
     requestPath: {{ .Values.backendConfig.healthCheck.path | default "/healthz" }}
