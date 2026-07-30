@@ -95,10 +95,15 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: openclaw-state
+              mountPath: /home/node/.openclaw
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: openclaw-state
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: v1
 kind: Service
