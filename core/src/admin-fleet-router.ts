@@ -2793,143 +2793,6 @@ async function createOperation(
   return ref.id;
 }
 
-type DefaultGatewayUserDecision =
-  | { kind: "ignore" }
-  | { kind: "already-on-target" }
-  | { kind: "owned-runtime" }
-  | {
-      kind: "blocked";
-      reason: "unassigned" | "current-gateway-missing" | "migration-in-flight";
-      currentGatewayId: string | null;
-      operationId?: string;
-    }
-  | { kind: "adopt"; operationId: string }
-  | { kind: "enqueue"; currentGatewayId: string; builderSlug: string | null };
-
-function defaultGatewayUserDecision(input: {
-  data: Record<string, unknown>;
-  gatewaysById: ReadonlyMap<string, DurableGatewayRoot>;
-  pending: { id: string; toGatewayId: string | null } | undefined;
-  targetGatewayId: string;
-  workspaceSlugsForUser: FleetRouterDeps["workspaceSlugsForUser"];
-}): DefaultGatewayUserDecision {
-  if (!accountAllowsInteractiveAccess(input.data)) return { kind: "ignore" };
-  const currentGatewayId = readUserGatewayId(input.data);
-  if (!currentGatewayId) {
-    return { kind: "blocked", reason: "unassigned", currentGatewayId: null };
-  }
-  const currentGateway = input.gatewaysById.get(currentGatewayId);
-  if (!currentGateway) {
-    return { kind: "blocked", reason: "current-gateway-missing", currentGatewayId };
-  }
-  if (
-    currentGateway.gatewayClass !== "shared" &&
-    currentGateway.allocation?.kind === "disposable-builder"
-  ) {
-    return { kind: "owned-runtime" };
-  }
-  if (currentGatewayId === input.targetGatewayId) return { kind: "already-on-target" };
-  if (input.pending?.toGatewayId === input.targetGatewayId) {
-    return { kind: "adopt", operationId: input.pending.id };
-  }
-  if (input.pending) {
-    return {
-      kind: "blocked",
-      reason: "migration-in-flight",
-      currentGatewayId,
-      operationId: input.pending.id,
-    };
-  }
-  return {
-    kind: "enqueue",
-    currentGatewayId,
-    builderSlug: resolveCustomerSlug(input.data, input.workspaceSlugsForUser),
-  };
-}
-
-function indexPendingMigrations(
-  docs: ReadonlyArray<FirestoreDocLike>,
-): Map<string, { id: string; toGatewayId: string | null }> {
-  const pendingByUid = new Map<string, { id: string; toGatewayId: string | null }>();
-  for (const operation of docs) {
-    const data = operation.data();
-    if (data.kind !== OP_KIND_MIGRATE_CUSTOMER) continue;
-    const operationInput = isPlainRecord(data.input) ? data.input : {};
-    const uid = asStringOrNull(data.inputUid) ?? asStringOrNull(operationInput.uid);
-    if (!uid || pendingByUid.has(uid)) continue;
-    pendingByUid.set(uid, {
-      id: operation.id,
-      toGatewayId: asStringOrNull(operationInput.toGatewayId),
-    });
-  }
-  return pendingByUid;
-}
-
-async function convergeDefaultGatewayChange(input: {
-  deps: FleetRouterDeps;
-  gatewaysById: ReadonlyMap<string, DurableGatewayRoot>;
-  previousGatewayId: string | null;
-  targetGatewayId: string;
-  createdBy: string;
-  enqueueMigration: (input: Record<string, unknown>) => Promise<string>;
-}): Promise<AdminDefaultGatewayChange> {
-  const [usersSnap, pendingOpsSnap] = await Promise.all([
-    input.deps.db.collection("users").get(),
-    input.deps.db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .where("status", "in", ["pending", "running"])
-      .get(),
-  ]);
-  const pendingByUid = indexPendingMigrations(pendingOpsSnap.docs);
-
-  const result: AdminDefaultGatewayChange = {
-    previousGatewayId: input.previousGatewayId,
-    targetGatewayId: input.targetGatewayId,
-    enqueued: [],
-    adopted: [],
-    blocked: [],
-    ownedRuntimeUntouched: 0,
-  };
-  const users = [...usersSnap.docs].sort((a, b) => a.id.localeCompare(b.id));
-  for (const user of users) {
-    const data = user.data() as Record<string, unknown>;
-    const decision = defaultGatewayUserDecision({
-      data,
-      gatewaysById: input.gatewaysById,
-      pending: pendingByUid.get(user.id),
-      targetGatewayId: input.targetGatewayId,
-      workspaceSlugsForUser: input.deps.workspaceSlugsForUser,
-    });
-    if (decision.kind === "ignore" || decision.kind === "already-on-target") continue;
-    if (decision.kind === "owned-runtime") {
-      result.ownedRuntimeUntouched += 1;
-      continue;
-    }
-    if (decision.kind === "blocked") {
-      result.blocked.push({
-        uid: user.id,
-        reason: decision.reason,
-        currentGatewayId: decision.currentGatewayId,
-        ...(decision.operationId ? { operationId: decision.operationId } : {}),
-      });
-      continue;
-    }
-    if (decision.kind === "adopt") {
-      result.adopted.push({ uid: user.id, operationId: decision.operationId });
-      continue;
-    }
-    const operationId = await input.enqueueMigration({
-      uid: user.id,
-      ...(decision.builderSlug ? { builderSlug: decision.builderSlug } : {}),
-      fromGatewayId: decision.currentGatewayId,
-      toGatewayId: input.targetGatewayId,
-      source: "platform-default-change",
-    });
-    result.enqueued.push({ uid: user.id, operationId });
-  }
-  return result;
-}
-
 function operationDoc(
   opts: NewOperationInput,
   createdAt: number,
@@ -3035,28 +2898,36 @@ function centralReleaseFanoutMember(
   };
 }
 
+function centralReleaseFanoutMetadataValid(
+  data: Record<string, unknown>,
+  version: string,
+): boolean {
+  return data.version === version &&
+    typeof data.sourceSha === "string" &&
+    typeof data.manifestDigest === "string" &&
+    (data.environment === "test" || data.environment === "prod") &&
+    (data.gatewayScope === "shared" || data.gatewayScope === "all") &&
+    (data.status === "pending" || data.status === "complete") &&
+    isPlainRecord(data.rollouts);
+}
+
+function centralReleaseFanoutGatewayIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  if (!value.every((gatewayId) => typeof gatewayId === "string")) return null;
+  return new Set(value).size === value.length ? value : null;
+}
+
 function centralReleaseFanoutFromData(
   data: Record<string, unknown> | undefined,
   version: string,
 ): CentralReleaseFanout {
-  const gatewayIds = data?.gatewayIds;
-  if (
-    data?.version !== version ||
-    typeof data.sourceSha !== "string" ||
-    typeof data.manifestDigest !== "string" ||
-    (data.environment !== "test" && data.environment !== "prod") ||
-    (data.gatewayScope !== "shared" && data.gatewayScope !== "all") ||
-    !Array.isArray(gatewayIds) ||
-    gatewayIds.length === 0 ||
-    !gatewayIds.every((gatewayId) => typeof gatewayId === "string") ||
-    new Set(gatewayIds).size !== gatewayIds.length ||
-    (data.status !== "pending" && data.status !== "complete") ||
-    !isPlainRecord(data.rollouts)
-  ) {
+  if (!data || !centralReleaseFanoutMetadataValid(data, version)) {
     throw new Error(`CENTRAL release fanout ${version} is malformed`);
   }
+  const gatewayIds = centralReleaseFanoutGatewayIds(data.gatewayIds);
+  if (gatewayIds === null) throw new Error(`CENTRAL release fanout ${version} is malformed`);
   const rollouts = Object.fromEntries(
-    Object.entries(data.rollouts).map(([gatewayId, member]) => [
+    Object.entries(data.rollouts as Record<string, unknown>).map(([gatewayId, member]) => [
       gatewayId,
       centralReleaseFanoutMember(member, version, gatewayId),
     ]),
@@ -3066,12 +2937,12 @@ function centralReleaseFanoutFromData(
   }
   return {
     version,
-    sourceSha: data.sourceSha,
-    manifestDigest: data.manifestDigest,
-    environment: data.environment,
-    gatewayScope: data.gatewayScope,
+    sourceSha: data.sourceSha as string,
+    manifestDigest: data.manifestDigest as string,
+    environment: data.environment as "test" | "prod",
+    gatewayScope: data.gatewayScope as CentralReleaseFanout["gatewayScope"],
     gatewayIds,
-    status: data.status,
+    status: data.status as "pending" | "complete",
     rollouts,
   };
 }

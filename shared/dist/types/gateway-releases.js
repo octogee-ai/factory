@@ -297,6 +297,23 @@ async function preserveExistingAssignment(txn, assignmentRef, userRef, params) {
     txn.update(userRef, params.mirrorPatch);
     return true;
 }
+async function automaticBuilderRejectReason(txn, userRef, params) {
+    if (!params.automatic)
+        return null;
+    const userSnap = await txn.get(userRef);
+    const userData = userSnap.exists ? userSnap.data() : undefined;
+    return builderIsOperatorManaged(userData)
+        ? "builder-operator-managed"
+        : null;
+}
+function placementGatewayRejectReason(gatewayData, params) {
+    if (!isDurablePlacementRoot(gatewayData, params.gatewayId))
+        return "gateway-root-invalid";
+    if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
+        return "gateway-operator-managed";
+    }
+    return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
+}
 export async function commitPlacementAtomic(db, params) {
     const userRef = db.collection("users").doc(params.uid);
     const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
@@ -306,12 +323,9 @@ export async function commitPlacementAtomic(db, params) {
     return db.runTransaction(async (txn) => {
         const gatewaySnap = await txn.get(gatewayRef);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-        if (params.automatic) {
-            const userSnap = await txn.get(userRef);
-            if (builderIsOperatorManaged(userSnap.exists ? userSnap.data() : undefined)) {
-                return { kind: "rejected", reason: "builder-operator-managed" };
-            }
-        }
+        const builderRejectReason = await automaticBuilderRejectReason(txn, userRef, params);
+        if (builderRejectReason)
+            return { kind: "rejected", reason: builderRejectReason };
         if (!gatewaySnap.exists) {
             if (params.requireDurableGateway) {
                 return { kind: "rejected", reason: "gateway-root-invalid" };
@@ -319,14 +333,11 @@ export async function commitPlacementAtomic(db, params) {
             txn.update(userRef, params.mirrorPatch);
             return { kind: "mirror-only" };
         }
+        const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
+        if (gatewayRejectReason)
+            return { kind: "rejected", reason: gatewayRejectReason };
         if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
             return { kind: "rejected", reason: "gateway-root-invalid" };
-        }
-        if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
-            return { kind: "rejected", reason: "gateway-operator-managed" };
-        }
-        if (gatewayData.desiredStatus !== "running") {
-            return { kind: "rejected", reason: "gateway-not-running" };
         }
         const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId));
         const runtimeRejectReason = placementRuntimeRejectReason(runtimeSnap, params.gatewayId);
@@ -351,8 +362,6 @@ export async function commitPlacementAtomic(db, params) {
         if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
             return { kind: "assignment-preserved" };
         }
-        // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
-        // (the steady baseline before any migration cutover bumps the epoch).
         txn.update(userRef, params.mirrorPatch);
         const assignmentDoc = {
             uid: params.uid,
