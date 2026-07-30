@@ -1,6 +1,7 @@
+import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
 export const CREW_ROLES = ["coach"];
 export const CREW_IDENTITY = {
-    coach: { name: "Octo", emoji: "🐙", model: "platform-openrouter/z-ai/glm-5.2" },
+    coach: { name: "Octo", emoji: "🐙", model: DEFAULT_BUILDER_AGENT_MODEL_REF },
 };
 export const TIERS = ["trial", "free", "hobby", "pro", "max"];
 export const TIER_CREW_ACCESS = {

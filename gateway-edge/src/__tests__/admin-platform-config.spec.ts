@@ -148,27 +148,63 @@ describe("admin platform-config", () => {
     expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
+  it("GET serves the Builder Agent default dial with its compiled defaults", async () => {
+    const res = await request(app).get("/api/admin/platform-config");
+    expect(res.status).toBe(200);
+    expect(res.body.builderAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.defaultBuilderAgentModelRef).toBe(
+      "platform-openrouter/deepseek/deepseek-v4-pro",
+    );
+    expect(res.body.builderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(res.body.defaultBuilderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
+
+    platformDocs["platformConfig/models"] = {
+      freeTierModelRef: "anthropic/claude-haiku-4-5",
+      builderAgentModelRef: "anthropic/claude-sonnet-4-6",
+      builderAgentFallbackModelRef: null,
+    };
+    const dialed = await request(app).get("/api/admin/platform-config");
+    expect(dialed.body.builderAgentModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(dialed.body.builderAgentFallbackModelRef).toBeNull();
+  });
+
   it("PUT writes the dial with audit fields and echoes the new value", async () => {
     const res = await request(app)
       .put("/api/admin/platform-config")
       .send({
         freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
         opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
+        builderAgentModelRef: "anthropic/claude-sonnet-4-6",
+        builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
       });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       ok: true,
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
+      builderAgentModelRef: "anthropic/claude-sonnet-4-6",
+      builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
     });
     expect(setCalls).toHaveLength(1);
     expect(setCalls[0].path).toBe("platformConfig/models");
     expect(setCalls[0].data).toMatchObject({
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
+      builderAgentModelRef: "anthropic/claude-sonnet-4-6",
+      builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
       updatedBy: "admin-user",
       updatedAt: "server-now",
     });
+  });
+
+  it("PUT rejects a Builder Agent ref outside the catalog", async () => {
+    const res = await request(app).put("/api/admin/platform-config").send({
+      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      builderAgentModelRef: "z-ai/glm-5.2",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_model_ref");
+    expect(setCalls).toHaveLength(0);
   });
 
   it("PUT rejects a non-catalog ref with 400 and writes nothing", async () => {

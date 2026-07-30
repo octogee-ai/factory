@@ -51,6 +51,7 @@ import {
 } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { parseBuilderAgentModelDefault } from "@octogee/shared/types/platform-config";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -924,11 +925,34 @@ export async function syncByotForCustomer(
 
   // Explicit per-agent picks land last so they win over the class default the
   // sync just wrote; house-only plans stay pinned to the house model.
-  await actions.applyAgentModelOverrides(slug, userData.systemConfig?.agentModels, {
-    houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
-  });
+  await actions.applyAgentModelOverrides(
+    slug,
+    agentModelsWithBuilderDefault(slug, userData, desired),
+    {
+      houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
+    },
+  );
 
   await refreshProvisionedCoachRuntimeSessions(slug, userData, actions, deps?.logFn ?? log);
+}
+
+// The operator's Builder Agent default fills in for a coach with no explicit
+// pick — exactly the "config default stands" case (catalog plan, no BYOT, no
+// house pin). BYOT and house-only coaches keep their own model authority, and
+// an explicit pick always wins by sitting later in the map.
+function agentModelsWithBuilderDefault(
+  slug: string,
+  userData: SyncByotUserData,
+  desired: DesiredByotState,
+): AgentModelSelections | undefined {
+  const explicit = userData.systemConfig?.agentModels;
+  if (desired.enabled || desired.coachModelInput !== null) return explicit;
+  if (userData.provisioning?.openclaw?.status !== "complete") return explicit;
+  const platformDefault = parseBuilderAgentModelDefault(userData.builderAgentDefault);
+  if (!platformDefault) return explicit;
+  const coachAgentId = `octogee-${slug}-coach`;
+  if (explicit?.[coachAgentId]) return explicit;
+  return { [coachAgentId]: platformDefault, ...(explicit ?? {}) };
 }
 
 async function refreshProvisionedCoachRuntimeSessions(

@@ -354,6 +354,7 @@ function byotUserDataFromSnapshot(snapshot) {
         systemConfig: snapshot.systemConfig,
         tier: snapshot.tier,
         freeTierModelRef: snapshot.freeTierModelRef,
+        builderAgentDefault: snapshot.builderAgentDefault,
         // Full plan-input set: the reassert's resolveBillingProfile must see the same
         // plan the trusted side resolved, or a trial/builder user's agent-model picks
         // defer to house_only on every mount/roll.

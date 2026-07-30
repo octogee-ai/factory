@@ -6,7 +6,9 @@ import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import {
+  createCachedBuilderAgentDefaultResolver,
   createCachedFreeTierModelResolver,
+  type BuilderAgentDefaultResolver,
   type FreeTierModelResolver,
 } from "../lib/platform-model-config.js";
 import type {
@@ -1121,7 +1123,10 @@ async function loadSnapshot(
   db: Firestore,
   uid: string,
   data: Record<string, unknown>,
-  freeTierModelRef: string,
+  modelDials: {
+    freeTierModelRef: string;
+    builderAgentDefault: FleetBrokerUserSnapshot["builderAgentDefault"];
+  },
 ): Promise<FleetBrokerUserSnapshot | null> {
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
@@ -1144,7 +1149,8 @@ async function loadSnapshot(
     slug,
     ...baseFields,
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
-    freeTierModelRef,
+    freeTierModelRef: modelDials.freeTierModelRef,
+    builderAgentDefault: modelDials.builderAgentDefault,
     channels,
     projects,
     ...(projectAgents.length > 0 ? { projectAgents } : {}),
@@ -1174,6 +1180,7 @@ async function findAssignedUidBySlug(
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
   resolveFreeTierModel: FreeTierModelResolver;
+  resolveBuilderAgentDefault: BuilderAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
   ensureCommunityMembership: NonNullable<FleetBrokerRouteDeps["ensureCommunityMembership"]>;
@@ -1200,6 +1207,11 @@ function resolveFleetBrokerRouteDeps(
     resolveFreeTierModel: createCachedFreeTierModelResolver({
       db: opts.db,
       onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
+    }),
+    resolveBuilderAgentDefault: createCachedBuilderAgentDefaultResolver({
+      db: opts.db,
+      onError: (err) =>
+        logger.error("fleet-broker builder-agent dial resolution failed", { err }),
     }),
     provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
     markProvisioningComplete:
@@ -1278,7 +1290,10 @@ function installSnapshotRoutes(
       .collection("users")
       .where(OPENCLAW_GATEWAY_ID_FIELD, "==", bound.gatewayId)
       .get();
-    const freeTierModelRef = (await deps.resolveFreeTierModel()).ref;
+    const modelDials = {
+      freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+      builderAgentDefault: await deps.resolveBuilderAgentDefault(),
+    };
     const users: FleetBrokerUserSnapshot[] = [];
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
@@ -1286,7 +1301,7 @@ function installSnapshotRoutes(
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }
-      const snapshot = await loadSnapshot(db, doc.id, data, freeTierModelRef);
+      const snapshot = await loadSnapshot(db, doc.id, data, modelDials);
       if (snapshot) users.push(snapshot);
     }
     res.json({ users });
@@ -1325,7 +1340,10 @@ function installSnapshotRoutes(
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const snapshot = await loadSnapshot(db, uid, data, (await deps.resolveFreeTierModel()).ref);
+    const snapshot = await loadSnapshot(db, uid, data, {
+      freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+      builderAgentDefault: await deps.resolveBuilderAgentDefault(),
+    });
     if (!snapshot) {
       res.status(404).json({ error: "not_found" });
       return;

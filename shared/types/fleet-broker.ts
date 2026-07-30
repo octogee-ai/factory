@@ -143,6 +143,10 @@ export interface FleetBrokerUserSnapshot {
   // server-side: the house pin for house_only plans and the BYOK fallback.
   // Fingerprinted — a dial flip re-ensures mounted house-only customers.
   freeTierModelRef?: string;
+  // The operator's Builder Agent default dial (platformConfig/models): the
+  // {primary, fallbacks} a catalog-plan Agent runs until its Builder picks
+  // their own. Fingerprinted — a dial flip re-ensures mounted customers.
+  builderAgentDefault?: { primary: string; fallbacks: string[] };
   ownerName: string;
   email: string;
   displayName: string;

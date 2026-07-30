@@ -354,6 +354,9 @@ export function deriveDesiredByotState(userData: {
   // The operator's free-tier model dial, stamped on the snapshot by the
   // trusted side; revalidated here against the catalog.
   freeTierModelRef?: unknown;
+  // The operator's Builder Agent default dial, stamped like freeTierModelRef;
+  // revalidated pod-side before it fills in for a missing coach pick.
+  builderAgentDefault?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };

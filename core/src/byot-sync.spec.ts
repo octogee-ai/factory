@@ -2543,6 +2543,114 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     });
   });
 
+  const builderDefaultDeps = (applyAgentModelOverridesFn: ReturnType<typeof vi.fn>) => ({
+    isOperatorGateway: () => false,
+    applyByotState: vi.fn(() => false),
+    applyCoachModelPatch: vi.fn(async () => false),
+    applyCoachToolsConvergence: vi.fn(async () => false),
+    triggerSecretsReload: vi.fn(async () => {}),
+    applyAgentModelOverrides: applyAgentModelOverridesFn,
+  });
+  const builderAgentDefault = {
+    primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+    fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+  };
+
+  it("catalog plan with no pick: the platform Builder Agent default fills in for the coach", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        builderAgentDefault,
+      },
+      builderDefaultDeps(applyAgentModelOverridesFn),
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
+      "tester-70",
+      { "octogee-tester-70-coach": builderAgentDefault },
+      { houseOnly: false },
+    );
+  });
+
+  it("an explicit coach pick beats the platform default", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+    const agentModels = {
+      "octogee-tester-70-coach": {
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: [] as string[],
+      },
+    };
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        builderAgentDefault,
+        systemConfig: { agentModels },
+      },
+      builderDefaultDeps(applyAgentModelOverridesFn),
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
+      houseOnly: false,
+    });
+  });
+
+  it("BYOT and house-only coaches never inherit the platform default", async () => {
+    const byotOverrides = vi.fn(async () => true);
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        systemConfig: { byot: { provider: "anthropic" } },
+        builderAgentDefault,
+      },
+      builderDefaultDeps(byotOverrides),
+    );
+    expect(byotOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: false });
+
+    const houseOnlyOverrides = vi.fn(async () => true);
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "free",
+        builderAgentDefault,
+      },
+      builderDefaultDeps(houseOnlyOverrides),
+    );
+    expect(houseOnlyOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: true });
+  });
+
+  it("a malformed platform-default stamp is discarded, not applied", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        selectedTier: "personal",
+        builderAgentDefault: { primary: "not-a-catalog-ref", fallbacks: [] },
+      },
+      builderDefaultDeps(applyAgentModelOverridesFn),
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", undefined, {
+      houseOnly: false,
+    });
+  });
+
   it("shared gateway: a free-plan owner's overrides arrive houseOnly:true (deferred)", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => false);
 

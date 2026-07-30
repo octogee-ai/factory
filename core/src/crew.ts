@@ -1,10 +1,11 @@
 import { DocumentData } from "firebase-admin/firestore";
+import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
 
 export const CREW_ROLES = ["coach"] as const;
 export type CrewRole = typeof CREW_ROLES[number];
 
 export const CREW_IDENTITY: Record<CrewRole, { name: string; emoji: string; model: string }> = {
-  coach: { name: "Octo", emoji: "🐙", model: "platform-openrouter/z-ai/glm-5.2" },
+  coach: { name: "Octo", emoji: "🐙", model: DEFAULT_BUILDER_AGENT_MODEL_REF },
 };
 
 export const TIERS = ["trial", "free", "hobby", "pro", "max"] as const;

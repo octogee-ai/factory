@@ -38,9 +38,17 @@ export declare function parsePlatformConnectConfig(value: unknown): PlatformConn
 export declare function googleConnectAllowed(config: PlatformConnectConfig | null, uid: string): boolean;
 export declare const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
 export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
+export declare const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export declare const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null;
+export interface BuilderAgentModelDefault {
+    primary: string;
+    fallbacks: string[];
+}
 export interface PlatformModelConfig {
     freeTierModelRef: string;
     opsAgentModelRef: string;
+    builderAgentModelRef: string;
+    builderAgentFallbackModelRef: string | null;
 }
 export interface ResolvedFreeTierModel {
     ref: string;
@@ -51,5 +59,7 @@ export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
     runtimeModelRef: string;
 }
 export declare function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null;
+export declare function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentModelDefault;
+export declare function parseBuilderAgentModelDefault(value: unknown): BuilderAgentModelDefault | null;
 export declare function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null;
 export declare function resolveOpsAgentModel(ref: string): ResolvedOpsAgentModel | null;

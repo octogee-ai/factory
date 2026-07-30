@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
 import {
   CONFIG_PATCH_DEADLINE_MS,
   MIGRATING_IN_PIN_TTL_MS,
@@ -108,7 +109,7 @@ import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 const DEFAULT_COACH = {
   name: "Octo",
   emoji: "",
-  model: "platform-openrouter/z-ai/glm-5.2",
+  model: DEFAULT_BUILDER_AGENT_MODEL_REF,
 };
 
 interface BuildBrokeredLifecycleAdapterOptions {
@@ -225,6 +226,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     trialGrant: snapshot.trialGrant,
     signupOfferConvertedAt: snapshot.signupOfferConvertedAt,
     freeTierModelRef: snapshot.freeTierModelRef,
+    builderAgentDefault: snapshot.builderAgentDefault,
     systemConfig: snapshot.systemConfig,
   };
 }
