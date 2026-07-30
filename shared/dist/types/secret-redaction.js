@@ -1,4 +1,7 @@
 const REDACTED = "[redacted]";
+// Patterns err toward over-redaction: a false positive costs a "[redacted]",
+// a miss leaks a live credential. Specific shapes run before the generic
+// long-run catchalls so the specific replacement wins where it applies.
 const SECRET_PATTERNS = [
     [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, REDACTED],
     [/\b(Authorization\s*[:=]\s*Basic\s+)[-a-z0-9._~+/=]{8,}/gi, `$1${REDACTED}`],
@@ -6,14 +9,14 @@ const SECRET_PATTERNS = [
     [/\b(Bearer\s+)[-a-z0-9._~+/=]{12,}/gi, `$1${REDACTED}`],
     [/\b(Cookie\s*[:=]\s*)[^\r\n]+/gi, `$1${REDACTED}`],
     [/\b(Set-Cookie\s*[:=]\s*)[^\r\n]+/gi, `$1${REDACTED}`],
-    [/\bsk-[A-Za-z0-9_-]{16,}/g, REDACTED],
+    [/\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,}/g, REDACTED],
     [/\bgh[opusr]_[A-Za-z0-9]{20,}/g, REDACTED],
     [/\bgithub_pat_\w{20,}/g, REDACTED],
-    [/\bAKIA[A-Z0-9]{16}\b/g, REDACTED],
-    [/\bASIA[A-Z0-9]{16}\b/g, REDACTED],
+    [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, REDACTED],
     [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, REDACTED],
     [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, REDACTED],
     [/\b[0-9a-fA-F]{40,}\b/g, REDACTED],
+    [/\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{40,}\b/g, REDACTED],
 ];
 const LABELED_SECRET_PATTERNS = [
     /\b((?:access|refresh|id|oauth)[-_]?token\s*[:=]\s*)[^\s,;&}]+/gi,

@@ -140,6 +140,7 @@ export {
   trialConfigHash,
 } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
+export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';
 
 export type {
   NotificationCategory,

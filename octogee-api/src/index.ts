@@ -324,6 +324,7 @@ export function createApp(opts: CreateAppOptions = {}) {
         createOpsAgentHttpClient({
           baseUrl: process.env.OPS_AGENT_URL,
           bearerToken: process.env.OPS_AGENT_BEARER_TOKEN,
+          logError: (message, fields) => logger.error(message, fields),
         }),
       resolveModel:
         opts.resolveOpsAgentModel ??

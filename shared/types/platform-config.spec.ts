@@ -175,13 +175,13 @@ describe("parsePlatformModelConfig", () => {
 });
 
 describe("DEFAULT_OPS_AGENT_MODEL_REF", () => {
-  it("defaults to GLM 5.2 on the platform OpenRouter key and maps to the OpenClaw runtime ref", () => {
-    expect(DEFAULT_OPS_AGENT_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
+  it("defaults to MiniMax M3 on the platform OpenRouter key and maps to the OpenClaw runtime ref", () => {
+    expect(DEFAULT_OPS_AGENT_MODEL_REF).toBe("platform-openrouter/minimax/minimax-m3");
     expect(resolveOpsAgentModel(DEFAULT_OPS_AGENT_MODEL_REF)).toEqual({
-      ref: "platform-openrouter/z-ai/glm-5.2",
+      ref: "platform-openrouter/minimax/minimax-m3",
       provider: "openrouter",
-      upstreamModelId: "z-ai/glm-5.2",
-      runtimeModelRef: "openrouter/z-ai/glm-5.2",
+      upstreamModelId: "minimax/minimax-m3",
+      runtimeModelRef: "openrouter/minimax/minimax-m3",
     });
   });
 

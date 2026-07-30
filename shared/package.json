@@ -158,6 +158,10 @@
       "types": "./dist/types/secret-redaction.d.ts",
       "default": "./dist/types/secret-redaction.js"
     },
+    "./types/tool-format": {
+      "types": "./dist/types/tool-format.d.ts",
+      "default": "./dist/types/tool-format.js"
+    },
     "./types/openclaw-wire": {
       "types": "./dist/types/openclaw-wire.d.ts",
       "default": "./dist/types/openclaw-wire.js"
@@ -302,6 +306,9 @@
       ],
       "types/secret-redaction": [
         "dist/types/secret-redaction.d.ts"
+      ],
+      "types/tool-format": [
+        "dist/types/tool-format.d.ts"
       ],
       "types/openclaw-wire": [
         "dist/types/openclaw-wire.d.ts"
