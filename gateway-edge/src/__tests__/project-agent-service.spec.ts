@@ -47,6 +47,7 @@ vi.mock("../lib/db.js", () => ({
   db: { doc: (path: string) => docRef(path), collection: (name: string) => collectionRef(name) },
   FieldValue: {
     serverTimestamp: () => "SERVER_TS",
+    arrayUnion: (...values: unknown[]) => ({ arrayUnion: values }),
     arrayRemove: (...values: unknown[]) => ({ arrayRemove: values }),
   },
 }));
@@ -85,6 +86,12 @@ function actor(overrides: Record<string, unknown> = {}) {
 }
 
 const PROJECT_PATH = "workspaces/mira/projects/orbit";
+const ROSTER_UNION = {
+  path: "users/owner-1",
+  data: {
+    "provisioning.openclaw.agentIds": { arrayUnion: ["octogee-mira-proj-orbit-coach"] },
+  },
+};
 
 function seedProject(extra: Record<string, unknown> = {}) {
   h.docs.set(PROJECT_PATH, { id: "orbit", ownerUid: "owner-1", ...extra });
@@ -126,6 +133,7 @@ describe("setProjectAgentEnabled — enable", () => {
       });
     }
     expect(h.sets).toEqual([]);
+    expect(h.updates).toEqual([]);
   });
 
   it("allows an active Builder Signup Offer to enable a project agent", async () => {
@@ -190,6 +198,7 @@ describe("setProjectAgentEnabled — enable", () => {
       body: { error: "Only the project owner can manage its agent" },
     });
     expect(h.sets).toEqual([]);
+    expect(h.updates).toEqual([]);
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
   });
 
@@ -245,6 +254,14 @@ describe("setProjectAgentEnabled — enable", () => {
     });
   });
 
+  it("registers the agent id in the owner's provisioning roster so the byok broker will issue its tokens", async () => {
+    seedProject();
+
+    await setProjectAgentEnabled(actor(), "orbit", true);
+
+    expect(h.updates).toEqual([ROSTER_UNION]);
+  });
+
   it("keeps the flag but reports 502 when minting fails (retry re-mints idempotently)", async () => {
     seedProject();
     h.createProjectAgentBot.mockRejectedValue(new Error("MM down"));
@@ -252,6 +269,7 @@ describe("setProjectAgentEnabled — enable", () => {
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
     expect(h.sets.some((s) => s.path === PROJECT_PATH)).toBe(true);
+    expect(h.updates).toEqual([ROSTER_UNION]);
     expect(result).toEqual({
       status: 502,
       body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
@@ -311,6 +329,7 @@ describe("setProjectAgentEnabled — disable", () => {
       project: "orbit",
       mmUserId: "bot-1",
     });
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
     expect(result).toEqual({
       status: 200,
       body: { success: true, enabled: false, provisioned: false },
@@ -327,9 +346,27 @@ describe("setProjectAgentEnabled — disable", () => {
     );
 
     expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
     expect(result).toEqual({
       status: 200,
       body: { success: true, enabled: false, provisioned: false },
+    });
+  });
+
+  it("deregisters the roster id even when retiring the bot fails — the disabled flag already ends config demand", async () => {
+    seedProject();
+    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
+      mmUserId: "bot-1",
+      personalToken: "pat-1",
+    });
+    h.retireProjectAgentBot.mockRejectedValue(new Error("MM down"));
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", false);
+
+    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+    expect(result).toEqual({
+      status: 502,
+      body: { error: "Agent disabled, but retiring the bot failed - toggle again to retry" },
     });
   });
 });
