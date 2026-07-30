@@ -58,6 +58,7 @@ spec:
         octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
       labels:
         app: octogee-gateway
+        gateway-id: {{ .Values.gatewayId }}
         gateway-instance: {{ $revision }}
         gateway-class: {{ $gatewayClass | quote }}
         # Profile label lets the umbrella gateway-edge alias Service
@@ -86,6 +87,20 @@ spec:
                   app: octogee-gateway
               namespaceSelector: {}
               topologyKey: kubernetes.io/hostname
+            {{- if eq $gatewayClass "shared" }}
+            - labelSelector:
+                matchLabels:
+                  app: octogee-gateway
+                  gateway-class: shared
+                matchExpressions:
+                  - key: gateway-id
+                    operator: Exists
+                  - key: gateway-id
+                    operator: NotIn
+                    values:
+                      - {{ .Values.gatewayId }}
+              topologyKey: topology.kubernetes.io/zone
+            {{- end }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:

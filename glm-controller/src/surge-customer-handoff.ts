@@ -194,8 +194,12 @@ async function restoreAbandonedSurgeAssignments(
   gatewayId: string,
   assignments: readonly SurgeAssignment[],
   ownedBy: string | null,
-  observedPodUids: readonly string[],
+  context: {
+    observedPodUids: readonly string[];
+    reclaimableOwners?: ReadonlySet<string>;
+  },
 ): Promise<void> {
+  const { observedPodUids, reclaimableOwners = new Set() } = context;
   const liveSurgeOwners = new Set(observedPodUids.map((uid) => operationId(gatewayId, uid)));
   for (const assignment of assignments) {
     const priorOwner = assignment.updatedByOperationId;
@@ -204,7 +208,7 @@ async function restoreAbandonedSurgeAssignments(
       priorOwner === null ||
       priorOwner === ownedBy ||
       !isSurgeOwnerForGateway(priorOwner, gatewayId) ||
-      liveSurgeOwners.has(priorOwner)
+      (liveSurgeOwners.has(priorOwner) && !reclaimableOwners.has(priorOwner))
     ) {
       continue;
     }
@@ -363,7 +367,10 @@ async function migrateAssignmentsAndReleaseTarget(
     input.gatewayId,
     assignments,
     ownedBy,
-    observedPodUids,
+    {
+      observedPodUids,
+      reclaimableOwners: new Set([operationId(input.gatewayId, sourcePod.uid)]),
+    },
   );
   assertAssignmentsAvailable(assignments, ownedBy);
   try {
@@ -413,7 +420,7 @@ export async function reconcileSurgeCustomerHandoff(
       input.gatewayId,
       assignments,
       null,
-      observedPodUids,
+      { observedPodUids },
     );
     return { ready: false };
   }
@@ -432,7 +439,7 @@ export async function reconcileSurgeCustomerHandoff(
       input.gatewayId,
       assignments,
       ownedBy,
-      observedPodUids,
+      { observedPodUids },
     );
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
     return { ready: true };

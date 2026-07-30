@@ -541,7 +541,8 @@ export interface Operation {
   // Set when a transient failure schedules an automatic retry; the op stays `pending`
   // until this passes. Cleared once claimed.
   nextAttemptAt?: number | null;
-  // Total handler invocations so far (first run = 1), capped at MAX_OPERATION_ATTEMPTS.
+  // Total handler invocations so far (first run = 1). Ordinary transient work
+  // caps at MAX_OPERATION_ATTEMPTS; explicit level-triggered obligations may exceed it.
   attempts?: number;
   // One entry per FAILED attempt — retried or terminal — preserving that attempt's
   // steps/error/classification (the live `steps` field resets on retry). Successful

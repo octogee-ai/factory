@@ -95,6 +95,11 @@ describe("classifyOperationFailure", () => {
         '/restore/default: 500 {"error":"restore failed","message":"system config writer lock is busy"}',
       ),
     ).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        '/restore/default: 500 {"message":"channel did not connect; fleet will retry"}',
+      ),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
@@ -420,6 +425,57 @@ describe("buildOperationCompletionUpdate", () => {
 
     expect(update.status).toBe("pending");
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("keeps an automatic Builder return retryable beyond the cap for a transient cause", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: "builder-return-run-alice",
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: {
+          source: "builder-activation-lease",
+          fromGatewayId: "run-alice",
+        },
+        attempts: MAX_OPERATION_ATTEMPTS,
+        attemptHistory: [],
+      },
+      result: {
+        steps: [],
+        success: false,
+        error: "/restore/default transport failed: fetch failed",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.attempts).toBe(MAX_OPERATION_ATTEMPTS + 1);
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("still terminalizes a validation failure for an automatic Builder return", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: "builder-return-run-alice",
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: {
+          source: "builder-activation-lease",
+          fromGatewayId: "run-alice",
+        },
+        attempts: MAX_OPERATION_ATTEMPTS,
+      },
+      result: {
+        steps: [],
+        success: false,
+        error: "target assignment belongs to another Builder",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("failed");
   });
 
   it("preserves rolledBack from the handler result on terminal failure", () => {

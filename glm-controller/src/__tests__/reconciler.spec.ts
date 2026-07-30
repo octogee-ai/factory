@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  serializeGatewayConvergence,
   snapshotHasReconcileRelevantChange,
   startReconciler,
 } from "../index";
@@ -500,5 +501,63 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     stop();
 
     expect(convergeGateways).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs bounded timing for each reconciliation phase", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const log = vi.fn();
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: { default: servingRuntime() },
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      convergeGateways: vi.fn(async () => {}),
+      log,
+    });
+
+    await runTick(callbacks);
+    stop();
+
+    for (const phase of [
+      "durable-state",
+      "image-pins",
+      "runtime-dependencies",
+      "convergence",
+      "fleet-ingress",
+    ]) {
+      expect(log).toHaveBeenCalledWith(
+        `[glm-controller] reconcile phase=${phase} started`,
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(
+          new RegExp(`^\\[glm-controller\\] reconcile phase=${phase} completed durationMs=\\d+$`),
+        ),
+      );
+    }
+  });
+
+  it("serializes global and targeted convergence passes", async () => {
+    const started: Array<readonly string[] | undefined> = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstPass = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const converge = serializeGatewayConvergence(async (gatewayIds) => {
+      started.push(gatewayIds);
+      if (started.length === 1) await firstPass;
+    });
+
+    const global = converge();
+    const targeted = converge(["default-b"]);
+    await Promise.resolve();
+
+    expect(started).toEqual([undefined]);
+    releaseFirst?.();
+    await Promise.all([global, targeted]);
+    expect(started).toEqual([undefined, ["default-b"]]);
   });
 });
