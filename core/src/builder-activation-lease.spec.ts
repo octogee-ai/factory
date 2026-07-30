@@ -268,15 +268,33 @@ describe("requestBuilderActivationLease", () => {
     });
   });
 
-  it("does not activate shell-less Builder tiers for a shell request", async () => {
-    const { db } = state();
+  it("activates every Builder tier for a shell request, Hobby included", async () => {
+    const { db, docs } = state();
 
     await expect(request(db, {
       cause: "shell",
       eventKey: "shell:req-1",
     })).resolves.toMatchObject({
-      statusCode: 403,
-      body: { code: "gateway-shells-locked" },
+      statusCode: 202,
+      body: {
+        status: "requested",
+        leaseId: "lease-one",
+        generation: 1,
+        sizingTier: "xs",
+      },
+    });
+
+    expect(docs["users/uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            status: "requested",
+            cause: "shell",
+            entitlementTier: "hobby",
+            sizingTier: "xs",
+          },
+        },
+      },
     });
   });
 
