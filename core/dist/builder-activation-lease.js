@@ -92,7 +92,7 @@ function parkedDuplicateBody(lease) {
         },
     };
 }
-function activationDemandEligibility(userData, cause, now) {
+function activationDemandEligibility(userData, now) {
     if (!accountAllowsInteractiveAccess(userData)) {
         return {
             result: {
@@ -112,17 +112,6 @@ function activationDemandEligibility(userData, cause, now) {
                 body: {
                     code: "builder-runtime-not-entitled",
                     error: "Builder runtime entitlement is required",
-                },
-            },
-        };
-    }
-    if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
-        return {
-            result: {
-                statusCode: 403,
-                body: {
-                    code: "gateway-shells-locked",
-                    error: "Gateway shell access is locked until the tier enables it",
                 },
             },
         };
@@ -236,7 +225,7 @@ export async function requestBuilderActivationLease(input) {
                 },
             };
         }
-        const eligibility = activationDemandEligibility(userData, cause, input.now ?? Date.now());
+        const eligibility = activationDemandEligibility(userData, input.now ?? Date.now());
         if ("result" in eligibility)
             return eligibility.result;
         const { entitlementTier, sizingTier, slug } = eligibility;

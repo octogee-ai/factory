@@ -160,7 +160,6 @@ type ActivationDemandEligibility =
 
 function activationDemandEligibility(
   userData: Record<string, unknown>,
-  cause: BuilderRuntimeDemandCause,
   now: number,
 ): ActivationDemandEligibility {
   if (!accountAllowsInteractiveAccess(userData)) {
@@ -182,17 +181,6 @@ function activationDemandEligibility(
         body: {
           code: "builder-runtime-not-entitled",
           error: "Builder runtime entitlement is required",
-        },
-      },
-    };
-  }
-  if (cause === "shell" && !BUILDER_TIERS[entitlementTier].builderShell) {
-    return {
-      result: {
-        statusCode: 403,
-        body: {
-          code: "gateway-shells-locked",
-          error: "Gateway shell access is locked until the tier enables it",
         },
       },
     };
@@ -332,7 +320,6 @@ export async function requestBuilderActivationLease(
     }
     const eligibility = activationDemandEligibility(
       userData,
-      cause,
       input.now ?? Date.now(),
     );
     if ("result" in eligibility) return eligibility.result;
