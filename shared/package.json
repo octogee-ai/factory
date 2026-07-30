@@ -186,6 +186,10 @@
       "types": "./dist/types/project-retention.d.ts",
       "default": "./dist/types/project-retention.js"
     },
+    "./types/run-live": {
+      "types": "./dist/types/run-live.d.ts",
+      "default": "./dist/types/run-live.js"
+    },
     "./types/shells": {
       "types": "./dist/types/shells.d.ts",
       "default": "./dist/types/shells.js"
