@@ -98,6 +98,13 @@ spec:
                   name: {{ .Values.llmBroker.openaiProviderSecret.name }}
                   key: {{ .Values.llmBroker.openaiProviderSecret.key }}
                   optional: {{ .Values.llmBroker.openaiProviderSecret.optional | default true }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 72
           readinessProbe:
             httpGet:
               path: /healthz
