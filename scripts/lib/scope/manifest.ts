@@ -261,7 +261,7 @@ export const EDGES: readonly ScopeEdge[] = [
     when: "site/",
     jobs: [JOBS.tests],
     reason:
-      "tests/specs reads site/ source directly: site/src/lib/* (explore-loader, public-builder-loader, public-jsonld, site-pricing-parity specs), site/firebase.json (site-hosting-security.spec.ts), and site/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
+      "tests/specs reads site/ source directly: site/src/lib/* (explore-loader, public-builder-loader, public-jsonld, site-pricing-parity specs; site-hosting-security.spec.ts pins security-headers.ts against the root firebase.json site target) and site/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
   },
   {
     when: "scripts/",
