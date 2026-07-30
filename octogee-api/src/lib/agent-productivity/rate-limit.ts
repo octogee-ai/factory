@@ -1,10 +1,11 @@
-export type ProductivityRateTier = "read" | "write";
+export type ProductivityRateTier = "read" | "write" | "prepare";
 
 const WINDOW_MS = 15 * 60_000;
 
 const TIER_LIMITS: Record<ProductivityRateTier, number> = {
   read: 60,
   write: 20,
+  prepare: 10,
 };
 
 interface RateWindow {

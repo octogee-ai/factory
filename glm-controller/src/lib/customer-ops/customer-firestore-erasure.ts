@@ -66,6 +66,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
     uidFields: ["ownerUid", "granteeUid", "confirmedByUid", "cancelledByUid"],
   },
   gatewayConnectionAssistance: { uidFields: ["ownerUid", "requesterUid"] },
+  productivityApprovals: { uidFields: ["ownerUid"] },
   agentImports: { uidFields: ["uid"] },
   agentControls: {},
   glmGateways: {},

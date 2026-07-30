@@ -100,6 +100,11 @@ describe("createProductivityRateLimiter", () => {
       expect(limiter.consume("gw-1", "octogee-eggman-coach", "read")).toEqual({ allowed: true });
     }
     expect(limiter.consume("gw-1", "octogee-eggman-coach", "read").allowed).toBe(false);
+
+    for (let i = 0; i < 10; i += 1) {
+      expect(limiter.consume("gw-1", "octogee-eggman-coach", "prepare")).toEqual({ allowed: true });
+    }
+    expect(limiter.consume("gw-1", "octogee-eggman-coach", "prepare").allowed).toBe(false);
   });
 
   it("uses production defaults for every tier when `limits` is absent entirely", () => {
@@ -110,7 +115,6 @@ describe("createProductivityRateLimiter", () => {
     }
     expect(limiter.consume("gw-1", "octogee-eggman-coach", "write").allowed).toBe(false);
   });
-
   it("bounds retained windows and evicts the one that expires first", () => {
     let now = 0;
     const limiter = createProductivityRateLimiter({
