@@ -137,8 +137,8 @@ describe("helm/octogee-gateway/ — revision-aware render (revisionId != gateway
     expect(out).not.toContain("gateway-auth-token-default-r7");
   });
 
-  it("names the PodDisruptionBudget by revisionId", () => {
-    const pdb = byKind(helmTemplate(REVISION), "PodDisruptionBudget")[0];
+  it("names an isolated gateway PodDisruptionBudget by revisionId", () => {
+    const pdb = byKind(helmTemplate({ ...REVISION, profile: "operator" }), "PodDisruptionBudget")[0];
     expect(pdb?.metadata?.name).toBe("octogee-gateway-default-r7");
   });
 });

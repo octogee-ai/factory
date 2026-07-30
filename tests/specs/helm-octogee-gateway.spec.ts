@@ -634,21 +634,19 @@ const out = helmTemplate();
     }
   });
 
-  it("renders a PodDisruptionBudget keyed by gateway-instance", () => {
-    const out = helmTemplate();
-    const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-default");
+  it("renders a PodDisruptionBudget keyed by gateway-instance for an isolated gateway", () => {
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+    });
+    const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-bender");
     expect(pdb).not.toBeNull();
-    expect(pdb).toMatch(/gateway-instance:\s*default/);
+    expect(pdb).toMatch(/gateway-instance:\s*bender/);
   });
 
-  // PDB policy is now class-uniform cattle behavior: maxUnavailable:1
-  // (disruptionsAllowed:1) so activeMigration can evict + right-size onto a
-  // cheaper node. A uniform minAvailable:1 silently blocked self-heal.
-  // Anchored regexes — the rendered comments mention the other field's name.
-  it("shared gateway PDB allows one voluntary disruption (maxUnavailable:1) so activeMigration can right-size", () => {
-    const pdb = findDoc(helmTemplate(), "PodDisruptionBudget", "octogee-gateway-default") ?? "";
-    expect(pdb).toMatch(/^\s*maxUnavailable:\s*1\s*$/m);
-    expect(pdb).not.toMatch(/^\s*minAvailable:/m);
+  it("leaves shared disruption ownership to the umbrella pool PDB", () => {
+    const out = helmTemplate();
+    expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
   });
 
   it("operator gateway PDB uses the same cattle maxUnavailable policy", () => {
@@ -663,8 +661,12 @@ const out = helmTemplate();
   });
 
   it("pdb.enabled=false renders no PodDisruptionBudget", () => {
-    const out = helmTemplate("octogee-gw-default", { "pdb.enabled": "false" });
-    expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
+    const out = helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      gatewayClass: "operator",
+      "pdb.enabled": "false",
+    });
+    expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-bender")).toBeNull();
   });
 
   it("does NOT render the umbrella's spanning resources (alias Service, Ingress, NetworkPolicy)", () => {

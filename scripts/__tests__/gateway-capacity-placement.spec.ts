@@ -10,13 +10,25 @@ const temporaryDirectories: string[] = [];
 const computeClassName = "octogee-gateway-test";
 
 function deployment(instance: string, overrides: Record<string, unknown> = {}) {
+  const gatewayClass = instance === "default" ? "shared" : "operator";
   return {
     metadata: {
       name: `octogee-gateway-${instance}`,
-      labels: { app: "octogee-gateway", "gateway-instance": instance },
+      labels: {
+        app: "octogee-gateway",
+        "gateway-instance": instance,
+        "gateway-class": gatewayClass,
+      },
     },
     spec: {
       template: {
+        metadata: {
+          labels: {
+            app: "octogee-gateway",
+            "gateway-instance": instance,
+            "gateway-class": gatewayClass,
+          },
+        },
         spec: {
           nodeSelector: { "cloud.google.com/compute-class": computeClassName },
           ...overrides,
@@ -84,7 +96,40 @@ function pdb(instance: string, overrides: Record<string, unknown> = {}) {
       name: `octogee-gateway-${instance}`,
       labels: { app: "octogee-gateway", "gateway-instance": instance },
     },
-    spec: { maxUnavailable: 1, ...overrides },
+    spec: {
+      maxUnavailable: 1,
+      selector: {
+        matchLabels: {
+          app: "octogee-gateway",
+          "gateway-instance": instance,
+        },
+      },
+      ...overrides,
+    },
+  };
+}
+
+function sharedPoolPdb(overrides: Record<string, unknown> = {}) {
+  return {
+    metadata: {
+      name: "shared-gateway-pool",
+      labels: { "app.kubernetes.io/name": "octogee" },
+    },
+    spec: {
+      minAvailable: 1,
+      selector: {
+        matchLabels: {
+          app: "octogee-gateway",
+          "gateway-class": "shared",
+        },
+        matchExpressions: [{
+          key: "gateway-instance",
+          operator: "In",
+          values: ["default"],
+        }],
+      },
+      ...overrides,
+    },
   };
 }
 
@@ -128,7 +173,7 @@ esac
           items: [node("spot-node", true)],
         }),
         MOCK_PDBS: JSON.stringify(fixtures.pdbs ?? {
-          items: [pdb("default"), pdb("operator")],
+          items: [sharedPoolPdb(), pdb("operator")],
         }),
         MOCK_COMPUTE_CLASSES: JSON.stringify(fixtures.computeClasses ?? {
           items: [computeClass()],
@@ -159,6 +204,45 @@ describe("gateway capacity placement verifier", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(
       "gateway capacity placement verified: 2 Deployment(s), 0 on-demand fallback pod(s)",
+    );
+  });
+
+  it("rejects a shared pod covered by both pool and per-instance PDBs", () => {
+    const result = runPlacementCheck({
+      pdbs: { items: [sharedPoolPdb(), pdb("default"), pdb("operator")] },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Deployment octogee-gateway-default expected exactly one matching PDB, found 2",
+    );
+  });
+
+  it("rejects a pool PDB whose declared membership exceeds the shared Deployments", () => {
+    const result = runPlacementCheck({
+      pdbs: {
+        items: [
+          sharedPoolPdb({
+            selector: {
+              matchLabels: {
+                app: "octogee-gateway",
+                "gateway-class": "shared",
+              },
+              matchExpressions: [{
+                key: "gateway-instance",
+                operator: "In",
+                values: ["default", "default-b"],
+              }],
+            },
+          }),
+          pdb("operator"),
+        ],
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "shared pool PDB gateway-instance membership must exactly match shared Deployments",
     );
   });
 
@@ -203,8 +287,8 @@ describe("gateway capacity placement verifier", () => {
       },
       pdbs: {
         items: [
-          pdb("default", { minAvailable: 1, maxUnavailable: undefined }),
-          pdb("operator"),
+          sharedPoolPdb({ minAvailable: 0 }),
+          pdb("operator", { minAvailable: 1, maxUnavailable: undefined }),
         ],
       },
       computeClasses: {
@@ -229,8 +313,15 @@ describe("gateway capacity placement verifier", () => {
     expect(result.stdout).toContain(
       `ComputeClass ${computeClassName} must actively migrate fallback nodes back to Spot`,
     );
-    expect(result.stdout).toContain("PDB for Deployment octogee-gateway-default must not set minAvailable");
-    expect(result.stdout).toContain("PDB for Deployment octogee-gateway-default must set maxUnavailable=1");
+    expect(result.stdout).toContain(
+      "shared pool PDB for Deployment octogee-gateway-default must set minAvailable=1",
+    );
+    expect(result.stdout).toContain(
+      "PDB for Deployment octogee-gateway-operator must not set minAvailable",
+    );
+    expect(result.stdout).toContain(
+      "PDB for Deployment octogee-gateway-operator must set maxUnavailable=1",
+    );
     expect(result.stdout).toContain(
       "running pod octogee-gateway-default-abc must retain the gateway ComputeClass selector",
     );

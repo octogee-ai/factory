@@ -249,8 +249,8 @@ import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import { completeHealthyBootstrapAddGatewayOperations } from "./bootstrap-add-gateway-recovery.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
 import {
-  bootstrapSharedGatewayPool,
   parseDeclaredSharedGatewayIds,
+  runSharedGatewayPoolReconcile,
   startSharedGatewayPoolReconciler,
 } from "./shared-gateway-pool-bootstrap.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
@@ -2165,14 +2165,14 @@ async function main(): Promise<void> {
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
-  await bootstrapSharedGatewayPool({
+  await runSharedGatewayPoolReconcile({
     db,
     namespace: NAMESPACE,
     declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
     ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
     log: deps.log,
     now: () => Date.now(),
-  });
+  }, "startup");
 
   if (await controllerWorkFrozen(deps, "orphan-op resume")) {
     holdFrozenController(maintenanceGate, log);
