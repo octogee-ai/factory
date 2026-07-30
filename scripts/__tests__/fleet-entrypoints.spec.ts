@@ -9,8 +9,10 @@ import {
 import {
   createAssignedFingerprintReader,
   createFleetSystemConfigFlush,
+  createFleetControllerMutationGatedRpc,
   createSystemConfigMutationGatedRpc,
   resolveFleetControllerEntrypointConfig,
+  FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
   SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS,
 } from "../entrypoints/fleet-controller.js";
 import {
@@ -158,6 +160,34 @@ describe("fleet-controller entrypoint config", () => {
     try {
       await expect(rpc.configApply({}, "current")).resolves.toEqual({ ok: true, hash: "next" });
       expect(configApply).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the sixty-second RPC timeout while retaining the provisioning mutation gate", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-timeout-"));
+    const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
+    const createRpc = vi.fn(() => ({
+      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
+      configApply: vi.fn(async () => ({ ok: true as const, hash: "next" })),
+      configPatch,
+      channelsStatus: vi.fn(async () => ({ channels: [] })),
+    }));
+    const rpc = createFleetControllerMutationGatedRpc(openclawDir, createRpc as never);
+    expect(acquireSystemConfigShellCapabilitySync({
+      openclawDir,
+      shellId: "native-config",
+    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
+
+    try {
+      expect(createRpc).toHaveBeenCalledWith({
+        allowLegacyGatewayTokenFallback: true,
+        callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+      });
+      await expect(rpc.configPatch({ agents: {} }, "current"))
+        .rejects.toThrow(/shell-active/i);
+      expect(configPatch).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(openclawDir, { recursive: true, force: true });
     }

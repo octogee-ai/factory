@@ -181,6 +181,20 @@ export {
   resolveLiveActivationTargetGatewayId,
 } from './orchestrator-placement.js';
 export type {
+  SharedGatewayPoolCandidate,
+  SharedGatewayPoolConfig,
+  SharedGatewayRebalance,
+  SharedGatewaySelection,
+} from './shared-gateway-pool.js';
+export {
+  authoritativeSharedGatewayLoad,
+  isAcceptingSharedGateway,
+  parseSharedGatewayPoolConfig,
+  planSharedGatewayRebalance,
+  selectSharedGateway,
+  stableGatewayUidHash,
+} from './shared-gateway-pool.js';
+export type {
   ModelCatalogProvider,
   ModelCatalogSource,
   ModelCatalogEntry,

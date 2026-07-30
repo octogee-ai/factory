@@ -138,6 +138,8 @@ spec:
             {{- end }}
             - name: BOOTSTRAP_DEFAULT_GATEWAY
               value: {{ (.Values.bootstrapDefaultGateway).enabled | default false | quote }}
+            - name: SHARED_GATEWAY_IDS
+              value: {{ required "glm-controller.sharedGatewayIds is required" .Values.sharedGatewayIds | toJson | quote }}
             - name: BOOTSTRAP_IMAGE_REPOSITORY
               value: {{ required "glm-controller.bootstrapDefaultGateway.imageRepository is required" (.Values.bootstrapDefaultGateway).imageRepository | quote }}
             - name: BOOTSTRAP_IMAGE_TAG

@@ -74,6 +74,31 @@ export interface CutoverCommitParams {
     automatic?: boolean;
 }
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
+export interface UnavailableGatewayRecoveryParams {
+    operationId: string;
+    kind: "recover-shared-customer" | "recover-disposable-customer";
+    uid: string;
+    slug: string;
+    fromGatewayId: string;
+    toGatewayId: string;
+    expectedSourceEpoch: number;
+    sharedGatewayIds: readonly string[];
+    targetHeartbeatMaxAgeMs: number;
+    validateTarget?: (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void>;
+    disposableLease?: {
+        leaseId: string;
+        generation: number;
+    };
+}
+export interface UnavailableGatewayRecoveryTargetValidationContext {
+    txn: FleetStateTxn;
+    targetGatewayId: string;
+    targetRoot: Record<string, unknown>;
+    targetRuntime: Record<string, unknown>;
+}
+export declare function commitUnavailableGatewayRecoveryAtomic(deps: FleetStateDeps, params: UnavailableGatewayRecoveryParams): Promise<{
+    operationId: string;
+}>;
 export interface MarkAssignmentStateParams {
     gatewayId: string;
     uid: string;

@@ -1,5 +1,5 @@
 import { FieldValue, } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayShellState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayShellState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -8,6 +8,7 @@ import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-d
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousBuilderPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
+import { parseSharedGatewayPoolConfig, } from "@octogee/shared/types/shared-gateway-pool";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
@@ -119,8 +120,9 @@ export function resolveFleetDeploymentSettings(namespace = resolveFleetNamespace
 }
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 function normalizeOnboardingRuntimeConfig(data) {
-    return {
+    return parseSharedGatewayPoolConfig(data) ?? {
         defaultGatewayId: asStringOrNull(data?.defaultGatewayId) ?? "",
+        sharedGatewayIds: [],
     };
 }
 async function readOnboardingRuntimeConfig(deps) {
@@ -136,10 +138,10 @@ function validatePlacementGateway(gatewayId, gatewaysById) {
             body: { error: "placement gateway desired state not found", gatewayId },
         };
     }
-    if (gateway.desiredStatus === "retired") {
+    if (gateway.desiredStatus !== "running") {
         return {
             status: 400,
-            body: { error: "placement gateway must not be retired", gatewayId },
+            body: { error: "placement gateway must be running", gatewayId },
         };
     }
     if (gateway.gatewayClass !== "shared") {
@@ -148,12 +150,34 @@ function validatePlacementGateway(gatewayId, gatewaysById) {
             body: { error: "placement gateway must be a shared gateway", gatewayId },
         };
     }
+    if (isOperatorManaged(gateway.managedBy)) {
+        return {
+            status: 400,
+            body: { error: "placement gateway must be Cowboy-managed", gatewayId },
+        };
+    }
     return null;
 }
-function parsePlacementPatch(body, gatewaysById) {
+function parsePlacementPatch(body, gatewaysById, config) {
     const defaultGatewayId = asStringOrNull(body.defaultGatewayId);
     if (!defaultGatewayId) {
         return { error: { status: 400, body: { error: "defaultGatewayId is required" } } };
+    }
+    if (config === null) {
+        return {
+            error: {
+                status: 409,
+                body: { error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool" },
+            },
+        };
+    }
+    if (!config.sharedGatewayIds.includes(defaultGatewayId)) {
+        return {
+            error: {
+                status: 400,
+                body: { error: "default gateway must already be a configured shared pool member", gatewayId: defaultGatewayId },
+            },
+        };
     }
     const gatewayError = validatePlacementGateway(defaultGatewayId, gatewaysById);
     if (gatewayError)
@@ -348,7 +372,9 @@ function buildCustomerPlacementProjection(input) {
         data: input.data,
         assignedGatewayId,
         glmByGatewayId: input.glmByGatewayId,
-    }) ?? input.config.defaultGatewayId;
+    }) ?? (assignedGatewayId !== null && input.config.sharedGatewayIds.includes(assignedGatewayId)
+        ? assignedGatewayId
+        : input.config.defaultGatewayId);
     const mountedGatewayId = slug ? input.mountedBySlug.get(slug) ?? null : null;
     const latestOp = latestOperation(input.operations, (operation) => operationUid(operation) === input.uid);
     const driftState = driftStateForCustomer({
@@ -534,6 +560,7 @@ function buildOnboardingPlacementResponse(opts) {
     return {
         config: {
             defaultGatewayId,
+            sharedGatewayIds: [...opts.config.sharedGatewayIds],
         },
         gateways,
         customers,
@@ -1897,50 +1924,123 @@ async function readRelease(db, gatewayId, release) {
 function asReleaseArtifactPayload(artifact) {
     return { ...artifact };
 }
-const CENTRAL_RELEASE_GATEWAY_ID = "default";
-const CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION = "centralTestReleaseReservations";
+const CENTRAL_RELEASE_FANOUTS_COLLECTION = "centralReleaseFanouts";
 const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
 const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const RELEASE_VERSION_PATTERN = new RegExp(`^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
     `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`);
-class CentralTestReleaseVersionConflictError extends Error {
+class CentralReleaseVersionConflictError extends Error {
     version;
     constructor(version) {
-        super(`CENTRAL TEST version ${version} is already reserved for a different manifest`);
+        super(`CENTRAL release version ${version} is already reserved for a different pool or manifest`);
         this.version = version;
     }
 }
-function centralTestReleaseReservationFromData(data, version) {
+function centralReleaseFanoutMember(value, version, gatewayId) {
+    if (!isPlainRecord(value) ||
+        typeof value.release !== "number" ||
+        !Number.isSafeInteger(value.release) ||
+        value.release < 1 ||
+        (typeof value.rolloutOperationId !== "string" && value.rolloutOperationId !== null)) {
+        throw new Error(`CENTRAL release fanout ${version} member ${gatewayId} is malformed`);
+    }
+    return {
+        release: value.release,
+        rolloutOperationId: value.rolloutOperationId,
+    };
+}
+function centralReleaseFanoutFromData(data, version) {
+    const gatewayIds = data?.gatewayIds;
     if (data?.version !== version ||
         typeof data.sourceSha !== "string" ||
         typeof data.manifestDigest !== "string" ||
-        typeof data.gatewayId !== "string" ||
-        typeof data.release !== "number" ||
-        !Number.isSafeInteger(data.release) ||
-        (typeof data.rolloutOperationId !== "string" && data.rolloutOperationId !== null)) {
-        throw new Error(`CENTRAL TEST reservation ${version} is malformed`);
+        (data.environment !== "test" && data.environment !== "prod") ||
+        (data.gatewayScope !== "shared" && data.gatewayScope !== "all") ||
+        !Array.isArray(gatewayIds) ||
+        gatewayIds.length === 0 ||
+        !gatewayIds.every((gatewayId) => typeof gatewayId === "string") ||
+        new Set(gatewayIds).size !== gatewayIds.length ||
+        (data.status !== "pending" && data.status !== "complete") ||
+        !isPlainRecord(data.rollouts)) {
+        throw new Error(`CENTRAL release fanout ${version} is malformed`);
+    }
+    const rollouts = Object.fromEntries(Object.entries(data.rollouts).map(([gatewayId, member]) => [
+        gatewayId,
+        centralReleaseFanoutMember(member, version, gatewayId),
+    ]));
+    if (Object.keys(rollouts).some((gatewayId) => !gatewayIds.includes(gatewayId))) {
+        throw new Error(`CENTRAL release fanout ${version} contains an unknown member`);
     }
     return {
         version,
         sourceSha: data.sourceSha,
         manifestDigest: data.manifestDigest,
-        gatewayId: data.gatewayId,
-        release: data.release,
-        rolloutOperationId: data.rolloutOperationId,
+        environment: data.environment,
+        gatewayScope: data.gatewayScope,
+        gatewayIds,
+        status: data.status,
+        rollouts,
     };
 }
-function centralTestReservationMatches(reservation, input) {
-    return reservation.sourceSha === input.sourceSha &&
-        reservation.manifestDigest === input.manifestDigest;
+function centralReleaseFanoutMatches(fanout, input) {
+    return fanout.sourceSha === input.sourceSha &&
+        fanout.manifestDigest === input.manifestDigest &&
+        fanout.environment === input.environment &&
+        fanout.gatewayScope === input.gatewayScope &&
+        fanout.gatewayIds.length === input.gatewayIds.length &&
+        fanout.gatewayIds.every((gatewayId, index) => gatewayId === input.gatewayIds[index]);
 }
-async function readCentralTestReleaseReservation(db, version) {
+async function readCentralReleaseFanout(db, version) {
     const snapshot = await db
-        .collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION)
+        .collection(CENTRAL_RELEASE_FANOUTS_COLLECTION)
         .doc(version)
         .get();
     if (!snapshot.exists)
         return null;
-    return centralTestReleaseReservationFromData(snapshot.data(), version);
+    return centralReleaseFanoutFromData(snapshot.data(), version);
+}
+async function ensureCentralReleaseFanout(db, input, createdBy, now) {
+    const ref = db.collection(CENTRAL_RELEASE_FANOUTS_COLLECTION).doc(input.version);
+    return db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (snapshot.exists) {
+            const existing = centralReleaseFanoutFromData(snapshot.data(), input.version);
+            if (!centralReleaseFanoutMatches(existing, input)) {
+                throw new CentralReleaseVersionConflictError(input.version);
+            }
+            return existing;
+        }
+        const fanout = {
+            ...input,
+            status: "pending",
+            rollouts: {},
+        };
+        transaction.create(ref, {
+            ...fanout,
+            createdAt: now,
+            createdBy,
+            updatedAt: now,
+        });
+        return fanout;
+    });
+}
+async function completeCentralReleaseFanout(db, input, now) {
+    const ref = db.collection(CENTRAL_RELEASE_FANOUTS_COLLECTION).doc(input.version);
+    await db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (!snapshot.exists)
+            throw new Error(`CENTRAL release fanout ${input.version} is missing`);
+        const fanout = centralReleaseFanoutFromData(snapshot.data(), input.version);
+        if (!centralReleaseFanoutMatches(fanout, input)) {
+            throw new CentralReleaseVersionConflictError(input.version);
+        }
+        if (fanout.gatewayIds.some((gatewayId) => fanout.rollouts[gatewayId] === undefined)) {
+            throw new Error(`CENTRAL release fanout ${input.version} is incomplete`);
+        }
+        if (fanout.status === "complete")
+            return;
+        transaction.update(ref, { status: "complete", updatedAt: now });
+    });
 }
 function releaseVersionFromBody(value) {
     return typeof value === "string" && RELEASE_VERSION_PATTERN.test(value) ? value : null;
@@ -2066,19 +2166,23 @@ function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
         left.imageTag === right.imageTag);
 }
-async function existingReservedGatewayRelease(transaction, reservationRef, reservation) {
-    if (!reservationRef || !reservation)
+async function existingCentralFanoutGatewayRelease(transaction, fanoutRef, fanoutInput, gatewayId) {
+    if (!fanoutRef || !fanoutInput)
         return null;
-    const snapshot = await transaction.get(reservationRef);
-    if (!snapshot.exists)
-        return null;
-    const existing = centralTestReleaseReservationFromData(snapshot.data(), reservation.version);
-    if (!centralTestReservationMatches(existing, reservation)) {
-        throw new CentralTestReleaseVersionConflictError(reservation.version);
+    const snapshot = await transaction.get(fanoutRef);
+    if (!snapshot.exists) {
+        throw new Error(`CENTRAL release fanout ${fanoutInput.version} is missing`);
     }
+    const fanout = centralReleaseFanoutFromData(snapshot.data(), fanoutInput.version);
+    if (!centralReleaseFanoutMatches(fanout, fanoutInput)) {
+        throw new CentralReleaseVersionConflictError(fanoutInput.version);
+    }
+    const member = fanout.rollouts[gatewayId];
+    if (!member)
+        return null;
     return {
-        release: existing.release,
-        operationId: existing.rolloutOperationId,
+        release: member.release,
+        operationId: member.rolloutOperationId,
         reused: true,
     };
 }
@@ -2128,26 +2232,25 @@ async function assertAppendGatewayReleaseMaintenance(transaction, db, required) 
     const maintenanceSnapshot = await transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH));
     assertNormalFleetMutationSnapshotOpen(maintenanceSnapshot);
 }
-function writeCentralTestReleaseReservation(transaction, reservationRef, reservation, result) {
-    if (!reservationRef || !reservation)
+function writeCentralReleaseFanoutMember(transaction, fanoutRef, fanoutInput, result) {
+    if (!fanoutRef || !fanoutInput)
         return;
-    transaction.create(reservationRef, {
-        version: reservation.version,
-        sourceSha: reservation.sourceSha,
-        manifestDigest: reservation.manifestDigest,
-        gatewayId: result.gatewayId,
-        release: result.release,
-        rolloutOperationId: result.operationId,
+    transaction.update(fanoutRef, {
+        [`rollouts.${result.gatewayId}`]: {
+            release: result.release,
+            rolloutOperationId: result.operationId,
+        },
+        updatedAt: Date.now(),
     });
 }
 async function appendGatewayRelease(db, args) {
     const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
     const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    const reservationRef = args.centralTestReservation
-        ? db.collection(CENTRAL_TEST_RELEASE_RESERVATIONS_COLLECTION).doc(args.centralTestReservation.version)
+    const fanoutRef = args.centralReleaseFanout
+        ? db.collection(CENTRAL_RELEASE_FANOUTS_COLLECTION).doc(args.centralReleaseFanout.version)
         : null;
     return db.runTransaction(async (txn) => {
-        const existing = await existingReservedGatewayRelease(txn, reservationRef, args.centralTestReservation);
+        const existing = await existingCentralFanoutGatewayRelease(txn, fanoutRef, args.centralReleaseFanout, args.gateway.gatewayId);
         if (existing)
             return existing;
         const current = await appendGatewayReleaseCurrentRoot(txn, db, gwRef, args);
@@ -2179,7 +2282,7 @@ async function appendGatewayRelease(db, args) {
             createdBy: args.createdBy,
             input: rolloutOpInputFromArtifact(args.gateway.gatewayId, artifact),
         }, args.now));
-        writeCentralTestReleaseReservation(txn, reservationRef, args.centralTestReservation, { gatewayId: args.gateway.gatewayId, release, operationId: operationRef.id });
+        writeCentralReleaseFanoutMember(txn, fanoutRef, args.centralReleaseFanout, { gatewayId: args.gateway.gatewayId, release, operationId: operationRef.id });
         return { release, operationId: operationRef.id };
     });
 }
@@ -2203,7 +2306,7 @@ class InvalidGatewayRootError extends Error {
     }
 }
 function respondReleaseWriteConflict(res, error) {
-    if (error instanceof CentralTestReleaseVersionConflictError) {
+    if (error instanceof CentralReleaseVersionConflictError) {
         res.status(409).json({ error: error.message });
         return true;
     }
@@ -2298,50 +2401,61 @@ async function centralManifestForSourceSha(authority, sourceSha) {
     }
     return manifest;
 }
-function assertCentralTestReleaseReservation(existing, input) {
-    if (existing && !centralTestReservationMatches(existing, input)) {
+function assertCentralReleaseFanout(existing, input) {
+    if (existing && !centralReleaseFanoutMatches(existing, input)) {
         rejectCentralReleaseRequest(409, {
-            error: `CENTRAL TEST version ${input.version} is already reserved for a different manifest`,
+            error: `CENTRAL release version ${input.version} is already reserved for a different pool or manifest`,
         });
     }
 }
-async function centralReleaseGateway(db, operation) {
-    const gateway = await readGatewayDoc(db, CENTRAL_RELEASE_GATEWAY_ID);
+async function centralSharedGatewayPoolConfig(db) {
+    const config = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+    const parsed = parseSharedGatewayPoolConfig(config.exists ? config.data() : undefined);
+    if (parsed === null) {
+        rejectCentralReleaseRequest(409, {
+            error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool",
+        });
+    }
+    return parsed;
+}
+async function centralSharedReleaseGateway(db, gatewayId, operation) {
+    const gateway = await readGatewayDoc(db, gatewayId);
     if (!gateway) {
         rejectCentralReleaseRequest(404, {
             error: ERR_GATEWAY_NOT_FOUND,
-            gatewayId: CENTRAL_RELEASE_GATEWAY_ID,
+            gatewayId,
         });
     }
-    if (gateway.desiredStatus === "retired") {
+    if (gateway.desiredStatus !== "running") {
         rejectCentralReleaseRequest(409, {
-            error: `cannot ${operation} a release for a retired gateway`,
+            error: `configured shared gateway must be running to ${operation} a release`,
+            gatewayId: gateway.gatewayId,
+        });
+    }
+    if (gateway.gatewayClass !== "shared" || isOperatorManaged(gateway.managedBy)) {
+        rejectCentralReleaseRequest(409, {
+            error: "configured shared gateway must be Cowboy-managed and shared-class",
             gatewayId: gateway.gatewayId,
         });
     }
     return gateway;
 }
-async function centralTestReleaseGateways(db, gatewayScope) {
-    const sharedGateway = await centralReleaseGateway(db, "cut");
-    if (gatewayScope === "shared")
-        return [sharedGateway];
+async function centralReleaseGateways(db, gatewayScope, operation) {
+    const config = await centralSharedGatewayPoolConfig(db);
+    const sharedGateways = await Promise.all(config.sharedGatewayIds.map((gatewayId) => centralSharedReleaseGateway(db, gatewayId, operation)));
+    const primary = sharedGateways[0];
+    if (gatewayScope === "shared") {
+        return { primary, gateways: sharedGateways };
+    }
     const snapshot = await db.collection(GATEWAYS_COLLECTION).get();
     const gateways = snapshot.docs
         .map((document) => asDurableGatewayRoot(document.data(), document.id))
         .filter((gateway) => gateway !== null && gateway.desiredStatus !== "retired")
         .sort((left, right) => left.gatewayId.localeCompare(right.gatewayId));
-    if (!gateways.some((gateway) => gateway.gatewayId === sharedGateway.gatewayId)) {
-        throw new Error(`CENTRAL shared gateway ${sharedGateway.gatewayId} is absent from durable gateway roots`);
+    if (!gateways.some((gateway) => gateway.gatewayId === primary.gatewayId)) {
+        throw new Error(`CENTRAL shared gateway ${primary.gatewayId} is absent from durable gateway roots`);
     }
-    return gateways;
-}
-async function existingCentralTestGatewayRollout(db, gateway, payload, note) {
-    const latest = await readRelease(db, gateway.gatewayId, gateway.latestRelease);
-    if (!latest || latest.note !== note || !isReleasePayload(latest.payload))
-        return null;
-    if (releasePayloadHash(latest.payload) !== releasePayloadHash(payload))
-        return null;
-    return { release: latest.release, operationId: null, reused: true };
+    return { primary, gateways };
 }
 async function assertNoCentralReleaseOperation(db, gateway, allowExistingReservation = false) {
     const conflict = await findConflictingGatewayOp(db, gateway.gatewayId);
@@ -3202,11 +3316,7 @@ function runtimeTerminationCanStart(lease, now) {
 }
 async function requestActivationLeaseTermination(db, transaction, input) {
     const userRef = db.collection("users").doc(input.uid);
-    const assignmentRef = db.doc(`gateways/${input.defaultGatewayId}/assignments/${input.uid}`);
-    const [userSnapshot, assignmentSnapshot] = await Promise.all([
-        transaction.get(userRef),
-        transaction.get(assignmentRef),
-    ]);
+    const userSnapshot = await transaction.get(userRef);
     if (!userSnapshot.exists)
         return { kind: "not-found" };
     const data = userSnapshot.data();
@@ -3216,13 +3326,16 @@ async function requestActivationLeaseTermination(db, transaction, input) {
     }
     const { lease, openclaw } = resolved;
     const targetGatewayId = asStringOrNull(lease.targetGatewayId);
+    const sharedGatewayId = asStringOrNull(openclaw.gatewayId);
     if (!targetGatewayId ||
-        asStringOrNull(openclaw.gatewayId) !== input.defaultGatewayId) {
+        !sharedGatewayId ||
+        !input.sharedGatewayIds.includes(sharedGatewayId)) {
         return {
             kind: "conflict",
             reason: "Builder is not authoritative on the shared gateway",
         };
     }
+    const assignmentSnapshot = await transaction.get(db.doc(`gateways/${sharedGatewayId}/assignments/${input.uid}`));
     const assignment = assignmentSnapshot.exists
         ? assignmentSnapshot.data()
         : undefined;
@@ -3230,7 +3343,7 @@ async function requestActivationLeaseTermination(db, transaction, input) {
         exists: assignmentSnapshot.exists,
         assignment,
         uid: input.uid,
-        gatewayId: input.defaultGatewayId,
+        gatewayId: sharedGatewayId,
     })) {
         return {
             kind: "conflict",
@@ -3449,11 +3562,12 @@ export function addAdminFleetRoutes(router, deps) {
                         targetPodCount === 0,
                 };
             });
-            const defaultGatewayId = asStringOrNull(configSnap.data()?.defaultGatewayId);
+            const sharedPoolConfig = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
+            const sharedGatewayIds = new Set(sharedPoolConfig?.sharedGatewayIds ?? []);
             const parkedBuilders = usersSnap.docs.filter((doc) => {
                 const resolved = activationLeaseFromUser(doc.data());
                 return (resolved?.lease.status === "parked" &&
-                    asStringOrNull(resolved.openclaw.gatewayId) === defaultGatewayId);
+                    sharedGatewayIds.has(asStringOrNull(resolved.openclaw.gatewayId) ?? ""));
             }).length;
             res.json({
                 gateways,
@@ -3479,15 +3593,33 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.patch("/onboarding-placement", async (req, res, next) => {
         try {
-            const [gatewaySnap, config] = await Promise.all([
+            const [gatewaySnap, configSnap] = await Promise.all([
                 db.collection(GATEWAYS_COLLECTION).get(),
-                readOnboardingRuntimeConfig(deps),
+                db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get(),
             ]);
             const gatewaysById = indexDurableGatewayRoots(gatewaySnap.docs);
-            const parsed = parsePlacementPatch(req.body, gatewaysById);
+            const config = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
+            if (config === null) {
+                res.status(409).json({
+                    error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool",
+                });
+                return;
+            }
+            const parsed = parsePlacementPatch(req.body, gatewaysById, config);
             if ("error" in parsed) {
                 res.status(parsed.error.status).json(parsed.error.body);
                 return;
+            }
+            for (const gatewayId of config.sharedGatewayIds) {
+                const gatewayError = validatePlacementGateway(gatewayId, gatewaysById);
+                if (gatewayError) {
+                    res.status(409).json({
+                        error: "configured shared pool member is invalid",
+                        gatewayId,
+                        detail: gatewayError.body.error,
+                    });
+                    return;
+                }
             }
             const target = await readGatewayRegistrationReadiness(db, parsed.ok.defaultGatewayId);
             if (target.status !== "ready") {
@@ -3505,7 +3637,7 @@ export function addAdminFleetRoutes(router, deps) {
                 what: "set default gateway placement",
                 why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: parsed.ok.defaultGatewayId },
-                preActionStatus: { defaultGatewayId: config.defaultGatewayId || null },
+                preActionStatus: { defaultGatewayId: config.defaultGatewayId },
                 mutation: {
                     kind: "set-default-gateway-placement",
                     gatewayId: parsed.ok.defaultGatewayId,
@@ -3513,43 +3645,23 @@ export function addAdminFleetRoutes(router, deps) {
                 action: async () => {
                     await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
                         defaultGatewayId: parsed.ok.defaultGatewayId,
+                        sharedGatewayIds: [
+                            parsed.ok.defaultGatewayId,
+                            ...config.sharedGatewayIds.filter((gatewayId) => gatewayId !== parsed.ok.defaultGatewayId),
+                        ],
                         placementUpdatedAt: Date.now(),
                         placementUpdatedBy: createdBy,
                     }, { merge: true });
                 },
             });
-            const defaultChange = await convergeDefaultGatewayChange({
-                deps,
-                gatewaysById,
-                previousGatewayId: config.defaultGatewayId || null,
+            const defaultChange = {
+                previousGatewayId: config.defaultGatewayId,
                 targetGatewayId: parsed.ok.defaultGatewayId,
-                createdBy,
-                enqueueMigration: async (input) => {
-                    const uid = input.uid;
-                    const fromGatewayId = input.fromGatewayId;
-                    const toGatewayId = input.toGatewayId;
-                    return runAdminFleetMutation({
-                        req,
-                        what: "migrate builder after default placement change",
-                        why: ADMIN_FLEET_REQUEST_REASON,
-                        target: { uid, gatewayId: toGatewayId },
-                        preActionStatus: { gatewayId: fromGatewayId },
-                        mutation: {
-                            kind: OP_KIND_MIGRATE_CUSTOMER,
-                            uid,
-                            fromGatewayId,
-                            toGatewayId,
-                            source: "platform-default-change",
-                        },
-                        idempotencyScope: `default-placement-migration:${uid}`,
-                        action: async () => createOperation(db, {
-                            kind: OP_KIND_MIGRATE_CUSTOMER,
-                            createdBy,
-                            input,
-                        }),
-                    });
-                },
-            });
+                enqueued: [],
+                adopted: [],
+                blocked: [],
+                ownedRuntimeUntouched: 0,
+            };
             const response = await readAdminOnboardingPlacementResponse(deps);
             res.json({ ...response, defaultChange });
         }
@@ -3926,9 +4038,9 @@ export function addAdminFleetRoutes(router, deps) {
             const leaseId = body.leaseId;
             const generation = body.generation;
             const now = Date.now();
-            const config = await db.doc("config/orchestrator").get();
-            const defaultGatewayId = asStringOrNull(config.data()?.defaultGatewayId);
-            if (!defaultGatewayId) {
+            const config = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+            const sharedPoolConfig = parseSharedGatewayPoolConfig(config.exists ? config.data() : undefined);
+            if (sharedPoolConfig === null) {
                 res.status(409).json({ error: "default gateway is unavailable" });
                 return;
             }
@@ -3937,14 +4049,14 @@ export function addAdminFleetRoutes(router, deps) {
                 what: "terminate builder activation lease",
                 why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, leaseId, generation },
-                preActionStatus: { defaultGatewayId },
+                preActionStatus: { defaultGatewayId: sharedPoolConfig.defaultGatewayId },
                 mutation: { kind: "terminate-activation-lease", uid, leaseId, generation },
                 classifyResult: classifyActivationLeaseTermination,
                 action: async () => db.runTransaction((transaction) => requestActivationLeaseTermination(db, transaction, {
                     uid,
                     leaseId,
                     generation,
-                    defaultGatewayId,
+                    sharedGatewayIds: sharedPoolConfig.sharedGatewayIds,
                     requestedAt: now,
                     requestedBy: actor.uid ?? "unknown",
                 })),
@@ -4541,21 +4653,11 @@ export function addAdminFleetRoutes(router, deps) {
         }
     });
     async function centralTestGatewayRolloutFanout(input) {
-        const { req, gateways, primary, payload, note, manifestDigest, version, sourceSha, gatewayScope, testProvenance, createdBy, } = input;
+        const { req, gateways, primary, payload, note, manifestDigest, version, sourceSha, gatewayScope, testProvenance, createdBy, fanout, } = input;
         const rollouts = [];
         for (const targetGateway of gateways) {
             if (targetGateway.gatewayId === primary.gatewayId)
                 continue;
-            const existing = await existingCentralTestGatewayRollout(db, targetGateway, payload, note);
-            if (existing) {
-                rollouts.push({
-                    gatewayId: targetGateway.gatewayId,
-                    release: existing.release,
-                    operationId: existing.operationId,
-                    reused: true,
-                });
-                continue;
-            }
             const appended = await runAdminFleetMutation({
                 req,
                 what: "cut CENTRAL TEST gateway rollout",
@@ -4583,6 +4685,53 @@ export function addAdminFleetRoutes(router, deps) {
                     now: Date.now(),
                     sourceRelease: targetGateway.latestRelease,
                     note,
+                    centralReleaseFanout: fanout,
+                    requireMaintenanceOpen: true,
+                }),
+            });
+            rollouts.push({
+                gatewayId: targetGateway.gatewayId,
+                release: appended.release,
+                operationId: appended.operationId,
+                ...(appended.reused ? { reused: true } : {}),
+            });
+        }
+        return rollouts;
+    }
+    async function centralProdGatewayRolloutFanout(input) {
+        const { req, gateways, primary, payload, note, manifestDigest, version, sourceSha, testProvenance, createdBy, fanout, } = input;
+        const rollouts = [];
+        for (const targetGateway of gateways) {
+            if (targetGateway.gatewayId === primary.gatewayId)
+                continue;
+            const appended = await runAdminFleetMutation({
+                req,
+                what: "promote CENTRAL PROD gateway rollout",
+                why: ADMIN_FLEET_REQUEST_REASON,
+                target: { gatewayId: targetGateway.gatewayId, gatewayScope: "shared", version, sourceSha },
+                preActionStatus: {
+                    latestRelease: targetGateway.latestRelease,
+                    desiredRelease: targetGateway.desiredRelease,
+                },
+                mutation: {
+                    kind: "promote-central-prod-gateway-rollout",
+                    gatewayId: targetGateway.gatewayId,
+                    gatewayScope: "shared",
+                    version,
+                    sourceSha,
+                    manifestDigest,
+                },
+                testProvenance,
+                idempotencyScope: `promote-central-prod-release:${version}:${targetGateway.gatewayId}`,
+                action: async () => appendGatewayRelease(db, {
+                    gateway: targetGateway,
+                    artifact: gatewayArtifactFromReleasePayload(payload),
+                    payload,
+                    createdBy,
+                    now: Date.now(),
+                    sourceRelease: targetGateway.latestRelease,
+                    note,
+                    centralReleaseFanout: fanout,
                     requireMaintenanceOpen: true,
                 }),
             });
@@ -4600,16 +4749,22 @@ export function addAdminFleetRoutes(router, deps) {
             const authority = centralReleaseAuthorityFor(deps, "test");
             const { version, sourceSha, gatewayScope } = centralTestReleaseRequest(req.body);
             const manifest = await centralManifestForSourceSha(authority, sourceSha);
-            const existingReservation = await readCentralTestReleaseReservation(db, version);
-            assertCentralTestReleaseReservation(existingReservation, {
+            const { gateways, primary: gateway } = await centralReleaseGateways(db, gatewayScope, "cut");
+            const fanoutInput = {
                 version,
                 sourceSha,
                 manifestDigest: manifest.manifestDigest,
-            });
-            const gateways = await centralTestReleaseGateways(db, gatewayScope);
-            const gateway = gateways.find((candidate) => candidate.gatewayId === CENTRAL_RELEASE_GATEWAY_ID);
+                environment: "test",
+                gatewayScope,
+                gatewayIds: gateways.map((candidate) => candidate.gatewayId),
+            };
+            const existingFanout = await readCentralReleaseFanout(db, version);
+            assertCentralReleaseFanout(existingFanout, fanoutInput);
+            const actor = req;
+            const createdBy = actor.uid ?? "unknown";
+            const fanout = await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             for (const candidate of gateways) {
-                await assertNoCentralReleaseOperation(db, candidate, existingReservation !== null && candidate.gatewayId === gateway.gatewayId);
+                await assertNoCentralReleaseOperation(db, candidate, fanout.rollouts[candidate.gatewayId] !== undefined);
             }
             const payload = centralGatewayReleasePayload(manifest);
             const aliasPlan = centralReleaseAliasPlans({
@@ -4618,8 +4773,6 @@ export function addAdminFleetRoutes(router, deps) {
                 version,
                 includeTestRecord: true,
             });
-            const actor = req;
-            const createdBy = actor.uid ?? "unknown";
             const testProvenance = {
                 environment: "test",
                 sourceCommit: sourceSha,
@@ -4647,7 +4800,7 @@ export function addAdminFleetRoutes(router, deps) {
                     },
                     aliasPlan,
                     testProvenance,
-                    ...(existingReservation
+                    ...(existingFanout
                         ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
                         : {}),
                     classifyResult: classifyCentralReleaseMutation({
@@ -4684,7 +4837,7 @@ export function addAdminFleetRoutes(router, deps) {
                                 now: Date.now(),
                                 sourceRelease: gateway.latestRelease,
                                 note: `CENTRAL TEST ${version} ${sourceSha}`,
-                                centralTestReservation: { version, sourceSha, manifestDigest: manifest.manifestDigest },
+                                centralReleaseFanout: fanoutInput,
                                 requireMaintenanceOpen: true,
                             });
                         }
@@ -4742,8 +4895,10 @@ export function addAdminFleetRoutes(router, deps) {
                     gatewayScope,
                     testProvenance,
                     createdBy,
+                    fanout: fanoutInput,
                 }),
             ];
+            await completeCentralReleaseFanout(db, fanoutInput, Date.now());
             res.status(202).json({
                 version,
                 sourceSha,
@@ -4771,8 +4926,23 @@ export function addAdminFleetRoutes(router, deps) {
                     error: "CENTRAL TEST record does not identify the exact release manifest",
                 });
             }
-            const gateway = await centralReleaseGateway(db, "promote");
-            await assertNoCentralReleaseOperation(db, gateway);
+            const { gateways, primary: gateway } = await centralReleaseGateways(db, "shared", "promote");
+            const fanoutInput = {
+                version,
+                sourceSha: manifest.sourceSha,
+                manifestDigest: manifest.manifestDigest,
+                environment: "prod",
+                gatewayScope: "shared",
+                gatewayIds: gateways.map((candidate) => candidate.gatewayId),
+            };
+            const existingFanout = await readCentralReleaseFanout(db, version);
+            assertCentralReleaseFanout(existingFanout, fanoutInput);
+            const actor = req;
+            const createdBy = actor.uid ?? "unknown";
+            const fanout = await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
+            for (const candidate of gateways) {
+                await assertNoCentralReleaseOperation(db, candidate, fanout.rollouts[candidate.gatewayId] !== undefined);
+            }
             const payload = centralGatewayReleasePayload(manifest);
             const aliasPlan = centralReleaseAliasPlans({
                 authority,
@@ -4780,8 +4950,6 @@ export function addAdminFleetRoutes(router, deps) {
                 version,
                 includeTestRecord: false,
             });
-            const actor = req;
-            const createdBy = actor.uid ?? "unknown";
             const testProvenance = {
                 environment: "test",
                 sourceCommit: manifest.sourceSha,
@@ -4812,6 +4980,9 @@ export function addAdminFleetRoutes(router, deps) {
                         gatewayId: gateway.gatewayId,
                         imageTag: payload.imageTag,
                     }),
+                    ...(existingFanout
+                        ? { idempotencyScope: `promote-central-prod-release:${version}:resume` }
+                        : {}),
                     action: async () => {
                         let aliasOutcomes = [];
                         try {
@@ -4841,6 +5012,7 @@ export function addAdminFleetRoutes(router, deps) {
                                 now: Date.now(),
                                 sourceRelease: gateway.latestRelease,
                                 note: `CENTRAL PROD ${version} ${manifest.sourceSha}`,
+                                centralReleaseFanout: fanoutInput,
                                 requireMaintenanceOpen: true,
                             });
                             return { appended, aliasOutcomes };
@@ -4866,12 +5038,37 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (!result.appended)
                 throw new Error("CENTRAL PROD release mutation has no release result");
+            const note = `CENTRAL PROD ${version} ${manifest.sourceSha}`;
+            const rollouts = [
+                {
+                    gatewayId: gateway.gatewayId,
+                    release: result.appended.release,
+                    operationId: result.appended.operationId,
+                    ...(result.appended.reused ? { reused: true } : {}),
+                },
+                ...await centralProdGatewayRolloutFanout({
+                    req,
+                    gateways,
+                    primary: gateway,
+                    payload,
+                    note,
+                    manifestDigest: manifest.manifestDigest,
+                    version,
+                    sourceSha: manifest.sourceSha,
+                    testProvenance,
+                    createdBy,
+                    fanout: fanoutInput,
+                }),
+            ];
+            await completeCentralReleaseFanout(db, fanoutInput, Date.now());
             res.status(202).json({
                 version,
                 sourceSha: manifest.sourceSha,
+                gatewayScope: "shared",
                 gatewayId: gateway.gatewayId,
                 release: result.appended.release,
                 operationId: result.appended.operationId,
+                rollouts,
             });
         }
         catch (error) {

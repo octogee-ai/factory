@@ -395,7 +395,31 @@ export interface GatewayRuntimeDoc {
   createdByOperationId: string | null;
   helm: GatewayHelmObservation;
   heartbeat: GatewayHeartbeatObservation;
+  kubernetes?: GatewayKubernetesObservation;
   lastError: { message: string | null; at: number | null };
+}
+
+export interface GatewayKubernetesObservation {
+  status: "ready" | "not-ready" | "missing" | "unknown";
+  totalPods: number;
+  readyPods: number;
+  observedAt: number;
+}
+
+export function hasFreshReadyKubernetesObservation(
+  runtime: GatewayRuntimeDoc,
+  nowMs: number,
+  maxAgeMs: number,
+): boolean {
+  const observation = runtime.kubernetes;
+  return observation?.status === "ready" &&
+    Number.isSafeInteger(observation.totalPods) &&
+    observation.totalPods > 0 &&
+    Number.isSafeInteger(observation.readyPods) &&
+    observation.readyPods > 0 &&
+    Number.isFinite(observation.observedAt) &&
+    nowMs >= observation.observedAt &&
+    nowMs - observation.observedAt <= maxAgeMs;
 }
 
 export function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc {
@@ -574,6 +598,14 @@ export interface PlacementFirestore {
   runTransaction: <T>(body: (txn: PlacementTxn) => Promise<T>) => Promise<T>;
 }
 
+export interface PlacementTargetValidationContext {
+  txn: PlacementTxn;
+  gatewayRef: PlacementDocRef;
+  assignmentRef: PlacementDocRef;
+  gateway: GatewayDoc & GatewayMutableConfig;
+  runtime: Record<string, unknown>;
+}
+
 export interface CommitPlacementParams {
   uid: string;
   slug: string;
@@ -590,6 +622,9 @@ export interface CommitPlacementParams {
   assignmentWrite?: "upsert" | "create-if-missing";
   requireDurableGateway?: boolean;
   automatic?: boolean;
+  validateTarget?: (
+    context: PlacementTargetValidationContext,
+  ) => Promise<PlacementRejectReason | null>;
 }
 
 export type PlacementRejectReason =
@@ -597,7 +632,8 @@ export type PlacementRejectReason =
   | "gateway-operator-managed"
   | "builder-operator-managed"
   | "gateway-not-running"
-  | "gateway-not-serving";
+  | "gateway-not-serving"
+  | "gateway-target-not-accepting";
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
@@ -683,15 +719,6 @@ export async function commitPlacementAtomic(
     if (gatewayData.desiredStatus !== "running") {
       return { kind: "rejected", reason: "gateway-not-running" };
     }
-    if (await preserveExistingAssignment(
-      txn,
-      assignmentRef,
-      userRef,
-      params,
-    )) {
-      return { kind: "assignment-preserved" };
-    }
-
     const runtimeSnap = await txn.get(
       db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId),
     );
@@ -701,6 +728,28 @@ export async function commitPlacementAtomic(
     );
     if (runtimeRejectReason) {
       return { kind: "rejected", reason: runtimeRejectReason };
+    }
+    const runtimeData = runtimeSnap.data();
+    if (!runtimeData) {
+      return { kind: "rejected", reason: "gateway-not-serving" };
+    }
+    if (params.validateTarget) {
+      const targetRejectReason = await params.validateTarget({
+        txn,
+        gatewayRef,
+        assignmentRef,
+        gateway: gatewayData,
+        runtime: runtimeData,
+      });
+      if (targetRejectReason) return { kind: "rejected", reason: targetRejectReason };
+    }
+    if (await preserveExistingAssignment(
+      txn,
+      assignmentRef,
+      userRef,
+      params,
+    )) {
+      return { kind: "assignment-preserved" };
     }
 
     // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0

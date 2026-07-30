@@ -29,6 +29,9 @@ kmsKeyName: ""
 # chart. Override only for tests / non-standard image layouts.
 gatewayChart: /charts/octogee-gateway
 
+sharedGatewayIds:
+  - default
+
 # Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;
 # operator can override per-env if cluster topology changes.

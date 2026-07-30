@@ -142,6 +142,17 @@ export function isW9GatewayEdgeImage(value, gatewayImageTag, gatewayImageReposit
 export function isAssignmentState(value) {
     return value === "serving" || value === "quiescing" || value === "migrating";
 }
+export function hasFreshReadyKubernetesObservation(runtime, nowMs, maxAgeMs) {
+    const observation = runtime.kubernetes;
+    return observation?.status === "ready" &&
+        Number.isSafeInteger(observation.totalPods) &&
+        observation.totalPods > 0 &&
+        Number.isSafeInteger(observation.readyPods) &&
+        observation.readyPods > 0 &&
+        Number.isFinite(observation.observedAt) &&
+        nowMs >= observation.observedAt &&
+        nowMs - observation.observedAt <= maxAgeMs;
+}
 export function isGatewayRuntimeDoc(data) {
     if (!data || typeof data !== "object")
         return false;
@@ -317,13 +328,28 @@ export async function commitPlacementAtomic(db, params) {
         if (gatewayData.desiredStatus !== "running") {
             return { kind: "rejected", reason: "gateway-not-running" };
         }
-        if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
-            return { kind: "assignment-preserved" };
-        }
         const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId));
         const runtimeRejectReason = placementRuntimeRejectReason(runtimeSnap, params.gatewayId);
         if (runtimeRejectReason) {
             return { kind: "rejected", reason: runtimeRejectReason };
+        }
+        const runtimeData = runtimeSnap.data();
+        if (!runtimeData) {
+            return { kind: "rejected", reason: "gateway-not-serving" };
+        }
+        if (params.validateTarget) {
+            const targetRejectReason = await params.validateTarget({
+                txn,
+                gatewayRef,
+                assignmentRef,
+                gateway: gatewayData,
+                runtime: runtimeData,
+            });
+            if (targetRejectReason)
+                return { kind: "rejected", reason: targetRejectReason };
+        }
+        if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
+            return { kind: "assignment-preserved" };
         }
         // Mirror + assignment are all-or-nothing: a serving assignment at epoch 0
         // (the steady baseline before any migration cutover bumps the epoch).

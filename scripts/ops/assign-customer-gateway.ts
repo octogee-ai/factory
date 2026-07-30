@@ -6,31 +6,35 @@ import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "node:url";
 import {
-  isValidGatewayId,
+  GLM_OPERATIONS_COLLECTION,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
 import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import {
   resolveOnboardingPlacementEligibility,
-  type OnboardingOrchestratorConfig,
 } from "../../shared/types/orchestrator-placement.js";
 import {
   commitPlacementAtomic,
+  hasFreshReadyKubernetesObservation,
+  isGatewayRuntimeDoc,
   type PlacementFirestore,
 } from "../../shared/types/gateway-releases.js";
+import {
+  parseSharedGatewayPoolConfig,
+  selectSharedGateway,
+  type SharedGatewayPoolCandidate,
+  type SharedGatewayPoolConfig,
+} from "../../shared/types/shared-gateway-pool.js";
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "../../shared/types/fleet-controller.js";
 
 const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
 
 
 
-async function readOrchestratorConfig(db: Firestore): Promise<OnboardingOrchestratorConfig | null> {
+async function readOrchestratorConfig(db: Firestore): Promise<SharedGatewayPoolConfig | null> {
   const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
   if (!snap.exists) return null;
-  const data = snap.data() as Partial<OnboardingOrchestratorConfig> | undefined;
-  if (!isValidGatewayId(data?.defaultGatewayId)) {
-    return null;
-  }
-  return { defaultGatewayId: data.defaultGatewayId };
+  return parseSharedGatewayPoolConfig(snap.data());
 }
 
 type AssignResult =
@@ -40,6 +44,127 @@ type AssignResult =
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
   return profile === "operator" ? "operator" : "standard";
+}
+
+function millis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    "toMillis" in value &&
+    typeof value.toMillis === "function"
+  ) {
+    const result = value.toMillis();
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  }
+  return null;
+}
+
+function mountedRosterComplete(
+  assignmentDocs: readonly { data(): Record<string, unknown> }[],
+  mountedCustomers: readonly string[],
+): boolean {
+  const mounted = new Set(mountedCustomers);
+  return assignmentDocs.every((assignment) => {
+    const slug = assignment.data().slug;
+    return typeof slug === "string" && mounted.has(slug);
+  });
+}
+
+type SelectedAssignmentGateway = {
+  gatewayId: string;
+  gatewayProfile: GatewayProfile;
+};
+
+async function selectAssignmentGateway(
+  db: Firestore,
+  config: SharedGatewayPoolConfig,
+  uid: string,
+  currentGatewayId: string | null,
+  pinnedGatewayId: string | null,
+): Promise<SelectedAssignmentGateway | null> {
+  const [assignmentSnapshot, operationSnapshot] = await Promise.all([
+    db.collectionGroup("assignments").get(),
+    db.collection(GLM_OPERATIONS_COLLECTION)
+      .where("status", "in", ["pending", "running"])
+      .get(),
+  ]);
+  const assignmentsByGateway = new Map<string, typeof assignmentSnapshot.docs>();
+  for (const assignment of assignmentSnapshot.docs) {
+    const gatewayId = assignment.ref.parent.parent?.id;
+    if (!gatewayId) continue;
+    const existing = assignmentsByGateway.get(gatewayId) ?? [];
+    existing.push(assignment);
+    assignmentsByGateway.set(gatewayId, existing);
+  }
+  const incomingMigrationsByGateway = new Map<string, number>();
+  for (const operation of operationSnapshot.docs) {
+    const data = operation.data();
+    if (data.kind !== "migrate-customer") continue;
+    const input = data.input;
+    if (input === null || typeof input !== "object" || Array.isArray(input)) continue;
+    const targetGatewayId = (input as Record<string, unknown>).toGatewayId;
+    if (typeof targetGatewayId !== "string") continue;
+    incomingMigrationsByGateway.set(
+      targetGatewayId,
+      (incomingMigrationsByGateway.get(targetGatewayId) ?? 0) + 1,
+    );
+  }
+
+  const candidates: SharedGatewayPoolCandidate[] = [];
+  const profiles = new Map<string, GatewayProfile>();
+  const now = Date.now();
+  for (const gatewayId of config.sharedGatewayIds) {
+    const [authorization, runtimeSnapshot] = await Promise.all([
+      readGatewayAuthorization(db, gatewayId),
+      db.doc(`glmGateways/${gatewayId}`).get(),
+    ]);
+    if (!authorization) continue;
+    const runtime = runtimeSnapshot.exists ? runtimeSnapshot.data() : undefined;
+    const heartbeatAt = isGatewayRuntimeDoc(runtime)
+      ? millis(runtime.heartbeat.lastHeartbeatAt)
+      : null;
+    const assignments = assignmentsByGateway.get(gatewayId) ?? [];
+    const incomingMigrationCount = incomingMigrationsByGateway.get(gatewayId) ?? 0;
+    const runtimeReady = isGatewayRuntimeDoc(runtime) &&
+      runtime.gatewayId === gatewayId &&
+      hasFreshReadyKubernetesObservation(runtime, now, GATEWAY_UNREACHABLE_AFTER_MS);
+    const heartbeatFresh = heartbeatAt !== null &&
+      heartbeatAt <= now &&
+      now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
+    candidates.push({
+      gatewayId,
+      gatewayClass: authorization.config.gatewayClass,
+      desiredStatus: authorization.gateway.desiredStatus,
+      managedBy: authorization.gateway.managedBy,
+      ready: runtimeReady,
+      serving: isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "serving",
+      heartbeatFresh,
+      liveReleaseReady: isGatewayRuntimeDoc(runtime) &&
+        authorization.gateway.liveRelease !== null &&
+        authorization.gateway.liveRelease === authorization.gateway.desiredRelease &&
+        runtime.release === authorization.gateway.liveRelease,
+      rosterComplete: isGatewayRuntimeDoc(runtime) &&
+        mountedRosterComplete(assignments, runtime.heartbeat.mountedCustomers),
+      converging: incomingMigrationCount > 0,
+      incomingMigrationCount,
+      assignmentCount: assignments.length,
+    });
+    profiles.set(gatewayId, normalizeGatewayProfile(authorization.config.profile));
+  }
+  const selection = selectSharedGateway({
+    uid,
+    config,
+    candidates: pinnedGatewayId === null
+      ? candidates
+      : candidates.filter((candidate) => candidate.gatewayId === pinnedGatewayId),
+    currentGatewayId,
+  });
+  if (selection.kind === "blocked") return null;
+  const gatewayProfile = profiles.get(selection.gatewayId);
+  return gatewayProfile === undefined
+    ? null
+    : { gatewayId: selection.gatewayId, gatewayProfile };
 }
 
 export async function readGatewayProfile(
@@ -99,12 +224,17 @@ export async function assignOne(
   if (config === null) {
     return { kind: "not-ready", uid, slug, reason: "config-missing" };
   }
-  const target = config.defaultGatewayId;
-  const targetProfile = await readGatewayProfile(db, target);
-  if (targetProfile === null) {
-    return { kind: "not-ready", uid, slug, reason: "gateway-config-missing" };
-  }
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
+  let pinnedGatewayId: string | null = null;
+  if (current !== null && config.sharedGatewayIds.includes(current)) {
+    const existingAssignment = await db.doc(`gateways/${current}/assignments/${uid}`).get();
+    if (existingAssignment.exists) pinnedGatewayId = current;
+  }
+  const selected = await selectAssignmentGateway(db, config, uid, current, pinnedGatewayId);
+  if (selected === null) {
+    return { kind: "not-ready", uid, slug, reason: "no-accepting-shared-gateway" };
+  }
+  const { gatewayId: target, gatewayProfile: targetProfile } = selected;
   if (current === target) {
     if (!opts.dryRun) {
       const committed = await commitPlacementAtomic(db as unknown as PlacementFirestore, {

@@ -334,6 +334,7 @@ export async function applyConfigPatch(
   const sleep = createAbortableSleep(signal, opts.sleep);
   const rpc = opts.rpc ?? createGatewayRpc({
     allowLegacyGatewayTokenFallback: true,
+    callTimeoutMs: 60_000,
   });
   const ownsRpc = !opts.rpc;
 

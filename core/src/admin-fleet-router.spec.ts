@@ -598,8 +598,15 @@ function mkAdminFleetRouteApp(opts: {
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }) {
+  const sharedGatewayIds = typeof opts.config.defaultGatewayId === "string" &&
+    opts.config.sharedGatewayIds === undefined
+    ? [opts.config.defaultGatewayId]
+    : opts.config.sharedGatewayIds;
   const state = {
-    config: { ...opts.config },
+    config: {
+      ...opts.config,
+      ...(sharedGatewayIds === undefined ? {} : { sharedGatewayIds }),
+    },
     users: { ...opts.users },
     operations: { ...(opts.operations ?? {}) },
   };
@@ -1173,12 +1180,12 @@ describe("fleet gateway projection", () => {
   it("summarizes parked Builders, lifecycle failures, staleness, and oldest activation", async () => {
     const now = Date.now();
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "shared-blue" },
+      config: { defaultGatewayId: "shared-blue", sharedGatewayIds: ["shared-blue", "shared-green"] },
       users: {
         parked: {
           provisioning: {
             openclaw: {
-              gatewayId: "shared-blue",
+              gatewayId: "shared-green",
               activationLease: {
                 leaseId: "lease-parked",
                 generation: 1,
@@ -1791,7 +1798,10 @@ describe("onboarding placement (post-cohorts)", () => {
 
     const res = await request(app).get("/onboarding-placement").expect(200);
 
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-missing" });
+    expect(res.body.config).toEqual({
+      defaultGatewayId: "gw-missing",
+      sharedGatewayIds: ["gw-missing"],
+    });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "default-gateway-missing", gatewayId: "gw-missing" }),
@@ -1857,9 +1867,9 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("PATCH validates the target and queues shared Builders without moving active disposable Builders", async () => {
+  it("PATCH promotes a configured shared member without migrating existing Builders", async () => {
     const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-old" },
+      config: { defaultGatewayId: "gw-old", sharedGatewayIds: ["gw-old", "gw-new"] },
       users: {
         "uid-shared": {
           username: "shared-builder",
@@ -1937,53 +1947,38 @@ describe("onboarding placement (post-cohorts)", () => {
       .patch("/onboarding-placement")
       .send({ defaultGatewayId: "gw-builder" })
       .expect(400);
-    expect(rejected.body.error).toContain("shared gateway");
+    expect(rejected.body.error).toContain("configured shared pool member");
 
     const bare = await request(app)
       .patch("/onboarding-placement")
       .send({ defaultGatewayId: "gw-bare" })
       .expect(400);
-    expect(bare.body.error).toContain("desired state not found");
+    expect(bare.body.error).toContain("configured shared pool member");
 
     const response = await request(app)
       .patch("/onboarding-placement")
       .send({ defaultGatewayId: "gw-new" })
       .expect(200);
     expect(state.config.defaultGatewayId).toBe("gw-new");
+    expect(state.config.sharedGatewayIds).toEqual(["gw-new", "gw-old"]);
     expect(response.body.defaultChange).toMatchObject({
       previousGatewayId: "gw-old",
       targetGatewayId: "gw-new",
-      enqueued: [{ uid: "uid-shared", operationId: "operation-1" }],
-      adopted: [{ uid: "uid-adopted", operationId: "existing-migration" }],
+      enqueued: [],
+      adopted: [],
       blocked: [],
-      ownedRuntimeUntouched: 1,
-    });
-    expect(state.operations["operation-1"]).toMatchObject({
-      kind: "migrate-customer",
-      status: "pending",
-      input: {
-        uid: "uid-shared",
-        builderSlug: "shared-builder",
-        fromGatewayId: "gw-old",
-        toGatewayId: "gw-new",
-        source: "platform-default-change",
-      },
+      ownedRuntimeUntouched: 0,
     });
     const migrationAudits = Object.values(state.operations).filter((operation) =>
       (operation as { recordType?: unknown }).recordType === "audit" &&
       (operation as { mutation?: { kind?: unknown } }).mutation?.kind === "migrate-customer",
     );
-    expect(migrationAudits).toEqual([
-      expect.objectContaining({
-        status: "completed",
-        target: { uid: "uid-shared", gatewayId: "gw-new" },
-      }),
-    ]);
+    expect(migrationAudits).toEqual([]);
   });
 
-  it("moves a legacy non-disposable owner root to the new shared default", async () => {
+  it("does not move a legacy non-disposable owner root when the primary changes", async () => {
     const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-old" },
+      config: { defaultGatewayId: "gw-old", sharedGatewayIds: ["gw-old", "gw-new"] },
       users: {
         "uid-legacy": {
           username: "legacy-builder",
@@ -2018,19 +2013,12 @@ describe("onboarding placement (post-cohorts)", () => {
       .expect(200);
 
     expect(response.body.defaultChange).toMatchObject({
-      enqueued: [{ uid: "uid-legacy", operationId: "operation-1" }],
+      enqueued: [],
       ownedRuntimeUntouched: 0,
     });
-    expect(state.operations["operation-1"]).toMatchObject({
-      kind: "migrate-customer",
-      input: {
-        uid: "uid-legacy",
-        builderSlug: "legacy-builder",
-        fromGatewayId: "legacy-owner",
-        toGatewayId: "gw-new",
-        source: "platform-default-change",
-      },
-    });
+    expect(Object.values(state.operations).filter((operation) =>
+      (operation as { kind?: unknown }).kind === "migrate-customer",
+    )).toEqual([]);
   });
 
   it("ignores retired override data and exposes no override API", async () => {
@@ -2051,7 +2039,10 @@ describe("onboarding placement (post-cohorts)", () => {
 
     const res = await request(app).get("/onboarding-placement").expect(200);
 
-    expect(res.body.config).toEqual({ defaultGatewayId: "gw-default" });
+    expect(res.body.config).toEqual({
+      defaultGatewayId: "gw-default",
+      sharedGatewayIds: ["gw-default"],
+    });
     expect(res.body).not.toHaveProperty("overrides");
     expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");
 
@@ -2123,6 +2114,44 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.driftSummary).toMatchObject({
       healthy: 1,
       "pointer-drift": 0,
+    });
+  });
+
+  it("treats an assignment on a non-primary shared pool member as authoritative", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {
+        defaultGatewayId: "default-blue",
+        sharedGatewayIds: ["default-blue", "default-green"],
+      },
+      users: {
+        "uid-bob": {
+          username: "bob",
+          provisioning: { openclaw: { slug: "bob", gatewayId: "default-green" } },
+        },
+      },
+      glmGateways: {
+        "default-blue": {
+          gatewayId: "default-blue",
+          gatewayClass: "shared",
+          desiredStatus: "running",
+          heartbeat: { status: "ready", mountedCustomers: [] },
+        },
+        "default-green": {
+          gatewayId: "default-green",
+          gatewayClass: "shared",
+          desiredStatus: "running",
+          heartbeat: { status: "ready", mountedCustomers: ["bob"] },
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.customers[0]).toMatchObject({
+      policyTargetGatewayId: "default-green",
+      assignedGatewayId: "default-green",
+      mountedGatewayId: "default-green",
+      driftState: "healthy",
     });
   });
 

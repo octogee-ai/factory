@@ -248,6 +248,11 @@ import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import { completeHealthyBootstrapAddGatewayOperations } from "./bootstrap-add-gateway-recovery.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
+import {
+  bootstrapSharedGatewayPool,
+  parseDeclaredSharedGatewayIds,
+  startSharedGatewayPoolReconciler,
+} from "./shared-gateway-pool-bootstrap.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   createFirestoreMaintenanceGate,
@@ -273,6 +278,7 @@ const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const MIGRATE_CUSTOMER_KIND = "migrate-customer";
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
+const SHARED_GATEWAY_POOL_RECONCILE_MS = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
 
@@ -1862,6 +1868,7 @@ function startControllerBackgroundTasks({
       log,
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
+      readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
       maintenanceGate: deps.maintenanceGate,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
@@ -2158,6 +2165,14 @@ async function main(): Promise<void> {
 
   await bootstrapGlmGateways(deps);
   await bootstrapDefaultGateway(deps);
+  await bootstrapSharedGatewayPool({
+    db,
+    namespace: NAMESPACE,
+    declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
+    ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
+    log: deps.log,
+    now: () => Date.now(),
+  });
 
   if (await controllerWorkFrozen(deps, "orphan-op resume")) {
     holdFrozenController(maintenanceGate, log);
@@ -2207,6 +2222,16 @@ async function main(): Promise<void> {
     helm: deps.helm,
     fleetControllerPrivateKey,
   });
+  stoppers.push(
+    startSharedGatewayPoolReconciler({
+      db,
+      namespace: NAMESPACE,
+      declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
+      ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
+      log: deps.log,
+      now: () => Date.now(),
+    }, SHARED_GATEWAY_POOL_RECONCILE_MS),
+  );
   stoppers.push(
     startMaintenanceRestartWatcher({
       gate: maintenanceGate,

@@ -3,6 +3,7 @@ import type {
   QueryDocumentSnapshot,
   Transaction,
 } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 
 import {
   GatewayRetirementConflictError,
@@ -22,10 +23,23 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
+  hasFreshReadyKubernetesObservation,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
   type PlacementFirestore,
 } from "@octogee/shared/types/gateway-releases";
+import {
+  parseSharedGatewayPoolConfig,
+  planSharedGatewayRebalance,
+  selectSharedGateway,
+  type SharedGatewayPoolCandidate,
+} from "@octogee/shared/types/shared-gateway-pool";
+import {
+  commitUnavailableGatewayRecoveryAtomic,
+  type FleetStateFirestore,
+  type UnavailableGatewayRecoveryParams,
+  type UnavailableGatewayRecoveryTargetValidationContext,
+} from "@octogee/core/fleet-state";
 import {
   resolveContinuousBuilderPlacement,
   resolveLiveActivationTargetGatewayId,
@@ -50,6 +64,7 @@ const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
 const BUILDER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
 const DISPOSABLE_BUILDER_ALLOCATION_KIND = "disposable-builder";
 const ROLLED_BACK_STATUS = "rolled-back";
+const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
 export interface PlacementPolicyUser {
   uid: string;
@@ -67,12 +82,51 @@ export interface PlacementPolicyMigration {
   error?: string;
 }
 
+export type PlacementPolicyKubernetesStatus = "ready" | "not-ready" | "missing" | "unknown";
+
+export interface PlacementPolicyPodDiagnostics {
+  status: string;
+  totalPods: number;
+  readyPods: number;
+  error?: string;
+}
+
+export function placementKubernetesStatus(
+  diagnostics: PlacementPolicyPodDiagnostics | undefined,
+): PlacementPolicyKubernetesStatus {
+  if (!diagnostics || diagnostics.error) return "unknown";
+  if (diagnostics.status === "unknown") return "unknown";
+  if (diagnostics.totalPods === 0) return "missing";
+  if (diagnostics.totalPods > 0 && diagnostics.readyPods > 0) return "ready";
+  if (diagnostics.totalPods > 0) return "not-ready";
+  return "unknown";
+}
+
+export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway {
+  kubernetesStatus?: PlacementPolicyKubernetesStatus;
+  serving?: boolean;
+  heartbeatFresh?: boolean;
+  liveReleaseReady?: boolean;
+  rosterComplete?: boolean;
+  assignmentCount?: number;
+}
+
+export interface PlacementPolicyAssignment {
+  uid: string;
+  slug: string;
+  gatewayId: string;
+  state: string;
+  epoch: number | null;
+}
+
 export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
+  sharedGatewayIds: readonly string[];
   idleMs: number;
   liveRunBuilderSlugs: string[];
   users: PlacementPolicyUser[];
-  gateways: ContinuousPlacementOwnedGateway[];
+  gateways: PlacementPolicyGateway[];
+  assignments: PlacementPolicyAssignment[];
   activeMigrations: PlacementPolicyMigration[];
 }
 
@@ -128,7 +182,10 @@ export interface RecoverUnreachableDisposableGatewayInput {
   leaseId: string;
   generation: number;
   authoritativeGatewayId: string;
+  sourceUnavailable?: boolean;
 }
+
+export interface RecoverUnavailableGatewayInput extends UnavailableGatewayRecoveryParams {}
 
 export interface BuilderRuntimeActivity {
   lastActiveAt: number | null;
@@ -169,6 +226,7 @@ export interface PlacementPolicyReconcilerDeps {
   advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
   failActivationLease(input: FailActivationLeaseInput): Promise<void>;
+  recoverUnavailableGateway(input: RecoverUnavailableGatewayInput): Promise<{ operationId: string }>;
   recoverUnreachableDisposableGateway(
     input: RecoverUnreachableDisposableGatewayInput,
   ): Promise<{ recovered: boolean; operationId: string }>;
@@ -265,9 +323,11 @@ function builderActivationLease(data: Record<string, unknown>): BuilderActivatio
 interface PlacementPolicyReconcileContext {
   deps: PlacementPolicyReconcilerDeps;
   state: PlacementPolicySnapshot;
-  gateways: Map<string, ContinuousPlacementOwnedGateway>;
+  gateways: Map<string, PlacementPolicyGateway>;
   migrations: Map<string, PlacementPolicyMigration>;
   operations: Map<string, PlacementPolicyMigration>;
+  assignments: Map<string, PlacementPolicyAssignment>;
+  admittedSharedGatewayIds: Set<string>;
   result: PlacementPolicyReconcileResult;
   mutations: number;
   mutationLimitLogged: boolean;
@@ -307,6 +367,102 @@ function blockPlacement(
   );
 }
 
+function placementAssignmentKey(gatewayId: string, uid: string): string {
+  return `${gatewayId}\u0000${uid}`;
+}
+
+function kubernetesReady(gateway: PlacementPolicyGateway): boolean {
+  return gateway.kubernetesStatus === undefined
+    ? gateway.ready
+    : gateway.kubernetesStatus === "ready";
+}
+
+function knownKubernetesUnavailable(gateway: PlacementPolicyGateway | undefined): boolean {
+  return gateway?.kubernetesStatus === "missing" || gateway?.kubernetesStatus === "not-ready";
+}
+
+function gatewayRuntimeServing(gateway: PlacementPolicyGateway): boolean {
+  return gateway.serving ?? gateway.ready;
+}
+
+function gatewayHeartbeatFresh(gateway: PlacementPolicyGateway): boolean {
+  return gateway.heartbeatFresh ?? gateway.ready;
+}
+
+function gatewayLiveReleaseReady(gateway: PlacementPolicyGateway): boolean {
+  return gateway.liveReleaseReady ?? gateway.ready;
+}
+
+function isSharedPoolGateway(
+  context: PlacementPolicyReconcileContext,
+  gatewayId: string | null,
+): boolean {
+  return gatewayId !== null && context.state.sharedGatewayIds.includes(gatewayId);
+}
+
+function sharedGatewayCandidates(
+  context: PlacementPolicyReconcileContext,
+): SharedGatewayPoolCandidate[] {
+  return context.state.gateways.map((gateway) => {
+    const incomingMigrationCount = context.state.activeMigrations.filter(
+      (operation) =>
+        (operation.status === "pending" || operation.status === "running") &&
+        operation.toGatewayId === gateway.gatewayId,
+    ).length;
+    const assignmentCount = gateway.assignmentCount ?? context.state.assignments.filter(
+      (assignment) => assignment.gatewayId === gateway.gatewayId,
+    ).length;
+    return {
+      gatewayId: gateway.gatewayId,
+      gatewayClass: gateway.gatewayClass,
+      desiredStatus: gateway.desiredStatus,
+      managedBy: gateway.managedBy,
+      ready: kubernetesReady(gateway),
+      serving: gatewayRuntimeServing(gateway),
+      heartbeatFresh: gatewayHeartbeatFresh(gateway),
+      liveReleaseReady: gatewayLiveReleaseReady(gateway),
+      rosterComplete: gateway.rosterComplete ?? true,
+      converging: incomingMigrationCount > 0 || context.admittedSharedGatewayIds.has(gateway.gatewayId),
+      incomingMigrationCount,
+      assignmentCount,
+    };
+  });
+}
+
+function selectAcceptingSharedGateway(
+  context: PlacementPolicyReconcileContext,
+  uid: string,
+  currentGatewayId?: string | null,
+): string | null {
+  const selection = selectSharedGateway({
+    uid,
+    config: {
+      defaultGatewayId: context.state.defaultGatewayId,
+      sharedGatewayIds: context.state.sharedGatewayIds,
+    },
+    candidates: sharedGatewayCandidates(context),
+    ...(currentGatewayId === undefined ? {} : { currentGatewayId }),
+  });
+  return selection.kind === "selected" ? selection.gatewayId : null;
+}
+
+function sharedAuthorityGatewayId(
+  context: PlacementPolicyReconcileContext,
+  currentGatewayId: string | null,
+): string | null {
+  if (isSharedPoolGateway(context, currentGatewayId)) return currentGatewayId;
+  return selectAcceptingSharedGateway(context, "placement-policy-authority");
+}
+
+function admitSharedGateway(
+  context: PlacementPolicyReconcileContext,
+  gatewayId: string,
+): void {
+  if (isSharedPoolGateway(context, gatewayId)) {
+    context.admittedSharedGatewayIds.add(gatewayId);
+  }
+}
+
 async function retireUnentitledOwnedGateways(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
@@ -326,7 +482,10 @@ async function retireUnentitledOwnedGateways(
       gatewayId: gateway.gatewayId,
       ...(gateway.disposable ? {} : {
         legacyNonDisposable: true,
-        authoritativeGatewayId: context.state.defaultGatewayId,
+        authoritativeGatewayId: sharedAuthorityGatewayId(
+          context,
+          currentGatewayId(user.data),
+        ) ?? context.state.defaultGatewayId,
       }),
     });
     if (retired) context.result.retired += 1;
@@ -362,16 +521,26 @@ async function reconcileLegacyOwnerLease(
   current: string | null,
   target: ContinuousPlacementOwnedGateway,
 ): Promise<void> {
-  if (current !== context.state.defaultGatewayId) {
-    if (adoptActiveMigration(context, user.uid, context.state.defaultGatewayId)) return;
+  const sharedGatewayId = sharedAuthorityGatewayId(context, current);
+  if (!sharedGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "no-accepting-shared-gateway",
+      reason: "no configured shared gateway can receive the legacy owner runtime",
+    });
+    return;
+  }
+  if (current !== sharedGatewayId) {
+    if (adoptActiveMigration(context, user.uid, sharedGatewayId)) return;
     if (!claimPlacementMutation(context)) return;
     await context.deps.enqueueMigration({
       uid: user.uid,
       builderSlug,
       fromGatewayId: current ?? target.gatewayId,
-      toGatewayId: context.state.defaultGatewayId,
+      toGatewayId: sharedGatewayId,
       source: "continuous-placement-policy",
     });
+    admitSharedGateway(context, sharedGatewayId);
     context.result.enqueued += 1;
     return;
   }
@@ -381,7 +550,7 @@ async function reconcileLegacyOwnerLease(
     builderSlug,
     gatewayId: target.gatewayId,
     legacyNonDisposable: true,
-    authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeGatewayId: sharedGatewayId,
   });
   if (retired) {
     context.result.retired += 1;
@@ -409,6 +578,7 @@ async function assignMissingPlacement(
     gatewayId: placement.targetGatewayId,
     gateway: targetGateway,
   });
+  admitSharedGateway(context, placement.targetGatewayId);
   context.result.assigned += 1;
 }
 
@@ -472,6 +642,67 @@ function disposableTargetMatchesLease(
     disposableTargetIdentityMatchesLease(gateway, user, lease);
 }
 
+async function reconcileUnavailableServingGateway(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  currentGatewayId: string | null,
+): Promise<boolean> {
+  const source = currentGatewayId ? context.gateways.get(currentGatewayId) : null;
+  if (!source || !knownKubernetesUnavailable(source)) return false;
+
+  const assignment = context.assignments.get(
+    placementAssignmentKey(source.gatewayId, user.uid),
+  );
+  if (!assignment || assignment.state !== "serving" || assignment.epoch === null) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "unavailable-source-assignment-fence",
+      reason: `source ${source.gatewayId} has no exact serving assignment epoch`,
+    });
+    return true;
+  }
+
+  const lease = builderActivationLease(user.data);
+  const kind = isSharedPoolGateway(context, source.gatewayId) && source.gatewayClass === "shared"
+    ? "recover-shared-customer" as const
+    : lease?.status === "active" && disposableTargetIdentityMatchesLease(source, user, lease)
+      ? "recover-disposable-customer" as const
+      : null;
+  if (!kind) return false;
+
+  const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, source.gatewayId);
+  if (!targetGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease: lease ?? undefined,
+      code: "no-accepting-shared-gateway",
+      reason: `source ${source.gatewayId} has known Kubernetes status ${source.kubernetesStatus}`,
+    });
+    return true;
+  }
+  if (!claimPlacementMutation(context)) return true;
+  const operationId = kind === "recover-shared-customer"
+    ? `recover-shared-${user.uid}-${source.gatewayId}-${assignment.epoch}`
+    : `recover-disposable-${user.uid}-${source.gatewayId}-${assignment.epoch}`;
+  await context.deps.recoverUnavailableGateway({
+    operationId,
+    kind,
+    uid: user.uid,
+    slug: builderSlug,
+    fromGatewayId: source.gatewayId,
+    toGatewayId: targetGatewayId,
+    expectedSourceEpoch: assignment.epoch,
+    sharedGatewayIds: context.state.sharedGatewayIds,
+    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
+    ...(kind === "recover-disposable-customer"
+      ? { disposableLease: { leaseId: lease!.leaseId, generation: lease!.generation } }
+      : {}),
+  });
+  admitSharedGateway(context, targetGatewayId);
+  return true;
+}
+
 function authoritativeLeaseStatus(
   lease: BuilderActivationLease,
 ): AuthoritativeLeaseStatus {
@@ -488,13 +719,27 @@ async function recoverAndRetireUnreachableTarget(
   target: ContinuousPlacementOwnedGateway,
 ): Promise<string | null> {
   if (!claimPlacementMutation(context)) return null;
+  const authoritativeGatewayId = sharedAuthorityGatewayId(
+    context,
+    currentGatewayId(user.data),
+  );
+  if (!authoritativeGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "no-accepting-shared-gateway",
+      reason: "no configured shared gateway is authoritative for disposable cleanup",
+    });
+    return null;
+  }
   const recovery = await context.deps.recoverUnreachableDisposableGateway({
     uid: user.uid,
     builderSlug,
     gatewayId: target.gatewayId,
     leaseId: lease.leaseId,
     generation: lease.generation,
-    authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeGatewayId,
+    ...(lease.raw.returnReason === "source-unavailable" ? { sourceUnavailable: true } : {}),
   });
   if (!recovery.recovered) {
     blockPlacement(context, {
@@ -511,7 +756,7 @@ async function recoverAndRetireUnreachableTarget(
     gatewayId: target.gatewayId,
     leaseId: lease.leaseId,
     generation: lease.generation,
-    authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeGatewayId,
     authoritativeLeaseStatus: authoritativeLeaseStatus(lease),
     zeroWorkloadRecoveryOperationId: recovery.operationId,
   });
@@ -534,12 +779,12 @@ async function cleanupUnreachableProvisioningTarget(
   const { context, user, builderSlug, current, lease, target } = input;
   if (target.desiredStatus === "running" && target.ready) return false;
   if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
-  if (current !== context.state.defaultGatewayId) {
+  if (!isSharedPoolGateway(context, current)) {
     blockPlacement(context, {
       uid: user.uid,
       lease,
       code: "unreachable-target-authority-fence",
-      reason: `Builder is assigned to ${current ?? "missing"}, not ${context.state.defaultGatewayId}`,
+      reason: `Builder is assigned to ${current ?? "missing"}, not a configured shared gateway`,
     });
     return true;
   }
@@ -630,7 +875,10 @@ async function cleanupUnauthorizedProvisioningTarget(
         gatewayId: target.gatewayId,
         leaseId: lease.leaseId,
         generation: lease.generation,
-        authoritativeGatewayId: context.state.defaultGatewayId,
+        authoritativeGatewayId: sharedAuthorityGatewayId(
+          context,
+          currentGatewayId(user.data),
+        ) ?? context.state.defaultGatewayId,
         authoritativeLeaseStatus: "provisioning",
       })
     : Boolean(await recoverAndRetireUnreachableTarget(
@@ -672,7 +920,7 @@ async function advanceReadyProvisioningTarget(
       id: operationId,
       uid: user.uid,
       builderSlug,
-      fromGatewayId: current ?? context.state.defaultGatewayId,
+      fromGatewayId: current ?? sharedAuthorityGatewayId(context, null) ?? context.state.defaultGatewayId,
       toGatewayId: target.gatewayId,
     })) {
       blockPlacement(context, {
@@ -698,7 +946,7 @@ async function advanceReadyProvisioningTarget(
   const enqueuedOperationId = await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
-    fromGatewayId: current ?? context.state.defaultGatewayId,
+    fromGatewayId: current ?? sharedAuthorityGatewayId(context, null) ?? context.state.defaultGatewayId,
     toGatewayId: target.gatewayId,
     source: BUILDER_ACTIVATION_LEASE_SOURCE,
     operationId,
@@ -845,8 +1093,7 @@ async function cleanupFailedActivation(
     return false;
   }
   if (target.desiredStatus !== "retired") {
-    const recoveredRetirement =
-      current === context.state.defaultGatewayId && !target.ready;
+    const recoveredRetirement = isSharedPoolGateway(context, current) && !target.ready;
     const retired = recoveredRetirement
       ? Boolean(await recoverAndRetireUnreachableTarget(
           context,
@@ -900,8 +1147,8 @@ async function queueLeaseReturn(
       uid: user.uid,
       builderSlug,
       fromGatewayId: targetGatewayId,
-      toGatewayId: context.state.defaultGatewayId,
-    })) {
+      toGatewayId: active.toGatewayId,
+    }) || !isSharedPoolGateway(context, active.toGatewayId)) {
       blockPlacement(context, {
         uid: user.uid,
         lease,
@@ -921,15 +1168,26 @@ async function queueLeaseReturn(
     });
     return;
   }
+  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid);
+  if (!sharedGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "no-accepting-shared-gateway",
+      reason: "no configured shared gateway can receive the returning Builder",
+    });
+    return;
+  }
   if (!claimPlacementMutation(context)) return;
   const operationId = await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
     fromGatewayId: targetGatewayId,
-    toGatewayId: context.state.defaultGatewayId,
+    toGatewayId: sharedGatewayId,
     source: BUILDER_ACTIVATION_LEASE_SOURCE,
     operationId: `builder-return-${targetGatewayId}`,
   });
+  admitSharedGateway(context, sharedGatewayId);
   context.result.enqueued += 1;
   await context.deps.advanceActivationLease({
     uid: user.uid,
@@ -946,7 +1204,8 @@ function completedReturnMigration(input: ActivationTargetContext): PlacementPoli
   const operationId = `builder-return-${lease.targetGatewayId!}`;
   const operation = context.operations.get(operationId);
   if (
-    current !== context.state.defaultGatewayId ||
+    !isSharedPoolGateway(context, current) ||
+    current !== operation?.toGatewayId ||
     operation?.status !== "succeeded" ||
     !disposableTargetIdentityMatchesLease(target, user, lease) ||
     !activationMigrationMatches(operation, {
@@ -954,7 +1213,7 @@ function completedReturnMigration(input: ActivationTargetContext): PlacementPoli
       uid: user.uid,
       builderSlug,
       fromGatewayId: target.gatewayId,
-      toGatewayId: context.state.defaultGatewayId,
+      toGatewayId: operation?.toGatewayId ?? "",
     })
   ) {
     return null;
@@ -1064,8 +1323,8 @@ async function reconcileReturnMigrationOnTarget(
       uid: user.uid,
       builderSlug,
       fromGatewayId: targetGatewayId,
-      toGatewayId: context.state.defaultGatewayId,
-    })) {
+      toGatewayId: active.toGatewayId,
+    }) && isSharedPoolGateway(context, active.toGatewayId)) {
       context.result.adopted += 1;
     } else {
       blockPlacement(context, {
@@ -1077,15 +1336,26 @@ async function reconcileReturnMigrationOnTarget(
     }
     return true;
   }
+  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid);
+  if (!sharedGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "no-accepting-shared-gateway",
+      reason: "no configured shared gateway can receive the returning Builder",
+    });
+    return true;
+  }
   if (!claimPlacementMutation(context)) return true;
   await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
     fromGatewayId: targetGatewayId,
-    toGatewayId: context.state.defaultGatewayId,
+    toGatewayId: sharedGatewayId,
     source: BUILDER_ACTIVATION_LEASE_SOURCE,
     operationId,
   });
+  admitSharedGateway(context, sharedGatewayId);
   context.result.enqueued += 1;
   return true;
 }
@@ -1104,7 +1374,11 @@ async function completeReturnedLease(
     });
     return;
   }
-  if (!target.ready || target.desiredStatus === "paused") {
+  if (
+    lease.raw.returnReason === "source-unavailable" ||
+    !target.ready ||
+    target.desiredStatus === "paused"
+  ) {
     const recoveryOperationId = await recoverAndRetireUnreachableTarget(
       context,
       user,
@@ -1143,7 +1417,10 @@ async function completeReturnedLease(
           telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
           telemetryFenceStatus: "succeeded" as const,
         }),
-    authoritativeGatewayId: context.state.defaultGatewayId,
+    authoritativeGatewayId: sharedAuthorityGatewayId(
+      context,
+      currentGatewayId(user.data),
+    ) ?? context.state.defaultGatewayId,
   });
   if (!retired) {
     blockPlacement(context, {
@@ -1187,12 +1464,12 @@ async function reconcileReturningLease(
   }
   const targetInput = { context, user, builderSlug, current, lease, target };
   if (await reconcileReturnMigrationOnTarget(targetInput)) return;
-  if (current !== context.state.defaultGatewayId) {
+  if (!isSharedPoolGateway(context, current)) {
     blockPlacement(context, {
       uid: user.uid,
       lease,
       code: "return-authority-fence",
-      reason: `Builder is assigned to ${current ?? "missing"}, not ${context.state.defaultGatewayId}`,
+      reason: `Builder is assigned to ${current ?? "missing"}, not a configured shared gateway`,
     });
     return;
   }
@@ -1262,12 +1539,13 @@ async function reconcileEligibleBuilder(
     });
     return;
   }
+  if (await reconcileUnavailableServingGateway(context, user, builderSlug, current)) return;
   if (await reconcileActivationLease(context, user, builderSlug, current)) return;
   const entitledOwned = resolveLiveActivationTargetGatewayId({
     userData: user.data,
     now: new Date(context.deps.now()),
   });
-  const placement = resolveContinuousBuilderPlacement({
+  const resolvedPlacement = resolveContinuousBuilderPlacement({
     uid: user.uid,
     userData: user.data,
     currentGatewayId: current,
@@ -1275,6 +1553,22 @@ async function reconcileEligibleBuilder(
     ownedGateway: entitledOwned ? context.gateways.get(entitledOwned) ?? null : null,
     now: new Date(context.deps.now()),
   });
+  const activeMigration = context.migrations.get(user.uid);
+  const targetGatewayId = resolvedPlacement.ownedGatewayId === null &&
+      activeMigration && isSharedPoolGateway(context, activeMigration.toGatewayId)
+    ? activeMigration.toGatewayId
+    : resolvedPlacement.ownedGatewayId === null
+      ? selectAcceptingSharedGateway(context, user.uid, current)
+      : resolvedPlacement.targetGatewayId;
+  if (!targetGatewayId) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "no-accepting-shared-gateway",
+      reason: "no configured shared gateway is accepting placement",
+    });
+    return;
+  }
+  const placement = { ...resolvedPlacement, targetGatewayId };
   await reconcileResolvedPlacement(context, user, builderSlug, current, placement);
 }
 
@@ -1299,8 +1593,20 @@ async function reconcileResolvedPlacement(
     return;
   }
   if (placement.targetGatewayId === current) {
-    if (placement.ownedGatewayId === null && current === context.state.defaultGatewayId) {
+    if (placement.ownedGatewayId === null && isSharedPoolGateway(context, current)) {
       await retireUnentitledOwnedGateways(context, user, builderSlug);
+    }
+    return;
+  }
+  if (placement.ownedGatewayId === null && isSharedPoolGateway(context, current)) {
+    const source = context.gateways.get(current);
+    if (!source || !kubernetesReady(source)) {
+      blockPlacement(context, {
+        uid: user.uid,
+        code: "shared-source-not-ready",
+        reason: `source ${current} is not known Kubernetes Ready`,
+      });
+      return;
     }
     return;
   }
@@ -1313,6 +1619,7 @@ async function reconcileResolvedPlacement(
     toGatewayId: placement.targetGatewayId,
     source: "continuous-placement-policy",
   });
+  admitSharedGateway(context, placement.targetGatewayId);
   context.result.enqueued += 1;
 }
 
@@ -1330,6 +1637,49 @@ async function reconcilePlacementUser(
   await reconcileEligibleBuilder(context, user, eligibility.slug);
 }
 
+async function reconcileSharedGatewayRebalance(
+  context: PlacementPolicyReconcileContext,
+): Promise<void> {
+  const plan = planSharedGatewayRebalance({
+    config: {
+      defaultGatewayId: context.state.defaultGatewayId,
+      sharedGatewayIds: context.state.sharedGatewayIds,
+    },
+    candidates: sharedGatewayCandidates(context),
+  });
+  if (!plan) return;
+  for (const user of [...context.state.users].sort((left, right) => left.uid.localeCompare(right.uid))) {
+    const userGatewayId = currentGatewayId(user.data);
+    if (userGatewayId !== plan.fromGatewayId) continue;
+    if (isOperatorManaged(record(record(user.data.provisioning)?.openclaw)?.managedBy)) continue;
+    const eligibility = resolveOnboardingPlacementEligibility(user.data);
+    if (!eligibility.eligible || builderActivationLease(user.data)) continue;
+    const assignment = context.assignments.get(
+      placementAssignmentKey(plan.fromGatewayId, user.uid),
+    );
+    if (!assignment || assignment.state !== "serving") continue;
+    if (context.migrations.has(user.uid)) {
+      blockPlacement(context, {
+        uid: user.uid,
+        code: "migration-target-conflict",
+        reason: "an active migration owns this Builder's target",
+      });
+      continue;
+    }
+    if (!claimPlacementMutation(context)) return;
+    await context.deps.enqueueMigration({
+      uid: user.uid,
+      builderSlug: eligibility.slug,
+      fromGatewayId: plan.fromGatewayId,
+      toGatewayId: plan.toGatewayId,
+      source: "continuous-placement-policy",
+    });
+    admitSharedGateway(context, plan.toGatewayId);
+    context.result.enqueued += 1;
+    return;
+  }
+}
+
 export async function reconcilePlacementPolicyOnce(
   deps: PlacementPolicyReconcilerDeps,
 ): Promise<PlacementPolicyReconcileResult> {
@@ -1342,7 +1692,14 @@ export async function reconcilePlacementPolicyOnce(
   };
   if (await placementMaintenanceFrozen(deps)) return result;
   const state = await deps.readSnapshot();
-  if (!state.defaultGatewayId) throw new Error("placement policy default gateway is missing");
+  const pool = parseSharedGatewayPoolConfig({
+    defaultGatewayId: state.defaultGatewayId,
+    sharedGatewayIds: state.sharedGatewayIds,
+  });
+  if (!pool) {
+    deps.log("[placement-policy] disabled: config/orchestrator shared gateway pool is invalid");
+    return result;
+  }
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
   const unknownMirrorGatewayIds = state.users
     .flatMap((user) => {
@@ -1362,6 +1719,12 @@ export async function reconcilePlacementPolicyOnce(
       .map((item) => [item.uid, item]),
   );
   const operations = new Map(state.activeMigrations.map((item) => [item.id, item]));
+  const assignments = new Map(
+    state.assignments.map((assignment) => [
+      placementAssignmentKey(assignment.gatewayId, assignment.uid),
+      assignment,
+    ]),
+  );
 
   const context = {
     deps,
@@ -1369,6 +1732,8 @@ export async function reconcilePlacementPolicyOnce(
     gateways,
     migrations,
     operations,
+    assignments,
+    admittedSharedGatewayIds: new Set<string>(),
     result,
     mutations: 0,
     mutationLimitLogged: false,
@@ -1382,6 +1747,14 @@ export async function reconcilePlacementPolicyOnce(
         `[placement-policy] ${user.uid}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+  try {
+    await reconcileSharedGatewayRebalance(context);
+  } catch (error) {
+    result.blocked += 1;
+    deps.log(
+      `[placement-policy] shared rebalance: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   return result;
 }
@@ -1470,14 +1843,18 @@ interface FirestorePlacementPolicyInput {
     totalPods: number;
     error?: string;
   }>;
+  readGatewayPodDiagnosticsBatch(input: {
+    namespace: string;
+    gatewayIds: readonly string[];
+  }): Promise<Record<string, PlacementPolicyPodDiagnostics>>;
 }
 
 async function readPlacementPolicySnapshot(
-  db: Firestore,
-  fallbackIdleMs: number,
-  now: number,
+  input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
-  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap, liveRunsSnap] =
+  const { db, idleMs: fallbackIdleMs, now: nowFn } = input;
+  const now = nowFn();
+  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap, liveRunsSnap, assignmentsSnap] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
       db.collection("users").get(),
@@ -1487,16 +1864,18 @@ async function readPlacementPolicySnapshot(
         .where("status", "in", ["pending", "running", "failed", ROLLED_BACK_STATUS])
         .get(),
       db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
+      db.collectionGroup("assignments").get(),
     ]);
-  const defaultGatewayId = nonEmptyString(configSnap.data()?.defaultGatewayId);
-  if (!defaultGatewayId) throw new Error("config/orchestrator.defaultGatewayId is missing");
+  const pool = parseSharedGatewayPoolConfig(configSnap.data());
+  if (!pool) throw new Error("config/orchestrator shared gateway pool is invalid");
+  const { defaultGatewayId, sharedGatewayIds } = pool;
   const completedReturnRefs = usersSnap.docs.flatMap((doc) => {
     const userData = doc.data() as Record<string, unknown>;
     const lease = builderActivationLease(userData);
     return (
       lease?.status === "active" &&
       lease.targetGatewayId &&
-      currentGatewayId(userData) === defaultGatewayId
+      sharedGatewayIds.includes(currentGatewayId(userData) ?? "")
     )
       ? [
           db.collection(GLM_OPERATIONS_COLLECTION)
@@ -1512,6 +1891,48 @@ async function readPlacementPolicySnapshot(
     ? configuredIdleMs
     : fallbackIdleMs;
   const runtimes = docsById(runtimeSnap.docs);
+  const kubernetesByGatewayId = await input.readGatewayPodDiagnosticsBatch({
+    namespace: input.namespace,
+    gatewayIds: gatewaysSnap.docs.map((doc) => doc.id),
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    input.log(`[placement-policy] Kubernetes diagnostics unreadable; treating fleet as unknown: ${message}`);
+    return Object.fromEntries(gatewaysSnap.docs.map((doc) => [doc.id, {
+      status: "unknown",
+      totalPods: 0,
+      readyPods: 0,
+    }]));
+  });
+  const observationBatch = db.batch();
+  let observationWrites = 0;
+  for (const runtimeDocument of runtimeSnap.docs) {
+    const diagnostics = kubernetesByGatewayId[runtimeDocument.id];
+    const status = placementKubernetesStatus(diagnostics);
+    observationBatch.set(runtimeDocument.ref, {
+      kubernetes: {
+        status,
+        totalPods: diagnostics?.totalPods ?? 0,
+        readyPods: diagnostics?.readyPods ?? 0,
+        observedAt: now,
+      },
+    }, { merge: true });
+    observationWrites += 1;
+  }
+  if (observationWrites > 0) await observationBatch.commit();
+  const assignments = assignmentsSnap.docs.flatMap((doc): PlacementPolicyAssignment[] => {
+    const data = doc.data() as Record<string, unknown>;
+    const gatewayId = nonEmptyString(data.gatewayId) ?? doc.ref.parent.parent?.id ?? null;
+    const uid = nonEmptyString(data.uid) ?? doc.id;
+    const slug = nonEmptyString(data.slug);
+    const state = nonEmptyString(data.state);
+    const rawEpoch = data.epoch;
+    const epoch = typeof rawEpoch === "number" &&
+      Number.isSafeInteger(rawEpoch) && rawEpoch >= 0
+      ? rawEpoch
+      : null;
+    if (!gatewayId || !uid || !slug || !state) return [];
+    return [{ uid, slug, gatewayId, state, epoch }];
+  });
   const gateways = gatewaysSnap.docs.flatMap((doc) => {
     const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
     if (!root) return [];
@@ -1519,6 +1940,21 @@ async function readPlacementPolicySnapshot(
     const heartbeatAt = isGatewayRuntimeDoc(runtime)
       ? millis(runtime.heartbeat.lastHeartbeatAt)
       : null;
+    const runtimeReady = isGatewayRuntimeDoc(runtime) &&
+      runtime.gatewayId === doc.id &&
+      root.liveRelease !== null &&
+      root.desiredRelease === root.liveRelease &&
+      runtime.release === root.liveRelease &&
+      runtime.lifecycle === "serving" &&
+      runtime.heartbeat.status === "ready" &&
+      heartbeatAt !== null &&
+      now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
+    const diagnostics = kubernetesByGatewayId[doc.id];
+    const kubernetesStatus = placementKubernetesStatus(diagnostics);
+    const assigned = assignments.filter((assignment) => assignment.gatewayId === doc.id);
+    const mounted = isGatewayRuntimeDoc(runtime) && Array.isArray(runtime.heartbeat.mountedCustomers)
+      ? new Set(runtime.heartbeat.mountedCustomers.filter((slug): slug is string => typeof slug === "string"))
+      : new Set<string>();
     return [{
       gatewayId: doc.id,
       gatewayClass: root.gatewayClass,
@@ -1527,27 +1963,32 @@ async function readPlacementPolicySnapshot(
       managedBy: root.managedBy,
       disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
       allocation: root.allocation ?? null,
-      ready: isGatewayRuntimeDoc(runtime) &&
-        runtime.gatewayId === doc.id &&
+      ready: runtimeReady,
+      kubernetesStatus,
+      serving: isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "serving",
+      heartbeatFresh: heartbeatAt !== null && now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS,
+      liveReleaseReady: isGatewayRuntimeDoc(runtime) &&
         root.liveRelease !== null &&
         root.desiredRelease === root.liveRelease &&
-        runtime.release === root.liveRelease &&
-        runtime.lifecycle === "serving" &&
-        runtime.heartbeat.status === "ready" &&
-        heartbeatAt !== null &&
-        now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS,
+        runtime.release === root.liveRelease,
+      rosterComplete: assigned.every((assignment) => mounted.has(assignment.slug)),
+      assignmentCount: assigned.length,
     }];
   });
-  const defaultGateway = gateways.find((gateway) => gateway.gatewayId === defaultGatewayId);
-  if (
-    !defaultGateway ||
-    defaultGateway.gatewayClass !== "shared" ||
-    defaultGateway.desiredStatus !== "running"
-  ) {
-    throw new Error(`configured default gateway ${defaultGatewayId} is unavailable`);
+  for (const gatewayId of sharedGatewayIds) {
+    const gateway = gateways.find((item) => item.gatewayId === gatewayId);
+    if (
+      !gateway ||
+      gateway.gatewayClass !== "shared" ||
+      gateway.desiredStatus !== "running" ||
+      isOperatorManaged(gateway.managedBy)
+    ) {
+      throw new Error(`configured shared gateway ${gatewayId} is not an automatic running shared root`);
+    }
   }
   return {
     defaultGatewayId,
+    sharedGatewayIds,
     idleMs,
     liveRunBuilderSlugs: [...new Set(liveRunsSnap.docs.flatMap((doc) => {
       const parts = doc.ref.path.split("/");
@@ -1555,12 +1996,83 @@ async function readPlacementPolicySnapshot(
     }))],
     users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
+    assignments,
     activeMigrations: [
       ...opsSnap.docs,
       ...completedReturnSnapshots.filter(
         (snapshot) => snapshot.exists && snapshot.data()?.status === "succeeded",
       ),
     ].flatMap((doc) => activeMigration(doc as QueryDocumentSnapshot) ?? []),
+  };
+}
+
+function recoveryRosterIsComplete(
+  assignments: ReadonlyArray<{ data(): Record<string, unknown> }>,
+  mountedCustomers: readonly string[],
+): boolean {
+  const slugs = assignments.map((document) => nonEmptyString(document.data().slug));
+  return slugs.every((slug): slug is string => slug !== null) &&
+    new Set(slugs).size === slugs.length &&
+    slugs.every((slug) => mountedCustomers.includes(slug));
+}
+
+function operationTargetsGateway(
+  document: { data(): Record<string, unknown> },
+  gatewayId: string,
+): boolean {
+  const operation = document.data();
+  if (
+    operation.kind !== "migrate-customer" ||
+    (operation.status !== "pending" && operation.status !== "running")
+  ) return false;
+  return record(operation.input)?.toGatewayId === gatewayId;
+}
+
+function unavailableRecoveryTargetFence(
+  input: FirestorePlacementPolicyInput,
+  request: UnavailableGatewayRecoveryParams,
+): (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void> {
+  return async (context) => {
+    const transaction = context.txn as unknown as Transaction;
+    const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(context.targetGatewayId);
+    const [configSnapshot, assignmentsSnapshot, operationsSnapshot] = await Promise.all([
+      transaction.get(input.db.doc(ORCHESTRATOR_CONFIG_DOC_PATH)),
+      transaction.get(gatewayRef.collection("assignments")),
+      transaction.get(
+        input.db.collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", ["pending", "running"]),
+      ),
+    ]);
+    const pool = parseSharedGatewayPoolConfig(
+      configSnapshot.exists ? configSnapshot.data() : undefined,
+    );
+    if (
+      pool === null ||
+      pool.sharedGatewayIds.length !== request.sharedGatewayIds.length ||
+      pool.sharedGatewayIds.some((gatewayId, index) => gatewayId !== request.sharedGatewayIds[index]) ||
+      !pool.sharedGatewayIds.includes(context.targetGatewayId)
+    ) {
+      throw new Error("shared gateway pool changed before unavailable-source recovery");
+    }
+    const runtime = isGatewayRuntimeDoc(context.targetRuntime) ? context.targetRuntime : null;
+    if (
+      runtime === null ||
+      !hasFreshReadyKubernetesObservation(
+        runtime,
+        input.now(),
+        request.targetHeartbeatMaxAgeMs,
+      ) ||
+      !recoveryRosterIsComplete(
+        assignmentsSnapshot.docs,
+        runtime.heartbeat.mountedCustomers,
+      ) ||
+      operationsSnapshot.docs.some((document) =>
+        operationTargetsGateway(document, context.targetGatewayId))
+    ) {
+      throw new Error(
+        `shared gateway ${context.targetGatewayId} changed before unavailable-source recovery`,
+      );
+    }
   };
 }
 
@@ -1727,7 +2239,14 @@ function recoveryAuthorityMatches(input: {
   request: RecoverUnreachableDisposableGatewayInput;
 }): boolean {
   const { userData, assignmentExists, assignment, request } = input;
-  return currentGatewayId(userData ?? {}) === request.authoritativeGatewayId &&
+  const lease = builderActivationLease(userData ?? {});
+  return (!request.sourceUnavailable || (
+    lease?.leaseId === request.leaseId &&
+    lease.generation === request.generation &&
+    lease.status === "returning" &&
+    lease.raw.returnReason === "source-unavailable"
+  )) &&
+    currentGatewayId(userData ?? {}) === request.authoritativeGatewayId &&
     assignmentExists &&
     assignment?.uid === request.uid &&
     assignment.gatewayId === request.authoritativeGatewayId &&
@@ -1777,7 +2296,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
       );
     }
     const runtime = runtimeSnapshot.data() as Record<string, unknown> | undefined;
-    if (recoveryTargetBecameReady({
+    if (!request.sourceUnavailable && recoveryTargetBecameReady({
       root,
       runtime,
       request,
@@ -2185,12 +2704,20 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     now: input.now,
     log: input.log,
     maintenanceGate: input.maintenanceGate,
-    readSnapshot: () => readPlacementPolicySnapshot(input.db, input.idleMs, input.now()),
+    readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
     completeActivationLease: (request) => completeActivationLeaseFirestore(input, request),
     failActivationLease: (request) => failActivationLeaseFirestore(input, request),
+    recoverUnavailableGateway: (request) => commitUnavailableGatewayRecoveryAtomic({
+      db: input.db as unknown as FleetStateFirestore,
+      now: () => new Date(input.now()),
+      serverTimestamp: () => FieldValue.serverTimestamp(),
+    }, {
+      ...request,
+      validateTarget: unavailableRecoveryTargetFence(input, request),
+    }),
     recoverUnreachableDisposableGateway: (request) =>
       recoverUnreachableDisposableGatewayFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),

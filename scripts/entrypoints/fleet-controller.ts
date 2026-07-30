@@ -52,6 +52,7 @@ export const SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS = [
   2_500,
   3_000,
 ] as const;
+export const FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS = 60_000;
 
 export function resolveFleetControllerEntrypointConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -130,13 +131,26 @@ export function createSystemConfigMutationGatedRpc(
   });
 }
 
+export function createFleetControllerMutationGatedRpc(
+  openclawDir: string = OPENCLAW_DIR,
+  createRpc?: typeof createGatewayRpc,
+): GatewayRpcClient {
+  const runtimeRpc = createRpc
+    ? createRpc({
+        allowLegacyGatewayTokenFallback: true,
+        callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+      })
+    : createGatewayRpc({
+        allowLegacyGatewayTokenFallback: true,
+        callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+      });
+  return createSystemConfigMutationGatedRpc(runtimeRpc, openclawDir);
+}
+
 async function main(): Promise<void> {
   const entrypointConfig = resolveFleetControllerEntrypointConfig();
   log(bootBanner("fleet-controller"));
-  const runtimeRpc = createGatewayRpc({
-    allowLegacyGatewayTokenFallback: true,
-  });
-  const rpc = createSystemConfigMutationGatedRpc(runtimeRpc, OPENCLAW_DIR);
+  const rpc = createFleetControllerMutationGatedRpc();
   const openclawVersion = probeOpenClawVersion({
     execFile: execFileSync,
     binaryPath: "/usr/local/bin/openclaw",
