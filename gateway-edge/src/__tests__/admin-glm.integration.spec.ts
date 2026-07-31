@@ -1103,22 +1103,34 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
   });
 
-  it("stays Spot-priced even when the durable root holds a residual computeClass", async () => {
+  it("defaults operator gateways to Spot even with a residual computeClass", async () => {
     seedDurableGateway("dedicated", {
       heartbeat: { status: "ready", mountedCustomers: [] },
-      root: { sizingTier: "m", computeClass: "octogee-gateway" },
+      root: {
+        gatewayClass: "operator",
+        profile: "operator",
+        imageProfile: "operator",
+        ownerUid: "uid-dedicated",
+        builderSlug: "dedicated",
+        sizingTier: "m",
+        computeClass: "octogee-gateway",
+      },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const dedicated = res.body.gateways.find((g: any) => g.gatewayId === "dedicated");
     expect(dedicated.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
-    expect(dedicated.reservation).toEqual({ type: "spot", priceMultiplier: 0.3 });
+    expect(dedicated.reservation).toEqual({
+      type: "spot",
+      priceMultiplier: 0.3,
+      source: "class-default",
+    });
     expect(dedicated.sizing.monthlyCostUsd.compute).toBeLessThan(
       dedicated.sizing.monthlyCostUsd.onDemandCompute,
     );
   });
 
-  it("defaults shared gateways to Spot pricing", async () => {
+  it("defaults shared gateways to On-Demand pricing", async () => {
     seedDurableGateway("shared", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: { sizingTier: "m" },
@@ -1127,12 +1139,13 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const res = await request(app).get("/api/admin/gateways");
     const shared = res.body.gateways.find((g: any) => g.gatewayId === "shared");
     expect(shared.reservation).toMatchObject({
-      type: "spot",
+      type: "on-demand",
+      source: "class-default",
     });
-    expect(shared.sizing.monthlyCostUsd.compute).toBeLessThan(
+    expect(shared.sizing.monthlyCostUsd.compute).toBe(
       shared.sizing.monthlyCostUsd.onDemandCompute,
     );
-    expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
+    expect(res.body.stats.fleetCost.savingsUsd).toBe(0);
   });
 
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {

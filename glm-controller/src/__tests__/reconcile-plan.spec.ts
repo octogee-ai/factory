@@ -380,7 +380,7 @@ describe("buildInstancesMap", () => {
     expect(map.default.serviceAccount).toEqual({ create: true });
   });
 
-  it("never carries a persistence knob in helm values (Spot + emptyDir only)", () => {
+  it("never carries a persistence knob in Helm values (emptyDir only)", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "bender", profile: "operator" }),
     ]);

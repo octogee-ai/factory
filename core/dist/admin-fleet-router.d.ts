@@ -9,6 +9,7 @@ export interface FleetLogger {
     warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+export type GatewayPodCapacityType = "spot" | "on-demand";
 export interface GatewayPodDiagnostic {
     name: string;
     phase: string;
@@ -17,6 +18,7 @@ export interface GatewayPodDiagnostic {
     restarts: number;
     reason: string | null;
     nodeName: string | null;
+    capacityType: GatewayPodCapacityType | null;
     ageMs: number | null;
 }
 export interface GatewayPodDiagnostics {
@@ -24,6 +26,9 @@ export interface GatewayPodDiagnostics {
     totalPods: number;
     readyPods: number;
     totalRestarts: number;
+    spotPods: number;
+    onDemandPods: number;
+    unknownCapacityPods: number;
     pods: GatewayPodDiagnostic[];
     error?: string;
 }
@@ -98,9 +103,10 @@ type ProjectedGatewayStorage = {
     accessModes: string[];
 };
 declare function projectGatewayStorage(_gatewayId: string, _glmDoc: GlmDoc | undefined): ProjectedGatewayStorage;
-export declare function projectGatewayReservation(_glmDoc: GlmDoc | undefined): {
+export declare function projectGatewayReservation(glmDoc: GlmDoc | undefined, observedCapacityType?: GatewayPodCapacityType): {
     type: GatewayPricingMode;
     priceMultiplier: number;
+    source: "kubernetes" | "class-default";
 };
 declare function projectDisposableRuntime(glmDoc: GlmDoc | undefined): {
     ownerUid: string;

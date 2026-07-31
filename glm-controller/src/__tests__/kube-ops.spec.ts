@@ -317,6 +317,18 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
           ],
         }),
       },
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: {
+                name: "gke-node-1",
+                labels: { "cloud.google.com/gke-spot": "true" },
+              },
+            },
+          ],
+        }),
+      },
     ]);
     const kube = createKubeSubprocessRunner({
       runKubectl,
@@ -339,6 +351,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
       "-o",
       "json",
     ]);
+    expect(calls[1]).toEqual(["get", "nodes", "-o", "json"]);
     expect(diagnostics).toMatchObject({
       status: "ready",
       totalPods: 1,
@@ -353,9 +366,13 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
           restarts: 3,
           reason: null,
           nodeName: "gke-node-1",
+          capacityType: "spot",
           ageMs: 120_000,
         },
       ],
+      spotPods: 1,
+      onDemandPods: 0,
+      unknownCapacityPods: 0,
     });
   });
 
@@ -381,6 +398,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
           ],
         }),
       },
+      { stdout: JSON.stringify({ items: [] }) },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
@@ -398,7 +416,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
     });
   });
 
-  it("reads every gateway's pod diagnostics with one kubectl invocation", async () => {
+  it("reads every gateway's pods and their scheduled node capacity in one batch", async () => {
     const { runKubectl, calls } = mockSubprocess([
       {
         stdout: JSON.stringify({
@@ -408,6 +426,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
                 name: "octogee-gateway-alpha-abc",
                 labels: { "gateway-instance": "alpha" },
               },
+              spec: { nodeName: "standard-node" },
               status: {
                 phase: "Running",
                 containerStatuses: [
@@ -421,6 +440,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
                 name: "octogee-gateway-bravo-def",
                 labels: { "gateway-instance": "bravo" },
               },
+              spec: { nodeName: "spot-node" },
               status: {
                 phase: "Pending",
                 containerStatuses: [
@@ -431,6 +451,19 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
                     state: { waiting: { reason: "ContainerCreating" } },
                   },
                 ],
+              },
+            },
+          ],
+        }),
+      },
+      {
+        stdout: JSON.stringify({
+          items: [
+            { metadata: { name: "standard-node", labels: {} } },
+            {
+              metadata: {
+                name: "spot-node",
+                labels: { "cloud.google.com/gke-spot": "true" },
               },
             },
           ],
@@ -455,17 +488,35 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
         "-o",
         "json",
       ],
+      ["get", "nodes", "-o", "json"],
     ]);
     expect(diagnostics).toMatchObject({
-      alpha: { status: "ready", totalPods: 1, readyPods: 1 },
+      alpha: {
+        status: "ready",
+        totalPods: 1,
+        readyPods: 1,
+        spotPods: 0,
+        onDemandPods: 1,
+        unknownCapacityPods: 0,
+      },
       bravo: {
         status: "not-ready",
         totalPods: 1,
         readyPods: 0,
         totalRestarts: 1,
-        pods: [{ reason: "ContainerCreating" }],
+        spotPods: 1,
+        onDemandPods: 0,
+        unknownCapacityPods: 0,
+        pods: [{ reason: "ContainerCreating", capacityType: "spot" }],
       },
-      charlie: { status: "missing", totalPods: 0, readyPods: 0 },
+      charlie: {
+        status: "missing",
+        totalPods: 0,
+        readyPods: 0,
+        spotPods: 0,
+        onDemandPods: 0,
+        unknownCapacityPods: 0,
+      },
     });
   });
 });

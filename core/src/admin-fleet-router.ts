@@ -131,6 +131,7 @@ export interface FleetLogger {
 }
 
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+export type GatewayPodCapacityType = "spot" | "on-demand";
 
 function rejectPersistenceInBody(body: Record<string, unknown>): {
   status: number;
@@ -141,7 +142,7 @@ function rejectPersistenceInBody(body: Record<string, unknown>): {
     status: 400,
     body: {
       error:
-        "persistence specs are rejected — all gateways are Spot + emptyDir; PVC-backed gateways are dropped",
+        "persistence specs are rejected — gateways use emptyDir; scheduling is managed independently",
     },
   };
 }
@@ -154,6 +155,7 @@ export interface GatewayPodDiagnostic {
   restarts: number;
   reason: string | null;
   nodeName: string | null;
+  capacityType: GatewayPodCapacityType | null;
   ageMs: number | null;
 }
 
@@ -162,6 +164,9 @@ export interface GatewayPodDiagnostics {
   totalPods: number;
   readyPods: number;
   totalRestarts: number;
+  spotPods: number;
+  onDemandPods: number;
+  unknownCapacityPods: number;
   pods: GatewayPodDiagnostic[];
   error?: string;
 }
@@ -1304,8 +1309,6 @@ function emptyDirGatewayStorage(): ProjectedGatewayStorage {
   };
 }
 
-// All gateways are Spot + emptyDir (#1932); the PVC path is deleted end-to-end
-// (GATEWAY-RELEASES-SPEC). Storage is always projected as emptyDir.
 function projectGatewayStorage(
   _gatewayId: string,
   _glmDoc: GlmDoc | undefined,
@@ -1313,15 +1316,21 @@ function projectGatewayStorage(
   return emptyDirGatewayStorage();
 }
 
-// Gateway pods select nothing but `cloud.google.com/gke-spot`: Spot-only, with
-// no on-demand fallback rung, so pricing is always the Spot rate.
 export function projectGatewayReservation(
-  _glmDoc: GlmDoc | undefined,
+  glmDoc: GlmDoc | undefined,
+  observedCapacityType?: GatewayPodCapacityType,
 ): {
   type: GatewayPricingMode;
   priceMultiplier: number;
+  source: "kubernetes" | "class-default";
 } {
-  return { type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER };
+  const type = observedCapacityType ??
+    (normalizeGatewayClass(glmDoc) === "shared" ? "on-demand" : "spot");
+  return {
+    type,
+    priceMultiplier: type === "spot" ? SPOT_PRICE_MULTIPLIER : 1,
+    source: observedCapacityType ? "kubernetes" : "class-default",
+  };
 }
 
 function projectDisposableRuntime(
@@ -2710,9 +2719,10 @@ async function projectGatewaySummaryWithDiagnostics(
     return { ...summary, podDiagnostics: null };
   }
   try {
+    const podDiagnostics = await deps.readGatewayPodDiagnostics(summary.gatewayId);
     return {
-      ...summary,
-      podDiagnostics: await deps.readGatewayPodDiagnostics(summary.gatewayId),
+      ...repriceGatewaySummaryFromKubernetes(summary, podDiagnostics),
+      podDiagnostics,
     };
   } catch (e) {
     deps.logger.warn("gateway pod diagnostics failed", {
@@ -2726,6 +2736,9 @@ async function projectGatewaySummaryWithDiagnostics(
         totalPods: 0,
         readyPods: 0,
         totalRestarts: 0,
+        spotPods: 0,
+        onDemandPods: 0,
+        unknownCapacityPods: 0,
         pods: [],
         error: (e as Error)?.message ?? "pod diagnostics failed",
       },
@@ -2739,8 +2752,56 @@ function unknownGatewayPodDiagnostics(error: string): GatewayPodDiagnostics {
     totalPods: 0,
     readyPods: 0,
     totalRestarts: 0,
+    spotPods: 0,
+    onDemandPods: 0,
+    unknownCapacityPods: 0,
     pods: [],
     error,
+  };
+}
+
+function observedGatewayCapacityType(
+  diagnostics: GatewayPodDiagnostics,
+): GatewayPodCapacityType | undefined {
+  if (diagnostics.onDemandPods > 0) return "on-demand";
+  if (diagnostics.spotPods > 0) return "spot";
+  return undefined;
+}
+
+function repriceGatewaySummaryFromKubernetes<T extends ReturnType<typeof projectGatewaySummary>>(
+  summary: T,
+  diagnostics: GatewayPodDiagnostics,
+): T {
+  const reservation = projectGatewayReservation(
+    { gatewayClass: summary.gatewayClass },
+    observedGatewayCapacityType(diagnostics),
+  );
+  const cost = summary.desiredStatus === "paused"
+    ? {
+        computeUsd: 0,
+        onDemandComputeUsd: 0,
+        savingsUsd: 0,
+        pricingMode: reservation.type,
+        perBuilderAtTarget: 0,
+        perBuilderAtTypical: 0,
+      }
+    : estimateGatewayMonthlyCost(summary.sizing.tier, {
+        pricingMode: reservation.type,
+      });
+  return {
+    ...summary,
+    reservation,
+    sizing: {
+      ...summary.sizing,
+      monthlyCostUsd: {
+        compute: cost.computeUsd,
+        onDemandCompute: cost.onDemandComputeUsd,
+        savings: cost.savingsUsd,
+        pricingMode: cost.pricingMode,
+        perBuilderAtTarget: cost.perBuilderAtTarget,
+        perBuilderAtTypical: cost.perBuilderAtTypical,
+      },
+    },
   };
 }
 
@@ -2755,12 +2816,14 @@ async function projectGatewaySummariesWithDiagnostics(
     const diagnostics = await readBatch(
       summaries.map((summary) => summary.gatewayId),
     );
-    return summaries.map((summary) => ({
-      ...summary,
-      podDiagnostics:
-        diagnostics[summary.gatewayId] ??
-        unknownGatewayPodDiagnostics("gateway missing from batched pod diagnostics"),
-    }));
+    return summaries.map((summary) => {
+      const podDiagnostics = diagnostics[summary.gatewayId] ??
+        unknownGatewayPodDiagnostics("gateway missing from batched pod diagnostics");
+      return {
+        ...repriceGatewaySummaryFromKubernetes(summary, podDiagnostics),
+        podDiagnostics,
+      };
+    });
   } catch (error) {
     const message = (error as Error)?.message ?? String(error);
     deps.logger.warn("gateway pod diagnostics batch failed", { error: message });
@@ -4424,6 +4487,11 @@ type ActivationLeaseReturnOutcome =
   | { kind: "adopted" }
   | { kind: "requested" };
 
+type ActivationLeaseCancellationOutcome =
+  | { kind: "not-found" }
+  | { kind: "conflict"; reason: string }
+  | { kind: "cancelled" };
+
 function classifyActivationLeaseTermination(
   result: ActivationLeaseTerminationOutcome,
 ): NormalFleetMutationResult {
@@ -4459,6 +4527,18 @@ function classifyActivationLeaseReturn(
       outcome: "failed",
       error: "activation lease return was already requested",
     };
+  }
+  return { outcome: "completed" };
+}
+
+function classifyActivationLeaseCancellation(
+  result: ActivationLeaseCancellationOutcome,
+): NormalFleetMutationResult {
+  if (result.kind === "not-found") {
+    return { outcome: "failed", error: ERR_USER_NOT_FOUND };
+  }
+  if (result.kind === "conflict") {
+    return { outcome: "failed", error: result.reason };
   }
   return { outcome: "completed" };
 }
@@ -5536,6 +5616,81 @@ router.post(
           gatewayProfile,
           ...(currentGid === targetGatewayId ? { repaired: true } : {}),
         });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.post(
+    "/customers/:uid/activation-lease/cancel",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body = isPlainRecord(req.body) ? req.body : {};
+        const allowed = new Set(["leaseId", "generation"]);
+        if (
+          Object.keys(body).some((key) => !allowed.has(key)) ||
+          typeof body.leaseId !== "string" ||
+          !Number.isSafeInteger(body.generation) ||
+          (body.generation as number) <= 0
+        ) {
+          res.status(400).json({ error: "leaseId and generation are required" });
+          return;
+        }
+        const uid = req.params.uid as string;
+        const leaseId = body.leaseId;
+        const generation = body.generation as number;
+        const userRef = db.collection("users").doc(uid);
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "cancel builder activation lease",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, leaseId, generation },
+          preActionStatus: {},
+          mutation: { kind: "cancel-activation-lease", uid, leaseId, generation },
+          classifyResult: classifyActivationLeaseCancellation,
+          action: async () => db.runTransaction(async (transaction) => {
+            const snapshot = await transaction.get(userRef);
+            if (!snapshot.exists) return { kind: "not-found" as const };
+            const resolved = activationLeaseFromUser(
+              snapshot.data() as Record<string, unknown>,
+            );
+            const lease = resolved?.lease;
+            if (
+              !lease ||
+              lease.leaseId !== leaseId ||
+              lease.generation !== generation
+            ) {
+              return {
+                kind: "conflict" as const,
+                reason: "lease generation changed",
+              };
+            }
+            if (
+              lease.status !== "requested" ||
+              asStringOrNull(lease.targetGatewayId) !== null ||
+              asStringOrNull(lease.activationOperationId) !== null
+            ) {
+              return {
+                kind: "conflict" as const,
+                reason: "activation request has already allocated a disposable runtime",
+              };
+            }
+            transaction.update(userRef, {
+              "provisioning.openclaw.activationLease": FieldValue.delete(),
+            });
+            return { kind: "cancelled" as const };
+          }),
+        });
+        if (outcome.kind === "not-found") {
+          res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+          return;
+        }
+        if (outcome.kind === "conflict") {
+          res.status(409).json({ error: outcome.reason });
+          return;
+        }
+        res.status(200).json({ status: "cancelled", leaseId, generation });
       } catch (e) {
         next(e);
       }

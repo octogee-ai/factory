@@ -43,6 +43,7 @@ export interface KubeOps {
 }
 
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
+export type GatewayPodCapacityType = "spot" | "on-demand";
 
 export interface GatewayPodDiagnostic {
   name: string;
@@ -52,6 +53,7 @@ export interface GatewayPodDiagnostic {
   restarts: number;
   reason: string | null;
   nodeName: string | null;
+  capacityType: GatewayPodCapacityType | null;
   ageMs: number | null;
 }
 
@@ -60,6 +62,9 @@ export interface GatewayPodDiagnostics {
   totalPods: number;
   readyPods: number;
   totalRestarts: number;
+  spotPods: number;
+  onDemandPods: number;
+  unknownCapacityPods: number;
   pods: GatewayPodDiagnostic[];
   error?: string;
 }
@@ -136,7 +141,11 @@ function podConditionReason(status: Record<string, unknown>): string | null {
   return null;
 }
 
-function projectPodDiagnostic(pod: Record<string, unknown>, now: number): GatewayPodDiagnostic {
+function projectPodDiagnostic(
+  pod: Record<string, unknown>,
+  now: number,
+  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+): GatewayPodDiagnostic {
   const metadata = isRecord(pod.metadata) ? pod.metadata : {};
   const spec = isRecord(pod.spec) ? pod.spec : {};
   const status = isRecord(pod.status) ? pod.status : {};
@@ -155,6 +164,7 @@ function projectPodDiagnostic(pod: Record<string, unknown>, now: number): Gatewa
     podConditionReason(status);
   const createdAt = stringOrNull(metadata.creationTimestamp);
   const createdMs = createdAt ? Date.parse(createdAt) : NaN;
+  const nodeName = stringOrNull(spec.nodeName);
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
     phase: stringOrNull(status.phase) ?? "Unknown",
@@ -162,27 +172,66 @@ function projectPodDiagnostic(pod: Record<string, unknown>, now: number): Gatewa
     totalContainers,
     restarts,
     reason,
-    nodeName: stringOrNull(spec.nodeName),
+    nodeName,
+    capacityType: nodeName ? capacityByNodeName.get(nodeName) ?? null : null,
     ageMs: Number.isFinite(createdMs) ? Math.max(0, now - createdMs) : null,
   };
 }
 
-function summarizePodDiagnostics(
+function kubeListRecords(
   stdout: string,
-  now: number,
-): GatewayPodDiagnostics {
+  resource: string,
+): Record<string, unknown>[] {
   const parsed = JSON.parse(stdout) as unknown;
   if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
-    throw new Error("kubectl get pods returned invalid JSON shape");
+    throw new Error(`kubectl get ${resource} returned invalid JSON shape`);
   }
-  return summarizePodRecords(parsed.items.filter(isRecord), now);
+  return parsed.items.filter(isRecord);
+}
+
+function nodeCapacityByName(stdout: string): Map<string, GatewayPodCapacityType> {
+  const capacities = new Map<string, GatewayPodCapacityType>();
+  for (const node of kubeListRecords(stdout, "nodes")) {
+    const metadata = isRecord(node.metadata) ? node.metadata : {};
+    const name = stringOrNull(metadata.name);
+    if (!name) continue;
+    const labels = isRecord(metadata.labels) ? metadata.labels : {};
+    const spot =
+      labels["cloud.google.com/gke-spot"] === "true" ||
+      labels["cloud.google.com/gke-preemptible"] === "true";
+    capacities.set(name, spot ? "spot" : "on-demand");
+  }
+  return capacities;
+}
+
+async function readNodeCapacityByName(
+  deps: KubeOpsRunnerDeps,
+  podRecords: readonly Record<string, unknown>[],
+): Promise<Map<string, GatewayPodCapacityType>> {
+  const hasScheduledPod = podRecords.some((pod) => {
+    const spec = isRecord(pod.spec) ? pod.spec : {};
+    return stringOrNull(spec.nodeName) !== null;
+  });
+  if (!hasScheduledPod) return new Map();
+  const result = await deps.runKubectl(["get", "nodes", "-o", "json"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `kubectl get nodes failed (code=${result.code}): ${
+        result.stderr.trim() || result.stdout.trim()
+      }`,
+    );
+  }
+  return nodeCapacityByName(result.stdout);
 }
 
 function summarizePodRecords(
   podRecords: readonly Record<string, unknown>[],
   now: number,
+  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
 ): GatewayPodDiagnostics {
-  const pods = podRecords.map((pod) => projectPodDiagnostic(pod, now));
+  const pods = podRecords.map((pod) =>
+    projectPodDiagnostic(pod, now, capacityByNodeName)
+  );
   const totalPods = pods.length;
   const readyPods = pods.filter(
     (pod) =>
@@ -191,6 +240,9 @@ function summarizePodRecords(
       pod.readyContainers === pod.totalContainers,
   ).length;
   const totalRestarts = pods.reduce((sum, pod) => sum + pod.restarts, 0);
+  const spotPods = pods.filter((pod) => pod.capacityType === "spot").length;
+  const onDemandPods = pods.filter((pod) => pod.capacityType === "on-demand").length;
+  const unknownCapacityPods = totalPods - spotPods - onDemandPods;
   let status: GatewayPodDiagnosticsStatus = "not-ready";
   if (totalPods === 0) {
     status = "missing";
@@ -202,6 +254,9 @@ function summarizePodRecords(
     totalPods,
     readyPods,
     totalRestarts,
+    spotPods,
+    onDemandPods,
+    unknownCapacityPods,
     pods,
   };
 }
@@ -213,17 +268,14 @@ function gatewayIdForPod(pod: Record<string, unknown>): string | null {
 }
 
 function summarizeGatewayPodDiagnosticsBatch(
-  stdout: string,
+  podRecords: readonly Record<string, unknown>[],
   gatewayIds: readonly string[],
   now: number,
+  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
 ): Record<string, GatewayPodDiagnostics> {
-  const parsed = JSON.parse(stdout) as unknown;
-  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
-    throw new Error("kubectl get pods returned invalid JSON shape");
-  }
   const requested = new Set(gatewayIds);
   const podsByGatewayId = new Map<string, Record<string, unknown>[]>();
-  for (const pod of parsed.items.filter(isRecord)) {
+  for (const pod of podRecords) {
     const gatewayId = gatewayIdForPod(pod);
     if (!gatewayId || !requested.has(gatewayId)) continue;
     const pods = podsByGatewayId.get(gatewayId) ?? [];
@@ -233,7 +285,11 @@ function summarizeGatewayPodDiagnosticsBatch(
   return Object.fromEntries(
     gatewayIds.map((gatewayId) => [
       gatewayId,
-      summarizePodRecords(podsByGatewayId.get(gatewayId) ?? [], now),
+      summarizePodRecords(
+        podsByGatewayId.get(gatewayId) ?? [],
+        now,
+        capacityByNodeName,
+      ),
     ]),
   );
 }
@@ -244,6 +300,9 @@ function unknownPodDiagnostics(error?: string): GatewayPodDiagnostics {
     totalPods: 0,
     readyPods: 0,
     totalRestarts: 0,
+    spotPods: 0,
+    onDemandPods: 0,
+    unknownCapacityPods: 0,
     pods: [],
     ...(error ? { error } : {}),
   };
@@ -398,7 +457,13 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
           }`,
         );
       }
-      return summarizePodDiagnostics(result.stdout, deps.now?.() ?? Date.now());
+      const podRecords = kubeListRecords(result.stdout, "pods");
+      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
+      return summarizePodRecords(
+        podRecords,
+        deps.now?.() ?? Date.now(),
+        capacityByNodeName,
+      );
     },
 
     async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds }) {
@@ -428,10 +493,13 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
           }`,
         );
       }
+      const podRecords = kubeListRecords(result.stdout, "pods");
+      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
       return summarizeGatewayPodDiagnosticsBatch(
-        result.stdout,
+        podRecords,
         gatewayIds,
         deps.now?.() ?? Date.now(),
+        capacityByNodeName,
       );
     },
 

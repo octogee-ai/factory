@@ -19,32 +19,34 @@ import {
 } from "@octogee/shared/types/glm";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
 
-// The Fleet card's reservation/cost derives from this projection. Gateway pods
-// carry only `cloud.google.com/gke-spot` now — no compute class, and no
-// on-demand fallback rung — so the projection is Spot for every class.
-describe("projectGatewayReservation — Spot with no fallback rung", () => {
+describe("projectGatewayReservation", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([
-    ["PROD", "octogee"],
-    ["TEST", "octogee-test"],
-    ["Build Week", "octogee-build-week"],
-  ])("%s gateways are Spot-priced and expose no compute class", (_label, namespace) => {
-    vi.stubEnv("K8S_NAMESPACE", namespace);
-    const r = projectGatewayReservation({ profile: "operator", gatewayClass: "operator" });
-    expect(r).toEqual({ type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER });
-    expect(r).not.toHaveProperty("computeClass");
-  });
-
-  it("ignores a residual computeClass or scheduling field on the glm doc", () => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee");
-    const r = projectGatewayReservation({
-      profile: "operator",
-      scheduling: "on-demand",
+  it("defaults Shared gateways to on-demand and disposable gateways to Spot before a pod schedules", () => {
+    expect(projectGatewayReservation({ gatewayClass: "shared" })).toEqual({
+      type: "on-demand",
+      priceMultiplier: 1,
+      source: "class-default",
     });
-    expect(r).toEqual({ type: "spot", priceMultiplier: SPOT_PRICE_MULTIPLIER });
+    expect(projectGatewayReservation({ gatewayClass: "operator" })).toEqual({
+      type: "spot",
+      priceMultiplier: SPOT_PRICE_MULTIPLIER,
+      source: "class-default",
+    });
   });
 
+  it("uses observed pod-node capacity instead of the class default", () => {
+    expect(projectGatewayReservation({ gatewayClass: "shared" }, "spot")).toEqual({
+      type: "spot",
+      priceMultiplier: SPOT_PRICE_MULTIPLIER,
+      source: "kubernetes",
+    });
+    expect(projectGatewayReservation({ gatewayClass: "operator" }, "on-demand")).toEqual({
+      type: "on-demand",
+      priceMultiplier: 1,
+      source: "kubernetes",
+    });
+  });
 });
 
 describe("resolveFleetDeploymentSettings", () => {
@@ -556,7 +558,12 @@ function applyDottedPatch(
       }
       cursor = cursor[part] as Record<string, unknown>;
     }
-    cursor[parts.at(-1)!] = value;
+    const leaf = parts.at(-1)!;
+    if ((value as { constructor?: { name?: string } })?.constructor?.name === "DeleteTransform") {
+      delete cursor[leaf];
+    } else {
+      cursor[leaf] = value;
+    }
   }
 }
 
@@ -1594,6 +1601,86 @@ describe("fleet gateway projection", () => {
 });
 
 describe("manual disposable runtime return", () => {
+  it("cancels an exact requested lease before a disposable runtime is allocated", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              gatewayId: "shared-blue",
+              managedBy: "cowboy",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "requested",
+                sourceGatewayId: "shared-blue",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/cancel")
+      .send({ leaseId: "lease-1", generation: 3 })
+      .expect(200, {
+        status: "cancelled",
+        leaseId: "lease-1",
+        generation: 3,
+      });
+
+    expect(state.users["uid-alice"]?.provisioning.openclaw).not.toHaveProperty(
+      "activationLease",
+    );
+    expect(
+      Object.values(state.operations).filter(
+        (operation) =>
+          operation.recordType === "audit" &&
+          (operation.mutation as Record<string, unknown> | undefined)?.kind ===
+            "cancel-activation-lease",
+      ),
+    ).toEqual([expect.objectContaining({ status: "completed" })]);
+  });
+
+  it("refuses to cancel after activation has allocated a target", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              gatewayId: "shared-blue",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "requested",
+                sourceGatewayId: "shared-blue",
+                targetGatewayId: "run-alice",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/cancel")
+      .send({ leaseId: "lease-1", generation: 3 })
+      .expect(409);
+
+    expect(state.users["uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: { status: "requested", targetGatewayId: "run-alice" },
+        },
+      },
+    });
+  });
+
   it("records an idempotent return request against the exact active lease generation", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },

@@ -665,6 +665,9 @@ describe("createHttpServer — admin gateway routes", () => {
       totalPods: 1,
       readyPods: 1,
       totalRestarts: 2,
+      spotPods: 1,
+      onDemandPods: 0,
+      unknownCapacityPods: 0,
       pods: [
         {
           name: "octogee-gateway-bender-abc",
@@ -674,6 +677,7 @@ describe("createHttpServer — admin gateway routes", () => {
           restarts: 2,
           reason: null,
           nodeName: "gke-node-1",
+          capacityType: "spot" as const,
           ageMs: 125_000,
         },
       ],
@@ -694,6 +698,10 @@ describe("createHttpServer — admin gateway routes", () => {
       totalRestarts: 2,
       pods: [{ name: "octogee-gateway-bender-abc", nodeName: "gke-node-1" }],
     });
+    expect(res.body.gateways[0]).toMatchObject({
+      reservation: { type: "spot", source: "kubernetes" },
+      sizing: { monthlyCostUsd: { pricingMode: "spot" } },
+    });
   });
 
   it("batches pod diagnostics for every gateway into one fleet read", async () => {
@@ -708,6 +716,9 @@ describe("createHttpServer — admin gateway routes", () => {
         totalPods: 1,
         readyPods: 1,
         totalRestarts: 0,
+        spotPods: 0,
+        onDemandPods: 1,
+        unknownCapacityPods: 0,
         pods: [],
       },
       bravo: {
@@ -715,6 +726,9 @@ describe("createHttpServer — admin gateway routes", () => {
         totalPods: 0,
         readyPods: 0,
         totalRestarts: 0,
+        spotPods: 0,
+        onDemandPods: 0,
+        unknownCapacityPods: 0,
         pods: [],
       },
     }));
