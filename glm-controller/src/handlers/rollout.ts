@@ -81,14 +81,6 @@ export function planDesiredReleaseActivation(
     };
   }
   if (gateway.desiredRelease === targetRelease) return { success: true, patch: null };
-  if (gateway.desiredRelease !== gateway.liveRelease) {
-    return {
-      success: false,
-      error:
-        `status 503: gateway ${gateway.gatewayId} cannot activate release ${targetRelease} while ` +
-        `release ${gateway.desiredRelease} is not live`,
-    };
-  }
   return {
     success: true,
     patch: {
@@ -143,7 +135,7 @@ async function runReleaseRoll(
 ): Promise<{ success: boolean; error?: string }> {
   const recorded = await awaitTargetRelease(deps, target, progress);
   if (!recorded.success) return recorded;
-  const activationWindow = await awaitActivationWindow(deps, target, progress);
+  const activationWindow = await awaitActivationWindow(deps, target);
   if (!activationWindow.success) return activationWindow;
   const activation = await deps.activateDesiredRelease({
     gatewayId: target.gatewayId,
@@ -166,6 +158,21 @@ async function awaitTargetRelease(
   progress: RollProgress,
 ): Promise<{ success: boolean; error?: string }> {
   for (;;) {
+    const gateway = await deps.readGatewayDoc(target.gatewayId);
+    if (!gateway) {
+      return {
+        success: false,
+        error: `gateway ${target.gatewayId} desired doc disappeared before release activation`,
+      };
+    }
+    if (gateway.latestRelease !== target.targetRelease) {
+      return {
+        success: false,
+        error:
+          `gateway ${target.gatewayId} target release ${target.targetRelease} was superseded by ` +
+          `latest release ${gateway.latestRelease}`,
+      };
+    }
     const payload = await deps.readReleasePayload(target.gatewayId, target.targetRelease);
     if (payload?.imageTag === target.imageTag) return { success: true };
     if (deps.now() - progress.startedAt >= deps.releaseRecordTimeoutMs) {
@@ -184,48 +191,26 @@ async function awaitTargetRelease(
 async function awaitActivationWindow(
   deps: RolloutDeps,
   target: RollTarget,
-  progress: RollProgress,
 ): Promise<{ success: boolean; error?: string }> {
-  for (;;) {
-    const gateway = await deps.readGatewayDoc(target.gatewayId);
-    if (!gateway) {
-      return {
-        success: false,
-        error: `gateway ${target.gatewayId} desired doc disappeared before release activation`,
-      };
-    }
-    if (gateway.desiredStatus === "retired") {
-      return { success: false, error: `gateway ${target.gatewayId} is retired — cannot roll` };
-    }
-    if (gateway.latestRelease !== target.targetRelease) {
-      return {
-        success: false,
-        error:
-          `gateway ${target.gatewayId} target release ${target.targetRelease} was superseded by ` +
-          `latest release ${gateway.latestRelease}`,
-      };
-    }
-    if (
-      gateway.desiredRelease === target.targetRelease ||
-      gateway.desiredRelease === gateway.liveRelease
-    ) {
-      return { success: true };
-    }
-    if (deps.now() - progress.startedAt >= deps.convergeTimeoutMs) {
-      return {
-        success: false,
-        error:
-          `status 503: gateway ${target.gatewayId} did not finish converging release ` +
-          `${gateway.desiredRelease} before release ${target.targetRelease} activation`,
-      };
-    }
-    deps.log(
-      `[rollout] ${target.gatewayId}: waiting for r${gateway.desiredRelease} to become live ` +
-      `before activating r${target.targetRelease}`,
-    );
-    await deps.wait(deps.pollIntervalMs);
-    await progress.refreshLiveness();
+  const gateway = await deps.readGatewayDoc(target.gatewayId);
+  if (!gateway) {
+    return {
+      success: false,
+      error: `gateway ${target.gatewayId} desired doc disappeared before release activation`,
+    };
   }
+  if (gateway.desiredStatus === "retired") {
+    return { success: false, error: `gateway ${target.gatewayId} is retired — cannot roll` };
+  }
+  if (gateway.latestRelease !== target.targetRelease) {
+    return {
+      success: false,
+      error:
+        `gateway ${target.gatewayId} target release ${target.targetRelease} was superseded by ` +
+        `latest release ${gateway.latestRelease}`,
+    };
+  }
+  return { success: true };
 }
 
 async function awaitConvergence(
@@ -274,6 +259,14 @@ function assessRollOutcome(
   },
 ): { success: boolean; error?: string } | null {
   const { gw, gatewayId, targetRelease, imageTag } = input;
+  if (gw.latestRelease !== targetRelease) {
+    return {
+      success: false,
+      error:
+        `rollout ${gatewayId} → release ${targetRelease} (${imageTag}) was superseded by ` +
+        `latest release ${gw.latestRelease}`,
+    };
+  }
   if (gw.desiredRelease !== targetRelease) {
     return {
       success: false,

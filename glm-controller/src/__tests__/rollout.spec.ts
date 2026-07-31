@@ -141,25 +141,34 @@ describe("rollout desired release activation", () => {
       .toEqual({ success: true, patch: null });
   });
 
-  it("rejects a superseded target or another release still converging", () => {
+  it("rejects a superseded target", () => {
     expect(planDesiredReleaseActivation(
       mkGateway({ latestRelease: 3, desiredRelease: 1, liveRelease: 1 }),
       2,
       100,
       "op-1",
     )).toMatchObject({ success: false, error: expect.stringContaining("superseded") });
+  });
+
+  it("replaces an incomplete desired release while the live source remains serving", () => {
     expect(planDesiredReleaseActivation(
-      mkGateway({ desiredRelease: 1, liveRelease: 0 }),
-      2,
+      mkGateway({ latestRelease: 3, desiredRelease: 2, liveRelease: 1 }),
+      3,
       100,
       "op-1",
-    )).toMatchObject({ success: false, error: expect.stringContaining("not live") });
+    )).toEqual({
+      success: true,
+      patch: {
+        desiredRelease: 3,
+        updatedAt: 100,
+        updatedBy: "rollout:op-1",
+      },
+    });
   });
 });
 
 describe("rollout op — awaits the roll arm's convergence", () => {
-  it("holds global rollout ownership until a prior desired release becomes live", async () => {
-    let stable = false;
+  it("supersedes a prior incomplete desired release without waiting for its convergence", async () => {
     let activated = false;
     const activateDesiredRelease = vi.fn(async () => {
       activated = true;
@@ -174,24 +183,16 @@ describe("rollout op — awaits the roll arm's convergence", () => {
             liveRelease: 3,
             liveRevisionId: "default-r3",
           })
-        : stable
-          ? mkGateway({
+        : mkGateway({
             latestRelease: 3,
             desiredRelease: 2,
-            liveRelease: 2,
-            liveRevisionId: "default-r2",
-          })
-          : mkGateway({
-              latestRelease: 3,
-              desiredRelease: 2,
-              liveRelease: 1,
-            }),
+            liveRelease: 1,
+          }),
       readReleasePayload: async (_gatewayId, release) =>
         release === 3 ? mkPayload({ imageTag: "feed456-ocbeta2" }) : null,
       activateDesiredRelease,
       wait: async () => {
-        expect(activateDesiredRelease).not.toHaveBeenCalled();
-        stable = true;
+        throw new Error("newer rollout should not wait for the incomplete prior release");
       },
     });
 
@@ -206,12 +207,77 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       targetRelease: 3,
       operationId: "op-1",
     });
-    expect(deps.logs).toContain(
-      "[rollout] default: waiting for r2 to become live before activating r3",
-    );
     expect(
       reportStep.mock.calls.filter((call) => call[0].status === "running"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+  });
+
+  it("fails a running older rollout promptly when a newer cut advances latest release", async () => {
+    let newerReleaseCut = false;
+    let now = 0;
+    const deps = mkDeps({
+      readGatewayDoc: async () => newerReleaseCut
+        ? mkGateway({ latestRelease: 3, desiredRelease: 2, liveRelease: 1 })
+        : mkGateway({ latestRelease: 2, desiredRelease: 2, liveRelease: 1 }),
+      activateDesiredRelease: vi.fn(async () => ({ success: true as const })),
+      convergeTimeoutMs: 2_000,
+      now: () => now,
+      wait: async () => {
+        now += 1_000;
+        newerReleaseCut = true;
+      },
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("superseded by latest release 3");
+    expect(deps.activateDesiredRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates the newer latest release while the old live source serves until convergence", async () => {
+    let activated = false;
+    let converged = false;
+    let sourceObservedDuringHandoff = false;
+    let now = 0;
+    const deps = mkDeps({
+      readGatewayDoc: async () => {
+        if (!activated) return mkGateway({ latestRelease: 3, desiredRelease: 2, liveRelease: 1 });
+        if (!converged) {
+          sourceObservedDuringHandoff = true;
+          return mkGateway({ latestRelease: 3, desiredRelease: 3, liveRelease: 1 });
+        }
+        return mkGateway({ latestRelease: 3, desiredRelease: 3, liveRelease: 3 });
+      },
+      readReleasePayload: async (_gatewayId, release) =>
+        release === 3 ? mkPayload({ imageTag: "feed456-ocbeta2" }) : null,
+      activateDesiredRelease: vi.fn(async () => {
+        activated = true;
+        return { success: true as const };
+      }),
+      convergeTimeoutMs: 2_000,
+      now: () => now,
+      wait: async () => {
+        now += 1_000;
+        expect(sourceObservedDuringHandoff).toBe(true);
+        converged = true;
+      },
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 3, imageTag: "feed456-ocbeta2" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(true);
+    expect(deps.activateDesiredRelease).toHaveBeenCalledWith({
+      gatewayId: "default",
+      targetRelease: 3,
+      operationId: "op-1",
+    });
   });
 
   it("refreshes operation liveness on every convergence poll", async () => {

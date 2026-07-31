@@ -545,6 +545,70 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     ]));
   });
 
+  it("queues a newer CENTRAL release behind an active rollout reservation", async () => {
+    const authority = releaseAuthority();
+    const seed = seedNewSchemaGateway("default", sharedPayload(), {
+      latestRelease: 2,
+      desiredRelease: 2,
+      liveRelease: 1,
+    });
+    seed[`${GLM_OPERATIONS_COLLECTION}/rollout-v0.4.13`] = {
+      kind: "rollout",
+      status: "running",
+      input: { gatewayId: "default", targetRelease: 2, imageTag: "old-release" },
+    };
+    const { app, store } = mkApp(seed, { releaseAuthority: authority });
+
+    const response = await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.1", sourceSha })
+      .expect(202);
+
+    expect(response.body).toMatchObject({ release: 3 });
+    expect(store.get("gateways/default")).toMatchObject({
+      latestRelease: 3,
+      desiredRelease: 2,
+      liveRelease: 1,
+    });
+    expect(opsIn(store, "rollout")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ input: expect.objectContaining({ targetRelease: 2 }) }),
+      expect.objectContaining({ input: expect.objectContaining({ targetRelease: 3 }) }),
+    ]));
+  });
+
+  it("rejects a CENTRAL release before fanout when a customer migration owns a member", async () => {
+    const authority = releaseAuthority();
+    const { app, store } = mkApp({
+      "config/orchestrator": {
+        defaultGatewayId: "default",
+        sharedGatewayIds: ["default", "default-b"],
+      },
+      ...seedNewSchemaGateway("default", sharedPayload()),
+      ...seedNewSchemaGateway("default-b", sharedPayload()),
+      [`${GLM_OPERATIONS_COLLECTION}/migration-live`]: {
+        kind: "migrate-customer",
+        status: "running",
+        input: { fromGatewayId: "other", toGatewayId: "elsewhere" },
+        customerMigrationV2: {
+          sourceGatewayId: "default-b",
+          targetGatewayId: "elsewhere",
+        },
+      },
+    }, { releaseAuthority: authority });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.1", sourceSha })
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toMatch(/customer migration.*in flight/i));
+
+    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(store.get("gateways/default-b")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(store.get("centralReleaseFanouts/v0.4.1")).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("rejects a CENTRAL release when any configured shared member is not running", async () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp({

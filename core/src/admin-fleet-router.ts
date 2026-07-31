@@ -3581,15 +3581,36 @@ async function centralReleaseGateways(
 async function assertNoCentralReleaseOperation(
   db: Firestore,
   gateway: GatewayDoc,
-  allowExistingReservation = false,
 ): Promise<void> {
-  const conflict = await findConflictingGatewayOp(db, gateway.gatewayId);
-  if (conflict && !allowExistingReservation) {
+  const activeOperations = await db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "in", ["pending", "running"])
+    .get();
+  const migrationConflict = findActiveGatewayMigration(
+    gateway.gatewayId,
+    activeOperations.docs.map(projectOperationForMigrationLock),
+  );
+  if (migrationConflict) {
+    rejectCentralReleaseRequest(409, {
+      error: `customer migration is in flight for gateway ${gateway.gatewayId}`,
+      gatewayId: gateway.gatewayId,
+      operationId: migrationConflict.id,
+      kind: OP_KIND_MIGRATE_CUSTOMER,
+    });
+  }
+  const conflict = activeOperations.docs.find((doc) => {
+    const operation = doc.data() as Record<string, unknown>;
+    const input = operation.input;
+    return isPlainRecord(input) && input.gatewayId === gateway.gatewayId;
+  });
+  const conflictData = conflict?.data() as Record<string, unknown> | undefined;
+  const kind = typeof conflictData?.kind === "string" ? conflictData.kind : null;
+  if (conflict && kind !== "rollout") {
     rejectCentralReleaseRequest(409, {
       error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
       gatewayId: gateway.gatewayId,
       operationId: conflict.id,
-      kind: conflict.kind,
+      kind,
     });
   }
 }
@@ -6378,19 +6399,15 @@ router.post(
         assertCentralReleaseFanout(existingFanout, fanoutInput);
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        const fanout = await ensureCentralReleaseFanout(
+        for (const candidate of gateways) {
+          await assertNoCentralReleaseOperation(db, candidate);
+        }
+        await ensureCentralReleaseFanout(
           db,
           fanoutInput,
           createdBy,
           Date.now(),
         );
-        for (const candidate of gateways) {
-          await assertNoCentralReleaseOperation(
-            db,
-            candidate,
-            fanout.rollouts[candidate.gatewayId] !== undefined,
-          );
-        }
         const payload = centralGatewayReleasePayload(manifest);
         const aliasPlan = centralReleaseAliasPlans({
           authority,
@@ -6560,19 +6577,15 @@ router.post(
         assertCentralReleaseFanout(existingFanout, fanoutInput);
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
-        const fanout = await ensureCentralReleaseFanout(
+        for (const candidate of gateways) {
+          await assertNoCentralReleaseOperation(db, candidate);
+        }
+        await ensureCentralReleaseFanout(
           db,
           fanoutInput,
           createdBy,
           Date.now(),
         );
-        for (const candidate of gateways) {
-          await assertNoCentralReleaseOperation(
-            db,
-            candidate,
-            fanout.rollouts[candidate.gatewayId] !== undefined,
-          );
-        }
         const payload = centralGatewayReleasePayload(manifest);
         const aliasPlan = centralReleaseAliasPlans({
           authority,
