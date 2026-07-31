@@ -104,6 +104,7 @@ describe("admin platform-config", () => {
     expect(refs).toContain("anthropic/claude-haiku-4-5");
     expect(refs).toContain("platform-openrouter/z-ai/glm-5.2");
     expect(refs).toContain("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(refs).toContain("platform-openrouter/openai/gpt-5.6-luna");
     const haiku = res.body.catalog.find((c: { ref: string }) => c.ref === "anthropic/claude-haiku-4-5");
     expect(haiku).toMatchObject({ label: "Claude Haiku 4.5", provider: "anthropic" });
     expect(res.body.opsCatalog.map((c: { ref: string }) => c.ref)).toEqual(
@@ -151,10 +152,15 @@ describe("admin platform-config", () => {
   it("GET serves the Builder Agent default dial with its compiled defaults", async () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
-    expect(res.body.builderAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.builderAgentModelRef).toBe("platform-openrouter/openai/gpt-5.6-luna");
     expect(res.body.defaultBuilderAgentModelRef).toBe(
-      "platform-openrouter/deepseek/deepseek-v4-pro",
+      "platform-openrouter/openai/gpt-5.6-luna",
     );
+    expect(res.body.catalog).toContainEqual({
+      ref: "platform-openrouter/openai/gpt-5.6-luna",
+      label: "GPT-5.6 Luna",
+      provider: "openrouter",
+    });
     expect(res.body.builderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
     expect(res.body.defaultBuilderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
 

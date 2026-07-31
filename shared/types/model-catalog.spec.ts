@@ -9,7 +9,7 @@ import {
 } from "./model-catalog";
 
 describe("MODEL_CATALOG", () => {
-  it("serves both broker providers — anthropic house pair + openrouter pair", () => {
+  it("serves both broker providers — anthropic house pair + OpenRouter catalog", () => {
     expect(modelCatalogForProvider("anthropic").map((e) => e.id)).toEqual([
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-haiku-4-5",
@@ -18,6 +18,7 @@ describe("MODEL_CATALOG", () => {
       "z-ai/glm-5.2",
       "minimax/minimax-m3",
       "deepseek/deepseek-v4-pro",
+      "openai/gpt-5.6-luna",
     ]);
   });
 
@@ -26,6 +27,16 @@ describe("MODEL_CATALOG", () => {
     expect(entry?.label).toBe("DeepSeek V4 Pro");
     expect(entry?.contextTokens).toBe(1_048_576);
     expect(entry?.reasoningEfforts).toEqual([]);
+  });
+
+  it("carries GPT-5.6 Luna through OpenRouter with its full context window", () => {
+    const entry = modelCatalogEntryFor("openrouter", "openai/gpt-5.6-luna");
+    expect(entry).toMatchObject({
+      label: "GPT-5.6 Luna",
+      source: "openrouter",
+      contextTokens: 1_050_000,
+      reasoningEfforts: ["high", "xhigh"],
+    });
   });
 
   it("carries GPT-5.4 Mini on the OpenAI platform provider", () => {

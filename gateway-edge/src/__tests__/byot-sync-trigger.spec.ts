@@ -101,7 +101,7 @@ describe("model credential sync trigger", () => {
     const enriched = {
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       builderAgentDefault: {
-        primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+        primary: "platform-openrouter/openai/gpt-5.6-luna",
         fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
       },
       ...userData,
@@ -184,7 +184,7 @@ describe("model credential sync trigger", () => {
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
     expect(body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(body.builderAgentDefault).toEqual({
-      primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+      primary: "platform-openrouter/openai/gpt-5.6-luna",
       fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
     });
     expect(warns.join("\n")).toContain("platform model dial");

@@ -168,9 +168,11 @@ const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
   "haiku-3.5": pricing(0.8, 4, "haiku-3.5"),
 };
 const UNKNOWN_MODEL_FALLBACK_PRICING = pricing(10, 50, "unknown-fable-fallback");
+// Snapshot from OpenRouter's model API, verified 2026-07-30. Luna includes the 50% promotion.
 const OPENROUTER_PRICING: Record<string, AnthropicPricing> = {
   "z-ai/glm-5.2": pricing(0.94, 3, "openrouter:z-ai/glm-5.2"),
   "deepseek/deepseek-v4-pro": pricing(0.435, 0.87, "openrouter:deepseek/deepseek-v4-pro"),
+  "openai/gpt-5.6-luna": pricing(0.1, 0.6, "openrouter:openai/gpt-5.6-luna"),
 };
 const UNKNOWN_OPENROUTER_FALLBACK_PRICING = pricing(1, 5, "openrouter:unknown-fallback");
 // Snapshot from the OpenAI API pricing page, verified 2026-07-08:

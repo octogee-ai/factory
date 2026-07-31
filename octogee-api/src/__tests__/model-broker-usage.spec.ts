@@ -166,6 +166,15 @@ describe("OpenRouter cost estimation", () => {
     expect(cost.output).toBeCloseTo(0.87);
     expect(cost.cacheRead).toBeCloseTo(0.0435);
   });
+
+  it("prices GPT-5.6 Luna at OpenRouter's promotional rate", () => {
+    const cost = estimateModelBrokerCost("openrouter", "openai/gpt-5.6-luna", MILLION_EACH);
+    expect(cost.pricingModel).toBe("openrouter:openai/gpt-5.6-luna");
+    expect(cost.input).toBeCloseTo(0.1);
+    expect(cost.output).toBeCloseTo(0.6);
+    expect(cost.cacheRead).toBeCloseTo(0.01);
+    expect(cost.total).toBeCloseTo(0.71);
+  });
 });
 
 describe("OpenAI cost estimation", () => {

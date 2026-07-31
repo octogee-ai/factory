@@ -142,7 +142,7 @@ export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepsee
 export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
 // The platform default every Builder's Agent starts on until they pick their
 // own model in Account → Models. Fallback ref null = no fallback.
-export const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-5.6-luna";
 export const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF = "platform-openrouter/z-ai/glm-5.2";
 function catalogRefOrNull(value) {
     return typeof value === "string" && resolveFreeTierModel(value) !== null ? value : null;
