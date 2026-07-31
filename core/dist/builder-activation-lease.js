@@ -172,14 +172,25 @@ function returningLeaseWithPendingDemand(input) {
         };
     return { ...lease, pendingDemand };
 }
-function adoptedActivationLease(lease, eventKey, observedAt) {
+function adoptedActivationLease(lease, input) {
     if (!existingLeaseCanAdopt(lease))
         return null;
+    const targetlessRequested = lease.status === "requested" && lease.targetGatewayId === undefined;
     return {
         ...lease,
         status: lease.status,
-        lastActiveAt: Math.max(typeof lease?.lastActiveAt === "number" ? lease.lastActiveAt : 0, observedAt),
-        lastEventKey: eventKey,
+        lastActiveAt: Math.max(typeof lease?.lastActiveAt === "number" ? lease.lastActiveAt : 0, input.observedAt),
+        lastEventKey: input.eventKey,
+        ...(targetlessRequested
+            ? {
+                cause: input.cause,
+                eventKey: input.eventKey,
+                requestedAt: input.observedAt,
+                requestedBy: input.createdBy,
+                sourceGatewayId: input.sourceGatewayId,
+                sourceAssignmentEpoch: input.sourceAssignmentEpoch,
+            }
+            : {}),
     };
 }
 export async function requestBuilderActivationLease(input) {
@@ -252,7 +263,14 @@ export async function requestBuilderActivationLease(input) {
                 pending: true,
             });
         }
-        const adoptedLease = adoptedActivationLease(existing, eventKey, observedAt);
+        const adoptedLease = adoptedActivationLease(existing, {
+            eventKey,
+            cause,
+            observedAt,
+            createdBy: input.createdBy,
+            sourceGatewayId: reportingGatewayId,
+            sourceAssignmentEpoch: assignmentEpoch,
+        });
         if (adoptedLease) {
             transaction.update(userRef, {
                 "provisioning.openclaw.activationLease": adoptedLease,

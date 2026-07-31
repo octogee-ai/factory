@@ -149,6 +149,130 @@ describe("requestBuilderActivationLease", () => {
     expect(idFactory).toHaveBeenCalledTimes(1);
   });
 
+  it("rebases a targetless requested lease to a newly accepted serving assignment", async () => {
+    const user = activeTrial({
+      provisioning: {
+        status: "complete",
+        openclaw: {
+          gatewayId: "shared-green",
+          slug: "alice",
+          activationLease: {
+            leaseId: "lease-existing",
+            generation: 7,
+            status: "requested",
+            cause: "ticket",
+            eventKey: "ticket:old",
+            requestedAt: 4_000,
+            lastActiveAt: 4_000,
+            requestedBy: "gateway-edge:shared-blue",
+            sourceGatewayId: "shared-blue",
+            sourceAssignmentEpoch: 4,
+            entitlementTier: "hobby",
+            sizingTier: "xs",
+          },
+        },
+      },
+    });
+    const { db, docs } = fakeDb({
+      "users/uid-alice": user,
+      "gateways/shared-green/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "shared-green",
+        state: "serving",
+        epoch: 8,
+      },
+    });
+
+    await expect(request(db, {
+      reportingGatewayId: "shared-green",
+      assignmentEpoch: 8,
+      eventKey: "shell:new",
+      cause: "shell",
+      observedAt: 9_000,
+      createdBy: "builder-shell:uid-alice:alice",
+    })).resolves.toMatchObject({
+      statusCode: 202,
+      body: { leaseId: "lease-existing", generation: 7, status: "requested", adopted: true },
+    });
+
+    expect(docs["users/uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          activationLease: {
+            leaseId: "lease-existing",
+            generation: 7,
+            status: "requested",
+            sourceGatewayId: "shared-green",
+            sourceAssignmentEpoch: 8,
+            cause: "shell",
+            eventKey: "shell:new",
+            requestedAt: 9_000,
+            lastActiveAt: 9_000,
+            requestedBy: "builder-shell:uid-alice:alice",
+          },
+        },
+      },
+    });
+    expect(docs["users/uid-alice"]?.provisioning?.openclaw?.activationLease).not.toHaveProperty(
+      "targetGatewayId",
+    );
+  });
+
+  it.each(["requested", "provisioning", "activating", "active"])(
+    "does not rebase an %s lease after it has a target",
+    async (status) => {
+      const user = activeTrial({
+        provisioning: {
+          status: "complete",
+          openclaw: {
+            gatewayId: "shared-green",
+            slug: "alice",
+            activationLease: {
+              leaseId: "lease-existing",
+              generation: 7,
+              status,
+              targetGatewayId: "run-alice",
+              sourceGatewayId: "shared-blue",
+              sourceAssignmentEpoch: 4,
+            },
+          },
+        },
+      });
+      const { db, docs } = fakeDb({
+        "users/uid-alice": user,
+        "gateways/shared-green/assignments/uid-alice": {
+          uid: "uid-alice",
+          slug: "alice",
+          gatewayId: "shared-green",
+          state: "serving",
+          epoch: 8,
+        },
+      });
+
+      await expect(request(db, {
+        reportingGatewayId: "shared-green",
+        assignmentEpoch: 8,
+        eventKey: "shell:new",
+        cause: "shell",
+        observedAt: 9_000,
+      })).resolves.toMatchObject({ statusCode: 202, body: { adopted: true } });
+
+      expect(docs["users/uid-alice"]).toMatchObject({
+        provisioning: {
+          openclaw: {
+            activationLease: {
+              status,
+              targetGatewayId: "run-alice",
+              sourceGatewayId: "shared-blue",
+              sourceAssignmentEpoch: 4,
+            },
+          },
+        },
+      });
+    },
+  );
+
   it("acknowledges a late duplicate of a parked run without waking a new gateway", async () => {
     const parked = activeTrial({
       provisioning: {
