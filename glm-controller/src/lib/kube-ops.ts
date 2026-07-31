@@ -283,13 +283,11 @@ function summarizeGatewaySpotCapacity(
   const readyOnDemandPods = pods.filter(
     (pod) => pod.ready && pod.capacityClass === "on-demand",
   ).length;
-  const status = pods.length === 0
-    ? "missing"
-    : readySpotPods > 0
-      ? "ready-spot"
-      : readyOnDemandPods > 0
-        ? "ready-on-demand"
-        : "not-ready";
+  const status = gatewaySpotCapacityStatus({
+    totalPods: pods.length,
+    readySpotPods,
+    readyOnDemandPods,
+  });
   return {
     status,
     totalPods: pods.length,
@@ -298,6 +296,17 @@ function summarizeGatewaySpotCapacity(
     readyOnDemandPods,
     pods,
   };
+}
+
+function gatewaySpotCapacityStatus(input: {
+  totalPods: number;
+  readySpotPods: number;
+  readyOnDemandPods: number;
+}): GatewaySpotCapacityObservation["status"] {
+  if (input.totalPods === 0) return "missing";
+  if (input.readySpotPods > 0) return "ready-spot";
+  if (input.readyOnDemandPods > 0) return "ready-on-demand";
+  return "not-ready";
 }
 
 function gatewayPodNodeNames(stdout: string): string[] {
@@ -353,6 +362,54 @@ function unknownPodDiagnostics(error?: string): GatewayPodDiagnostics {
     pods: [],
     ...(error ? { error } : {}),
   };
+}
+
+async function readGatewaySpotCapacity(
+  deps: KubeOpsRunnerDeps,
+  input: { namespace: string; gatewayId: string },
+): Promise<GatewaySpotCapacityObservation> {
+  const pods = await deps.runKubectl([
+    "-n",
+    input.namespace,
+    "get",
+    "pods",
+    "-l",
+    `app=octogee-gateway,gateway-instance=${input.gatewayId}`,
+    "-o",
+    "json",
+  ]);
+  if (pods.code !== 0) {
+    if (isNotFound(pods.stderr)) {
+      return {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+        readySpotPods: 0,
+        readyOnDemandPods: 0,
+        pods: [],
+        error: "pods not found",
+      };
+    }
+    throw new Error(
+      `kubectl get pods gateway-instance=${input.gatewayId} ns=${input.namespace} failed (code=${pods.code}): ${
+        pods.stderr.trim() || pods.stdout.trim()
+      }`,
+    );
+  }
+  const nodeNames = gatewayPodNodeNames(pods.stdout);
+  const observations = await Promise.all(nodeNames.map(async (nodeName) => {
+    const node = await deps.runKubectl(["get", "node", nodeName, "-o", "json"]);
+    if (node.code !== 0) {
+      if (isNotFound(node.stderr)) return [nodeName, "unknown"] as const;
+      throw new Error(
+        `kubectl get node ${nodeName} failed (code=${node.code}): ${
+          node.stderr.trim() || node.stdout.trim()
+        }`,
+      );
+    }
+    return [nodeName, nodeCapacityClass(node.stdout)] as const;
+  }));
+  return summarizeGatewaySpotCapacity(pods.stdout, new Map(observations));
 }
 
 export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
@@ -541,50 +598,7 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       );
     },
 
-    async readGatewaySpotCapacity({ namespace, gatewayId }) {
-      const pods = await deps.runKubectl([
-        "-n",
-        namespace,
-        "get",
-        "pods",
-        "-l",
-        `app=octogee-gateway,gateway-instance=${gatewayId}`,
-        "-o",
-        "json",
-      ]);
-      if (pods.code !== 0) {
-        if (isNotFound(pods.stderr)) {
-          return {
-            status: "unknown",
-            totalPods: 0,
-            readyPods: 0,
-            readySpotPods: 0,
-            readyOnDemandPods: 0,
-            pods: [],
-            error: "pods not found",
-          };
-        }
-        throw new Error(
-          `kubectl get pods gateway-instance=${gatewayId} ns=${namespace} failed (code=${pods.code}): ${
-            pods.stderr.trim() || pods.stdout.trim()
-          }`,
-        );
-      }
-      const nodeNames = gatewayPodNodeNames(pods.stdout);
-      const observations = await Promise.all(nodeNames.map(async (nodeName) => {
-        const node = await deps.runKubectl(["get", "node", nodeName, "-o", "json"]);
-        if (node.code !== 0) {
-          if (isNotFound(node.stderr)) return [nodeName, "unknown"] as const;
-          throw new Error(
-            `kubectl get node ${nodeName} failed (code=${node.code}): ${
-              node.stderr.trim() || node.stdout.trim()
-            }`,
-          );
-        }
-        return [nodeName, nodeCapacityClass(node.stdout)] as const;
-      }));
-      return summarizeGatewaySpotCapacity(pods.stdout, new Map(observations));
-    },
+    readGatewaySpotCapacity: (input) => readGatewaySpotCapacity(deps, input),
 
     async deletePersistentVolumeClaim({ namespace, name }) {
       await deleteKubeResource(deps, "pvc", { namespace, name });

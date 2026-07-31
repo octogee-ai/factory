@@ -2707,6 +2707,98 @@ export async function readMigrationUserSnapshot(
   };
 }
 
+type CapacityRebalanceNonceClaim =
+  | { kind: "claimed"; sourcePodUids: readonly string[] }
+  | { kind: "completed" }
+  | { kind: "rejected"; error: string };
+
+type CapacityRebalanceGatewayRoot = NonNullable<
+  ReturnType<typeof projectGatewayDesiredRootForGateway>
+>;
+
+function capacityRebalanceClaimRoot(
+  root: CapacityRebalanceGatewayRoot | null,
+  gatewayId: string,
+): { root: CapacityRebalanceGatewayRoot } | { error: string } {
+  if (!root) return { error: `gateway ${gatewayId} has no durable desired state` };
+  if (root.gatewayClass !== "shared") return { error: `gateway ${gatewayId} is not a shared gateway` };
+  if (root.desiredStatus !== "running") {
+    return { error: `gateway ${gatewayId} is ${root.desiredStatus}, not running` };
+  }
+  if (isOperatorManaged(root.managedBy)) return { error: `gateway ${gatewayId} is operator-managed` };
+  return { root };
+}
+
+function existingCapacityRebalanceClaim(
+  root: CapacityRebalanceGatewayRoot,
+  gatewayId: string,
+  operationId: string,
+): CapacityRebalanceNonceClaim | null {
+  const current = gatewayCapacityRebalanceIntent(root.capacityRebalance);
+  if (root.capacityRebalance !== undefined && !current) {
+    return { kind: "rejected", error: `gateway ${gatewayId} has malformed capacity rebalance state` };
+  }
+  if (!current?.active) {
+    return current?.operationId === operationId && root.capacityRebalanceNonce === operationId
+      ? { kind: "completed" }
+      : null;
+  }
+  if (root.capacityRebalanceNonce !== current.nonce) {
+    return { kind: "rejected", error: `gateway ${gatewayId} has malformed active capacity rebalance state` };
+  }
+  if (current.operationId !== operationId) {
+    return {
+      kind: "rejected",
+      error: `gateway ${gatewayId} capacity rebalance is owned by ${current.operationId}`,
+    };
+  }
+  return { kind: "claimed", sourcePodUids: current.sourcePodUids };
+}
+
+async function claimCapacityRebalanceNonce(
+  db: Firestore,
+  input: { gatewayId: string; operationId: string; sourcePodUids: readonly string[] },
+): Promise<CapacityRebalanceNonceClaim> {
+  return db.runTransaction(async (txn) => {
+    const ref = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+    const snapshot = await txn.get(ref);
+    const root = projectGatewayDesiredRootForGateway(
+      snapshot.exists ? snapshot.data() : undefined,
+      input.gatewayId,
+    );
+    const checked = capacityRebalanceClaimRoot(root, input.gatewayId);
+    if ("error" in checked) return { kind: "rejected", error: checked.error };
+    const existing = existingCapacityRebalanceClaim(
+      checked.root,
+      input.gatewayId,
+      input.operationId,
+    );
+    if (existing) return existing;
+    const existingNonce = checked.root.capacityRebalanceNonce;
+    if (existingNonce !== undefined && typeof existingNonce !== "string") {
+      return {
+        kind: "rejected",
+        error: `gateway ${input.gatewayId} has malformed capacity rebalance nonce`,
+      };
+    }
+    const now = Date.now();
+    txn.set(ref, {
+      capacityRebalanceNonce: input.operationId,
+      capacityRebalance: {
+        nonce: input.operationId,
+        active: true,
+        operationId: input.operationId,
+        previousNonce: existingNonce ?? null,
+        sourcePodUids: [...input.sourcePodUids],
+        requestedAt: now,
+      },
+      updatedAt: now,
+      updatedBy: `capacity-rebalance:${input.operationId}`,
+    }, { merge: true });
+    return { kind: "claimed", sourcePodUids: [...input.sourcePodUids] };
+  });
+}
+
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
   db: Firestore,
@@ -3137,78 +3229,7 @@ async function buildHandlers(
           }
         : null;
     },
-    claimNonce: async ({ gatewayId, operationId, sourcePodUids }) =>
-      db.runTransaction(async (txn) => {
-        const ref = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-        const snap = await txn.get(ref);
-        const root = projectGatewayDesiredRootForGateway(
-          snap.exists ? snap.data() : undefined,
-          gatewayId,
-        );
-        if (!root) return { kind: "rejected" as const, error: `gateway ${gatewayId} has no durable desired state` };
-        if (root.gatewayClass !== "shared") {
-          return { kind: "rejected" as const, error: `gateway ${gatewayId} is not a shared gateway` };
-        }
-        if (root.desiredStatus !== "running") {
-          return {
-            kind: "rejected" as const,
-            error: `gateway ${gatewayId} is ${root.desiredStatus}, not running`,
-          };
-        }
-        if (isOperatorManaged(root.managedBy)) {
-          return { kind: "rejected" as const, error: `gateway ${gatewayId} is operator-managed` };
-        }
-        const current = gatewayCapacityRebalanceIntent(root.capacityRebalance);
-        if (root.capacityRebalance !== undefined && !current) {
-          return {
-            kind: "rejected" as const,
-            error: `gateway ${gatewayId} has malformed capacity rebalance state`,
-          };
-        }
-        if (current?.active) {
-          if (root.capacityRebalanceNonce !== current.nonce) {
-            return {
-              kind: "rejected" as const,
-              error: `gateway ${gatewayId} has malformed active capacity rebalance state`,
-            };
-          }
-          if (current.operationId !== operationId) {
-            return {
-              kind: "rejected" as const,
-              error: `gateway ${gatewayId} capacity rebalance is owned by ${current.operationId}`,
-            };
-          }
-          return { kind: "claimed" as const, sourcePodUids: current.sourcePodUids };
-        }
-        if (
-          current?.operationId === operationId &&
-          root.capacityRebalanceNonce === operationId
-        ) {
-          return { kind: "completed" as const };
-        }
-        const existingNonce = root.capacityRebalanceNonce;
-        if (existingNonce !== undefined && typeof existingNonce !== "string") {
-          return {
-            kind: "rejected" as const,
-            error: `gateway ${gatewayId} has malformed capacity rebalance nonce`,
-          };
-        }
-        const now = Date.now();
-        txn.set(ref, {
-          capacityRebalanceNonce: operationId,
-          capacityRebalance: {
-            nonce: operationId,
-            active: true,
-            operationId,
-            previousNonce: existingNonce ?? null,
-            sourcePodUids: [...sourcePodUids],
-            requestedAt: now,
-          },
-          updatedAt: now,
-          updatedBy: `capacity-rebalance:${operationId}`,
-        }, { merge: true });
-        return { kind: "claimed" as const, sourcePodUids: [...sourcePodUids] };
-      }),
+    claimNonce: (input) => claimCapacityRebalanceNonce(db, input),
     completeNonce: async ({ gatewayId, operationId }) =>
       db.runTransaction(async (txn) => {
         const ref = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);

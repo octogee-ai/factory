@@ -54,26 +54,38 @@ export function findSerialConflict(
   return { conflictingOpId: conflict.id, waitingOn: describeWaitingOn(conflict) };
 }
 
+function inputString(input: OperationRef["input"], key: string): string | undefined {
+  const value = input?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function rolloutWaitingOn(input: OperationRef["input"]): string | null {
+  const gatewayId = inputString(input, "gatewayId");
+  if (!gatewayId) return null;
+  const imageTag = inputString(input, "imageTag");
+  return imageTag ? `roll ${gatewayId} → ${imageTag}` : `roll ${gatewayId}`;
+}
+
+function capacityRebalanceWaitingOn(input: OperationRef["input"]): string {
+  const gatewayId = inputString(input, "gatewayId");
+  return gatewayId ? `capacity rebalance ${gatewayId}` : "another capacity rebalance";
+}
+
+function migrationWaitingOn(input: OperationRef["input"]): string | null {
+  const toGatewayId = inputString(input, "toGatewayId");
+  if (!toGatewayId) return null;
+  const fromGatewayId = inputString(input, "fromGatewayId");
+  return fromGatewayId ? `migration ${fromGatewayId} → ${toGatewayId}` : `migration → ${toGatewayId}`;
+}
+
+const WAITING_ON_DESCRIPTIONS: Readonly<Record<string, (input: OperationRef["input"]) => string | null>> = {
+  rollout: rolloutWaitingOn,
+  "rebalance-gateway-capacity": capacityRebalanceWaitingOn,
+  "migrate-customer": migrationWaitingOn,
+};
+
 function describeWaitingOn(op: OperationRef): string {
-  if (op.kind === "rollout") {
-    const gatewayId = typeof op.input?.gatewayId === "string" ? op.input.gatewayId : undefined;
-    const imageTag = typeof op.input?.imageTag === "string" ? op.input.imageTag : undefined;
-    if (gatewayId) {
-      return imageTag ? `roll ${gatewayId} → ${imageTag}` : `roll ${gatewayId}`;
-    }
-  }
-  if (op.kind === "rebalance-gateway-capacity") {
-    const gatewayId = typeof op.input?.gatewayId === "string" ? op.input.gatewayId : undefined;
-    return gatewayId ? `capacity rebalance ${gatewayId}` : "another capacity rebalance";
-  }
-  if (op.kind === "migrate-customer") {
-    const toGatewayId = typeof op.input?.toGatewayId === "string" ? op.input.toGatewayId : undefined;
-    const fromGatewayId = typeof op.input?.fromGatewayId === "string" ? op.input.fromGatewayId : undefined;
-    if (toGatewayId) {
-      return fromGatewayId ? `migration ${fromGatewayId} → ${toGatewayId}` : `migration → ${toGatewayId}`;
-    }
-  }
-  return `another ${op.kind} operation`;
+  return WAITING_ON_DESCRIPTIONS[op.kind]?.(op.input) ?? `another ${op.kind} operation`;
 }
 
 export interface PendingOperationRef extends OperationRef {
