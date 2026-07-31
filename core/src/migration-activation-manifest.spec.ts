@@ -10,6 +10,7 @@ import {
   writeActivationManifest,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
+import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
 
 const tmpDirs: string[] = [];
 
@@ -205,6 +206,49 @@ describe("migration activation manifest", () => {
         "bindings",
       ],
     });
+  });
+
+  it("rebinds redacted platform embedding refs before replacing the stable agent list", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            list: [{
+              id: "octogee-bob-coach",
+              memorySearch: {
+                provider: "openai-compatible",
+                remote: {
+                  baseUrl: "http://llm-broker:3010/v1",
+                  apiKey: {
+                    source: "exec",
+                    provider: "gcp-secret-manager",
+                    id: "__OPENCLAW_REDACTED__",
+                  },
+                },
+              },
+            }],
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { list: Array<{ id: string; memorySearch?: { remote?: { apiKey?: { id?: string } } } }> };
+    };
+    expect(patch.agents.list[0]?.memorySearch?.remote?.apiKey?.id).toBe(
+      platformOpenAiEmbeddingSecretId("octogee-bob-coach"),
+    );
   });
 
   it("replays all project agents while leaving foreign accounts and bindings out of the patch", async () => {

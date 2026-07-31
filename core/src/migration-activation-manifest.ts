@@ -13,6 +13,7 @@ import {
   type ConfigCache,
 } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
+import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
@@ -350,20 +351,21 @@ export async function applyOpenClawActivationManifest(
             targetUsesKeyedEntries,
           ),
         }));
+        const nextAgents = targetUsesKeyedEntries
+          ? activationAgents.map((entry) => entry.agent)
+          : activationAgents.reduce(
+            (agentList, entry) => upsertAgentInFullAgentList(
+              { agents: { list: agentList } },
+              entry.agentId,
+              entry.agent,
+            ),
+            replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
+          );
         return {
           agents: customerAgentRosterPatch(
             current,
             manifest.slug,
-            targetUsesKeyedEntries
-              ? activationAgents.map((entry) => entry.agent)
-              : activationAgents.reduce(
-                (agentList, entry) => upsertAgentInFullAgentList(
-                  { agents: { list: agentList } },
-                  entry.agentId,
-                  entry.agent,
-                ),
-                replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
-              ),
+            rebindPlatformEmbeddingRefs(nextAgents),
           ),
           bindings: [
             ...currentBindings.filter(

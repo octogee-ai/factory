@@ -1,8 +1,15 @@
 import { projectAgentId } from "../../shared/types/identity.js";
+import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
 import {
   mattermostAccountSecretRef,
   type MattermostAccountSecretRef,
 } from "./mattermost-account-secrets.js";
+
+export {
+  PLATFORM_EMBEDDING_SECRET_PREFIX,
+  platformOpenAiEmbeddingSecretId,
+  rebindPlatformEmbeddingRefs,
+} from "@octogee/core/platform-embedding-refs";
 
 const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
 // In-cluster K8s Service DNS (llm-broker), same as the Helm default it
@@ -22,10 +29,6 @@ function normalizedBaseUrl(value: string | undefined): string {
     baseUrl = baseUrl.slice(0, -1);
   }
   return baseUrl;
-}
-
-export function platformOpenAiEmbeddingSecretId(agentId: string): string {
-  return `agent-embedding-token-openai-${agentId}`;
 }
 
 export function platformOpenAiEmbeddingMemorySearch(
@@ -50,63 +53,6 @@ export function platformOpenAiEmbeddingsEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return /^(1|true|yes|on)$/iu.test(env.OPENAI_EMBEDDINGS_ENABLED ?? "");
-}
-
-export const PLATFORM_EMBEDDING_SECRET_PREFIX = "agent-embedding-token-openai-";
-const OPENCLAW_REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function recordOrEmpty(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function selectMemorySearch(entry: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (isRecord(entry.memorySearch)) return entry.memorySearch;
-  if (isRecord(entry.memory) && isRecord(entry.memory.search)) return entry.memory.search;
-  return undefined;
-}
-
-// A platform embedding SecretRef is DERIVED from its agent id, never carried.
-// Two corruption vectors make carrying fatal: (1) a full agents.list rebuilt
-// from a shifted `current` hands one coach another coach's ref, and (2) —
-// the live r9 wedge — config.get REDACTS the id to __OPENCLAW_REDACTED__ and
-// the server back-substitutes sentinels BY ARRAY INDEX on patch-apply, so any
-// removal shifts every survivor. Rewriting sentinels to the derived id here
-// means our patches carry real values and the server has nothing to
-// substitute. Safe because buildCustomerAgent is the only writer of
-// exec/gcp-secret-manager embedding refs on gateway pods — a future BYO
-// embedding ref must use a distinguishable source/provider shape. Non-platform
-// (BYO-shaped) ids pass through untouched.
-function rebindPlatformEmbeddingRef(entry: unknown): unknown {
-  if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
-  const memorySearch = selectMemorySearch(entry);
-  if (!memorySearch) return entry;
-  const remote = memorySearch.remote;
-  if (!isRecord(remote)) return entry;
-  const apiKey = remote.apiKey;
-  if (!isRecord(apiKey) || typeof apiKey.id !== "string") return entry;
-  const platformShaped =
-    apiKey.id.startsWith("platform-openai-embedding-") ||
-    apiKey.id.startsWith(PLATFORM_EMBEDDING_SECRET_PREFIX) ||
-    (apiKey.id === OPENCLAW_REDACTED_SENTINEL &&
-      apiKey.source === "exec" &&
-      apiKey.provider === "gcp-secret-manager");
-  if (!platformShaped) return entry;
-  const expected = platformOpenAiEmbeddingSecretId(entry.id);
-  if (apiKey.id === expected) return entry;
-  const reboundSearch = {
-    ...memorySearch,
-    remote: { ...remote, apiKey: { ...apiKey, id: expected } },
-  };
-  if (isRecord(entry.memorySearch)) return { ...entry, memorySearch: reboundSearch };
-  return { ...entry, memory: { ...recordOrEmpty(entry.memory), search: reboundSearch } };
-}
-
-export function rebindPlatformEmbeddingRefs(agents: readonly unknown[]): unknown[] {
-  return agents.map(rebindPlatformEmbeddingRef);
 }
 
 export interface ProjectRestoreInput {

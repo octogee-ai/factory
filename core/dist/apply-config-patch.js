@@ -104,7 +104,8 @@ async function runConfigPatchAttempt(args, ctx) {
 function isPermanentConfigPatchError(err) {
     return (err.code === "auth-failed" ||
         err.code === "invalid-patch" ||
-        err.code === "invalid-response");
+        err.code === "invalid-response" ||
+        (err.code === "rpc-error" && /redacted id placeholder with no matching original value/i.test(err.message)));
 }
 function isDestructiveArrayGuardError(err) {
     return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);

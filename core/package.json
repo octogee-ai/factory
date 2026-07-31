@@ -229,6 +229,10 @@
       "types": "./dist/openclaw-control-runtime-ready.d.ts",
       "default": "./dist/openclaw-control-runtime-ready.js"
     },
+    "./platform-embedding-refs": {
+      "types": "./dist/platform-embedding-refs.d.ts",
+      "default": "./dist/platform-embedding-refs.js"
+    },
     "./secret-manager": {
       "types": "./dist/secret-manager.d.ts",
       "default": "./dist/secret-manager.js"
@@ -516,6 +520,9 @@
       ],
       "openclaw-control-runtime-ready": [
         "dist/openclaw-control-runtime-ready.d.ts"
+      ],
+      "platform-embedding-refs": [
+        "dist/platform-embedding-refs.d.ts"
       ],
       "secret-manager": [
         "dist/secret-manager.d.ts"

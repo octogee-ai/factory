@@ -4,6 +4,7 @@ import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
+import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
 function isRecord(value) {
@@ -228,10 +229,11 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 ...entry,
                 agent: activationAgentForTarget(entry.agent, currentActivationAgent(current, entry.agentId), targetUsesKeyedEntries),
             }));
+            const nextAgents = targetUsesKeyedEntries
+                ? activationAgents.map((entry) => entry.agent)
+                : activationAgents.reduce((agentList, entry) => upsertAgentInFullAgentList({ agents: { list: agentList } }, entry.agentId, entry.agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
             return {
-                agents: customerAgentRosterPatch(current, manifest.slug, targetUsesKeyedEntries
-                    ? activationAgents.map((entry) => entry.agent)
-                    : activationAgents.reduce((agentList, entry) => upsertAgentInFullAgentList({ agents: { list: agentList } }, entry.agentId, entry.agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []))),
+                agents: customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(nextAgents)),
                 bindings: [
                     ...currentBindings.filter((binding) => !(isRecord(binding)
                         && typeof binding.agentId === "string"

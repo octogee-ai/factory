@@ -294,6 +294,25 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     ).rejects.toMatchObject({ code: "invalid-response" });
     expect(sleep).not.toHaveBeenCalled();
   });
+
+  it("throws a redacted SecretRef placeholder rejection without retry", async () => {
+    const configPatch = vi.fn(async () => {
+      throw new OpenclawWireError(
+        "rpc-error",
+        "SecretRef at agents.list[].memorySearch.remote.apiKey contains a redacted id placeholder with no matching original value.",
+      );
+    });
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}) },
+        { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configPatch }) },
+      ),
+    ).rejects.toMatchObject({ code: "rpc-error" });
+    expect(configPatch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
 });
 
 describe("applyConfigPatch — caller error bubbling", () => {
@@ -776,7 +795,7 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
 });
 
 describe("isPermanentConfigPatchFailure", () => {
-  it("classifies invalid patch responses and destructive array guard rejections as permanent", () => {
+  it("classifies invalid patch responses, redacted SecretRefs, and destructive array guard rejections as permanent", () => {
     expect(
       isPermanentConfigPatchFailure(
         new OpenclawWireError("invalid-patch", "invalid patch"),
@@ -787,6 +806,14 @@ describe("isPermanentConfigPatchFailure", () => {
         new OpenclawWireError(
           "rpc-error",
           "config.patch would remove entries from array path(s): bindings",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError(
+          "rpc-error",
+          "SecretRef at agents.list[].memorySearch.remote.apiKey contains a redacted id placeholder with no matching original value.",
         ),
       ),
     ).toBe(true);
