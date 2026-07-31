@@ -439,6 +439,20 @@ function assertRecoverySource(input) {
     }
     return disposableRecoveryLease(root, openclaw, params);
 }
+function clearRecoveredSourceMount(input) {
+    const runtimeData = input.sourceRuntimeSnapshot.exists
+        ? input.sourceRuntimeSnapshot.data()
+        : undefined;
+    const runtime = isGatewayRuntimeDoc(runtimeData) ? runtimeData : null;
+    if (!runtime?.heartbeat.mountedCustomers.includes(input.slug))
+        return;
+    input.txn.update(input.sourceRuntimeRef, {
+        heartbeat: {
+            ...runtime.heartbeat,
+            mountedCustomers: runtime.heartbeat.mountedCustomers.filter((mountedCustomer) => mountedCustomer !== input.slug),
+        },
+    });
+}
 export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
     if (!params.operationId ||
         !Number.isSafeInteger(params.expectedSourceEpoch) ||
@@ -471,10 +485,6 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         const targetAssignment = targetAssignmentSnapshot.exists
             ? targetAssignmentSnapshot.data()
             : undefined;
-        const sourceRuntimeData = sourceRuntimeSnapshot.exists
-            ? sourceRuntimeSnapshot.data()
-            : undefined;
-        const sourceRuntime = isGatewayRuntimeDoc(sourceRuntimeData) ? sourceRuntimeData : null;
         if (recoveryAlreadyCommitted({
             params,
             operation,
@@ -513,14 +523,12 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         });
         const targetRoot = targetRootSnapshot.data();
         const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
-        if (sourceRuntime?.heartbeat.mountedCustomers.includes(params.slug)) {
-            txn.update(sourceRuntimeRef, {
-                heartbeat: {
-                    ...sourceRuntime.heartbeat,
-                    mountedCustomers: sourceRuntime.heartbeat.mountedCustomers.filter((mountedCustomer) => mountedCustomer !== params.slug),
-                },
-            });
-        }
+        clearRecoveredSourceMount({
+            txn,
+            sourceRuntimeRef,
+            sourceRuntimeSnapshot,
+            slug: params.slug,
+        });
         txn.update(userRef, {
             "provisioning.openclaw.gatewayId": params.toGatewayId,
             "provisioning.openclaw.gatewayAssignedAt": nowMs,
