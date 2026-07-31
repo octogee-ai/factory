@@ -1193,8 +1193,56 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 
     expect(patchMocks.applyConfigPatch).toHaveBeenLastCalledWith(
       { buildPatch: expect.any(Function) },
-      expect.objectContaining({ maxRetries: 2, rpc }),
+      expect.objectContaining({
+        maxRetries: 2,
+        rpc,
+        cache: expect.objectContaining({ current: undefined, hash: "" }),
+      }),
     );
+  });
+
+  it("shares the lifecycle config cache with model convergence after the mount patch", async () => {
+    const snapshot = fullSnapshot({
+      coachToken: "pat-tester10",
+      coachMmUserId: "mm-tester10-coach",
+      mattermostUserId: "mm-tester10",
+      customerMmUserId: "mm-tester10",
+    });
+    const rpc = mkGatewayRpc();
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
+      if (!options.cache) throw new Error("expected lifecycle config cache");
+      options.cache.current = { mounted: snapshot.slug };
+      options.cache.hash = "mounted-hash";
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({
+        userSnapshot: vi.fn(async () => snapshot),
+      }),
+      rpc,
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, {
+      _coachPersonalToken: snapshot.coachToken,
+    });
+    const mountOptions = patchMocks.applyConfigPatch.mock.calls.at(-1)?.[1];
+
+    await adapter.reassertByotForCustomer({
+      username: snapshot.slug,
+      byotActive: false,
+      provisioning: { openclaw: { status: "complete" } },
+    });
+    const deps = modelCredentialMocks.syncModelCredentialsForCustomer.mock.calls.at(-1)?.[1];
+    await deps.applyConfigPatch({ buildPatch: () => ({}) }, {});
+    const modelOptions = patchMocks.applyConfigPatch.mock.calls.at(-1)?.[1];
+
+    expect(mountOptions?.cache).toBeDefined();
+    expect(modelOptions?.cache).toBe(mountOptions?.cache);
+    expect(modelOptions?.cache).toEqual({
+      current: { mounted: snapshot.slug },
+      hash: "mounted-hash",
+    });
   });
 
   it("reconcileCommunityMembership delegates to the fleet broker's ensure-community-membership RPC (no admin creds in-pod)", async () => {

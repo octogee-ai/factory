@@ -573,6 +573,8 @@ The stack currently exists to provide these product behaviors:
 - tenant-scoped Mattermost reloads instead of reconnecting every tenant;
 - trusted local `config.patch` writes without the untrusted-client rate cap;
 - post-write config hashes so callers can skip no-op patches;
+- reuse of successfully resolved, unchanged exec-backed SecretRefs during
+  automatic config writes and refreshes;
 - sidecar-visible Agent activity and session-correlated diagnostics;
 - durable activity capture and warm terminal fallback; and
 - device-token self-pairing restrictions.

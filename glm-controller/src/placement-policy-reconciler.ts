@@ -58,6 +58,7 @@ import {
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
+export const SHARED_GATEWAY_REBALANCE_STABILITY_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION =
   "gatewayRecoveryReceipts";
 const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
@@ -107,6 +108,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   kubernetesStatus?: PlacementPolicyKubernetesStatus;
   serving?: boolean;
   heartbeatFresh?: boolean;
+  runtimeStartedAt?: number | null;
   liveReleaseReady?: boolean;
   rosterComplete?: boolean;
   assignmentCount?: number;
@@ -427,6 +429,18 @@ function sharedGatewayCandidates(
       incomingMigrationCount,
       assignmentCount,
     };
+  });
+}
+
+function sharedGatewayPoolStableForRebalance(
+  context: PlacementPolicyReconcileContext,
+): boolean {
+  const now = context.deps.now();
+  return context.state.sharedGatewayIds.every((gatewayId) => {
+    const startedAt = context.gateways.get(gatewayId)?.runtimeStartedAt;
+    return typeof startedAt === "number" &&
+      Number.isFinite(startedAt) &&
+      now - startedAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
   });
 }
 
@@ -1674,7 +1688,7 @@ async function reconcileSharedGatewayRebalance(
     },
     candidates: sharedGatewayCandidates(context),
   });
-  if (!plan) return;
+  if (!plan || !sharedGatewayPoolStableForRebalance(context)) return;
   for (const user of [...context.state.users].sort((left, right) => left.uid.localeCompare(right.uid))) {
     const userGatewayId = currentGatewayId(user.data);
     if (userGatewayId !== plan.fromGatewayId) continue;
@@ -1983,6 +1997,7 @@ function placementGatewayFromDocument(input: {
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
     heartbeatFresh,
+    runtimeStartedAt: millis(runtime?.heartbeat.startedAt),
     liveReleaseReady: [
       runtime !== null,
       root.liveRelease !== null,

@@ -71,6 +71,7 @@ export const BROKER_BASE_URL =
   process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL || `http://${BROKER_HOST}:3001`;
 export const KSA_TOKEN_PATH =
   process.env.OCTOGEE_API_SA_TOKEN_PATH || "/var/run/secrets/octogee-gateway-broker/token";
+export const BROKER_REQUEST_TIMEOUT_MS = 4000;
 
 const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
@@ -198,6 +199,7 @@ async function readRequest() {
 export async function resolveOne(id, deps = {}) {
   const token = deps.token ?? fs.readFileSync(KSA_TOKEN_PATH, "utf8").trim();
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const requestTimeoutMs = deps.requestTimeoutMs ?? BROKER_REQUEST_TIMEOUT_MS;
   const headers = { "content-type": "application/json", "x-k8s-sa-token": token };
   if (process.env.INTERNAL_SERVICE_KEY) {
     headers["x-internal-service-key"] = process.env.INTERNAL_SERVICE_KEY;
@@ -227,6 +229,7 @@ export async function resolveOne(id, deps = {}) {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(requestTimeoutMs),
   });
   if (!res.ok) {
     throw new Error(`byok broker returned ${res.status}`);
