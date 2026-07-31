@@ -62,7 +62,7 @@ export function createRestartGatewayHandler(
           error: message,
         });
         deps.log(
-          `[restart-gateway] ${gatewayId} pod was already replaced; in-process restart is satisfied`,
+          `[restart-gateway] ${gatewayId} pod is no longer execable; Kubernetes replacement satisfies restart intent`,
         );
         return { steps: [], success: true };
       }
