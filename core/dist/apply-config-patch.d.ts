@@ -30,6 +30,7 @@ export interface ConfigPatchRetryPlan {
     source: "server retry-after" | "exp backoff";
 }
 export declare function configPatchRetryPlan(err: OpenclawWireError, currentBackoffMs: number, remainingMs: number): ConfigPatchRetryPlan;
+export declare function isPermanentConfigPatchFailure(err: unknown): boolean;
 export interface ApplyConfigPatchResult {
     mode: "rpc";
     attempts: number;

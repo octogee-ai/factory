@@ -28,13 +28,15 @@ export interface ReconcileLoopDeps {
   getContentStale?: () => string[];
   /** Idempotent mount/restore — safe to call every tick until observed catches up. */
   ensureSlug: (slug: string) => Promise<EnsureOutcome>;
+  shouldEnsureSlug?: (slug: string) => boolean;
+  shouldDeferRemainingMounts?: (error: unknown) => boolean;
   unmountSlug: (slug: string) => Promise<UnmountOutcome>;
   log: (msg: string) => void;
   /** Cap concurrent mounts/evicts so a cold pod doesn't thundering-herd. */
   maxConcurrent?: number;
   /** Best-effort: an ensure threw. For surfacing a bounded gateways/{id}.lastError mirror.
    *  MUST NOT throw — the loop guards it, but it should not rely on that. */
-  onEnsureError?: (slug: string, message: string) => void;
+  onEnsureError?: (slug: string, message: string, error: unknown) => void;
   /** Best-effort: an ensure succeeded — clear any prior lastError for this slug. */
   onEnsureSuccess?: (slug: string) => void;
 }
@@ -72,7 +74,10 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
   // content has drifted. Staleness never resurrects an unassigned slug — the filter is
   // over `desired`, so a stale slug that is no longer desired falls through to evict.
   const toMount = [...desired].filter(
-    (s) => (!mountObserved.has(s) || contentStale.has(s)) && !inFlight.has(s),
+    (s) =>
+      (!mountObserved.has(s) || contentStale.has(s)) &&
+      !inFlight.has(s) &&
+      (deps.shouldEnsureSlug?.(s) ?? true),
   );
   const toEvict = [...evictObserved].filter((s) => !desired.has(s) && !inFlight.has(s));
 
@@ -84,10 +89,36 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
     `[reconcile] ${deps.gatewayId}: +${toMount.length} mount${mountList} / -${toEvict.length} evict${evictList}`,
   );
 
-  const actions: Array<() => Promise<void>> = [];
+  let evictionFailed = false;
+  const evictions: Array<() => Promise<void>> = [];
 
+  for (const slug of toEvict) {
+    evictions.push(async () => {
+      inFlight.add(slug);
+      try {
+        const outcome = await deps.unmountSlug(slug);
+        deps.log(`[reconcile] ${deps.gatewayId}: evicted ${slug} (${outcome})`);
+      } catch (err) {
+        evictionFailed = true;
+        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ evict failed for ${slug}: ${errMessage(err)}`);
+      } finally {
+        inFlight.delete(slug);
+      }
+    });
+  }
+
+  await runBounded(evictions, deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
+
+  if (evictionFailed) {
+    deps.log(`[reconcile] ${deps.gatewayId}: deferring ${toMount.length} mount(s) until eviction succeeds`);
+    return;
+  }
+
+  const mounts: Array<() => Promise<void>> = [];
+  let deferRemainingMounts = false;
   for (const slug of toMount) {
-    actions.push(async () => {
+    mounts.push(async () => {
+      if (deferRemainingMounts) return;
       inFlight.add(slug);
       try {
         const outcome = await deps.ensureSlug(slug);
@@ -96,28 +127,21 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
       } catch (err) {
         const message = errMessage(err);
         deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${message}`);
-        fireSafely(deps, () => deps.onEnsureError?.(slug, message));
+        if (deps.shouldDeferRemainingMounts?.(err)) {
+          deferRemainingMounts = true;
+          deps.log(`[reconcile] ${deps.gatewayId}: deferring remaining mounts after permanent ensure failure`);
+        }
+        fireSafely(deps, () => deps.onEnsureError?.(slug, message, err));
       } finally {
         inFlight.delete(slug);
       }
     });
   }
 
-  for (const slug of toEvict) {
-    actions.push(async () => {
-      inFlight.add(slug);
-      try {
-        const outcome = await deps.unmountSlug(slug);
-        deps.log(`[reconcile] ${deps.gatewayId}: evicted ${slug} (${outcome})`);
-      } catch (err) {
-        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ evict failed for ${slug}: ${errMessage(err)}`);
-      } finally {
-        inFlight.delete(slug);
-      }
-    });
-  }
-
-  await runBounded(actions, deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
+  await runBounded(
+    mounts,
+    deps.shouldDeferRemainingMounts ? 1 : (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT),
+  );
 }
 
 async function runBounded(actions: Array<() => Promise<void>>, max: number): Promise<void> {

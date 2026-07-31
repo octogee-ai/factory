@@ -109,6 +109,10 @@ function isPermanentConfigPatchError(err) {
 function isDestructiveArrayGuardError(err) {
     return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
 }
+export function isPermanentConfigPatchFailure(err) {
+    return (err instanceof OpenclawWireError &&
+        (isPermanentConfigPatchError(err) || isDestructiveArrayGuardError(err)));
+}
 function throwIfPermanentConfigPatchFailure(err, ctx) {
     if (isPermanentConfigPatchError(err)) {
         ctx.log(`⚠ ${ctx.prefix}config.patch ${err.code} (permanent) after ${ctx.elapsed}ms — giving up: ${err.message}`);

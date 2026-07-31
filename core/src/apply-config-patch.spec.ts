@@ -15,6 +15,7 @@ vi.mock("./gateway-rpc.js", async (importActual) => {
 import {
   applyConfigPatch,
   configPatchRetryPlan,
+  isPermanentConfigPatchFailure,
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
   customerConfigFullAgentListReplacePaths,
@@ -771,6 +772,27 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
     expect(configPatch).toHaveBeenCalledTimes(1); // permanent — not retried to the deadline
     expect(sleep).not.toHaveBeenCalled();
     expect(logs.some((l) => l.includes("buildReplacePaths"))).toBe(true); // points at the fix
+  });
+});
+
+describe("isPermanentConfigPatchFailure", () => {
+  it("classifies invalid patch responses and destructive array guard rejections as permanent", () => {
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError("invalid-patch", "invalid patch"),
+      ),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError(
+          "rpc-error",
+          "config.patch would remove entries from array path(s): bindings",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(new OpenclawWireError("timeout", "timed out")),
+    ).toBe(false);
   });
 });
 

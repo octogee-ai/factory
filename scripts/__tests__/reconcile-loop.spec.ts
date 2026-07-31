@@ -67,6 +67,105 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(d.evicted).toEqual(["d"]);
   });
 
+  it("evicts stale local state before mounting the assigned roster", async () => {
+    const actions: string[] = [];
+    let staleConfigPresent = true;
+    const eviction = deferred();
+    const d = mkDeps({
+      maxConcurrent: 4,
+      ...observed(["test31"]),
+      readDesired: async () => ["alice", "bob"],
+      unmountSlug: async (slug) => {
+        actions.push(`evict:${slug}`);
+        await eviction.promise;
+        staleConfigPresent = false;
+        return "drained";
+      },
+      ensureSlug: async (slug) => {
+        actions.push(`mount:${slug}`);
+        if (staleConfigPresent) throw new Error("stale unauthorized SecretRef remains configured");
+        return "mounted";
+      },
+    });
+
+    const reconcile = reconcileFleet(d);
+    await flushMicrotasks();
+    expect(actions).toEqual(["evict:test31"]);
+    eviction.resolve();
+    await reconcile;
+
+    expect(actions).toEqual(["evict:test31", "mount:alice", "mount:bob"]);
+  });
+
+  it("defers mounts when stale local state cannot be evicted", async () => {
+    const d = mkDeps({
+      ...observed(["test31"]),
+      readDesired: async () => ["alice"],
+      unmountSlug: async () => {
+        throw new Error("remove config.patch rejected");
+      },
+    });
+
+    await reconcileFleet(d);
+
+    expect(d.ensured).toEqual([]);
+    expect(d.logs.some((line) => line.includes("deferring 1 mount"))).toBe(true);
+  });
+
+  it("stops the serial mount lane after a permanent config failure", async () => {
+    const d = mkDeps({
+      maxConcurrent: 1,
+      readDesired: async () => ["poisoned", "protected"],
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        if (slug === "poisoned") throw new Error("invalid patch");
+        return "mounted";
+      },
+      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
+    });
+
+    await reconcileFleet(d);
+
+    expect(d.ensured).toEqual(["poisoned"]);
+  });
+
+  it("continues evicting while the ensure lane is held", async () => {
+    const d = mkDeps({
+      ...observed(["stale"]),
+      readDesired: async () => ["alice"],
+      shouldEnsureSlug: () => false,
+    });
+
+    await reconcileFleet(d);
+
+    expect(d.evicted).toEqual(["stale"]);
+    expect(d.ensured).toEqual([]);
+  });
+
+  it("resumes a held mount lane on the next tick after stale state is evicted", async () => {
+    let observedSlugs = ["stale"];
+    let held = true;
+    const d = mkDeps({
+      getMountObserved: () => observedSlugs,
+      getEvictObserved: () => observedSlugs,
+      readDesired: async () => ["alice"],
+      shouldEnsureSlug: () => !held,
+      unmountSlug: async (slug) => {
+        d.evicted.push(slug);
+        held = false;
+        observedSlugs = [];
+        return "drained";
+      },
+    });
+
+    await reconcileFleet(d);
+    expect(d.evicted).toEqual(["stale"]);
+    expect(d.ensured).toEqual([]);
+
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["alice"]);
+  });
+
   it("is a no-op when observed already equals desired (no mount, no evict)", async () => {
     const d = mkDeps({
       ...observed(["a", "b"]),

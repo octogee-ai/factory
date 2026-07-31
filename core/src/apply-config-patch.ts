@@ -221,6 +221,13 @@ function isDestructiveArrayGuardError(err: OpenclawWireError): boolean {
   return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
 }
 
+export function isPermanentConfigPatchFailure(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    (isPermanentConfigPatchError(err) || isDestructiveArrayGuardError(err))
+  );
+}
+
 function throwIfPermanentConfigPatchFailure(
   err: OpenclawWireError,
   ctx: { elapsed: number; log: (msg: string) => void; prefix: string },
