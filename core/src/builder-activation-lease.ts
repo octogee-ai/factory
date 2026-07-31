@@ -256,18 +256,36 @@ function returningLeaseWithPendingDemand(input: {
 
 function adoptedActivationLease(
   lease: Record<string, unknown> | null,
-  eventKey: string,
-  observedAt: number,
+  input: {
+    eventKey: string;
+    cause: BuilderRuntimeDemandCause;
+    observedAt: number;
+    createdBy: string;
+    sourceGatewayId: string;
+    sourceAssignmentEpoch: number;
+  },
 ): Record<string, unknown> | null {
   if (!existingLeaseCanAdopt(lease)) return null;
+  const targetlessRequested =
+    lease!.status === "requested" && lease!.targetGatewayId === undefined;
   return {
     ...lease!,
     status: lease!.status,
     lastActiveAt: Math.max(
       typeof lease?.lastActiveAt === "number" ? lease.lastActiveAt : 0,
-      observedAt,
+      input.observedAt,
     ),
-    lastEventKey: eventKey,
+    lastEventKey: input.eventKey,
+    ...(targetlessRequested
+      ? {
+          cause: input.cause,
+          eventKey: input.eventKey,
+          requestedAt: input.observedAt,
+          requestedBy: input.createdBy,
+          sourceGatewayId: input.sourceGatewayId,
+          sourceAssignmentEpoch: input.sourceAssignmentEpoch,
+        }
+      : {}),
   };
 }
 
@@ -346,7 +364,14 @@ export async function requestBuilderActivationLease(
         pending: true,
       });
     }
-    const adoptedLease = adoptedActivationLease(existing, eventKey, observedAt);
+    const adoptedLease = adoptedActivationLease(existing, {
+      eventKey,
+      cause,
+      observedAt,
+      createdBy: input.createdBy,
+      sourceGatewayId: reportingGatewayId,
+      sourceAssignmentEpoch: assignmentEpoch,
+    });
     if (adoptedLease) {
       transaction.update(userRef, {
         "provisioning.openclaw.activationLease": adoptedLease,
