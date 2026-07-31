@@ -62,6 +62,7 @@ export interface RSyncMigrationTransferDeps {
   db: Firestore;
   namespace: string;
   privateKey: string;
+  fleetControllerPort: string;
   resolveGatewayUrl: (gatewayId: string) => string;
   runCommand?: CommandRunner;
   fetch?: typeof globalThis.fetch;
@@ -148,6 +149,7 @@ function postSignedJson<Resp>(
   },
   opts: {
     transportId: string;
+    baseUrl?: string;
     path: string;
     migrationId: string;
     body: Record<string, unknown>;
@@ -155,7 +157,7 @@ function postSignedJson<Resp>(
 ): Promise<Resp> {
   const rawBody = JSON.stringify(opts.body);
   const signature = signFleetRequest(deps.privateKey, opts.migrationId, rawBody);
-  const url = `${deps.resolveGatewayUrl(opts.transportId)}${opts.path}`;
+  const url = `${opts.baseUrl ?? deps.resolveGatewayUrl(opts.transportId)}${opts.path}`;
   return deps.fetchImpl(url, {
     method: "POST",
     headers: {
@@ -285,6 +287,7 @@ async function resolveRunningGatewayPod(params: {
   namespace: string;
   transportId: string;
   runCommand: CommandRunner;
+  requireReady: boolean;
 }): Promise<{ name: string; podIP: string }> {
   const selector = `app=octogee-gateway,gateway-instance=${params.transportId}`;
   const result = await params.runCommand("kubectl", [
@@ -306,20 +309,27 @@ async function resolveRunningGatewayPod(params: {
   const running = (parsed.items ?? []).filter((item) => {
     if (!item.metadata?.name || !item.status?.podIP || item.metadata.deletionTimestamp) return false;
     if (item.status?.phase !== "Running") return false;
+    if (!params.requireReady) return true;
     return (item.status.conditions ?? []).some(
-      (c) => c.type === "Ready" && c.status === "True",
+      (condition) => condition.type === "Ready" && condition.status === "True",
     );
   });
   if (running.length !== 1) {
+    const state = params.requireReady ? "ready" : "running";
     throw Object.assign(
       new Error(
-        `expected exactly one running pod for transport=${params.transportId}; found ${running.length}`,
+        `expected exactly one ${state} pod for transport=${params.transportId}; found ${running.length}`,
       ),
       { retryable: true },
     );
   }
   const item = running[0];
   return { name: item.metadata!.name!, podIP: item.status!.podIP! };
+}
+
+function podBaseUrl(podIP: string, port: string): string {
+  const host = podIP.includes(":") ? `[${podIP}]` : podIP;
+  return `http://${host}:${port}`;
 }
 
 export function createRsyncMigrationTransfer(
@@ -332,13 +342,14 @@ export function createRsyncMigrationTransfer(
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
   const log = deps.log ?? (() => undefined);
 
-  const control = <Resp>(
-    transportId: string,
-    gatewayId: string,
-    pathSuffix: string,
-    migrationId: string,
-    body: Record<string, unknown>,
-  ) =>
+  const control = <Resp>(opts: {
+    transportId: string;
+    gatewayId: string;
+    pathSuffix: string;
+    migrationId: string;
+    body: Record<string, unknown>;
+    baseUrl?: string;
+  }) =>
     postSignedJson<Resp>(
       {
         fetchImpl,
@@ -346,10 +357,11 @@ export function createRsyncMigrationTransfer(
         resolveGatewayUrl: deps.resolveGatewayUrl,
       },
       {
-        transportId,
-        path: `${pathSuffix}/${gatewayId}`,
-        migrationId,
-        body,
+        transportId: opts.transportId,
+        baseUrl: opts.baseUrl,
+        path: `${opts.pathSuffix}/${opts.gatewayId}`,
+        migrationId: opts.migrationId,
+        body: opts.body,
       },
     );
 
@@ -375,19 +387,24 @@ export function createRsyncMigrationTransfer(
     }
 
     let targetPrepareAttempted = false;
+    let targetPod: { name: string; podIP: string } | undefined;
     try {
-      const [sourcePod, targetPod] = await Promise.all([
+      const [sourcePod, resolvedTargetPod] = await Promise.all([
         resolveRunningGatewayPod({
           namespace: deps.namespace,
           transportId: fromTransportId,
           runCommand,
+          requireReady: true,
         }),
         resolveRunningGatewayPod({
           namespace: deps.namespace,
           transportId: toTransportId,
           runCommand,
+          requireReady: false,
         }),
       ]);
+      targetPod = resolvedTargetPod;
+      const targetBaseUrl = podBaseUrl(targetPod.podIP, deps.fleetControllerPort);
       const prepareBody: PrepareRsyncImportRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
@@ -397,13 +414,14 @@ export function createRsyncMigrationTransfer(
         sourcePodIp: sourcePod.podIP,
       };
       targetPrepareAttempted = true;
-      const prepared = await control<PrepareRsyncImportResponse>(
-        toTransportId,
-        input.toGatewayId,
-        "/prepare-rsync-import",
-        input.migrationId,
-        prepareBody as unknown as Record<string, unknown>,
-      );
+      const prepared = await control<PrepareRsyncImportResponse>({
+        transportId: toTransportId,
+        gatewayId: input.toGatewayId,
+        pathSuffix: "/prepare-rsync-import",
+        migrationId: input.migrationId,
+        body: prepareBody as unknown as Record<string, unknown>,
+        baseUrl: targetBaseUrl,
+      });
       log(
         `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod.name} → ${input.toGatewayId}/${targetPod.name} target=${targetPod.podIP}:${prepared.port}`,
       );
@@ -417,39 +435,41 @@ export function createRsyncMigrationTransfer(
         transferKey,
         includeActivationManifest: input.includeActivationManifest,
       };
-      await control<ImportResponse>(
-        fromTransportId,
-        input.fromGatewayId,
-        "/push-rsync-state",
-        input.migrationId,
-        pushBody as unknown as Record<string, unknown>,
-      );
+      await control<ImportResponse>({
+        transportId: fromTransportId,
+        gatewayId: input.fromGatewayId,
+        pathSuffix: "/push-rsync-state",
+        migrationId: input.migrationId,
+        body: pushBody as unknown as Record<string, unknown>,
+      });
       const finishBody: FinishRsyncImportRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
         mode,
       };
-      await control<ImportResponse>(
-        toTransportId,
-        input.toGatewayId,
-        "/finish-rsync-import",
-        input.migrationId,
-        finishBody as unknown as Record<string, unknown>,
-      );
+      await control<ImportResponse>({
+        transportId: toTransportId,
+        gatewayId: input.toGatewayId,
+        pathSuffix: "/finish-rsync-import",
+        migrationId: input.migrationId,
+        body: finishBody as unknown as Record<string, unknown>,
+        baseUrl: targetBaseUrl,
+      });
       await markTaskSucceeded(claimed.ref, now);
       log(
         `[migration-rsync] ✅ task=${claimed.taskId} mode=${mode} migrationId=${input.migrationId} slug=${input.slug}`,
       );
       return { migrationId: input.migrationId, slug: input.slug, imported: true };
     } catch (err) {
-      if (targetPrepareAttempted) {
-        await control<ImportResponse>(
-          toTransportId,
-          input.toGatewayId,
-          "/abort-rsync-import",
-          input.migrationId,
-          { migrationId: input.migrationId, slug: input.slug, mode },
-        ).catch((abortErr) => {
+      if (targetPrepareAttempted && targetPod) {
+        await control<ImportResponse>({
+          transportId: toTransportId,
+          gatewayId: input.toGatewayId,
+          pathSuffix: "/abort-rsync-import",
+          migrationId: input.migrationId,
+          body: { migrationId: input.migrationId, slug: input.slug, mode },
+          baseUrl: podBaseUrl(targetPod.podIP, deps.fleetControllerPort),
+        }).catch((abortErr) => {
           log(
             `[migration-rsync] ⚠ abort failed mode=${mode} migrationId=${input.migrationId} slug=${input.slug}: ${abortErr instanceof Error ? abortErr.message : String(abortErr)}`,
           );

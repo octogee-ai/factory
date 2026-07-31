@@ -2592,6 +2592,7 @@ function createMigrationClientBuilder(
         db,
         namespace: NAMESPACE,
         privateKey,
+        fleetControllerPort: FLEET_CONTROLLER_PORT,
         resolveGatewayUrl: resolveSync,
         log: logFn,
       }),

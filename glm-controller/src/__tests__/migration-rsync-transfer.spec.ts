@@ -12,6 +12,8 @@ type Store = Record<string, Record<string, unknown>>;
 
 const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
 const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
+const IPV6_TARGET_POD_IP = "fd00::20";
+const FLEET_CONTROLLER_PORT = "3003";
 
 function makeDb(store: Store): Firestore {
   const docFor = (collection: string, id: string) => ({
@@ -63,22 +65,29 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function readyPod(name: string): Response {
+function runningPod(name: string, ready = true, podIP?: string): Response {
   return jsonResponse({
     items: [
       {
         metadata: { name },
         status: {
           phase: "Running",
-          podIP: name === "gw-from-pod" ? SOURCE_POD_IP : TARGET_POD_IP,
-          conditions: [{ type: "Ready", status: "True" }],
+          podIP: podIP ?? (name === "gw-from-pod" ? SOURCE_POD_IP : TARGET_POD_IP),
+          conditions: [{ type: "Ready", status: ready ? "True" : "False" }],
         },
       },
     ],
   });
 }
 
-function makeFetch(calls: string[]): typeof fetch {
+function readyPod(name: string): Response {
+  return runningPod(name);
+}
+
+function makeFetch(
+  calls: string[],
+  targetPodIP = TARGET_POD_IP,
+): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
@@ -99,7 +108,7 @@ function makeFetch(calls: string[]): typeof fetch {
     }
     if (url.includes("/push-rsync-state/")) {
       expect(body).toMatchObject({
-        targetHost: TARGET_POD_IP,
+        targetHost: targetPodIP,
         targetPort: 30873,
         transferUser: "migration",
       });
@@ -140,6 +149,117 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  it("uses a running target transport while restore convergence intentionally holds Pod readiness", async () => {
+    const store: Store = {};
+    const fetchCalls: string[] = [];
+    const runCommand: CommandRunner = async (_command, args) => {
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      const response = selector.includes("gateway-instance=gw-to")
+        ? runningPod("gw-to-pod", false, IPV6_TARGET_POD_IP)
+        : readyPod("gw-from-pod");
+      return { stdout: await response.text(), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: "7443",
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch(fetchCalls, IPV6_TARGET_POD_IP),
+      runCommand,
+    });
+
+    await expect(transfer({
+      migrationId: "mig-target-restoring",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "pre",
+    })).resolves.toMatchObject({ imported: true });
+    expect(fetchCalls).toEqual([
+      `http://[${IPV6_TARGET_POD_IP}]:7443/prepare-rsync-import/gw-to`,
+      "http://gw-from/push-rsync-state/gw-from",
+      `http://[${IPV6_TARGET_POD_IP}]:7443/finish-rsync-import/gw-to`,
+    ]);
+  });
+
+  it("requires the source transport to be Ready before it serves the state push", async () => {
+    const store: Store = {};
+    const runCommand: CommandRunner = async (_command, args) => {
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      const response = selector.includes("gateway-instance=gw-from")
+        ? runningPod("gw-from-pod", false)
+        : readyPod("gw-to-pod");
+      return { stdout: await response.text(), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch([]),
+      runCommand,
+    });
+
+    await expect(transfer({
+      migrationId: "mig-source-not-ready",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "pre",
+    })).rejects.toMatchObject({
+      message: "expected exactly one ready pod for transport=gw-from; found 0",
+      retryable: true,
+    });
+  });
+
+  it("rejects an ambiguous target transport instead of selecting an arbitrary pod", async () => {
+    const store: Store = {};
+    const runCommand: CommandRunner = async (_command, args) => {
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      if (selector.includes("gateway-instance=gw-to")) {
+        return {
+          stdout: JSON.stringify({
+            items: [
+              {
+                metadata: { name: "gw-to-pod-a" },
+                status: { phase: "Running", podIP: TARGET_POD_IP },
+              },
+              {
+                metadata: { name: "gw-to-pod-b" },
+                status: { phase: "Running", podIP: "10.1.0.21" },
+              },
+            ],
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: await readyPod("gw-from-pod").text(), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch([]),
+      runCommand,
+    });
+
+    await expect(transfer({
+      migrationId: "mig-ambiguous-target",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "pre",
+    })).rejects.toMatchObject({
+      message: "expected exactly one running pod for transport=gw-to; found 2",
+      retryable: true,
+    });
+  });
+
   it("signals a missing source pod as retryable so a preempted shared gateway can recover in place", async () => {
     const store: Store = {};
     const runCommand: CommandRunner = async (_command, args) => {
@@ -153,6 +273,7 @@ describe("createRsyncMigrationTransfer", () => {
       db: makeDb(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: (id) => `http://${id}`,
       fetch: makeFetch([]),
       runCommand,
@@ -165,7 +286,7 @@ describe("createRsyncMigrationTransfer", () => {
       slug: "alice",
       mode: "pre",
     })).rejects.toMatchObject({
-      message: "expected exactly one running pod for transport=gw-from; found 0",
+      message: "expected exactly one ready pod for transport=gw-from; found 0",
       retryable: true,
     });
   });
@@ -189,6 +310,7 @@ describe("createRsyncMigrationTransfer", () => {
       db: makeDb(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: (id) => `http://${id}`,
       fetch: makeFetch(fetchCalls),
       runCommand,
@@ -209,9 +331,9 @@ describe("createRsyncMigrationTransfer", () => {
       "app=octogee-gateway,gateway-instance=default-r3",
     ]);
     expect(fetchCalls).toEqual([
-      "http://default-r3/prepare-rsync-import/default",
+      `http://${TARGET_POD_IP}:3003/prepare-rsync-import/default`,
       "http://default-r2/push-rsync-state/default",
-      "http://default-r3/finish-rsync-import/default",
+      `http://${TARGET_POD_IP}:3003/finish-rsync-import/default`,
     ]);
   });
 
@@ -224,6 +346,7 @@ describe("createRsyncMigrationTransfer", () => {
       db: makeDb(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: (id) => `http://${id}`,
       fetch: makeFetch(fetchCalls),
       runCommand: makeCommandRunner(commandCalls),
@@ -247,9 +370,9 @@ describe("createRsyncMigrationTransfer", () => {
       targetGatewayId: "gw-to",
     });
     expect(fetchCalls).toEqual([
-      "http://gw-to/prepare-rsync-import/gw-to",
+      `http://${TARGET_POD_IP}:3003/prepare-rsync-import/gw-to`,
       "http://gw-from/push-rsync-state/gw-from",
-      "http://gw-to/finish-rsync-import/gw-to",
+      `http://${TARGET_POD_IP}:3003/finish-rsync-import/gw-to`,
     ]);
     expect(commandCalls.filter((c) => c.command === "kubectl")).toHaveLength(2);
     expect(commandCalls.filter((c) => c.command === "rsync")).toHaveLength(0);
@@ -284,6 +407,7 @@ describe("createRsyncMigrationTransfer", () => {
       db: makeDb(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: (id) => `http://${id}`,
       fetch,
       runCommand: makeCommandRunner(commandCalls),
@@ -302,7 +426,9 @@ describe("createRsyncMigrationTransfer", () => {
 
     await expect(transfer(input)).rejects.toThrow(/network reset/);
     expect(store["mig-2__final"]).toMatchObject({ status: "failed", attempt: 1 });
-    expect(fetchCalls).toContain("http://gw-to/abort-rsync-import/gw-to");
+    expect(fetchCalls).toContain(
+      `http://${TARGET_POD_IP}:3003/abort-rsync-import/gw-to`,
+    );
 
     failPush = false;
     await transfer(input);
