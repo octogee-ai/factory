@@ -576,6 +576,38 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     ]));
   });
 
+  it("rejects a non-rollout gateway conflict even when an active rollout is read first", async () => {
+    const authority = releaseAuthority();
+    const seed = seedNewSchemaGateway("default", sharedPayload());
+    seed[`${GLM_OPERATIONS_COLLECTION}/rollout-first`] = {
+      kind: "rollout",
+      status: "running",
+      input: { gatewayId: "default", targetRelease: 2, imageTag: "old-release" },
+    };
+    seed[`${GLM_OPERATIONS_COLLECTION}/restart-second`] = {
+      kind: "restart-gateway",
+      status: "pending",
+      input: { gatewayId: "default" },
+    };
+    const { app, store } = mkApp(seed, { releaseAuthority: authority });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.1", sourceSha })
+      .expect(409)
+      .expect({
+        error: "another operation is already pending or running for this gateway",
+        gatewayId: "default",
+        operationId: "restart-second",
+        kind: "restart-gateway",
+      });
+
+    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(store.get("centralReleaseFanouts/v0.4.1")).toBeUndefined();
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+  });
+
   it("rejects a CENTRAL release before fanout when a customer migration owns a member", async () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp({

@@ -3601,11 +3601,15 @@ async function assertNoCentralReleaseOperation(
   const conflict = activeOperations.docs.find((doc) => {
     const operation = doc.data() as Record<string, unknown>;
     const input = operation.input;
-    return isPlainRecord(input) && input.gatewayId === gateway.gatewayId;
+    return (
+      operation.kind !== "rollout" &&
+      isPlainRecord(input) &&
+      input.gatewayId === gateway.gatewayId
+    );
   });
   const conflictData = conflict?.data() as Record<string, unknown> | undefined;
   const kind = typeof conflictData?.kind === "string" ? conflictData.kind : null;
-  if (conflict && kind !== "rollout") {
+  if (conflict) {
     rejectCentralReleaseRequest(409, {
       error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
       gatewayId: gateway.gatewayId,
