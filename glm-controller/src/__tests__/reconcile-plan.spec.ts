@@ -745,7 +745,7 @@ describe("chart-drift comparison is caller-gated (issue #997 — PROD must not a
     expect(changes[0]).toMatchObject({ kind: "update", gatewayId: "default" });
   });
 
-  it("compareChartFingerprint defaults to true — chart-only drift still re-applies (TEST auto-roll unchanged)", () => {
+  it("compareChartFingerprint defaults to true — chart-only drift is detected", () => {
     const actual: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-old" } };
     const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
     const changes = diffInstancesMap(actual, desiredMap);

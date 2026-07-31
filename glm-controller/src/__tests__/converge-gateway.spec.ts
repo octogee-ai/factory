@@ -3,6 +3,7 @@ import {
   gatewayDeploymentIntentFingerprint,
   cowboyMayMarkGatewayLive,
   deploymentIntentFingerprintForComparison,
+  gatewayReleaseAuthorizesChartDrift,
   gatewayUpsertOptsFromRelease,
   markLiveRuntimePatch,
   orderGatewaysForConvergence,
@@ -393,6 +394,54 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toEqual({ kind: "upsert", replicas: 1 });
   });
 
+  it("holds a same-release capacity upsert instead of piggybacking unreleased chart drift", () => {
+    const stableGateway = gateway({ liveRelease: 2 });
+    const rebalancingGateway = gateway({
+      liveRelease: 2,
+      capacityRebalanceNonce: "capacity-rebalance-bender-1",
+    });
+    const observed = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: stableGateway,
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-a",
+    });
+    const desired = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: rebalancingGateway,
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+      chartFingerprint: "chart-b",
+    });
+    const comparison = deploymentIntentFingerprintForComparison({
+      desired,
+      observedChartFingerprint: "chart-a",
+      observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+      applyChartDrift: gatewayReleaseAuthorizesChartDrift(rebalancingGateway),
+    });
+
+    expect(planGatewayConvergence({
+      gateway: rebalancingGateway,
+      artifact: artifact(),
+      helm: {
+        imageRepository: REPO,
+        imageTag: "def5678",
+        replicas: 1,
+        chartFingerprint: "chart-a",
+        deploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+      },
+      desiredChartFingerprint: "chart-b",
+      desiredDeploymentIntentFingerprint: comparison,
+      deploymentReady: true,
+    })).toEqual({
+      kind: "hold-unreleased-chart",
+      error: "gateway bender deployment mutation waits for a journaled release before applying chart drift",
+    });
+  });
+
   it("upserts an unchanged release when only the rendered owner pair changes", () => {
     const previous = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
@@ -440,39 +489,65 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toEqual({ kind: "upsert", replicas: 1 });
   });
 
-  it("ignores chart-only drift in PROD while retaining it in TEST", () => {
+  it("ignores ambient chart drift but applies it during a journaled release", () => {
+    const convergedGateway = gateway({ desiredRelease: 2, liveRelease: 2 });
+    const rollingGateway = gateway({ desiredRelease: 2, liveRelease: 1 });
     const observed = gatewayUpsertOptsFromRelease({
-      namespace: "octogee",
-      gateway: gateway(),
+      namespace: "octogee-test",
+      gateway: convergedGateway,
       artifact: artifact(),
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
       chartFingerprint: "chart-a",
     });
     const desired = gatewayUpsertOptsFromRelease({
-      namespace: "octogee",
-      gateway: gateway(),
+      namespace: "octogee-test",
+      gateway: convergedGateway,
       artifact: artifact(),
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
       chartFingerprint: "chart-b",
     });
 
-    expect(deploymentIntentFingerprintForComparison({
+    const ambientComparison = deploymentIntentFingerprintForComparison({
       desired,
       observedChartFingerprint: "chart-a",
       observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
-      autoRollOnChartDrift: false,
-    })).toBe(observed.deploymentIntentFingerprint);
-    expect(deploymentIntentFingerprintForComparison({
+      applyChartDrift: gatewayReleaseAuthorizesChartDrift(convergedGateway),
+    });
+    const releaseComparison = deploymentIntentFingerprintForComparison({
       desired,
       observedChartFingerprint: "chart-a",
       observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
-      autoRollOnChartDrift: true,
-    })).toBe(desired.deploymentIntentFingerprint);
+      applyChartDrift: gatewayReleaseAuthorizesChartDrift(rollingGateway),
+    });
+
+    const helm = {
+      imageRepository: REPO,
+      imageTag: "def5678",
+      replicas: 1,
+      deploymentIntentFingerprint: observed.deploymentIntentFingerprint,
+    };
+    expect(planGatewayConvergence({
+      gateway: convergedGateway,
+      artifact: artifact(),
+      helm,
+      desiredDeploymentIntentFingerprint: ambientComparison,
+      deploymentReady: true,
+    })).toEqual({ kind: "steady" });
+    expect(planGatewayConvergence({
+      gateway: rollingGateway,
+      artifact: artifact(),
+      helm,
+      desiredDeploymentIntentFingerprint: releaseComparison,
+      deploymentReady: true,
+    })).toEqual({ kind: "upsert", replicas: 1 });
+    expect(gatewayReleaseAuthorizesChartDrift(
+      gateway({ desiredRelease: 1, liveRelease: null }),
+    )).toBe(true);
   });
 
-  it("retains owner drift in PROD when chart-only drift is suppressed", () => {
+  it("retains owner drift when ambient chart-only drift is suppressed", () => {
     const observed = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
       gateway: gateway({
@@ -504,7 +579,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       desired,
       observedChartFingerprint: "chart-a",
       observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
-      autoRollOnChartDrift: false,
+      applyChartDrift: false,
     })).not.toBe(observed.deploymentIntentFingerprint);
   });
 
@@ -522,7 +597,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       desired,
       observedChartFingerprint: undefined,
       observedDeploymentIntentFingerprint: undefined,
-      autoRollOnChartDrift: false,
+      applyChartDrift: false,
     })).toBe(desired.deploymentIntentFingerprint);
   });
 

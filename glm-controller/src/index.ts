@@ -75,6 +75,7 @@ import {
   cowboyMayMarkGatewayLive,
   cowboyMayMutateGateway,
   gatewayImageFor,
+  gatewayReleaseAuthorizesChartDrift,
   gatewayUpsertOptsFromRelease,
   markLiveRuntimePatch,
   deploymentIntentFingerprintForComparison,
@@ -310,7 +311,6 @@ const GATEWAY_VALUES_FILE = (function () {
 })();
 const PIN_ENV = ENVIRONMENT_SETTINGS.pinEnvironment;
 
-const AUTO_ROLL_ON_CHART_DRIFT = NAMESPACE !== "octogee";
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
 const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
@@ -838,6 +838,7 @@ export async function refineGatewayConvergenceAction(input: {
   artifact: ReleasePayload | null;
   runtime: GatewayRuntimeDoc | undefined;
   helmObserved: ObservedHelmInstance | null;
+  desiredChartFingerprint?: string;
   desiredDeploymentIntentFingerprint?: string;
   action: GatewayConvergenceAction;
 }): Promise<GatewayConvergenceAction> {
@@ -847,6 +848,7 @@ export async function refineGatewayConvergenceAction(input: {
     artifact,
     runtime,
     helmObserved,
+    desiredChartFingerprint,
     desiredDeploymentIntentFingerprint,
     action,
   } = input;
@@ -871,6 +873,7 @@ export async function refineGatewayConvergenceAction(input: {
     gateway,
     artifact,
     helm: helmObserved,
+    desiredChartFingerprint,
     desiredDeploymentIntentFingerprint,
     deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, desiredImage.imageTag),
   });
@@ -923,11 +926,13 @@ async function convergeOneGateway(
     instance,
   });
   const desiredOpts = desiredIntent?.opts ?? null;
+  const desiredChartFingerprint = desiredOpts?.chartFingerprint;
   const desiredDeploymentIntentFingerprint = desiredIntent?.comparisonFingerprint;
   const initialAction = planGatewayConvergence({
     gateway,
     artifact,
     helm: helmObserved,
+    desiredChartFingerprint,
     desiredDeploymentIntentFingerprint,
     deploymentReady: false,
   });
@@ -937,6 +942,7 @@ async function convergeOneGateway(
     artifact,
     runtime,
     helmObserved,
+    desiredChartFingerprint,
     desiredDeploymentIntentFingerprint,
     action: initialAction,
   });
@@ -944,6 +950,7 @@ async function convergeOneGateway(
     case "steady":
       return;
     case "hold-missing-release":
+    case "hold-unreleased-chart":
       throw new Error(action.error);
     case "uninstall":
       await uninstallGateway(passDeps, gateway);
@@ -1044,6 +1051,7 @@ function observedHelmInstance(
     replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
     ownerUid: instance.ownerUid,
     builderSlug: instance.builderSlug,
+    chartFingerprint: instance.chartFingerprint,
     deploymentIntentFingerprint: instance.deploymentIntentFingerprint ?? null,
   };
 }
@@ -1077,7 +1085,7 @@ async function prepareDesiredGatewayIntent(input: {
       desired: opts,
       observedChartFingerprint: instance?.chartFingerprint,
       observedDeploymentIntentFingerprint: instance?.deploymentIntentFingerprint,
-      autoRollOnChartDrift: AUTO_ROLL_ON_CHART_DRIFT,
+      applyChartDrift: gatewayReleaseAuthorizesChartDrift(gateway),
     }),
   };
 }
@@ -2226,7 +2234,7 @@ async function main(): Promise<void> {
   );
 
   log(
-    `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftAutoRoll=${AUTO_ROLL_ON_CHART_DRIFT} valuesFile=${GATEWAY_VALUES_FILE}`,
+    `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
   );
 
   await bootstrapGlmGateways(deps);

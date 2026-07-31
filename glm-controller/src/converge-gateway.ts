@@ -47,6 +47,12 @@ export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean
     gateway.liveRelease !== gateway.desiredRelease;
 }
 
+export function gatewayReleaseAuthorizesChartDrift(
+  gateway: Pick<DurableGateway, "desiredRelease" | "liveRelease">,
+): boolean {
+  return gateway.liveRelease !== gateway.desiredRelease;
+}
+
 export function orderGatewaysForConvergence(
   gateways: readonly DurableGateway[],
 ): DurableGateway[] {
@@ -95,6 +101,7 @@ export interface ObservedHelmInstance {
   replicas: number | null;
   ownerUid?: string;
   builderSlug?: string;
+  chartFingerprint?: string;
   deploymentIntentFingerprint?: string | null;
 }
 
@@ -102,6 +109,7 @@ export interface GatewayConvergencePlanInput {
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   helm: ObservedHelmInstance | null;
+  desiredChartFingerprint?: string;
   desiredDeploymentIntentFingerprint?: string;
   deploymentReady: boolean;
 }
@@ -109,6 +117,7 @@ export interface GatewayConvergencePlanInput {
 export type GatewayConvergenceAction =
   | { kind: "uninstall" }
   | { kind: "hold-missing-release"; error: string }
+  | { kind: "hold-unreleased-chart"; error: string }
   | { kind: "upsert"; replicas: number }
   | { kind: "mark-live" }
   | { kind: "steady" };
@@ -143,6 +152,14 @@ export function planGatewayConvergence(
   }
   const replicas = desiredReplicas(gateway);
   if (gatewayDeploymentDrifted(input, artifact, replicas)) {
+    if (gatewayUpsertHasUnreleasedChartDrift(input)) {
+      return {
+        kind: "hold-unreleased-chart",
+        error:
+          `gateway ${gateway.gatewayId} deployment mutation waits for a journaled release ` +
+          "before applying chart drift",
+      };
+    }
     return { kind: "upsert", replicas };
   }
   if (
@@ -152,6 +169,15 @@ export function planGatewayConvergence(
     return { kind: "mark-live" };
   }
   return { kind: "steady" };
+}
+
+function gatewayUpsertHasUnreleasedChartDrift(
+  input: GatewayConvergencePlanInput,
+): boolean {
+  return !gatewayReleaseAuthorizesChartDrift(input.gateway) &&
+    input.helm?.chartFingerprint !== undefined &&
+    input.desiredChartFingerprint !== undefined &&
+    input.helm.chartFingerprint !== input.desiredChartFingerprint;
 }
 
 function gatewayDeploymentDrifted(
@@ -238,9 +264,9 @@ export function deploymentIntentFingerprintForComparison(input: {
   desired: GatewayUpsertOpts;
   observedChartFingerprint: string | undefined;
   observedDeploymentIntentFingerprint: string | undefined;
-  autoRollOnChartDrift: boolean;
+  applyChartDrift: boolean;
 }): string | undefined {
-  if (input.autoRollOnChartDrift || !input.observedChartFingerprint) {
+  if (input.applyChartDrift || !input.observedChartFingerprint) {
     return input.desired.deploymentIntentFingerprint;
   }
   return gatewayDeploymentIntentFingerprint({
