@@ -53,6 +53,19 @@ export function createRestartGatewayHandler(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (restartTargetUnavailable(message)) {
+        await reportStep(ctx, {
+          name: "openclaw-restart",
+          status: "skipped",
+          startedAt,
+          completedAt: deps.now(),
+          error: message,
+        });
+        deps.log(
+          `[restart-gateway] ${gatewayId} pod is no longer execable; Kubernetes replacement satisfies restart intent`,
+        );
+        return { steps: [], success: true };
+      }
       await reportStep(ctx, {
         name: "openclaw-restart",
         status: "failed",
@@ -72,6 +85,15 @@ export function createRestartGatewayHandler(
 
     return { steps: [], success: true };
   };
+}
+
+function restartTargetUnavailable(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("cannot exec into a container in a completed pod") ||
+    /pods?\s+"[^"]+"\s+not found/u.test(normalized) ||
+    normalized.includes("pod does not exist")
+  );
 }
 
 async function reportStep(

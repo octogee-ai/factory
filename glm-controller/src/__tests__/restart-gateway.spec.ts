@@ -121,6 +121,47 @@ describe("createRestartGatewayHandler", () => {
     expect(failed?.error).toMatch(/connection refused/);
   });
 
+  it("treats a restart against an already failed pod as idempotently satisfied", async () => {
+    const deps = mkDeps({
+      kubeOps: {
+        scaleDeployment: vi.fn(async () => undefined),
+        restartOpenClawInPlace: vi.fn(async () => {
+          throw new Error(
+            "cannot exec into a container in a completed pod; current phase is Failed",
+          );
+        }),
+        readDeployedReplicas: vi.fn(async () => 1),
+        deletePersistentVolumeClaim: vi.fn(async () => undefined),
+      },
+    });
+    const { ctx, reported } = mkCtx();
+
+    const result = await createRestartGatewayHandler(deps)(mkOp(), ctx);
+
+    expect(result.success).toBe(true);
+    expect(reported.map((step) => `${step.name}:${step.status}`)).toEqual([
+      "openclaw-restart:running",
+      "openclaw-restart:skipped",
+    ]);
+  });
+
+  it("treats a restart against a disappeared pod as idempotently satisfied", async () => {
+    const deps = mkDeps({
+      kubeOps: {
+        scaleDeployment: vi.fn(async () => undefined),
+        restartOpenClawInPlace: vi.fn(async () => {
+          throw new Error('Error from server (NotFound): pods "octogee-gateway-bender-abc" not found');
+        }),
+        readDeployedReplicas: vi.fn(async () => 1),
+        deletePersistentVolumeClaim: vi.fn(async () => undefined),
+      },
+    });
+
+    const result = await createRestartGatewayHandler(deps)(mkOp(), mkCtx().ctx);
+
+    expect(result.success).toBe(true);
+  });
+
   it("does NOT touch desiredStatus or any Firestore docs (restart is a one-shot kubectl op)", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);

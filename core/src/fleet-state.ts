@@ -701,6 +701,30 @@ function assertRecoverySource(input: {
   return disposableRecoveryLease(root, openclaw, params);
 }
 
+function clearRecoveredSourceMount(input: {
+  txn: FleetStateTxn;
+  sourceRuntimeRef: FleetStateDocRef;
+  sourceRuntimeSnapshot: {
+    exists: boolean;
+    data: () => Record<string, unknown> | undefined;
+  };
+  slug: string;
+}): void {
+  const runtimeData = input.sourceRuntimeSnapshot.exists
+    ? input.sourceRuntimeSnapshot.data()
+    : undefined;
+  const runtime = isGatewayRuntimeDoc(runtimeData) ? runtimeData : null;
+  if (!runtime?.heartbeat.mountedCustomers.includes(input.slug)) return;
+  input.txn.update(input.sourceRuntimeRef, {
+    heartbeat: {
+      ...runtime.heartbeat,
+      mountedCustomers: runtime.heartbeat.mountedCustomers.filter(
+        (mountedCustomer) => mountedCustomer !== input.slug,
+      ),
+    },
+  });
+}
+
 export async function commitUnavailableGatewayRecoveryAtomic(
   deps: FleetStateDeps,
   params: UnavailableGatewayRecoveryParams,
@@ -718,6 +742,8 @@ export async function commitUnavailableGatewayRecoveryAtomic(
     .doc(params.operationId);
   const sourceAssignmentRef = assignmentRef(deps.db, params.fromGatewayId, params.uid);
   const targetAssignmentRef = assignmentRef(deps.db, params.toGatewayId, params.uid);
+  const sourceRuntimeRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.fromGatewayId);
+  const targetRuntimeRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId);
   const userRef = deps.db.collection("users").doc(params.uid);
   const nowMs = deps.now ? deps.now().getTime() : Date.now();
 
@@ -727,6 +753,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(
       userSnapshot,
       sourceRootSnapshot,
       targetRootSnapshot,
+      sourceRuntimeSnapshot,
       targetRuntimeSnapshot,
       sourceAssignmentSnapshot,
       targetAssignmentSnapshot,
@@ -735,7 +762,8 @@ export async function commitUnavailableGatewayRecoveryAtomic(
       txn.get(userRef),
       txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
       txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId)),
-      txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId)),
+      txn.get(sourceRuntimeRef),
+      txn.get(targetRuntimeRef),
       txn.get(sourceAssignmentRef),
       txn.get(targetAssignmentRef),
     ]);
@@ -782,6 +810,12 @@ export async function commitUnavailableGatewayRecoveryAtomic(
     });
     const targetRoot = targetRootSnapshot.data();
     const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+    clearRecoveredSourceMount({
+      txn,
+      sourceRuntimeRef,
+      sourceRuntimeSnapshot,
+      slug: params.slug,
+    });
     txn.update(userRef, {
       "provisioning.openclaw.gatewayId": params.toGatewayId,
       "provisioning.openclaw.gatewayAssignedAt": nowMs,
