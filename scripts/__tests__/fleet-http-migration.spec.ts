@@ -1463,6 +1463,86 @@ describe("queued-rsync migration control handlers", () => {
     expect(daemon.kill).toHaveBeenCalled();
   });
 
+  it("reclaims an interrupted rsync session only for its owning migration", async () => {
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      markCustomerMigratingIn: vi.fn(),
+    });
+    const waitForRsyncReady = vi.fn(async () => undefined);
+    const interruptedDaemon = mkFakeChild();
+    const resumedDaemon = mkFakeChild();
+    spawnMock
+      .mockReturnValueOnce(interruptedDaemon)
+      .mockReturnValueOnce(resumedDaemon);
+    const handler = createPrepareRsyncImportHandler(
+      mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady }),
+    );
+    const interrupted: PrepareRsyncImportRequestBody = {
+      migrationId: "surge-default-b-target",
+      slug: "smoke-dave-smoke",
+      mode: "pre",
+      transferUser: "migration",
+      transferKey: "a".repeat(64),
+    };
+    const interruptedRaw = JSON.stringify(interrupted);
+    const interruptedResponse = mkResponse();
+    try {
+      await handler(
+        mkRequest(interrupted, {
+          signature: signFleetRequest(PRIVATE_KEY, interrupted.migrationId, interruptedRaw),
+        }),
+        interruptedResponse.res,
+        vi.fn(),
+      );
+      expect(interruptedResponse.getStatus()).toBe(200);
+
+      const resumed: PrepareRsyncImportRequestBody = {
+        ...interrupted,
+        slug: "smoke-erica-smoke",
+        mode: "final",
+        transferKey: "b".repeat(64),
+      };
+      const resumedRaw = JSON.stringify(resumed);
+      const resumedResponse = mkResponse();
+      await handler(
+        mkRequest(resumed, {
+          signature: signFleetRequest(PRIVATE_KEY, resumed.migrationId, resumedRaw),
+        }),
+        resumedResponse.res,
+        vi.fn(),
+      );
+      expect(resumedResponse.getStatus()).toBe(200);
+      expect(interruptedDaemon.kill).toHaveBeenCalledWith("SIGTERM");
+
+      const otherMigration: PrepareRsyncImportRequestBody = {
+        ...resumed,
+        migrationId: "surge-default-b-other-target",
+        transferKey: "c".repeat(64),
+      };
+      const otherRaw = JSON.stringify(otherMigration);
+      const otherResponse = mkResponse();
+      await handler(
+        mkRequest(otherMigration, {
+          signature: signFleetRequest(PRIVATE_KEY, otherMigration.migrationId, otherRaw),
+        }),
+        otherResponse.res,
+        vi.fn(),
+      );
+      expect(otherResponse.getStatus()).toBe(500);
+      expect(otherResponse.getBody()).toMatchObject({
+        error: "prepare-rsync-import failed",
+        message: expect.stringContaining("surge-default-b-target"),
+      });
+      expect(resumedDaemon.kill).not.toHaveBeenCalled();
+    } finally {
+      for (const daemon of [interruptedDaemon, resumedDaemon]) {
+        if (daemon.exitCode !== null || daemon.signalCode !== null) continue;
+        daemon.exitCode = 0;
+        daemon.emit("exit", 0, null);
+      }
+    }
+  });
+
   it("createPushRsyncStateHandler runs rsync directly to the target pod with the one-time key", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [

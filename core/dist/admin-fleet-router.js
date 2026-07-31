@@ -2356,14 +2356,35 @@ async function centralReleaseGateways(db, gatewayScope, operation) {
     }
     return { primary, gateways };
 }
-async function assertNoCentralReleaseOperation(db, gateway, allowExistingReservation = false) {
-    const conflict = await findConflictingGatewayOp(db, gateway.gatewayId);
-    if (conflict && !allowExistingReservation) {
+async function assertNoCentralReleaseOperation(db, gateway) {
+    const activeOperations = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("status", "in", ["pending", "running"])
+        .get();
+    const migrationConflict = findActiveGatewayMigration(gateway.gatewayId, activeOperations.docs.map(projectOperationForMigrationLock));
+    if (migrationConflict) {
+        rejectCentralReleaseRequest(409, {
+            error: `customer migration is in flight for gateway ${gateway.gatewayId}`,
+            gatewayId: gateway.gatewayId,
+            operationId: migrationConflict.id,
+            kind: OP_KIND_MIGRATE_CUSTOMER,
+        });
+    }
+    const conflict = activeOperations.docs.find((doc) => {
+        const operation = doc.data();
+        const input = operation.input;
+        return (operation.kind !== "rollout" &&
+            isPlainRecord(input) &&
+            input.gatewayId === gateway.gatewayId);
+    });
+    const conflictData = conflict?.data();
+    const kind = typeof conflictData?.kind === "string" ? conflictData.kind : null;
+    if (conflict) {
         rejectCentralReleaseRequest(409, {
             error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
             gatewayId: gateway.gatewayId,
             operationId: conflict.id,
-            kind: conflict.kind,
+            kind,
         });
     }
 }
@@ -4662,10 +4683,10 @@ export function addAdminFleetRoutes(router, deps) {
             assertCentralReleaseFanout(existingFanout, fanoutInput);
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
-            const fanout = await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             for (const candidate of gateways) {
-                await assertNoCentralReleaseOperation(db, candidate, fanout.rollouts[candidate.gatewayId] !== undefined);
+                await assertNoCentralReleaseOperation(db, candidate);
             }
+            await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             const payload = centralGatewayReleasePayload(manifest);
             const aliasPlan = centralReleaseAliasPlans({
                 authority,
@@ -4839,10 +4860,10 @@ export function addAdminFleetRoutes(router, deps) {
             assertCentralReleaseFanout(existingFanout, fanoutInput);
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
-            const fanout = await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             for (const candidate of gateways) {
-                await assertNoCentralReleaseOperation(db, candidate, fanout.rollouts[candidate.gatewayId] !== undefined);
+                await assertNoCentralReleaseOperation(db, candidate);
             }
+            await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             const payload = centralGatewayReleasePayload(manifest);
             const aliasPlan = centralReleaseAliasPlans({
                 authority,
