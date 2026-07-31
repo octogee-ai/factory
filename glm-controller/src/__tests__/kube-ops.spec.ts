@@ -180,6 +180,26 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
   });
 });
 
+describe("createKubeSubprocessRunner — restartDeployment", () => {
+  it("requests a deployment rollout restart for a pod that is no longer execable", async () => {
+    const { runKubectl, calls } = mockSubprocess([{}]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await kube.restartDeployment({
+      namespace: "octogee-test",
+      name: "octogee-gateway-bender",
+    });
+
+    expect(calls).toEqual([[
+      "-n",
+      "octogee-test",
+      "rollout",
+      "restart",
+      "deploy/octogee-gateway-bender",
+    ]]);
+  });
+});
+
 describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
   it("returns the deployment's .spec.replicas via kubectl get -o jsonpath", async () => {
     const { runKubectl, calls } = mockSubprocess([{ stdout: "0" }]);
