@@ -356,6 +356,43 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).not.toBe(base.deploymentIntentFingerprint);
   });
 
+  it("turns a capacity-rebalance nonce into a same-release surge deployment intent", () => {
+    const before = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway({ liveRelease: 2 }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+    const rebalanced = gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway({ liveRelease: 2, capacityRebalanceNonce: "capacity-rebalance-bender-1" }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(rebalanced).toMatchObject({
+      imageRepository: before.imageRepository,
+      imageTag: before.imageTag,
+      capacityRebalanceNonce: "capacity-rebalance-bender-1",
+      rollStrategy: "surge",
+    });
+    expect(rebalanced.deploymentIntentFingerprint).not.toBe(before.deploymentIntentFingerprint);
+    expect(planGatewayConvergence({
+      gateway: gateway({ liveRelease: 2, capacityRebalanceNonce: "capacity-rebalance-bender-1" }),
+      artifact: artifact(),
+      helm: {
+        imageRepository: REPO,
+        imageTag: "def5678",
+        replicas: 1,
+        deploymentIntentFingerprint: before.deploymentIntentFingerprint,
+      },
+      desiredDeploymentIntentFingerprint: rebalanced.deploymentIntentFingerprint,
+      deploymentReady: true,
+    })).toEqual({ kind: "upsert", replicas: 1 });
+  });
+
   it("upserts an unchanged release when only the rendered owner pair changes", () => {
     const previous = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",

@@ -24,6 +24,10 @@ export interface KubeOps {
     namespace: string;
     gatewayIds: readonly string[];
   }): Promise<Record<string, GatewayPodDiagnostics>>;
+  readGatewaySpotCapacity(opts: {
+    namespace: string;
+    gatewayId: string;
+  }): Promise<GatewaySpotCapacityObservation>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
     name: string;
@@ -61,6 +65,27 @@ export interface GatewayPodDiagnostics {
   readyPods: number;
   totalRestarts: number;
   pods: GatewayPodDiagnostic[];
+  error?: string;
+}
+
+export type GatewayPodCapacityClass = "spot" | "on-demand" | "unknown";
+
+export interface GatewaySpotCapacityPod {
+  uid: string;
+  name: string;
+  phase: string;
+  ready: boolean;
+  nodeName: string | null;
+  capacityClass: GatewayPodCapacityClass;
+}
+
+export interface GatewaySpotCapacityObservation {
+  status: "ready-spot" | "ready-on-demand" | "not-ready" | "missing" | "unknown";
+  totalPods: number;
+  readyPods: number;
+  readySpotPods: number;
+  readyOnDemandPods: number;
+  pods: GatewaySpotCapacityPod[];
   error?: string;
 }
 
@@ -114,6 +139,11 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function podUid(pod: Record<string, unknown>): string | null {
+  const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+  return stringOrNull(metadata.uid);
+}
+
 function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -134,6 +164,12 @@ function podConditionReason(status: Record<string, unknown>): string | null {
     }
   }
   return null;
+}
+
+function podReady(status: Record<string, unknown>): boolean {
+  const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+  return conditions.some((condition) =>
+    isRecord(condition) && condition.type === "Ready" && condition.status === "True");
 }
 
 function projectPodDiagnostic(pod: Record<string, unknown>, now: number): GatewayPodDiagnostic {
@@ -204,6 +240,76 @@ function summarizePodRecords(
     totalRestarts,
     pods,
   };
+}
+
+function nodeCapacityClass(stdout: string): GatewayPodCapacityClass {
+  const parsed = JSON.parse(stdout) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error("kubectl get node returned invalid JSON shape");
+  }
+  const metadata = isRecord(parsed.metadata) ? parsed.metadata : {};
+  const labels = isRecord(metadata.labels) ? metadata.labels : {};
+  return labels["cloud.google.com/gke-spot"] === "true" ? "spot" : "on-demand";
+}
+
+function summarizeGatewaySpotCapacity(
+  podsStdout: string,
+  nodeClasses: ReadonlyMap<string, GatewayPodCapacityClass>,
+): GatewaySpotCapacityObservation {
+  const parsed = JSON.parse(podsStdout) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
+    throw new Error("kubectl get pods returned invalid JSON shape");
+  }
+  const pods = parsed.items.filter(isRecord).flatMap((pod) => {
+    const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+    const spec = isRecord(pod.spec) ? pod.spec : {};
+    const status = isRecord(pod.status) ? pod.status : {};
+    const uid = podUid(pod);
+    if (!uid) return [];
+    const nodeName = stringOrNull(spec.nodeName);
+    return [{
+      uid,
+      name: stringOrNull(metadata.name) ?? "unknown",
+      phase: stringOrNull(status.phase) ?? "Unknown",
+      ready: stringOrNull(status.phase) === "Running" && podReady(status),
+      nodeName,
+      capacityClass: nodeName ? nodeClasses.get(nodeName) ?? "unknown" : "unknown",
+    }];
+  });
+  const readyPods = pods.filter((pod) => pod.ready).length;
+  const readySpotPods = pods.filter(
+    (pod) => pod.ready && pod.capacityClass === "spot",
+  ).length;
+  const readyOnDemandPods = pods.filter(
+    (pod) => pod.ready && pod.capacityClass === "on-demand",
+  ).length;
+  const status = pods.length === 0
+    ? "missing"
+    : readySpotPods > 0
+      ? "ready-spot"
+      : readyOnDemandPods > 0
+        ? "ready-on-demand"
+        : "not-ready";
+  return {
+    status,
+    totalPods: pods.length,
+    readyPods,
+    readySpotPods,
+    readyOnDemandPods,
+    pods,
+  };
+}
+
+function gatewayPodNodeNames(stdout: string): string[] {
+  const parsed = JSON.parse(stdout) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
+    throw new Error("kubectl get pods returned invalid JSON shape");
+  }
+  return [...new Set(parsed.items.filter(isRecord).flatMap((pod) => {
+    const spec = isRecord(pod.spec) ? pod.spec : {};
+    const nodeName = stringOrNull(spec.nodeName);
+    return nodeName ? [nodeName] : [];
+  }))];
 }
 
 function gatewayIdForPod(pod: Record<string, unknown>): string | null {
@@ -435,6 +541,51 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       );
     },
 
+    async readGatewaySpotCapacity({ namespace, gatewayId }) {
+      const pods = await deps.runKubectl([
+        "-n",
+        namespace,
+        "get",
+        "pods",
+        "-l",
+        `app=octogee-gateway,gateway-instance=${gatewayId}`,
+        "-o",
+        "json",
+      ]);
+      if (pods.code !== 0) {
+        if (isNotFound(pods.stderr)) {
+          return {
+            status: "unknown",
+            totalPods: 0,
+            readyPods: 0,
+            readySpotPods: 0,
+            readyOnDemandPods: 0,
+            pods: [],
+            error: "pods not found",
+          };
+        }
+        throw new Error(
+          `kubectl get pods gateway-instance=${gatewayId} ns=${namespace} failed (code=${pods.code}): ${
+            pods.stderr.trim() || pods.stdout.trim()
+          }`,
+        );
+      }
+      const nodeNames = gatewayPodNodeNames(pods.stdout);
+      const observations = await Promise.all(nodeNames.map(async (nodeName) => {
+        const node = await deps.runKubectl(["get", "node", nodeName, "-o", "json"]);
+        if (node.code !== 0) {
+          if (isNotFound(node.stderr)) return [nodeName, "unknown"] as const;
+          throw new Error(
+            `kubectl get node ${nodeName} failed (code=${node.code}): ${
+              node.stderr.trim() || node.stdout.trim()
+            }`,
+          );
+        }
+        return [nodeName, nodeCapacityClass(node.stdout)] as const;
+      }));
+      return summarizeGatewaySpotCapacity(pods.stdout, new Map(observations));
+    },
+
     async deletePersistentVolumeClaim({ namespace, name }) {
       await deleteKubeResource(deps, "pvc", { namespace, name });
     },
@@ -480,6 +631,19 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
       return Object.fromEntries(
         gatewayIds.map((gatewayId) => [gatewayId, unknownPodDiagnostics()]),
       );
+    },
+    readGatewaySpotCapacity: async ({ namespace, gatewayId }) => {
+      log(
+        `[kube-ops:stub] readGatewaySpotCapacity ns=${namespace} ${gatewayId} — returning unknown`,
+      );
+      return {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+        readySpotPods: 0,
+        readyOnDemandPods: 0,
+        pods: [],
+      };
     },
     deletePersistentVolumeClaim: async ({ namespace, name }) => {
       log(`[kube-ops:stub] delete pvc ns=${namespace} ${name} — no exec`);

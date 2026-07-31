@@ -4,6 +4,7 @@ import { serialFleetOperationsConflict } from "@octogee/core/fleet-operation-loc
 // cannot run together, and rollout operations remain globally serial.
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
+  "rebalance-gateway-capacity",
   "migrate-customer",
 ]);
 
@@ -60,6 +61,10 @@ function describeWaitingOn(op: OperationRef): string {
     if (gatewayId) {
       return imageTag ? `roll ${gatewayId} → ${imageTag}` : `roll ${gatewayId}`;
     }
+  }
+  if (op.kind === "rebalance-gateway-capacity") {
+    const gatewayId = typeof op.input?.gatewayId === "string" ? op.input.gatewayId : undefined;
+    return gatewayId ? `capacity rebalance ${gatewayId}` : "another capacity rebalance";
   }
   if (op.kind === "migrate-customer") {
     const toGatewayId = typeof op.input?.toGatewayId === "string" ? op.input.toGatewayId : undefined;

@@ -61,6 +61,7 @@ kmsKeyName?: string;
 deploymentTargetId?: string;
 deploymentProjectId?: string;
 gatewayServiceAccount?: string;
+capacityRebalanceNonce?: string;
     rollStrategy?: "recreate" | "surge";
     waitForReady?: boolean;
   }): Promise<void>;
@@ -366,6 +367,7 @@ export interface BuildUpgradeArgsOpts {
   deploymentTargetId?: string;
   deploymentProjectId?: string;
   gatewayServiceAccount?: string;
+  capacityRebalanceNonce?: string;
   valuesFile?: string;
   rollStrategy?: "recreate" | "surge";
   waitForReady?: boolean;
@@ -386,6 +388,7 @@ type UpgradeStringOption = {
     | "deploymentTargetId"
     | "deploymentProjectId"
     | "gatewayServiceAccount"
+    | "capacityRebalanceNonce"
     | "conversationExperimentMode"
     | "gatewayEdgeImageRepository"
     | "gatewayEdgeImageTag"
@@ -421,6 +424,7 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
   { option: "kmsKeyName", key: "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME" },
   { option: "gatewayServiceAccount", key: "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT" },
+  { option: "capacityRebalanceNonce", key: "capacityRebalanceNonce" },
   { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
   { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },
   { option: "gatewayEdgeImageTag", key: "gatewayEdge.image.tag" },

@@ -99,6 +99,30 @@ describe("runStuckOpReaperTick", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("op-stuck"));
   });
 
+  it("reaps a capacity rebalance that stops reporting bounded progress", async () => {
+    const ops: FakeOpDoc[] = [
+      {
+        id: "capacity-stuck",
+        data: {
+          status: "running",
+          kind: "rebalance-gateway-capacity",
+          startedAt: NOW - 20 * 60_000,
+          lastProgressAt: NOW - 16 * 60_000,
+        },
+      },
+    ];
+
+    const result = await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 1, reaped: 1 });
+    expect(ops[0].updated).toMatchObject({ status: "failed" });
+  });
+
   it("does not manufacture a cleanup lease when the reaper cannot prove freeze ownership", async () => {
     const ops: FakeOpDoc[] = [{
       id: "op-stuck-migration",

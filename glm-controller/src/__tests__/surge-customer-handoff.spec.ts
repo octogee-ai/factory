@@ -181,6 +181,25 @@ describe("surge customer handoff", () => {
     ]);
   });
 
+  it("keeps a same-release target blocked until Cowboy confirms the replacement is Spot", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+    h.deps.targetHasRequiredCapacity = vi.fn(async () => false);
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      requiredTargetCapacity: "spot",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.deps.targetHasRequiredCapacity).toHaveBeenCalledWith({
+      gatewayId: "default",
+      targetPodUid: "target-uid",
+      requiredCapacity: "spot",
+    });
+    expect(h.events).toEqual([]);
+  });
+
   it("selects a replacement that reports the complete OpenClaw-qualified image tag", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],

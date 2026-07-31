@@ -44,6 +44,15 @@ export interface GatewayRetirementClaim {
   previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
 }
 
+export interface GatewayCapacityRebalanceIntent {
+  nonce: string;
+  active: boolean;
+  operationId: string;
+  previousNonce: string | null;
+  sourcePodUids: string[];
+  requestedAt: number;
+}
+
 // gateways/{gatewayId} — durable desired gateway identity. Gateways have no
 // reservation mirror and no persistence (all gateways are Spot + emptyDir).
 export interface GatewayDoc {
@@ -60,6 +69,8 @@ export interface GatewayDoc {
   retireAfter?: number | null;
   retirementVersion?: number;
   retirementClaim?: GatewayRetirementClaim | null;
+  capacityRebalanceNonce?: string;
+  capacityRebalance?: GatewayCapacityRebalanceIntent;
 }
 
 export const W9_CANDIDATE_MANIFEST_PATH =

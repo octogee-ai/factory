@@ -90,6 +90,7 @@ describe("helm-runner helpers", () => {
       upgradeTimeout: "10m",
       chartFingerprint: "f".repeat(64),
       deploymentIntentFingerprint: "d".repeat(64),
+      capacityRebalanceNonce: "capacity-rebalance-bender-1",
       rollStrategy: "surge",
       profile: "operator",
       gatewayClass: "operator",
@@ -117,6 +118,9 @@ describe("helm-runner helpers", () => {
     expect(stringPair("serviceAccountName")).toBe("serviceAccountName=octogee-gateway-bender");
     expect(stringPair("deploymentIntentFingerprint")).toBe(
       `deploymentIntentFingerprint=${"d".repeat(64)}`,
+    );
+    expect(stringPair("capacityRebalanceNonce")).toBe(
+      "capacityRebalanceNonce=capacity-rebalance-bender-1",
     );
     expect(stringPair("rollStrategy")).toBe("rollStrategy=surge");
     expect(stringPair("gatewayEdge.env.OCTOGEE_KMS_KEY_NAME")).toBe(

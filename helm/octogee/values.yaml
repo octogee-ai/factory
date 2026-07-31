@@ -260,6 +260,8 @@ gatewayFleet:
   # release namespace.
   tokenReviewRbac:
     enabled: true
+  capacityObservationRbac:
+    enabled: true
   previewIngress:
     enabled: false
     host: ""

@@ -31,6 +31,17 @@ describe("isSeriallyExclusiveKind", () => {
     expect(isSeriallyExclusiveKind("migrate-customer")).toBe(true);
   });
 
+  it("treats capacity rebalance as globally serial", () => {
+    expect(isSeriallyExclusiveKind("rebalance-gateway-capacity")).toBe(true);
+    expect(findSerialConflict(
+      { id: "capacity-b", kind: "rebalance-gateway-capacity", input: { gatewayId: "b" } },
+      [{ id: "capacity-a", kind: "rebalance-gateway-capacity", input: { gatewayId: "a" } }],
+    )).toEqual({
+      conflictingOpId: "capacity-a",
+      waitingOn: "capacity rebalance a",
+    });
+  });
+
   it("does not restrict kinds with no known hard-fail-on-busy path", () => {
     expect(isSeriallyExclusiveKind("retire-gateway")).toBe(false);
     expect(isSeriallyExclusiveKind("recycle-gateway")).toBe(false);

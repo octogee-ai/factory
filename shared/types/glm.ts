@@ -247,6 +247,7 @@ export type OperationKind =
   | "retire-gateway"
   | "restart-gateway"
   | "recycle-gateway"
+  | "rebalance-gateway-capacity"
   | "rollout"
   | "deprovision-customer"
   | "suspend-customer"

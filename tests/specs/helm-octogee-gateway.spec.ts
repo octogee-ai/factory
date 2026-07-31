@@ -177,6 +177,16 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/octogee\.ai\/builder-slug:\s*"ceckert"/);
   });
 
+  it("stamps the Cowboy capacity-rebalance nonce on the pod template", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-default", {
+      capacityRebalanceNonce: "capacity-rebalance-default-1",
+    }), "Deployment", "octogee-gateway-default") ?? "";
+
+    expect(dep).toMatch(
+      /octogee\.ai\/capacity-rebalance-nonce:\s*"capacity-rebalance-default-1"/,
+    );
+  });
+
   it("refuses a partial dedicated owner snapshot", () => {
     expect(() => helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
@@ -644,7 +654,7 @@ const out = helmTemplate();
     expect(pdb).toMatch(/gateway-instance:\s*bender/);
   });
 
-  it("leaves shared disruption ownership to the umbrella pool PDB", () => {
+  it("leaves shared disruption ownership to umbrella identity PDBs", () => {
     const out = helmTemplate();
     expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
   });
@@ -1331,17 +1341,21 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     expect(dep).toMatch(/emptyDir:\s*\{\}/);
   });
 
-  // Gateways must NOT carry cluster-autoscaler.kubernetes.io/safe-to-evict:"false".
-  // GKE Autopilot maps it to the extended-duration-pods feature, which it never
-  // grants to Spot Pods — so it warned on every deploy and the 7-day pin never
-  // took. The real voluntary-disruption guard is the maxUnavailable:1 PDB,
-  // unchanged here. All gateways are Spot + emptyDir.
   it("operator gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       profile: "operator",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
+    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
+  });
+
+  it("shared gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
+    const out = helmTemplate("octogee-gw-default", {
+      gatewayId: "default",
+      gatewayClass: "shared",
+    });
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
   });
 

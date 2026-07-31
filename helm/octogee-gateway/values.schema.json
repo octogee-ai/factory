@@ -117,6 +117,9 @@
     "deploymentIntentFingerprint": {
       "type": "string"
     },
+    "capacityRebalanceNonce": {
+      "type": "string"
+    },
     "serviceAccountName": {
       "type": "string"
     },
