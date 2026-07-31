@@ -1126,15 +1126,16 @@ async function stopRsyncSession(session: RSyncImportSession | undefined): Promis
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true }).catch(() => undefined);
 }
 
-async function stopConflictingRsyncSession(key: string, port: number): Promise<void> {
-  for (const session of rsyncImportSessions.values()) {
-    if (session.key === key) {
-      await stopRsyncSession(session);
-      continue;
-    }
+async function stopConflictingRsyncSession(migrationId: string, port: number): Promise<void> {
+  const sessions = [...rsyncImportSessions.values()];
+  const conflictingSession = sessions.find((session) => session.migrationId !== migrationId);
+  if (conflictingSession) {
     throw new Error(
-      `rsync import port ${port} is already serving migrationId=${session.migrationId} slug=${session.slug}`,
+      `rsync import port ${port} is already serving migrationId=${conflictingSession.migrationId} slug=${conflictingSession.slug}`,
     );
+  }
+  for (const session of sessions) {
+    await stopRsyncSession(session);
   }
 }
 
@@ -1285,7 +1286,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     try {
-      await stopConflictingRsyncSession(key, port);
+      await stopConflictingRsyncSession(body.migrationId, port);
       const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(body.slug)
         : await deps.adapter.prepareImportDir(body.slug, mode);
