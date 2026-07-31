@@ -25,12 +25,20 @@ export interface FleetBrokerAssignmentRosterEntry {
   epoch: number;
 }
 
+export interface FleetBrokerConfiguredBuilderProjectCredential {
+  projectId: string;
+  agentId: string;
+  accountId: string;
+  token: string;
+}
+
 export interface FleetBrokerConfiguredBuilderBootstrap {
   uid: string;
   slug: string;
   agentId: string;
   accountId: string;
   coachToken: string;
+  projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }
 
 // Vegas: per-project agent state as served to gateways. `token`/`mmUserId`

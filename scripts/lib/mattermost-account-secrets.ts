@@ -132,11 +132,6 @@ export async function updateMattermostAccountSecrets(
     filePath,
     async () => {
       const secrets = await readSecrets(filePath);
-      for (const [accountId, token] of Object.entries(change.set ?? {})) {
-        assertAccountId(accountId);
-        if (token.length === 0) throw new Error(`Mattermost account ${accountId} has an empty token`);
-        secrets[accountId] = token;
-      }
       for (const accountId of change.remove ?? []) {
         assertAccountId(accountId);
         delete secrets[accountId];
@@ -146,6 +141,11 @@ export async function updateMattermostAccountSecrets(
         for (const accountId of Object.keys(secrets)) {
           if (accountId.startsWith(prefix)) delete secrets[accountId];
         }
+      }
+      for (const [accountId, token] of Object.entries(change.set ?? {})) {
+        assertAccountId(accountId);
+        if (token.length === 0) throw new Error(`Mattermost account ${accountId} has an empty token`);
+        secrets[accountId] = token;
       }
       await writeSecrets(filePath, secrets);
     },

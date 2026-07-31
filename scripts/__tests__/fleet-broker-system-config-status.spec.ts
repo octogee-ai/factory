@@ -44,6 +44,7 @@ describe("fleet broker system config status", () => {
       agentId: "octogee-alice-coach",
       accountId: "alice-coach",
       coachToken: "coach-token",
+      projectCredentials: [],
     };
     vi.mocked(internalFetch).mockResolvedValueOnce(new Response(
       JSON.stringify({ bootstrap }),

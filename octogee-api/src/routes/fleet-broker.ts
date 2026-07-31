@@ -3,7 +3,11 @@ import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import { isValidUsername } from "@octogee/shared/types/identity";
+import {
+  isValidProjectId,
+  isValidUsername,
+  projectAgentId,
+} from "@octogee/shared/types/identity";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import {
   createCachedBuilderAgentDefaultResolver,
@@ -16,10 +20,12 @@ import type {
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
   FleetBrokerConfiguredBuilderBootstrap,
+  FleetBrokerConfiguredBuilderProjectCredential,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerPreStopFlushStep,
+  FleetBrokerProjectAgent,
   FleetBrokerProjectRestore,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
@@ -1371,8 +1377,9 @@ function configuredBuilderBootstrapPayload(input: {
   slug: string;
   user: Record<string, unknown> | undefined;
   coach: Record<string, unknown> | undefined;
+  projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }): FleetBrokerConfiguredBuilderBootstrap | null {
-  const { uid, slug, user, coach } = input;
+  const { uid, slug, user, coach, projectCredentials } = input;
   const agentId = `octogee-${slug}-coach`;
   if (!user || slugFromAssignedUser(user) !== slug) return null;
   if (!agentBelongsToAssignedWorkspace(user, agentId)) return null;
@@ -1383,7 +1390,30 @@ function configuredBuilderBootstrapPayload(input: {
     agentId,
     accountId: `${slug}-coach`,
     coachToken: coach.personalToken,
+    projectCredentials,
   };
+}
+
+function configuredBuilderProjectCredentials(
+  slug: string,
+  projectAgents: readonly FleetBrokerProjectAgent[],
+): FleetBrokerConfiguredBuilderProjectCredential[] {
+  const credentials: FleetBrokerConfiguredBuilderProjectCredential[] = [];
+  for (const project of projectAgents) {
+    if (
+      !project.enabled ||
+      !isValidProjectId(project.projectId) ||
+      typeof project.token !== "string" ||
+      project.token.length === 0
+    ) continue;
+    credentials.push({
+      projectId: project.projectId,
+      agentId: projectAgentId(slug, project.projectId),
+      accountId: `${slug}-proj-${project.projectId}`,
+      token: project.token,
+    });
+  }
+  return credentials.sort((a, b) => a.projectId.localeCompare(b.projectId));
 }
 
 async function handleConfiguredBuilderBootstrap(
@@ -1415,15 +1445,17 @@ async function handleConfiguredBuilderBootstrap(
     return;
   }
 
-  const [userSnap, coachSnap] = await Promise.all([
+  const [userSnap, coachSnap, projectAgents] = await Promise.all([
     db.collection("users").doc(uid).get(),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    collectProjectAgentStates(db, uid, request.slug),
   ]);
   const bootstrap = configuredBuilderBootstrapPayload({
     uid,
     slug: request.slug,
     user: userSnap.data() as Record<string, unknown> | undefined,
     coach: coachSnap.data() as Record<string, unknown> | undefined,
+    projectCredentials: configuredBuilderProjectCredentials(request.slug, projectAgents),
   });
   if (!bootstrap) {
     res.status(404).json({ error: "configured_builder_bootstrap_unavailable" });

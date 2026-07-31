@@ -3,13 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-bootstrap.js";
 
 describe("configured builder bootstrap", () => {
-  it("materializes only the exact coach account credential returned for this revision", async () => {
+  it("materializes the exact workspace and project coach credentials required at boot", async () => {
     const configuredBuilderBootstrap = vi.fn().mockResolvedValue({
       uid: "uid-alice",
       slug: "alice",
       agentId: "octogee-alice-coach",
       accountId: "alice-coach",
       coachToken: "coach-token",
+      projectCredentials: [{
+        projectId: "orbit",
+        agentId: "octogee-alice-proj-orbit-coach",
+        accountId: "alice-proj-orbit",
+        token: "project-token",
+      }],
     });
     const writeSecrets = vi.fn().mockResolvedValue(undefined);
 
@@ -25,8 +31,91 @@ describe("configured builder bootstrap", () => {
 
     expect(configuredBuilderBootstrap).toHaveBeenCalledWith("alice");
     expect(writeSecrets).toHaveBeenCalledWith("/tmp/openclaw", {
-      set: { "alice-coach": "coach-token" },
+      removePrefixes: ["alice-proj-"],
+      set: {
+        "alice-coach": "coach-token",
+        "alice-proj-orbit": "project-token",
+      },
     });
+  });
+
+  it("rejects a project credential outside the configured Builder identity", async () => {
+    const writeSecrets = vi.fn().mockResolvedValue(undefined);
+
+    await expect(hydrateConfiguredBuilderBootstrap({
+      openclawDir: "/tmp/openclaw",
+      gatewayId: "bender",
+      slug: "alice",
+    }, {
+      createClient: () => ({
+        configuredBuilderBootstrap: vi.fn().mockResolvedValue({
+          uid: "uid-alice",
+          slug: "alice",
+          agentId: "octogee-alice-coach",
+          accountId: "alice-coach",
+          coachToken: "coach-token",
+          projectCredentials: [{
+            projectId: "orbit",
+            agentId: "octogee-victim-proj-orbit-coach",
+            accountId: "victim-proj-orbit",
+            token: "victim-token",
+          }],
+        }),
+      }),
+      writeSecrets,
+    })).rejects.toThrow("configured builder bootstrap identity mismatch");
+    expect(writeSecrets).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "missing project credential list",
+      bootstrap: {
+        uid: "uid-alice",
+        slug: "alice",
+        agentId: "octogee-alice-coach",
+        accountId: "alice-coach",
+        coachToken: "coach-token",
+      },
+    },
+    {
+      name: "duplicate project credential",
+      bootstrap: {
+        uid: "uid-alice",
+        slug: "alice",
+        agentId: "octogee-alice-coach",
+        accountId: "alice-coach",
+        coachToken: "coach-token",
+        projectCredentials: [
+          {
+            projectId: "orbit",
+            agentId: "octogee-alice-proj-orbit-coach",
+            accountId: "alice-proj-orbit",
+            token: "project-token-a",
+          },
+          {
+            projectId: "orbit",
+            agentId: "octogee-alice-proj-orbit-coach",
+            accountId: "alice-proj-orbit",
+            token: "project-token-b",
+          },
+        ],
+      },
+    },
+  ])("rejects a broker response with $name", async ({ bootstrap }) => {
+    const writeSecrets = vi.fn().mockResolvedValue(undefined);
+
+    await expect(hydrateConfiguredBuilderBootstrap({
+      openclawDir: "/tmp/openclaw",
+      gatewayId: "bender",
+      slug: "alice",
+    }, {
+      createClient: () => ({
+        configuredBuilderBootstrap: vi.fn().mockResolvedValue(bootstrap),
+      }),
+      writeSecrets,
+    })).rejects.toThrow("configured builder bootstrap identity mismatch");
+    expect(writeSecrets).not.toHaveBeenCalled();
   });
 
   it("provisions the configured coach once when a freshly claimed gateway has no bootstrap yet", async () => {
@@ -37,6 +126,7 @@ describe("configured builder bootstrap", () => {
       agentId: "octogee-alice-coach",
       accountId: "alice-coach",
       coachToken: "coach-token",
+      projectCredentials: [],
     };
     const configuredBuilderBootstrap = vi.fn()
       .mockRejectedValueOnce(new Error(
@@ -86,6 +176,7 @@ describe("configured builder bootstrap", () => {
     });
     expect(client.setAgentIds).toHaveBeenCalledWith("uid-alice", ["octogee-alice-coach"]);
     expect(writeSecrets).toHaveBeenCalledWith("/tmp/openclaw", {
+      removePrefixes: ["alice-proj-"],
       set: { "alice-coach": "coach-token" },
     });
   });
@@ -150,6 +241,7 @@ describe("configured builder bootstrap", () => {
             agentId: "octogee-victim-coach",
             accountId: "victim-coach",
             coachToken: "victim-token",
+            projectCredentials: [],
           }),
         uidForSlug: vi.fn().mockResolvedValue("uid-alice"),
         provisionMattermost: vi.fn().mockResolvedValue({}),
@@ -176,6 +268,7 @@ describe("configured builder bootstrap", () => {
           agentId: "octogee-victim-coach",
           accountId: "victim-coach",
           coachToken: "victim-token",
+          projectCredentials: [],
         }),
       }),
       writeSecrets,

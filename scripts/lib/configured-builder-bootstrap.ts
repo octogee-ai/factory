@@ -1,4 +1,8 @@
-import type { FleetBrokerConfiguredBuilderBootstrap } from "../../shared/types/fleet-broker.js";
+import type {
+  FleetBrokerConfiguredBuilderBootstrap,
+  FleetBrokerConfiguredBuilderProjectCredential,
+} from "../../shared/types/fleet-broker.js";
+import { isValidProjectId, projectAgentId } from "../../shared/types/identity.js";
 import {
   createFleetBrokerClient,
   type FleetBrokerClient,
@@ -25,14 +29,42 @@ interface ConfiguredBuilderBootstrapDependencies {
   writeSecrets?: typeof updateMattermostAccountSecrets;
 }
 
+function matchesProjectCredential(
+  value: unknown,
+  slug: string,
+  seen: Set<string>,
+): value is FleetBrokerConfiguredBuilderProjectCredential {
+  if (!value || typeof value !== "object") return false;
+  const credential = value as Partial<FleetBrokerConfiguredBuilderProjectCredential>;
+  if (
+    !isValidProjectId(credential.projectId) ||
+    credential.agentId !== projectAgentId(slug, credential.projectId) ||
+    credential.accountId !== `${slug}-proj-${credential.projectId}` ||
+    typeof credential.token !== "string" ||
+    credential.token.length === 0 ||
+    seen.has(credential.projectId)
+  ) return false;
+  seen.add(credential.projectId);
+  return true;
+}
+
 function matchesConfiguredBuilder(
   bootstrap: FleetBrokerConfiguredBuilderBootstrap,
   slug: string,
 ): boolean {
-  return bootstrap.slug === slug &&
-    bootstrap.agentId === `octogee-${slug}-coach` &&
-    bootstrap.accountId === `${slug}-coach` &&
-    bootstrap.coachToken.length > 0;
+  if (bootstrap.slug !== slug) return false;
+  if (
+    bootstrap.agentId !== `octogee-${slug}-coach` ||
+    bootstrap.accountId !== `${slug}-coach` ||
+    typeof bootstrap.coachToken !== "string" ||
+    bootstrap.coachToken.length === 0 ||
+    !Array.isArray(bootstrap.projectCredentials)
+  ) return false;
+  const seen = new Set<string>();
+  for (const credential of bootstrap.projectCredentials) {
+    if (!matchesProjectCredential(credential, slug, seen)) return false;
+  }
+  return true;
 }
 
 function isConfiguredBuilderBootstrapUnavailable(error: unknown): boolean {
@@ -63,7 +95,17 @@ export async function hydrateConfiguredBuilderBootstrap(
   if (!matchesConfiguredBuilder(bootstrap, input.slug)) {
     throw new Error("configured builder bootstrap identity mismatch");
   }
+  const projectSecrets = Object.fromEntries(
+    bootstrap.projectCredentials.map((credential) => [
+      credential.accountId,
+      credential.token,
+    ]),
+  );
   await writeSecrets(input.openclawDir, {
-    set: { [bootstrap.accountId]: bootstrap.coachToken },
+    removePrefixes: [`${input.slug}-proj-`],
+    set: {
+      [bootstrap.accountId]: bootstrap.coachToken,
+      ...projectSecrets,
+    },
   });
 }

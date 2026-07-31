@@ -141,4 +141,26 @@ describe("Mattermost account SecretRefs", () => {
     await expect(readMattermostAccountSecret(openclawDir, "alice-coach")).resolves.toBeNull();
     await expect(readMattermostAccountSecret(openclawDir, "bob-coach")).resolves.toBe("pat-b");
   });
+
+  it("prunes a Builder's stale project tokens before setting its current active tokens", async () => {
+    const openclawDir = tempOpenClawDir();
+    await updateMattermostAccountSecrets(openclawDir, {
+      set: {
+        "alice-proj-old": "pat-old",
+        "alice-proj-orbit": "pat-stale",
+        "bob-proj-keep": "pat-bob",
+      },
+    });
+
+    await updateMattermostAccountSecrets(openclawDir, {
+      removePrefixes: ["alice-proj-"],
+      set: { "alice-proj-orbit": "pat-current" },
+    });
+
+    await expect(readMattermostAccountSecret(openclawDir, "alice-proj-old")).resolves.toBeNull();
+    await expect(readMattermostAccountSecret(openclawDir, "alice-proj-orbit"))
+      .resolves.toBe("pat-current");
+    await expect(readMattermostAccountSecret(openclawDir, "bob-proj-keep"))
+      .resolves.toBe("pat-bob");
+  });
 });

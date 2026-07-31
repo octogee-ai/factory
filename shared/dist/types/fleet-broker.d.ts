@@ -24,12 +24,19 @@ export interface FleetBrokerAssignmentRosterEntry {
     state: AssignmentState;
     epoch: number;
 }
+export interface FleetBrokerConfiguredBuilderProjectCredential {
+    projectId: string;
+    agentId: string;
+    accountId: string;
+    token: string;
+}
 export interface FleetBrokerConfiguredBuilderBootstrap {
     uid: string;
     slug: string;
     agentId: string;
     accountId: string;
     coachToken: string;
+    projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }
 export interface FleetBrokerProjectAgent {
     projectId: string;
