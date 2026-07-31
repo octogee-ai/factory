@@ -151,39 +151,6 @@ describe("gateway convergence surge wiring", () => {
     });
   });
 
-  it("requires Spot target admission only while a capacity rebalance is active", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
-    const rebalancing = {
-      ...gateway(),
-      capacityRebalanceNonce: "capacity-rebalance-bender-1",
-      capacityRebalance: {
-        nonce: "capacity-rebalance-bender-1",
-        active: true,
-        operationId: "capacity-rebalance-bender-1",
-        previousNonce: null,
-        sourcePodUids: ["old-pod"],
-        requestedAt: 1,
-      },
-    };
-
-    await refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff, rebalancing),
-      gateway: rebalancing,
-      artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    });
-
-    expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
-      gatewayId: "bender",
-      desiredImageTag: "def5678-oc2026.7.1",
-      requiresCustomerMigration: true,
-      ownerlessOperatorPrewarm: false,
-      requiredTargetCapacity: "spot",
-    });
-  });
-
   it("does not mark a qualified release live from an ambiguous legacy SHA heartbeat", async () => {
     await expect(refineGatewayConvergenceAction({
       passDeps: passDeps(vi.fn(async () => ({ ready: true }))),

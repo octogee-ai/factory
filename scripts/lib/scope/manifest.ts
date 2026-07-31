@@ -28,6 +28,7 @@ export const JOBS = {
   customerLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
   gatewayEdgeEmulator: "gateway-edge-emulator",
+  glmControllerEmulator: "glm-controller-emulator",
   octogeeApiEmulator: "octogee-api-emulator",
 } as const;
 
@@ -121,6 +122,7 @@ export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.customerLifecycleEmulator,
   JOBS.functionsEmulator,
   JOBS.gatewayEdgeEmulator,
+  JOBS.glmControllerEmulator,
   JOBS.octogeeApiEmulator,
 ] as const;
 
@@ -140,7 +142,10 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
-  { dir: "glm-controller/", jobs: [JOBS.glmController] },
+  {
+    dir: "glm-controller/",
+    jobs: [JOBS.glmController, JOBS.glmControllerEmulator],
+  },
   {
     dir: "ops-agent/extensions/octogee-ops-runtime-tools/",
     jobs: [JOBS.opsAgentRuntimeTools, JOBS.tests],
@@ -192,6 +197,16 @@ export interface ScopeEdge {
 // Cross-package edges, additive on top of ownership. The correctness hazards —
 // each pinned by a test in scope-resolve.spec.ts.
 export const EDGES: readonly ScopeEdge[] = [
+  {
+    when: "scripts/ops/run-emulator-vitest.mjs",
+    jobs: [
+      JOBS.functionsEmulator,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmControllerEmulator,
+      JOBS.octogeeApiEmulator,
+    ],
+    reason: "the shared Firebase emulator runner launches every package emulator suite",
+  },
   {
     when: "core/",
     jobs: [

@@ -109,7 +109,7 @@ spec:
           args:
             - --port=8080
             - --telemetry-port=8081
-            - --metric-labels-allowlist=nodes=[cloud.google.com/gke-spot,cloud.google.com/compute-class,topology.kubernetes.io/zone],pods=[gateway-class]
+            - --metric-labels-allowlist=nodes=[cloud.google.com/gke-spot,cloud.google.com/gke-provisioning,cloud.google.com/compute-class,topology.kubernetes.io/zone],pods=[gateway-class,gateway-id,gateway-instance,octogee.ai/builder-slug]
           ports:
             - name: http-metrics
               containerPort: 8080
@@ -168,6 +168,6 @@ spec:
       metricRelabeling:
         - action: keep
           sourceLabels: [__name__]
-          regex: kube_(cronjob_status_last_successful_time|daemonset_labels|deployment_(labels|status_replicas_available|status_replicas_unavailable)|namespace_(created|labels)|node_(info|labels)|persistentvolumeclaim_info|pod_(container_(info|resource_limits|resource_requests|status_(last_terminated_(exitcode|reason)|ready|restarts_total|running|terminated|waiting|waiting_reason))|info|labels|status_(phase|qos_class|ready|reason|scheduled))|statefulset_labels)
+          regex: kube_(cronjob_status_last_successful_time|daemonset_labels|deployment_(labels|status_replicas_available|status_replicas_unavailable)|namespace_(created|labels)|node_(info|labels|spec_taint|status_condition)|persistentvolumeclaim_info|pod_(container_(info|resource_limits|resource_requests|status_(last_terminated_(exitcode|reason)|ready|restarts_total|running|terminated|waiting|waiting_reason))|info|labels|status_(phase|qos_class|ready|reason|scheduled))|statefulset_labels)
   targetLabels:
     metadata: []

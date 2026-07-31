@@ -92,8 +92,6 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     const byos = await restoreByos(adapter, slug);
     steps.push(...byos.steps);
     throwIfAborted(signal, uid);
-    steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
-    throwIfAborted(signal, uid);
     await applyConfigPatchAndMount(adapter, snapshot, null, byos.present, signal);
     steps.push("config-patch");
     throwIfAborted(signal, uid);
@@ -105,6 +103,11 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
+    throwIfAborted(signal, uid);
+    if (rehydratesProjectCheckouts(adapter, snapshot)) {
+        steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
+    }
+    throwIfAborted(signal, uid);
     adapter.writeMountMarker?.(slug);
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
     return { restored: true, steps };
@@ -126,6 +129,10 @@ async function cloneProjectsFromSnapshot(adapter, snapshot) {
         }
     }
     return steps;
+}
+function rehydratesProjectCheckouts(adapter, snapshot) {
+    const scope = snapshot.projectCheckoutScope ?? adapter.projectCheckoutScope?.(snapshot.slug);
+    return scope === "workspace-and-projects";
 }
 function throwIfAborted(signal, uid) {
     if (!signal?.aborted)
@@ -179,13 +186,8 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     throwIfAborted(signal, uid);
     steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
     throwIfAborted(signal, uid);
-    steps.push(...(await runBlobSync(adapter, slug)));
-    throwIfAborted(signal, uid);
     const byos = await restoreByos(adapter, slug);
     steps.push(...byos.steps);
-    throwIfAborted(signal, uid);
-    const projectClones = await cloneMissingProjects(adapter, slug);
-    steps.push(...projectClones.steps);
     throwIfAborted(signal, uid);
     const mm = await provisionMattermostIfMissing(adapter, uid, snapshot, ctx);
     snapshot = mm.snapshot;
@@ -202,6 +204,13 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
+    throwIfAborted(signal, uid);
+    steps.push(...(await runBlobSync(adapter, slug)));
+    throwIfAborted(signal, uid);
+    const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+        ? await cloneMissingProjects(adapter, slug)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
     throwIfAborted(signal, uid);
     adapter.log(`✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`);
     steps.push(...(await scheduleGreetingIfNeeded(adapter, uid, snapshot)));

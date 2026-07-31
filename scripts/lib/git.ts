@@ -507,32 +507,40 @@ function getOriginRemoteSilent(coachDir: string): string | null {
   }
 }
 
-function migrateHttpRemoteToSsh(coachDir: string, slug: string): boolean {
-  const result = gitExec(coachDir, [
+function migrateHttpRemoteToSsh(repoDir: string, slug: string, remoteUrl: string): boolean {
+  let repoPath: string;
+  try {
+    const segments = new URL(remoteUrl).pathname.split("/").filter(Boolean);
+    if (segments.length !== 2 || segments[0] !== workspaceGiteaOrg(slug)) return false;
+    repoPath = segments.join("/");
+  } catch {
+    return false;
+  }
+  const result = gitExec(repoDir, [
     "remote", "set-url", "origin",
-    sshRemoteUrl(workspaceGiteaOrg(slug), workspaceRepoName()),
+    `git@${GIT_SSH_HOST}:${repoPath}`,
   ]);
   if (result === null) return false;
-  log(`[git-sync] ${slug}: migrated remote to SSH`);
+  log(`[git-sync] ${slug}/${repoPath}: migrated remote to SSH`);
   return true;
 }
 
-function commitLocalChanges(coachDir: string, slug: string, strict: boolean): boolean {
-  const status = gitExec(coachDir, ["status", "--porcelain"]);
+function commitLocalChanges(repoDir: string, label: string, strict: boolean): boolean {
+  const status = gitExec(repoDir, ["status", "--porcelain"]);
   if (status === null) {
-    if (strict) throw new Error(`${slug}: git status failed`);
+    if (strict) throw new Error(`${label}: git status failed`);
     return false;
   }
   if (status === "") return false;
-  if (gitExec(coachDir, ["add", "-A"]) === null) {
-    if (strict) throw new Error(`${slug}: git add failed`);
+  if (gitExec(repoDir, ["add", "-A"]) === null) {
+    if (strict) throw new Error(`${label}: git add failed`);
     return false;
   }
   const committed = gitExec(
-    coachDir,
+    repoDir,
     ["commit", "-m", `auto: ${new Date().toISOString()}`],
   ) !== null;
-  if (!committed && strict) throw new Error(`${slug}: git commit failed`);
+  if (!committed && strict) throw new Error(`${label}: git commit failed`);
   return committed;
 }
 
@@ -543,13 +551,13 @@ function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined)
   }
 }
 
-function pushAndLog(coachDir: string, slug: string, keyArg: string | undefined): boolean {
-  const pushResult = gitExec(coachDir, ["push", "origin", "main"], keyArg);
+function pushAndLog(repoDir: string, label: string, keyArg: string | undefined): boolean {
+  const pushResult = gitExec(repoDir, ["push", "origin", "main"], keyArg);
   if (pushResult !== null) {
-    log(`[git-sync] ${slug}: pushed changes`);
+    log(`[git-sync] ${label}: pushed changes`);
     return true;
   } else {
-    log(`⚠ [git-sync] ${slug}: push failed`);
+    log(`⚠ [git-sync] ${label}: push failed`);
     return false;
   }
 }
@@ -589,36 +597,116 @@ export function runWorkspaceSyncMutation(
   }
 }
 
-function syncOneWorkspace(slug: string, strict: boolean): void {
-  const coachDir = path.join(CUSTOMERS_DIR, slug);
-  const gitDir = path.join(coachDir, ".git");
-  if (!fs.existsSync(gitDir)) return;
-  runWorkspaceSyncMutation(coachDir, slug, () => {
-    setRepoSshCommand(coachDir, slug);
+interface RepositorySyncTarget {
+  dir: string;
+  label: string;
+}
+
+function syncOneRepository(
+  slug: string,
+  target: RepositorySyncTarget,
+  strict: boolean,
+): void {
+  if (!fs.existsSync(path.join(target.dir, ".git"))) {
+    if (strict) throw new Error(`${target.label}: git metadata is missing`);
+    return;
+  }
+  runWorkspaceSyncMutation(target.dir, target.label, () => {
+    setRepoSshCommand(target.dir, slug);
 
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-    const remoteCheck = getOriginRemoteSilent(coachDir);
+    const remoteCheck = getOriginRemoteSilent(target.dir);
     if (remoteCheck === null) {
-      if (strict) throw new Error(`${slug}: git origin is missing`);
-      dlog(`[git-sync] ${slug}: no remote — skipping (lifecycle contract will heal on next restore)`);
+      if (strict) throw new Error(`${target.label}: git origin is missing`);
+      dlog(`[git-sync] ${target.label}: no remote — skipping (lifecycle contract will heal on next restore)`);
       return;
     }
 
     if (remoteCheck.startsWith("http")) {
-      const migrated = migrateHttpRemoteToSsh(coachDir, slug);
-      if (!migrated && strict) throw new Error(`${slug}: SSH remote migration failed`);
+      const migrated = migrateHttpRemoteToSsh(target.dir, slug, remoteCheck);
+      if (!migrated && strict) throw new Error(`${target.label}: SSH remote migration failed`);
     }
 
-    const committed = commitLocalChanges(coachDir, slug, strict);
-    rebaseFromOriginIfPresent(coachDir, keyArg);
+    const committed = commitLocalChanges(target.dir, target.label, strict);
+    rebaseFromOriginIfPresent(target.dir, keyArg);
 
     if (committed || strict) {
-      const pushed = pushAndLog(coachDir, slug, keyArg);
-      if (!pushed && strict) throw new Error(`${slug}: git push failed`);
+      const pushed = pushAndLog(target.dir, target.label, keyArg);
+      if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
     }
   }, { strict });
+}
+
+function workspaceSyncTarget(slug: string): RepositorySyncTarget {
+  return {
+    dir: path.join(CUSTOMERS_DIR, slug),
+    label: slug,
+  };
+}
+
+function projectSyncTargets(slug: string): RepositorySyncTarget[] {
+  const projectsDir = path.join(CUSTOMERS_DIR, slug, "projects");
+  if (!fs.existsSync(projectsDir)) return [];
+  return fs.readdirSync(projectsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => ({
+      dir: path.join(projectsDir, entry.name),
+      label: `${slug}/projects/${entry.name}`,
+    }));
+}
+
+async function syncRepositoryTargets(
+  slug: string,
+  targets: RepositorySyncTarget[],
+  strict: boolean,
+): Promise<void> {
+  const failures: string[] = [];
+  for (const target of targets) {
+    try {
+      syncOneRepository(slug, target, strict);
+    } catch (err) {
+      const failure = errMessage(err);
+      log(`⚠ [git-sync] ${failure}`);
+      failures.push(failure);
+    }
+  }
+  if (strict && failures.length > 0) {
+    throw new Error(`[git-sync] durable flush failed: ${failures.join("; ")}`);
+  }
+}
+
+export interface SyncCustomerRepositoriesOptions {
+  strict?: boolean;
+}
+
+export async function syncCustomerRepositoriesForSlug(
+  slug: string,
+  opts: SyncCustomerRepositoriesOptions = {},
+): Promise<void> {
+  await syncRepositoryTargets(
+    slug,
+    [workspaceSyncTarget(slug), ...projectSyncTargets(slug)],
+    opts.strict === true,
+  );
+}
+
+export async function syncAllCustomerRepositories(
+  opts: SyncCustomerRepositoriesOptions = {},
+): Promise<void> {
+  const failures: string[] = [];
+  for (const slug of listOnDiskCustomerSlugs()) {
+    try {
+      await syncCustomerRepositoriesForSlug(slug, opts);
+    } catch (err) {
+      failures.push(errMessage(err));
+    }
+  }
+  if (opts.strict && failures.length > 0) {
+    throw new Error(`[git-sync] durable flush failed: ${failures.join("; ")}`);
+  }
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.
@@ -632,7 +720,7 @@ export async function syncAllWorkspaces(opts: SyncAllWorkspacesOptions = {}): Pr
   const failures: string[] = [];
   for (const slug of listOnDiskCustomerSlugs()) {
     try {
-      syncOneWorkspace(slug, opts.strict === true);
+      syncOneRepository(slug, workspaceSyncTarget(slug), opts.strict === true);
     } catch (err) {
       const failure = errMessage(err);
       log(`⚠ [git-sync] ${failure}`);

@@ -19,6 +19,7 @@ export interface FleetBrokerProjectRestore {
     giteaRepoName: string | null;
     provisioningState?: string;
 }
+export type FleetBrokerProjectCheckoutScope = "workspace-only" | "workspace-and-projects";
 export interface FleetBrokerAssignmentRosterEntry {
     uid: string;
     state: AssignmentState;
@@ -118,6 +119,7 @@ export interface FleetBrokerUserSnapshot {
     customerMmUserId: string | null;
     greetingPosted: boolean;
     channels: FleetBrokerChannelBinding[];
+    projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects: FleetBrokerProjectRestore[];
     projectAgents?: FleetBrokerProjectAgent[];
     selectedTier?: unknown;

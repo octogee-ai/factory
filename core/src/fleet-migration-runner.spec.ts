@@ -37,7 +37,10 @@ function happyClient(): MigrationClient & { calls: string[] } {
       calls.push(`quiesce:${slug}`);
       return { migrationId: "m1", slug, drained: true, runningCount: 0 };
     }) as MigrationClient["quiesce"],
-    flushGateway: vi.fn() as unknown as MigrationClient["flushGateway"],
+    flushGateway: vi.fn(async ({ slug, reason }) => {
+      calls.push(`flush:${slug}:${reason}`);
+      return { migrationId: "m1", slug, ok: true, durationMs: 1, steps: [] };
+    }) as MigrationClient["flushGateway"],
     transferState: vi.fn(async ({ slug, mode }) => {
       calls.push(`transfer:${slug}:${mode ?? "default"}`);
       return { migrationId: "m1", slug, imported: true };
@@ -107,6 +110,7 @@ describe("runMigration — happy path", () => {
       "restore:alice",
       "transfer:alice:pre",
       "quiesce:alice",
+      "flush:alice:migration-final",
       "transfer:alice:final",
       "verify:alice",
       "unmount:gw-blue:alice",
@@ -124,6 +128,7 @@ describe("runMigration — happy path", () => {
       "report:restore-target:running", "report:restore-target:done",
       "report:pre-sync-state:running", "report:pre-sync-state:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
+      "report:flush-source:running", "report:flush-source:done",
       "report:final-sync-state:running", "report:final-sync-state:done",
       "report:verify-target:running", "report:verify-target:done",
       "report:cutover-firestore:running", "report:cutover-firestore:done",
@@ -149,6 +154,23 @@ describe("runMigration — happy path", () => {
 
     expect(events).toContain("cutover:gw-blue->gw-blue:mirror=false");
   });
+
+  it.each(["workspace-only", "workspace-and-projects"] as const)(
+    "carries %s checkout scope through both state transfers",
+    async (projectCheckoutScope) => {
+      const { client, deps, input } = harness();
+      input.restoreSnapshot = { ...SNAPSHOT, projectCheckoutScope };
+
+      await runMigration(input, deps);
+
+      const transferCalls = (client.transferState as ReturnType<typeof vi.fn>).mock.calls;
+      expect(transferCalls).toHaveLength(2);
+      expect(transferCalls.map(([call]) => call)).toEqual([
+        expect.objectContaining({ mode: "pre", projectCheckoutScope }),
+        expect.objectContaining({ mode: "final", projectCheckoutScope }),
+      ]);
+    },
+  );
 });
 
 describe("runMigration — failures", () => {
@@ -211,6 +233,46 @@ describe("runMigration — gated quiesce", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(events).toContain("assignment:gw-blue:quiescing");
+    expect(events).toContain("assignment:gw-blue:serving");
+  });
+
+  it("flushes the source after assignment-gated quiescence and before final sync", async () => {
+    const client = happyClient();
+    const { deps, input, events } = harness({ client, gateAssignment: true });
+
+    await runMigration(input, deps);
+
+    const gate = events.indexOf("assignment:gw-blue:quiescing");
+    const quiesceDone = events.indexOf("report:quiesce-source:done");
+    const flushRunning = events.indexOf("report:flush-source:running");
+    const finalSyncRunning = events.indexOf("report:final-sync-state:running");
+    const quiesce = client.calls.indexOf("quiesce:alice");
+    const flush = client.calls.indexOf("flush:alice:migration-final");
+    const finalSync = client.calls.indexOf("transfer:alice:final");
+    expect(gate).toBeGreaterThan(-1);
+    expect(quiesceDone).toBeGreaterThan(gate);
+    expect(flushRunning).toBeGreaterThan(quiesceDone);
+    expect(finalSyncRunning).toBeGreaterThan(flushRunning);
+    expect(quiesce).toBeGreaterThan(-1);
+    expect(flush).toBeGreaterThan(quiesce);
+    expect(finalSync).toBeGreaterThan(flush);
+  });
+
+  it("flush failure restores the source assignment and never starts final sync", async () => {
+    const client = happyClient();
+    (client.flushGateway as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("durable checkpoint unavailable"),
+    );
+    const { deps, input, events } = harness({ client, gateAssignment: true });
+
+    const result = await runMigration(input, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt).toMatchObject({
+      phase: "source-quiesced",
+      error: "durable checkpoint unavailable",
+    });
+    expect(client.calls).not.toContain("transfer:alice:final");
     expect(events).toContain("assignment:gw-blue:serving");
   });
 

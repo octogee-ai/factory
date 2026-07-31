@@ -175,7 +175,7 @@ if [[ "$APPLY" == true ]]; then
   echo -e "${GREEN}${BOLD}✓ Reconcile applied + self-verified for: ${SLUGS[*]}${NC}"
   echo "  Next (you drive — don't let automation race kubectl):"
   echo "   1) restart each customer's gateway so #970 self-heals ws-<slug>/team/membership:"
-  echo "        kubectl --context $K8S_CONTEXT -n $K8S_NAMESPACE rollout restart deploy/octogee-gateway-default"
+  echo "        kubectl --context $K8S_CONTEXT -n $K8S_NAMESPACE rollout restart deploy/octogee-gateway-shared-a"
   echo "      (dedicated-gateway customers: restart octogee-gateway-<instance> instead —"
   echo "       check provisioning.openclaw.gatewayId for the slug)"
   echo "   2) re-run this script in dry-run mode → expect 'already reconciled — no actions' (idempotent proof)"

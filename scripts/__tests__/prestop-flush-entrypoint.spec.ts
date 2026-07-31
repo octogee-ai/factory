@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPreStopGiteaKeyRelease,
+  createPreStopSessionQuiesce,
   createPreStopSystemConfigFlush,
+  PRESTOP_SESSION_QUIESCE_TIMEOUT_MS,
   resolvePreStopFlushConfig,
 } from "../entrypoints/prestop-flush.js";
 
@@ -17,7 +19,7 @@ describe("prestop-flush entrypoint config", () => {
     });
   });
 
-  it("keeps dedicated gateway ids and leaves system config sync disabled without a slug", () => {
+  it("keeps dedicated gateway ids and leaves the builder slug empty when the pod is shared", () => {
     expect(resolvePreStopFlushConfig(
       {},
       { gatewayClass: "dedicated", gatewayId: "gw-alice" },
@@ -42,6 +44,67 @@ describe("prestop-flush entrypoint config", () => {
       durablePolicy: true,
       source: "auto-watch",
     }));
+  });
+
+  it("checkpoints every mounted customer's system config on a shared gateway", async () => {
+    const sync = vi.fn(() => ({
+      committed: true,
+      pushed: true,
+      acceptedCommit: "a".repeat(40),
+    }));
+    const flush = createPreStopSystemConfigFlush(
+      "",
+      () => {},
+      sync,
+      () => ["alice", "bob"],
+    );
+
+    await flush();
+
+    expect(sync.mock.calls.map(([slug]) => slug)).toEqual(["alice", "bob"]);
+  });
+
+  it("attempts every shared system config checkpoint and reports all failures", async () => {
+    const sync = vi.fn((slug: string) => slug === "alice"
+      ? { committed: false, pushed: false, pending: true, errorCode: "push-failed" }
+      : { committed: true, pushed: true, acceptedCommit: "b".repeat(40) });
+    const flush = createPreStopSystemConfigFlush(
+      "",
+      () => {},
+      sync,
+      () => ["alice", "bob"],
+    );
+
+    await expect(flush()).rejects.toThrow(/alice.*push-failed/i);
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("quiesces only the dedicated builder before its preStop checkpoint", async () => {
+    const quiesce = vi.fn(async () => ({ drained: true, runningCount: 0 }));
+    const run = createPreStopSessionQuiesce("alice", {
+      listCustomerSlugs: () => ["alice", "bob"],
+      quiesce,
+    });
+
+    await run();
+
+    expect(quiesce).toHaveBeenCalledTimes(1);
+    expect(quiesce).toHaveBeenCalledWith("alice", expect.objectContaining({
+      timeoutMs: PRESTOP_SESSION_QUIESCE_TIMEOUT_MS,
+    }));
+  });
+
+  it("attempts every shared customer and fails loud after bounded quiescence", async () => {
+    const quiesce = vi.fn(async (slug: string) => slug === "alice"
+      ? { drained: false, runningCount: 2 }
+      : { drained: true, runningCount: 0 });
+    const run = createPreStopSessionQuiesce("", {
+      listCustomerSlugs: () => ["alice", "bob"],
+      quiesce,
+    });
+
+    await expect(run()).rejects.toThrow(/alice.*2 session/u);
+    expect(quiesce).toHaveBeenCalledTimes(2);
   });
 
   it("builds exact-key cleanup for a retiring tenant-bound pod", async () => {

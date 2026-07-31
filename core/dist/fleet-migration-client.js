@@ -109,7 +109,7 @@ export function createMigrationClient(deps) {
             log(`[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`);
             return res;
         },
-        async transferState({ migrationId, fromGatewayId, toGatewayId, fromTransportId, toTransportId, slug, mode, includeActivationManifest }) {
+        async transferState({ migrationId, fromGatewayId, toGatewayId, fromTransportId, toTransportId, slug, mode, includeActivationManifest, projectCheckoutScope, }) {
             const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
             const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
             const parsed = await postSignedJson(fromTransportId ?? fromGatewayId, `/push-state/${fromGatewayId}`, migrationId, {
@@ -120,6 +120,7 @@ export function createMigrationClient(deps) {
                 targetImportSignature,
                 ...(mode ? { mode } : {}),
                 ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
+                ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
             }, transferMs);
             log(`[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`);
             return parsed;

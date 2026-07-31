@@ -1,4 +1,4 @@
-import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
+import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import {
   GATEWAY_CLASS,
   GATEWAY_ID,
@@ -9,10 +9,13 @@ import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   listLocalCustomerPubKeys,
+  listOnDiskCustomerSlugs,
   readLocalCustomerPubKey,
-  syncAllWorkspaces,
+  syncAllCustomerRepositories,
+  syncCustomerRepositoriesForSlug,
   type LocalCustomerPubKey,
 } from "../lib/git.js";
+import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
 import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
@@ -24,6 +27,37 @@ export interface PreStopFlushConfig {
   builderSlug: string;
   gatewayClass: string;
   gatewayId: string;
+}
+
+export const PRESTOP_SESSION_QUIESCE_TIMEOUT_MS = 5_000;
+
+export function createPreStopSessionQuiesce(
+  builderSlug: string,
+  deps: {
+    listCustomerSlugs: () => string[];
+    quiesce: typeof quiesceCustomerSessions;
+  } = {
+    listCustomerSlugs: listOnDiskCustomerSlugs,
+    quiesce: quiesceCustomerSessions,
+  },
+): () => Promise<void> {
+  return async () => {
+    const slugs = builderSlug ? [builderSlug] : deps.listCustomerSlugs();
+    const failures = (await Promise.all(slugs.map(async (slug) => {
+      try {
+        const result = await deps.quiesce(slug, {
+          timeoutMs: PRESTOP_SESSION_QUIESCE_TIMEOUT_MS,
+          log,
+        });
+        return result.drained ? null : `${slug}: ${result.runningCount} session(s) still running`;
+      } catch (err) {
+        return `${slug}: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }))).filter((failure): failure is string => failure !== null);
+    if (failures.length > 0) {
+      throw new Error(`[prestop-flush] session quiesce incomplete: ${failures.join("; ")}`);
+    }
+  };
 }
 
 export function resolvePreStopFlushConfig(
@@ -45,10 +79,21 @@ export function createPreStopSystemConfigFlush(
   builderSlug: string,
   logFn: (message: string) => void = log,
   sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
-): (() => Promise<void>) | undefined {
-  if (!builderSlug) return undefined;
+  listCustomerSlugs: () => string[] = listOnDiskCustomerSlugs,
+): () => Promise<void> {
   return async () => {
-    checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
+    const slugs = builderSlug ? [builderSlug] : listCustomerSlugs();
+    const failures: string[] = [];
+    for (const slug of slugs) {
+      try {
+        checkpointDurableSystemConfigForSlug(slug, { log: logFn }, sync);
+      } catch (err) {
+        failures.push(`${slug}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`[prestop-flush] system config checkpoint failed: ${failures.join("; ")}`);
+    }
   };
 }
 
@@ -102,11 +147,19 @@ async function main(): Promise<void> {
   const result = await runGatewayPreStopFlush({
     gatewayId,
     gatewayClass,
-    syncWorkspaces: () => syncAllWorkspaces({ strict: true }),
-    syncBlobs: () => blobSyncAllWithOptions({
-      strict: true,
-      storeForSlug: () => createBrokeredBlobStore(brokerClient),
-    }),
+    quiesceSessions: createPreStopSessionQuiesce(builderSlug),
+    syncWorkspaces: builderSlug
+      ? () => syncCustomerRepositoriesForSlug(builderSlug, { strict: true })
+      : () => syncAllCustomerRepositories({ strict: true }),
+    syncBlobs: builderSlug
+      ? () => blobSyncForSlug(builderSlug, {
+          strict: true,
+          store: createBrokeredBlobStore(brokerClient),
+        })
+      : () => blobSyncAllWithOptions({
+          strict: true,
+          storeForSlug: () => createBrokeredBlobStore(brokerClient),
+        }),
     syncSystemConfig: createPreStopSystemConfigFlush(builderSlug),
     releaseGiteaKey: createPreStopGiteaKeyRelease(builderSlug),
     log,

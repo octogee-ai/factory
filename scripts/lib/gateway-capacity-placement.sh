@@ -70,6 +70,12 @@ live_pdbs = [
     if not item.get("metadata", {}).get("deletionTimestamp")
 ]
 selected_classes = set()
+selected_class_roles = {}
+gateway_class_by_instance = {
+    item.get("metadata", {}).get("labels", {}).get("gateway-instance"):
+        item.get("metadata", {}).get("labels", {}).get("gateway-class")
+    for item in live_deployments
+}
 shared_instances = {
     item.get("metadata", {}).get("labels", {}).get("gateway-instance")
     for item in live_deployments
@@ -135,6 +141,7 @@ for deployment in live_deployments:
         errors.append(f"Deployment {name} must select a gateway ComputeClass")
     else:
         selected_classes.add(compute_class)
+        selected_class_roles.setdefault(compute_class, set()).add(gateway_class)
     if spot_label in node_selector:
         errors.append(f"Deployment {name} must not hard-select Spot nodes")
     if not instance:
@@ -203,9 +210,14 @@ for name in sorted(selected_classes):
         continue
     spec = item.get("spec", {})
     priorities = spec.get("priorities") or []
-    valid_priorities = len(priorities) == 2
+    roles = selected_class_roles.get(name, set())
+    if "shared" in roles and len(roles) > 1:
+        errors.append(f"ComputeClass {name} must not mix shared and owner-bound gateways")
+    shared_only = roles == {"shared"}
+    expected_spot_priorities = (False,) if shared_only else (True, False)
+    valid_priorities = len(priorities) == len(expected_spot_priorities)
     if valid_priorities:
-        for index, expected_spot in enumerate((True, False)):
+        for index, expected_spot in enumerate(expected_spot_priorities):
             priority = priorities[index]
             location = priority.get("location") or {}
             zones = location.get("zones") or []
@@ -217,13 +229,14 @@ for name in sorted(selected_classes):
             ):
                 valid_priorities = False
                 break
-        if valid_priorities:
+        if valid_priorities and len(priorities) == 2:
             valid_priorities = (
                 set(priorities[0]["location"]["zones"])
                 == set(priorities[1]["location"]["zones"])
             )
     if not valid_priorities:
-        errors.append(f"ComputeClass {name} must prefer regional Spot before on-demand")
+        policy = "use regional on-demand only" if shared_only else "prefer regional Spot before on-demand"
+        errors.append(f"ComputeClass {name} must {policy}")
     if not (spec.get("autopilot") or {}).get("enabled"):
         errors.append(f"ComputeClass {name} must explicitly enable Autopilot")
     if not (spec.get("activeMigration") or {}).get("optimizeRulePriority"):
@@ -237,7 +250,10 @@ node_labels = {
     item.get("metadata", {}).get("name"): item.get("metadata", {}).get("labels", {})
     for item in nodes.get("items", [])
 }
-fallback_pods = []
+owner_bound_fallback_pods = []
+shared_on_demand_pods = []
+shared_nodes_by_instance = {}
+shared_zones_by_instance = {}
 
 for pod in pods.get("items", []):
     metadata = pod.get("metadata", {})
@@ -245,6 +261,8 @@ for pod in pods.get("items", []):
         continue
     name = metadata.get("name", "unnamed")
     spec = pod.get("spec", {})
+    instance = metadata.get("labels", {}).get("gateway-instance")
+    gateway_class = gateway_class_by_instance.get(instance)
     compute_class = (spec.get("nodeSelector") or {}).get(compute_class_label)
     if compute_class not in selected_classes:
         errors.append(f"running pod {name} must retain the gateway ComputeClass selector")
@@ -259,8 +277,39 @@ for pod in pods.get("items", []):
     if labels.get(compute_class_label) != compute_class:
         errors.append(f"running pod {name} is not on its selected gateway ComputeClass")
         continue
-    if labels.get(spot_label) != "true":
-        fallback_pods.append(name)
+    is_spot = labels.get(spot_label) == "true"
+    if gateway_class == "shared":
+        if is_spot:
+            errors.append(f"shared gateway pod {name} must run on on-demand capacity")
+        else:
+            shared_on_demand_pods.append(name)
+        if instance:
+            shared_nodes_by_instance.setdefault(instance, set()).add(node_name)
+            zone = labels.get("topology.kubernetes.io/zone")
+            if not zone:
+                errors.append(f"shared gateway pod {name} is on a node without a zone label")
+            else:
+                shared_zones_by_instance.setdefault(instance, set()).add(zone)
+    elif not is_spot:
+        owner_bound_fallback_pods.append(name)
+
+shared_node_owners = {}
+for instance, node_names in sorted(shared_nodes_by_instance.items()):
+    for node_name in node_names:
+        prior = shared_node_owners.get(node_name)
+        if prior is not None and prior != instance:
+            errors.append(f"shared gateway instances {prior} and {instance} share node {node_name}")
+        else:
+            shared_node_owners[node_name] = instance
+
+shared_zone_owners = {}
+for instance, zones in sorted(shared_zones_by_instance.items()):
+    for zone in zones:
+        prior = shared_zone_owners.get(zone)
+        if prior is not None and prior != instance:
+            errors.append(f"shared gateway instances {prior} and {instance} share zone {zone}")
+        else:
+            shared_zone_owners[zone] = instance
 
 if errors:
     print("; ".join(errors))
@@ -268,10 +317,11 @@ if errors:
 
 summary = (
     f"gateway capacity placement verified: {len(live_deployments)} Deployment(s), "
-    f"{len(fallback_pods)} on-demand fallback pod(s)"
+    f"{len(shared_on_demand_pods)} shared on-demand pod(s), "
+    f"{len(owner_bound_fallback_pods)} owner-bound on-demand fallback pod(s)"
 )
-if fallback_pods:
-    fallback_list = ", ".join(sorted(fallback_pods))
+if owner_bound_fallback_pods:
+    fallback_list = ", ".join(sorted(owner_bound_fallback_pods))
     summary += f": {fallback_list}"
 print(summary)
 '

@@ -81,6 +81,7 @@ SQL_JSON="${TEMP_DIR}/sql.json"
 NODE_JSON="${TEMP_DIR}/node.json"
 EMAIL_CHANNEL_JSON="${TEMP_DIR}/email-notification-channel.json"
 SMS_CHANNEL_JSON="${TEMP_DIR}/sms-notification-channel.json"
+DISCORD_CHANNEL_JSON="${TEMP_DIR}/discord-notification-channel.json"
 SERVICE_HEALTH_API_JSON="${TEMP_DIR}/service-health-api.json"
 ALERT_POLICIES_JSON="${TEMP_DIR}/alert-policies.json"
 
@@ -187,6 +188,21 @@ SMS_CHANNEL_NAME="$(
     ))[0].name
   ' "${SMS_CHANNEL_JSON}"
 )"
+
+gcloud beta monitoring channels list \
+  --project="${PROJECT_ID}" \
+  --filter='type="pubsub" AND displayName="Octogee Ops Discord (secondary)"' \
+  --format=json >"${DISCORD_CHANNEL_JSON}"
+if ! jq -e '
+  length == 1 and
+  .[0].type == "pubsub" and
+  .[0].enabled == true and
+  .[0].displayName == "Octogee Ops Discord (secondary)"
+' "${DISCORD_CHANNEL_JSON}" >/dev/null; then
+  echo "Verify the Octogee Ops Discord Cloud Monitoring notification channel, then rerun bootstrap-west-platform.sh --verify-only" >&2
+  exit 1
+fi
+DISCORD_CHANNEL_NAME="$(jq -er '.[0].name' "${DISCORD_CHANNEL_JSON}")"
 
 gcloud services list \
   --enabled \
@@ -299,6 +315,40 @@ if ! jq -e \
   )) | length == 1
 ' "${ALERT_POLICIES_JSON}" >/dev/null; then
   echo "Personalized Service Health alert invariants failed: policy, EventLog v1 filter, extractors, channels, rate limit, auto-close, or dashboard link drifted" >&2
+  exit 1
+fi
+
+if ! jq -e \
+  --arg email "${EMAIL_CHANNEL_NAME}" \
+  --arg sms "${SMS_CHANNEL_NAME}" \
+  --arg discord "${DISCORD_CHANNEL_NAME}" '
+  def routed_to_all:
+    .notificationChannels as $channels |
+    ($channels | length) == 3 and
+    ($channels | index($email)) != null and
+    ($channels | index($sms)) != null and
+    ($channels | index($discord)) != null;
+  map(select(
+    .displayName == "Octogee GKE Spot preemption observed" and
+    .enabled == true and
+    routed_to_all and
+    (.conditions | length) == 1 and
+    ((.conditions[0].conditionMatchedLog.filter // "") as $filter |
+      ($filter | contains("resource.type=\"gce_instance\"")) and
+      ($filter | contains("log_id(\"cloudaudit.googleapis.com/system_event\")")) and
+      ($filter | contains("protoPayload.methodName=\"compute.instances.preempted\"")) and
+      ($filter | contains("/instances/gk3-octogee-gateway-")) and
+      .conditions[0].conditionMatchedLog.labelExtractors == {
+        instance_id: "EXTRACT(resource.labels.instance_id)",
+        zone: "EXTRACT(resource.labels.zone)"
+      } and
+      .alertStrategy.autoClose == "3600s" and
+      .alertStrategy.notificationRateLimit.period == "300s" and
+      ((.documentation.content // "") | contains("octogee-spot-disruptions"))
+    )
+  )) | length == 1
+' "${ALERT_POLICIES_JSON}" >/dev/null; then
+  echo "GKE Spot preemption alert-policy invariants failed: authoritative filter, extractors, channels, rate limit, auto-close, or dashboard link drifted" >&2
   exit 1
 fi
 

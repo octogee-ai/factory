@@ -164,8 +164,8 @@ ORCH_OUTPUT=""
 DEFAULT_GATEWAY_ID=""
 SHARED_GATEWAY_IDS=""
 if [[ "$ENV" == "custom" ]]; then
-  DEFAULT_GATEWAY_ID="default"
-  SHARED_GATEWAY_IDS="default"
+  DEFAULT_GATEWAY_ID="shared-a"
+  SHARED_GATEWAY_IDS="shared-a,shared-b,shared-c,shared-d"
 else
   ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
   DEFAULT_GATEWAY_ID=$(echo "$ORCH_OUTPUT" | sed -nE \

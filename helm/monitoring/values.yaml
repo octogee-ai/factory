@@ -40,17 +40,20 @@ grafana:
       datasources:
         - name: Managed Prometheus
           type: prometheus
+          uid: gmp
           url: http://gmp-frontend.monitoring.svc.cluster.local:9090
           access: proxy
           isDefault: true
         - name: Cloud Monitoring
           type: stackdriver
+          uid: cloud-monitoring
           access: proxy
           jsonData:
             authenticationType: gce
             defaultProject: octogee
         - name: Cloud Logging
           type: googlecloud-logging-datasource
+          uid: cloud-logging
           access: proxy
           jsonData:
             authenticationType: gce

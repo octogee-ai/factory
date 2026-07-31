@@ -9,8 +9,8 @@ import {
 } from "./shared-gateway-pool.js";
 
 const config = {
-  defaultGatewayId: "default",
-  sharedGatewayIds: ["default", "default-b"],
+  defaultGatewayId: "shared-a",
+  sharedGatewayIds: ["shared-a", "shared-b"],
 } as const;
 
 function candidate(
@@ -27,7 +27,6 @@ function candidate(
     heartbeatFresh: true,
     liveReleaseReady: true,
     rosterComplete: true,
-    converging: false,
     incomingMigrationCount: 0,
     assignmentCount: 0,
     ...overrides,
@@ -37,37 +36,37 @@ function candidate(
 describe("parseSharedGatewayPoolConfig", () => {
   it("requires a valid unique pool with the primary first", () => {
     expect(parseSharedGatewayPoolConfig(config)).toEqual(config);
-    expect(parseSharedGatewayPoolConfig({ defaultGatewayId: "default" })).toBeNull();
+    expect(parseSharedGatewayPoolConfig({ defaultGatewayId: "shared-a" })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "default",
-      sharedGatewayIds: ["default-b", "default"],
+      defaultGatewayId: "shared-a",
+      sharedGatewayIds: ["shared-b", "shared-a"],
     })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "default",
-      sharedGatewayIds: ["default", "default"],
+      defaultGatewayId: "shared-a",
+      sharedGatewayIds: ["shared-a", "shared-a"],
     })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "default",
-      sharedGatewayIds: ["default", "NOT VALID"],
+      defaultGatewayId: "shared-a",
+      sharedGatewayIds: ["shared-a", "NOT VALID"],
     })).toBeNull();
   });
 });
 
 describe("shared gateway selection", () => {
   it("chooses the least authoritative load", () => {
-    expect(authoritativeSharedGatewayLoad(candidate("default", {
+    expect(authoritativeSharedGatewayLoad(candidate("shared-a", {
       assignmentCount: 2,
       incomingMigrationCount: 1,
     }))).toBe(3);
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      candidates: [candidate("default", { assignmentCount: 4 }), candidate("default-b", { assignmentCount: 2 })],
-    })).toMatchObject({ kind: "selected", gatewayId: "default-b", load: 2 });
+      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-b", load: 2 });
   });
 
   it("uses a stable uid hash to distribute equal loads", () => {
-    const candidates = [candidate("default"), candidate("default-b")];
+    const candidates = [candidate("shared-a"), candidate("shared-b")];
     const picks = new Set(
       Array.from({ length: 32 }, (_, index) => selectSharedGateway({
         uid: `uid-${index}`,
@@ -75,7 +74,7 @@ describe("shared gateway selection", () => {
         candidates,
       })).map((selection) => selection.kind === "selected" ? selection.gatewayId : null),
     );
-    expect(picks).toEqual(new Set(["default", "default-b"]));
+    expect(picks).toEqual(new Set(["shared-a", "shared-b"]));
     expect(selectSharedGateway({ uid: "uid-7", config, candidates })).toEqual(
       selectSharedGateway({ uid: "uid-7", config, candidates }),
     );
@@ -85,15 +84,15 @@ describe("shared gateway selection", () => {
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      currentGatewayId: "default",
-      candidates: [candidate("default", { assignmentCount: 3 }), candidate("default-b", { assignmentCount: 2 })],
-    })).toMatchObject({ gatewayId: "default", retainedCurrent: true });
+      currentGatewayId: "shared-a",
+      candidates: [candidate("shared-a", { assignmentCount: 3 }), candidate("shared-b", { assignmentCount: 2 })],
+    })).toMatchObject({ gatewayId: "shared-a", retainedCurrent: true });
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      currentGatewayId: "default",
-      candidates: [candidate("default", { assignmentCount: 4 }), candidate("default-b", { assignmentCount: 2 })],
-    })).toMatchObject({ gatewayId: "default-b", retainedCurrent: false });
+      currentGatewayId: "shared-a",
+      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
+    })).toMatchObject({ gatewayId: "shared-b", retainedCurrent: false });
   });
 
   it("excludes invalid destinations and blocks visibly when none accept", () => {
@@ -102,27 +101,36 @@ describe("shared gateway selection", () => {
       { heartbeatFresh: false },
       { managedBy: "operator" },
       { gatewayClass: "builder" },
-      { converging: true },
-      { incomingMigrationCount: 1 },
       { gatewayId: "isolated" },
     ]) {
-      expect(isAcceptingSharedGateway(config, candidate("default", overrides))).toBe(false);
+      expect(isAcceptingSharedGateway(config, candidate("shared-a", overrides))).toBe(false);
     }
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      candidates: [candidate("default", { ready: false })],
+      candidates: [candidate("shared-a", { ready: false })],
     })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
+  });
+
+  it("uses queued migrations as projected load without rejecting their target", () => {
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      config,
+      candidates: [
+        candidate("shared-a", { assignmentCount: 1, incomingMigrationCount: 2 }),
+        candidate("shared-b", { assignmentCount: 2 }),
+      ],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-b", load: 2 });
   });
 
   it("plans one recovery rebalance only when the healthy pool differs by two", () => {
     expect(planSharedGatewayRebalance({
       config,
-      candidates: [candidate("default", { assignmentCount: 4 }), candidate("default-b", { assignmentCount: 2 })],
-    })).toEqual({ fromGatewayId: "default", toGatewayId: "default-b" });
+      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
+    })).toEqual({ fromGatewayId: "shared-a", toGatewayId: "shared-b" });
     expect(planSharedGatewayRebalance({
       config,
-      candidates: [candidate("default", { assignmentCount: 3 }), candidate("default-b", { assignmentCount: 2 })],
+      candidates: [candidate("shared-a", { assignmentCount: 3 }), candidate("shared-b", { assignmentCount: 2 })],
     })).toBeNull();
   });
 });

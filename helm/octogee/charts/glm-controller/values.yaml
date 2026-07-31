@@ -30,7 +30,10 @@ kmsKeyName: ""
 gatewayChart: /charts/octogee-gateway
 
 sharedGatewayIds:
-  - default
+  - shared-a
+  - shared-b
+  - shared-c
+  - shared-d
 
 # Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;

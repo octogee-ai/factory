@@ -45,7 +45,11 @@ spec:
             description: "Cowboy expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
         - alert: GatewayOnDemandFallback
           expr: |
-            kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+            (
+              kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+              * on(namespace,pod) group_left()
+              kube_pod_labels{namespace=~"octogee|octogee-test",label_gateway_class=~"builder|operator"}
+            )
             * on(node) group_left()
             kube_node_labels{label_cloud_google_com_gke_spot!="true"}
           for: 2m
@@ -53,7 +57,7 @@ spec:
             severity: warning
           annotations:
             summary: "Gateway {{ $labels.pod }} is running on on-demand capacity"
-            description: "The regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available; disposable gateways actively migrate back to Spot, while Cowboy owns any shared on-demand rehome."
+            description: "An owner-bound regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available and active migration returns the gateway to Spot when capacity permits."
         - alert: SharedGatewayPoolDegraded
           expr: |
             (
@@ -70,7 +74,7 @@ spec:
             severity: critical
           annotations:
             summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
-            description: "Fewer than two Ready shared gateway pods are available. Each per-identity minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod; Cowboy owns recovery and any shared on-demand rehome. Inspect gateway pods, node capacity, and recovery operations."
+            description: "Fewer than two Ready shared gateway pods are available from the on-demand reliability floor. Each per-identity minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and recovery operations."
         - alert: SharedGatewayZoneDiversityLost
           expr: |
             (
@@ -96,6 +100,14 @@ spec:
           annotations:
             summary: "Shared gateway pool lost zone diversity in {{ $labels.namespace }}"
             description: "Ready shared gateway pods occupy fewer than two Central zones. Capacity remains available, but a zonal disruption can now remove the entire shared pool."
+        - alert: SharedGatewayMaxCapacity
+          expr: increase(glm_shared_gateway_max_capacity_total[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Shared Barn reached its configured member limit"
+            description: "Cowboy needs another whole Shared Barn member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
         - alert: GlmControllerReconcileStalled
           expr: (time() - glm_reconcile_last_success_timestamp_seconds) > 600
           for: 5m

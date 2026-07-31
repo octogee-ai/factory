@@ -527,7 +527,7 @@ function buildOnboardingPlacementResponse(opts) {
                 code: "default-gateway-missing",
                 severity: "error",
                 gatewayId: defaultGatewayId,
-                message: `Default gateway ${defaultGatewayId} has no desired state`,
+                message: `Shared Barn anchor ${defaultGatewayId} has no desired state`,
             });
         }
         else if (projectDesiredStatus(glmDoc) === "retired") {
@@ -535,7 +535,7 @@ function buildOnboardingPlacementResponse(opts) {
                 code: "default-gateway-retired",
                 severity: "error",
                 gatewayId: defaultGatewayId,
-                message: `Default gateway ${defaultGatewayId} is retired`,
+                message: `Shared Barn anchor ${defaultGatewayId} is retired`,
             });
         }
         else if (normalizeGatewayClass(glmDoc) !== "shared") {
@@ -543,7 +543,7 @@ function buildOnboardingPlacementResponse(opts) {
                 code: "default-gateway-not-shared",
                 severity: "warning",
                 gatewayId: defaultGatewayId,
-                message: `Default gateway ${defaultGatewayId} is not a shared gateway`,
+                message: `Shared Barn anchor ${defaultGatewayId} is not a shared gateway`,
             });
         }
     }
@@ -2324,9 +2324,9 @@ async function centralSharedReleaseGateway(db, gatewayId, operation) {
             gatewayId,
         });
     }
-    if (gateway.desiredStatus !== "running") {
+    if (gateway.desiredStatus === "retired") {
         rejectCentralReleaseRequest(409, {
-            error: `configured shared gateway must be running to ${operation} a release`,
+            error: `configured shared gateway must not be retired to ${operation} a release`,
             gatewayId: gateway.gatewayId,
         });
     }
@@ -2342,6 +2342,12 @@ async function centralReleaseGateways(db, gatewayScope, operation) {
     const config = await centralSharedGatewayPoolConfig(db);
     const sharedGateways = await Promise.all(config.sharedGatewayIds.map((gatewayId) => centralSharedReleaseGateway(db, gatewayId, operation)));
     const primary = sharedGateways[0];
+    if (primary.desiredStatus !== "running") {
+        rejectCentralReleaseRequest(409, {
+            error: `primary shared gateway must be running to ${operation} a release`,
+            gatewayId: primary.gatewayId,
+        });
+    }
     if (gatewayScope === "shared") {
         return { primary, gateways: sharedGateways };
     }
@@ -3522,17 +3528,6 @@ export function addAdminFleetRoutes(router, deps) {
             if ("error" in parsed) {
                 res.status(parsed.error.status).json(parsed.error.body);
                 return;
-            }
-            for (const gatewayId of config.sharedGatewayIds) {
-                const gatewayError = validatePlacementGateway(gatewayId, gatewaysById);
-                if (gatewayError) {
-                    res.status(409).json({
-                        error: "configured shared pool member is invalid",
-                        gatewayId,
-                        detail: gatewayError.body.error,
-                    });
-                    return;
-                }
             }
             const target = await readGatewayRegistrationReadiness(db, parsed.ok.defaultGatewayId);
             if (target.status !== "ready") {
@@ -5359,6 +5354,7 @@ export function addAdminFleetRoutes(router, deps) {
                         }
                         txn.update(userRef, {
                             "provisioning.openclaw.managedBy": "operator",
+                            "provisioning.openclaw.activationLease": FieldValue.delete(),
                             "provisioning.openclaw.gatewayId": FieldValue.delete(),
                             "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
                             "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
@@ -5495,7 +5491,10 @@ export function addAdminFleetRoutes(router, deps) {
                             };
                         }
                         if (current === targetGatewayId) {
-                            txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
+                            txn.update(userRef, {
+                                "provisioning.openclaw.managedBy": "operator",
+                                "provisioning.openclaw.activationLease": FieldValue.delete(),
+                            });
                             if (!targetAssignment) {
                                 txn.set(targetAssignmentRef, builderServingAssignment({
                                     uid,
@@ -5528,6 +5527,7 @@ export function addAdminFleetRoutes(router, deps) {
                                 "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
                                 "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
                                 "provisioning.openclaw.managedBy": "operator",
+                                "provisioning.openclaw.activationLease": FieldValue.delete(),
                             });
                             txn.set(targetAssignmentRef, builderServingAssignment({
                                 uid,
@@ -5541,7 +5541,10 @@ export function addAdminFleetRoutes(router, deps) {
                                 body: { uid, gatewayId: targetGatewayId, managedBy: "operator" },
                             };
                         }
-                        txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
+                        txn.update(userRef, {
+                            "provisioning.openclaw.managedBy": "operator",
+                            "provisioning.openclaw.activationLease": FieldValue.delete(),
+                        });
                         txn.create(operationRef, operationDoc({
                             kind: OP_KIND_MIGRATE_CUSTOMER,
                             createdBy,

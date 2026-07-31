@@ -67,11 +67,14 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("glm-controller change runs glm-controller + tests, not fail-open to everything", () => {
+  it("glm-controller owns its Firestore emulator suite too", () => {
     // + the glm-controller/ edge pulls tests: firebase-admin-major-alignment.spec.ts
     // sweeps glm-controller/package.json's firebase-admin range — the exact
     // regression (#1521) that spec exists to catch.
-    expectJobs(["glm-controller/src/index.ts"], ["glm-controller", "tests"]);
+    expectJobs(
+      ["glm-controller/src/index.ts"],
+      ["glm-controller", "glm-controller-emulator", "tests"],
+    );
   });
 
   it("octogee-chat-tools resolves to its own job (sibling extension dir)", () => {
@@ -212,6 +215,21 @@ describe("resolveScope — cross-package hazard edges", () => {
     );
   });
 
+  it("the shared emulator runner change exercises every package emulator suite", () => {
+    expectJobs(
+      ["scripts/ops/run-emulator-vitest.mjs"],
+      [
+        "scripts",
+        "customer-lifecycle-emulator",
+        "functions-emulator",
+        "gateway-edge-emulator",
+        "glm-controller-emulator",
+        "octogee-api-emulator",
+        "tests",
+      ],
+    );
+  });
+
   it("gateway-edge/src change ALSO runs octogee-api + its emulator suite (route imports + mounts)", () => {
     expectJobs(
       ["gateway-edge/src/routes/git.ts"],
@@ -310,6 +328,7 @@ describe("toGhaOutputs", () => {
     expect(out.run_customer_lifecycle_emulator).toBe(true);
     expect(out.run_functions_emulator).toBe(true);
     expect(out.run_gateway_edge_emulator).toBe(true);
+    expect(out.run_glm_controller_emulator).toBe(true);
     expect(out.run_octogee_api_emulator).toBe(true);
   });
 
@@ -318,6 +337,7 @@ describe("toGhaOutputs", () => {
     expect(out.test_matrix).toEqual([]);
     expect(out.any).toBe(false);
     expect(out.run_app).toBe(false);
+    expect(out.run_glm_controller_emulator).toBe(false);
   });
 });
 
@@ -327,6 +347,7 @@ describe("serializeGhaOutputs", () => {
     const lines = text.split("\n");
     expect(lines).toContain("any=true");
     expect(lines).toContain("run_functions_emulator=true");
+    expect(lines).toContain("run_glm_controller_emulator=false");
     expect(lines).toContain("run_app=false");
     expect(lines).toContain("run_octogee_api_emulator=false");
     // test_matrix must be single-line valid JSON (fromJSON() reads it in the workflow)

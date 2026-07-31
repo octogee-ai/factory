@@ -4,7 +4,7 @@ Resolve the revision id for this render.
 `revisionId` ({gatewayId}-r{n}) is the disposable instance dimension: every
 per-instance K8s resource NAME and the `gateway-instance` selector key off it so
 two simultaneous revisions of one gateway never collide. Legacy renders that
-pass only `gatewayId` (e.g. `default-blue`) get revisionId == gatewayId, so their
+pass only `gatewayId` (e.g. `shared-a`) get revisionId == gatewayId, so their
 resource names are unchanged. Tenant identity (KSA, secrets, GATEWAY_ID) stays
 gateway-scoped on `.Values.gatewayId` — see serviceAccountName / GATEWAY_ID.
 */}}
@@ -65,6 +65,14 @@ defaults to shared.
 operator
 {{- else -}}
 shared
+{{- end -}}
+{{- end }}
+
+{{- define "octogee-gateway.computeClass" -}}
+{{- if eq (include "octogee-gateway.gatewayClass" .) "shared" -}}
+{{- required "sharedComputeClass is required for shared gateways" .Values.sharedComputeClass -}}
+{{- else -}}
+{{- required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
 {{- end -}}
 {{- end }}
 

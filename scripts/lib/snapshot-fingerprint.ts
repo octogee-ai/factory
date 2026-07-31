@@ -8,11 +8,10 @@ import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js
 // customer must be re-ensured even though its mounted membership is unchanged. This is
 // what makes a project-agent toggle converge on the next tick instead of only on remount.
 //
-// `projectCloneSet` is fingerprinted because the clone only ever runs for an ACTIVE project
-// (listProjectsNeedingClone skips the rest), while project create writes the MM channel
-// BEFORE it flips provisioningState to active. Without it, a reconcile landing in that
-// window skips the clone and then records itself as applied — and the later
-// provisioning→active flip moves nothing, so the checkout is never cloned.
+// `projectCloneSet` is fingerprinted for targets that restore project checkouts because the
+// clone only ever runs for an ACTIVE project (listProjectsNeedingClone skips the rest), while
+// project create writes the MM channel BEFORE it flips provisioningState to active. Shared
+// targets project this set away, matching their workspace-only lifecycle convergence.
 //
 // It hashes the SET the ensure would actually clone — repo present AND active (or legacy
 // undefined), mirroring listProjectsNeedingClone's own filter — rather than raw project
@@ -88,7 +87,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     projectAgents: [...(snapshot.projectAgents ?? [])]
       .map((p) => ({ projectId: p.projectId, enabled: p.enabled, mmUserId: p.mmUserId, token: p.token }))
       .sort((a, b) => compareStrings(a.projectId, b.projectId)),
-    projectCloneSet: [...(snapshot.projects ?? [])]
+    projectCloneSet: snapshot.projectCheckoutScope === "workspace-only" ? [] : [...(snapshot.projects ?? [])]
       .filter(
         (p) =>
           !!p.giteaRepoName

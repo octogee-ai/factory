@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type {
+  FleetBrokerProjectCheckoutScope,
+  FleetBrokerUserSnapshot,
+} from "../../shared/types/fleet-broker.js";
 import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
 import {
   CONFIG_PATCH_DEADLINE_MS,
@@ -27,6 +30,7 @@ import {
   type RemoveCustomerResult,
   type UserSnapshot,
 } from "./customer-lifecycle.js";
+
 import {
   AGENTS_DIR,
   CUSTOMER_KEYS_DIR,
@@ -107,6 +111,8 @@ import {
 } from "./mattermost-account-secrets.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
+const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
+
 const DEFAULT_COACH = {
   name: "Octo",
   emoji: "",
@@ -119,6 +125,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   log: (msg: string) => void;
   adminMmUserId?: string;
   isOperatorGateway?: () => boolean;
+  projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
 
 interface BrokerCtx {
@@ -129,6 +136,7 @@ interface BrokerCtx {
   configCache: ConfigCache;
   snapshotsByUid: Map<string, FleetBrokerUserSnapshot>;
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
+  projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
 
 function buildRemoveCustomerPatchLocal(
@@ -180,8 +188,16 @@ function buildRemoveCustomerPatchLocal(
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
-  ctx.snapshotsByUid.set(snapshot.uid, snapshot);
-  ctx.snapshotsBySlug.set(snapshot.slug, snapshot);
+  const projectCheckoutScope = snapshot.projectCheckoutScope
+    ?? ctx.projectCheckoutScope?.(snapshot.slug)
+    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+  const projected = {
+    ...snapshot,
+    projectCheckoutScope,
+    projects: projectCheckoutScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE ? [] : snapshot.projects,
+  };
+  ctx.snapshotsByUid.set(projected.uid, projected);
+  ctx.snapshotsBySlug.set(projected.slug, projected);
 }
 
 function invalidateSnapshot(ctx: BrokerCtx, uid: string): void {
@@ -218,6 +234,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     greetingPosted: snapshot.greetingPosted,
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
+    projectCheckoutScope: snapshot.projectCheckoutScope,
     projects: snapshot.projects,
     projectAgents: snapshot.projectAgents,
     byotActive: snapshot.byotActive,
@@ -692,6 +709,14 @@ async function activateImportedCustomer(
 ): Promise<void> {
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  await pruneWorkspaceOnlyProjectCheckouts(
+    CUSTOMERS_DIR,
+    slug,
+    ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
+      ?? ctx.projectCheckoutScope?.(slug)
+      ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
+    ctx.log,
+  );
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
@@ -716,6 +741,23 @@ async function activateImportedCustomer(
   }
   await logActivatedCoachModel(ctx, slug);
   ctx.log(`[import:${slug}] activation complete`);
+}
+
+export async function pruneWorkspaceOnlyProjectCheckouts(
+  customersDir: string,
+  slug: string,
+  scope: FleetBrokerProjectCheckoutScope,
+  log: (message: string) => void,
+): Promise<void> {
+  if (scope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) return;
+  const projectsDir = path.join(customersDir, slug, "projects");
+  await fsp.rm(projectsDir, { recursive: true, force: true });
+  await fsp.mkdir(projectsDir, { recursive: true });
+  log(`[import:${slug}] removed project checkouts from workspace-only target`);
+}
+
+export function projectCheckoutScopeForRuntime(): FleetBrokerProjectCheckoutScope {
+  return WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
 }
 
 async function removeImportedCustomerBySlug(
@@ -758,10 +800,15 @@ export function buildBrokeredLifecycleAdapter(
     configCache: { current: undefined, hash: "" },
     snapshotsByUid: new Map(),
     snapshotsBySlug: new Map(),
+    projectCheckoutScope: opts.projectCheckoutScope,
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
     isOperatorGateway: opts.isOperatorGateway ?? (() => false),
+    projectCheckoutScope: (slug) =>
+      ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
+      ?? ctx.projectCheckoutScope?.(slug)
+      ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
     customerCoachWiredInOpenclawConfig: (slug) =>
       customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
     hasCustomerAgentRuntime: (slug) =>

@@ -66,6 +66,15 @@ describe("nextMigrationStep — forward path", () => {
   it("source-quiesced → final-sync state from source to target", () => {
     const step = nextMigrationStep(s("source-quiesced"));
     expect(step).toEqual({
+      action: "flush-source",
+      gateway: "gw-prod",
+      slug: "ceckert",
+    });
+  });
+
+  it("source-flushed → final-sync state from source to target", () => {
+    const step = nextMigrationStep(s("source-flushed"));
+    expect(step).toEqual({
       action: "sync-state",
       mode: "final",
       from: "gw-prod",
@@ -118,7 +127,8 @@ describe("advancePhase", () => {
     expect(advancePhase("keys-synced")).toBe("target-restored");
     expect(advancePhase("target-restored")).toBe("pre-synced");
     expect(advancePhase("pre-synced")).toBe("source-quiesced");
-    expect(advancePhase("source-quiesced")).toBe("final-synced");
+    expect(advancePhase("source-quiesced")).toBe("source-flushed");
+    expect(advancePhase("source-flushed")).toBe("final-synced");
     expect(advancePhase("final-synced")).toBe("target-verified");
     expect(advancePhase("target-verified")).toBe("cutover-done");
     expect(advancePhase("cutover-done")).toBe("source-unmounted");
@@ -135,13 +145,14 @@ describe("advancePhase", () => {
 });
 
 describe("fullPlan", () => {
-  it("from initial → 7 steps in canonical order", () => {
+  it("from initial → 8 steps in canonical order", () => {
     const plan = fullPlan(s("initial"));
-    expect(plan).toHaveLength(7);
+    expect(plan).toHaveLength(8);
     expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
       "restore-target",
       "pre-sync-state",
       "quiesce-source",
+      "flush-source",
       "final-sync-state",
       "verify-target",
       "cutover-firestore",
@@ -181,9 +192,9 @@ describe("rollbackPlan — pre-cutover", () => {
     expect(rollbackPlan(s("pre-synced"))).toEqual(plan);
   });
 
-  it("source-quiesced/final-synced/target-verified → unmount target import; source still owns", () => {
+  it("source-quiesced/source-flushed/final-synced/target-verified → unmount target import; source still owns", () => {
 
-    for (const phase of ["source-quiesced", "final-synced", "target-verified"] as const) {
+    for (const phase of ["source-quiesced", "source-flushed", "final-synced", "target-verified"] as const) {
       const plan = rollbackPlan(s(phase));
       expect(plan).toEqual([
         {
@@ -231,6 +242,7 @@ describe("describeStep", () => {
   it("renders every action variant non-empty", () => {
     const variants: ReturnType<typeof nextMigrationStep>[] = [
       { action: "quiesce-source", gateway: "g", slug: "s" },
+      { action: "flush-source", gateway: "g", slug: "s" },
       { action: "restore-target", gateway: "g", uid: "u", slug: "s" },
       { action: "sync-state", mode: "pre", from: "a", to: "b", slug: "s" },
       { action: "verify-target", gateway: "b", slug: "s" },

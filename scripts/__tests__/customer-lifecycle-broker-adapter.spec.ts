@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
-import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
+import {
+  buildBrokeredLifecycleAdapter,
+  projectCheckoutScopeForRuntime,
+  pruneWorkspaceOnlyProjectCheckouts,
+} from "../lib/customer-lifecycle-broker-adapter.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   applyConfigPatch,
@@ -216,6 +220,25 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       /missing activation manifest/,
     );
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+  });
+
+  it("removes transferred project checkouts before activating a workspace-only import", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-only-import-"));
+    const projectsDir = path.join(root, "alice", "projects");
+    await fs.mkdir(path.join(projectsDir, "camp", ".git"), { recursive: true });
+    const log = vi.fn();
+
+    try {
+      await pruneWorkspaceOnlyProjectCheckouts(root, "alice", "workspace-only", log);
+
+      expect(fsSync.existsSync(path.join(projectsDir, "camp"))).toBe(false);
+      expect(fsSync.existsSync(projectsDir)).toBe(true);
+      expect(log).toHaveBeenCalledWith(
+        "[import:alice] removed project checkouts from workspace-only target",
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("moves and quiesces every project agent state path owned by the builder", async () => {
@@ -1226,6 +1249,27 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(userSnapshot).toHaveBeenCalledTimes(1); // second read served from the seeded cache
   });
 
+  it("projects migration snapshots to workspace-only before lifecycle restore and fingerprinting", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-only",
+    });
+    adapter.seedUserSnapshotForMigration?.(
+      fullSnapshot({
+        projects: [
+          { projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" },
+        ],
+      }),
+    );
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.projectCheckoutScope).toBe("workspace-only");
+    expect(snap?.projects).toEqual([]);
+  });
+
   it("reassertByotForCustomer delegates model config writes through the adapter RPC", async () => {
     const rpc = {} as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
@@ -1328,6 +1372,12 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     });
 
     expect(ensureCommunityMembership).toHaveBeenCalledWith("uid-tester10");
+  });
+});
+
+describe("projectCheckoutScopeForRuntime", () => {
+  it("keeps runtime imports workspace-only", () => {
+    expect(projectCheckoutScopeForRuntime()).toBe("workspace-only");
   });
 });
 

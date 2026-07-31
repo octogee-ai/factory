@@ -27,7 +27,7 @@ export interface GatewayDesiredState {
   gatewayId: string;
 
   /**
-   * Durable identity this instance belongs to (`default`, `bender`) — bare,
+   * Durable identity this instance belongs to (`shared-a`, `bender`) — bare,
    * never blue/green-suffixed. Explicit on every instance written after the
    * gateway field landed; older docs derive it from gatewayId by convention
    * via deriveGatewayIdentity until backfilled.
@@ -158,7 +158,7 @@ export const NEW_GATEWAY_ID_REQUIREMENT =
 
 // Creation-time validator: roll-role suffixes are reserved so the
 // deriveGatewayIdentity convention fallback is safe by construction.
-// Instance ids minted by the blue/green machinery (default-blue) stay valid
+// Instance ids minted by the blue/green machinery (shared-a-blue) stay valid
 // under isValidGatewayId for routing and reconciliation.
 export function isValidNewGatewayId(id: unknown): id is string {
   if (!isValidGatewayId(id)) return false;
@@ -247,7 +247,7 @@ export type OperationKind =
   | "retire-gateway"
   | "restart-gateway"
   | "recycle-gateway"
-  | "rebalance-gateway-capacity"
+  | "scale-shared-member"
   | "rollout"
   | "deprovision-customer"
   | "suspend-customer"

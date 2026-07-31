@@ -1,6 +1,7 @@
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type {
+  FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectAgent,
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
@@ -24,6 +25,7 @@ export interface UserSnapshot {
   greetingPosted: boolean;
   channels: CustomerSnapshot["channels"];
   ownerName: string;
+  projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   projects?: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
@@ -78,6 +80,8 @@ export interface CustomerLifecycleAdapter {
    */
   customerCoachWiredInOpenclawConfig?: (slug: string) => boolean;
   hasCustomerAgentRuntime?: (slug: string) => boolean;
+
+  projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 
   /** Locally-present, coach-wired customer slugs — the pod's honest mounted set
    *  read WITHOUT Firestore, served via /health for Cowboy's pull-model poller.
@@ -428,9 +432,6 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
-  steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
-  throwIfAborted(signal, uid);
-
   await applyConfigPatchAndMount(adapter, snapshot, null, byos.present, signal);
   steps.push("config-patch");
   throwIfAborted(signal, uid);
@@ -446,6 +447,12 @@ async function restoreCustomerRuntimeFromSnapshotInner(
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push("verify-channel-ready");
+  throwIfAborted(signal, uid);
+
+  if (rehydratesProjectCheckouts(adapter, snapshot)) {
+    steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
+  }
+  throwIfAborted(signal, uid);
   adapter.writeMountMarker?.(slug);
   adapter.log(
     `[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`,
@@ -475,6 +482,14 @@ async function cloneProjectsFromSnapshot(
     }
   }
   return steps;
+}
+
+function rehydratesProjectCheckouts(
+  adapter: CustomerLifecycleAdapter,
+  snapshot: UserSnapshot,
+): boolean {
+  const scope = snapshot.projectCheckoutScope ?? adapter.projectCheckoutScope?.(snapshot.slug);
+  return scope === "workspace-and-projects";
 }
 
 function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
@@ -549,15 +564,8 @@ async function addCustomerToGatewayInner(
   steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
   throwIfAborted(signal, uid);
 
-  steps.push(...(await runBlobSync(adapter, slug)));
-  throwIfAborted(signal, uid);
-
   const byos = await restoreByos(adapter, slug);
   steps.push(...byos.steps);
-  throwIfAborted(signal, uid);
-
-  const projectClones = await cloneMissingProjects(adapter, slug);
-  steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
   const mm = await provisionMattermostIfMissing(adapter, uid, snapshot, ctx);
@@ -586,6 +594,15 @@ async function addCustomerToGatewayInner(
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push("verify-channel-ready");
+  throwIfAborted(signal, uid);
+
+  steps.push(...(await runBlobSync(adapter, slug)));
+  throwIfAborted(signal, uid);
+
+  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+    ? await cloneMissingProjects(adapter, slug)
+    : { steps: [], pending: [] };
+  steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
   adapter.log(

@@ -165,6 +165,41 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
+  it("selects on-demand capacity for shared gateways and Spot-first capacity for owner-bound gateways", () => {
+    const shared = findDoc(helmTemplate("octogee-gw-default", {
+      computeClass: "octogee-gateway-test",
+      sharedComputeClass: "octogee-gateway-shared-test",
+      gatewayClass: "shared",
+    }), "Deployment", "octogee-gateway-default") ?? "";
+    const operator = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      computeClass: "octogee-gateway-test",
+      sharedComputeClass: "octogee-gateway-shared-test",
+      gatewayClass: "operator",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+
+    expect(shared).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-shared-test"/);
+    expect(operator).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-test"/);
+  });
+
+  it("keeps Shared Barn identities on different nodes and different Central zones", () => {
+    const shared = findDoc(helmTemplate("octogee-gw-shared-a", {
+      gatewayId: "shared-a",
+      gatewayClass: "shared",
+    }), "Deployment", "octogee-gateway-shared-a") ?? "";
+    const ownerBound = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      gatewayClass: "builder",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    const ownerRequired = ownerBound.match(
+      /requiredDuringSchedulingIgnoredDuringExecution:[\s\S]*?(?=\n\s*preferredDuringSchedulingIgnoredDuringExecution:)/,
+    )?.[0] ?? "";
+
+    expect(shared).toMatch(/requiredDuringSchedulingIgnoredDuringExecution:[\s\S]*topologyKey: kubernetes\.io\/hostname/);
+    expect(shared).toMatch(/gateway-class: shared[\s\S]*operator: NotIn[\s\S]*- shared-a[\s\S]*topologyKey: topology\.kubernetes\.io\/zone/);
+    expect(ownerRequired).not.toContain("topologyKey: topology.kubernetes.io/zone");
+  });
+
   it("renders the dedicated owner snapshot into immutable pod annotations", () => {
     const dep = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
@@ -175,16 +210,6 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
 
     expect(dep).toMatch(/octogee\.ai\/owner-uid:\s*"uid-ceckert"/);
     expect(dep).toMatch(/octogee\.ai\/builder-slug:\s*"ceckert"/);
-  });
-
-  it("stamps the Cowboy capacity-rebalance nonce on the pod template", () => {
-    const dep = findDoc(helmTemplate("octogee-gw-default", {
-      capacityRebalanceNonce: "capacity-rebalance-default-1",
-    }), "Deployment", "octogee-gateway-default") ?? "";
-
-    expect(dep).toMatch(
-      /octogee\.ai\/capacity-rebalance-nonce:\s*"capacity-rebalance-default-1"/,
-    );
   });
 
   it("refuses a partial dedicated owner snapshot", () => {
@@ -1318,7 +1343,7 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 });
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
-  it("default instance stays cattle: emptyDir, no PVC, locked-down securityContext", () => {
+  it("every gateway class uses emptyDir with no PVC and a locked-down securityContext", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/emptyDir:\s*\{\}/);
@@ -1330,7 +1355,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     ).toBeNull();
   });
 
-  it("never renders a PVC even if a stale persistence.enabled value is passed (PVC path deleted, Spot + emptyDir only)", () => {
+  it("never renders a PVC even if a stale persistence.enabled value is passed", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       "persistence.enabled": "true",
@@ -1350,7 +1375,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
   });
 
-  it("shared gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
+  it("shared gateway leaves voluntary disruption protection to its identity PDB", () => {
     const out = helmTemplate("octogee-gw-default", {
       gatewayId: "default",
       gatewayClass: "shared",

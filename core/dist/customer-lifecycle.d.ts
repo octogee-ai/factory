@@ -1,6 +1,6 @@
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
-import type { FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
 export interface UserSnapshot {
     uid: string;
@@ -14,6 +14,7 @@ export interface UserSnapshot {
     greetingPosted: boolean;
     channels: CustomerSnapshot["channels"];
     ownerName: string;
+    projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects?: FleetBrokerProjectRestore[];
     projectAgents?: FleetBrokerProjectAgent[];
     byotActive?: boolean;
@@ -64,6 +65,7 @@ export interface CustomerLifecycleAdapter {
      */
     customerCoachWiredInOpenclawConfig?: (slug: string) => boolean;
     hasCustomerAgentRuntime?: (slug: string) => boolean;
+    projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
     /** Locally-present, coach-wired customer slugs — the pod's honest mounted set
      *  read WITHOUT Firestore, served via /health for Cowboy's pull-model poller.
      *  Also the reconcile's heartbeat report + mount-observed basis. */

@@ -178,7 +178,10 @@ return "ssh-pubkey";
       if (state.reassertContextFilesShouldFail) throw new Error("context-file reassert failed");
     },
 
-    listProjectsNeedingClone: async () => [...state.pendingProjects],
+    listProjectsNeedingClone: async () => {
+      record("listProjectsNeedingClone");
+      return [...state.pendingProjects];
+    },
     cloneProjectRepo: async (_slug: string, projectSlug: string) => {
       record("cloneProjectRepo");
       if (state.cloneProjectThrows) throw new Error("gitea unreachable");
@@ -260,6 +263,7 @@ function snap(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
     greetingPosted: false,
     channels: [],
     ownerName: "Test User",
+    projectCheckoutScope: "workspace-and-projects",
     ...overrides,
   };
 }
@@ -311,13 +315,13 @@ expect(result.steps).toEqual([
       "ssh-key",
       "write-templates",
       "init-workspace-repo",
-      "blob-sync",
       "mattermost-provision",
       "config-patch",
       "byot-reassert",
       "context-files-reassert",
       "warm-runtime-plugins",
       "verify-channel-ready",
+      "blob-sync",
       "schedule-greeting-cron",
       "mark-complete",
       "notify-ops",
@@ -1308,6 +1312,48 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
+  it("never probes or clones project checkouts for a workspace-only mount", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+        projectCheckoutScope: "workspace-only",
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.calls).not.toContain("listProjectsNeedingClone");
+    expect(state.calls).not.toContain("cloneProjectRepo");
+    expect(result.pendingProjectClones).toEqual([]);
+  });
+
+  it("establishes and verifies the coach before isolated project checkout convergence", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
+      state.calls.indexOf("cloneProjectRepo"),
+    );
+    expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
+      state.calls.indexOf("cloneProjectRepo"),
+    );
+  });
+
   it("surfaces a project whose clone did not land as pending — a swallowed failure must not read as converged", async () => {
     const state = makeState(
       snap({
@@ -1603,6 +1649,46 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(result.steps).not.toContain("blob-sync");
     expect(result.steps).toContain("verify-channel-ready");
+  });
+
+  it("restores only the workspace when the target checkout scope is workspace-only", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        projectCheckoutScope: undefined,
+        projects: [
+          { projectSlug: "camp", giteaRepoName: "test-camp", provisioningState: "active" },
+        ],
+      }),
+      emptyDisk(),
+    );
+    const adapter = makeAdapter(state);
+    adapter.projectCheckoutScope = () => "workspace-only";
+
+    await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+
+    expect(state.calls).not.toContain("cloneProjectRepo");
+  });
+
+  it("establishes and verifies the coach before restoring isolated project checkouts", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        projects: [
+          { projectSlug: "camp", giteaRepoName: "test-camp", provisioningState: "active" },
+        ],
+      }),
+      emptyDisk(),
+    );
+
+    await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
+      state.calls.indexOf("cloneProjectRepo"),
+    );
+    expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
+      state.calls.indexOf("cloneProjectRepo"),
+    );
   });
 
   it("replaces an imported origin-less checkout with the canonical Gitea workspace", async () => {

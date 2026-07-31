@@ -13,6 +13,8 @@
     "start": "node dist/glm-controller/src/index.js",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "K8S_NAMESPACE=octogee vitest run",
+    "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "test:emulator": "cd ../scripts && node ops/run-emulator-vitest.mjs --only firestore --project octogee-test --firebase-config ../firebase.json --config ../glm-controller/vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit"
   },

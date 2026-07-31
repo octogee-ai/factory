@@ -113,15 +113,4 @@ describe("serialFleetOperationsConflict", () => {
       { id: "b", kind: "rollout", input: { gatewayId: "green" } },
     )).toBe(true);
   });
-
-  it("keeps capacity rebalances globally serial with release rolls", () => {
-    expect(serialFleetOperationsConflict(
-      { id: "capacity-a", kind: "rebalance-gateway-capacity", input: { gatewayId: "blue" } },
-      { id: "capacity-b", kind: "rebalance-gateway-capacity", input: { gatewayId: "green" } },
-    )).toBe(true);
-    expect(serialFleetOperationsConflict(
-      { id: "capacity", kind: "rebalance-gateway-capacity", input: { gatewayId: "blue" } },
-      { id: "release", kind: "rollout", input: { gatewayId: "green" } },
-    )).toBe(true);
-  });
 });

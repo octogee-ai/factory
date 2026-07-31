@@ -8,12 +8,7 @@ export interface FleetOperationLockRef {
 
 const SERIAL_KINDS: ReadonlySet<string> = new Set([
   "rollout",
-  "rebalance-gateway-capacity",
   "migrate-customer",
-]);
-const GLOBAL_ROLL_KINDS: ReadonlySet<string> = new Set([
-  "rollout",
-  "rebalance-gateway-capacity",
 ]);
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["pending", "running"]);
 const RESOURCE_FIELDS = [
@@ -51,7 +46,7 @@ export function serialFleetOperationsConflict(
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
-  if (GLOBAL_ROLL_KINDS.has(candidate.kind) && GLOBAL_ROLL_KINDS.has(other.kind)) return true;
+  if (candidate.kind === "rollout" && other.kind === "rollout") return true;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {
     if (candidateResources.has(resource)) return true;

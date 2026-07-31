@@ -295,9 +295,16 @@ function verifyHeaderSignature(
 return verifyFleetRequest(publicKey, migrationId, slug, sigHeader);
 }
 
-function tarArgsForSources(sources: Array<{ cwd: string; path: string }>): string[] {
+function tarArgsForSources(
+  sources: Array<{ cwd: string; path: string }>,
+  input: { slug?: string; projectCheckoutScope?: PushStateRequestBody["projectCheckoutScope"] } = {},
+): string[] {
+  const excludes = input.projectCheckoutScope === "workspace-only" && input.slug
+    ? [`--exclude=customers/${input.slug}/projects`]
+    : [];
   return [
     "-cf", "-",
+    ...excludes,
     ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
   ];
 }
@@ -316,8 +323,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function spawnTarStream(sources: Array<{ cwd: string; path: string }>): TarStream {
-  const child = spawn("tar", tarArgsForSources(sources), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
+function spawnTarStream(
+  sources: Array<{ cwd: string; path: string }>,
+  input?: { slug?: string; projectCheckoutScope?: PushStateRequestBody["projectCheckoutScope"] },
+): TarStream {
+  const child = spawn("tar", tarArgsForSources(sources, input), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
   const stdout = child.stdout;
   const stderr = child.stderr;
   if (!stdout || !stderr) {
@@ -1592,7 +1602,10 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         `[migration-http] push-state mode=${body.mode ?? "default"} migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) to ${target.targetGatewayId}`,
       );
 
-      const tar = spawnTarStream(sources);
+      const tar = spawnTarStream(sources, {
+        slug: body.slug,
+        projectCheckoutScope: body.projectCheckoutScope,
+      });
       const tarDone = tar.done.catch((err: unknown) => {
         sourceTarError = err;
         abort.controller.abort(err);

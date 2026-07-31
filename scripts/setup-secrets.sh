@@ -806,17 +806,15 @@ rm -f "$FLEET_PRIVATE_TMP" "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"
 # for gateway auth. Legacy opt-in publishing overwrites the placeholder at
 # boot if explicitly enabled.
 #
-# Per-gatewayId naming future-proofs multi-pod fleets — a second gateway
-# pod (`gw-a`, `gw-b`) gets its own secret so chat-proxy can route users
-# to their assigned pod without mixing tokens.
+# Each stable Barn member and disposable gateway gets its own secret so
+# gateway-edge can route an assigned Builder without mixing tokens.
 #
 # Gateway IDs by env (match helm/octogee/values.{test,prod}.yaml):
 info "gateway-auth-token (Secret Manager, per-gatewayId)"
 case "$ENV" in
-  prod)      GATEWAY_IDS=("default") ;;
-  test)      GATEWAY_IDS=("default") ;;
-  build-week) GATEWAY_IDS=("default") ;;
-  custom)    GATEWAY_IDS=("default") ;;
+  prod|test|build-week|custom)
+    GATEWAY_IDS=("shared-a" "shared-b" "shared-c" "shared-d")
+    ;;
 esac
 
 # Legacy opt-in publisher/reader roles. These are resource-scoped to the

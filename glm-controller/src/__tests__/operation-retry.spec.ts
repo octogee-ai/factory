@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
 import {
   MAX_OPERATION_ATTEMPTS,
+  MAX_OPERATION_ATTEMPT_HISTORY,
   buildOperationCompletionUpdate,
   classifyOperationFailure,
-  capacityRebalanceRetryBackoffMs,
   retryBackoffMs,
   shouldPersistClaimedOperationCompletion,
   supersededRollMigrationAction,
@@ -106,6 +106,9 @@ describe("classifyOperationFailure", () => {
         '/restore/default: 500 {"message":"channel did not connect; fleet will retry"}',
       ),
     ).toBe("transient");
+    expect(
+      classifyOperationFailure("target gateway shared-b has an active or unconverged release roll"),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
@@ -148,15 +151,6 @@ describe("retryBackoffMs", () => {
     expect(retryBackoffMs(2)).toBe(120_000);
     expect(retryBackoffMs(3)).toBe(480_000);
     expect(retryBackoffMs(4)).toBe(480_000);
-  });
-});
-
-describe("capacityRebalanceRetryBackoffMs", () => {
-  it("uses a gentle unbounded schedule because GKE capacity observations carry no retry-after signal", () => {
-    expect(capacityRebalanceRetryBackoffMs(1)).toBe(5 * 60_000);
-    expect(capacityRebalanceRetryBackoffMs(2)).toBe(15 * 60_000);
-    expect(capacityRebalanceRetryBackoffMs(3)).toBe(30 * 60_000);
-    expect(capacityRebalanceRetryBackoffMs(99)).toBe(30 * 60_000);
   });
 });
 
@@ -469,28 +463,55 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
-  it("keeps an automatic capacity rebalance retryable beyond the cap with the gentler capacity schedule", () => {
+  it("keeps deterministic continuous placement demand retryable without creating new operations", () => {
     const update = buildOperationCompletionUpdate({
       op: {
-        id: "capacity-rebalance-default-pod-1",
-        kind: "rebalance-gateway-capacity",
+        id: `placement-${"a".repeat(32)}`,
+        kind: "migrate-customer",
         origin: "automatic",
-        input: { gatewayId: "default", sourcePodUid: "pod-1" },
+        input: { source: "continuous-placement-policy" },
         attempts: MAX_OPERATION_ATTEMPTS,
         attemptHistory: [],
       },
       result: {
         steps: [],
         success: false,
-        error: "status 503: capacity rebalance replacement landed on on-demand capacity",
+        error: "target gateway shared-b has an active or unconverged release roll",
       },
       steps: [],
       now,
     });
 
     expect(update.status).toBe("pending");
-    expect(update.nextAttemptAt).toBe(now + 30 * 60_000);
-    expect(update.error).toMatch(/retrying in 1800s/);
+    expect(update.attempts).toBe(MAX_OPERATION_ATTEMPTS + 1);
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("bounds level-triggered attempt history", () => {
+    const history = Array.from({ length: MAX_OPERATION_ATTEMPT_HISTORY }, (_, index) => ({
+      attempt: index + 1,
+      startedAt: index,
+      completedAt: index + 1,
+      error: "fetch failed",
+      classification: "transient" as const,
+      steps: [],
+    }));
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: "builder-return-run-alice",
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: { source: "builder-activation-lease", fromGatewayId: "run-alice" },
+        attempts: MAX_OPERATION_ATTEMPT_HISTORY,
+        attemptHistory: history,
+      },
+      result: { steps: [], success: false, error: "fetch failed" },
+      steps: [],
+      now,
+    });
+
+    expect(update.attemptHistory).toHaveLength(MAX_OPERATION_ATTEMPT_HISTORY);
+    expect((update.attemptHistory as Array<{ attempt: number }>)[0]?.attempt).toBe(2);
   });
 
   it("still terminalizes a validation failure for an automatic Builder return", () => {

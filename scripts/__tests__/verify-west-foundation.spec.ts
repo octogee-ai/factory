@@ -85,7 +85,9 @@ type RunOptions = {
   invalidSql?: boolean;
   externalNodeIp?: boolean;
   invalidSmsChannel?: boolean;
+  invalidDiscordChannel?: boolean;
   invalidWorkloadPolicy?: boolean;
+  invalidSpotPolicy?: boolean;
   staleWestOnlyWorkloadQuery?: boolean;
   contract?: Contract;
   emptyNamespaceMatcherQuery?: boolean;
@@ -151,6 +153,10 @@ case "$*" in
       printf '%s\n' '[]'
     elif [[ "$*" == *'type="sms"'* ]]; then
       printf '%s\n' '[{"name":"projects/octogee/notificationChannels/sms","displayName":"Octogee Ops","type":"sms","enabled":true,"verificationStatus":"VERIFIED"}]'
+    elif [[ "$*" == *'type="pubsub"'* && "$FAKE_INVALID_DISCORD_CHANNEL" == "true" ]]; then
+      printf '%s\n' '[]'
+    elif [[ "$*" == *'type="pubsub"'* ]]; then
+      printf '%s\n' '[{"name":"projects/octogee/notificationChannels/discord","displayName":"Octogee Ops Discord (secondary)","type":"pubsub","enabled":true}]'
     else
       printf '%s\n' '[{"name":"projects/octogee/notificationChannels/email","type":"email","enabled":true,"verificationStatus":"VERIFIED"}]'
     fi
@@ -172,6 +178,8 @@ case "$*" in
       fi
       service_health_filter='resource.type="servicehealth.googleapis.com/Event" AND jsonPayload.@type="type.googleapis.com/google.cloud.servicehealth.logging.v1.EventLog" AND jsonPayload.category="INCIDENT" AND (jsonPayload.state="ACTIVE" OR jsonPayload.detailedCategory="EMERGING_INCIDENT" OR jsonPayload.detailedCategory="CONFIRMED_INCIDENT")'
       service_health_channels='["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms"]'
+      spot_channels='["projects/octogee/notificationChannels/email","projects/octogee/notificationChannels/sms","projects/octogee/notificationChannels/discord"]'
+      spot_filter='resource.type="gce_instance" AND log_id("cloudaudit.googleapis.com/system_event") AND protoPayload.methodName="compute.instances.preempted" AND resource.labels.instance_name=~"/instances/gk3-octogee-gateway-"'
       service_health_enabled=true
       if [[ "$FAKE_INVALID_SERVICE_HEALTH_SCHEMA" == "true" ]]; then
         service_health_filter='resource.type="servicehealth.googleapis.com/Event" AND jsonPayload.@type="type.googleapis.com/google.cloud.servicehealth.logging.v1beta.EventLog"'
@@ -185,9 +193,14 @@ case "$*" in
       if [[ "$FAKE_INVALID_SERVICE_HEALTH_POLICY" == "true" ]]; then
         service_health_enabled=false
       fi
+      if [[ "$FAKE_INVALID_SPOT_POLICY" == "true" ]]; then
+        spot_channels='["projects/octogee/notificationChannels/email"]'
+      fi
       jq -cn \
         --arg filter "$service_health_filter" \
         --argjson channels "$service_health_channels" \
+        --arg spotFilter "$spot_filter" \
+        --argjson spotChannels "$spot_channels" \
         --argjson serviceHealthEnabled "$service_health_enabled" \
         --arg querySuffix "$query_suffix" \
         --arg criticalQuery "$FAKE_CRITICAL_QUERY" \
@@ -195,6 +208,7 @@ case "$*" in
         '[
           {displayName: "Octogee WEST GKE notifications", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionMatchedLog: {}}]},
           (if $serviceHealthEnabled then {displayName: "Octogee WEST Google Service Health incidents", enabled: true, notificationChannels: $channels, conditions: [{conditionMatchedLog: {filter: $filter, labelExtractors: {description: "EXTRACT(jsonPayload.description)", detailed_state: "EXTRACT(jsonPayload.detailedState)", impacted_locations: "EXTRACT(jsonPayload.impactedLocations)", impacted_products: "EXTRACT(jsonPayload.impactedProducts)", start_time: "EXTRACT(jsonPayload.startTime)", state: "EXTRACT(jsonPayload.state)", title: "EXTRACT(jsonPayload.title)"}}}], alertStrategy: {autoClose: "1800s", notificationRateLimit: {period: "300s"}}, documentation: {content: "https://console.cloud.google.com/servicehealth/incidentDetails/"}} else empty end),
+          {displayName: "Octogee GKE Spot preemption observed", enabled: true, notificationChannels: $spotChannels, conditions: [{conditionMatchedLog: {filter: $spotFilter, labelExtractors: {instance_id: "EXTRACT(resource.labels.instance_id)", zone: "EXTRACT(resource.labels.zone)"}}}], alertStrategy: {autoClose: "3600s", notificationRateLimit: {period: "300s"}}, documentation: {content: "octogee-spot-disruptions"}},
           {displayName: "Octogee workload critical", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ($criticalQuery + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]},
           {displayName: "Octogee workload warning", enabled: true, notificationChannels: ["projects/octogee/notificationChannels/email", "projects/octogee/notificationChannels/sms"], conditions: [{conditionPrometheusQueryLanguage: {query: ($warningQuery + $querySuffix), duration: "0s", evaluationInterval: "30s"}}]}
         ]'
@@ -250,7 +264,9 @@ esac
       FAKE_INVALID_SQL: options.invalidSql ? "true" : "false",
       FAKE_EXTERNAL_NODE_IP: options.externalNodeIp ? "true" : "false",
       FAKE_INVALID_SMS_CHANNEL: options.invalidSmsChannel ? "true" : "false",
+      FAKE_INVALID_DISCORD_CHANNEL: options.invalidDiscordChannel ? "true" : "false",
       FAKE_INVALID_WORKLOAD_POLICY: options.invalidWorkloadPolicy ? "true" : "false",
+      FAKE_INVALID_SPOT_POLICY: options.invalidSpotPolicy ? "true" : "false",
       OCTOGEE_DEPLOYMENT_TARGETS: contractFile,
       FAKE_CRITICAL_QUERY: liveQuery(options, contract, "critical"),
       FAKE_WARNING_QUERY: liveQuery(options, contract, "warning"),
@@ -329,11 +345,25 @@ describe("WEST foundation runtime verifier", () => {
     expect(result.stderr).toContain("Verify the Octogee Ops SMS Cloud Monitoring notification channel");
   });
 
+  it("requires the Octogee Ops Discord channel", () => {
+    const result = runVerifier({ invalidDiscordChannel: true });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Verify the Octogee Ops Discord Cloud Monitoring notification channel");
+  });
+
   it("requires enabled workload policies routed to both verified channels", () => {
     const result = runVerifier({ invalidWorkloadPolicy: true });
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("WEST workload alert-policy invariants failed");
+  });
+
+  it("requires the Spot preemption policy routed to every operations channel", () => {
+    const result = runVerifier({ invalidSpotPolicy: true });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("GKE Spot preemption alert-policy invariants failed");
   });
 
   it("rejects a policy still scoped to us-west1 alone while central hosts the active targets", () => {

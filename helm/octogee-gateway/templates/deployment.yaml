@@ -3,6 +3,7 @@
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
+{{- $computeClass := include "octogee-gateway.computeClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
@@ -56,17 +57,19 @@ spec:
       annotations:
         octogee.ai/owner-uid: {{ .Values.ownerUid | quote }}
         octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
-        octogee.ai/capacity-rebalance-nonce: {{ .Values.capacityRebalanceNonce | quote }}
       labels:
         app: octogee-gateway
         gateway-id: {{ .Values.gatewayId }}
         gateway-instance: {{ $revision }}
         gateway-class: {{ $gatewayClass | quote }}
+        {{- if .Values.builderSlug }}
+        octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
+        {{- end }}
         # Profile label lets the umbrella gateway-edge alias Service
         # safely exclude operator pods in a follow-up rollout after every
         # gateway pod has this label.
         gateway-profile: {{ $imageProfile | quote }}
-        # Per-pod sizing tier — stamped on the pod (and matching PVC) so
+        # Per-pod sizing tier — stamped on the pod so
         # GCP Billing Export can roll up cost by tier for the chargeback
         # surface (GATEWAY-PLATFORM-SPEC §Phase 5a).
         tier: {{ $tier | quote }}
@@ -79,7 +82,7 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       nodeSelector:
-        cloud.google.com/compute-class: {{ required "computeClass is required" .Values.computeClass | quote }}
+        cloud.google.com/compute-class: {{ $computeClass | quote }}
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -586,9 +589,7 @@ spec:
             periodSeconds: 30
         {{- end }}
       volumes:
-        # Gateways are Spot + emptyDir only (#1932). Pod-local state is
-        # disposable; customers/<slug>/ rehydrates from Gitea post-boot. The
-        # persistence path (PVC) was deleted end-to-end (GATEWAY-RELEASES-SPEC).
+        # Durable product state is substrate-backed; every pod disk is disposable.
         - name: data
           emptyDir: {}
         - name: tmp

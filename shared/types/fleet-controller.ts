@@ -1,6 +1,9 @@
 
 
-import type { FleetBrokerUserSnapshot } from "./fleet-broker.js";
+import type {
+  FleetBrokerProjectCheckoutScope,
+  FleetBrokerUserSnapshot,
+} from "./fleet-broker.js";
 
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 
@@ -117,6 +120,7 @@ export interface PushStateRequestBody extends MigrationRequestBody {
   targetUrl: string;
   targetImportSignature: string;
   includeActivationManifest?: boolean;
+  projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   mode?: "keys" | "pre" | "final";
 }
 

@@ -453,12 +453,14 @@ describe("MigrationClient.transferState", () => {
       slug: "alice",
       mode: "final",
       includeActivationManifest: true,
+      projectCheckoutScope: "workspace-only",
     });
 
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({
       mode: "final",
       includeActivationManifest: true,
+      projectCheckoutScope: "workspace-only",
       targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
     });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(

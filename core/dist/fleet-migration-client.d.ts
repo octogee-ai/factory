@@ -1,5 +1,5 @@
 import { type FlushGatewayResponse, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
     quiesceMs?: number;
@@ -47,6 +47,7 @@ export interface MigrationClient {
         slug: string;
         mode?: MigrationSyncMode;
         includeActivationManifest?: boolean;
+        projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     }): Promise<ImportResponse>;
     verifyTarget(opts: {
         migrationId: string;

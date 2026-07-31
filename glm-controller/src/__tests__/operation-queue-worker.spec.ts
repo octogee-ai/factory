@@ -544,54 +544,6 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     vi.useRealTimers();
   });
 
-  it("lets a migration use a gateway while an older capacity retry is sleeping", async () => {
-    vi.setSystemTime(1_000_000);
-    const capacityHandler: OperationHandler = vi.fn(async () => ({
-      steps: [],
-      success: true,
-    }));
-    const migrateHandler: OperationHandler = vi.fn(async () => ({
-      steps: [],
-      success: true,
-    }));
-    const { db, store } = createFakeGlmOperationsDb({
-      "capacity-retry": {
-        ...baseOp({
-          id: "capacity-retry",
-          kind: "rebalance-gateway-capacity",
-          origin: "automatic",
-          createdAt: 1,
-          input: { gatewayId: "default-b", sourcePodUid: "old" },
-        }),
-        nextAttemptAt: 1_000_000 + 5 * 60_000,
-        output: {
-          capacityRebalanceBackoffYield: {
-            operationId: "capacity-retry",
-            gatewayId: "default-b",
-            sourcePodUids: ["old"],
-          },
-        },
-      },
-      recovery: baseOp({
-        id: "recovery",
-        kind: "migrate-customer",
-        createdAt: 2,
-        input: { fromGatewayId: "default", toGatewayId: "default-b" },
-      }),
-    });
-    const deps = buildDeps(db, {
-      "rebalance-gateway-capacity": capacityHandler,
-      "migrate-customer": migrateHandler,
-    });
-
-    await drainPendingOperationsOnce(deps);
-
-    expect(capacityHandler).not.toHaveBeenCalled();
-    expect(migrateHandler).toHaveBeenCalledOnce();
-    expect(store.get("capacity-retry")?.status).toBe("pending");
-    expect(store.get("recovery")?.status).toBe("succeeded");
-  });
-
   it("requeues a transient failure with backoff and attempts, then succeeds once the backoff elapses", async () => {
     vi.setSystemTime(1_000_000);
     let calls = 0;

@@ -101,11 +101,6 @@ export interface SurgeCustomerHandoffDeps {
     operationId: string;
     pod: SurgePod;
   }) => Promise<void>;
-  targetHasRequiredCapacity?: (input: {
-    gatewayId: string;
-    targetPodUid: string;
-    requiredCapacity: "spot";
-  }) => Promise<boolean>;
   log: (message: string) => void;
 }
 
@@ -114,7 +109,6 @@ export interface ReconcileSurgeCustomerHandoffInput {
   desiredImageTag: string;
   requiresCustomerMigration: boolean;
   ownerlessOperatorPrewarm?: boolean;
-  requiredTargetCapacity?: "spot";
 }
 
 function operationId(gatewayId: string, targetPodUid: string): string {
@@ -436,26 +430,6 @@ export async function reconcileSurgeCustomerHandoff(
   const ownedBy = operationId(input.gatewayId, target.uid);
   const source = selectSource(pods, target);
   if (targetHealth.status !== "ready") return { ready: false };
-  if (input.requiredTargetCapacity) {
-    if (!deps.targetHasRequiredCapacity) {
-      throw new Error(
-        `surge target capacity gate is unavailable for ${input.gatewayId}`,
-      );
-    }
-    const admitted = await deps.targetHasRequiredCapacity({
-      gatewayId: input.gatewayId,
-      targetPodUid: target.uid,
-      requiredCapacity: input.requiredTargetCapacity,
-    });
-    if (!admitted) {
-      deps.log(
-        `[surge-handoff] holding target admission gateway=${input.gatewayId} ` +
-          `pod=${target.name} requiredCapacity=${input.requiredTargetCapacity}`,
-      );
-      return { ready: false };
-    }
-  }
-
   if (target.ready) {
     if (source.kind !== "missing") return { ready: false };
     const assignments = await deps.readAssignments(input.gatewayId);

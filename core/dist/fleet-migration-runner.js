@@ -21,6 +21,14 @@ async function executeStep(params) {
                 slug: step.slug,
             });
             return;
+        case "flush-source":
+            await deps.client.flushGateway({
+                migrationId,
+                gatewayId: step.gateway,
+                slug: step.slug,
+                reason: "migration-final",
+            });
+            return;
         case "sync-state":
             await deps.client.transferState({
                 migrationId,
@@ -29,6 +37,7 @@ async function executeStep(params) {
                 slug: step.slug,
                 mode: step.mode,
                 includeActivationManifest,
+                projectCheckoutScope: restoreSnapshot?.projectCheckoutScope,
             });
             return;
         case "verify-target":

@@ -227,7 +227,6 @@ export interface GatewayUpsertOpts {
   deploymentTargetId?: string;
   deploymentProjectId?: string;
   gatewayServiceAccount?: string;
-  capacityRebalanceNonce?: string;
   rollStrategy: "surge";
   waitForReady: false;
   deploymentIntentFingerprint: string;
@@ -369,7 +368,6 @@ export function gatewayUpsertOptsFromRelease(input: {
     deploymentTargetId: input.deploymentTargetId,
     deploymentProjectId: input.deploymentProjectId,
     gatewayServiceAccount: input.gatewayServiceAccount,
-    capacityRebalanceNonce: gateway.capacityRebalanceNonce,
     rollStrategy: "surge",
     waitForReady: false,
   };

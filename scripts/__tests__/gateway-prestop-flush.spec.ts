@@ -8,6 +8,7 @@ describe("runGatewayPreStopFlush", () => {
     const result = await runGatewayPreStopFlush({
       gatewayId: "eggman-devdays",
       gatewayClass: "operator",
+      quiesceSessions: vi.fn(async () => { calls.push("quiesce"); }),
       syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
       syncSystemConfig: vi.fn(async () => { calls.push("system_config-push"); }),
@@ -15,7 +16,7 @@ describe("runGatewayPreStopFlush", () => {
       log: () => {},
     });
 
-    expect(calls).toEqual(["workspaces", "blobs", "system_config-push", "release-key"]);
+    expect(calls).toEqual(["quiesce", "workspaces", "blobs", "system_config-push", "release-key"]);
     expect(result.ok).toBe(true);
     expect(result.steps.at(-1)).toMatchObject({ name: "gitea-key-release", status: "done" });
   });
@@ -61,6 +62,7 @@ describe("runGatewayPreStopFlush", () => {
     expect(result.ok).toBe(true);
     expect(result.systemConfigCommit).toBe("a".repeat(40));
     expect(result.steps.map((step) => step.status)).toEqual([
+      "skipped",
       "done",
       "done",
       "done",
@@ -89,6 +91,7 @@ describe("runGatewayPreStopFlush", () => {
     expect(calls).toEqual(["workspaces", "blobs"]);
     expect(result.ok).toBe(false);
     expect(result.steps).toMatchObject([
+      { name: "session-quiesce", status: "skipped" },
       { name: "workspace-git", status: "failed", error: "git unavailable" },
       { name: "blob-sync", status: "done" },
       { name: "system-config", status: "skipped" },
@@ -96,5 +99,33 @@ describe("runGatewayPreStopFlush", () => {
     ]);
     expect(logs.join("\n")).toMatch(/workspace-git failed/);
     expect(logs.join("\n")).toMatch(/complete ok=false/);
+  });
+
+  it("continues strict durable saves when best-effort session quiescence fails", async () => {
+    const calls: string[] = [];
+    const releaseGiteaKey = vi.fn(async () => {});
+    const result = await runGatewayPreStopFlush({
+      gatewayId: "builder-a",
+      gatewayClass: "builder",
+      quiesceSessions: vi.fn(async () => {
+        calls.push("quiesce");
+        throw new Error("2 sessions still running");
+      }),
+      syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
+      syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
+      syncSystemConfig: vi.fn(async () => { calls.push("system-config"); }),
+      releaseGiteaKey,
+      log: () => {},
+    });
+
+    expect(calls).toEqual(["quiesce", "workspaces", "blobs", "system-config"]);
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({
+      name: "session-quiesce",
+      status: "failed",
+      error: "2 sessions still running",
+    });
+    expect(releaseGiteaKey).not.toHaveBeenCalled();
+    expect(result.steps.at(-1)).toMatchObject({ name: "gitea-key-release", status: "skipped" });
   });
 });

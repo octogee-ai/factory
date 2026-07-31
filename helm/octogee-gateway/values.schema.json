@@ -10,7 +10,7 @@
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
       "minLength": 1,
       "maxLength": 32,
-      "description": "Bare logical gateway identity (e.g. `default`, `bender`). Tenant-scoped: names the K8s auth-token/model-key secrets, the gateway KSA, and the GATEWAY_ID pod env. Also the /g/<id>/* public path segment."
+      "description": "Bare logical gateway identity (e.g. `shared-a`, `bender`). Tenant-scoped: names the K8s auth-token/model-key secrets, the gateway KSA, and the GATEWAY_ID pod env. Also the /g/<id>/* public path segment."
     },
     "revisionId": {
       "type": "string",
@@ -51,12 +51,17 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 1,
-      "description": "Replica count for the gateway Deployment. 0 = paused (Cowboy sets this for desiredStatus=paused); 1 = running. HPA / multi-replica is GATEWAY-PLATFORM-SPEC §Phase 6, out of scope here."
+      "description": "Replica count for one stable gateway member. 0 = paused; 1 = running or draining. Cowboy scales the Shared Barn by whole independently rollable members, never HPA replicas behind one Service."
     },
     "computeClass": {
       "type": "string",
       "minLength": 1,
-      "description": "Environment-owned regional Spot-first ComputeClass selected by every gateway pod."
+      "description": "Environment-owned regional Spot-first ComputeClass selected by owner-bound gateway pods."
+    },
+    "sharedComputeClass": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Environment-owned regional on-demand-only ComputeClass selected by shared gateway pods."
     },
     "sizingTier": {
       "type": "string",
@@ -115,9 +120,6 @@
       "type": "string"
     },
     "deploymentIntentFingerprint": {
-      "type": "string"
-    },
-    "capacityRebalanceNonce": {
       "type": "string"
     },
     "serviceAccountName": {

@@ -1764,6 +1764,76 @@ describe("createPushStateHandler", () => {
     ]);
   });
 
+  it.each(["pre", "final"] as const)(
+    "excludes project checkouts from a workspace-only %s transfer",
+    async (mode) => {
+      const adapter = mkAdapter({
+        listExportPaths: vi.fn(async () => [
+          { cwd: "/state", path: "agents/octogee-chris-coach" },
+          { cwd: "/openclaw", path: "customers/chris" },
+        ]),
+      });
+      spawnMock.mockReturnValueOnce(mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 }));
+      const fetchMock = vi.fn(async () => new Response(
+        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+      const body: PushStateRequestBody = {
+        ...SAMPLE_PUSH,
+        mode,
+        projectCheckoutScope: "workspace-only",
+      };
+      const rawBody = JSON.stringify(body);
+      const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+      const req = mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+      });
+      const { res, getStatus } = mkResponse();
+
+      await handler(req, res, vi.fn());
+
+      expect(getStatus()).toBe(200);
+      expect(spawnMock.mock.calls[0][1]).toEqual([
+        "-cf", "-",
+        "--exclude=customers/chris/projects",
+        "-C", "/state", "agents/octogee-chris-coach",
+        "-C", "/openclaw", "customers/chris",
+      ]);
+    },
+  );
+
+  it("keeps project checkouts in an isolated disposable gateway transfer", async () => {
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/openclaw", path: "customers/chris" },
+      ]),
+    });
+    spawnMock.mockReturnValueOnce(mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 }));
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as unknown as typeof fetch;
+    const body: PushStateRequestBody = {
+      ...SAMPLE_PUSH,
+      mode: "final",
+      projectCheckoutScope: "workspace-and-projects",
+    };
+    const rawBody = JSON.stringify(body);
+    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(spawnMock.mock.calls[0][1]).toEqual([
+      "-cf", "-",
+      "-C", "/openclaw", "customers/chris",
+    ]);
+  });
+
   it("streams only the customer key dir in keys mode and forwards the import mode", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [

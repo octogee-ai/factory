@@ -1,11 +1,6 @@
 const SERIAL_KINDS = new Set([
     "rollout",
-    "rebalance-gateway-capacity",
     "migrate-customer",
-]);
-const GLOBAL_ROLL_KINDS = new Set([
-    "rollout",
-    "rebalance-gateway-capacity",
 ]);
 const ACTIVE_STATUSES = new Set(["pending", "running"]);
 const RESOURCE_FIELDS = [
@@ -35,7 +30,7 @@ export function fleetOperationLockResources(operation) {
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
         return false;
-    if (GLOBAL_ROLL_KINDS.has(candidate.kind) && GLOBAL_ROLL_KINDS.has(other.kind))
+    if (candidate.kind === "rollout" && other.kind === "rollout")
         return true;
     const candidateResources = fleetOperationLockResources(candidate);
     for (const resource of fleetOperationLockResources(other)) {

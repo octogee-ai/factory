@@ -121,16 +121,16 @@ describe("durable default gateway bootstrap", () => {
 
     expect(deps.ensureGatewayAuthSecret).toHaveBeenCalledWith({
       namespace: "octogee",
-      gatewayId: "default",
+      gatewayId: "shared-a",
     });
-    expect(deps.store.get("gateways/default")).toMatchObject({
-      gatewayId: "default",
+    expect(deps.store.get("gateways/shared-a")).toMatchObject({
+      gatewayId: "shared-a",
       latestRelease: 1,
       desiredRelease: 1,
       gatewayClass: "shared",
     });
-    expect(deps.store.get("gateways/default/releases/1")).toMatchObject({
-      gatewayId: "default",
+    expect(deps.store.get("gateways/shared-a/releases/1")).toMatchObject({
+      gatewayId: "shared-a",
       release: 1,
       payload: {
         imageRepository:
@@ -151,7 +151,7 @@ describe("durable default gateway bootstrap", () => {
     ).toMatchObject({
       status: "pending",
       input: {
-        gatewayId: "default",
+        gatewayId: "shared-a",
         imageTag: "753c212",
         gatewayClass: "shared",
       },
@@ -201,13 +201,13 @@ describe("durable default gateway bootstrap", () => {
     );
     vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "canonical-test");
     const deps = controllerDeps({
-      "gateways/default": {
-        gatewayId: "default",
+      "gateways/shared-a": {
+        gatewayId: "shared-a",
         latestRelease: 1,
         desiredRelease: 1,
       },
-      "gateways/default/releases/1": {
-        gatewayId: "default",
+      "gateways/shared-a/releases/1": {
+        gatewayId: "shared-a",
         release: 1,
       },
     });
@@ -228,20 +228,20 @@ describe("durable default gateway bootstrap", () => {
     );
     vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "canonical-test");
     const deps = controllerDeps({
-      "gateways/default": {
-        gatewayId: "default",
+      "gateways/shared-a": {
+        gatewayId: "shared-a",
         latestRelease: 117,
         desiredRelease: 117,
       },
-      "gateways/default/releases/117": {
-        gatewayId: "default",
+      "gateways/shared-a/releases/117": {
+        gatewayId: "shared-a",
         release: 117,
       },
     });
 
     await bootstrapDefaultGateway(deps);
 
-    expect(deps.store.has("gateways/default/releases/1")).toBe(false);
+    expect(deps.store.has("gateways/shared-a/releases/1")).toBe(false);
     expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();
     expect(
       [...deps.store.keys()].filter((path) => path.startsWith("glmOperations/")),
@@ -256,15 +256,15 @@ describe("durable default gateway bootstrap", () => {
     );
     vi.stubEnv("BOOTSTRAP_IMAGE_TAG", "canonical-test");
     const deps = controllerDeps({
-      "gateways/default": {
-        gatewayId: "default",
+      "gateways/shared-a": {
+        gatewayId: "shared-a",
         latestRelease: 117,
         desiredRelease: 117,
       },
     });
 
     await expect(bootstrapDefaultGateway(deps)).rejects.toThrow(
-      "default gateway bootstrap found durable root gateways/default referencing missing release 117",
+      "default gateway bootstrap found durable root gateways/shared-a referencing missing release 117",
     );
 
     expect(deps.ensureGatewayAuthSecret).not.toHaveBeenCalled();

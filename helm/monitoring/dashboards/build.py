@@ -78,6 +78,57 @@ def target(expr, legend="", refId="A"):
     return {"datasource": ds(), "expr": expr, "legendFormat": legend, "refId": refId}
 
 
+def cloud_target(metric_type, legend="", refId="A", group_bys=None,
+                 metric_kind="DELTA", value_type="INT64", aligner="ALIGN_SUM"):
+    return {
+        "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
+        "metricQuery": {
+            "projectName": "octogee",
+            "metricType": metric_type,
+            "metricKind": metric_kind,
+            "valueType": value_type,
+            "alignmentPeriod": "cloud-monitoring-auto",
+            "perSeriesAligner": aligner,
+            "crossSeriesReducer": "REDUCE_NONE",
+            "groupBys": group_bys or [],
+            "filters": [],
+            "aliasBy": legend,
+        },
+        "refId": refId,
+    }
+
+
+def cloud_panel(title, metric_type, unit="short", w=12, h=8,
+                group_bys=None, legend=True, desc="", kind="timeseries",
+                thresholds=None):
+    steps = thresholds or [{"color": "green", "value": None}]
+    if kind == "stat":
+        return {
+            "id": nid(), "type": "stat", "title": title,
+            "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
+            "description": desc,
+            "targets": [cloud_target(metric_type, "", "A", group_bys)],
+            "fieldConfig": {"defaults": {"unit": unit, "color": {"mode": "thresholds"},
+                            "thresholds": {"mode": "absolute", "steps": steps}}, "overrides": []},
+            "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
+                        "textMode": "auto", "colorMode": "value", "graphMode": "area"},
+            "gridPos": {"h": h, "w": w, "x": 0, "y": 0},
+        }
+    return {
+        "id": nid(), "type": "timeseries", "title": title,
+        "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
+        "description": desc,
+        "targets": [cloud_target(metric_type, "{{metric.label.cause}}" if group_bys and "metric.label.cause" in group_bys else "", "A", group_bys)],
+        "fieldConfig": {"defaults": {"unit": unit, "custom": {
+            "drawStyle": "line", "fillOpacity": 15, "showPoints": "never", "lineWidth": 1,
+            "stacking": {"mode": "normal" if not legend else "none", "group": "A"}}}, "overrides": []},
+        "options": {"legend": {"displayMode": "table" if legend else "list", "placement": "bottom",
+                    "calcs": ["lastNotNull", "max"] if legend else []},
+                    "tooltip": {"mode": "multi", "sort": "desc"}},
+        "gridPos": {"h": h, "w": w, "x": 0, "y": 0},
+    }
+
+
 def _targets(exprs):
     out = []
     for i, e in enumerate(exprs):
@@ -347,6 +398,11 @@ def d_fleet():
         stat("Reconcile errors (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}",result="fail"}}[1h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         stat("Gateways up", [f'count(up{{namespace="{NS}",job=~"octogee-gateway.*"}}==1) or vector(0)']),
+        row("Shared Barn capacity"),
+        stat("Barn assignments at last ceiling", [f'max(glm_shared_gateway_assignment_count{{namespace="{NS}"}}) or vector(0)']),
+        stat("Barn hot members at last ceiling", [f'max(glm_shared_gateway_hot_members{{namespace="{NS}"}}) or vector(0)']),
+        stat("Barn ceiling observations (1h)", [f'sum(increase(glm_shared_gateway_max_capacity_total{{namespace="{NS}"}}[1h])) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         row("Reconcile + fleet inventory"),
         ts("Reconcile rate by result", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}"}}[5m])) by (result)', "{{result}}")], unit="ops", legend=True),
         table("Gateway up/down", [(f'up{{namespace="{NS}",job=~"octogee-gateway.*"}}', "{{job}}")]),
@@ -523,8 +579,71 @@ def d_email():
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "platform"])
 
 
+def d_spot_disruptions():
+    logs_query = (
+        "https://console.cloud.google.com/logs/query?project=octogee&query="
+        "resource.type%3D%22gce_instance%22%0A"
+        "log_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%0A"
+        "protoPayload.methodName%3D%22compute.instances.preempted%22"
+    )
+    events_query = (
+        "https://console.cloud.google.com/logs/query?project=octogee&query="
+        "log_id%28%22events%22%29%0AjsonPayload.reason%3D%22NodeShutdown%22"
+    )
+    p = [
+        text("What this board proves", (
+            "This is the substrate view for Spot and Kubernetes disruption. **A real Spot preemption is only "
+            "confirmed by the Cloud Audit Log metric below** (`compute.instances.preempted`). Kubernetes events "
+            "are correlated observations; `FailedScheduling: preemption` is scheduler fit logic, not Spot proof.\n\n"
+            "The controller emits `octogee.disruption.v1` JSON records with node UID, provider/instance ID, "
+            "capacity class, taints, gateway identity, assignment roster, and active Cowboy operations.\n\n"
+            f"[Authoritative Spot Audit Logs]({logs_query}) · [Kubernetes NodeShutdown events]({events_query})"
+        ), h=7),
+        row("Current placement").copy(),
+        stat("Spot nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="spot"}}) or count(kube_node_labels{{label_cloud_google_com_gke_spot="true"}}) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}]),
+        stat("On-demand nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="on-demand"}}) or count(kube_node_labels{{label_cloud_google_com_gke_provisioning="standard"}}) or vector(0)']),
+        stat("Unknown capacity nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="unknown"}}) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}]),
+        stat("Gateway pods", [f'count(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}}) or vector(0)']),
+        stat("Gateway pods Pending", [f'count(kube_pod_status_phase{{namespace="{NS}",pod=~"octogee-gateway-.*",phase="Pending"}}==1) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]),
+        table("Spot node inventory", [
+            ('kube_node_info * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels', "{{node}}"),
+        ], w=24, h=8),
+        table("Gateway pod → node → Octogee identity", [
+            (f'kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels', "{{namespace}}/{{pod}} node={{node}} zone={{label_topology_kubernetes_io_zone}} spot={{label_cloud_google_com_gke_spot}} provisioning={{label_cloud_google_com_gke_provisioning}} gateway={{label_gateway_id}} builder={{label_octogee_ai_builder_slug}}"),
+        ], w=24, h=9),
+        row("Authoritative GCP evidence"),
+        cloud_panel("Confirmed Spot preemptions by zone", "logging.googleapis.com/user/octogee_spot_preemptions",
+                     unit="short", w=12, h=8, group_bys=["metric.label.zone"], legend=True,
+                     desc="Derived from Compute Engine system audit logs with methodName=compute.instances.preempted."),
+        cloud_panel("Structured disruption records by cause", "logging.googleapis.com/user/octogee_disruption_records",
+                     unit="short", w=12, h=8, group_bys=["metric.label.cause", "metric.label.capacity_class"], legend=True,
+                     desc="Controller observations from Kubernetes Events; these are not independently authoritative Spot confirmations."),
+        row("Kubernetes signals"),
+        ts("Controller observations by cause", [(f'sum(rate(glm_disruption_observations_total{{namespace="{NS}"}}[15m])) by (cause)', "{{cause}}")], unit="ops", legend=True),
+        ts("Node conditions", [("sum(kube_node_status_condition{condition=\"Ready\",status=\"false\"})", "NotReady"), ("sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "Ready")], legend=True),
+        table("Node taints observed by kube-state-metrics", [("kube_node_spec_taint", "{{node}} {{key}}={{value}}:{{effect}}")], w=24, h=7),
+        row("Replacement pressure and Cowboy context"),
+        ts("Pending gateway pods", [(f'sum(kube_pod_status_phase{{namespace="{NS}",pod=~"octogee-gateway-.*",phase="Pending"}}==1)', "Pending")], legend=True),
+        ts("Cowboy reconcile failures", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}",result="fail"}}[15m]))', "fail/s")], legend=True),
+        text("Action guide", (
+            "- `compute.instances.preempted` + a node/pod event: **confirmed Spot preemption**.\n"
+            "- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n"
+            "- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n"
+            "- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n"
+            "- Shared Barn members are intentionally on-demand; Spot evidence should name only disposable builder gateways."
+        ), h=7),
+    ]
+    return dashboard("octogee-spot-disruptions", "GKE — Spot & Node Disruptions", p,
+                     [tmpl_datasource(), tmpl_namespace()],
+                     links=[dlink("Gateways / Fleet", "gateway"), dlink("Platform", "platform")],
+                     refresh="30s", tags=["octogee", "kubernetes", "spot", "disruption"])
+
+
 GROUPS = {
-    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_email],
+    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_email, d_spot_disruptions],
     "gateways": [d_agent, d_runner, d_fleet, d_bridge, d_sizing],
     "tracing": [d_tracing],
 }

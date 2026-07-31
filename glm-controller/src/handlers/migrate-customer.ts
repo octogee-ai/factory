@@ -48,7 +48,10 @@ export interface MigrateCustomerDeps {
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
 
-  readUserSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
+  readUserSnapshot: (
+    uid: string,
+    toGatewayId: string,
+  ) => Promise<FleetBrokerUserSnapshot | null>;
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
@@ -399,7 +402,7 @@ async function buildV2DriverDeps(
   });
   const needsRestoreSnapshot = state.phase === "initialized" || state.phase === "keysSynced";
   const restoreSnapshot = needsRestoreSnapshot
-    ? await deps.readUserSnapshot(state.uid)
+    ? await deps.readUserSnapshot(state.uid, state.targetGatewayId)
     : undefined;
   if (needsRestoreSnapshot && !restoreSnapshot) {
     throw new Error(`durable snapshot not found for ${state.uid}`);
@@ -663,7 +666,10 @@ async function prepareMigration(
       resolved.targets.toGatewayId,
       await deps.resolveGatewayUrl(resolved.targets.toGatewayId),
     );
-    const restoreSnapshot = await deps.readUserSnapshot(request.uid);
+    const restoreSnapshot = await deps.readUserSnapshot(
+      request.uid,
+      resolved.targets.toGatewayId,
+    );
     if (!restoreSnapshot) {
       return { error: `durable snapshot not found for ${request.uid}` };
     }

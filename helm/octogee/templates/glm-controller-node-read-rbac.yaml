@@ -9,7 +9,16 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # The disruption observer correlates NodeShutdown events from kube-system and
+  # gke-* namespaces back to the gateway pod that was on the node. It reads
+  # pod metadata only; it never mutates cluster-scoped workloads.
+  - apiGroups: [""]
+    resources: ["pods"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -22,6 +22,7 @@ function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnaps
       { scope: "project", kind: "general", channelId: "projgen", projectId: "camp" },
     ],
     projects: [],
+    projectCheckoutScope: "workspace-and-projects",
     ownerName: "Alice",
     email: "alice@example.com",
     displayName: "Alice",
@@ -180,6 +181,31 @@ describe("snapshotConfigFingerprint", () => {
         }),
       ),
     ).not.toBe(base);
+  });
+
+  it("ignores project checkout drift for workspace-only snapshots while retaining project config drift", () => {
+    const withoutProject = snap({
+      projectCheckoutScope: "workspace-only",
+      projects: [],
+    });
+    const withProject = snap({
+      projectCheckoutScope: "workspace-only",
+      projects: [
+        { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },
+      ],
+    });
+
+    expect(snapshotConfigFingerprint(withProject)).toBe(
+      snapshotConfigFingerprint(withoutProject),
+    );
+    expect(snapshotConfigFingerprint(withProject)).not.toBe(
+      snapshotConfigFingerprint(snap({
+        ...withProject,
+        projectAgents: [
+          { projectId: "camp", enabled: true, mmUserId: "mm-camp", token: "pat-camp" },
+        ],
+      })),
+    );
   });
 
   it("changes when a project's repo is first provisioned — no repo name means nothing to clone", () => {

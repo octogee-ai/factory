@@ -146,7 +146,6 @@ async function selectAssignmentGateway(
         runtime.release === authorization.gateway.liveRelease,
       rosterComplete: isGatewayRuntimeDoc(runtime) &&
         mountedRosterComplete(assignments, runtime.heartbeat.mountedCustomers),
-      converging: incomingMigrationCount > 0,
       incomingMigrationCount,
       assignmentCount: assignments.length,
     });

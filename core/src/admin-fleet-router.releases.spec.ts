@@ -641,7 +641,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(opsIn(store, "rollout")).toHaveLength(0);
   });
 
-  it("rejects a CENTRAL release when any configured shared member is not running", async () => {
+  it("cuts a CENTRAL release onto a paused reserve shared member", async () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp({
       "config/orchestrator": {
@@ -655,14 +655,14 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     await request(app)
       .post("/releases/cut")
       .send({ version: "v0.4.0", sourceSha })
-      .expect(409)
-      .expect({
-        error: "configured shared gateway must be running to cut a release",
-        gatewayId: "default-b",
-      });
+      .expect(202);
 
-    expect(store.get("gateways/default")).toMatchObject({ desiredRelease: 1 });
-    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 1 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
+    expect(store.get("gateways/default-b")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 1,
+    });
+    expect(opsIn(store, "rollout")).toHaveLength(2);
   });
 
   it("rejects a conflicting durable TEST version before aliases or desired state change", async () => {
@@ -1079,6 +1079,19 @@ function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<str
   };
 }
 
+function builderUserWithLease(gatewayId: string): Record<string, unknown> {
+  const user = builderUser(gatewayId);
+  const provisioning = user.provisioning as Record<string, unknown>;
+  const openclaw = provisioning.openclaw as Record<string, unknown>;
+  openclaw.activationLease = {
+    leaseId: "historical-lease",
+    generation: 1,
+    status: "active",
+    targetGatewayId: "retired-disposable",
+  };
+  return user;
+}
+
 describe("PATCH /customers/:uid/placement", () => {
   it("rejects malformed placement commands before journaling or writing", async () => {
     const { app, store } = mkApp({ "users/uid-alice": builderUser("source") });
@@ -1107,7 +1120,7 @@ describe("PATCH /customers/:uid/placement", () => {
 
   it("atomically marks an assigned Builder operator-managed and queues its explicit migration", async () => {
     const { app, store } = mkApp({
-      "users/uid-alice": builderUser("source"),
+      "users/uid-alice": builderUserWithLease("source"),
       ...seedServingGateway("target", sharedPayload()),
     });
 
@@ -1124,6 +1137,10 @@ describe("PATCH /customers/:uid/placement", () => {
     expect(store.get("users/uid-alice")).toMatchObject({
       provisioning: { openclaw: { gatewayId: "source", managedBy: "operator" } },
     });
+    expect(
+      ((store.get("users/uid-alice")?.provisioning as Record<string, unknown>)
+        .openclaw as Record<string, unknown>),
+    ).not.toHaveProperty("activationLease");
     expect(store.get(`glmOperations/${response.body.operationId}`)).toMatchObject({
       kind: "migrate-customer",
       status: "pending",
@@ -1355,7 +1372,7 @@ describe("PATCH /customers/:uid/placement", () => {
 
   it("parks atomically with operator ownership after deleting the serving assignment", async () => {
     const { app, store } = mkApp({
-      "users/uid-alice": builderUser("source"),
+      "users/uid-alice": builderUserWithLease("source"),
       "gateways/source/assignments/uid-alice": {
         uid: "uid-alice",
         slug: "alice",
@@ -1381,6 +1398,7 @@ describe("PATCH /customers/:uid/placement", () => {
     expect(openclaw).not.toHaveProperty("gatewayAssignedAt");
     expect(openclaw).not.toHaveProperty("gatewayProfile");
     expect(openclaw).not.toHaveProperty("shellsEnabled");
+    expect(openclaw).not.toHaveProperty("activationLease");
     expect(store.get("gateways/source/assignments/uid-alice")).toBeUndefined();
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
       status: "completed",

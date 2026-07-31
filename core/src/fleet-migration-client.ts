@@ -14,7 +14,10 @@ import {
   type UnmountResponse,
   type VerifyMigrationResponse,
 } from "@octogee/shared/types/fleet-controller";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type {
+  FleetBrokerProjectCheckoutScope,
+  FleetBrokerUserSnapshot,
+} from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 
 export interface MigrationClientTimeouts {
@@ -76,6 +79,7 @@ export interface MigrationClient {
     slug: string;
     mode?: MigrationSyncMode;
     includeActivationManifest?: boolean;
+    projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   }): Promise<ImportResponse>;
 
   verifyTarget(opts: {
@@ -273,7 +277,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async transferState({ migrationId, fromGatewayId, toGatewayId, fromTransportId, toTransportId, slug, mode, includeActivationManifest }) {
+    async transferState({
+      migrationId,
+      fromGatewayId,
+      toGatewayId,
+      fromTransportId,
+      toTransportId,
+      slug,
+      mode,
+      includeActivationManifest,
+      projectCheckoutScope,
+    }) {
       const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
       const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
       const parsed = await postSignedJson<ImportResponse>(
@@ -288,6 +302,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
           targetImportSignature,
           ...(mode ? { mode } : {}),
           ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
+          ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
         },
         transferMs,
       );

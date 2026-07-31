@@ -12,9 +12,12 @@ import {
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import { syncAllWorkspaces } from "../lib/git.js";
-import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
-import { blobSyncAllWithOptions } from "../lib/blob-sync.js";
+import { syncAllWorkspaces, syncCustomerRepositoriesForSlug } from "../lib/git.js";
+import {
+  buildBrokeredLifecycleAdapter,
+  projectCheckoutScopeForRuntime,
+} from "../lib/customer-lifecycle-broker-adapter.js";
+import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
@@ -166,6 +169,7 @@ async function main(): Promise<void> {
     log,
     adminMmUserId: process.env.MM_ADMIN_USER_ID,
     isOperatorGateway,
+    projectCheckoutScope: () => projectCheckoutScopeForRuntime(),
   });
   const fleetHandle = await startFleetController({
     rpc,
@@ -186,20 +190,20 @@ async function main(): Promise<void> {
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
-    flushLocalState: async ({ reason, expectedSystemConfigCommit }) => {
-      log(`[fleet] controller-requested flush reason=${reason}`);
+    flushLocalState: async ({ slug, reason, expectedSystemConfigCommit }) => {
+      log(`[fleet] controller-requested flush slug=${slug} reason=${reason}`);
       return runGatewayPreStopFlush({
         gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
-        syncWorkspaces: () => syncAllWorkspaces({ strict: true }),
+        syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, { strict: true }),
         syncBlobs: operator
           ? undefined
-          : () => blobSyncAllWithOptions({
+          : () => blobSyncForSlug(slug, {
               strict: true,
-              storeForSlug: () => createBrokeredBlobStore(brokerClient),
+              store: createBrokeredBlobStore(brokerClient),
             }),
         syncSystemConfig: createFleetSystemConfigFlush(
-          entrypointConfig.builderSlug,
+          slug,
           log,
           syncSystemConfigForSlug,
           expectedSystemConfigCommit,

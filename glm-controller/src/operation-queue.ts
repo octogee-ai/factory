@@ -4,7 +4,6 @@ import { serialFleetOperationsConflict } from "@octogee/core/fleet-operation-loc
 // cannot run together, and rollout operations remain globally serial.
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
-  "rebalance-gateway-capacity",
   "migrate-customer",
 ]);
 
@@ -15,9 +14,7 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 export interface OperationRef {
   id: string;
   kind: string;
-  origin?: string;
   input?: Record<string, unknown>;
-  output?: Record<string, unknown>;
   customerMigrationV2?: {
     sourceGatewayId?: string;
     sourceRevisionId?: string;
@@ -68,11 +65,6 @@ function rolloutWaitingOn(input: OperationRef["input"]): string | null {
   return imageTag ? `roll ${gatewayId} → ${imageTag}` : `roll ${gatewayId}`;
 }
 
-function capacityRebalanceWaitingOn(input: OperationRef["input"]): string {
-  const gatewayId = inputString(input, "gatewayId");
-  return gatewayId ? `capacity rebalance ${gatewayId}` : "another capacity rebalance";
-}
-
 function migrationWaitingOn(input: OperationRef["input"]): string | null {
   const toGatewayId = inputString(input, "toGatewayId");
   if (!toGatewayId) return null;
@@ -82,7 +74,6 @@ function migrationWaitingOn(input: OperationRef["input"]): string | null {
 
 const WAITING_ON_DESCRIPTIONS: Readonly<Record<string, (input: OperationRef["input"]) => string | null>> = {
   rollout: rolloutWaitingOn,
-  "rebalance-gateway-capacity": capacityRebalanceWaitingOn,
   "migrate-customer": migrationWaitingOn,
 };
 
@@ -133,62 +124,17 @@ function isOlderThanCandidate(
 function findOlderPendingSameScope(
   candidate: OperationRef & { createdAt: number },
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
-  now: number,
 ): SerialConflict | null {
   const older = pendingOpsSameKind
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
-        pendingReservesSerialLane(candidate, pending, now) &&
         serialFleetOperationsConflict(candidate, pending) &&
         isOlderThanCandidate(pending, candidate),
     )
     .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];
   if (!older) return null;
   return { conflictingOpId: older.id, waitingOn: describeWaitingOn(older) };
-}
-
-function pendingReservesSerialLane(
-  candidate: OperationRef,
-  operation: PendingOperationRef,
-  now: number,
-): boolean {
-  if (typeof operation.nextAttemptAt !== "number" || operation.nextAttemptAt <= now) {
-    return true;
-  }
-  if (
-    candidate.kind !== "migrate-customer" ||
-    operation.kind !== "rebalance-gateway-capacity" ||
-    operation.origin !== "automatic"
-  ) {
-    return true;
-  }
-  return !capacityRebalanceBackoffYieldMatches(operation);
-}
-
-function capacityRebalanceBackoffYieldMatches(
-  operation: PendingOperationRef,
-): boolean {
-  const gatewayId = inputString(operation.input, "gatewayId");
-  const sourcePodUid = inputString(operation.input, "sourcePodUid");
-  const rollback = operation.output?.capacityRebalanceBackoffYield;
-  if (
-    !gatewayId ||
-    !sourcePodUid ||
-    !rollback ||
-    typeof rollback !== "object" ||
-    Array.isArray(rollback)
-  ) {
-    return false;
-  }
-  const proof = rollback as Record<string, unknown>;
-  return (
-    proof.operationId === operation.id &&
-    proof.gatewayId === gatewayId &&
-    Array.isArray(proof.sourcePodUids) &&
-    proof.sourcePodUids.length === 1 &&
-    proof.sourcePodUids[0] === sourcePodUid
-  );
 }
 
 // Pure decision core for the operation worker's claim transaction: given a
@@ -208,7 +154,7 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
-  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
+  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };
   return { outcome: "claim" };
 }

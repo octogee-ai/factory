@@ -181,14 +181,24 @@ export {
   resolveLiveActivationTargetGatewayId,
 } from './orchestrator-placement.js';
 export type {
+  SharedGatewayAutoscalingConfig,
+  SharedGatewayAutoscalingDecision,
+  SharedGatewayAutoscalingInput,
+  SharedGatewayAutoscalingMember,
   SharedGatewayPoolCandidate,
   SharedGatewayPoolConfig,
   SharedGatewayRebalance,
   SharedGatewaySelection,
 } from './shared-gateway-pool.js';
 export {
+  DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS,
+  DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+  DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER,
+  PRIMARY_SHARED_GATEWAY_ID,
+  STANDARD_SHARED_GATEWAY_IDS,
   authoritativeSharedGatewayLoad,
   isAcceptingSharedGateway,
+  parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
   planSharedGatewayRebalance,
   selectSharedGateway,
@@ -267,6 +277,7 @@ export type {
   FleetBrokerMattermostUpdate,
   FleetBrokerGreetingResult,
   FleetBrokerChannelBinding,
+  FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectRestore,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerCoachIdentity,

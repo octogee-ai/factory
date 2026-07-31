@@ -1986,7 +1986,7 @@ describe("onboarding placement (post-cohorts)", () => {
         },
       },
       gateways: {
-        "gw-old": durableGatewayRoot("gw-old"),
+        "gw-old": durableGatewayRoot("gw-old", { desiredStatus: "paused" }),
         "gw-new": durableGatewayRoot("gw-new"),
         "gw-builder": durableGatewayRoot("gw-builder", {
           gatewayClass: "builder",

@@ -188,7 +188,7 @@ const VERBS: readonly VerbHelp[] = [
     args: "<gw-id>",
     description:
       "Alias for `inspect gateway <gw-id>`, including durable state, heartbeat, and pod diagnostics.",
-    examples: ["fleet --env=prod gw inspect default"],
+    examples: ["fleet --env=prod gw inspect shared-a"],
     writes: false,
   },
   {

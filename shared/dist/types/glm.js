@@ -58,7 +58,7 @@ const ROLL_ROLE_SUFFIXES = ["-blue", "-green"];
 export const NEW_GATEWAY_ID_REQUIREMENT = `${GATEWAY_ID_REQUIREMENT}; the -blue/-green suffixes are reserved for roll roles`;
 // Creation-time validator: roll-role suffixes are reserved so the
 // deriveGatewayIdentity convention fallback is safe by construction.
-// Instance ids minted by the blue/green machinery (default-blue) stay valid
+// Instance ids minted by the blue/green machinery (shared-a-blue) stay valid
 // under isValidGatewayId for routing and reconciliation.
 export function isValidNewGatewayId(id) {
     if (!isValidGatewayId(id))

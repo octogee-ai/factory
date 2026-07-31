@@ -1,6 +1,7 @@
 export interface GatewayPreStopFlushDeps {
   gatewayId: string;
   gatewayClass: string;
+  quiesceSessions?: () => Promise<void>;
   syncWorkspaces: () => Promise<void>;
   syncBlobs?: () => Promise<void>;
   syncSystemConfig?: () => Promise<void | { acceptedCommit: string }>;
@@ -10,7 +11,7 @@ export interface GatewayPreStopFlushDeps {
 }
 
 export interface GatewayPreStopFlushStep {
-  name: "workspace-git" | "blob-sync" | "system-config" | "gitea-key-release";
+  name: "session-quiesce" | "workspace-git" | "blob-sync" | "system-config" | "gitea-key-release";
   status: "done" | "failed" | "skipped";
   error?: string;
   durationMs: number;
@@ -59,17 +60,19 @@ export async function runGatewayPreStopFlush(
     `[prestop-flush] starting gateway=${deps.gatewayId} class=${deps.gatewayClass || "unknown"}`,
   );
 
+  const quiesce = await runStep(deps, "session-quiesce", deps.quiesceSessions);
   const workspace = await runStep(deps, "workspace-git", deps.syncWorkspaces);
   const blobs = await runStep(deps, "blob-sync", deps.syncBlobs);
   const systemConfig = await runStep(deps, "system-config", deps.syncSystemConfig);
   const durableSteps = [workspace.step, blobs.step, systemConfig.step];
-  const durableFlushSucceeded = durableSteps.every((step) => step.status !== "failed");
+  const safeToReleaseKey = [quiesce.step, ...durableSteps]
+    .every((step) => step.status !== "failed");
   const keyRelease = await runStep(
     deps,
     "gitea-key-release",
-    durableFlushSucceeded ? deps.releaseGiteaKey : undefined,
+    safeToReleaseKey ? deps.releaseGiteaKey : undefined,
   );
-  const steps = [...durableSteps, keyRelease.step];
+  const steps = [quiesce.step, ...durableSteps, keyRelease.step];
   const durationMs = now() - started;
   const ok = steps.every((step) => step.status !== "failed");
   deps.log(`[prestop-flush] complete ok=${ok} durationMs=${durationMs}`);

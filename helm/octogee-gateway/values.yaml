@@ -4,7 +4,7 @@
 # under release name `octogee-gw-<gatewayId>`. The umbrella `octogee`
 # release no longer manages gateway pods.
 
-# Logical, stable, Cowboy-set gateway identity — a bare name (`default`,
+# Logical, stable, Cowboy-set gateway identity — a bare name (`shared-a`,
 # `bender`, `canary`). Written to Firestore `gateways/{gatewayId}`
 # heartbeats and matched against customer `provisioning.openclaw.gatewayId`.
 # Also forms the per-instance K8s resource names
@@ -64,10 +64,8 @@ operatorAccess:
   # Default off; set per operator gateway only.
   kubeApiServerEgressCidrs: []
 
-# Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused.
-# values.test.yaml defaults to 0 so TEST stays scaled-to-zero across release
-# pushes (the manual `kubectl scale --replicas=0 --all` workaround is no longer
-# needed — TEST is always paused unless an operator explicitly resumes).
+# Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused and
+# `--set replicas=1` for a running or draining member.
 replicas: 1
 
 # Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
@@ -76,8 +74,9 @@ replicas: 1
 rollStrategy: recreate
 
 computeClass: octogee-gateway
+sharedComputeClass: octogee-gateway-shared
 
-# Spot/preemption drain budget. Kubernetes runs this hook before SIGTERM and
+# Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below
 # gracePeriodSeconds to leave the entrypoint time to forward TERM to children.
 preStopFlush:
@@ -129,7 +128,6 @@ gatewayContainerSecurityContext:
 # unchanged — free no-op rolls, not a correctness issue.
 chartFingerprint: ""
 deploymentIntentFingerprint: ""
-capacityRebalanceNonce: ""
 
 conversationExperiment:
   mode: "broad"
@@ -168,10 +166,9 @@ env:
 preview:
   host: "preview.octogee.com"
 
-# Gateway storage is emptyDir only — all gateways are Spot + emptyDir (#1932).
-# Pod-local state is disposable; customers/<slug>/ rehydrates from Gitea
-# post-boot. The PVC path (persistence.*) was deleted end-to-end
-# (GATEWAY-RELEASES-SPEC): PVC-backed gateways are incompatible with Spot.
+# Gateway storage is emptyDir for every class. Shared Barn gateways use stable
+# identities and on-demand capacity; owner-bound cattle are Spot-first with
+# on-demand fallback. Durable product state rehydrates from the substrate.
 
 # Per-pod sizing tier. Operator-facing enum that maps to the matching
 # .Values.tiers entry below — drives resources + node-runtime tuning

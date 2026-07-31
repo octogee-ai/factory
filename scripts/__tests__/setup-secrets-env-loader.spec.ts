@@ -375,7 +375,7 @@ describe("setup-secrets env loader", () => {
   it("materializes the default gateway auth secret for Build Week", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
 
-    expect(setup).toContain('build-week) GATEWAY_IDS=("default")');
+    expect(setup).toContain('GATEWAY_IDS=("shared-a" "shared-b" "shared-c" "shared-d")');
   });
 
   it("syncs only Cloud Functions secrets that remain consumed", () => {

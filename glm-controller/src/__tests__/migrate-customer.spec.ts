@@ -244,6 +244,7 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(events).toContain("assignment:gw-blue:quiescing");
     expect(events).toContain("cutover:gw-blue->gw-green:mirror=true");
     expect(client.calls.every((call) => !/config/u.test(call))).toBe(true);
+    expect(deps.readUserSnapshot).toHaveBeenCalledWith("uid-alice", "gw-green");
   });
 
   it("reports failure with rollback when quiesce cannot drain", async () => {
@@ -295,6 +296,7 @@ describe("migrate-customer — durable V2 migration", () => {
       "unmount:gw-blue",
     ]);
     expect(events).toContain("v2-cutover:gw-blue->gw-green");
+    expect(deps.readUserSnapshot).toHaveBeenCalledWith("uid-alice", "gw-green");
     expect(client.flushGateway).toHaveBeenLastCalledWith(expect.objectContaining({
       gatewayId: "gw-green",
       expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,

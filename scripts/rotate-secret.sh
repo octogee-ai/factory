@@ -165,7 +165,7 @@ case "$SECRET" in
     echo "    social-notification-bearer — SOCIAL_NOTIFICATION_BEARER_TOKEN, consumers: octogee-api /social, social functions"
     echo "    mm-admin-pat          — MM admin PAT, consumers: octogee-api, glm-controller"
     echo "    gitea-pat             — Gitea API token, consumers: octogee-api, glm-controller"
-    echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumer: onSignup Cloud Function"
+    echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumers: signup + Monitoring alert relay Cloud Functions"
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
     echo "  Stripe webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."

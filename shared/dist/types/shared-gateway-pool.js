@@ -1,4 +1,14 @@
-import { isOperatorManaged, isValidGatewayId } from "./glm.js";
+import { isOperatorManaged, isValidGatewayId, } from "./glm.js";
+export const PRIMARY_SHARED_GATEWAY_ID = "shared-a";
+export const STANDARD_SHARED_GATEWAY_IDS = [
+    PRIMARY_SHARED_GATEWAY_ID,
+    "shared-b",
+    "shared-c",
+    "shared-d",
+];
+export const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
+export const DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER = 4;
+export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS = 300_000;
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -16,10 +26,48 @@ export function parseSharedGatewayPoolConfig(value) {
         new Set(rawSharedGatewayIds).size !== rawSharedGatewayIds.length) {
         return null;
     }
+    const sharedGatewayAutoscaling = value.sharedGatewayAutoscaling === undefined
+        ? undefined
+        : parseSharedGatewayAutoscalingConfig(value.sharedGatewayAutoscaling, rawSharedGatewayIds.length);
+    if (value.sharedGatewayAutoscaling !== undefined && sharedGatewayAutoscaling === null) {
+        return null;
+    }
     return {
         defaultGatewayId: value.defaultGatewayId,
         sharedGatewayIds: rawSharedGatewayIds,
+        ...(sharedGatewayAutoscaling ? { sharedGatewayAutoscaling } : {}),
     };
+}
+function isValidMinHotMembers(value, memberCount) {
+    return typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS &&
+        value <= memberCount;
+}
+function isValidTargetAssignmentsPerMember(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 2;
+}
+function isValidAutoscalingCooldown(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+export function parseSharedGatewayAutoscalingConfig(value, memberCount) {
+    if (!Number.isInteger(memberCount) || memberCount < DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS) {
+        return null;
+    }
+    if (value !== undefined && !isRecord(value))
+        return null;
+    const config = value ?? {};
+    if (!isRecord(config))
+        return null;
+    const minHotMembers = config.minHotMembers ?? DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS;
+    const targetAssignmentsPerMember = config.targetAssignmentsPerMember ?? DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER;
+    const cooldownMs = config.cooldownMs ?? DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS;
+    if (!isValidMinHotMembers(minHotMembers, memberCount) ||
+        !isValidTargetAssignmentsPerMember(targetAssignmentsPerMember) ||
+        !isValidAutoscalingCooldown(cooldownMs)) {
+        return null;
+    }
+    return { minHotMembers, targetAssignmentsPerMember, cooldownMs };
 }
 export function authoritativeSharedGatewayLoad(candidate) {
     return candidate.assignmentCount + candidate.incomingMigrationCount;
@@ -34,10 +82,8 @@ export function isAcceptingSharedGateway(config, candidate) {
         candidate.heartbeatFresh &&
         candidate.liveReleaseReady &&
         candidate.rosterComplete &&
-        !candidate.converging &&
         isNonNegativeInteger(candidate.assignmentCount) &&
-        isNonNegativeInteger(candidate.incomingMigrationCount) &&
-        candidate.incomingMigrationCount === 0);
+        isNonNegativeInteger(candidate.incomingMigrationCount));
 }
 export function stableGatewayUidHash(uid) {
     let hash = 2166136261;

@@ -24,6 +24,12 @@ export function nextMigrationStep(state) {
             };
         case "source-quiesced":
             return {
+                action: "flush-source",
+                gateway: state.fromGatewayId,
+                slug: state.slug,
+            };
+        case "source-flushed":
+            return {
                 action: "sync-state",
                 mode: "final",
                 from: state.fromGatewayId,
@@ -65,6 +71,8 @@ export function advancePhase(p) {
         case "pre-synced":
             return "source-quiesced";
         case "source-quiesced":
+            return "source-flushed";
+        case "source-flushed":
             return "final-synced";
         case "final-synced":
             return "target-verified";
@@ -100,6 +108,7 @@ export function rollbackPlan(state) {
         case "target-restored":
         case "pre-synced":
         case "source-quiesced":
+        case "source-flushed":
         case "final-synced":
         case "target-verified":
             return [
@@ -134,6 +143,8 @@ export function describeStep(step) {
     switch (step.action) {
         case "quiesce-source":
             return `quiesce ${step.slug} on ${step.gateway} (stop accepting new prompts; let in-flight runs settle)`;
+        case "flush-source":
+            return `flush durable state for ${step.slug} on ${step.gateway} after quiescence`;
         case "restore-target":
             return `restore durable state for ${step.slug} onto ${step.gateway} before live sync`;
         case "sync-state":

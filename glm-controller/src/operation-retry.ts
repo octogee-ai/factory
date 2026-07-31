@@ -36,6 +36,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /system config writer lock is busy/i,
   /system config mutation unavailable: writer-lock-busy/i,
   /fleet will retry/i,
+  /active or unconverged release roll/i,
 ];
 
 export function classifyOperationFailure(
@@ -48,6 +49,7 @@ export function classifyOperationFailure(
 }
 
 export const MAX_OPERATION_ATTEMPTS = 3;
+export const MAX_OPERATION_ATTEMPT_HISTORY = 20;
 
 const RETRY_BACKOFF_MS_BY_ATTEMPT: Readonly<Record<number, number>> = {
   1: 30_000,
@@ -174,30 +176,14 @@ function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): bool
     op.id === `builder-return-${fromGatewayId}`;
 }
 
-function isLevelTriggeredCapacityRebalance(op: OperationCompletionInput["op"]): boolean {
-  const gatewayId = op.input?.gatewayId;
-  const sourcePodUid = op.input?.sourcePodUid;
-  return op.kind === "rebalance-gateway-capacity" &&
-    op.origin === "automatic" &&
-    typeof gatewayId === "string" &&
-    typeof sourcePodUid === "string" &&
-    (op.id === `capacity-rebalance-${gatewayId}-${sourcePodUid}` ||
-      op.id?.startsWith(`capacity-rebalance-${gatewayId}-${sourcePodUid}-retry-`) === true);
-}
-
-export function capacityRebalanceRetryBackoffMs(attempt: number): number {
-  if (attempt <= 1) return 5 * 60_000;
-  if (attempt === 2) return 15 * 60_000;
-  return 30 * 60_000;
-}
-
-function retryBackoffForOperation(
+function isLevelTriggeredContinuousPlacement(
   op: OperationCompletionInput["op"],
-  attempt: number,
-): number {
-  return isLevelTriggeredCapacityRebalance(op)
-    ? capacityRebalanceRetryBackoffMs(attempt)
-    : retryBackoffMs(attempt);
+): boolean {
+  return op.kind === "migrate-customer" &&
+    op.origin === "automatic" &&
+    op.input?.source === "continuous-placement-policy" &&
+    typeof op.id === "string" &&
+    /^placement-[a-f0-9]{32}$/.test(op.id);
 }
 
 interface FailureCompletionContext {
@@ -227,7 +213,8 @@ function failureCompletionContext(
     error,
     classification,
     levelTriggeredFence,
-    attemptHistory: [...(input.op.attemptHistory ?? []), attemptRecord],
+    attemptHistory: [...(input.op.attemptHistory ?? []), attemptRecord]
+      .slice(-MAX_OPERATION_ATTEMPT_HISTORY),
   };
 }
 
@@ -236,7 +223,7 @@ function pendingCompletion(
   attempts: number,
   failure: FailureCompletionContext,
 ): Record<string, unknown> {
-  const backoffMs = retryBackoffForOperation(input.op, attempts);
+  const backoffMs = retryBackoffMs(attempts);
   return {
     status: "pending",
     startedAt: null,
@@ -289,7 +276,7 @@ export function buildOperationCompletionUpdate(
   const retryBeyondCap =
     failure.levelTriggeredFence ||
     isLevelTriggeredBuilderReturn(op) ||
-    isLevelTriggeredCapacityRebalance(op);
+    isLevelTriggeredContinuousPlacement(op);
   const retry = shouldRetry(
     op,
     result,

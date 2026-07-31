@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   recordGatewayHealth,
   recordConfigRoll,
+  recordDisruptionObservation,
+  recordDisruptionSnapshot,
   recordReconcile,
+  recordSharedGatewayMaxCapacity,
   renderMetrics,
   resetMetrics,
 } from "../metrics";
@@ -71,5 +74,42 @@ describe("glm-controller metrics", () => {
     expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r1",stage="unfreeze",result="ok"} 1');
     expect(out).not.toContain("uid=");
     expect(out).not.toContain("slug=");
+  });
+
+  it("renders disruption counters and the current substrate snapshot", () => {
+    recordDisruptionObservation({
+      cause: "node_shutdown_unconfirmed",
+      source: "kubernetes_event",
+      capacityClass: "spot",
+      namespace: "octogee-test",
+      now: 1_700_000_000_000,
+    });
+    recordDisruptionSnapshot({
+      spotNodes: 3,
+      onDemandNodes: 1,
+      unknownNodes: 0,
+      gatewayPods: 4,
+      pendingGatewayPods: 1,
+      now: 1_700_000_000_000,
+    });
+
+    const out = renderMetrics();
+
+    expect(out).toContain('glm_disruption_observations_total{cause="node_shutdown_unconfirmed",source="kubernetes_event",capacity_class="spot",namespace="octogee-test"} 1');
+    expect(out).toContain('glm_disruption_nodes{capacity_class="spot"} 3');
+    expect(out).toContain("glm_disruption_gateway_pods 4");
+    expect(out).toContain("glm_disruption_pending_gateway_pods 1");
+    expect(out).toContain("glm_disruption_last_observed_timestamp_seconds 1700000000.000");
+  });
+
+  it("counts Shared Barn maximum-capacity observations and exposes the last bounded snapshot", () => {
+    recordSharedGatewayMaxCapacity({ assignmentCount: 15, hotMemberCount: 4 });
+    recordSharedGatewayMaxCapacity({ assignmentCount: 16.8, hotMemberCount: 4.9 });
+
+    const out = renderMetrics();
+
+    expect(out).toContain("glm_shared_gateway_max_capacity_total 2");
+    expect(out).toContain("glm_shared_gateway_assignment_count 16");
+    expect(out).toContain("glm_shared_gateway_hot_members 4");
   });
 });

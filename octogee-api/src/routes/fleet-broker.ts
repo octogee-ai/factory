@@ -25,6 +25,7 @@ import type {
   FleetBrokerMattermostUpdate,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerPreStopFlushStep,
+  FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectAgent,
   FleetBrokerProjectRestore,
   FleetBrokerProvisioningStatus,
@@ -985,6 +986,26 @@ async function collectProjects(
   });
 }
 
+export function projectCheckoutScopeForGatewayRoot(
+  gatewayData: unknown,
+  gatewayId: string,
+  uid: string,
+  slug: string,
+): FleetBrokerProjectCheckoutScope {
+  const root = projectGatewayDesiredRootForGateway(gatewayData, gatewayId);
+  if (!root || root.ownerUid !== uid || root.builderSlug !== slug) {
+    return "workspace-only";
+  }
+  if (
+    (root.gatewayClass === "builder" || root.gatewayClass === "operator") &&
+    root.allocation?.kind === "disposable-builder" &&
+    root.allocation.claimedByUid === uid
+  ) {
+    return "workspace-and-projects";
+  }
+  return "workspace-only";
+}
+
 async function isAssignedToGateway(
   db: Firestore,
   gatewayId: string,
@@ -1084,7 +1105,7 @@ function snapshotBaseFields(
   slug: string,
 ): Omit<
   FleetBrokerUserSnapshot,
-  "uid" | "slug" | "channels" | "projects" | "coachToken" | "coachMmUserId" | "coachIdentity"
+  "uid" | "slug" | "channels" | "projectCheckoutScope" | "projects" | "coachToken" | "coachMmUserId" | "coachIdentity"
 > {
   const mattermostUserId = stringAt(data, "mattermost.userId") || null;
   return {
@@ -1133,12 +1154,15 @@ async function loadSnapshot(
     freeTierModelRef: string;
     builderAgentDefault: FleetBrokerUserSnapshot["builderAgentDefault"];
   },
+  projectCheckoutScope: FleetBrokerProjectCheckoutScope,
 ): Promise<FleetBrokerUserSnapshot | null> {
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
   const [channels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
     collectChannelBindings(db, slug),
-    collectProjects(db, slug),
+    projectCheckoutScope === "workspace-and-projects"
+      ? collectProjects(db, slug)
+      : Promise.resolve([]),
     collectProjectAgentStates(db, uid, slug),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
@@ -1158,6 +1182,7 @@ async function loadSnapshot(
     freeTierModelRef: modelDials.freeTierModelRef,
     builderAgentDefault: modelDials.builderAgentDefault,
     channels,
+    projectCheckoutScope,
     projects,
     ...(projectAgents.length > 0 ? { projectAgents } : {}),
     ...snapshotCoachFields(coachData),
@@ -1300,6 +1325,9 @@ function installSnapshotRoutes(
       freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
       builderAgentDefault: await deps.resolveBuilderAgentDefault(),
     };
+    const gatewayData = (
+      await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get()
+    ).data();
     const users: FleetBrokerUserSnapshot[] = [];
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
@@ -1307,7 +1335,15 @@ function installSnapshotRoutes(
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }
-      const snapshot = await loadSnapshot(db, doc.id, data, modelDials);
+      const slug = slugFromAssignedUser(data);
+      if (!slug) continue;
+      const snapshot = await loadSnapshot(
+        db,
+        doc.id,
+        data,
+        modelDials,
+        projectCheckoutScopeForGatewayRoot(gatewayData, bound.gatewayId, doc.id, slug),
+      );
       if (snapshot) users.push(snapshot);
     }
     res.json({ users });
@@ -1346,10 +1382,24 @@ function installSnapshotRoutes(
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const snapshot = await loadSnapshot(db, uid, data, {
-      freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
-      builderAgentDefault: await deps.resolveBuilderAgentDefault(),
-    });
+    const slug = slugFromAssignedUser(data);
+    if (!slug) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const gatewayData = (
+      await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get()
+    ).data();
+    const snapshot = await loadSnapshot(
+      db,
+      uid,
+      data,
+      {
+        freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+        builderAgentDefault: await deps.resolveBuilderAgentDefault(),
+      },
+      projectCheckoutScopeForGatewayRoot(gatewayData, bound.gatewayId, uid, slug),
+    );
     if (!snapshot) {
       res.status(404).json({ error: "not_found" });
       return;

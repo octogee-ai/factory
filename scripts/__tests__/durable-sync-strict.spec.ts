@@ -20,8 +20,8 @@ vi.mock("../lib/config.js", () => ({
   BLOB_SYNC_MAX_SIZE: 100 * 1024 * 1024,
 }));
 
-const { syncAllWorkspaces } = await import("../lib/git.js");
-const { blobSyncAllWithOptions } = await import("../lib/blob-sync.js");
+const { syncAllWorkspaces, syncCustomerRepositoriesForSlug } = await import("../lib/git.js");
+const { blobSyncAllWithOptions, blobSyncForSlug } = await import("../lib/blob-sync.js");
 
 beforeEach(() => {
   fs.rmSync(paths.customers, { recursive: true, force: true });
@@ -36,6 +36,79 @@ afterEach(() => {
 });
 
 describe("strict durable sync", () => {
+  function initPushableRepo(repo: string, remote: string): void {
+    fs.mkdirSync(repo, { recursive: true });
+    fs.mkdirSync(remote, { recursive: true });
+    execFileSync("git", ["init", "-q", "--bare"], { cwd: remote });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: repo });
+  }
+
+  it("strictly commits and pushes one customer's workspace and every project repo", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remotes = path.join(paths.customers, "remotes");
+    const workspaceRemote = path.join(remotes, "workspace.git");
+    const projectRemote = path.join(remotes, "project.git");
+    initPushableRepo(customer, workspaceRemote);
+    initPushableRepo(project, projectRemote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(customer, "README.md"), "workspace checkpoint\n");
+    fs.writeFileSync(path.join(project, "README.md"), "project checkpoint\n");
+
+    await syncCustomerRepositoriesForSlug("alice", { strict: true });
+
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: customer, encoding: "utf8" })).toBe("");
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" })).toBe("");
+    expect(execFileSync("git", ["show", "main:README.md"], { cwd: workspaceRemote, encoding: "utf8" })).toBe("workspace checkpoint\n");
+    expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
+  });
+
+  it("attempts every project checkpoint before reporting a workspace push failure", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const projectRemote = path.join(paths.customers, "project.git");
+    initPushableRepo(customer, path.join(paths.customers, "missing-workspace.git"));
+    fs.rmSync(path.join(paths.customers, "missing-workspace.git"), { recursive: true, force: true });
+    initPushableRepo(project, projectRemote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(customer, "README.md"), "workspace checkpoint\n");
+    fs.writeFileSync(path.join(project, "README.md"), "project checkpoint\n");
+
+    await expect(syncCustomerRepositoriesForSlug("alice", { strict: true }))
+      .rejects.toThrow(/alice.*push/u);
+
+    expect(execFileSync("git", ["show", "main:README.md"], {
+      cwd: projectRemote,
+      encoding: "utf8",
+    })).toBe("project checkpoint\n");
+  });
+
+  it("a slug-scoped migration blob flush does not touch another customer", async () => {
+    for (const slug of ["alice", "bob"]) {
+      const customer = path.join(paths.customers, slug);
+      fs.mkdirSync(path.join(customer, ".files"), { recursive: true });
+      fs.mkdirSync(path.join(customer, ".blobs"), { recursive: true });
+      fs.writeFileSync(path.join(customer, ".files", "manifest.json"), "{}\n");
+      fs.writeFileSync(path.join(customer, ".blobs", "pending.txt"), `${slug}\n`);
+    }
+    const upload = vi.fn(async () => {});
+
+    await blobSyncForSlug("alice", {
+      strict: true,
+      store: { download: vi.fn(async () => {}), upload },
+    });
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ slug: "alice" }));
+    expect(fs.readFileSync(
+      path.join(paths.customers, "bob", ".files", "manifest.json"),
+      "utf8",
+    )).toBe("{}\n");
+  });
+
   it("rejects the final workspace flush when a real git push fails", async () => {
     const workspace = path.join(paths.customers, "alice");
     fs.mkdirSync(workspace, { recursive: true });
