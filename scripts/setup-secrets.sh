@@ -739,6 +739,24 @@ if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
 fi
 ksecret social-notification-bearer --from-literal=bearer-token="$SOCIAL_NOTIFICATION_BEARER"
 
+# ── 9a3. System notification bearer (glm-controller → octogee-api /system) ─
+# Dedicated bearer for platform system-notification producers — the only auth
+# on /api/notifications/system (category-allowlisted to system.runtime;
+# Cowboy's runtime-sleep warning is the producer). octogee-api and
+# glm-controller both read the SAME K8s secret
+# (system-notification-bearer/bearer-token); Secret Manager is the durable
+# store. Precedence: env file > Secret Manager > existing K8s > generated.
+info "system-notification-bearer"
+SYSTEM_NOTIFICATION_BEARER_TOKEN="$(configured_secret_value "${SYSTEM_NOTIFICATION_BEARER_TOKEN:-}")"
+[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(sm_get "SYSTEM_NOTIFICATION_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(ksecret_key system-notification-bearer bearer-token)
+[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(openssl rand -hex 32)
+if [[ "$ENV" != "custom" ]]; then
+  sync_secret_manager_value SYSTEM_NOTIFICATION_BEARER_TOKEN "$SYSTEM_NOTIFICATION_BEARER_TOKEN" "$FIREBASE_PROJECT"
+fi
+save_env_file_value "$ENV_FILE" SYSTEM_NOTIFICATION_BEARER_TOKEN "$SYSTEM_NOTIFICATION_BEARER_TOKEN"
+ksecret system-notification-bearer --from-literal=bearer-token="$SYSTEM_NOTIFICATION_BEARER_TOKEN"
+
 # ── 9b. Fleet controller signing keypair (glm-controller ↔ gateway) ──────
 # glm-controller signs the in-cluster migration RPCs with an Ed25519 private
 # key; gateway pods verify with only the public key. Secret Manager is the
@@ -1023,80 +1041,49 @@ done
 echo ""
 echo -e "${CYAN}Secret completeness summary${NC}"
 OCTOGEE_SECRET_COMPLETENESS_FAILURES=0
-COMPLETENESS_LABELS=(
-  "mattermost-gateway / admin_user"
-  "mattermost-gateway / admin_pass"
-  "mattermost-gateway / admin_pat"
-  "mattermost-gateway / admin_pat_id"
-  "mattermost-gateway / admin_pat_fingerprint"
-  "mattermost-gateway / admin_user_id"
-  "mattermost-gateway / team_id"
-  "gitea-token"
-  "gateway-model-key-issuer"
-  "ops-agent-bearer"
-  "social-notification-bearer"
-  "octogee-anthropic"
-  "octogee-openrouter"
-  "openai-embeddings"
-  "resend-secrets / api_key"
-  "resend-secrets / from_email"
-  "github-oauth / client_id"
-  "github-oauth / client_secret"
-  "google-oauth / client_id"
-  "google-oauth / client_secret"
-  "google-oauth / picker_client_id"
-  "google-oauth / picker_api_key"
-  "google-oauth / picker_app_id"
-  "microsoft-oauth / client_id"
-  "microsoft-oauth / client_secret"
-  "connect-state-secret"
-  "stripe-secrets / secret_key"
-  "stripe-secrets / webhook_secret"
-  "stripe-secrets / price_ids"
-)
-COMPLETENESS_VALUES=(
-  "${MM_ADMIN_USER:-}" "${MM_ADMIN_PASS:-}" "${MM_ADMIN_PAT:-}" "${MM_ADMIN_PAT_ID:-}" "${MM_ADMIN_PAT_FINGERPRINT:-}" "${MM_ADMIN_USER_ID:-}" "${MM_TEAM_ID:-}"
-  "${GIT_API_TOKEN:-}" "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}" "${OPS_AGENT_BEARER_TOKEN:-}"
-  "${SOCIAL_NOTIFICATION_BEARER:-}" "${ANTHROPIC_API_KEY:-}" "${OPENROUTER_API_KEY:-}" "${OPENAI_API_KEY:-}"
-  "${RESEND_API_KEY:-}" "${RESEND_FROM_EMAIL:-}" "${GITHUB_CLIENT_ID:-}" "${GITHUB_CLIENT_SECRET:-}"
-  "${G_ID:-}" "${G_SEC:-}" "${G_PICKER_KEY:-}" "${G_PICKER_APP:-}"
-  "${MICROSOFT_CLIENT_ID:-}" "${MICROSOFT_CLIENT_SECRET:-}" "${CONNECT_STATE_SECRET:-}"
-  "${STRIPE_SECRET_KEY:-}" "${STRIPE_WEBHOOK_SECRET:-}" "${STRIPE_PRICE_IDS:-}"
-)
-COMPLETENESS_REQUIREMENTS=(
-  post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap post-bootstrap
-  launch launch launch launch launch optional launch launch
-  "$(octogee_oauth_provider_requirement github)" "$(octogee_oauth_provider_requirement github)"
-  "$(octogee_oauth_provider_requirement google)" "$(octogee_oauth_provider_requirement google)"
-  "$(octogee_oauth_provider_requirement google)" "$(octogee_oauth_provider_requirement google)"
-  "$(octogee_oauth_provider_requirement microsoft)" "$(octogee_oauth_provider_requirement microsoft)"
-  launch launch launch launch
-)
+# One row per secret — label, value, requirement travel together so the
+# summary cannot silently misalign the way parallel arrays did.
+completeness_row() {
+  octogee_secret_completeness_entry "$1" "$2" "$3" "$TARGET_LIFECYCLE" "$SECRET_SETUP_PHASE"
+}
+completeness_row "mattermost-gateway / admin_user"              "${MM_ADMIN_USER:-}"                        post-bootstrap
+completeness_row "mattermost-gateway / admin_pass"              "${MM_ADMIN_PASS:-}"                        post-bootstrap
+completeness_row "mattermost-gateway / admin_pat"               "${MM_ADMIN_PAT:-}"                         post-bootstrap
+completeness_row "mattermost-gateway / admin_pat_id"            "${MM_ADMIN_PAT_ID:-}"                      post-bootstrap
+completeness_row "mattermost-gateway / admin_pat_fingerprint"   "${MM_ADMIN_PAT_FINGERPRINT:-}"             post-bootstrap
+completeness_row "mattermost-gateway / admin_user_id"           "${MM_ADMIN_USER_ID:-}"                     post-bootstrap
+completeness_row "mattermost-gateway / team_id"                 "${MM_TEAM_ID:-}"                           post-bootstrap
+completeness_row "gitea-token"                                  "${GIT_API_TOKEN:-}"                        post-bootstrap
+completeness_row "gateway-model-key-issuer"                     "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}" launch
+completeness_row "ops-agent-bearer"                             "${OPS_AGENT_BEARER_TOKEN:-}"               launch
+completeness_row "social-notification-bearer"                   "${SOCIAL_NOTIFICATION_BEARER:-}"           launch
+completeness_row "system-notification-bearer"                   "${SYSTEM_NOTIFICATION_BEARER_TOKEN:-}"     launch
+completeness_row "octogee-anthropic"                            "${ANTHROPIC_API_KEY:-}"                    launch
+completeness_row "octogee-openrouter"                           "${OPENROUTER_API_KEY:-}"                   launch
+completeness_row "openai-embeddings"                            "${OPENAI_API_KEY:-}"                       optional
+completeness_row "resend-secrets / api_key"                     "${RESEND_API_KEY:-}"                       launch
+completeness_row "resend-secrets / from_email"                  "${RESEND_FROM_EMAIL:-}"                    launch
+completeness_row "github-oauth / client_id"                     "${GITHUB_CLIENT_ID:-}"                     "$(octogee_oauth_provider_requirement github)"
+completeness_row "github-oauth / client_secret"                 "${GITHUB_CLIENT_SECRET:-}"                 "$(octogee_oauth_provider_requirement github)"
+completeness_row "google-oauth / client_id"                     "${G_ID:-}"                                 "$(octogee_oauth_provider_requirement google)"
+completeness_row "google-oauth / client_secret"                 "${G_SEC:-}"                                "$(octogee_oauth_provider_requirement google)"
+completeness_row "google-oauth / picker_client_id"              "${G_PICKER_ID:-}"                          "$(octogee_oauth_provider_requirement google)"
+completeness_row "google-oauth / picker_api_key"                "${G_PICKER_KEY:-}"                         "$(octogee_oauth_provider_requirement google)"
+completeness_row "google-oauth / picker_app_id"                 "${G_PICKER_APP:-}"                         "$(octogee_oauth_provider_requirement google)"
+completeness_row "microsoft-oauth / client_id"                  "${MICROSOFT_CLIENT_ID:-}"                  "$(octogee_oauth_provider_requirement microsoft)"
+completeness_row "microsoft-oauth / client_secret"              "${MICROSOFT_CLIENT_SECRET:-}"              "$(octogee_oauth_provider_requirement microsoft)"
+completeness_row "connect-state-secret"                         "${CONNECT_STATE_SECRET:-}"                 launch
+completeness_row "stripe-secrets / secret_key"                  "${STRIPE_SECRET_KEY:-}"                    launch
+completeness_row "stripe-secrets / webhook_secret"              "${STRIPE_WEBHOOK_SECRET:-}"                launch
+completeness_row "stripe-secrets / price_ids"                   "${STRIPE_PRICE_IDS:-}"                     launch
 case "$TARGET_ID" in
   test-west|prod-west)
-    COMPLETENESS_LABELS+=(
-      "identity-platform-login / google client_id"
-      "identity-platform-login / google client_secret"
-      "identity-platform-login / github client_id"
-      "identity-platform-login / github client_secret"
-    )
-    COMPLETENESS_VALUES+=(
-      "${FIREBASE_AUTH_GOOGLE_CLIENT_ID:-}"
-      "${FIREBASE_AUTH_GOOGLE_CLIENT_SECRET:-}"
-      "${FIREBASE_AUTH_GITHUB_CLIENT_ID:-}"
-      "${FIREBASE_AUTH_GITHUB_CLIENT_SECRET:-}"
-    )
-    COMPLETENESS_REQUIREMENTS+=(launch launch launch launch)
+    completeness_row "identity-platform-login / google client_id"     "${FIREBASE_AUTH_GOOGLE_CLIENT_ID:-}"     launch
+    completeness_row "identity-platform-login / google client_secret" "${FIREBASE_AUTH_GOOGLE_CLIENT_SECRET:-}" launch
+    completeness_row "identity-platform-login / github client_id"     "${FIREBASE_AUTH_GITHUB_CLIENT_ID:-}"     launch
+    completeness_row "identity-platform-login / github client_secret" "${FIREBASE_AUTH_GITHUB_CLIENT_SECRET:-}" launch
     ;;
 esac
-for index in "${!COMPLETENESS_LABELS[@]}"; do
-  octogee_secret_completeness_entry \
-    "${COMPLETENESS_LABELS[$index]}" \
-    "${COMPLETENESS_VALUES[$index]}" \
-    "${COMPLETENESS_REQUIREMENTS[$index]}" \
-    "$TARGET_LIFECYCLE" \
-    "$SECRET_SETUP_PHASE"
-done
 
 echo ""
 if [[ "$OCTOGEE_SECRET_COMPLETENESS_FAILURES" -gt 0 ]]; then

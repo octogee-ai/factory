@@ -54,7 +54,9 @@ import {
   allocateDisposableGatewayFirestore,
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
+  publishIdleSleepFirestore,
   readBuilderActivityFirestore,
+  readShellsAtRiskFirestore,
 } from "./disposable-gateway-lifecycle.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
@@ -138,6 +140,7 @@ export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
   sharedGatewayIds: readonly string[];
   idleMs: number;
+  idleWarningMs: number;
   liveRunBuilderSlugs: string[];
   users: PlacementPolicyUser[];
   gateways: PlacementPolicyGateway[];
@@ -216,6 +219,24 @@ export interface BuilderRuntimeActivity {
   liveShell: boolean;
 }
 
+// Client-facing warning read model at users/{uid}.provisioning.openclaw.idleSleep.
+// Cowboy is the sole writer; the PWA renders the countdown from deadlineAt and
+// the keepalive ack resets the clock through normal demand, never this field.
+export interface IdleSleepProjection {
+  deadlineAt: number;
+  leaseId: string;
+  generation: number;
+  shellSessions: number;
+  updatedAt: number;
+}
+
+export interface RuntimeSleepWarningInput {
+  uid: string;
+  eventId: string;
+  deadlineAt: number;
+  shellSessions: number;
+}
+
 type AuthoritativeLeaseStatus = "provisioning" | "activating" | "returning";
 
 export interface RetireOwnedGatewayInput {
@@ -265,6 +286,9 @@ export interface PlacementPolicyReconcilerDeps {
     userData: Record<string, unknown>;
     liveRun: boolean;
   }): Promise<BuilderRuntimeActivity>;
+  readShellsAtRisk(input: { builderSlug: string; gatewayId: string }): Promise<number>;
+  publishIdleSleep(input: { uid: string; projection: IdleSleepProjection | null }): Promise<void>;
+  sendRuntimeSleepWarning(input: RuntimeSleepWarningInput): Promise<void>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
   deleteRetiredDisposableGateway(
@@ -1407,6 +1431,116 @@ function builderActivityRequiresRuntime(
     ));
 }
 
+function publishedIdleSleep(userData: Record<string, unknown>): IdleSleepProjection | null {
+  const provisioning = userData.provisioning as Record<string, unknown> | undefined;
+  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
+  const value = openclaw?.idleSleep as Record<string, unknown> | undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return typeof value.deadlineAt === "number" &&
+      typeof value.leaseId === "string" &&
+      typeof value.generation === "number" &&
+      typeof value.shellSessions === "number" &&
+      typeof value.updatedAt === "number"
+    ? value as unknown as IdleSleepProjection
+    : null;
+}
+
+async function ensureIdleSleepCleared(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+): Promise<void> {
+  if (!publishedIdleSleep(user.data)) return;
+  await context.deps.publishIdleSleep({ uid: user.uid, projection: null });
+}
+
+interface IdleSleepWarningWindow {
+  deadlineAt: number;
+  at: number;
+}
+
+// Pure window decision. `now` stays a thunk so veto paths never sample the
+// clock — reconcile tests pin the per-user now() call count.
+function idleSleepWarningWindow(input: {
+  idleMs: number;
+  idleWarningMs: number;
+  returnRequested: boolean;
+  activity: BuilderRuntimeActivity;
+  now: () => number;
+}): IdleSleepWarningWindow | null {
+  const { idleMs, idleWarningMs, returnRequested, activity } = input;
+  const eligible = idleWarningMs > 0 &&
+    idleMs > 0 &&
+    !returnRequested &&
+    !activity.liveRun &&
+    !activity.liveShell &&
+    activity.lastActiveAt !== null;
+  if (!eligible) return null;
+  const deadlineAt = activity.lastActiveAt! + idleMs;
+  const at = input.now();
+  return at >= deadlineAt - idleWarningMs && at < deadlineAt
+    ? { deadlineAt, at }
+    : null;
+}
+
+async function reconcileIdleSleepWarning(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  lease: BuilderActivationLease,
+  input: {
+    activity: BuilderRuntimeActivity;
+    returnRequested: boolean;
+    builderSlug: string;
+    gatewayId: string;
+  },
+): Promise<void> {
+  const window = idleSleepWarningWindow({
+    idleMs: context.state.idleMs,
+    idleWarningMs: context.state.idleWarningMs,
+    returnRequested: input.returnRequested,
+    activity: input.activity,
+    now: context.deps.now,
+  });
+  if (!window) {
+    await ensureIdleSleepCleared(context, user);
+    return;
+  }
+  const { deadlineAt, at } = window;
+  const existing = publishedIdleSleep(user.data);
+  const shellSessions = await context.deps.readShellsAtRisk({
+    builderSlug: input.builderSlug,
+    gatewayId: input.gatewayId,
+  });
+  const changed = !existing ||
+    existing.deadlineAt !== deadlineAt ||
+    existing.shellSessions !== shellSessions ||
+    existing.leaseId !== lease.leaseId ||
+    existing.generation !== lease.generation;
+  if (changed) {
+    await context.deps.publishIdleSleep({
+      uid: user.uid,
+      projection: {
+        deadlineAt,
+        leaseId: lease.leaseId,
+        generation: lease.generation,
+        shellSessions,
+        updatedAt: at,
+      },
+    });
+  }
+  // One notification per deadline, and only when sleep would destroy state:
+  // live tmux sessions die with the pod. A shell-free sleep is silent — wake
+  // is cheap and the modal covers the at-keyboard case.
+  const newDeadline = !existing || existing.deadlineAt !== deadlineAt;
+  if (newDeadline && shellSessions > 0) {
+    await context.deps.sendRuntimeSleepWarning({
+      uid: user.uid,
+      eventId: `runtime-sleep:${user.uid}:${lease.leaseId}:${lease.generation}:${deadlineAt}`,
+      deadlineAt,
+      shellSessions,
+    });
+  }
+}
+
 async function reconcileActiveLease(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
@@ -1451,13 +1585,22 @@ async function reconcileActiveLease(
     return;
   }
   const returnRequested = millis(lease.raw.returnRequestedAt) !== null;
-  if (!returnRequested && context.state.idleMs <= 0) return;
+  if (!returnRequested && context.state.idleMs <= 0) {
+    await ensureIdleSleepCleared(context, user);
+    return;
+  }
   const activity = await context.deps.readBuilderActivity({
     uid: user.uid,
     builderSlug,
     gatewayId: targetGatewayId!,
     userData: user.data,
     liveRun: context.state.liveRunBuilderSlugs.includes(builderSlug),
+  });
+  await reconcileIdleSleepWarning(context, user, lease, {
+    activity,
+    returnRequested,
+    builderSlug,
+    gatewayId: targetGatewayId!,
   });
   if (builderActivityRequiresRuntime(
     activity,
@@ -1671,6 +1814,9 @@ async function reconcileActivationLease(
       reason: `gateway ${target!.gatewayId} is operator-managed`,
     });
     return true;
+  }
+  if (lease.status !== "active") {
+    await ensureIdleSleepCleared(context, user);
   }
   if (lease.status === "requested") {
     await reconcileRequestedActivation(context, user, builderSlug, lease);
@@ -2171,6 +2317,8 @@ interface FirestorePlacementPolicyInput {
   db: Firestore;
   namespace: string;
   idleMs: number;
+  idleWarningMs: number;
+  sendRuntimeSleepWarning(input: RuntimeSleepWarningInput): Promise<void>;
   now(): number;
   log(message: string): void;
   maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
@@ -2362,6 +2510,10 @@ async function readPlacementPolicySnapshot(
     configSnap.data()?.disposableGatewayIdleMs,
     fallbackIdleMs,
   );
+  const idleWarningMs = placementPolicyIdleMs(
+    configSnap.data()?.disposableGatewayIdleWarningMs,
+    input.idleWarningMs,
+  );
   const runtimes = docsById(runtimeSnap.docs);
   const kubernetesByGatewayId = await input.readGatewayPodDiagnosticsBatch({
     namespace: input.namespace,
@@ -2393,6 +2545,7 @@ async function readPlacementPolicySnapshot(
     defaultGatewayId,
     sharedGatewayIds,
     idleMs,
+    idleWarningMs,
     liveRunBuilderSlugs: [...new Set(liveRunsSnap.docs.flatMap((doc) => {
       const parts = doc.ref.path.split("/");
       return parts[0] === "workspaces" && parts[1] ? [parts[1]] : [];
@@ -3138,6 +3291,9 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     recoverUnreachableDisposableGateway: (request) =>
       recoverUnreachableDisposableGatewayFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
+    readShellsAtRisk: (request) => readShellsAtRiskFirestore(input, request),
+    publishIdleSleep: (request) => publishIdleSleepFirestore(input, request),
+    sendRuntimeSleepWarning: (request) => input.sendRuntimeSleepWarning(request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
     deleteRetiredDisposableGateway: (request) =>

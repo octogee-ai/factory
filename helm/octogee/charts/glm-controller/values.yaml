@@ -42,6 +42,7 @@ env:
   gitApiUrl: ""
   gitOrg: ""
   mmUrl: ""
+  systemNotificationUrl: ""
 
 modelKeyIssuer:
   enabled: true
@@ -89,3 +90,4 @@ backendConfig:
 
 disposableGateway:
   idleMs: "1800000"
+  idleWarningMs: "300000"
