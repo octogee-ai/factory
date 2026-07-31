@@ -451,15 +451,18 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         .doc(params.operationId);
     const sourceAssignmentRef = assignmentRef(deps.db, params.fromGatewayId, params.uid);
     const targetAssignmentRef = assignmentRef(deps.db, params.toGatewayId, params.uid);
+    const sourceRuntimeRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.fromGatewayId);
+    const targetRuntimeRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId);
     const userRef = deps.db.collection("users").doc(params.uid);
     const nowMs = deps.now ? deps.now().getTime() : Date.now();
     await deps.db.runTransaction(async (txn) => {
-        const [operationSnapshot, userSnapshot, sourceRootSnapshot, targetRootSnapshot, targetRuntimeSnapshot, sourceAssignmentSnapshot, targetAssignmentSnapshot,] = await Promise.all([
+        const [operationSnapshot, userSnapshot, sourceRootSnapshot, targetRootSnapshot, sourceRuntimeSnapshot, targetRuntimeSnapshot, sourceAssignmentSnapshot, targetAssignmentSnapshot,] = await Promise.all([
             txn.get(operationRef),
             txn.get(userRef),
             txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
             txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId)),
-            txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.toGatewayId)),
+            txn.get(sourceRuntimeRef),
+            txn.get(targetRuntimeRef),
             txn.get(sourceAssignmentRef),
             txn.get(targetAssignmentRef),
         ]);
@@ -468,6 +471,10 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         const targetAssignment = targetAssignmentSnapshot.exists
             ? targetAssignmentSnapshot.data()
             : undefined;
+        const sourceRuntimeData = sourceRuntimeSnapshot.exists
+            ? sourceRuntimeSnapshot.data()
+            : undefined;
+        const sourceRuntime = isGatewayRuntimeDoc(sourceRuntimeData) ? sourceRuntimeData : null;
         if (recoveryAlreadyCommitted({
             params,
             operation,
@@ -506,6 +513,14 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         });
         const targetRoot = targetRootSnapshot.data();
         const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+        if (sourceRuntime?.heartbeat.mountedCustomers.includes(params.slug)) {
+            txn.update(sourceRuntimeRef, {
+                heartbeat: {
+                    ...sourceRuntime.heartbeat,
+                    mountedCustomers: sourceRuntime.heartbeat.mountedCustomers.filter((mountedCustomer) => mountedCustomer !== params.slug),
+                },
+            });
+        }
         txn.update(userRef, {
             "provisioning.openclaw.gatewayId": params.toGatewayId,
             "provisioning.openclaw.gatewayAssignedAt": nowMs,
