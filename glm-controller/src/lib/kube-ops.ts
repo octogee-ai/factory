@@ -8,10 +8,6 @@ export interface KubeOps {
     namespace: string;
     name: string;
   }): Promise<void>;
-  restartDeployment(opts: {
-    namespace: string;
-    name: string;
-  }): Promise<void>;
   readDeployedReplicas(opts: {
     namespace: string;
     name: string;
@@ -458,7 +454,9 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       // stays up and restartCount is unchanged. `--skip-deferral` bypasses the
       // active-work idle-drain wait so an operator click restarts promptly.
       // `-c gateway` targets the container that holds the openclaw CLI +
-      // process (not gateway-edge).
+      // process (not gateway-edge). Requires the gateway to be reachable —
+      // an unreachable/crash-looping pod needs a true reroll, which the
+      // operator drives separately.
       const args = [
         "-n",
         namespace,
@@ -484,24 +482,6 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       deps.log(
         `[kube-ops] in-process OpenClaw restart deploy/${name} ns=${namespace}`,
       );
-    },
-
-    async restartDeployment({ namespace, name }) {
-      const result = await deps.runKubectl([
-        "-n",
-        namespace,
-        "rollout",
-        "restart",
-        `deploy/${name}`,
-      ]);
-      if (result.code !== 0) {
-        throw new Error(
-          `kubectl rollout restart deploy/${name} ns=${namespace} failed (code=${result.code}): ${
-            result.stderr.trim() || result.stdout.trim()
-          }`,
-        );
-      }
-      deps.log(`[kube-ops] rollout restart deploy/${name} ns=${namespace}`);
     },
 
     async readDeployedReplicas({ namespace, name }) {
@@ -645,9 +625,6 @@ export function createLoggingKubeOps(log: (msg: string) => void): KubeOps {
     },
     restartOpenClawInPlace: async ({ namespace, name }) => {
       log(`[kube-ops:stub] in-process OpenClaw restart ns=${namespace} ${name} — no exec`);
-    },
-    restartDeployment: async ({ namespace, name }) => {
-      log(`[kube-ops:stub] rollout restart ns=${namespace} ${name} — no exec`);
     },
     readDeployedReplicas: async ({ namespace, name }) => {
       log(`[kube-ops:stub] readReplicas ns=${namespace} ${name} — returning null`);

@@ -61,7 +61,10 @@ export function createRestartGatewayHandler(
           completedAt: deps.now(),
           error: message,
         });
-        return restartDeployment(deps, revisionId, ctx);
+        deps.log(
+          `[restart-gateway] ${gatewayId} pod was already replaced; in-process restart is satisfied`,
+        );
+        return { steps: [], success: true };
       }
       await reportStep(ctx, {
         name: "openclaw-restart",
@@ -91,42 +94,6 @@ function restartTargetUnavailable(message: string): boolean {
     /pods?\s+"[^"]+"\s+not found/u.test(normalized) ||
     normalized.includes("pod does not exist")
   );
-}
-
-async function restartDeployment(
-  deps: RestartGatewayDeps,
-  revisionId: string,
-  ctx: OperationContext,
-): Promise<OperationResult> {
-  const startedAt = deps.now();
-  await reportStep(ctx, {
-    name: "deployment-restart",
-    status: "running",
-    startedAt,
-  });
-  try {
-    await deps.kubeOps.restartDeployment({
-      namespace: deps.namespace,
-      name: deploymentNameForGateway(revisionId),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await reportStep(ctx, {
-      name: "deployment-restart",
-      status: "failed",
-      startedAt,
-      completedAt: deps.now(),
-      error: message,
-    });
-    return { steps: [], success: false, error: message };
-  }
-  await reportStep(ctx, {
-    name: "deployment-restart",
-    status: "done",
-    startedAt,
-    completedAt: deps.now(),
-  });
-  return { steps: [], success: true };
 }
 
 async function reportStep(
