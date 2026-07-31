@@ -111,6 +111,10 @@ if shared_instances:
             errors.append(f"shared PDB {pdb_name} must set minAvailable=1")
         if "maxUnavailable" in pdb_spec:
             errors.append(f"shared PDB {pdb_name} must not set maxUnavailable")
+        if pdb_spec.get("unhealthyPodEvictionPolicy") != "AlwaysAllow":
+            errors.append(
+                f"shared PDB {pdb_name} must always allow unhealthy pod eviction"
+            )
 
 for deployment in live_deployments:
     metadata = deployment.get("metadata", {})

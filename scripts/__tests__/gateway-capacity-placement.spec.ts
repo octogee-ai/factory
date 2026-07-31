@@ -117,6 +117,7 @@ function sharedPdb(instance: string, overrides: Record<string, unknown> = {}) {
     },
     spec: {
       minAvailable: 1,
+      unhealthyPodEvictionPolicy: "AlwaysAllow",
       selector: {
         matchLabels: {
           app: "octogee-gateway",
@@ -249,6 +250,23 @@ describe("gateway capacity placement verifier", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
       "expected 2 per-identity shared PDBs, found 1",
+    );
+  });
+
+  it("rejects a shared PDB that blocks eviction of an unhealthy pod", () => {
+    const result = runPlacementCheck({
+      pdbs: {
+        items: [
+          sharedPdb("default", { unhealthyPodEvictionPolicy: undefined }),
+          sharedPdb("default-b"),
+          pdb("operator"),
+        ],
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "shared PDB shared-gateway-default must always allow unhealthy pod eviction",
     );
   });
 

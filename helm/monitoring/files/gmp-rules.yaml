@@ -70,7 +70,7 @@ spec:
             severity: critical
           annotations:
             summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
-            description: "Fewer than two Ready shared gateway pods are available. Each per-identity minAvailable: 1 PDB blocks voluntary drains of an identity at steady state while allowing its same-identity surge handoff; Cowboy owns recovery and any shared on-demand rehome. Inspect gateway pods, node capacity, and recovery operations."
+            description: "Fewer than two Ready shared gateway pods are available. Each per-identity minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod; Cowboy owns recovery and any shared on-demand rehome. Inspect gateway pods, node capacity, and recovery operations."
         - alert: SharedGatewayZoneDiversityLost
           expr: |
             (
