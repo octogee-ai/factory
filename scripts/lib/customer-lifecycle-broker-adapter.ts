@@ -9,6 +9,7 @@ import {
   MIGRATING_IN_PIN_TTL_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
+import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
@@ -570,12 +571,14 @@ async function quiesceCustomer(
   timeoutMs: number,
 ): Promise<{ drained: boolean; runningCount: number }> {
   const stateDir = resolveOpenClawStateDir();
-  const agentId = customerCoachAgentId(slug);
   const deadline = Date.now() + timeoutMs;
   let runningCount = 0;
   while (Date.now() < deadline) {
-    const sessions = await readAgentSessions(stateDir, agentId);
-    runningCount = sessions.filter((s) => s.status === "running").length;
+    runningCount = 0;
+    for (const agentId of agentIdsForMigration(slug)) {
+      const sessions = await readAgentSessions(stateDir, agentId);
+      runningCount += sessions.filter((s) => s.status === "running").length;
+    }
     if (runningCount === 0) return { drained: true, runningCount: 0 };
     log(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
     await new Promise<void>((r) => setTimeout(r, 1_000));
@@ -583,14 +586,46 @@ async function quiesceCustomer(
   return { drained: false, runningCount };
 }
 
+function stateDirectoryEntries(directory: string): fs.Dirent[] {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true });
+}
+
+function agentIdsForMigration(slug: string): string[] {
+  const stateDir = resolveOpenClawStateDir();
+  const agentIds = new Set([customerCoachAgentId(slug)]);
+  const addIfOwned = (agentId: string): void => {
+    if (agentIdBelongsToSlug(agentId, slug)) agentIds.add(agentId);
+  };
+  for (const entry of stateDirectoryEntries(path.join(stateDir, "agents"))) {
+    if (entry.isDirectory()) addIfOwned(entry.name);
+  }
+  for (const entry of stateDirectoryEntries(path.join(stateDir, "memory"))) {
+    if (!entry.isFile()) continue;
+    const suffix = [".sqlite-wal", ".sqlite-shm", ".sqlite"].find((candidate) =>
+      entry.name.endsWith(candidate),
+    );
+    if (suffix) addIfOwned(entry.name.slice(0, -suffix.length));
+  }
+  return [...agentIds].sort();
+}
+
+function memoryPathsForAgent(agentId: string): Array<{ cwd: string; path: string }> {
+  const stateDir = resolveOpenClawStateDir();
+  return [".sqlite", ".sqlite-wal", ".sqlite-shm"].map((suffix) => ({
+    cwd: stateDir,
+    path: path.join("memory", `${agentId}${suffix}`),
+  }));
+}
+
 async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path: string }>> {
   const stateDir = resolveOpenClawStateDir();
-  const agentId = customerCoachAgentId(slug);
   const candidates = [
-    { cwd: stateDir, path: path.join("agents", agentId) },
-    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite`) },
-    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite-wal`) },
-    { cwd: stateDir, path: path.join("memory", `${agentId}.sqlite-shm`) },
+    ...agentIdsForMigration(slug).map((agentId) => ({
+      cwd: stateDir,
+      path: path.join("agents", agentId),
+    })),
+    ...agentIdsForMigration(slug).flatMap((agentId) => memoryPathsForAgent(agentId)),
     { cwd: OPENCLAW_DIR, path: path.join("customers", slug) },
     { cwd: OPENCLAW_DIR, path: path.join("customer-keys", slug) },
   ];
@@ -611,12 +646,13 @@ async function prepareImportDir(
   mode: CustomerStateImportMode,
 ): Promise<string> {
   const stateDir = resolveOpenClawStateDir();
-  const agentId = customerCoachAgentId(slug);
   const wipePaths = [
-    path.join(stateDir, "agents", agentId),
-    path.join(stateDir, "memory", `${agentId}.sqlite`),
-    path.join(stateDir, "memory", `${agentId}.sqlite-wal`),
-    path.join(stateDir, "memory", `${agentId}.sqlite-shm`),
+    ...agentIdsForMigration(slug).flatMap((agentId) => [
+      path.join(stateDir, "agents", agentId),
+      path.join(stateDir, "memory", `${agentId}.sqlite`),
+      path.join(stateDir, "memory", `${agentId}.sqlite-wal`),
+      path.join(stateDir, "memory", `${agentId}.sqlite-shm`),
+    ]),
     path.join(OPENCLAW_DIR, "customers", slug),
     path.join(OPENCLAW_DIR, MIGRATION_ACTIVATION_DIR, slug),
   ];
@@ -627,7 +663,7 @@ async function prepareImportDir(
     await fsp.rm(p, { recursive: true, force: true }).catch(() => undefined);
   }
   await fsp.mkdir(path.join(stateDir, "agents"), { recursive: true });
-  await fsp.mkdir(path.join(stateDir, "agents", agentId, "agent"), { recursive: true });
+  await fsp.mkdir(path.join(stateDir, "agents", customerCoachAgentId(slug), "agent"), { recursive: true });
   await fsp.mkdir(CUSTOMERS_DIR, { recursive: true });
   await fsp.mkdir(CUSTOMER_KEYS_DIR, { recursive: true });
   return OPENCLAW_DIR;
@@ -679,26 +715,27 @@ async function removeImportedCustomerBySlug(
   ctx: BrokerCtx,
   slug: string,
 ): Promise<RemoveCustomerResult> {
-  const agentId = customerCoachAgentId(slug);
   const wasMounted =
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
   if (!wasMounted) return { wasMounted: false, steps: [] };
-  await applyRemoveCustomerConfigPatch(ctx, slug, agentId);
+  await applyRemoveCustomerConfigPatch(ctx, slug, customerCoachAgentId(slug));
   await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
   if (!isConfiguredGatewayBuilder(slug)) {
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
   }
-  await fsp.rm(path.join(resolveOpenClawStateDir(), "agents", agentId), {
-    recursive: true,
-    force: true,
-  });
   const stateDir = resolveOpenClawStateDir();
-  for (const suffix of [".sqlite", ".sqlite-wal", ".sqlite-shm"]) {
-    await fsp.rm(path.join(stateDir, "memory", `${agentId}${suffix}`), {
+  for (const agentId of agentIdsForMigration(slug)) {
+    await fsp.rm(path.join(stateDir, "agents", agentId), {
       recursive: true,
       force: true,
     });
+    for (const suffix of [".sqlite", ".sqlite-wal", ".sqlite-shm"]) {
+      await fsp.rm(path.join(stateDir, "memory", `${agentId}${suffix}`), {
+        recursive: true,
+        force: true,
+      });
+    }
   }
   return { wasMounted: true, steps: ["config-patch-remove", "delete-dir"] };
 }

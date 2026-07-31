@@ -267,57 +267,62 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async transfer({ gatewayId, slug, operationId, sourcePod, targetPod }) {
-      const transferKey = randomKey();
-      let prepared = false;
-      try {
-        const prepare = await control(
-          targetPod,
-          gatewayId,
-          "prepare-rsync-import",
-          operationId,
-          {
+      const transferMode = async (mode: "keys" | "final") => {
+        const transferKey = randomKey();
+        let prepared = false;
+        try {
+          const prepare = await control(
+            targetPod,
+            gatewayId,
+            "prepare-rsync-import",
+            operationId,
+            {
+              migrationId: operationId,
+              slug,
+              mode,
+              transferUser: "migration",
+              transferKey,
+              sourcePodIp: sourcePod.podIP,
+            },
+          ) as unknown as PrepareRsyncImportResponse;
+          if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
+            throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
+          }
+          prepared = true;
+          await control(sourcePod, gatewayId, "push-rsync-state", operationId, {
             migrationId: operationId,
             slug,
-            mode: "final",
+            mode,
+            targetHost: targetPod.podIP,
+            targetPort: prepare.port,
             transferUser: "migration",
             transferKey,
-            sourcePodIp: sourcePod.podIP,
-          },
-        ) as unknown as PrepareRsyncImportResponse;
-        if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
-          throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
-        }
-        prepared = true;
-        await control(sourcePod, gatewayId, "push-rsync-state", operationId, {
-          migrationId: operationId,
-          slug,
-          mode: "final",
-          targetHost: targetPod.podIP,
-          targetPort: prepare.port,
-          transferUser: "migration",
-          transferKey,
-          includeActivationManifest: true,
-        });
-        await control(targetPod, gatewayId, "finish-rsync-import", operationId, {
-          migrationId: operationId,
-          slug,
-          mode: "final",
-        });
-      } catch (error) {
-        if (prepared) {
-          await control(targetPod, gatewayId, "abort-rsync-import", operationId, {
+            ...(mode === "final" ? { includeActivationManifest: true } : {}),
+          });
+          await control(targetPod, gatewayId, "finish-rsync-import", operationId, {
             migrationId: operationId,
             slug,
-            mode: "final",
-          }).catch((abortError) => {
-            opts.log(
-              `[surge-handoff] abort failed pod=${targetPod.name} slug=${slug}: ` +
-              `${abortError instanceof Error ? abortError.message : String(abortError)}`,
-            );
+            mode,
           });
+        } catch (error) {
+          if (prepared) {
+            await control(targetPod, gatewayId, "abort-rsync-import", operationId, {
+              migrationId: operationId,
+              slug,
+              mode,
+            }).catch((abortError) => {
+              opts.log(
+                `[surge-handoff] abort failed pod=${targetPod.name} slug=${slug}: ` +
+                `${abortError instanceof Error ? abortError.message : String(abortError)}`,
+              );
+            });
+          }
+          throw error;
         }
-        throw error;
-      }
+      };
+
+      await transferMode("keys");
+      await transferMode("final");
     },
 
     async discardTargetCustomer({ gatewayId, slug, operationId, targetPod }) {

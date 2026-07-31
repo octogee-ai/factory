@@ -9,6 +9,8 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
+  desiredEnsureLaneFingerprint,
+  permanentConfigPatchRetryReady,
   evictLocalCustomer,
   gatewayServiceName,
   settleConvergence,
@@ -141,6 +143,24 @@ describe("cloneRetryReady — holds a stranded slug off the hot path between att
   it("converges IMMEDIATELY on genuine drift — a new project must never wait out a backoff earned by an unrelated stranded one", () => {
     const prior = { attempts: 5, nextAt: 9_000_000, fingerprint: "fp1" };
     expect(cloneRetryReady(prior, "fp2", 1_000)).toBe(true);
+  });
+});
+
+describe("permanentConfigPatchRetryReady", () => {
+  it("holds an unchanged invalid patch and immediately re-enables it for a changed desired fingerprint", () => {
+    const unchanged = desiredEnsureLaneFingerprint(
+      new Map([["alice", "fp1"], ["bob", "fp2"]]),
+    );
+    const reordered = desiredEnsureLaneFingerprint(
+      new Map([["bob", "fp2"], ["alice", "fp1"]]),
+    );
+    const changed = desiredEnsureLaneFingerprint(
+      new Map([["alice", "fp3"], ["bob", "fp2"]]),
+    );
+
+    expect(reordered).toBe(unchanged);
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged }, unchanged)).toBe(false);
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged }, changed)).toBe(true);
   });
 });
 

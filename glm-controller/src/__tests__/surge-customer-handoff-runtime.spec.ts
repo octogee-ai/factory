@@ -71,10 +71,13 @@ describe("surge handoff Kubernetes projection", () => {
   });
 });
 
+type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
+type FetchInput = string | URL | Request;
+
 describe("surge handoff direct pod transport", () => {
-  it("uses one signed rsync session and verifies each direct pod", async () => {
-    const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
-    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+  it("transfers customer keys before final state and verifies each direct pod", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = String(input);
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
@@ -92,10 +95,13 @@ describe("surge handoff direct pod transport", () => {
       }
       return new Response(JSON.stringify({ imported: true, released: true }));
     }) as unknown as typeof globalThis.fetch;
+    const randomKey = vi.fn()
+      .mockReturnValueOnce("keys-transfer-key")
+      .mockReturnValueOnce("final-transfer-key");
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       fetch,
-      randomKey: () => "transfer-key",
+      randomKey,
       log: vi.fn(),
     });
 
@@ -129,27 +135,80 @@ describe("surge handoff direct pod transport", () => {
       "http://10.0.0.2:3003/prepare-rsync-import/default",
       "http://10.0.0.1:3003/push-rsync-state/default",
       "http://10.0.0.2:3003/finish-rsync-import/default",
+      "http://10.0.0.2:3003/prepare-rsync-import/default",
+      "http://10.0.0.1:3003/push-rsync-state/default",
+      "http://10.0.0.2:3003/finish-rsync-import/default",
       "http://10.0.0.2:3003/unmount/default",
       "http://10.0.0.2:3003/complete-surge-handoff/default",
     ]);
     expect(calls[2]?.body).toMatchObject({
       slug: "alice",
+      mode: "keys",
       sourcePodIp: "10.0.0.1",
-      transferKey: "transfer-key",
+      transferKey: "keys-transfer-key",
     });
     expect(calls[3]?.body).toMatchObject({
+      mode: "keys",
+      targetHost: "10.0.0.2",
+      targetPort: 30873,
+    });
+    expect(calls[5]?.body).toMatchObject({
+      slug: "alice",
+      mode: "final",
+      sourcePodIp: "10.0.0.1",
+      transferKey: "final-transfer-key",
+    });
+    expect(calls[6]?.body).toMatchObject({
+      mode: "final",
       targetHost: "10.0.0.2",
       targetPort: 30873,
       includeActivationManifest: true,
     });
-    expect(calls[6]?.body).toEqual({
+    expect(calls[9]?.body).toEqual({
       migrationId: "surge-default-new",
       targetPodUid: "new",
     });
+    expect(randomKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not transfer final state when the key transfer fails", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, body });
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import" }));
+      }
+      if (url.includes("/push-rsync-state/") && body?.mode === "keys") {
+        return new Response(JSON.stringify({ error: "key export missing" }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      randomKey: () => "transfer-key",
+      log: vi.fn(),
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+    })).rejects.toThrow(/push-rsync-state.*404/u);
+
+    expect(calls.map((call) => [call.url, call.body?.mode])).toEqual([
+      ["http://10.0.0.2:3003/prepare-rsync-import/default", "keys"],
+      ["http://10.0.0.1:3003/push-rsync-state/default", "keys"],
+      ["http://10.0.0.2:3003/abort-rsync-import/default", "keys"],
+    ]);
   });
 
   it("reports a latched runtime as booting when the live OpenClaw probe is down", async () => {
-    const fetch = vi.fn(async (input: string | URL | Request) => {
+    const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
       if (url.endsWith("/health")) {
         return new Response(JSON.stringify({ status: "ready", version: "new" }));

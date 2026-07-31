@@ -15,6 +15,7 @@ vi.mock("./gateway-rpc.js", async (importActual) => {
 import {
   applyConfigPatch,
   configPatchRetryPlan,
+  isPermanentConfigPatchFailure,
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
   customerConfigFullAgentListReplacePaths,
@@ -774,6 +775,27 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
   });
 });
 
+describe("isPermanentConfigPatchFailure", () => {
+  it("classifies invalid patch responses and destructive array guard rejections as permanent", () => {
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError("invalid-patch", "invalid patch"),
+      ),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError(
+          "rpc-error",
+          "config.patch would remove entries from array path(s): bindings",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(new OpenclawWireError("timeout", "timed out")),
+    ).toBe(false);
+  });
+});
+
 describe("fullAgentListReplacePaths — the guard confirmation set for full agents.list patches", () => {
   it("confirms the list itself plus the per-entry arrays the platform rewrites — the guard descends into id-keyed entries and names shrunk nested arrays individually", () => {
     expect(fullAgentListReplacePaths()).toEqual([
@@ -954,6 +976,32 @@ describe("customerAgentRosterPatch", () => {
     expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
+  });
+
+  it("confirms arrays under every one of the customer's project accounts", () => {
+    const current = {
+      agents: { list: [] },
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { groupAllowFrom: ["workspace"] },
+            "alice-proj-orbit": { groupAllowFrom: ["orbit"] },
+            "alice-proj-old": { allowBots: ["retired"] },
+            "bob-proj-orbit": { groupAllowFrom: ["foreign"] },
+          },
+        },
+      },
+    };
+
+    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+      "bindings",
+      "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      "channels.mattermost.accounts.alice-proj-orbit.groupAllowFrom",
+      "channels.mattermost.accounts.alice-proj-old.allowBots",
+    ]);
   });
 });
 

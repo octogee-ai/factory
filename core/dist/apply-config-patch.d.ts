@@ -30,6 +30,7 @@ export interface ConfigPatchRetryPlan {
     source: "server retry-after" | "exp backoff";
 }
 export declare function configPatchRetryPlan(err: OpenclawWireError, currentBackoffMs: number, remainingMs: number): ConfigPatchRetryPlan;
+export declare function isPermanentConfigPatchFailure(err: unknown): boolean;
 export interface ApplyConfigPatchResult {
     mode: "rpc";
     attempts: number;
@@ -49,7 +50,7 @@ export declare function filterOutCustomerBindings<T extends {
 export declare function staleProjectAgentAccountNulls(current: unknown, slug: string, keepAccountIds: readonly string[]): Record<string, null>;
 /**
  * The replacePaths set for customer config patches that rebuild non-id arrays:
- * `bindings` plus every array under the slug's MM account. Add/re-ensure patches
+ * `bindings` plus every array under the slug's MM accounts. Add/re-ensure patches
  * intentionally omit `agents.list` so a one-agent upsert stays an id-keyed merge
  * instead of becoming whole-list replacement.
  */

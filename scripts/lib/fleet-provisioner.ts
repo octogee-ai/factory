@@ -46,6 +46,7 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
+import { isPermanentConfigPatchFailure } from "@octogee/core/apply-config-patch";
 import { startReconcileLoop, type UnmountOutcome } from "./reconcile-loop.js";
 import { selectStale } from "./content-convergence.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
@@ -69,6 +70,25 @@ export interface CloneRetryState {
   attempts: number;
   nextAt: number;
   fingerprint: string;
+}
+
+export interface PermanentConfigPatchRetryState {
+  fingerprint: string;
+}
+
+export function permanentConfigPatchRetryReady(
+  prior: PermanentConfigPatchRetryState | undefined,
+  desiredFingerprint: string | undefined,
+): boolean {
+  return !prior || (desiredFingerprint ?? "") !== prior.fingerprint;
+}
+
+export function desiredEnsureLaneFingerprint(fingerprints: ReadonlyMap<string, string>): string {
+  return JSON.stringify([...fingerprints].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function desiredEnsureLaneRosterFingerprint(slugs: readonly string[]): string {
+  return JSON.stringify([...new Set(slugs)].sort((a, b) => a.localeCompare(b)));
 }
 
 // Backoff for a project checkout that has not landed. It never abandons — a Gitea repo
@@ -585,6 +605,8 @@ function startMaybeReconcileLoop(params: {
   // Backoff state for slugs whose project checkout has not landed. Process-local on purpose:
   // a pod restart is itself a fresh chance for the clone to land.
   const cloneRetry = new Map<string, CloneRetryState>();
+  let permanentConfigPatchRetry: PermanentConfigPatchRetryState | undefined;
+  let desiredEnsureFingerprint = "";
   const persistAppliedFp = (): void => {
     if (!appliedFpFile) return;
     try {
@@ -600,13 +622,21 @@ function startMaybeReconcileLoop(params: {
       const next = await fingerprintSource();
       desiredFp.clear();
       for (const [slug, fp] of next) desiredFp.set(slug, fp);
+      desiredEnsureFingerprint = desiredEnsureLaneFingerprint(next);
       return [...next.keys()];
     };
   } else if (opts.readDesiredSlugs) {
-    readDesired = opts.readDesiredSlugs;
+    readDesired = async () => {
+      const slugs = await opts.readDesiredSlugs!();
+      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
+      return slugs;
+    };
   } else if (opts.db) {
-    readDesired = () =>
-      readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
+    readDesired = async () => {
+      const slugs = await readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
+      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
+      return slugs;
+    };
   }
   if (!provision || !readDesired) return () => undefined;
 
@@ -639,6 +669,9 @@ function startMaybeReconcileLoop(params: {
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     ...(getContentStale ? { getContentStale } : {}),
     readDesired,
+    shouldEnsureSlug: () =>
+      permanentConfigPatchRetryReady(permanentConfigPatchRetry, desiredEnsureFingerprint),
+    shouldDeferRemainingMounts: isPermanentConfigPatchFailure,
     ensureSlug: async (slug: string) => {
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
@@ -676,8 +709,16 @@ function startMaybeReconcileLoop(params: {
 
       return result.newCustomer ? "mounted" : "noop";
     },
-    onEnsureError: (slug, message) => recordReconcileError(opts, slug, message),
-    onEnsureSuccess: (slug) => clearReconcileError(opts, slug),
+    onEnsureError: (slug, message, error) => {
+      if (isPermanentConfigPatchFailure(error)) {
+        permanentConfigPatchRetry = { fingerprint: desiredEnsureFingerprint };
+      }
+      recordReconcileError(opts, slug, message);
+    },
+    onEnsureSuccess: (slug) => {
+      permanentConfigPatchRetry = undefined;
+      clearReconcileError(opts, slug);
+    },
     unmountSlug: (slug: string) =>
       evictLocalCustomer({
         adapter: wrappedAdapter,
@@ -685,6 +726,7 @@ function startMaybeReconcileLoop(params: {
         stampMounted,
         onLocalStateRemoved: (removedSlug) => {
           cloneRetry.delete(removedSlug);
+          permanentConfigPatchRetry = undefined;
           if (appliedFp.delete(removedSlug)) persistAppliedFp();
         },
       }),

@@ -13,24 +13,37 @@ export async function exportActivationManifestWithSecret(
   openclawDir: string,
   slug: string,
 ): Promise<MigrationActivationManifest> {
-  const accountId = `${slug}-coach`;
-  const botToken = await readMattermostAccountSecret(openclawDir, accountId);
-  if (!botToken) {
-    throw new Error(`[migration-activation:${slug}] Mattermost account secret is unavailable`);
-  }
-  return extractOpenClawActivationManifest(configPath, slug, { botToken });
+  return extractOpenClawActivationManifest(configPath, slug, {
+    resolveBotToken: async (accountId) =>
+      (await readMattermostAccountSecret(openclawDir, accountId)) ?? undefined,
+  });
 }
 
 export async function materializeActivationManifestSecret(
   openclawDir: string,
   manifest: MigrationActivationManifest,
 ): Promise<MigrationActivationManifest> {
-  const token = manifest.mattermostAccount.botToken;
-  if (typeof token !== "string" || token.length === 0) {
-    throw new Error(`[migration-activation:${manifest.slug}] transferred Mattermost token is missing`);
+  const projectAgents = manifest.projectAgents ?? [];
+  const accounts = [
+    {
+      accountId: manifest.accountId,
+      mattermostAccount: manifest.mattermostAccount,
+    },
+    ...projectAgents,
+  ];
+  const tokens: Record<string, string> = {};
+  for (const account of accounts) {
+    const token = account.mattermostAccount.botToken;
+    if (typeof token !== "string" || token.length === 0) {
+      throw new Error(
+        `[migration-activation:${manifest.slug}] transferred Mattermost token is missing for ${account.accountId}`,
+      );
+    }
+    tokens[account.accountId] = token;
   }
   await updateMattermostAccountSecrets(openclawDir, {
-    set: { [manifest.accountId]: token },
+    set: tokens,
+    removePrefixes: [`${manifest.slug}-proj-`],
   });
   return {
     ...manifest,
@@ -38,5 +51,12 @@ export async function materializeActivationManifestSecret(
       ...manifest.mattermostAccount,
       botToken: mattermostAccountSecretRef(manifest.accountId),
     },
+    projectAgents: projectAgents.map((project) => ({
+      ...project,
+      mattermostAccount: {
+        ...project.mattermostAccount,
+        botToken: mattermostAccountSecretRef(project.accountId),
+      },
+    })),
   };
 }

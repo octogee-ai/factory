@@ -1,10 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
+import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
+import { parseAgentId } from "@octogee/shared/types/identity";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
+  replaceCustomerAgentsInFullAgentList,
+  staleProjectAgentAccountNulls,
   upsertAgentInFullAgentList,
   type ConfigCache,
 } from "./apply-config-patch.js";
@@ -12,6 +16,14 @@ import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
+
+export interface MigrationActivationManifestProjectAgent {
+  agentId: string;
+  accountId: string;
+  agent: Record<string, unknown>;
+  mattermostAccount: Record<string, unknown>;
+  bindings: unknown[];
+}
 
 export interface MigrationActivationManifest {
   version: 1;
@@ -21,6 +33,7 @@ export interface MigrationActivationManifest {
   agent: Record<string, unknown>;
   mattermostAccount: Record<string, unknown>;
   bindings: unknown[];
+  projectAgents: MigrationActivationManifestProjectAgent[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -88,6 +101,49 @@ function expectedAccountId(slug: string): string {
   return `${slug}-coach`;
 }
 
+function expectedProjectAccountId(slug: string, agentId: string): string | null {
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind !== "project" || parsed.username !== slug) return null;
+  return `${slug}-proj-${parsed.project}`;
+}
+
+function validateManifestAgent(
+  value: Record<string, unknown>,
+  slug: string,
+  expectedId: string,
+  expectedAccount: string,
+): MigrationActivationManifestProjectAgent {
+  const agent = value.agent;
+  const mattermostAccount = value.mattermostAccount;
+  const bindings = value.bindings;
+  if (value.agentId !== expectedId || value.accountId !== expectedAccount) {
+    throw new Error(`[migration-activation:${slug}] activation manifest id mismatch`);
+  }
+  if (!isRecord(agent) || agent.id !== expectedId) {
+    throw new Error(`[migration-activation:${slug}] activation manifest agent missing or mismatched`);
+  }
+  if (
+    !isRecord(mattermostAccount)
+    || typeof mattermostAccount.botToken !== "string"
+    || mattermostAccount.botToken.length === 0
+  ) {
+    throw new Error(`[migration-activation:${slug}] activation manifest mattermost account is missing botToken`);
+  }
+  if (!Array.isArray(bindings) || bindings.length === 0) {
+    throw new Error(`[migration-activation:${slug}] activation manifest has no channel bindings`);
+  }
+  if (!bindings.every((binding) => isRecord(binding) && binding.agentId === expectedId)) {
+    throw new Error(`[migration-activation:${slug}] activation manifest contains binding for another agent`);
+  }
+  return {
+    agentId: expectedId,
+    accountId: expectedAccount,
+    agent,
+    mattermostAccount,
+    bindings,
+  };
+}
+
 function validateManifestShape(
   value: unknown,
   slug: string,
@@ -97,42 +153,95 @@ function validateManifestShape(
   }
   const agentId = expectedAgentId(slug);
   const accountId = expectedAccountId(slug);
-  const agent = value.agent;
-  const mattermostAccount = value.mattermostAccount;
-  const bindings = value.bindings;
   if (value.version !== 1 || value.slug !== slug) {
     throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
   }
-  if (value.agentId !== agentId || value.accountId !== accountId) {
-    throw new Error(`[migration-activation:${slug}] activation manifest id mismatch`);
+  const workspace = validateManifestAgent(value, slug, agentId, accountId);
+  const rawProjects = value.projectAgents;
+  if (rawProjects !== undefined && !Array.isArray(rawProjects)) {
+    throw new Error(`[migration-activation:${slug}] activation manifest project agents are invalid`);
   }
-  if (!isRecord(agent) || agent.id !== agentId) {
-    throw new Error(`[migration-activation:${slug}] activation manifest agent missing or mismatched`);
-  }
-  if (!isRecord(mattermostAccount) || typeof mattermostAccount.botToken !== "string" || mattermostAccount.botToken.length === 0) {
-    throw new Error(`[migration-activation:${slug}] activation manifest mattermost account is missing botToken`);
-  }
-  if (!Array.isArray(bindings) || bindings.length === 0) {
-    throw new Error(`[migration-activation:${slug}] activation manifest has no channel bindings`);
-  }
-  if (!bindings.every((binding) => isRecord(binding) && binding.agentId === agentId)) {
-    throw new Error(`[migration-activation:${slug}] activation manifest contains binding for another agent`);
+  const projectAgents = (rawProjects ?? []).map((project) => {
+    if (!isRecord(project) || typeof project.agentId !== "string") {
+      throw new Error(`[migration-activation:${slug}] activation manifest project agent is invalid`);
+    }
+    const projectAccountId = expectedProjectAccountId(slug, project.agentId);
+    if (!projectAccountId) {
+      throw new Error(`[migration-activation:${slug}] activation manifest project agent id mismatch`);
+    }
+    return validateManifestAgent(project, slug, project.agentId, projectAccountId);
+  });
+  const ids = new Set<string>();
+  const accounts = new Set<string>();
+  for (const entry of [workspace, ...projectAgents]) {
+    if (ids.has(entry.agentId) || accounts.has(entry.accountId)) {
+      throw new Error(`[migration-activation:${slug}] activation manifest contains duplicate agent/account`);
+    }
+    ids.add(entry.agentId);
+    accounts.add(entry.accountId);
   }
   return {
     version: 1,
     slug,
-    agentId,
-    accountId,
-    agent,
-    mattermostAccount,
-    bindings,
+    ...workspace,
+    projectAgents,
+  };
+}
+
+function sourceAgents(parsed: {
+  agents?: { list?: unknown[]; entries?: Record<string, unknown> };
+}): Record<string, unknown>[] {
+  const entries = parsed.agents?.entries;
+  if (isRecord(entries)) {
+    return Object.entries(entries)
+      .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
+      .map(([id, agent]) => ({ ...agent, id }));
+  }
+  const list = parsed.agents?.list;
+  return Array.isArray(list) ? list.filter(isRecord) : [];
+}
+
+interface SourceManifestAgentInput {
+  agent: Record<string, unknown> | undefined;
+  accountId: string;
+  bindings: unknown[];
+  opts: {
+    botToken?: string;
+    resolveBotToken?: (accountId: string) => Promise<string | undefined>;
+  };
+  sourceAccount: unknown;
+  isWorkspace: boolean;
+}
+
+async function sourceManifestAgent(
+  input: SourceManifestAgentInput,
+): Promise<Record<string, unknown>> {
+  let token: unknown;
+  if (input.opts.resolveBotToken) {
+    token = await input.opts.resolveBotToken(input.accountId);
+  } else if (input.isWorkspace && input.opts.botToken !== undefined) {
+    token = input.opts.botToken;
+  } else if (isRecord(input.sourceAccount)) {
+    token = input.sourceAccount.botToken;
+  }
+  return {
+    agentId: input.agent?.id,
+    accountId: input.accountId,
+    agent: input.agent,
+    mattermostAccount: isRecord(input.sourceAccount)
+      ? { ...input.sourceAccount, botToken: token }
+      : input.sourceAccount,
+    bindings: input.bindings,
   };
 }
 
 export async function extractOpenClawActivationManifest(
   configPath: string,
   slug: string,
-  opts: { botToken?: string } = {},
+  opts: {
+    botToken?: string;
+    resolveBotToken?: (accountId: string) => Promise<string | undefined>;
+  } = {},
 ): Promise<MigrationActivationManifest> {
   const raw = await fs.readFile(configPath, "utf-8");
   const parsed = JSON.parse(raw) as {
@@ -142,32 +251,48 @@ export async function extractOpenClawActivationManifest(
   };
   const agentId = expectedAgentId(slug);
   const accountId = expectedAccountId(slug);
-  const entries = parsed.agents?.entries;
-  const keyedAgent = isRecord(entries) && isRecord(entries[agentId])
-    ? { ...entries[agentId], id: agentId }
-    : undefined;
-  const agent = keyedAgent ?? parsed.agents?.list?.find(
-    (entry) => isRecord(entry) && entry.id === agentId,
-  );
-  const sourceAccount = parsed.channels?.mattermost?.accounts?.[accountId];
-  const mattermostAccount = isRecord(sourceAccount) && opts.botToken
-    ? { ...sourceAccount, botToken: opts.botToken }
-    : sourceAccount;
-  const bindings = (parsed.bindings ?? []).filter(
-    (binding) => isRecord(binding) && binding.agentId === agentId,
+  const agents = sourceAgents(parsed);
+  const bindings = Array.isArray(parsed.bindings) ? parsed.bindings : [];
+  const workspace = await sourceManifestAgent({
+    agent: agents.find((agent) => agent.id === agentId),
+    accountId,
+    bindings: bindings.filter((binding) => isRecord(binding) && binding.agentId === agentId),
+    opts,
+    sourceAccount: parsed.channels?.mattermost?.accounts?.[accountId],
+    isWorkspace: true,
+  });
+  const projectAgents = await Promise.all(
+    agents
+      .filter((agent) => typeof agent.id === "string" && expectedProjectAccountId(slug, agent.id))
+      .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+      .map(async (agent) => {
+        const projectAccountId = expectedProjectAccountId(slug, agent.id as string)!;
+        return sourceManifestAgent({
+          agent,
+          accountId: projectAccountId,
+          bindings: bindings.filter((binding) => isRecord(binding) && binding.agentId === agent.id),
+          opts,
+          sourceAccount: parsed.channels?.mattermost?.accounts?.[projectAccountId],
+          isWorkspace: false,
+        });
+      }),
   );
   return validateManifestShape(
     {
       version: 1,
       slug,
-      agentId,
-      accountId,
-      agent,
-      mattermostAccount,
-      bindings,
+      ...workspace,
+      projectAgents,
     },
     slug,
   );
+}
+
+function manifestAgents(
+  manifest: MigrationActivationManifest,
+): MigrationActivationManifestProjectAgent[] {
+  const { projectAgents, ...workspace } = manifest;
+  return [workspace, ...projectAgents];
 }
 
 export async function writeActivationManifest(
@@ -212,31 +337,55 @@ export async function applyOpenClawActivationManifest(
     {
       buildPatch: (current) => {
         const cfg = current as {
-          channels?: { mattermost?: { accounts?: Record<string, unknown> } };
           bindings?: unknown[];
         };
         const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
-        const currentAccounts = cfg.channels?.mattermost?.accounts ?? {};
-        const currentAgent = currentActivationAgent(current, manifest.agentId);
         const agents = (current as { agents?: Record<string, unknown> } | undefined)?.agents;
-        const agent = activationAgentForTarget(manifest.agent, currentAgent, isRecord(agents?.entries));
+        const targetUsesKeyedEntries = isRecord(agents?.entries);
+        const activationAgents = manifestAgents(manifest).map((entry) => ({
+          ...entry,
+          agent: activationAgentForTarget(
+            entry.agent,
+            currentActivationAgent(current, entry.agentId),
+            targetUsesKeyedEntries,
+          ),
+        }));
         return {
           agents: customerAgentRosterPatch(
             current,
             manifest.slug,
-            upsertAgentInFullAgentList(current, manifest.agentId, agent),
+            targetUsesKeyedEntries
+              ? activationAgents.map((entry) => entry.agent)
+              : activationAgents.reduce(
+                (agentList, entry) => upsertAgentInFullAgentList(
+                  { agents: { list: agentList } },
+                  entry.agentId,
+                  entry.agent,
+                ),
+                replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
+              ),
           ),
           bindings: [
             ...currentBindings.filter(
-              (binding) => !(isRecord(binding) && binding.agentId === manifest.agentId),
+              (binding) => !(
+                isRecord(binding)
+                && typeof binding.agentId === "string"
+                && agentIdBelongsToSlug(binding.agentId, manifest.slug)
+              ),
             ),
-            ...manifest.bindings,
+            ...activationAgents.flatMap((entry) => entry.bindings),
           ],
           channels: {
             mattermost: {
               accounts: {
-                ...currentAccounts,
-                [manifest.accountId]: manifest.mattermostAccount,
+                ...staleProjectAgentAccountNulls(
+                  current,
+                  manifest.slug,
+                  activationAgents.map((entry) => entry.accountId),
+                ),
+                ...Object.fromEntries(
+                  activationAgents.map((entry) => [entry.accountId, entry.mattermostAccount]),
+                ),
               },
             },
           },
