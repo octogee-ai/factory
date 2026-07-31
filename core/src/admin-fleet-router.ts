@@ -77,7 +77,12 @@ import {
   resolveLiveActivationTargetGatewayId,
 } from "@octogee/shared/types/orchestrator-placement";
 import {
+  DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
+  DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+  DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+  parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
+  type SharedGatewayAutoscalingConfig,
   type SharedGatewayPoolConfig,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
@@ -410,6 +415,7 @@ interface AdminOnboardingPlacementResponse {
   config: {
     defaultGatewayId: string | null;
     sharedGatewayIds: string[];
+    sharedGatewayAutoscaling: SharedGatewayAutoscalingConfig;
   };
   gateways: AdminOnboardingGatewaySummary[];
   customers: AdminOnboardingCustomerProjection[];
@@ -1010,6 +1016,11 @@ function buildOnboardingPlacementResponse(opts: {
     config: {
       defaultGatewayId,
       sharedGatewayIds: [...opts.config.sharedGatewayIds],
+      sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling ?? {
+        enabled: DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
+        minHotMembers: DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+        buildersPerGateway: DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+      },
     },
     gateways,
     customers,
@@ -5134,7 +5145,7 @@ router.get(
     },
   );
 
-router.patch(
+  router.patch(
     "/onboarding-placement",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -5207,6 +5218,56 @@ router.patch(
         };
         const response = await readAdminOnboardingPlacementResponse(deps);
         res.json({ ...response, defaultChange });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  router.patch(
+    "/onboarding-placement/autoscaling",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const configSnap = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+        const config = parseSharedGatewayPoolConfig(
+          configSnap.exists ? configSnap.data() : undefined,
+        );
+        if (config === null) {
+          res.status(409).json({
+            error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool",
+          });
+          return;
+        }
+        const autoscaling = parseSharedGatewayAutoscalingConfig(
+          req.body,
+          config.sharedGatewayIds.length,
+        );
+        if (autoscaling === null) {
+          res.status(400).json({
+            error: "enabled, minHotMembers, and buildersPerGateway must form a valid Barn autoscaling config",
+          });
+          return;
+        }
+        const actor = req as ActorRequest;
+        const updatedBy = actor.uid ?? "unknown";
+        await runAdminFleetMutation({
+          req,
+          what: "set Shared Barn autoscaling",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { sharedGatewayIds: config.sharedGatewayIds },
+          preActionStatus: {
+            sharedGatewayAutoscaling: config.sharedGatewayAutoscaling ?? null,
+          },
+          mutation: { kind: "set-shared-gateway-autoscaling", autoscaling },
+          action: async () => {
+            await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
+              sharedGatewayAutoscaling: autoscaling,
+              placementUpdatedAt: Date.now(),
+              placementUpdatedBy: updatedBy,
+            }, { merge: true });
+          },
+        });
+        res.json(await readAdminOnboardingPlacementResponse(deps));
       } catch (e) {
         next(e);
       }

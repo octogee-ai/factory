@@ -105,6 +105,24 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "steady" });
   });
 
+  it("restores a resumed same-release runtime to serving", async () => {
+    const resumedGateway = { ...gateway(), liveRelease: 2 };
+    const resumedRuntime = {
+      ...runtime("def5678-oc2026.7.1"),
+      lifecycle: "provisioning",
+      release: 2,
+    } as GatewayRuntimeDoc;
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(vi.fn(async () => ({ ready: true })), resumedGateway),
+      gateway: resumedGateway,
+      artifact,
+      runtime: resumedRuntime,
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+  });
+
   it("uses the operator image receipt for operator gateway handoff and readiness", async () => {
     const standardImageTag = `def5678-oc2026.7.1@sha256:${"a".repeat(64)}`;
     const operatorImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;

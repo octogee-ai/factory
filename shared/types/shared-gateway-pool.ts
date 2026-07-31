@@ -12,13 +12,13 @@ export const STANDARD_SHARED_GATEWAY_IDS = [
   "shared-d",
 ] as const;
 export const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
-export const DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER = 4;
-export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS = 300_000;
+export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
+export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 
 export interface SharedGatewayAutoscalingConfig {
+  enabled: boolean;
   minHotMembers: number;
-  targetAssignmentsPerMember: number;
-  cooldownMs: number;
+  buildersPerGateway: number;
 }
 
 export interface SharedGatewayAutoscalingMember {
@@ -33,16 +33,14 @@ export interface SharedGatewayAutoscalingMember {
 export interface SharedGatewayAutoscalingInput {
   config: SharedGatewayAutoscalingConfig;
   members: readonly SharedGatewayAutoscalingMember[];
-  now: number;
-  lastAutoscalingActionAt: number | null;
 }
 
 export type SharedGatewayAutoscalingDecision =
   | {
       kind: "hold";
       reason:
+        | "disabled"
         | "steady"
-        | "cooldown"
         | "converging"
         | "draining"
         | "minimum-hot-members"
@@ -134,12 +132,8 @@ function isValidMinHotMembers(value: unknown, memberCount: number): value is num
     value <= memberCount;
 }
 
-function isValidTargetAssignmentsPerMember(value: unknown): value is number {
+function isValidBuildersPerGateway(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 2;
-}
-
-function isValidAutoscalingCooldown(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 export function parseSharedGatewayAutoscalingConfig(
@@ -152,18 +146,18 @@ export function parseSharedGatewayAutoscalingConfig(
   if (value !== undefined && !isRecord(value)) return null;
   const config = value ?? {};
   if (!isRecord(config)) return null;
+  const enabled = config.enabled ?? DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED;
   const minHotMembers = config.minHotMembers ?? DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS;
-  const targetAssignmentsPerMember =
-    config.targetAssignmentsPerMember ?? DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER;
-  const cooldownMs = config.cooldownMs ?? DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS;
+  const buildersPerGateway =
+    config.buildersPerGateway ?? DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY;
   if (
+    typeof enabled !== "boolean" ||
     !isValidMinHotMembers(minHotMembers, memberCount) ||
-    !isValidTargetAssignmentsPerMember(targetAssignmentsPerMember) ||
-    !isValidAutoscalingCooldown(cooldownMs)
+    !isValidBuildersPerGateway(buildersPerGateway)
   ) {
     return null;
   }
-  return { minHotMembers, targetAssignmentsPerMember, cooldownMs };
+  return { enabled, minHotMembers, buildersPerGateway };
 }
 
 export function authoritativeSharedGatewayLoad(candidate: SharedGatewayPoolCandidate): number {

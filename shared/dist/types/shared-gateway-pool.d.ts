@@ -2,12 +2,12 @@ import { type GatewayDesiredStatus } from "./glm.js";
 export declare const PRIMARY_SHARED_GATEWAY_ID = "shared-a";
 export declare const STANDARD_SHARED_GATEWAY_IDS: readonly ["shared-a", "shared-b", "shared-c", "shared-d"];
 export declare const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
-export declare const DEFAULT_SHARED_GATEWAY_TARGET_ASSIGNMENTS_PER_MEMBER = 4;
-export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_COOLDOWN_MS = 300000;
+export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
+export declare const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 export interface SharedGatewayAutoscalingConfig {
+    enabled: boolean;
     minHotMembers: number;
-    targetAssignmentsPerMember: number;
-    cooldownMs: number;
+    buildersPerGateway: number;
 }
 export interface SharedGatewayAutoscalingMember {
     gatewayId: string;
@@ -20,12 +20,10 @@ export interface SharedGatewayAutoscalingMember {
 export interface SharedGatewayAutoscalingInput {
     config: SharedGatewayAutoscalingConfig;
     members: readonly SharedGatewayAutoscalingMember[];
-    now: number;
-    lastAutoscalingActionAt: number | null;
 }
 export type SharedGatewayAutoscalingDecision = {
     kind: "hold";
-    reason: "steady" | "cooldown" | "converging" | "draining" | "minimum-hot-members" | "malformed-config" | "malformed-state";
+    reason: "disabled" | "steady" | "converging" | "draining" | "minimum-hot-members" | "malformed-config" | "malformed-state";
 } | {
     kind: "resume-member";
     gatewayId: string;

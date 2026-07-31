@@ -563,6 +563,11 @@ describe("Admin onboarding placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-target",
       sharedGatewayIds: ["gw-target"],
+      sharedGatewayAutoscaling: {
+        enabled: true,
+        minHotMembers: 2,
+        buildersPerGateway: 4,
+      },
     });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.customers).toEqual([

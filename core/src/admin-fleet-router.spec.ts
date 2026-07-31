@@ -1972,6 +1972,11 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-missing",
       sharedGatewayIds: ["gw-missing"],
+      sharedGatewayAutoscaling: {
+        enabled: true,
+        minHotMembers: 2,
+        buildersPerGateway: 4,
+      },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -2192,6 +2197,41 @@ describe("onboarding placement (post-cohorts)", () => {
     )).toEqual([]);
   });
 
+  it("updates Shared Barn autoscaling through the platform config route", async () => {
+    const { app, state } = mkAdminFleetRouteApp({
+      config: {
+        defaultGatewayId: "shared-a",
+        sharedGatewayIds: ["shared-a", "shared-b", "shared-c", "shared-d"],
+        sharedGatewayAutoscaling: {
+          enabled: true,
+          minHotMembers: 2,
+          buildersPerGateway: 4,
+        },
+      },
+    });
+
+    const response = await request(app)
+      .patch("/onboarding-placement/autoscaling")
+      .send({ enabled: false, minHotMembers: 2, buildersPerGateway: 6 })
+      .expect(200);
+
+    expect(state.config.sharedGatewayAutoscaling).toEqual({
+      enabled: false,
+      minHotMembers: 2,
+      buildersPerGateway: 6,
+    });
+    expect(response.body.config.sharedGatewayAutoscaling).toEqual({
+      enabled: false,
+      minHotMembers: 2,
+      buildersPerGateway: 6,
+    });
+
+    await request(app)
+      .patch("/onboarding-placement/autoscaling")
+      .send({ enabled: true, minHotMembers: 1, buildersPerGateway: 4 })
+      .expect(400);
+  });
+
   it("ignores retired override data and exposes no override API", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "gw-default", overrides: { "uid-alice": "gw-canary" } },
@@ -2213,6 +2253,11 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-default",
       sharedGatewayIds: ["gw-default"],
+      sharedGatewayAutoscaling: {
+        enabled: true,
+        minHotMembers: 2,
+        buildersPerGateway: 4,
+      },
     });
     expect(res.body).not.toHaveProperty("overrides");
     expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");

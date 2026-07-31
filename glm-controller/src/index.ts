@@ -874,6 +874,13 @@ export async function refineGatewayConvergenceAction(input: {
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
     ownerlessOperatorPrewarm: false,
   });
+  if (
+    handoff.ready &&
+    runtimeReportsDesiredBuild(runtime, desiredImage.imageTag) &&
+    runtime?.lifecycle !== "serving"
+  ) {
+    return { kind: "mark-live" };
+  }
   return planGatewayConvergence({
     gateway,
     artifact,
