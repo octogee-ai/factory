@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import type { Server } from "http";
+import type { AddressInfo } from "net";
 import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   type FlushGatewayResponse,
@@ -267,6 +268,7 @@ export interface StartedFleetController {
   stop: () => Promise<void>;
 
 whenReady: Promise<void>;
+  port: number;
 }
 
 export interface FleetCapabilities {
@@ -1040,19 +1042,21 @@ const waitForGatewayReady = async (): Promise<void> => {
   const server: Server = await new Promise((resolve) => {
     const s = app.listen(opts.port, "0.0.0.0", () => resolve(s));
   });
+  const boundPort = (server.address() as AddressInfo).port;
   const stopSurgeSelfRelease = startPodSurgeReadinessRecovery({
     surgeReadiness,
     serviceName,
     namespace,
-    port: opts.port,
+    port: boundPort,
     log: opts.log,
   });
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
-    `[fleet] listening on 0.0.0.0:${opts.port}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
+    `[fleet] listening on 0.0.0.0:${boundPort}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
   );
 
 return {
+    port: boundPort,
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);

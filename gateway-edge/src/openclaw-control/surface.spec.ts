@@ -562,7 +562,9 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         authorize: async () => true,
         loadGatewayToken: async () => "gateway-secret",
         audit: async () => {},
-        rpcTimeoutMs: 30,
+        rpcTimeoutMs: ["late-result", "late-malformed-response", "hard-timeout"].includes(terminal)
+          ? 30
+          : 30_000,
         retainMutationLeaseUntilProcessReplacement: (lease) => {
           retainedMutationLease = lease;
         },

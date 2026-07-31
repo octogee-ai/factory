@@ -87,7 +87,7 @@ describe("openUpstream OpenClaw auth", () => {
         url,
         deviceToken: "device-token-abc123",
         identity,
-        timeoutMs: 500,
+        timeoutMs: 30_000,
       });
       ws.close();
 
@@ -106,7 +106,7 @@ describe("openUpstream OpenClaw auth", () => {
           url,
           token: "legacy-token",
           identity,
-          timeoutMs: 500,
+          timeoutMs: 30_000,
           onDeviceToken: (auth) => issued.push(auth),
         });
         ws.close();

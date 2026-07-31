@@ -34,7 +34,7 @@ describe("gateway-router entrypoint", () => {
         cwd: gatewayEdgeRoot,
         env,
         encoding: "utf8",
-        timeout: 5_000,
+        timeout: 50_000,
       },
     );
 

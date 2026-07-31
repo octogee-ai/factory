@@ -1,4 +1,3 @@
-import { createServer } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,17 +22,6 @@ const BYOSUB_ROUTES = [
   "/internal/byosub/claude-sso/submit",
   "/internal/byosub/device-auth/start",
 ];
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      srv.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
 
 // A db-less operator-class controller: platformState=false + reportState=false
 // + no db → caps.provision resolves false, the capability the byosub auth mount
@@ -66,10 +54,9 @@ describe("byosub auth route mount", () => {
   });
 
   it("an operator (db-less) fleet controller still mounts the byosub auth endpoints", async () => {
-    const port = await freePort();
-    controller = await startFleetController(operatorOpts(port));
+    controller = await startFleetController(operatorOpts(0));
     for (const path of BYOSUB_ROUTES) {
-      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      const res = await fetch(`http://127.0.0.1:${controller.port}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",

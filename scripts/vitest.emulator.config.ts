@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     include: ["__tests__/**/*.emulator.spec.ts"],
+    setupFiles: ["./test-setup/loopback-listen.ts"],
 
 fileParallelism: false,
     testTimeout: 15_000,

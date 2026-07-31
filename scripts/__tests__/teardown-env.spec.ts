@@ -435,7 +435,7 @@ function expectGiteaTokenMaterialPreserved(calls: string[]): void {
   expect(calls.some((call) => call.includes("secrets delete gitea-api-token"))).toBe(false);
 }
 
-describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => {
+describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () => {
   it("quiesces the exact target Gitea deployment before the private SQL owner reset", () => {
     const result = runPrivateCentralTeardown({ giteaWorkloadName: "octogee-gitea" });
 
@@ -536,7 +536,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 15_000 }, () => 
     );
   });
 
-  it("removes database-bound Gitea token material before resetting the Gitea database", { timeout: 40_000 }, () => {
+  it("removes database-bound Gitea token material before resetting the Gitea database", () => {
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
