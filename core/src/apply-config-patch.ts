@@ -544,17 +544,19 @@ function collectArrayPathsUnder(value: unknown, prefix: string): string[] {
 }
 
 function customerMattermostAccountArrayPaths(current: unknown, slug: string): string[] {
-  const accountId = `${slug}-coach`;
   const accounts = (
     current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } } | undefined
   )?.channels?.mattermost?.accounts;
-  const account = isPlainObject(accounts) ? accounts[accountId] : undefined;
-  return collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`);
+  if (!isPlainObject(accounts)) return [];
+  return Object.entries(accounts).flatMap(([accountId, account]) => {
+    if (accountId !== `${slug}-coach` && !accountId.startsWith(`${slug}-proj-`)) return [];
+    return collectArrayPathsUnder(account, `channels.mattermost.accounts.${accountId}`);
+  });
 }
 
 /**
  * The replacePaths set for customer config patches that rebuild non-id arrays:
- * `bindings` plus every array under the slug's MM account. Add/re-ensure patches
+ * `bindings` plus every array under the slug's MM accounts. Add/re-ensure patches
  * intentionally omit `agents.list` so a one-agent upsert stays an id-keyed merge
  * instead of becoming whole-list replacement.
  */

@@ -2,6 +2,13 @@ import { type ConfigCache } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 export declare const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export declare const MIGRATION_ACTIVATION_FILE = "activation.json";
+export interface MigrationActivationManifestProjectAgent {
+    agentId: string;
+    accountId: string;
+    agent: Record<string, unknown>;
+    mattermostAccount: Record<string, unknown>;
+    bindings: unknown[];
+}
 export interface MigrationActivationManifest {
     version: 1;
     slug: string;
@@ -10,10 +17,12 @@ export interface MigrationActivationManifest {
     agent: Record<string, unknown>;
     mattermostAccount: Record<string, unknown>;
     bindings: unknown[];
+    projectAgents: MigrationActivationManifestProjectAgent[];
 }
 export declare function activationManifestTarPath(slug: string): string;
 export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts?: {
     botToken?: string;
+    resolveBotToken?: (accountId: string) => Promise<string | undefined>;
 }): Promise<MigrationActivationManifest>;
 export declare function writeActivationManifest(rootDir: string, manifest: MigrationActivationManifest): Promise<{
     cwd: string;

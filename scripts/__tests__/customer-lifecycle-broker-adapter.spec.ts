@@ -217,6 +217,63 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
   });
+
+  it("moves and quiesces every project agent state path owned by the builder", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-project-state-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    await fs.mkdir(path.join(tempStateDir, "agents", "octogee-tester10-coach", "sessions"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(tempStateDir, "agents", "octogee-tester10-proj-orbit-coach", "sessions"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(tempStateDir, "agents", "octogee-other-proj-orbit-coach"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(tempStateDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempStateDir, "agents", "octogee-tester10-coach", "sessions", "sessions.json"),
+      JSON.stringify({ sessions: [{ status: "running" }] }),
+    );
+    await fs.writeFile(
+      path.join(
+        tempStateDir,
+        "agents",
+        "octogee-tester10-proj-orbit-coach",
+        "sessions",
+        "sessions.json",
+      ),
+      JSON.stringify({ sessions: [{ status: "running" }] }),
+    );
+    await fs.writeFile(
+      path.join(tempStateDir, "memory", "octogee-tester10-proj-orbit-coach.sqlite-wal"),
+      "",
+    );
+    await fs.writeFile(
+      path.join(tempStateDir, "memory", "octogee-other-proj-orbit-coach.sqlite-wal"),
+      "",
+    );
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    const paths = await adapter.listExportPaths("tester10");
+
+    expect(paths).toEqual(expect.arrayContaining([
+      { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-coach") },
+      { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-proj-orbit-coach") },
+      { cwd: tempStateDir, path: path.join("memory", "octogee-tester10-proj-orbit-coach.sqlite-wal") },
+    ]));
+    expect(paths).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: expect.stringContaining("octogee-other-") }),
+    ]));
+    await expect(adapter.quiesceCustomer("tester10", 1)).resolves.toEqual({
+      drained: false,
+      runningCount: 2,
+    });
+  });
 });
 
 describe("buildBrokeredLifecycleAdapter runtime plugin prewarm", () => {

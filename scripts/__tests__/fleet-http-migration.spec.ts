@@ -2247,6 +2247,16 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toBeNull();
   });
 
+  it("accepts project-agent state paths owned by the migrating builder", () => {
+    expect(findPathTraversalViolation([
+      "agents/octogee-chris-proj-cityscout-coach/sessions/sessions.json",
+      "agents/octogee-chris-proj-cityscout-coach/",
+      "memory/octogee-chris-proj-cityscout-coach.sqlite",
+      "memory/octogee-chris-proj-cityscout-coach.sqlite-wal",
+      "memory/octogee-chris-proj-cityscout-coach.sqlite-shm",
+    ], slug)).toBeNull();
+  });
+
   it("accepts bare directory entries that match a prefix exactly", () => {
     expect(findPathTraversalViolation([
       "customers/chris",
@@ -2341,6 +2351,15 @@ describe("findPathTraversalViolation", () => {
   it("rejects an agent dir for a different slug", () => {
     expect(findPathTraversalViolation([
       "agents/octogee-attacker-coach/sessions.json",
+    ], slug)).toContain("outside the per-slug allowlist");
+  });
+
+  it("rejects project agent state for another builder", () => {
+    expect(findPathTraversalViolation([
+      "agents/octogee-attacker-proj-cityscout-coach/sessions.json",
+    ], slug)).toContain("outside the per-slug allowlist");
+    expect(findPathTraversalViolation([
+      "memory/octogee-attacker-proj-cityscout-coach.sqlite",
     ], slug)).toContain("outside the per-slug allowlist");
   });
 

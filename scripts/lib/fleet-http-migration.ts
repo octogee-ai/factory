@@ -42,7 +42,7 @@ import {
   MIGRATION_MODE_HEADER,
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
-import { isValidUsername } from "../../shared/types/identity.js";
+import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
@@ -1794,8 +1794,6 @@ export function findPathTraversalViolation(
   mode: MigrationImportMode = "default",
 ): string | null {
   const durablePrefixes = [
-    `agents/octogee-${slug}-coach/`,
-    `memory/octogee-${slug}-coach.sqlite`,
     `customers/${slug}/`,
     `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
   ];
@@ -1811,7 +1809,9 @@ export function findPathTraversalViolation(
     if (entry.split("/").includes("..")) {
       return `path traversal '..' in tarball: ${raw}`;
     }
-    const allowed = allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p)) ||
+    const allowed =
+      (mode !== "keys" && isOwnedAgentStatePath(raw, entry, slug)) ||
+      allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p)) ||
       ((mode === "pre" || mode === "final") && raw === "customer-keys/");
     if (!allowed) {
       const allowlist = allowedPrefixes.map((prefix) => prefix.replace(/\/$/u, "")).join(", ");
@@ -1819,6 +1819,24 @@ export function findPathTraversalViolation(
     }
   }
   return null;
+}
+
+function isOwnedAgentStatePath(raw: string, entry: string, slug: string): boolean {
+  const segments = entry.split("/");
+  if (segments[0] === "agents") {
+    if (segments.length === 1) return raw.endsWith("/");
+    const parsed = parseAgentId(segments[1]!);
+    return parsed.kind !== "unknown" && parsed.username === slug;
+  }
+  if (segments[0] !== "memory") return false;
+  if (segments.length === 1) return raw.endsWith("/");
+  if (segments.length !== 2) return false;
+  const suffix = [".sqlite-wal", ".sqlite-shm", ".sqlite"].find((candidate) =>
+    segments[1]!.endsWith(candidate),
+  );
+  if (!suffix) return false;
+  const parsed = parseAgentId(segments[1]!.slice(0, -suffix.length));
+  return parsed.kind !== "unknown" && parsed.username === slug;
 }
 
 function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: string): boolean {

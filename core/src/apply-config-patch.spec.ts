@@ -955,6 +955,32 @@ describe("customerAgentRosterPatch", () => {
       customerConfigFullAgentListReplacePaths(current, "alice"),
     );
   });
+
+  it("confirms arrays under every one of the customer's project accounts", () => {
+    const current = {
+      agents: { list: [] },
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { groupAllowFrom: ["workspace"] },
+            "alice-proj-orbit": { groupAllowFrom: ["orbit"] },
+            "alice-proj-old": { allowBots: ["retired"] },
+            "bob-proj-orbit": { groupAllowFrom: ["foreign"] },
+          },
+        },
+      },
+    };
+
+    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+      "bindings",
+      "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      "channels.mattermost.accounts.alice-proj-orbit.groupAllowFrom",
+      "channels.mattermost.accounts.alice-proj-old.allowBots",
+    ]);
+  });
 });
 
 describe("filterOutCustomerBindings", () => {

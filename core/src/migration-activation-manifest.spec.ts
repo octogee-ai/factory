@@ -32,6 +32,7 @@ function manifest(): MigrationActivationManifest {
     agent: { id: "octogee-alice-coach", model: "custom-model" },
     mattermostAccount: { botToken: "coach-pat", groupAllowFrom: ["mm-user"] },
     bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+    projectAgents: [],
   };
 }
 
@@ -88,6 +89,59 @@ describe("migration activation manifest", () => {
     });
   });
 
+  it("carries every active project agent's account and bindings without carrying another builder", async () => {
+    const dir = await mkTmp();
+    const configPath = path.join(dir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          list: [
+            { id: "octogee-alice-coach", model: "workspace" },
+            { id: "octogee-alice-proj-orbit-coach", model: "orbit" },
+            { id: "octogee-alice-proj-scout-coach", model: "scout" },
+            { id: "octogee-bob-proj-orbit-coach", model: "foreign" },
+          ],
+        },
+        channels: {
+          mattermost: {
+            accounts: {
+              "alice-coach": { botToken: "workspace-pat" },
+              "alice-proj-orbit": { botToken: "orbit-pat" },
+              "alice-proj-scout": { botToken: "scout-pat" },
+              "bob-proj-orbit": { botToken: "foreign-pat" },
+            },
+          },
+        },
+        bindings: [
+          { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
+          { agentId: "octogee-alice-proj-orbit-coach", match: { channel: "mattermost", accountId: "alice-proj-orbit" } },
+          { agentId: "octogee-alice-proj-scout-coach", match: { channel: "mattermost", accountId: "alice-proj-scout" } },
+          { agentId: "octogee-bob-proj-orbit-coach", match: { channel: "mattermost", accountId: "bob-proj-orbit" } },
+        ],
+      }),
+    );
+
+    await expect(extractOpenClawActivationManifest(configPath, "alice")).resolves.toMatchObject({
+      projectAgents: [
+        {
+          agentId: "octogee-alice-proj-orbit-coach",
+          accountId: "alice-proj-orbit",
+          agent: { model: "orbit" },
+          mattermostAccount: { botToken: "orbit-pat" },
+          bindings: [{ agentId: "octogee-alice-proj-orbit-coach" }],
+        },
+        {
+          agentId: "octogee-alice-proj-scout-coach",
+          accountId: "alice-proj-scout",
+          agent: { model: "scout" },
+          mattermostAccount: { botToken: "scout-pat" },
+          bindings: [{ agentId: "octogee-alice-proj-scout-coach" }],
+        },
+      ],
+    });
+  });
+
   it("round-trips through the tar-relative manifest path", async () => {
     const dir = await mkTmp();
     const source = await writeActivationManifest(dir, manifest());
@@ -134,7 +188,7 @@ describe("migration activation manifest", () => {
       { id: "octogee-bob-coach" },
       { id: "octogee-alice-coach", model: "old" },
     ]);
-    expect(patch.channels.mattermost.accounts).toHaveProperty("default");
+    expect(patch.channels.mattermost.accounts).not.toHaveProperty("default");
     expect(patch.channels.mattermost.accounts).toHaveProperty("alice-coach");
     expect(patch.bindings).toEqual([
       { agentId: "octogee-bob-coach", keep: true },
@@ -150,6 +204,90 @@ describe("migration activation manifest", () => {
         "agents.list[].tools.alsoAllow",
         "bindings",
       ],
+    });
+  });
+
+  it("replays all project agents while leaving foreign accounts and bindings out of the patch", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            list: [
+              { id: "octogee-bob-coach", model: "foreign" },
+              { id: "octogee-alice-coach", model: "workspace-target" },
+              { id: "octogee-alice-proj-old-coach", model: "retired" },
+              { id: "octogee-alice-proj-orbit-coach", model: "orbit-target" },
+            ],
+          },
+          channels: {
+            mattermost: {
+              accounts: {
+                default: { botToken: { source: "file", id: "/default" } },
+                "alice-proj-old": { botToken: { source: "file", id: "/old" } },
+                "alice-proj-orbit": { botToken: { source: "file", id: "/orbit" } },
+                "bob-coach": { botToken: { source: "file", id: "/bob" } },
+              },
+            },
+          },
+          bindings: [
+            { agentId: "octogee-bob-coach", keep: true },
+            { agentId: "octogee-alice-coach", stale: true },
+            { agentId: "octogee-alice-proj-old-coach", stale: true },
+            { agentId: "octogee-alice-proj-orbit-coach", stale: true },
+          ],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const projectManifest: MigrationActivationManifest = {
+      ...manifest(),
+      projectAgents: [
+        {
+          agentId: "octogee-alice-proj-orbit-coach",
+          accountId: "alice-proj-orbit",
+          agent: { id: "octogee-alice-proj-orbit-coach", model: "orbit-source" },
+          mattermostAccount: { botToken: "orbit-pat" },
+          bindings: [{ agentId: "octogee-alice-proj-orbit-coach", match: { peer: "orbit" } }],
+        },
+        {
+          agentId: "octogee-alice-proj-scout-coach",
+          accountId: "alice-proj-scout",
+          agent: { id: "octogee-alice-proj-scout-coach", model: "scout-source" },
+          mattermostAccount: { botToken: "scout-pat" },
+          bindings: [{ agentId: "octogee-alice-proj-scout-coach", match: { peer: "scout" } }],
+        },
+      ],
+    };
+
+    await applyOpenClawActivationManifest(projectManifest, { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { list: Array<{ id: string; model?: string }> };
+      bindings: Array<{ agentId: string; stale?: boolean; keep?: boolean }>;
+      channels: { mattermost: { accounts: Record<string, unknown> } };
+    };
+    expect(patch.agents.list).toEqual([
+      { id: "octogee-bob-coach", model: "foreign" },
+      { id: "octogee-alice-coach", model: "workspace-target" },
+      { id: "octogee-alice-proj-orbit-coach", model: "orbit-target" },
+      { id: "octogee-alice-proj-scout-coach", model: "scout-source" },
+    ]);
+    expect(patch.bindings).toEqual([
+      { agentId: "octogee-bob-coach", keep: true },
+      ...projectManifest.bindings,
+      ...projectManifest.projectAgents.flatMap((entry) => entry.bindings),
+    ]);
+    expect(patch.channels.mattermost.accounts).toEqual({
+      "alice-proj-old": null,
+      "alice-coach": projectManifest.mattermostAccount,
+      "alice-proj-orbit": projectManifest.projectAgents[0]!.mattermostAccount,
+      "alice-proj-scout": projectManifest.projectAgents[1]!.mattermostAccount,
     });
   });
 
