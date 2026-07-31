@@ -1479,8 +1479,11 @@ async function attemptClaimOrQueueOperation(
           return isSeriallyExclusiveKind(pendingOperation.kind) ? [{
             id: d.id,
             kind: pendingOperation.kind,
+            origin: pendingOperation.origin,
             input: pendingOperation.input,
+            output: pendingOperation.output,
             createdAt: pendingOperation.createdAt,
+            nextAttemptAt: pendingOperation.nextAttemptAt,
             customerMigrationV2: pendingOperation.customerMigrationV2,
           }] : [];
         });

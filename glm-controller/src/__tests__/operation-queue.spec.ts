@@ -284,6 +284,91 @@ describe("decideOperationClaim", () => {
     expect(decision).toEqual({ outcome: "claim" });
   });
 
+  it("does not let an older sleeping capacity retry reserve a gateway", () => {
+    const sleepingCapacityRetry = {
+      id: "capacity-retry",
+      kind: "rebalance-gateway-capacity",
+      origin: "automatic",
+      createdAt: 1,
+      nextAttemptAt: now + 5 * 60_000,
+      input: { gatewayId: "default-b", sourcePodUid: "old" },
+      output: {
+        capacityRebalanceBackoffYield: {
+          operationId: "capacity-retry",
+          gatewayId: "default-b",
+          sourcePodUids: ["old"],
+        },
+      },
+    };
+    const decision = decideOperationClaim({
+      op: {
+        id: "recovery",
+        kind: "migrate-customer",
+        status: "pending",
+        createdAt: 2,
+        input: { fromGatewayId: "default", toGatewayId: "default-b" },
+      },
+      now,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [sleepingCapacityRetry],
+    });
+
+    expect(decision).toEqual({ outcome: "claim" });
+  });
+
+  it("keeps a sleeping capacity retry serialized without a stable rollback proof", () => {
+    const decision = decideOperationClaim({
+      op: {
+        id: "recovery",
+        kind: "migrate-customer",
+        status: "pending",
+        createdAt: 2,
+        input: { fromGatewayId: "default", toGatewayId: "default-b" },
+      },
+      now,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [{
+        id: "capacity-retry",
+        kind: "rebalance-gateway-capacity",
+        origin: "automatic",
+        createdAt: 1,
+        nextAttemptAt: now + 5 * 60_000,
+        input: { gatewayId: "default-b", sourcePodUid: "old" },
+      }],
+    });
+
+    expect(decision).toEqual({
+      outcome: "queue",
+      waitingOn: "capacity rebalance default-b",
+    });
+  });
+
+  it("keeps a sleeping durable migration's gateway lock", () => {
+    const decision = decideOperationClaim({
+      op: {
+        id: "next-migration",
+        kind: "migrate-customer",
+        status: "pending",
+        createdAt: 2,
+        input: { fromGatewayId: "other", toGatewayId: "default-b" },
+      },
+      now,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [{
+        id: "durable-migration",
+        kind: "migrate-customer",
+        createdAt: 1,
+        nextAttemptAt: now + 30_000,
+        input: { fromGatewayId: "default", toGatewayId: "default-b" },
+      }],
+    });
+
+    expect(decision).toEqual({
+      outcome: "queue",
+      waitingOn: "migration default → default-b",
+    });
+  });
+
   it("queues instead of failing when a conflicting rollout is running", () => {
     const decision = decideOperationClaim({
       op: { id: "op-2", kind: "rollout", status: "pending", createdAt: 2 },

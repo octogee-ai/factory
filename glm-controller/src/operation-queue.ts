@@ -15,7 +15,9 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 export interface OperationRef {
   id: string;
   kind: string;
+  origin?: string;
   input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
   customerMigrationV2?: {
     sourceGatewayId?: string;
     sourceRevisionId?: string;
@@ -90,6 +92,7 @@ function describeWaitingOn(op: OperationRef): string {
 
 export interface PendingOperationRef extends OperationRef {
   createdAt: number;
+  nextAttemptAt?: number | null;
 }
 
 export interface OperationClaimCandidate {
@@ -130,17 +133,62 @@ function isOlderThanCandidate(
 function findOlderPendingSameScope(
   candidate: OperationRef & { createdAt: number },
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
+  now: number,
 ): SerialConflict | null {
   const older = pendingOpsSameKind
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
+        pendingReservesSerialLane(candidate, pending, now) &&
         serialFleetOperationsConflict(candidate, pending) &&
         isOlderThanCandidate(pending, candidate),
     )
     .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];
   if (!older) return null;
   return { conflictingOpId: older.id, waitingOn: describeWaitingOn(older) };
+}
+
+function pendingReservesSerialLane(
+  candidate: OperationRef,
+  operation: PendingOperationRef,
+  now: number,
+): boolean {
+  if (typeof operation.nextAttemptAt !== "number" || operation.nextAttemptAt <= now) {
+    return true;
+  }
+  if (
+    candidate.kind !== "migrate-customer" ||
+    operation.kind !== "rebalance-gateway-capacity" ||
+    operation.origin !== "automatic"
+  ) {
+    return true;
+  }
+  return !capacityRebalanceBackoffYieldMatches(operation);
+}
+
+function capacityRebalanceBackoffYieldMatches(
+  operation: PendingOperationRef,
+): boolean {
+  const gatewayId = inputString(operation.input, "gatewayId");
+  const sourcePodUid = inputString(operation.input, "sourcePodUid");
+  const rollback = operation.output?.capacityRebalanceBackoffYield;
+  if (
+    !gatewayId ||
+    !sourcePodUid ||
+    !rollback ||
+    typeof rollback !== "object" ||
+    Array.isArray(rollback)
+  ) {
+    return false;
+  }
+  const proof = rollback as Record<string, unknown>;
+  return (
+    proof.operationId === operation.id &&
+    proof.gatewayId === gatewayId &&
+    Array.isArray(proof.sourcePodUids) &&
+    proof.sourcePodUids.length === 1 &&
+    proof.sourcePodUids[0] === sourcePodUid
+  );
 }
 
 // Pure decision core for the operation worker's claim transaction: given a
@@ -160,7 +208,7 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
-  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind);
+  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };
   return { outcome: "claim" };
 }
