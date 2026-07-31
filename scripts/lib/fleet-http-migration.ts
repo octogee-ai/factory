@@ -925,6 +925,7 @@ export async function sendPushStateImportResponse(
 
 const RSYNC_IMPORT_MODULE = "state";
 const RSYNC_READY_TIMEOUT_MS = 5_000;
+const RSYNC_DAEMON_STOP_TIMEOUT_MS = 5_000;
 const RSYNC_BIN = "/usr/bin/rsync";
 
 interface RSyncImportSession {
@@ -1057,10 +1058,70 @@ async function waitForTcpPort(port: number): Promise<void> {
   throw lastErr instanceof Error ? lastErr : new Error(`rsync port ${port} did not become ready`);
 }
 
+function rsyncDaemonExited(child: ReturnType<typeof spawn>): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function signalRsyncDaemonAndWait(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+): Promise<boolean> {
+  if (rsyncDaemonExited(child)) return true;
+  return new Promise<boolean>((resolve, reject) => {
+    let timeout: NodeJS.Timeout | null = null;
+    const cleanup = (): void => {
+      child.removeListener("exit", onExit);
+      child.removeListener("error", onError);
+      if (timeout) clearTimeout(timeout);
+    };
+    const onExit = (): void => {
+      cleanup();
+      resolve(true);
+    };
+    const onError = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    child.once("exit", onExit);
+    child.once("error", onError);
+    if (rsyncDaemonExited(child)) {
+      onExit();
+      return;
+    }
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, RSYNC_DAEMON_STOP_TIMEOUT_MS);
+    try {
+      if (child.kill(signal)) return;
+      if (rsyncDaemonExited(child)) {
+        onExit();
+        return;
+      }
+    } catch (err) {
+      if (rsyncDaemonExited(child)) {
+        onExit();
+        return;
+      }
+      cleanup();
+      reject(err);
+      return;
+    }
+    cleanup();
+    reject(new Error(`rsync daemon did not accept ${signal}`));
+  });
+}
+
+async function stopRsyncDaemon(child: ReturnType<typeof spawn>): Promise<void> {
+  if (await signalRsyncDaemonAndWait(child, "SIGTERM")) return;
+  if (await signalRsyncDaemonAndWait(child, "SIGKILL")) return;
+  throw new Error("rsync daemon did not exit after SIGTERM and SIGKILL");
+}
+
 async function stopRsyncSession(session: RSyncImportSession | undefined): Promise<void> {
   if (!session) return;
+  await stopRsyncDaemon(session.child);
   rsyncImportSessions.delete(session.key);
-  session.child.kill("SIGTERM");
   await fs.rm(session.stageDir, { recursive: true, force: true }).catch(() => undefined);
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true }).catch(() => undefined);
 }
@@ -1391,7 +1452,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       log,
     );
     try {
-      session.child.kill("SIGTERM");
+      await stopRsyncDaemon(session.child);
       const entries = await listRelativeEntries(session.stageDir);
       const violation = findPathTraversalViolation(entries, body.slug, mode);
       if (violation !== null) {
