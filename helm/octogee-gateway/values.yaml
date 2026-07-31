@@ -129,6 +129,7 @@ gatewayContainerSecurityContext:
 # unchanged — free no-op rolls, not a correctness issue.
 chartFingerprint: ""
 deploymentIntentFingerprint: ""
+capacityRebalanceNonce: ""
 
 conversationExperiment:
   mode: "broad"

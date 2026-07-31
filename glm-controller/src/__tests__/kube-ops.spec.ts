@@ -470,6 +470,111 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
   });
 });
 
+describe("createKubeSubprocessRunner — readGatewaySpotCapacity", () => {
+  it("joins gateway pods to node Spot labels without mutating either resource", async () => {
+    const { runKubectl, calls } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: { uid: "old", name: "octogee-gateway-default-old" },
+              spec: { nodeName: "on-demand-node" },
+              status: {
+                phase: "Running",
+                conditions: [{ type: "Ready", status: "True" }],
+              },
+            },
+            {
+              metadata: { uid: "replacement", name: "octogee-gateway-default-new" },
+              spec: { nodeName: "spot-node" },
+              status: {
+                phase: "Running",
+                conditions: [{ type: "Ready", status: "True" }],
+              },
+            },
+          ],
+        }),
+      },
+      {
+        stdout: JSON.stringify({ metadata: { name: "on-demand-node", labels: {} } }),
+      },
+      {
+        stdout: JSON.stringify({
+          metadata: { name: "spot-node", labels: { "cloud.google.com/gke-spot": "true" } },
+        }),
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(kube.readGatewaySpotCapacity({
+      namespace: "octogee-test",
+      gatewayId: "default",
+    })).resolves.toEqual({
+      status: "ready-spot",
+      totalPods: 2,
+      readyPods: 2,
+      readySpotPods: 1,
+      readyOnDemandPods: 1,
+      pods: [
+        {
+          uid: "old",
+          name: "octogee-gateway-default-old",
+          phase: "Running",
+          ready: true,
+          nodeName: "on-demand-node",
+          capacityClass: "on-demand",
+        },
+        {
+          uid: "replacement",
+          name: "octogee-gateway-default-new",
+          phase: "Running",
+          ready: true,
+          nodeName: "spot-node",
+          capacityClass: "spot",
+        },
+      ],
+    });
+    expect(calls).toEqual([
+      [
+        "-n",
+        "octogee-test",
+        "get",
+        "pods",
+        "-l",
+        "app=octogee-gateway,gateway-instance=default",
+        "-o",
+        "json",
+      ],
+      ["get", "node", "on-demand-node", "-o", "json"],
+      ["get", "node", "spot-node", "-o", "json"],
+    ]);
+  });
+
+  it("keeps an unscheduled blocked candidate unknown rather than assuming it is Spot", async () => {
+    const { runKubectl } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          items: [{
+            metadata: { uid: "pending", name: "octogee-gateway-default-pending" },
+            spec: {},
+            status: { phase: "Pending", conditions: [{ type: "Ready", status: "False" }] },
+          }],
+        }),
+      },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    await expect(kube.readGatewaySpotCapacity({
+      namespace: "octogee-test",
+      gatewayId: "default",
+    })).resolves.toMatchObject({
+      status: "not-ready",
+      readyPods: 0,
+      pods: [{ uid: "pending", capacityClass: "unknown", ready: false }],
+    });
+  });
+});
+
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("deletes the named PVC idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([

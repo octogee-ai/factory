@@ -76,7 +76,7 @@ shared_instances = {
     if item.get("metadata", {}).get("labels", {}).get("gateway-class") == "shared"
 }
 shared_instances.discard(None)
-shared_pool_pdbs = [
+shared_pdbs = [
     item for item in live_pdbs
     if (
         item.get("spec", {})
@@ -86,26 +86,31 @@ shared_pool_pdbs = [
     ) == "shared"
 ]
 if shared_instances:
-    if len(shared_pool_pdbs) != 1:
-        errors.append(f"expected exactly one shared pool PDB, found {len(shared_pool_pdbs)}")
-    else:
-        pool_expressions = [
-            expression
-            for expression in (
-                shared_pool_pdbs[0]
-                .get("spec", {})
-                .get("selector", {})
-                .get("matchExpressions", [])
-            )
-            if expression.get("key") == "gateway-instance"
-        ]
-        pool_instances = (
-            set(pool_expressions[0].get("values") or [])
-            if len(pool_expressions) == 1 and pool_expressions[0].get("operator") == "In"
-            else set()
+    if len(shared_pdbs) != len(shared_instances):
+        errors.append(
+            f"expected {len(shared_instances)} per-identity shared PDBs, found {len(shared_pdbs)}"
         )
-        if pool_instances != shared_instances:
-            errors.append("shared pool PDB gateway-instance membership must exactly match shared Deployments")
+    for pdb in shared_pdbs:
+        pdb_name = pdb.get("metadata", {}).get("name", "unnamed")
+        pdb_spec = pdb.get("spec", {})
+        pdb_selector = pdb_spec.get("selector", {})
+        pdb_labels = pdb_selector.get("matchLabels") or {}
+        pdb_instance = pdb_labels.get("gateway-instance")
+        expected_labels = {
+            "app": "octogee-gateway",
+            "gateway-class": "shared",
+            "gateway-instance": pdb_instance,
+        }
+        if (
+            pdb_instance not in shared_instances
+            or pdb_labels != expected_labels
+            or pdb_selector.get("matchExpressions")
+        ):
+            errors.append(f"shared PDB {pdb_name} must exactly select one live shared gateway")
+        if str(pdb_spec.get("minAvailable")) != "1":
+            errors.append(f"shared PDB {pdb_name} must set minAvailable=1")
+        if "maxUnavailable" in pdb_spec:
+            errors.append(f"shared PDB {pdb_name} must not set maxUnavailable")
 
 for deployment in live_deployments:
     metadata = deployment.get("metadata", {})
@@ -162,22 +167,19 @@ for deployment in live_deployments:
     pdb_selector = pdb_spec.get("selector", {})
     if gateway_class == "shared":
         if str(pdb_spec.get("minAvailable")) != "1":
-            errors.append(f"shared pool PDB for Deployment {name} must set minAvailable=1")
+            errors.append(f"shared PDB for Deployment {name} must set minAvailable=1")
         if "maxUnavailable" in pdb_spec:
-            errors.append(f"shared pool PDB for Deployment {name} must not set maxUnavailable")
-        if (pdb_selector.get("matchLabels") or {}).get("gateway-class") != "shared":
-            errors.append(f"shared pool PDB for Deployment {name} must select gateway-class=shared")
-        instance_expressions = [
-            expression
-            for expression in (pdb_selector.get("matchExpressions") or [])
-            if expression.get("key") == "gateway-instance"
-        ]
+            errors.append(f"shared PDB for Deployment {name} must not set maxUnavailable")
+        expected_labels = {
+            "app": "octogee-gateway",
+            "gateway-class": "shared",
+            "gateway-instance": instance,
+        }
         if (
-            len(instance_expressions) != 1
-            or instance_expressions[0].get("operator") != "In"
-            or instance not in (instance_expressions[0].get("values") or [])
+            (pdb_selector.get("matchLabels") or {}) != expected_labels
+            or pdb_selector.get("matchExpressions")
         ):
-            errors.append(f"shared pool PDB for Deployment {name} must explicitly include its gateway-instance")
+            errors.append(f"shared PDB for Deployment {name} must exactly select its shared gateway-instance")
     else:
         if "minAvailable" in pdb_spec:
             errors.append(f"PDB for Deployment {name} must not set minAvailable")

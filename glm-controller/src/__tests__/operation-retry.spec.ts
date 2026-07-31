@@ -4,6 +4,7 @@ import {
   MAX_OPERATION_ATTEMPTS,
   buildOperationCompletionUpdate,
   classifyOperationFailure,
+  capacityRebalanceRetryBackoffMs,
   retryBackoffMs,
   shouldPersistClaimedOperationCompletion,
   supersededRollMigrationAction,
@@ -142,6 +143,15 @@ describe("retryBackoffMs", () => {
     expect(retryBackoffMs(2)).toBe(120_000);
     expect(retryBackoffMs(3)).toBe(480_000);
     expect(retryBackoffMs(4)).toBe(480_000);
+  });
+});
+
+describe("capacityRebalanceRetryBackoffMs", () => {
+  it("uses a gentle unbounded schedule because GKE capacity observations carry no retry-after signal", () => {
+    expect(capacityRebalanceRetryBackoffMs(1)).toBe(5 * 60_000);
+    expect(capacityRebalanceRetryBackoffMs(2)).toBe(15 * 60_000);
+    expect(capacityRebalanceRetryBackoffMs(3)).toBe(30 * 60_000);
+    expect(capacityRebalanceRetryBackoffMs(99)).toBe(30 * 60_000);
   });
 });
 
@@ -452,6 +462,30 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.status).toBe("pending");
     expect(update.attempts).toBe(MAX_OPERATION_ATTEMPTS + 1);
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("keeps an automatic capacity rebalance retryable beyond the cap with the gentler capacity schedule", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: "capacity-rebalance-default-pod-1",
+        kind: "rebalance-gateway-capacity",
+        origin: "automatic",
+        input: { gatewayId: "default", sourcePodUid: "pod-1" },
+        attempts: MAX_OPERATION_ATTEMPTS,
+        attemptHistory: [],
+      },
+      result: {
+        steps: [],
+        success: false,
+        error: "status 503: capacity rebalance replacement landed on on-demand capacity",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.nextAttemptAt).toBe(now + 30 * 60_000);
+    expect(update.error).toMatch(/retrying in 1800s/);
   });
 
   it("still terminalizes a validation failure for an automatic Builder return", () => {

@@ -53,7 +53,7 @@ spec:
             severity: warning
           annotations:
             summary: "Gateway {{ $labels.pod }} is running on on-demand capacity"
-            description: "The regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available; active migration will keep trying to return this gateway to Spot."
+            description: "The regional Spot-first ComputeClass exhausted a Spot placement and activated its on-demand fallback. Service remains available; disposable gateways actively migrate back to Spot, while Cowboy owns any shared on-demand rehome."
         - alert: SharedGatewayPoolDegraded
           expr: |
             (
@@ -70,7 +70,7 @@ spec:
             severity: critical
           annotations:
             summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
-            description: "Fewer than two Ready shared gateway pods are available. Cowboy cannot retain the shared pool's independent recovery capacity; inspect gateway pods, node capacity, and recovery operations."
+            description: "Fewer than two Ready shared gateway pods are available. Each per-identity minAvailable: 1 PDB blocks voluntary drains of an identity at steady state while allowing its same-identity surge handoff; Cowboy owns recovery and any shared on-demand rehome. Inspect gateway pods, node capacity, and recovery operations."
         - alert: SharedGatewayZoneDiversityLost
           expr: |
             (

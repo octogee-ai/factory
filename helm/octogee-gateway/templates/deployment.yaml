@@ -56,6 +56,7 @@ spec:
       annotations:
         octogee.ai/owner-uid: {{ .Values.ownerUid | quote }}
         octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
+        octogee.ai/capacity-rebalance-nonce: {{ .Values.capacityRebalanceNonce | quote }}
       labels:
         app: octogee-gateway
         gateway-id: {{ .Values.gatewayId }}

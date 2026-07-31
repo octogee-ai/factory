@@ -66,6 +66,7 @@ import {
   projectGatewayDesiredRootForGateway,
   GATEWAY_RELEASES_SUBCOLLECTION,
   type GatewayDoc,
+  type GatewayCapacityRebalanceIntent,
   type GatewayRuntimeDoc,
   type ReleasePayload,
   type AssignmentState,
@@ -136,6 +137,7 @@ import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
+import { createCapacityRebalanceGatewayHandler } from "./handlers/capacity-rebalance-gateway.js";
 import { createRolloutHandler } from "./handlers/rollout.js";
 import {
   createDeprovisionCustomerHandler,
@@ -253,6 +255,10 @@ import {
   runSharedGatewayPoolReconcile,
   startSharedGatewayPoolReconciler,
 } from "./shared-gateway-pool-bootstrap.js";
+import {
+  startSharedGatewayCapacityReconciler,
+} from "./shared-gateway-capacity-reconciler.js";
+import { parseSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   createFirestoreMaintenanceGate,
@@ -277,8 +283,10 @@ const logger = createLogger({
 const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const MIGRATE_CUSTOMER_KIND = "migrate-customer";
+const CAPACITY_REBALANCE_GATEWAY_KIND = "rebalance-gateway-capacity";
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const SHARED_GATEWAY_POOL_RECONCILE_MS = 30_000;
+const SHARED_GATEWAY_CAPACITY_RECONCILE_MS = 30_000;
 const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
 
@@ -804,6 +812,7 @@ interface GatewayConvergencePassDeps {
     desiredImageTag: string;
     requiresCustomerMigration: boolean;
     ownerlessOperatorPrewarm: boolean;
+    requiredTargetCapacity?: "spot";
   }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
 }
@@ -854,6 +863,9 @@ export async function refineGatewayConvergenceAction(input: {
     desiredImageTag: desiredImage.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
     ownerlessOperatorPrewarm: false,
+    ...(gateway.capacityRebalance?.active === true
+      ? { requiredTargetCapacity: "spot" as const }
+      : {}),
   });
   return planGatewayConvergence({
     gateway,
@@ -1313,6 +1325,7 @@ export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 // the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
 const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "rollout",
+  CAPACITY_REBALANCE_GATEWAY_KIND,
   MIGRATE_CUSTOMER_KIND,
   "suspend-customer",
   "erase-customer",
@@ -1324,6 +1337,7 @@ const AUTOMATIC_GATEWAY_MUTATION_KINDS: ReadonlySet<string> = new Set([
   "restart-gateway",
   "recycle-gateway",
   "rollout",
+  CAPACITY_REBALANCE_GATEWAY_KIND,
   MIGRATE_CUSTOMER_KIND,
 ]);
 
@@ -1396,7 +1410,7 @@ function failFencedOperation(
 }
 
 function operationIsRestartResumable(op: Operation): boolean {
-  if (op.kind === "rollout") return true;
+  if (op.kind === "rollout" || op.kind === CAPACITY_REBALANCE_GATEWAY_KIND) return true;
   return operationNeedsDurableRestartResume(op);
 }
 
@@ -2124,6 +2138,22 @@ async function createControllerRuntime(
       pod: { uid: string; name: string; podIP: string; ready: boolean };
       slug: string;
     }) => readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug),
+    targetHasRequiredCapacity: async ({
+      gatewayId,
+      targetPodUid,
+      requiredCapacity,
+    }: {
+      gatewayId: string;
+      targetPodUid: string;
+      requiredCapacity: "spot";
+    }) => {
+      const observation = await kubeOps.readGatewaySpotCapacity({
+        namespace: NAMESPACE,
+        gatewayId,
+      });
+      return observation.pods.some((pod) =>
+        pod.uid === targetPodUid && pod.capacityClass === requiredCapacity);
+    },
     markAssignment: (input: {
       gatewayId: string;
       uid: string;
@@ -2212,6 +2242,41 @@ async function main(): Promise<void> {
     now: () => Date.now(),
   };
   await runSharedGatewayPoolReconcile(sharedGatewayPoolDeps, "startup");
+  const sharedGatewayCapacityDeps = {
+    listSharedGatewayIds: async () => {
+      const snapshot = await db.doc("config/orchestrator").get();
+      const config = parseSharedGatewayPoolConfig(snapshot.exists ? snapshot.data() : undefined);
+      if (!config) throw new Error("config/orchestrator must contain a valid sharedGatewayIds pool");
+      return config.sharedGatewayIds;
+    },
+    readGateway: async (gatewayId: string) => {
+      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const gateway = projectGatewayDesiredRootForGateway(
+        snapshot.exists ? snapshot.data() : undefined,
+        gatewayId,
+      );
+      return gateway
+        ? {
+            gatewayId: gateway.gatewayId,
+            gatewayClass: gateway.gatewayClass,
+            desiredStatus: gateway.desiredStatus,
+            managedBy: gateway.managedBy,
+          }
+        : null;
+    },
+    readSpotCapacity: (gatewayId: string) => deps.kubeOps!.readGatewaySpotCapacity({
+      namespace: NAMESPACE,
+      gatewayId,
+    }),
+    hasActiveCapacityRebalance: () => hasActiveCapacityRebalanceOperation(db),
+    enqueueCapacityRebalance: (input: {
+      gatewayId: string;
+      sourcePodUid: string;
+      operationId: string;
+    }) => enqueueSharedGatewayCapacityRebalance(db, input),
+    workFrozen: () => controllerWorkFrozen(deps, "shared capacity reconcile"),
+    log: deps.log,
+  };
 
   if (await controllerWorkFrozen(deps, "orphan-op resume")) {
     holdFrozenController(maintenanceGate, log);
@@ -2265,6 +2330,12 @@ async function main(): Promise<void> {
     startSharedGatewayPoolReconciler(sharedGatewayPoolDeps, SHARED_GATEWAY_POOL_RECONCILE_MS),
   );
   stoppers.push(
+    startSharedGatewayCapacityReconciler(
+      sharedGatewayCapacityDeps,
+      SHARED_GATEWAY_CAPACITY_RECONCILE_MS,
+    ),
+  );
+  stoppers.push(
     startMaintenanceRestartWatcher({
       gate: maintenanceGate,
       log,
@@ -2279,6 +2350,75 @@ async function main(): Promise<void> {
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+}
+
+async function hasActiveCapacityRebalanceOperation(db: Firestore): Promise<boolean> {
+  const operations = db.collection(GLM_OPERATIONS_COLLECTION);
+  const snapshots = await Promise.all([
+    operations.where("status", "==", "pending").get(),
+    operations.where("status", "==", "running").get(),
+  ]);
+  return snapshots.some((snapshot) => snapshot.docs.some((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    return data.kind === CAPACITY_REBALANCE_GATEWAY_KIND;
+  }));
+}
+
+async function enqueueSharedGatewayCapacityRebalance(
+  db: Firestore,
+  input: { gatewayId: string; sourcePodUid: string; operationId: string },
+): Promise<{ kind: "created" | "existing" | "blocked"; operationId: string }> {
+  const operations = db.collection(GLM_OPERATIONS_COLLECTION);
+  const queueRef = db.doc("config/capacity-rebalance-queue");
+  return db.runTransaction(async (transaction) => {
+    let operationId = input.operationId;
+    let operationRef = operations.doc(operationId);
+    const [operationSnapshot, queueSnapshot] = await Promise.all([
+      transaction.get(operationRef),
+      transaction.get(queueRef),
+    ]);
+    const existingStatus = operationSnapshot.exists ? operationSnapshot.data()?.status : undefined;
+    if (existingStatus === "pending" || existingStatus === "running" || existingStatus === "succeeded") {
+      return { kind: "existing" as const, operationId };
+    }
+    if (operationSnapshot.exists) {
+      operationId = `${input.operationId}-retry-${Date.now()}`;
+      operationRef = operations.doc(operationId);
+      const retrySnapshot = await transaction.get(operationRef);
+      if (retrySnapshot.exists) return { kind: "existing" as const, operationId };
+    }
+    const queuedOperationId = queueSnapshot.data()?.operationId;
+    if (typeof queuedOperationId === "string" && queuedOperationId !== operationId) {
+      const queuedOperation = await transaction.get(operations.doc(queuedOperationId));
+      const queuedStatus = queuedOperation.exists ? queuedOperation.data()?.status : undefined;
+      if (queuedStatus === "pending" || queuedStatus === "running") {
+        return { kind: "blocked" as const, operationId: queuedOperationId };
+      }
+    }
+    const now = Date.now();
+    transaction.set(operationRef, {
+      kind: CAPACITY_REBALANCE_GATEWAY_KIND,
+      status: "pending",
+      origin: "automatic",
+      createdBy: "glm-controller-shared-capacity",
+      createdAt: now,
+      startedAt: null,
+      completedAt: null,
+      gatewayId: input.gatewayId,
+      input: {
+        gatewayId: input.gatewayId,
+        sourcePodUid: input.sourcePodUid,
+      },
+      steps: [],
+    });
+    transaction.set(queueRef, {
+      operationId,
+      gatewayId: input.gatewayId,
+      sourcePodUid: input.sourcePodUid,
+      updatedAt: now,
+    });
+    return { kind: "created" as const, operationId };
+  });
 }
 
 export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
@@ -2565,6 +2705,98 @@ export async function readMigrationUserSnapshot(
     ...(systemConfig ? { systemConfig } : {}),
     ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
   };
+}
+
+type CapacityRebalanceNonceClaim =
+  | { kind: "claimed"; sourcePodUids: readonly string[] }
+  | { kind: "completed" }
+  | { kind: "rejected"; error: string };
+
+type CapacityRebalanceGatewayRoot = NonNullable<
+  ReturnType<typeof projectGatewayDesiredRootForGateway>
+>;
+
+function capacityRebalanceClaimRoot(
+  root: CapacityRebalanceGatewayRoot | null,
+  gatewayId: string,
+): { root: CapacityRebalanceGatewayRoot } | { error: string } {
+  if (!root) return { error: `gateway ${gatewayId} has no durable desired state` };
+  if (root.gatewayClass !== "shared") return { error: `gateway ${gatewayId} is not a shared gateway` };
+  if (root.desiredStatus !== "running") {
+    return { error: `gateway ${gatewayId} is ${root.desiredStatus}, not running` };
+  }
+  if (isOperatorManaged(root.managedBy)) return { error: `gateway ${gatewayId} is operator-managed` };
+  return { root };
+}
+
+function existingCapacityRebalanceClaim(
+  root: CapacityRebalanceGatewayRoot,
+  gatewayId: string,
+  operationId: string,
+): CapacityRebalanceNonceClaim | null {
+  const current = gatewayCapacityRebalanceIntent(root.capacityRebalance);
+  if (root.capacityRebalance !== undefined && !current) {
+    return { kind: "rejected", error: `gateway ${gatewayId} has malformed capacity rebalance state` };
+  }
+  if (!current?.active) {
+    return current?.operationId === operationId && root.capacityRebalanceNonce === operationId
+      ? { kind: "completed" }
+      : null;
+  }
+  if (root.capacityRebalanceNonce !== current.nonce) {
+    return { kind: "rejected", error: `gateway ${gatewayId} has malformed active capacity rebalance state` };
+  }
+  if (current.operationId !== operationId) {
+    return {
+      kind: "rejected",
+      error: `gateway ${gatewayId} capacity rebalance is owned by ${current.operationId}`,
+    };
+  }
+  return { kind: "claimed", sourcePodUids: current.sourcePodUids };
+}
+
+async function claimCapacityRebalanceNonce(
+  db: Firestore,
+  input: { gatewayId: string; operationId: string; sourcePodUids: readonly string[] },
+): Promise<CapacityRebalanceNonceClaim> {
+  return db.runTransaction(async (txn) => {
+    const ref = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
+    const snapshot = await txn.get(ref);
+    const root = projectGatewayDesiredRootForGateway(
+      snapshot.exists ? snapshot.data() : undefined,
+      input.gatewayId,
+    );
+    const checked = capacityRebalanceClaimRoot(root, input.gatewayId);
+    if ("error" in checked) return { kind: "rejected", error: checked.error };
+    const existing = existingCapacityRebalanceClaim(
+      checked.root,
+      input.gatewayId,
+      input.operationId,
+    );
+    if (existing) return existing;
+    const existingNonce = checked.root.capacityRebalanceNonce;
+    if (existingNonce !== undefined && typeof existingNonce !== "string") {
+      return {
+        kind: "rejected",
+        error: `gateway ${input.gatewayId} has malformed capacity rebalance nonce`,
+      };
+    }
+    const now = Date.now();
+    txn.set(ref, {
+      capacityRebalanceNonce: input.operationId,
+      capacityRebalance: {
+        nonce: input.operationId,
+        active: true,
+        operationId: input.operationId,
+        previousNonce: existingNonce ?? null,
+        sourcePodUids: [...input.sourcePodUids],
+        requestedAt: now,
+      },
+      updatedAt: now,
+      updatedBy: `capacity-rebalance:${input.operationId}`,
+    }, { merge: true });
+    return { kind: "claimed", sourcePodUids: [...input.sourcePodUids] };
+  });
 }
 
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
@@ -2980,12 +3212,104 @@ async function buildHandlers(
     pollIntervalMs: 5_000,
   });
 
+  const capacityRebalanceGateway = createCapacityRebalanceGatewayHandler({
+    readGateway: async (gatewayId) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = projectGatewayDesiredRootForGateway(
+        snap.exists ? snap.data() : undefined,
+        gatewayId,
+      );
+      return root
+        ? {
+            gatewayClass: root.gatewayClass,
+            desiredStatus: root.desiredStatus,
+            managedBy: root.managedBy,
+            capacityRebalance: gatewayCapacityRebalanceIntent(root.capacityRebalance),
+            capacityRebalanceNonce: root.capacityRebalanceNonce,
+          }
+        : null;
+    },
+    claimNonce: (input) => claimCapacityRebalanceNonce(db, input),
+    completeNonce: async ({ gatewayId, operationId }) =>
+      db.runTransaction(async (txn) => {
+        const ref = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+        const snap = await txn.get(ref);
+        const root = projectGatewayDesiredRootForGateway(
+          snap.exists ? snap.data() : undefined,
+          gatewayId,
+        );
+        const current = gatewayCapacityRebalanceIntent(root?.capacityRebalance);
+        if (!root || !current || current.operationId !== operationId) {
+          return {
+            kind: "rejected" as const,
+            error: `gateway ${gatewayId} capacity rebalance ownership changed before completion`,
+          };
+        }
+        if (!current.active && root.capacityRebalanceNonce === operationId) {
+          return { kind: "completed" as const };
+        }
+        if (!current.active || root.capacityRebalanceNonce !== operationId) {
+          return {
+            kind: "rejected" as const,
+            error: `gateway ${gatewayId} capacity rebalance nonce changed before completion`,
+          };
+        }
+        const now = Date.now();
+        txn.set(ref, {
+          capacityRebalance: { ...current, active: false },
+          updatedAt: now,
+          updatedBy: `capacity-rebalance:${operationId}`,
+        }, { merge: true });
+        return { kind: "completed" as const };
+      }),
+    revertNonce: async ({ gatewayId, operationId }) => {
+      await db.runTransaction(async (txn) => {
+        const ref = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+        const snap = await txn.get(ref);
+        const root = projectGatewayDesiredRootForGateway(
+          snap.exists ? snap.data() : undefined,
+          gatewayId,
+        );
+        const current = gatewayCapacityRebalanceIntent(root?.capacityRebalance);
+        if (!root || !current || current.operationId !== operationId) {
+          throw new Error(`gateway ${gatewayId} capacity rebalance ownership changed before revert`);
+        }
+        if (!current.active) return;
+        if (root.capacityRebalanceNonce !== current.nonce) {
+          throw new Error(`gateway ${gatewayId} capacity rebalance nonce changed before revert`);
+        }
+        const now = Date.now();
+        txn.set(ref, {
+          ...(current.previousNonce === null
+            ? { capacityRebalanceNonce: FieldValue.delete() }
+            : { capacityRebalanceNonce: current.previousNonce }),
+          capacityRebalance: { ...current, active: false },
+          updatedAt: now,
+          updatedBy: `capacity-rebalance:${operationId}`,
+        }, { merge: true });
+      });
+    },
+    readSpotCapacity: (gatewayId) => kubeOps.readGatewaySpotCapacity({
+      namespace: NAMESPACE,
+      gatewayId,
+    }),
+    requestReconcileTick: () => requestReconcileTickRef.fire?.(),
+    now: () => Date.now(),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    log: logFn,
+    readyTimeoutMs: 9 * 60_000,
+    rollbackTimeoutMs: 4 * 60_000,
+    progressIntervalMs: 60_000,
+    pollIntervalMs: 5_000,
+  });
+
   return {
     "add-gateway": addGateway,
     [MIGRATE_CUSTOMER_KIND]: migrateCustomer,
     "retire-gateway": retireGateway,
     "restart-gateway": restartGateway,
     "recycle-gateway": recycleGateway,
+    [CAPACITY_REBALANCE_GATEWAY_KIND]: capacityRebalanceGateway,
     rollout,
     "deprovision-customer": deprovisionCustomer,
     "suspend-customer": suspendCustomer,
@@ -3005,6 +3329,35 @@ function timestampMillis(value: unknown): number | null {
     return typeof result === "number" && Number.isFinite(result) ? result : null;
   }
   return null;
+}
+
+export function gatewayCapacityRebalanceIntent(
+  value: unknown,
+): GatewayCapacityRebalanceIntent | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.nonce !== "string" ||
+    typeof record.active !== "boolean" ||
+    typeof record.operationId !== "string" ||
+    (record.previousNonce !== null && typeof record.previousNonce !== "string") ||
+    record.nonce !== record.operationId ||
+    !Array.isArray(record.sourcePodUids) ||
+    record.sourcePodUids.length === 0 ||
+    !record.sourcePodUids.every((podUid) => typeof podUid === "string" && podUid.length > 0) ||
+    typeof record.requestedAt !== "number" ||
+    !Number.isFinite(record.requestedAt)
+  ) {
+    return null;
+  }
+  return {
+    nonce: record.nonce,
+    active: record.active,
+    operationId: record.operationId,
+    previousNonce: record.previousNonce,
+    sourcePodUids: record.sourcePodUids,
+    requestedAt: record.requestedAt,
+  };
 }
 
 function deletionEnvironment(): string {

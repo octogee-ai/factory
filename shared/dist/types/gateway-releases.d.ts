@@ -16,6 +16,14 @@ export interface GatewayRetirementClaim {
     } | null;
     previousDesiredStatus: Exclude<GatewayLifecycleStatus, "retired">;
 }
+export interface GatewayCapacityRebalanceIntent {
+    nonce: string;
+    active: boolean;
+    operationId: string;
+    previousNonce: string | null;
+    sourcePodUids: string[];
+    requestedAt: number;
+}
 export interface GatewayDoc {
     gatewayId: string;
     createdAt: number;
@@ -30,6 +38,8 @@ export interface GatewayDoc {
     retireAfter?: number | null;
     retirementVersion?: number;
     retirementClaim?: GatewayRetirementClaim | null;
+    capacityRebalanceNonce?: string;
+    capacityRebalance?: GatewayCapacityRebalanceIntent;
 }
 export declare const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
 export declare const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";

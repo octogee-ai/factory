@@ -174,6 +174,32 @@ function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): bool
     op.id === `builder-return-${fromGatewayId}`;
 }
 
+function isLevelTriggeredCapacityRebalance(op: OperationCompletionInput["op"]): boolean {
+  const gatewayId = op.input?.gatewayId;
+  const sourcePodUid = op.input?.sourcePodUid;
+  return op.kind === "rebalance-gateway-capacity" &&
+    op.origin === "automatic" &&
+    typeof gatewayId === "string" &&
+    typeof sourcePodUid === "string" &&
+    (op.id === `capacity-rebalance-${gatewayId}-${sourcePodUid}` ||
+      op.id?.startsWith(`capacity-rebalance-${gatewayId}-${sourcePodUid}-retry-`) === true);
+}
+
+export function capacityRebalanceRetryBackoffMs(attempt: number): number {
+  if (attempt <= 1) return 5 * 60_000;
+  if (attempt === 2) return 15 * 60_000;
+  return 30 * 60_000;
+}
+
+function retryBackoffForOperation(
+  op: OperationCompletionInput["op"],
+  attempt: number,
+): number {
+  return isLevelTriggeredCapacityRebalance(op)
+    ? capacityRebalanceRetryBackoffMs(attempt)
+    : retryBackoffMs(attempt);
+}
+
 interface FailureCompletionContext {
   error: string;
   classification: OperationFailureClassification;
@@ -210,7 +236,7 @@ function pendingCompletion(
   attempts: number,
   failure: FailureCompletionContext,
 ): Record<string, unknown> {
-  const backoffMs = retryBackoffMs(attempts);
+  const backoffMs = retryBackoffForOperation(input.op, attempts);
   return {
     status: "pending",
     startedAt: null,
@@ -261,7 +287,9 @@ export function buildOperationCompletionUpdate(
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);
   const retryBeyondCap =
-    failure.levelTriggeredFence || isLevelTriggeredBuilderReturn(op);
+    failure.levelTriggeredFence ||
+    isLevelTriggeredBuilderReturn(op) ||
+    isLevelTriggeredCapacityRebalance(op);
   const retry = shouldRetry(
     op,
     result,

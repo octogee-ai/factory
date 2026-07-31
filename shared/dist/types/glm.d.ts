@@ -92,7 +92,7 @@ export declare function resolveUserGatewayShellState(data: {
     gatewayProfile: GatewayProfile;
     shellsEnabled: boolean;
 };
-export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
+export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "rebalance-gateway-capacity" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
 export declare const OPERATION_ORIGINS: readonly ["automatic", "operator"];
 export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];
