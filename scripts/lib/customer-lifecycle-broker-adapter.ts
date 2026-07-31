@@ -272,14 +272,14 @@ function coachToken(
   return brokerSnapshot?.coachToken ?? null;
 }
 
-function materializeCoachBrokerProfiles(
-  agentId: string,
+function materializeCustomerBrokerProfiles(
+  agentIds: string[],
   slug: string,
   logFn: (message: string) => void,
 ): void {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
-  const materialized = materializeBrokerProfilesForAgents([agentId], {
+  const materialized = materializeBrokerProfilesForAgents(agentIds, {
     logFn,
     ...(openRouterBaseUrl
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
@@ -291,6 +291,10 @@ function materializeCoachBrokerProfiles(
   if (materialized > 0) {
     logFn(`[add:${slug}] broker model profiles materialized before config hot-reload`);
   }
+}
+
+function agentIdsFromEntries(entries: ReadonlyArray<Record<string, unknown>>): string[] {
+  return entries.flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : []));
 }
 
 async function restartMattermostRoutingMonitors(
@@ -369,8 +373,6 @@ async function applyAddCustomerConfigPatch(
 
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
-  await fsp.mkdir(agentDir, { recursive: true });
-  materializeCoachBrokerProfiles(agentId, snapshot.slug, ctx.log);
   const agentEntry = buildCustomerAgent({
     uid: snapshot.uid,
     slug: snapshot.slug,
@@ -387,6 +389,18 @@ async function applyAddCustomerConfigPatch(
       : {}),
   });
   const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  const projectAgentEntries = buildProjectAgents({
+    slug: snapshot.slug,
+    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
+    agentsDir: AGENTS_DIR,
+    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
+    projectAgents,
+  });
+  const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
+  await Promise.all(
+    brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
+  );
+  materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
   const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     set: {
@@ -394,13 +408,6 @@ async function applyAddCustomerConfigPatch(
       ...projectSecretChange.set,
     },
     remove: projectSecretChange.remove,
-  });
-  const projectAgentEntries = buildProjectAgents({
-    slug: snapshot.slug,
-    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-    agentsDir: AGENTS_DIR,
-    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
-    projectAgents,
   });
   const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
   const bindings = buildCustomerBindings([

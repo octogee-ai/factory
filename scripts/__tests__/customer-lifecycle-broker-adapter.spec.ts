@@ -920,7 +920,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
-  it("materializes the first shared coach broker catalog before its config hot-reload", async () => {
+  it("materializes every active agent's broker catalog before its config hot-reload", async () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
@@ -950,6 +950,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       greetingPosted: false,
       channels: [],
       projects: [],
+      projectAgents: [
+        { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+        { projectId: "unminted", enabled: true, mmUserId: null, token: null },
+        { projectId: "retired", enabled: false, mmUserId: "mm-retired", token: "pat-retired" },
+      ],
       ownerName: "First",
       coachToken: "pat-first",
       coachMmUserId: "mm-first-coach",
@@ -958,7 +963,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-first" });
 
     expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledWith(
-      ["octogee-first-coach"],
+      ["octogee-first-coach", "octogee-first-proj-orbit-coach"],
       expect.objectContaining({
         openRouter: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
         openAi: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
