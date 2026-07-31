@@ -630,7 +630,7 @@
     "@google-cloud/secret-manager": "^6.3.0",
     "express": "^5.2.1",
     "firebase-admin": "^14.2.0",
-    "google-auth-library": "^10.7.0",
+    "google-auth-library": "^10.9.1",
     "unique-names-generator": "^4.7.1",
     "ws": "^8.21.1"
   },
