@@ -96,7 +96,9 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
   try {
     const uid = req.uid!;
 
-    await maybeRequestActivationBeforeTicket(uid, req.user);
+    if ((req.body as { anticipate?: unknown } | undefined)?.anticipate === true) {
+      await maybeRequestActivationBeforeTicket(uid, req.user);
+    }
 
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
