@@ -40,6 +40,7 @@ import {
   type UnavailableGatewayRecoveryParams,
   type UnavailableGatewayRecoveryTargetValidationContext,
 } from "@octogee/core/fleet-state";
+import { supersedeRollingSharedGatewayRoll } from "@octogee/core/shared-gateway-roll-recovery";
 import {
   resolveContinuousBuilderPlacement,
   resolveLiveActivationTargetGatewayId,
@@ -112,6 +113,9 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   liveReleaseReady?: boolean;
   rosterComplete?: boolean;
   assignmentCount?: number;
+  latestRelease?: number;
+  desiredRelease?: number;
+  liveRelease?: number | null;
 }
 
 export interface PlacementPolicyAssignment {
@@ -190,6 +194,14 @@ export interface RecoverUnreachableDisposableGatewayInput {
 
 export interface RecoverUnavailableGatewayInput extends UnavailableGatewayRecoveryParams {}
 
+export interface SupersedeRollingSharedGatewayInput {
+  sourceGatewayId: string;
+  targetGatewayId: string;
+  expectedLiveRelease: number;
+  expectedDesiredRelease: number;
+  targetHeartbeatMaxAgeMs: number;
+}
+
 export interface BuilderRuntimeActivity {
   lastActiveAt: number | null;
   liveRun: boolean;
@@ -230,6 +242,11 @@ export interface PlacementPolicyReconcilerDeps {
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
   failActivationLease(input: FailActivationLeaseInput): Promise<void>;
   recoverUnavailableGateway(input: RecoverUnavailableGatewayInput): Promise<{ operationId: string }>;
+  supersedeRollingSharedGateway(input: SupersedeRollingSharedGatewayInput): Promise<{
+    kind: "scheduled" | "already-scheduled" | "not-eligible";
+    release?: number;
+    operationId?: string;
+  }>;
   recoverUnreachableDisposableGateway(
     input: RecoverUnreachableDisposableGatewayInput,
   ): Promise<{ recovered: boolean; operationId: string }>;
@@ -340,6 +357,7 @@ interface PlacementPolicyReconcileContext {
   operations: Map<string, PlacementPolicyMigration>;
   assignments: Map<string, PlacementPolicyAssignment>;
   admittedSharedGatewayIds: Set<string>;
+  supersededSharedGatewayIds: Set<string>;
   result: PlacementPolicyReconcileResult;
   mutations: number;
   mutationLimitLogged: boolean;
@@ -405,6 +423,10 @@ function gatewayLiveReleaseReady(gateway: PlacementPolicyGateway): boolean {
   return gateway.liveReleaseReady ?? gateway.ready;
 }
 
+function isPositiveRelease(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
 function isSharedPoolGateway(
   context: PlacementPolicyReconcileContext,
   gatewayId: string | null,
@@ -451,6 +473,60 @@ function sharedGatewayPoolStableForRebalance(
       Number.isFinite(startedAt) &&
       now - startedAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
   });
+}
+
+function rollingSharedGatewayForUnavailableRecovery(
+  context: PlacementPolicyReconcileContext,
+  sourceGatewayId: string,
+): SupersedeRollingSharedGatewayInput | null {
+  const candidates = sharedGatewayCandidates(context);
+  const peers: SupersedeRollingSharedGatewayInput[] = [];
+  for (const gateway of context.state.gateways) {
+    const peer = rollingSharedGatewayPeer(
+      context,
+      sourceGatewayId,
+      candidates.find((candidate) => candidate.gatewayId === gateway.gatewayId),
+      gateway,
+    );
+    if (peer) peers.push(peer);
+  }
+  return peers.length === 1 ? peers[0]! : null;
+}
+
+function rollingSharedGatewayPeer(
+  context: PlacementPolicyReconcileContext,
+  sourceGatewayId: string,
+  candidate: SharedGatewayPoolCandidate | undefined,
+  gateway: PlacementPolicyGateway,
+): SupersedeRollingSharedGatewayInput | null {
+  if (gateway.gatewayId === sourceGatewayId || !candidate) return null;
+  const { liveRelease, desiredRelease } = gateway;
+  const candidateIsRollingPeer = [
+    context.state.sharedGatewayIds.includes(gateway.gatewayId),
+    candidate.gatewayClass === "shared",
+    candidate.desiredStatus === "running",
+    !isOperatorManaged(candidate.managedBy),
+    kubernetesReady(gateway),
+    candidate.serving,
+    candidate.heartbeatFresh,
+    candidate.rosterComplete,
+    !candidate.converging,
+    candidate.incomingMigrationCount === 0,
+    gateway.latestRelease === desiredRelease,
+  ].every(Boolean);
+  if (
+    !candidateIsRollingPeer ||
+    !isPositiveRelease(liveRelease) ||
+    !isPositiveRelease(desiredRelease) ||
+    desiredRelease <= liveRelease
+  ) return null;
+  return {
+    sourceGatewayId,
+    targetGatewayId: gateway.gatewayId,
+    expectedLiveRelease: liveRelease,
+    expectedDesiredRelease: desiredRelease,
+    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
+  };
 }
 
 function selectAcceptingSharedGateway(
@@ -693,6 +769,7 @@ async function reconcileUnavailableServingGateway(
 
   const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, source.gatewayId);
   if (!targetGatewayId) {
+    await scheduleRollingSharedPeerRecovery(context, source, kind);
     blockPlacement(context, {
       uid: user.uid,
       lease: lease ?? undefined,
@@ -721,6 +798,31 @@ async function reconcileUnavailableServingGateway(
   });
   admitSharedGateway(context, targetGatewayId);
   return true;
+}
+
+async function scheduleRollingSharedPeerRecovery(
+  context: PlacementPolicyReconcileContext,
+  source: PlacementPolicyGateway,
+  kind: UnavailableGatewayRecoveryParams["kind"],
+): Promise<void> {
+  if (kind !== "recover-shared-customer") return;
+  if (source.kubernetesStatus !== "missing") return;
+  const peerRoll = rollingSharedGatewayForUnavailableRecovery(context, source.gatewayId);
+  if (!peerRoll || context.supersededSharedGatewayIds.has(peerRoll.targetGatewayId)) return;
+  if (!claimPlacementMutation(context)) return;
+  try {
+    const outcome = await context.deps.supersedeRollingSharedGateway(peerRoll);
+    if (outcome.kind === "not-eligible") return;
+    context.deps.log(
+      `[placement-policy] shared-peer-roll-recovery outcome=${outcome.kind} ` +
+        `source=${peerRoll.sourceGatewayId} target=${peerRoll.targetGatewayId} ` +
+        `supersededRelease=${peerRoll.expectedDesiredRelease} ` +
+        `rollbackRelease=${outcome.release ?? "unknown"} ` +
+        `operationId=${outcome.operationId ?? "unknown"}`,
+    );
+  } finally {
+    context.supersededSharedGatewayIds.add(peerRoll.targetGatewayId);
+  }
 }
 
 function unavailableRecoveryKind(
@@ -1785,6 +1887,7 @@ export async function reconcilePlacementPolicyOnce(
     operations,
     assignments,
     admittedSharedGatewayIds: new Set<string>(),
+    supersededSharedGatewayIds: new Set<string>(),
     result,
     mutations: 0,
     mutationLimitLogged: false,
@@ -2951,6 +3054,10 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       ...request,
       validateTarget: unavailableRecoveryTargetFence(input, request),
     }),
+    supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({
+      db: input.db,
+      now: input.now,
+    }, request),
     recoverUnreachableDisposableGateway: (request) =>
       recoverUnreachableDisposableGatewayFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),

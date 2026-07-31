@@ -157,6 +157,10 @@
       "types": "./dist/fleet-state.d.ts",
       "default": "./dist/fleet-state.js"
     },
+    "./shared-gateway-roll-recovery": {
+      "types": "./dist/shared-gateway-roll-recovery.d.ts",
+      "default": "./dist/shared-gateway-roll-recovery.js"
+    },
     "./gateway-device-identity": {
       "types": "./dist/gateway-device-identity.d.ts",
       "default": "./dist/gateway-device-identity.js"
@@ -461,6 +465,9 @@
       ],
       "fleet-state": [
         "dist/fleet-state.d.ts"
+      ],
+      "shared-gateway-roll-recovery": [
+        "dist/shared-gateway-roll-recovery.d.ts"
       ],
       "gateway-device-identity": [
         "dist/gateway-device-identity.d.ts"
