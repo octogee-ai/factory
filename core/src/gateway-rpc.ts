@@ -108,6 +108,12 @@ export interface GatewaySessionsResetResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayToolsCatalogResult {
+  agentId: string;
+  groups: unknown[];
+  [extra: string]: unknown;
+}
+
 export interface CronAddSpec {
   name: string;
   description?: string;
@@ -168,6 +174,10 @@ export interface GatewayRpcClient {
     agentId: string;
     reason: "new" | "reset";
   }): Promise<GatewaySessionsResetResult>;
+  toolsCatalog(
+    params: { agentId: string; includePlugins: true },
+    timeoutMs?: number,
+  ): Promise<GatewayToolsCatalogResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
@@ -308,6 +318,34 @@ function formatConnectTrace(trace: ConnectTrace): string {
   return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
 }
 
+function parseToolsCatalogResult(
+  payload: unknown,
+  agentId: string,
+): GatewayToolsCatalogResult {
+  if (!payload || typeof payload !== "object") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "tools.catalog returned non-object payload");
+  }
+  const result = payload as { agentId?: unknown; groups?: unknown };
+  if (result.agentId !== agentId || !Array.isArray(result.groups)) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "tools.catalog payload missing the requested agentId or groups array",
+    );
+  }
+  return payload as GatewayToolsCatalogResult;
+}
+
+async function fetchToolsCatalog(
+  call: (method: string, params: unknown, timeoutMs?: number) => Promise<unknown>,
+  params: { agentId: string; includePlugins: true },
+  timeoutMs?: number,
+): Promise<GatewayToolsCatalogResult> {
+  return parseToolsCatalogResult(
+    await call("tools.catalog", params, timeoutMs),
+    params.agentId,
+  );
+}
+
 function createDefaultConnectTraceHandler(
   traceVerbose: boolean,
   slowTraceMs: number,
@@ -434,7 +472,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     return identity;
   }
 
-  async function call(method: string, params: unknown): Promise<unknown> {
+  async function call(
+    method: string,
+    params: unknown,
+    requestTimeoutMs = callTimeoutMs,
+  ): Promise<unknown> {
     const ws = await openAndConnect({
       url,
       ...auth,
@@ -449,7 +491,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         id: randomUUID(),
         method,
         params,
-        timeoutMs: callTimeoutMs,
+        timeoutMs: requestTimeoutMs,
       });
     } finally {
       try {
@@ -496,9 +538,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       );
     },
 
-    async channelsStatus() {
-      return await call("channels.status", {});
-    },
+    channelsStatus: async () => await call("channels.status", {}),
 
     async channelsStop(params) {
       const payload = await call("channels.stop", params);
@@ -566,6 +606,8 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return payload as GatewaySessionsResetResult;
     },
 
+    toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
+
     async cronAdd(spec) {
       const payload = await call("cron.add", spec);
       if (!payload || typeof payload !== "object") {
@@ -622,7 +664,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       }
     },
 
-    async close() {},
+    close: async () => {},
   };
 }
 

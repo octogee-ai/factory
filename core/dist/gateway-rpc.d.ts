@@ -71,6 +71,11 @@ export interface GatewaySessionsResetResult {
     ok: true;
     [extra: string]: unknown;
 }
+export interface GatewayToolsCatalogResult {
+    agentId: string;
+    groups: unknown[];
+    [extra: string]: unknown;
+}
 export interface CronAddSpec {
     name: string;
     description?: string;
@@ -141,6 +146,10 @@ export interface GatewayRpcClient {
         agentId: string;
         reason: "new" | "reset";
     }): Promise<GatewaySessionsResetResult>;
+    toolsCatalog(params: {
+        agentId: string;
+        includePlugins: true;
+    }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;

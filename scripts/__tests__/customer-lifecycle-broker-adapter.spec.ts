@@ -219,6 +219,27 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 });
 
+describe("buildBrokeredLifecycleAdapter runtime plugin prewarm", () => {
+  it("loads the mounted coach plugin catalog with the migration startup budget", async () => {
+    const toolsCatalog = vi.fn(async () => ({ tools: [] }));
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: mkGatewayRpc({ toolsCatalog }),
+      log: vi.fn(),
+    });
+
+    await adapter.warmAgentRuntimePlugins?.("tester10");
+
+    expect(toolsCatalog).toHaveBeenCalledWith(
+      {
+        agentId: "octogee-tester10-coach",
+        includePlugins: true,
+      },
+      180_000,
+    );
+  });
+});
+
 describe("buildBrokeredLifecycleAdapter template files", () => {
   const previousTemplatesDir = process.env.OCTOGEE_TEMPLATES_DIR;
   let tempRoot: string;

@@ -794,6 +794,15 @@ export function buildBrokeredLifecycleAdapter(
         userData as Parameters<typeof reassertConvergedContextFilesForSlug>[0],
       );
     },
+    warmAgentRuntimePlugins: async (slug) => {
+      await ctx.rpc.toolsCatalog(
+        {
+          agentId: customerCoachAgentId(slug),
+          includePlugins: true,
+        },
+        180_000,
+      );
+    },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),

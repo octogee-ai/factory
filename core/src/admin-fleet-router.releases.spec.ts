@@ -492,9 +492,12 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ gatewayId: "retired" }),
     ]));
-    expect(store.get("gateways/default")).toMatchObject({ desiredRelease: 2 });
-    expect(store.get("gateways/shared-blue")).toMatchObject({ desiredRelease: 2 });
-    expect(store.get("gateways/paused")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
+    expect(store.get("gateways/shared-blue")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 1,
+    });
+    expect(store.get("gateways/paused")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
     expect(store.get("gateways/retired")).toMatchObject({ desiredRelease: 1 });
     expect(auditsIn(store)).toEqual(expect.arrayContaining([
       expect.objectContaining({ what: "cut CENTRAL TEST release" }),
@@ -526,8 +529,20 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ gatewayId: "isolated" }),
     ]));
-    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
+    expect(store.get("gateways/default-b")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 1,
+    });
     expect(store.get("gateways/isolated")).toMatchObject({ desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        input: expect.objectContaining({ gatewayId: "default", targetRelease: 2 }),
+      }),
+      expect.objectContaining({
+        input: expect.objectContaining({ gatewayId: "default-b", targetRelease: 2 }),
+      }),
+    ]));
   });
 
   it("rejects a CENTRAL release when any configured shared member is not running", async () => {
@@ -630,7 +645,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
     expect([first.body.release, second.body.release]).toEqual([2, 2]);
-    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
     expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
       sourceSha,
       manifestDigest,
@@ -695,7 +710,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       .send({ version: "v0.4.0", sourceSha })
       .expect(500);
 
-    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
     expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
       status: "pending",
       rollouts: { default: { release: 2 } },
@@ -756,7 +771,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       .expect(202);
 
     expect(retry.body).toEqual(expect.objectContaining({ release: 2 }));
-    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
     expect(opsIn(store, "rollout")).toHaveLength(1);
     expect(auditsIn(store)).toHaveLength(2);
   });
@@ -822,7 +837,10 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(response.body.rollouts).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ gatewayId: "isolated" }),
     ]));
-    expect(store.get("gateways/default-b")).toMatchObject({ desiredRelease: 2 });
+    expect(store.get("gateways/default-b")).toMatchObject({
+      latestRelease: 2,
+      desiredRelease: 1,
+    });
     expect(store.get("gateways/isolated")).toMatchObject({ desiredRelease: 1 });
     expect(auditsIn(store)).toEqual(expect.arrayContaining([
       expect.objectContaining({ what: "promote CENTRAL PROD gateway rollout" }),
@@ -848,7 +866,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
 
     expect(store.get("gateways/default")).toMatchObject({
       latestRelease: 2,
-      desiredRelease: 2,
+      desiredRelease: 1,
     });
     expect(store.get("gateways/default-b")).toMatchObject({
       latestRelease: 1,
@@ -870,11 +888,11 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     ]));
     expect(store.get("gateways/default")).toMatchObject({
       latestRelease: 2,
-      desiredRelease: 2,
+      desiredRelease: 1,
     });
     expect(store.get("gateways/default-b")).toMatchObject({
       latestRelease: 2,
-      desiredRelease: 2,
+      desiredRelease: 1,
     });
     expect(store.get("centralReleaseFanouts/v0.4.0")).toMatchObject({
       status: "complete",
@@ -1715,7 +1733,7 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     expect(opsIn(store, "rollout")).toHaveLength(0);
   });
 
-  it("cuts release 2 on an image change, bumps desiredRelease, and queues a rollout op (legacy converge)", async () => {
+  it("stages release 2 and queues the exact rollout without advancing desiredRelease", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
 
     const res = await request(app)
@@ -1730,11 +1748,11 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
     expect(rel2).toMatchObject({ sourceRelease: 1, release: 2 });
 
     const gw = store.get("gateways/beta");
-    expect(gw).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(gw).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
 
     expect(opsIn(store, "rollout")).toHaveLength(1);
     expect(opsIn(store, "rollout")[0]).toMatchObject({
-      input: { gatewayId: "beta", imageTag: "deadbee" },
+      input: { gatewayId: "beta", targetRelease: 2, imageTag: "deadbee" },
     });
   });
 
@@ -1914,7 +1932,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
       (store.get(`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)?.payload as ReleasePayload)
         .imageTag,
     ).toBe("abc1234");
-    expect(store.get("gateways/gamma")).toMatchObject({ latestRelease: 3, desiredRelease: 3 });
+    expect(store.get("gateways/gamma")).toMatchObject({ latestRelease: 3, desiredRelease: 2 });
     expect(opsIn(store, "rollout")).toHaveLength(1);
   });
 
@@ -1955,7 +1973,7 @@ describe("release cut — transactional append + pointer advance (P1-A)", () => 
       accepted === a ? "deadbee" : "c0ffee1",
     );
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/race`)).toBeUndefined();
-    expect(store.get("gateways/race")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.get("gateways/race")).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
   });
 
   it("refuses to overwrite an existing release doc (orphan-immunity)", async () => {
@@ -2000,7 +2018,7 @@ describe("release cut — transactional append + pointer advance (P1-A)", () => 
     const { app, store } = mkApp(seed);
     const res = await request(app).post("/gateways/rb/releases/1/rollback").send({}).expect(202);
     expect(res.body).toMatchObject({ release: 3, rolledBackFrom: 1 });
-    expect(store.get("gateways/rb")).toMatchObject({ latestRelease: 3, desiredRelease: 3 });
+    expect(store.get("gateways/rb")).toMatchObject({ latestRelease: 3, desiredRelease: 2 });
     // History 1 and 2 untouched.
     expect((store.get(`gateways/rb/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)?.payload as ReleasePayload).imageTag).toBe("deadbee");
   });

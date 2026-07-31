@@ -1294,7 +1294,7 @@ describe("POST /api/admin/rollouts — body type guards", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/rollouts")
-      .send({ gatewayId: "default", imageTag: 9999 });
+      .send({ gatewayId: "default", targetRelease: 2, imageTag: 9999 });
     expect(res.status).toBe(400);
   });
 });
@@ -1428,10 +1428,10 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
     const op = commandOperationCall();
     expect(op?.data).toMatchObject({
       kind: "rollout",
-      input: { gatewayId: "default", imageTag: "abcdef1" },
+      input: { gatewayId: "default", targetRelease: 2, imageTag: "abcdef1" },
       createdBy: "admin-user",
     });
-    expect(gatewaysDocs.default).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(gatewaysDocs.default).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
     expect(gatewayReleasesDocs["default/2"]?.payload).toMatchObject({ imageTag: "abcdef1" });
   });
 
@@ -1767,6 +1767,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
 
     const res = await request(buildApp()).post("/api/admin/rollouts").send({
       gatewayId: "default",
+      targetRelease: 2,
       imageTag: "def5678",
     });
 
@@ -1778,6 +1779,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/rollouts").send({
       gatewayId: "default",
+      targetRelease: 2,
       imageTag: "def5678",
     });
     expect(res.status).toBe(202);
@@ -1785,14 +1787,14 @@ describe("POST /api/admin/rollouts — composite operation", () => {
     expect(op?.data).toMatchObject({
       kind: "rollout",
       status: "pending",
-      input: { gatewayId: "default", imageTag: "def5678" },
+      input: { gatewayId: "default", targetRelease: 2, imageTag: "def5678" },
       createdBy: "admin-user",
     });
   });
 
   it("does not replay a completed Idempotency-Key", async () => {
     const app = buildApp();
-    const requestBody = { gatewayId: "default", imageTag: "def5678" };
+    const requestBody = { gatewayId: "default", targetRelease: 2, imageTag: "def5678" };
 
     await request(app)
       .post("/api/admin/rollouts")
@@ -1815,12 +1817,12 @@ describe("POST /api/admin/rollouts — composite operation", () => {
     await request(app)
       .post("/api/admin/rollouts")
       .set("Idempotency-Key", "rollout-1")
-      .send({ gatewayId: "default", imageTag: "def5678" })
+      .send({ gatewayId: "default", targetRelease: 2, imageTag: "def5678" })
       .expect(202);
     const conflict = await request(app)
       .post("/api/admin/rollouts")
       .set("Idempotency-Key", "rollout-1")
-      .send({ gatewayId: "default", imageTag: "abc1234" })
+      .send({ gatewayId: "default", targetRelease: 2, imageTag: "abc1234" })
       .expect(409);
 
     expect(conflict.body).toMatchObject({

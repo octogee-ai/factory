@@ -101,6 +101,8 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
     throwIfAborted(signal, uid);
+    steps.push(...(await warmAgentRuntimePluginsIfSupported(adapter, slug)));
+    throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
     adapter.writeMountMarker?.(slug);
@@ -195,6 +197,8 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
     throwIfAborted(signal, uid);
     steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
+    throwIfAborted(signal, uid);
+    steps.push(...(await warmAgentRuntimePluginsIfSupported(adapter, slug)));
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push("verify-channel-ready");
@@ -472,6 +476,15 @@ async function verifyChannelReady(adapter, slug, verifyTimeoutMs) {
         throw new Error(`[add:${slug}] channel didn't reach running+connected within ${verifyTimeoutMs}ms (waited ${elapsed}ms) — failing the mount; fleet will retry`);
     }
     adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
+}
+async function warmAgentRuntimePluginsIfSupported(adapter, slug) {
+    if (!adapter.warmAgentRuntimePlugins)
+        return [];
+    const startedAt = Date.now();
+    adapter.log(`[add:${slug}] warming agent runtime plugins`);
+    await adapter.warmAgentRuntimePlugins(slug);
+    adapter.log(`[add:${slug}] agent runtime plugins warm in ${Date.now() - startedAt}ms`);
+    return ["warm-runtime-plugins"];
 }
 async function scheduleGreetingIfNeeded(adapter, uid, snapshot) {
     if (snapshot.greetingPosted)

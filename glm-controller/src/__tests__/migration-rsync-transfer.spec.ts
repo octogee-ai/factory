@@ -140,6 +140,36 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  it("signals a missing source pod as retryable so a preempted shared gateway can recover in place", async () => {
+    const store: Store = {};
+    const runCommand: CommandRunner = async (_command, args) => {
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      if (selector.includes("gateway-instance=gw-to")) {
+        return { stdout: await readyPod("gw-to-pod").text(), stderr: "", code: 0 };
+      }
+      return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch([]),
+      runCommand,
+    });
+
+    await expect(transfer({
+      migrationId: "mig-preempted-source",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "pre",
+    })).rejects.toMatchObject({
+      message: "expected exactly one running pod for transport=gw-from; found 0",
+      retryable: true,
+    });
+  });
+
   it("uses revision transport ids for same-gateway drain pod selection and control URLs", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];

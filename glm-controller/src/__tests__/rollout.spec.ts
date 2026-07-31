@@ -1,14 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRolloutHandler, type RolloutDeps } from "../handlers/rollout.js";
+import {
+  createRolloutHandler,
+  planDesiredReleaseActivation,
+  type RolloutDeps,
+} from "../handlers/rollout.js";
 import type { Operation } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext } from "../operation-router.js";
-
-// The rollout op is now a THIN release-roll driver: it validates that the
-// gateway is on the Step 2 identity schema (refusing with the backfill tool
-// otherwise), confirms the desired release carries the requested image, kicks a
-// reconcile tick, and awaits the reconciler roll arm's level-triggered
-// convergence. All actual roll work lives in converge-roll.ts.
 
 function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
@@ -72,6 +70,7 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
   return {
     readGatewayDoc: async () => mkGateway(),
     readReleasePayload: async () => mkPayload(),
+    activateDesiredRelease: vi.fn(async () => ({ success: true as const })),
     requestReconcileTick: vi.fn(),
     releaseRecordTimeoutMs: 10_000,
     convergeTimeoutMs: 100_000,
@@ -90,17 +89,21 @@ describe("rollout op — durable root validation", () => {
   it("refuses a gateway with no durable gateways/{id} desired doc without naming retired recovery tools", async () => {
     const deps = mkDeps({ readGatewayDoc: async () => null });
     const handler = createRolloutHandler(deps);
-    const res = await handler(mkOp({ gatewayId: "legacy-gw", imageTag: "cafe123-ocbeta2" }), ctx);
+    const res = await handler(mkOp({ gatewayId: "legacy-gw", targetRelease: 2, imageTag: "cafe123-ocbeta2" }), ctx);
     expect(res.success).toBe(false);
     expect(res.error).toContain("legacy-gw");
     expect(res.error).toContain("durable gateways/legacy-gw desired doc");
     expect(res.error).not.toContain("backfill-gateway-identity");
   });
 
-  it("fails on missing gatewayId / imageTag inputs", async () => {
+  it("fails on missing gatewayId / targetRelease / imageTag inputs", async () => {
     const handler = createRolloutHandler(mkDeps());
-    expect((await handler(mkOp({ imageTag: "t" }), ctx)).error).toContain("gatewayId");
-    expect((await handler(mkOp({ gatewayId: "g" }), ctx)).error).toContain("imageTag");
+    expect((await handler(mkOp({ targetRelease: 2, imageTag: "t" }), ctx)).error)
+      .toContain("gatewayId");
+    expect((await handler(mkOp({ gatewayId: "g", imageTag: "t" }), ctx)).error)
+      .toContain("targetRelease");
+    expect((await handler(mkOp({ gatewayId: "g", targetRelease: 2 }), ctx)).error)
+      .toContain("imageTag");
   });
 
   it("refuses a retired gateway", async () => {
@@ -108,7 +111,7 @@ describe("rollout op — durable root validation", () => {
       readGatewayDoc: async () => mkGateway({ desiredStatus: "retired" }),
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(false);
@@ -116,7 +119,101 @@ describe("rollout op — durable root validation", () => {
   });
 });
 
+describe("rollout desired release activation", () => {
+  it("activates only the exact staged release from a stable live root", () => {
+    expect(planDesiredReleaseActivation(
+      mkGateway({ desiredRelease: 1, liveRelease: 1 }),
+      2,
+      100,
+      "op-1",
+    )).toEqual({
+      success: true,
+      patch: {
+        desiredRelease: 2,
+        updatedAt: 100,
+        updatedBy: "rollout:op-1",
+      },
+    });
+  });
+
+  it("is idempotent after the operation has activated its release", () => {
+    expect(planDesiredReleaseActivation(mkGateway(), 2, 100, "op-1"))
+      .toEqual({ success: true, patch: null });
+  });
+
+  it("rejects a superseded target or another release still converging", () => {
+    expect(planDesiredReleaseActivation(
+      mkGateway({ latestRelease: 3, desiredRelease: 1, liveRelease: 1 }),
+      2,
+      100,
+      "op-1",
+    )).toMatchObject({ success: false, error: expect.stringContaining("superseded") });
+    expect(planDesiredReleaseActivation(
+      mkGateway({ desiredRelease: 1, liveRelease: 0 }),
+      2,
+      100,
+      "op-1",
+    )).toMatchObject({ success: false, error: expect.stringContaining("not live") });
+  });
+});
+
 describe("rollout op — awaits the roll arm's convergence", () => {
+  it("holds global rollout ownership until a prior desired release becomes live", async () => {
+    let stable = false;
+    let activated = false;
+    const activateDesiredRelease = vi.fn(async () => {
+      activated = true;
+      return { success: true as const };
+    });
+    const reportStep = vi.fn(async () => undefined);
+    const deps = mkDeps({
+      readGatewayDoc: async () => activated
+        ? mkGateway({
+            latestRelease: 3,
+            desiredRelease: 3,
+            liveRelease: 3,
+            liveRevisionId: "default-r3",
+          })
+        : stable
+          ? mkGateway({
+            latestRelease: 3,
+            desiredRelease: 2,
+            liveRelease: 2,
+            liveRevisionId: "default-r2",
+          })
+          : mkGateway({
+              latestRelease: 3,
+              desiredRelease: 2,
+              liveRelease: 1,
+            }),
+      readReleasePayload: async (_gatewayId, release) =>
+        release === 3 ? mkPayload({ imageTag: "feed456-ocbeta2" }) : null,
+      activateDesiredRelease,
+      wait: async () => {
+        expect(activateDesiredRelease).not.toHaveBeenCalled();
+        stable = true;
+      },
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 3, imageTag: "feed456-ocbeta2" }),
+      { reportStep },
+    );
+
+    expect(res.success).toBe(true);
+    expect(activateDesiredRelease).toHaveBeenCalledWith({
+      gatewayId: "default",
+      targetRelease: 3,
+      operationId: "op-1",
+    });
+    expect(deps.logs).toContain(
+      "[rollout] default: waiting for r2 to become live before activating r3",
+    );
+    expect(
+      reportStep.mock.calls.filter((call) => call[0].status === "running"),
+    ).toHaveLength(2);
+  });
+
   it("refreshes operation liveness on every convergence poll", async () => {
     let polls = 0;
     const reportStep = vi.fn(async () => undefined);
@@ -145,7 +242,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     });
 
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       { reportStep },
     );
 
@@ -181,11 +278,33 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       },
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(true);
+    expect(deps.activateDesiredRelease).toHaveBeenCalledWith({
+      gatewayId: "default",
+      targetRelease: 2,
+      operationId: "op-1",
+    });
     expect(deps.requestReconcileTick).toHaveBeenCalled();
+  });
+
+  it("does not reconcile when exact release activation is rejected", async () => {
+    const deps = mkDeps({
+      activateDesiredRelease: vi.fn(async () => ({
+        success: false as const,
+        error: "another release is not live",
+      })),
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+
+    expect(res).toMatchObject({ success: false, error: "another release is not live" });
+    expect(deps.requestReconcileTick).not.toHaveBeenCalled();
   });
 
   it("narrates convergence progress into the op log", async () => {
@@ -201,7 +320,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       },
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(true);
@@ -215,7 +334,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       releaseRecordTimeoutMs: 3_000,
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(false);
@@ -233,7 +352,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       },
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(true);
@@ -245,7 +364,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       readGatewayDoc: async () => mkGateway(),
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(false);
@@ -258,7 +377,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       readGatewayDoc: async () => mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
     });
     const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", imageTag: "cafe123-ocbeta2" }),
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(true);

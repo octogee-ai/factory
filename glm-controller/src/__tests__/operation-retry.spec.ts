@@ -72,6 +72,11 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
     expect(classifyOperationFailure("context deadline exceeded")).toBe("transient");
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        "status 503: gateway default cannot activate release 3 while release 2 is not live",
+      ),
+    ).toBe("transient");
     expect(classifyOperationFailure("TypeError: fetch failed")).toBe("transient");
     expect(classifyOperationFailure("response body terminated before completion")).toBe("transient");
     expect(classifyOperationFailure("premature close while reading response body")).toBe("transient");

@@ -139,7 +139,10 @@ import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createCapacityRebalanceGatewayHandler } from "./handlers/capacity-rebalance-gateway.js";
-import { createRolloutHandler } from "./handlers/rollout.js";
+import {
+  createRolloutHandler,
+  planDesiredReleaseActivation,
+} from "./handlers/rollout.js";
 import {
   createDeprovisionCustomerHandler,
   type CustomerCleanupContext,
@@ -3148,6 +3151,30 @@ async function buildHandlers(
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
+    activateDesiredRelease: async ({ gatewayId, targetRelease, operationId }) =>
+      db.runTransaction(async (transaction) => {
+        const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+        const snapshot = await transaction.get(gatewayRef);
+        const gateway = durableRolloutGateway(
+          snapshot.exists ? snapshot.data() : undefined,
+          gatewayId,
+        );
+        if (!gateway) {
+          return {
+            success: false as const,
+            error: `gateway ${gatewayId} durable root is unavailable`,
+          };
+        }
+        const activation = planDesiredReleaseActivation(
+          gateway,
+          targetRelease,
+          Date.now(),
+          operationId,
+        );
+        if (!activation.success || activation.patch === null) return activation;
+        transaction.update(gatewayRef, activation.patch);
+        return { success: true as const };
+      }),
     requestReconcileTick: () => requestReconcileTickRef.fire?.(),
     releaseRecordTimeoutMs: 60_000,
     convergeTimeoutMs: 45 * 60_000,

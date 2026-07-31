@@ -2173,14 +2173,13 @@ async function appendGatewayRelease(db, args) {
         txn.set(relRef, releaseDoc);
         txn.update(gwRef, {
             latestRelease: release,
-            desiredRelease: release,
             updatedAt: args.now,
             updatedBy: args.createdBy,
         });
         txn.set(operationRef, operationDoc({
             kind: "rollout",
             createdBy: args.createdBy,
-            input: rolloutOpInputFromArtifact(args.gateway.gatewayId, artifact),
+            input: rolloutOpInputFromArtifact(args.gateway.gatewayId, release, artifact),
         }, args.now));
         writeCentralReleaseFanoutMember(txn, fanoutRef, args.centralReleaseFanout, { gatewayId: args.gateway.gatewayId, release, operationId: operationRef.id });
         return { release, operationId: operationRef.id };
@@ -2375,9 +2374,10 @@ function respondCentralReleaseError(res, error) {
     }
     return respondReleaseWriteConflict(res, error);
 }
-function rolloutOpInputFromArtifact(gatewayId, artifact) {
+function rolloutOpInputFromArtifact(gatewayId, targetRelease, artifact) {
     return {
         gatewayId,
+        targetRelease,
         imageTag: artifact.imageTag,
         imageRepository: artifact.imageRepository,
     };
@@ -2519,7 +2519,7 @@ async function recordRolloutRelease(db, args) {
             operationId: await createOperation(db, {
                 kind: "rollout",
                 createdBy: args.createdBy,
-                input: rolloutOpInputFromArtifact(gateway.gatewayId, artifact),
+                input: rolloutOpInputFromArtifact(gateway.gatewayId, gateway.desiredRelease, artifact),
             }),
         };
     }
@@ -5751,11 +5751,14 @@ export function addAdminFleetRoutes(router, deps) {
             const body = req.body;
             if (typeof body.gatewayId !== "string" ||
                 body.gatewayId.length === 0 ||
+                typeof body.targetRelease !== "number" ||
+                !Number.isSafeInteger(body.targetRelease) ||
+                body.targetRelease < 1 ||
                 typeof body.imageTag !== "string" ||
                 body.imageTag.length === 0) {
                 res.status(400).json({
                     error: "missing required fields",
-                    required: ["gatewayId", "imageTag"],
+                    required: ["gatewayId", "targetRelease", "imageTag"],
                 });
                 return;
             }
@@ -5770,6 +5773,7 @@ export function addAdminFleetRoutes(router, deps) {
                 mutation: {
                     kind: "rollout",
                     gatewayId: body.gatewayId,
+                    targetRelease: body.targetRelease,
                     imageTag: body.imageTag,
                 },
                 action: async () => createOperation(db, {
@@ -5777,6 +5781,7 @@ export function addAdminFleetRoutes(router, deps) {
                     createdBy,
                     input: {
                         gatewayId: body.gatewayId,
+                        targetRelease: body.targetRelease,
                         imageTag: body.imageTag,
                     },
                 }),

@@ -121,6 +121,19 @@ function formatConnectTrace(trace) {
         : `FAIL stage=${trace.stage} ${trace.errorCode}: ${trace.errorMessage}`;
     return `[rpc-trace] ${outcome} total=${trace.totalMs}ms ${phases} url=${trace.url}`;
 }
+function parseToolsCatalogResult(payload, agentId) {
+    if (!payload || typeof payload !== "object") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "tools.catalog returned non-object payload");
+    }
+    const result = payload;
+    if (result.agentId !== agentId || !Array.isArray(result.groups)) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "tools.catalog payload missing the requested agentId or groups array");
+    }
+    return payload;
+}
+async function fetchToolsCatalog(call, params, timeoutMs) {
+    return parseToolsCatalogResult(await call("tools.catalog", params, timeoutMs), params.agentId);
+}
 function createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs) {
     let lastFailureKey = "";
     let lastFailureLogAt = 0;
@@ -212,7 +225,7 @@ export function createGatewayRpc(opts = {}) {
         identity = loadOrCreateDeviceIdentity();
         return identity;
     }
-    async function call(method, params) {
+    async function call(method, params, requestTimeoutMs = callTimeoutMs) {
         const ws = await openAndConnect({
             url,
             ...auth,
@@ -227,7 +240,7 @@ export function createGatewayRpc(opts = {}) {
                 id: randomUUID(),
                 method,
                 params,
-                timeoutMs: callTimeoutMs,
+                timeoutMs: requestTimeoutMs,
             });
         }
         finally {
@@ -266,9 +279,7 @@ export function createGatewayRpc(opts = {}) {
                 onConnectTrace,
             }, patch, baseHash, opts?.replacePaths);
         },
-        async channelsStatus() {
-            return await call("channels.status", {});
-        },
+        channelsStatus: async () => await call("channels.status", {}),
         async channelsStop(params) {
             const payload = await call("channels.stop", params);
             if (!payload ||
@@ -317,6 +328,7 @@ export function createGatewayRpc(opts = {}) {
             }
             return payload;
         },
+        toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
         async cronAdd(spec) {
             const payload = await call("cron.add", spec);
             if (!payload || typeof payload !== "object") {
@@ -363,7 +375,7 @@ export function createGatewayRpc(opts = {}) {
                 return false;
             }
         },
-        async close() { },
+        close: async () => { },
     };
 }
 function resolveGatewayAuth(opts) {

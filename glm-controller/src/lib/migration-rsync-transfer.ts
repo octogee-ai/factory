@@ -311,8 +311,11 @@ async function resolveRunningGatewayPod(params: {
     );
   });
   if (running.length !== 1) {
-    throw new Error(
-      `expected exactly one running pod for transport=${params.transportId}; found ${running.length}`,
+    throw Object.assign(
+      new Error(
+        `expected exactly one running pod for transport=${params.transportId}; found ${running.length}`,
+      ),
+      { retryable: true },
     );
   }
   const item = running[0];

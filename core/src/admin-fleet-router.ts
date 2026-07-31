@@ -3345,7 +3345,6 @@ async function appendGatewayRelease(
     txn.set(relRef, releaseDoc as unknown as Record<string, unknown>);
     txn.update(gwRef, {
       latestRelease: release,
-      desiredRelease: release,
       updatedAt: args.now,
       updatedBy: args.createdBy,
     });
@@ -3355,7 +3354,7 @@ async function appendGatewayRelease(
         {
           kind: "rollout",
           createdBy: args.createdBy,
-          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, artifact),
+          input: rolloutOpInputFromArtifact(args.gateway.gatewayId, release, artifact),
         },
         args.now,
       ),
@@ -3605,10 +3604,12 @@ function respondCentralReleaseError(res: Response, error: unknown): boolean {
 
 function rolloutOpInputFromArtifact(
   gatewayId: string,
+  targetRelease: number,
   artifact: GatewayArtifact,
 ): Record<string, unknown> {
   return {
     gatewayId,
+    targetRelease,
     imageTag: artifact.imageTag,
     imageRepository: artifact.imageRepository,
   };
@@ -3772,7 +3773,7 @@ async function recordRolloutRelease(
       operationId: await createOperation(db, {
         kind: "rollout",
         createdBy: args.createdBy,
-        input: rolloutOpInputFromArtifact(gateway.gatewayId, artifact),
+        input: rolloutOpInputFromArtifact(gateway.gatewayId, gateway.desiredRelease, artifact),
       }),
     };
   }
@@ -7538,17 +7539,21 @@ router.get(
       try {
         const body = req.body as Partial<{
           gatewayId: string;
+          targetRelease: number;
           imageTag: string;
         }>;
         if (
           typeof body.gatewayId !== "string" ||
           body.gatewayId.length === 0 ||
+          typeof body.targetRelease !== "number" ||
+          !Number.isSafeInteger(body.targetRelease) ||
+          body.targetRelease < 1 ||
           typeof body.imageTag !== "string" ||
           body.imageTag.length === 0
         ) {
           res.status(400).json({
             error: "missing required fields",
-            required: ["gatewayId", "imageTag"],
+            required: ["gatewayId", "targetRelease", "imageTag"],
           });
           return;
         }
@@ -7563,6 +7568,7 @@ router.get(
           mutation: {
             kind: "rollout",
             gatewayId: body.gatewayId,
+            targetRelease: body.targetRelease,
             imageTag: body.imageTag,
           },
           action: async () => createOperation(db, {
@@ -7570,6 +7576,7 @@ router.get(
             createdBy,
             input: {
               gatewayId: body.gatewayId,
+              targetRelease: body.targetRelease,
               imageTag: body.imageTag,
             },
           }),

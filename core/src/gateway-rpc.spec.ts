@@ -519,6 +519,45 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("toolsCatalog", () => {
+    it("requests the exact agent plugin catalog and validates the response", async () => {
+      let captured: unknown;
+      server.setHandler("tools.catalog", (params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: { agentId: "octogee-test-coach", groups: [] },
+        };
+      });
+
+      await expect(client.toolsCatalog({
+        agentId: "octogee-test-coach",
+        includePlugins: true,
+      })).resolves.toEqual({
+        agentId: "octogee-test-coach",
+        groups: [],
+      });
+      expect(captured).toEqual({
+        agentId: "octogee-test-coach",
+        includePlugins: true,
+      });
+    });
+
+    it("rejects a catalog for a different agent", async () => {
+      server.setHandler("tools.catalog", () => ({
+        ok: true,
+        payload: { agentId: "octogee-other-coach", groups: [] },
+      }));
+
+      await expect(client.toolsCatalog({
+        agentId: "octogee-test-coach",
+        includePlugins: true,
+      })).rejects.toMatchObject({
+        code: "invalid-response",
+      });
+    });
+  });
+
   describe("cronAdd", () => {
     it("calls `cron.add` with the job spec verbatim and returns the server payload", async () => {
       let captured: unknown = "not-called";

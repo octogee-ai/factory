@@ -5,6 +5,11 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 export interface RolloutDeps {
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
+  activateDesiredRelease: (input: {
+    gatewayId: string;
+    targetRelease: number;
+    operationId: string;
+  }) => Promise<{ success: true } | { success: false; error: string }>;
   requestReconcileTick?: () => void;
   releaseRecordTimeoutMs: number;
   convergeTimeoutMs: number;
@@ -16,46 +21,109 @@ export interface RolloutDeps {
 
 interface RolloutInput {
   gatewayId?: unknown;
+  targetRelease?: unknown;
   imageTag?: unknown;
+}
+
+interface RollTarget {
+  gatewayId: string;
+  targetRelease: number;
+  imageTag: string;
+}
+
+interface RollProgress {
+  startedAt: number;
+  refreshLiveness: () => Promise<void>;
 }
 
 function fail(error: string): OperationResult {
   return { steps: [], success: false, error };
 }
 
-function converged(gw: GatewayDoc): boolean {
-  return gw.liveRelease === gw.desiredRelease;
+function parseRollTarget(input: RolloutInput): RollTarget | string {
+  if (typeof input.gatewayId !== "string" || input.gatewayId.length === 0) {
+    return "missing gatewayId in op.input";
+  }
+  if (
+    typeof input.targetRelease !== "number" ||
+    !Number.isSafeInteger(input.targetRelease) ||
+    input.targetRelease < 1
+  ) {
+    return "missing targetRelease in op.input";
+  }
+  if (typeof input.imageTag !== "string" || input.imageTag.length === 0) {
+    return "missing imageTag in op.input";
+  }
+  return {
+    gatewayId: input.gatewayId,
+    targetRelease: input.targetRelease,
+    imageTag: input.imageTag,
+  };
+}
+
+export function planDesiredReleaseActivation(
+  gateway: GatewayDoc,
+  targetRelease: number,
+  updatedAt: number,
+  operationId: string,
+):
+  | { success: true; patch: Record<string, unknown> | null }
+  | { success: false; error: string } {
+  if (gateway.desiredStatus === "retired") {
+    return { success: false, error: `gateway ${gateway.gatewayId} is retired — cannot roll` };
+  }
+  if (gateway.latestRelease !== targetRelease) {
+    return {
+      success: false,
+      error:
+        `gateway ${gateway.gatewayId} target release ${targetRelease} was superseded by ` +
+        `latest release ${gateway.latestRelease}`,
+    };
+  }
+  if (gateway.desiredRelease === targetRelease) return { success: true, patch: null };
+  if (gateway.desiredRelease !== gateway.liveRelease) {
+    return {
+      success: false,
+      error:
+        `status 503: gateway ${gateway.gatewayId} cannot activate release ${targetRelease} while ` +
+        `release ${gateway.desiredRelease} is not live`,
+    };
+  }
+  return {
+    success: true,
+    patch: {
+      desiredRelease: targetRelease,
+      updatedAt,
+      updatedBy: `rollout:${operationId}`,
+    },
+  };
+}
+
+function converged(gw: GatewayDoc, targetRelease: number): boolean {
+  return gw.desiredRelease === targetRelease && gw.liveRelease === targetRelease;
 }
 
 export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
-    const input = op.input as RolloutInput;
-    const gatewayId = typeof input.gatewayId === "string" ? input.gatewayId : undefined;
-    const imageTag = typeof input.imageTag === "string" ? input.imageTag : undefined;
-    if (!gatewayId) return fail("missing gatewayId in op.input");
-    if (!imageTag) return fail("missing imageTag in op.input");
-
-    const gateway = await deps.readGatewayDoc(gatewayId);
+    const target = parseRollTarget(op.input as RolloutInput);
+    if (typeof target === "string") return fail(target);
+    const gateway = await deps.readGatewayDoc(target.gatewayId);
     if (!gateway) {
       return fail(
-        `gateway ${gatewayId} has no durable gateways/${gatewayId} desired doc`,
+        `gateway ${target.gatewayId} has no durable gateways/${target.gatewayId} desired doc`,
       );
     }
     if (gateway.desiredStatus === "retired") {
-      return fail(`gateway ${gatewayId} is retired — cannot roll`);
+      return fail(`gateway ${target.gatewayId} is retired — cannot roll`);
     }
 
-    deps.requestReconcileTick?.();
     const startedAt = deps.now();
     await reportStep(ctx, { name: "release-roll", status: "running", startedAt });
-
-    const outcome = await awaitConvergence(
-      deps,
-      gatewayId,
-      imageTag,
+    const outcome = await runReleaseRoll(deps, target, op.id, {
       startedAt,
-      () => reportStep(ctx, { name: "release-roll", status: "running", startedAt }),
-    );
+      refreshLiveness: () =>
+        reportStep(ctx, { name: "release-roll", status: "running", startedAt }),
+    });
     await reportStep(ctx, {
       name: "release-roll",
       status: outcome.success ? "done" : "failed",
@@ -67,46 +135,132 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
   };
 }
 
+async function runReleaseRoll(
+  deps: RolloutDeps,
+  target: RollTarget,
+  operationId: string,
+  progress: RollProgress,
+): Promise<{ success: boolean; error?: string }> {
+  const recorded = await awaitTargetRelease(deps, target, progress);
+  if (!recorded.success) return recorded;
+  const activationWindow = await awaitActivationWindow(deps, target, progress);
+  if (!activationWindow.success) return activationWindow;
+  const activation = await deps.activateDesiredRelease({
+    gatewayId: target.gatewayId,
+    targetRelease: target.targetRelease,
+    operationId,
+  });
+  if (!activation.success) return activation;
+  deps.requestReconcileTick?.();
+  return awaitConvergence(deps, target, progress);
+}
+
 interface RollNarration {
   lastStatus: string | null;
   lastError: string | null;
 }
 
+async function awaitTargetRelease(
+  deps: RolloutDeps,
+  target: RollTarget,
+  progress: RollProgress,
+): Promise<{ success: boolean; error?: string }> {
+  for (;;) {
+    const payload = await deps.readReleasePayload(target.gatewayId, target.targetRelease);
+    if (payload?.imageTag === target.imageTag) return { success: true };
+    if (deps.now() - progress.startedAt >= deps.releaseRecordTimeoutMs) {
+      return {
+        success: false,
+        error:
+          `target release ${target.targetRelease} of ${target.gatewayId} records image ` +
+          `${payload?.imageTag ?? "none"}, not the requested ${target.imageTag}`,
+      };
+    }
+    await deps.wait(deps.pollIntervalMs);
+    await progress.refreshLiveness();
+  }
+}
+
+async function awaitActivationWindow(
+  deps: RolloutDeps,
+  target: RollTarget,
+  progress: RollProgress,
+): Promise<{ success: boolean; error?: string }> {
+  for (;;) {
+    const gateway = await deps.readGatewayDoc(target.gatewayId);
+    if (!gateway) {
+      return {
+        success: false,
+        error: `gateway ${target.gatewayId} desired doc disappeared before release activation`,
+      };
+    }
+    if (gateway.desiredStatus === "retired") {
+      return { success: false, error: `gateway ${target.gatewayId} is retired — cannot roll` };
+    }
+    if (gateway.latestRelease !== target.targetRelease) {
+      return {
+        success: false,
+        error:
+          `gateway ${target.gatewayId} target release ${target.targetRelease} was superseded by ` +
+          `latest release ${gateway.latestRelease}`,
+      };
+    }
+    if (
+      gateway.desiredRelease === target.targetRelease ||
+      gateway.desiredRelease === gateway.liveRelease
+    ) {
+      return { success: true };
+    }
+    if (deps.now() - progress.startedAt >= deps.convergeTimeoutMs) {
+      return {
+        success: false,
+        error:
+          `status 503: gateway ${target.gatewayId} did not finish converging release ` +
+          `${gateway.desiredRelease} before release ${target.targetRelease} activation`,
+      };
+    }
+    deps.log(
+      `[rollout] ${target.gatewayId}: waiting for r${gateway.desiredRelease} to become live ` +
+      `before activating r${target.targetRelease}`,
+    );
+    await deps.wait(deps.pollIntervalMs);
+    await progress.refreshLiveness();
+  }
+}
+
 async function awaitConvergence(
   deps: RolloutDeps,
-  gatewayId: string,
-  imageTag: string,
-  startedAt: number,
-  refreshLiveness: () => Promise<void>,
+  target: RollTarget,
+  progress: RollProgress,
 ): Promise<{ success: boolean; error?: string }> {
   const narration: RollNarration = { lastStatus: null, lastError: null };
   for (;;) {
-    const gw = await deps.readGatewayDoc(gatewayId);
+    const gw = await deps.readGatewayDoc(target.gatewayId);
     if (!gw) {
-      return { success: false, error: `gateway ${gatewayId} desired doc disappeared mid-roll` };
+      return {
+        success: false,
+        error: `gateway ${target.gatewayId} desired doc disappeared mid-roll`,
+      };
     }
-    const payload = await deps.readReleasePayload(gatewayId, gw.desiredRelease);
-    const elapsed = deps.now() - startedAt;
+    const elapsed = deps.now() - progress.startedAt;
     const outcome = assessRollOutcome(deps, {
       gw,
-      gatewayId,
-      imageTag,
-      elapsed,
-      recordedImageTag: payload?.imageTag ?? null,
+      ...target,
     });
     if (outcome) return outcome;
 
-    narrateRollProgress(deps, gatewayId, gw, narration);
+    narrateRollProgress(deps, target.gatewayId, gw, narration);
     if (elapsed >= deps.convergeTimeoutMs) {
       return {
         success: false,
         error:
-          `roll of ${gatewayId} to ${imageTag} did not converge within ${deps.convergeTimeoutMs}ms` +
+          `roll of ${target.gatewayId} to ${target.imageTag} did not converge within ` +
+          `${deps.convergeTimeoutMs}ms` +
           timeoutContext(narration),
       };
     }
     await deps.wait(deps.pollIntervalMs);
-    await refreshLiveness();
+    await progress.refreshLiveness();
   }
 }
 
@@ -115,24 +269,21 @@ function assessRollOutcome(
   input: {
     gw: GatewayDoc;
     gatewayId: string;
+    targetRelease: number;
     imageTag: string;
-    elapsed: number;
-    recordedImageTag: string | null;
   },
 ): { success: boolean; error?: string } | null {
-  const { gw, gatewayId, imageTag } = input;
-  if (input.recordedImageTag !== imageTag) {
-    if (input.elapsed < deps.releaseRecordTimeoutMs) return null;
+  const { gw, gatewayId, targetRelease, imageTag } = input;
+  if (gw.desiredRelease !== targetRelease) {
     return {
       success: false,
       error:
-        `desiredRelease ${gw.desiredRelease} of ${gatewayId} records image ` +
-        `${input.recordedImageTag ?? "none"}, not the requested ${imageTag} — the release cut ` +
-        `failed or a newer release superseded this rollout`,
+        `rollout ${gatewayId} → release ${targetRelease} (${imageTag}) lost desired authority ` +
+        `to release ${gw.desiredRelease}`,
     };
   }
-  if (converged(gw)) {
-    deps.log(`[rollout] ${gatewayId} converged onto release ${gw.liveRelease} (${imageTag})`);
+  if (converged(gw, targetRelease)) {
+    deps.log(`[rollout] ${gatewayId} converged onto release ${targetRelease} (${imageTag})`);
     return { success: true };
   }
   return null;
