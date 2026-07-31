@@ -8,16 +8,9 @@ const verifier = resolve(import.meta.dirname, "../lib/gateway-capacity-placement
 const verifyEnv = readFileSync(resolve(import.meta.dirname, "../verify-env.sh"), "utf8");
 const temporaryDirectories: string[] = [];
 const disposableComputeClassName = "octogee-gateway-test";
-const sharedComputeClassName = "octogee-gateway-shared-test";
 
 function gatewayClass(instance: string): "operator" | "shared" {
   return instance === "operator" ? "operator" : "shared";
-}
-
-function computeClassFor(instance: string): string {
-  return gatewayClass(instance) === "shared"
-    ? sharedComputeClassName
-    : disposableComputeClassName;
 }
 
 function deployment(instance: string, overrides: Record<string, unknown> = {}) {
@@ -41,7 +34,9 @@ function deployment(instance: string, overrides: Record<string, unknown> = {}) {
           },
         },
         spec: {
-          nodeSelector: { "cloud.google.com/compute-class": computeClassFor(instance) },
+          ...(gatewayClassName === "shared"
+            ? {}
+            : { nodeSelector: { "cloud.google.com/compute-class": disposableComputeClassName } }),
           ...overrides,
         },
       },
@@ -65,7 +60,9 @@ function pod(
     },
     spec: {
       nodeName,
-      nodeSelector: { "cloud.google.com/compute-class": computeClassFor(instance) },
+      ...(gatewayClass(instance) === "shared"
+        ? {}
+        : { nodeSelector: { "cloud.google.com/compute-class": disposableComputeClassName } }),
       ...overrides,
     },
     status: { phase: "Running" },
@@ -101,18 +98,12 @@ function disposableComputeClass(overrides: Record<string, unknown> = {}) {
   ], overrides);
 }
 
-function sharedComputeClass(overrides: Record<string, unknown> = {}) {
-  return computeClass(sharedComputeClassName, [
-    { podFamily: "general-purpose", spot: false },
-  ], overrides);
-}
-
-function node(name: string, computeClassName: string, spot: boolean, zone: string) {
+function node(name: string, computeClassName: string | undefined, spot: boolean, zone: string) {
   return {
     metadata: {
       name,
       labels: {
-        "cloud.google.com/compute-class": computeClassName,
+        ...(computeClassName ? { "cloud.google.com/compute-class": computeClassName } : {}),
         "topology.kubernetes.io/zone": zone,
         ...(spot ? { "cloud.google.com/gke-spot": "true" } : {}),
       },
@@ -218,8 +209,8 @@ esac
         }),
         MOCK_NODES: JSON.stringify(fixtures.nodes ?? {
           items: [
-            node("shared-node-shared-a", sharedComputeClassName, false, "us-central1-a"),
-            node("shared-node-shared-b", sharedComputeClassName, false, "us-central1-b"),
+            node("shared-node-shared-a", undefined, false, "us-central1-a"),
+            node("shared-node-shared-b", undefined, false, "us-central1-b"),
             node("spot-node", disposableComputeClassName, true, "us-central1-c"),
           ],
         }),
@@ -227,7 +218,7 @@ esac
           items: [sharedPdb("shared-a"), sharedPdb("shared-b"), pdb("operator")],
         }),
         MOCK_COMPUTE_CLASSES: JSON.stringify(fixtures.computeClasses ?? {
-          items: [disposableComputeClass(), sharedComputeClass()],
+          items: [disposableComputeClass()],
         }),
       },
     },
@@ -249,7 +240,7 @@ describe("gateway capacity placement verifier", () => {
     );
   });
 
-  it("accepts on-demand shared capacity and regional Spot-first owner-bound capacity", () => {
+  it("accepts shared gateways on the platform lane and regional Spot-first owner-bound capacity", () => {
     const result = runPlacementCheck({});
 
     expect(result.status, result.stderr).toBe(0);
@@ -308,7 +299,7 @@ describe("gateway capacity placement verifier", () => {
     const result = runPlacementCheck({
       pods: { items: [pod("shared-a"), pod("operator", "on-demand-node")] },
       nodes: { items: [
-        node("shared-node-shared-a", sharedComputeClassName, false, "us-central1-a"),
+        node("shared-node-shared-a", undefined, false, "us-central1-a"),
         node("on-demand-node", disposableComputeClassName, false, "us-central1-c"),
       ] },
     });
@@ -323,7 +314,6 @@ describe("gateway capacity placement verifier", () => {
       computeClasses: {
         items: [
           disposableComputeClass({ autopilot: { enabled: false } }),
-          sharedComputeClass(),
         ],
       },
     });
@@ -338,11 +328,15 @@ describe("gateway capacity placement verifier", () => {
     const result = runPlacementCheck({
       deployments: {
         items: [
-          deployment("shared-a", { nodeSelector: {} }),
+          deployment("shared-a", {
+            nodeSelector: { "cloud.google.com/compute-class": "octogee-gateway-shared-test" },
+          }),
           deployment("operator"),
         ],
       },
-      pods: { items: [pod("shared-a", "wrong-class-node", { nodeSelector: {} })] },
+      pods: { items: [pod("shared-a", "wrong-class-node", {
+        nodeSelector: { "cloud.google.com/compute-class": "octogee-gateway-shared-test" },
+      })] },
       nodes: {
         items: [{
           metadata: {
@@ -367,14 +361,13 @@ describe("gateway capacity placement verifier", () => {
             }],
             activeMigration: { optimizeRulePriority: false },
           }),
-          sharedComputeClass(),
         ],
       },
     });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
-      "Deployment octogee-gateway-shared-a must select a gateway ComputeClass",
+      "Deployment octogee-gateway-shared-a must use platform on-demand capacity without a custom ComputeClass",
     );
     expect(result.stdout).toContain(
       `ComputeClass ${disposableComputeClassName} must prefer regional Spot before on-demand`,
@@ -392,7 +385,7 @@ describe("gateway capacity placement verifier", () => {
       "PDB for Deployment octogee-gateway-operator must set maxUnavailable=1",
     );
     expect(result.stdout).toContain(
-      "running pod octogee-gateway-shared-a-abc must retain the gateway ComputeClass selector",
+      "running shared pod octogee-gateway-shared-a-abc must not select a custom ComputeClass",
     );
   });
 
@@ -407,7 +400,7 @@ describe("gateway capacity placement verifier", () => {
       },
       nodes: {
         items: [
-          node("shared-spot-node", sharedComputeClassName, true, "us-central1-a"),
+          node("shared-spot-node", undefined, true, "us-central1-a"),
           node("spot-node", disposableComputeClassName, true, "us-central1-c"),
         ],
       },
@@ -422,8 +415,8 @@ describe("gateway capacity placement verifier", () => {
     const result = runPlacementCheck({
       nodes: {
         items: [
-          node("shared-node-shared-a", sharedComputeClassName, false, "us-central1-a"),
-          node("shared-node-shared-b", sharedComputeClassName, false, "us-central1-a"),
+          node("shared-node-shared-a", undefined, false, "us-central1-a"),
+          node("shared-node-shared-b", undefined, false, "us-central1-a"),
           node("spot-node", disposableComputeClassName, true, "us-central1-c"),
         ],
       },

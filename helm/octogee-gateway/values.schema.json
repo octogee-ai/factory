@@ -58,11 +58,6 @@
       "minLength": 1,
       "description": "Environment-owned regional Spot-first ComputeClass selected by owner-bound gateway pods."
     },
-    "sharedComputeClass": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Environment-owned regional on-demand-only ComputeClass selected by shared gateway pods."
-    },
     "sizingTier": {
       "type": "string",
       "enum": ["", "xs", "s", "m", "l"],

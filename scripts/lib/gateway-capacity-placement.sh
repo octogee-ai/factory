@@ -137,8 +137,13 @@ for deployment in live_deployments:
     pod_spec = deployment.get("spec", {}).get("template", {}).get("spec", {})
     node_selector = pod_spec.get("nodeSelector") or {}
     compute_class = node_selector.get(compute_class_label)
-    if not isinstance(compute_class, str) or not compute_class.startswith("octogee-gateway"):
-        errors.append(f"Deployment {name} must select a gateway ComputeClass")
+    if gateway_class == "shared":
+        if compute_class is not None:
+            errors.append(
+                f"Deployment {name} must use platform on-demand capacity without a custom ComputeClass"
+            )
+    elif not isinstance(compute_class, str) or not compute_class.startswith("octogee-gateway"):
+        errors.append(f"Deployment {name} must select an owner-bound gateway ComputeClass")
     else:
         selected_classes.add(compute_class)
         selected_class_roles.setdefault(compute_class, set()).add(gateway_class)
@@ -210,11 +215,7 @@ for name in sorted(selected_classes):
         continue
     spec = item.get("spec", {})
     priorities = spec.get("priorities") or []
-    roles = selected_class_roles.get(name, set())
-    if "shared" in roles and len(roles) > 1:
-        errors.append(f"ComputeClass {name} must not mix shared and owner-bound gateways")
-    shared_only = roles == {"shared"}
-    expected_spot_priorities = (False,) if shared_only else (True, False)
+    expected_spot_priorities = (True, False)
     valid_priorities = len(priorities) == len(expected_spot_priorities)
     if valid_priorities:
         for index, expected_spot in enumerate(expected_spot_priorities):
@@ -235,8 +236,7 @@ for name in sorted(selected_classes):
                 == set(priorities[1]["location"]["zones"])
             )
     if not valid_priorities:
-        policy = "use regional on-demand only" if shared_only else "prefer regional Spot before on-demand"
-        errors.append(f"ComputeClass {name} must {policy}")
+        errors.append(f"ComputeClass {name} must prefer regional Spot before on-demand")
     if not (spec.get("autopilot") or {}).get("enabled"):
         errors.append(f"ComputeClass {name} must explicitly enable Autopilot")
     if not (spec.get("activeMigration") or {}).get("optimizeRulePriority"):
@@ -264,8 +264,11 @@ for pod in pods.get("items", []):
     instance = metadata.get("labels", {}).get("gateway-instance")
     gateway_class = gateway_class_by_instance.get(instance)
     compute_class = (spec.get("nodeSelector") or {}).get(compute_class_label)
-    if compute_class not in selected_classes:
-        errors.append(f"running pod {name} must retain the gateway ComputeClass selector")
+    if gateway_class == "shared":
+        if compute_class is not None:
+            errors.append(f"running shared pod {name} must not select a custom ComputeClass")
+    elif compute_class not in selected_classes:
+        errors.append(f"running owner-bound pod {name} must retain the gateway ComputeClass selector")
     node_name = spec.get("nodeName")
     if not node_name:
         errors.append(f"running pod {name} has no scheduled node")
@@ -274,7 +277,7 @@ for pod in pods.get("items", []):
     if labels is None:
         errors.append(f"running pod {name} is scheduled on unknown node {node_name}")
         continue
-    if labels.get(compute_class_label) != compute_class:
+    if gateway_class != "shared" and labels.get(compute_class_label) != compute_class:
         errors.append(f"running pod {name} is not on its selected gateway ComputeClass")
         continue
     is_spot = labels.get(spot_label) == "true"

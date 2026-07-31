@@ -165,20 +165,18 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).not.toBeNull();
   });
 
-  it("selects on-demand capacity for shared gateways and Spot-first capacity for owner-bound gateways", () => {
+  it("uses the platform lane for shared gateways and the Spot-first class for owner-bound gateways", () => {
     const shared = findDoc(helmTemplate("octogee-gw-default", {
       computeClass: "octogee-gateway-test",
-      sharedComputeClass: "octogee-gateway-shared-test",
       gatewayClass: "shared",
     }), "Deployment", "octogee-gateway-default") ?? "";
     const operator = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       computeClass: "octogee-gateway-test",
-      sharedComputeClass: "octogee-gateway-shared-test",
       gatewayClass: "operator",
     }), "Deployment", "octogee-gateway-bender") ?? "";
 
-    expect(shared).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-shared-test"/);
+    expect(shared).not.toContain("cloud.google.com/compute-class");
     expect(operator).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-test"/);
   });
 

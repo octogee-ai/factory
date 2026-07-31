@@ -68,14 +68,6 @@ shared
 {{- end -}}
 {{- end }}
 
-{{- define "octogee-gateway.computeClass" -}}
-{{- if eq (include "octogee-gateway.gatewayClass" .) "shared" -}}
-{{- required "sharedComputeClass is required for shared gateways" .Values.sharedComputeClass -}}
-{{- else -}}
-{{- required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
-{{- end -}}
-{{- end }}
-
 {{/*
 Resolve the installed image/tooling profile. Shared and builder classes both
 use the standard image; operator class uses the operator image.

@@ -74,7 +74,6 @@ replicas: 1
 rollStrategy: recreate
 
 computeClass: octogee-gateway
-sharedComputeClass: octogee-gateway-shared
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below

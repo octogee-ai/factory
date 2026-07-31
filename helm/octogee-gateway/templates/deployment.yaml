@@ -3,7 +3,6 @@
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
-{{- $computeClass := include "octogee-gateway.computeClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
@@ -81,8 +80,10 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
+      {{- if ne $gatewayClass "shared" }}
       nodeSelector:
-        cloud.google.com/compute-class: {{ $computeClass | quote }}
+        cloud.google.com/compute-class: {{ required "computeClass is required for owner-bound gateways" .Values.computeClass | quote }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
