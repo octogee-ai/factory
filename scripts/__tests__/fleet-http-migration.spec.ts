@@ -328,10 +328,13 @@ function mkFakeChild(opts: {
   stdout?: string[];
   stderr?: string[];
   exitCode?: number;
+  holdExit?: boolean;
 } = {}): EventEmitter & {
   stdout: Readable;
   stderr: Readable;
   stdin: Writable;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   kill: () => boolean;
 } {
   const stdout = new Readable({ read() { /* noop; caller pushes + ends */ } });
@@ -346,7 +349,18 @@ function mkFakeChild(opts: {
     stdin: new Writable({
       write(_chunk, _enc, cb) { cb(); },
     }),
-    kill: vi.fn(() => true),
+    exitCode: opts.exitCode ?? null,
+    signalCode: null,
+    kill: vi.fn(() => {
+      if (!opts.holdExit) {
+        setImmediate(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          child.signalCode = "SIGTERM";
+          child.emit("exit", null, "SIGTERM");
+        });
+      }
+      return true;
+    }),
   });
   if (opts.exitCode !== undefined) {
     const code = opts.exitCode;
@@ -1567,6 +1581,60 @@ describe("queued-rsync migration control handlers", () => {
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];
     expect(copyCommand).toMatch(/\/rsync$/);
     expect(copyArgs.at(-1)).toBe("/openclaw/");
+  });
+
+  it("does not acknowledge a finished key import until its rsync listener exits", async () => {
+    const adapter = mkAdapter({
+      prepareKeyImportDir: vi.fn(async () => "/openclaw"),
+    });
+    const daemon = mkFakeChild({ holdExit: true });
+    const copy = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(daemon).mockReturnValueOnce(copy);
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30873,
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-keys-exit",
+      slug: "chris",
+      mode: "keys",
+      transferUser: "migration",
+      transferKey: "d".repeat(64),
+    };
+    const prepareRaw = JSON.stringify(prepareBody);
+    const prepareHandler = createPrepareRsyncImportHandler(deps);
+    await prepareHandler(
+      mkRequest(prepareBody, { signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, prepareRaw) }),
+      mkResponse().res,
+      vi.fn(),
+    );
+
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: "mig-keys-exit",
+      slug: "chris",
+      mode: "keys",
+    };
+    const finishRaw = JSON.stringify(finishBody);
+    const finishHandler = createFinishRsyncImportHandler(deps);
+    const finishResponse = mkResponse();
+    const finish = finishHandler(
+      mkRequest(finishBody, { signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw) }),
+      finishResponse.res,
+      vi.fn(),
+    );
+
+    expect(await Promise.race([
+      finish.then(() => "finished"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 100)),
+    ])).toBe("pending");
+    expect(daemon.kill).toHaveBeenCalledWith("SIGTERM");
+
+    daemon.exitCode = 0;
+    daemon.emit("exit", 0, null);
+    await finish;
+
+    expect(finishResponse.getStatus()).toBe(200);
   });
 });
 
