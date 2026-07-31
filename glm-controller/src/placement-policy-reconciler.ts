@@ -2217,26 +2217,28 @@ function placementPolicyIdleMs(value: unknown, fallbackIdleMs: number): number {
     : fallbackIdleMs;
 }
 
-async function persistKubernetesObservations(
+export async function persistKubernetesObservations(
   db: Firestore,
   runtimeDocuments: ReadonlyArray<QueryDocumentSnapshot>,
   kubernetesByGatewayId: Readonly<Record<string, PlacementPolicyPodDiagnostics>>,
   now: number,
 ): Promise<void> {
   if (runtimeDocuments.length === 0) return;
-  const batch = db.batch();
-  for (const runtimeDocument of runtimeDocuments) {
+  await Promise.all(runtimeDocuments.map(async (runtimeDocument) => {
     const diagnostics = kubernetesByGatewayId[runtimeDocument.id];
-    batch.set(runtimeDocument.ref, {
-      kubernetes: {
-        status: placementKubernetesStatus(diagnostics),
-        totalPods: diagnostics?.totalPods ?? 0,
-        readyPods: diagnostics?.readyPods ?? 0,
-        observedAt: now,
-      },
-    }, { merge: true });
-  }
-  await batch.commit();
+    await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(runtimeDocument.ref);
+      if (!current.exists || !isGatewayRuntimeDoc(current.data())) return;
+      transaction.set(runtimeDocument.ref, {
+        kubernetes: {
+          status: placementKubernetesStatus(diagnostics),
+          totalPods: diagnostics?.totalPods ?? 0,
+          readyPods: diagnostics?.readyPods ?? 0,
+          observedAt: now,
+        },
+      }, { merge: true });
+    });
+  }));
 }
 
 function placementAssignmentFromDocument(

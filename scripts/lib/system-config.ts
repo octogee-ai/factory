@@ -71,6 +71,7 @@ const OPENCLAW_CONFIG_FILENAME = "openclaw.json";
 const SYSTEM_CONFIG_METADATA_FILENAME = ".octogee.json";
 const SYSTEM_CONFIG_GITIGNORE_FILENAME = ".gitignore";
 const GIT_REV_PARSE_HEAD = ["rev-parse", "HEAD"];
+const MAIN_REF = "refs/heads/main";
 const ACCEPTED_HEAD_UNAVAILABLE = "accepted-head-unavailable";
 const VALIDATION_RESTORE_FAILED = "validation-restore-failed";
 
@@ -392,7 +393,7 @@ async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): 
 }
 
 function retainedSeedGitStateMatches(repoDir: string, keyPath: string): boolean {
-  if (gitExec(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath) !== "") return false;
+  if (gitExec(repoDir, ["ls-remote", "origin", MAIN_REF], keyPath) !== "") return false;
   const head = gitExec(repoDir, GIT_REV_PARSE_HEAD, keyPath);
   if (!head || !GIT_SHA_RE.test(head)) return false;
   if (gitExec(repoDir, ["symbolic-ref", "--short", "HEAD"], keyPath) !== "main") return false;
@@ -463,7 +464,7 @@ function cloneOrReuseSystemConfigRepo(
     if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
       if (retryRetainedInitialSeedPush(slug, dir, templatePath, sshKey, log)) return true;
       if (
-        gitExec(dir, ["ls-remote", "origin", "refs/heads/main"], sshKey) === "" &&
+        gitExec(dir, ["ls-remote", "origin", MAIN_REF], sshKey) === "" &&
         gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
       ) {
         return true;
@@ -686,6 +687,33 @@ function remoteHeadFromLsRemote(output: string | null): string | null {
   return GIT_SHA_RE.test(head) ? head : null;
 }
 
+export function readDurableSystemConfigHeadForSlug(
+  slug: string,
+  opts: {
+    openclawDir?: string;
+    gitExec?: typeof gitExec;
+    customerSshKeyPath?: typeof customerSshKeyPath;
+  } = {},
+): string {
+  if (!isValidUsername(slug)) {
+    throw new Error(`invalid builder slug: ${slug}`);
+  }
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const execGit = opts.gitExec ?? gitExec;
+  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const head = remoteHeadFromLsRemote(
+    execGit(
+      openclawDir,
+      ["ls-remote", remoteUrl(slug), MAIN_REF],
+      keyPath,
+    ),
+  );
+  if (!head) {
+    throw new Error(`durable system config head unavailable for ${slug}`);
+  }
+  return head;
+}
+
 function inspectRemoteRelation(
   repoDir: string,
   keyPath: string,
@@ -693,7 +721,7 @@ function inspectRemoteRelation(
 ): { relation: "equal" | "local-ahead" | "conflict" | "unavailable"; head?: string; remoteHead?: string } {
   const head = execGit(repoDir, GIT_REV_PARSE_HEAD, keyPath);
   const remoteHead = remoteHeadFromLsRemote(
-    execGit(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath),
+    execGit(repoDir, ["ls-remote", "origin", MAIN_REF], keyPath),
   );
   if (!head || !GIT_SHA_RE.test(head) || !remoteHead) return { relation: "unavailable" };
   if (head === remoteHead) return { relation: "equal", head, remoteHead };
@@ -1382,7 +1410,7 @@ function readSystemConfigAuditGitState(
     indexTree: execGit(repoDir, ["write-tree"], keyPath),
     worktree: execGit(repoDir, ["status", "--porcelain", "--", ...SYSTEM_CONFIG_PATHSPEC_ARGS], keyPath),
     remoteHead: remoteHeadFromLsRemote(
-      execGit(repoDir, ["ls-remote", "origin", "refs/heads/main"], keyPath),
+      execGit(repoDir, ["ls-remote", "origin", MAIN_REF], keyPath),
     ),
     configHash: systemConfigFingerprint(configPath),
   };

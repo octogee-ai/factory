@@ -46,37 +46,40 @@ describe("prestop-flush entrypoint config", () => {
     }));
   });
 
-  it("checkpoints every mounted customer's system config on a shared gateway", async () => {
-    const sync = vi.fn(() => ({
-      committed: true,
-      pushed: true,
-      acceptedCommit: "a".repeat(40),
-    }));
+  it("verifies every mounted customer's durable system config on a shared gateway", async () => {
+    const sync = vi.fn();
+    const readAcceptedCommit = vi.fn(() => "a".repeat(40));
     const flush = createPreStopSystemConfigFlush(
       "",
       () => {},
       sync,
       () => ["alice", "bob"],
+      readAcceptedCommit,
     );
 
     await flush();
 
-    expect(sync.mock.calls.map(([slug]) => slug)).toEqual(["alice", "bob"]);
+    expect(sync).not.toHaveBeenCalled();
+    expect(readAcceptedCommit.mock.calls.map(([slug]) => slug)).toEqual(["alice", "bob"]);
   });
 
-  it("attempts every shared system config checkpoint and reports all failures", async () => {
-    const sync = vi.fn((slug: string) => slug === "alice"
-      ? { committed: false, pushed: false, pending: true, errorCode: "push-failed" }
-      : { committed: true, pushed: true, acceptedCommit: "b".repeat(40) });
+  it("attempts every shared system config verification and reports all failures", async () => {
+    const sync = vi.fn();
+    const readAcceptedCommit = vi.fn((slug: string) => {
+      if (slug === "alice") throw new Error("remote-head-unavailable");
+      return "b".repeat(40);
+    });
     const flush = createPreStopSystemConfigFlush(
       "",
       () => {},
       sync,
       () => ["alice", "bob"],
+      readAcceptedCommit,
     );
 
-    await expect(flush()).rejects.toThrow(/alice.*push-failed/i);
-    expect(sync).toHaveBeenCalledTimes(2);
+    await expect(flush()).rejects.toThrow(/alice.*remote-head-unavailable/i);
+    expect(sync).not.toHaveBeenCalled();
+    expect(readAcceptedCommit).toHaveBeenCalledTimes(2);
   });
 
   it("quiesces only the dedicated builder before its preStop checkpoint", async () => {

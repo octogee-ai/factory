@@ -19,6 +19,7 @@ import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
 import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
+  readDurableSystemConfigHeadForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
@@ -80,13 +81,19 @@ export function createPreStopSystemConfigFlush(
   logFn: (message: string) => void = log,
   sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
   listCustomerSlugs: () => string[] = listOnDiskCustomerSlugs,
+  readAcceptedCommit: typeof readDurableSystemConfigHeadForSlug =
+    readDurableSystemConfigHeadForSlug,
 ): () => Promise<void> {
   return async () => {
     const slugs = builderSlug ? [builderSlug] : listCustomerSlugs();
     const failures: string[] = [];
     for (const slug of slugs) {
       try {
-        checkpointDurableSystemConfigForSlug(slug, { log: logFn }, sync);
+        if (builderSlug) {
+          checkpointDurableSystemConfigForSlug(slug, { log: logFn }, sync);
+        } else {
+          readAcceptedCommit(slug);
+        }
       } catch (err) {
         failures.push(`${slug}: ${err instanceof Error ? err.message : String(err)}`);
       }

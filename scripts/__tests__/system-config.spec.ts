@@ -20,6 +20,7 @@ import {
   checkpointBootSystemConfigForSlug,
   extractLegacyMattermostAccountSecrets,
   pushDirtySystemConfigForSlug,
+  readDurableSystemConfigHeadForSlug,
   reconcileSystemConfigSchema,
   removeLegacyMacConfig,
   removeLegacyMacState,
@@ -86,6 +87,25 @@ describe("system_config restore", () => {
     expect(result).toEqual({ skipped: "invalid-builder-slug", seeded: false, restored: false });
     expect(generateCustomerSshKey).not.toHaveBeenCalled();
     expect(ensureSystemConfigRepo).not.toHaveBeenCalled();
+  });
+
+  it("reads the accepted system config commit without requiring a local checkout", () => {
+    const acceptedCommit = "a".repeat(40);
+    vi.mocked(gitExec).mockReturnValue(`${acceptedCommit}\trefs/heads/main`);
+
+    expect(readDurableSystemConfigHeadForSlug("alice", { openclawDir })).toBe(acceptedCommit);
+    expect(gitExec).toHaveBeenCalledWith(
+      openclawDir,
+      ["ls-remote", "git@gitea:alice/system_config.git", "refs/heads/main"],
+      "/tmp/customer-keys/alice/id_ed25519",
+    );
+  });
+
+  it("fails when the durable system config head is unavailable", () => {
+    vi.mocked(gitExec).mockReturnValue(null);
+
+    expect(() => readDurableSystemConfigHeadForSlug("alice", { openclawDir }))
+      .toThrow("durable system config head unavailable for alice");
   });
 
   it("reruns schema migration after Doctor repairs invalid legacy JSON", async () => {

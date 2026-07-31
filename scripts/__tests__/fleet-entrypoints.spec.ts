@@ -8,6 +8,7 @@ import {
 } from "@octogee/core/system-config-mutation-lease";
 import {
   createAssignedFingerprintReader,
+  createFleetSharedSystemConfigFlush,
   createFleetSystemConfigFlush,
   createFleetControllerMutationGatedRpc,
   createSystemConfigMutationGatedRpc,
@@ -140,6 +141,33 @@ describe("fleet-controller entrypoint config", () => {
       expectedRemoteCommit: expectedSystemConfigCommit,
       source: "migration-checkpoint",
     }));
+  });
+
+  it("uses the accepted remote system config commit when the source is Shared", async () => {
+    const acceptedCommit = "a".repeat(40);
+    const readAcceptedCommit = vi.fn(() => acceptedCommit);
+    const flush = createFleetSharedSystemConfigFlush(
+      "alice",
+      undefined,
+      readAcceptedCommit,
+    );
+
+    await expect(flush()).resolves.toEqual({ acceptedCommit });
+    expect(readAcceptedCommit).toHaveBeenCalledExactlyOnceWith("alice");
+  });
+
+  it("rejects a Shared target whose durable system config commit drifted during migration", async () => {
+    const expectedCommit = "a".repeat(40);
+    const observedCommit = "b".repeat(40);
+    const flush = createFleetSharedSystemConfigFlush(
+      "alice",
+      expectedCommit,
+      () => observedCommit,
+    );
+
+    await expect(flush()).rejects.toThrow(
+      `durable system config head changed: expected ${expectedCommit}, observed ${observedCommit}`,
+    );
   });
 
   it("ignores a leftover roll-era freeze marker — identity-pure mutation (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {

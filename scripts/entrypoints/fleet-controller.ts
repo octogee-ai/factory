@@ -29,6 +29,7 @@ import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js"
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   checkpointDurableSystemConfigForSlug,
+  readDurableSystemConfigHeadForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import {
@@ -84,6 +85,23 @@ export function createFleetSystemConfigFlush(
       ...(expectedRemoteCommit ? { expectedRemoteCommit } : {}),
     }, sync);
     return { acceptedCommit: result.acceptedCommit! };
+  };
+}
+
+export function createFleetSharedSystemConfigFlush(
+  builderSlug: string,
+  expectedRemoteCommit?: string,
+  readAcceptedCommit: typeof readDurableSystemConfigHeadForSlug =
+    readDurableSystemConfigHeadForSlug,
+): () => Promise<{ acceptedCommit: string }> {
+  return async () => {
+    const acceptedCommit = readAcceptedCommit(builderSlug);
+    if (expectedRemoteCommit && acceptedCommit !== expectedRemoteCommit) {
+      throw new Error(
+        `durable system config head changed: expected ${expectedRemoteCommit}, observed ${acceptedCommit}`,
+      );
+    }
+    return { acceptedCommit };
   };
 }
 
@@ -202,12 +220,14 @@ async function main(): Promise<void> {
               strict: true,
               store: createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: createFleetSystemConfigFlush(
-          slug,
-          log,
-          syncSystemConfigForSlug,
-          expectedSystemConfigCommit,
-        ),
+        syncSystemConfig: operator
+          ? createFleetSystemConfigFlush(
+              slug,
+              log,
+              syncSystemConfigForSlug,
+              expectedSystemConfigCommit,
+            )
+          : createFleetSharedSystemConfigFlush(slug, expectedSystemConfigCommit),
         log,
       });
     },
