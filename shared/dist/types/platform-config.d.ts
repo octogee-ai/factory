@@ -38,7 +38,7 @@ export declare function parsePlatformConnectConfig(value: unknown): PlatformConn
 export declare function googleConnectAllowed(config: PlatformConnectConfig | null, uid: string): boolean;
 export declare const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
 export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
-export declare const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export declare const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-5.6-luna";
 export declare const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null;
 export interface BuilderAgentModelDefault {
     primary: string;

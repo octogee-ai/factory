@@ -48,7 +48,9 @@ function canonicalAnthropicModel(raw: string): string {
 function canonicalProviderModel(provider: string, raw: string): string {
   if (provider === "anthropic") return canonicalAnthropicModel(raw);
   if (provider === "openrouter") {
-    const known = raw === "z-ai/glm-5.2" || raw === "deepseek/deepseek-v4-pro";
+    const known = raw === "z-ai/glm-5.2" ||
+      raw === "deepseek/deepseek-v4-pro" ||
+      raw === "openai/gpt-5.6-luna";
     return known ? `openrouter:${raw}` : "openrouter:unknown-fallback";
   }
   if (provider === "openai") {

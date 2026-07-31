@@ -31,6 +31,7 @@ const ANONYMOUS_OPERATIONAL_MODELS_BY_PROVIDER = {
   openrouter: [
     "openrouter:z-ai/glm-5.2",
     "openrouter:deepseek/deepseek-v4-pro",
+    "openrouter:openai/gpt-5.6-luna",
     "openrouter:unknown-fallback",
   ],
   openai: ["openai:gpt-5.4-mini", "openai:unknown-fallback"],
