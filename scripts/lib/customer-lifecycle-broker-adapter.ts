@@ -785,7 +785,7 @@ export function buildBrokeredLifecycleAdapter(
         userData as Parameters<typeof syncModelCredentialsForCustomer>[0],
         {
           applyConfigPatch: (args, options) =>
-            applyConfigPatch(args, { ...options, rpc: ctx.rpc }),
+            applyConfigPatch(args, { ...options, rpc: ctx.rpc, cache: ctx.configCache }),
           refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessions,
         },
       ),

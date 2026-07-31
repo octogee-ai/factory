@@ -619,6 +619,22 @@ describe("applyConfigPatch — config cache", () => {
     expect(cache.current).toEqual({ v: 2 });
   });
 
+  it("preserves the accepted cache after a no-op response omits hash and config", async () => {
+    const cache = { current: { v: 1 }, hash: "h1" };
+    const configPatch = vi.fn(async () => ({
+      ok: true as const,
+      noop: true as const,
+      path: "/x",
+    }));
+
+    await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ cache }), rpc: makeFakeRpc({ configPatch }) },
+    );
+
+    expect(cache).toEqual({ current: { v: 1 }, hash: "h1" });
+  });
+
   it("falls back to configGet when cache hash is empty (first call)", async () => {
     const cache = { current: undefined as unknown, hash: "" };
     const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));

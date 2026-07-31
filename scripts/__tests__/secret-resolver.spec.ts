@@ -6,15 +6,26 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // resolveOne is exported for in-process unit coverage of the broker call; the
 // resolver's main() is import-guarded, so this import is inert.
-import { resolveOne as resolveOneRaw, BROKER_BASE_URL, KSA_TOKEN_PATH } from "../secret-resolver.mjs";
+import {
+  resolveOne as resolveOneRaw,
+  BROKER_BASE_URL,
+  BROKER_REQUEST_TIMEOUT_MS,
+  KSA_TOKEN_PATH,
+} from "../secret-resolver.mjs";
 const resolveOne = resolveOneRaw as (
   id: string,
   deps?: {
     token?: string;
     fetchImpl?: (
       url: string,
-      init: { method: string; headers: Record<string, string>; body: string },
+      init: {
+        method: string;
+        headers: Record<string, string>;
+        body: string;
+        signal: AbortSignal;
+      },
     ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+    requestTimeoutMs?: number;
   },
 ) => Promise<string>;
 
@@ -241,7 +252,12 @@ describe("secret-resolver — defense-in-depth", () => {
 
 describe("resolveOne — brokered byok materialization (unit, injected deps)", () => {
   it("POSTs { id } to /internal/byok/api-key with the KSA token and returns the value", async () => {
-    let seen: { url: string; init: { headers: Record<string, string>; body: string } } | undefined;
+    let seen:
+      | {
+          url: string;
+          init: { headers: Record<string, string>; body: string; signal: AbortSignal };
+        }
+      | undefined;
     const v = await resolveOne("byok-tester5-grok", {
       token: "ksa-tok",
       fetchImpl: async (url, init) => {
@@ -252,7 +268,22 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(v).toBe("xai-key-tester5");
     expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/api-key`);
     expect(seen?.init.headers["x-k8s-sa-token"]).toBe("ksa-tok");
+    expect(seen?.init.signal).toBeInstanceOf(AbortSignal);
+    expect(BROKER_REQUEST_TIMEOUT_MS).toBe(4000);
     expect(JSON.parse(seen!.init.body)).toEqual({ id: "byok-tester5-grok" });
+  });
+
+  it("aborts a stalled broker request within the configured resolver deadline", async () => {
+    await expect(
+      resolveOne("byok-tester5-grok", {
+        token: "ksa-tok",
+        requestTimeoutMs: 10,
+        fetchImpl: async (_url, init) =>
+          await new Promise<never>((_resolve, reject) => {
+            init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+          }),
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
   });
 
   it("routes an agent-model-token id to /internal/byok/agent-model-token with the embedded agentId", async () => {

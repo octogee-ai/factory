@@ -30,6 +30,8 @@ function seedCacheFromFetch(cache, config, hash) {
 function updateCacheAfterPatch(cache, patchResult) {
     if (!cache)
         return;
+    if (patchResult.noop === true)
+        return;
     if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
         cache.hash = patchResult.hash;
         cache.current = patchResult.config ?? cache.current;
