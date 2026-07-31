@@ -1406,13 +1406,12 @@ export type AdminBuilderRuntimeLifecycle =
   | "retiring"
   | "failed";
 
-const BUILDER_RUNTIME_STATUSES = new Set([
+const LIVE_BUILDER_RUNTIME_STATUSES = new Set([
   "requested",
   "provisioning",
   "activating",
   "active",
   "returning",
-  "failed",
 ]);
 const BUILDER_RUNTIME_STALE_AFTER_MS = 10 * 60_000;
 const BUILDER_RUNTIME_STATUS_FIELDS: Record<AdminBuilderRuntimeLifecycle, string> = {
@@ -1562,16 +1561,15 @@ function builderRuntimeLifecycle(
   leaseStatus: string,
   retirement: BuilderRuntimeRetirementContext,
 ): AdminBuilderRuntimeLifecycle | null {
+  // Terminal leases surface on Fleet only while their disposable teardown is
+  // unfinished; completed history lives on the customer's placement receipts.
+  const teardownLingers = retirement.target !== undefined && !retirement.complete;
   const visible =
-    BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
-    (
-      leaseStatus === "parked" &&
-      retirement.started &&
-      !retirement.complete
-    );
+    LIVE_BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
+    ((leaseStatus === "parked" || leaseStatus === "failed") && teardownLingers);
   if (!visible) return null;
   if (retirement.failed || leaseStatus === "failed") return "failed";
-  if (retirement.started) return "retiring";
+  if (retirement.started || leaseStatus === "parked") return "retiring";
   return leaseStatus as AdminBuilderRuntimeLifecycle;
 }
 
@@ -1671,7 +1669,6 @@ export function projectBuilderRuntime(
   cleanupError: string | null;
   error: string | null;
   terminationAvailable: boolean;
-  retryAvailable: boolean;
   targetPodStatus: GatewayPodDiagnosticsStatus | null;
   targetPodCount: number | null;
 } | null {
@@ -1752,7 +1749,6 @@ export function projectBuilderRuntime(
       leaseFailed,
       stale,
     }),
-    retryAvailable: false,
     targetPodStatus: null,
     targetPodCount: null,
   };
@@ -5005,18 +5001,10 @@ router.get(
           const target = runtime.targetGatewayId
             ? gatewayById.get(runtime.targetGatewayId)
             : undefined;
-          const targetPodStatus = target?.podDiagnostics?.status ?? null;
-          const targetPodCount = target?.podDiagnostics?.totalPods ?? null;
           return {
             ...runtime,
-            targetPodStatus,
-            targetPodCount,
-            retryAvailable:
-              runtime.lifecycle === "failed" &&
-              runtime.cleanupOperationStatus === "succeeded" &&
-              target?.desiredStatus === "retired" &&
-              targetPodStatus === "missing" &&
-              targetPodCount === 0,
+            targetPodStatus: target?.podDiagnostics?.status ?? null,
+            targetPodCount: target?.podDiagnostics?.totalPods ?? null,
           };
         });
         const sharedPoolConfig = parseSharedGatewayPoolConfig(
@@ -5283,6 +5271,27 @@ router.patch(
     },
   );
 
+function activeDistributionGateways(
+  glmById: ReadonlyMap<string, GlmDoc>,
+  legacyById: ReadonlyMap<string, unknown>,
+): Map<string, { status: string; mountedCustomers: Set<string>; mountedCount: number }> {
+  const gateways = new Map<
+    string,
+    { status: string; mountedCustomers: Set<string>; mountedCount: number }
+  >();
+  for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
+    if (projectDesiredStatus(glmById.get(gatewayId)) === "retired") continue;
+    const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
+    const mounted = [...readMountedSlugs(hb)];
+    gateways.set(gatewayId, {
+      status: typeof hb?.status === "string" ? hb.status : "unknown",
+      mountedCustomers: new Set(mounted),
+      mountedCount: mounted.length,
+    });
+  }
+  return gateways;
+}
+
 router.get(
     "/customer-distribution",
     async (_req: Request, res: Response, next: NextFunction) => {
@@ -5298,23 +5307,7 @@ router.get(
           gatewayDocs: gwSnap.docs,
           glmDocs: glmSnap.docs,
         });
-        const gateways = new Map<
-          string,
-          {
-            status: string;
-            mountedCustomers: Set<string>;
-            mountedCount: number;
-          }
-        >();
-        for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
-          const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
-          const mounted = [...readMountedSlugs(hb)];
-          gateways.set(gatewayId, {
-            status: typeof hb?.status === "string" ? hb.status : "unknown",
-            mountedCustomers: new Set(mounted),
-            mountedCount: mounted.length,
-          });
-        }
+        const gateways = activeDistributionGateways(glmById, legacyById);
 
         const assignedByGateway = new Map<string, number>();
         const mountedByGateway = new Map<string, number>();

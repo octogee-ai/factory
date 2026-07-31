@@ -27,14 +27,29 @@ describe("builderGatewayIdForSlug", () => {
 
 describe("disposableBuilderGatewayId", () => {
   it("binds the identity to one activation generation", () => {
-    const first = disposableBuilderGatewayId("jack", 1, "lease-one");
-    const retry = disposableBuilderGatewayId("jack", 1, "lease-one");
-    const next = disposableBuilderGatewayId("jack", 2, "lease-two");
+    const first = disposableBuilderGatewayId("jack", 1, "lease-one", "xs");
+    const retry = disposableBuilderGatewayId("jack", 1, "lease-one", "xs");
+    const next = disposableBuilderGatewayId("jack", 2, "lease-two", "xs");
 
     expect(first).toBe(retry);
     expect(next).not.toBe(first);
     expect(isValidNewGatewayId(first)).toBe(true);
     expect(isValidNewGatewayId(next)).toBe(true);
+  });
+
+  it("names the runtime by shortened slug and instance size for pod listings", () => {
+    expect(disposableBuilderGatewayId("jack", 1, "lease-one", "xs")).toMatch(
+      /^jack-xs-[0-9a-f]{8}$/u,
+    );
+    expect(disposableBuilderGatewayId("jack", 1, "lease-one", "m")).toMatch(
+      /^jack-m-[0-9a-f]{8}$/u,
+    );
+  });
+
+  it("rejects a sizing tier outside the catalog", () => {
+    expect(() =>
+      disposableBuilderGatewayId("jack", 1, "lease-one", "xxl" as never),
+    ).toThrow("invalid Builder runtime sizing tier");
   });
 
   it("keeps long and reserved-looking slugs inside the new-gateway contract", () => {
@@ -43,8 +58,9 @@ describe("disposableBuilderGatewayId", () => {
       "builder-with-green",
       "builder-with-blue",
     ]) {
-      const gatewayId = disposableBuilderGatewayId(slug, 999_999, "lease-collision-seed");
+      const gatewayId = disposableBuilderGatewayId(slug, 999_999, "lease-collision-seed", "xs");
       expect(gatewayId.length).toBeLessThanOrEqual(32);
+      expect(gatewayId).toContain("-xs-");
       expect(isValidNewGatewayId(gatewayId)).toBe(true);
     }
   });

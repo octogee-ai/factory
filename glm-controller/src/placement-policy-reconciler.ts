@@ -242,6 +242,14 @@ export interface PlacementPolicyReconcilerDeps {
   }): Promise<BuilderRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
+  deleteRetiredDisposableGateway(
+    input: DeleteRetiredDisposableGatewayInput,
+  ): Promise<boolean>;
+}
+
+export interface DeleteRetiredDisposableGatewayInput {
+  gatewayId: string;
+  ownerUid: string;
 }
 
 export interface PlacementPolicyReconcileResult {
@@ -249,6 +257,7 @@ export interface PlacementPolicyReconcileResult {
   enqueued: number;
   adopted: number;
   retired: number;
+  swept: number;
   blocked: number;
 }
 
@@ -1729,6 +1738,7 @@ export async function reconcilePlacementPolicyOnce(
     enqueued: 0,
     adopted: 0,
     retired: 0,
+    swept: 0,
     blocked: 0,
   };
   if (await placementMaintenanceFrozen(deps)) return result;
@@ -1797,7 +1807,68 @@ export async function reconcilePlacementPolicyOnce(
       `[placement-policy] shared rebalance: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  try {
+    await reconcileDisposableTombstones(context);
+  } catch (error) {
+    result.blocked += 1;
+    deps.log(
+      `[placement-policy] tombstone sweep: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   return result;
+}
+
+const LIVE_LEASE_STATUSES = new Set([
+  "requested",
+  "provisioning",
+  "activating",
+  "active",
+  "returning",
+]);
+
+function liveLeaseTargetGatewayIds(
+  users: ReadonlyArray<PlacementPolicyUser>,
+): Set<string> {
+  const targets = new Set<string>();
+  for (const user of users) {
+    const lease = record(record(record(user.data.provisioning)?.openclaw)?.activationLease);
+    const target = lease ? nonEmptyString(lease.targetGatewayId) : null;
+    if (lease && target && LIVE_LEASE_STATUSES.has(String(lease.status))) {
+      targets.add(target);
+    }
+  }
+  return targets;
+}
+
+// Disposable runtimes leave no fleet tombstone: once retirement cleanup has
+// succeeded, the durable record is deleted and the Builder's placement
+// receipts become the audit trail.
+async function reconcileDisposableTombstones(
+  context: PlacementPolicyReconcileContext,
+): Promise<void> {
+  const liveTargets = liveLeaseTargetGatewayIds(context.state.users);
+  const candidates = context.state.gateways
+    .filter((gateway) =>
+      gateway.disposable &&
+      gateway.desiredStatus === "retired" &&
+      !isOperatorManaged(gateway.managedBy) &&
+      gateway.ownerUid !== null &&
+      !liveTargets.has(gateway.gatewayId))
+    .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
+  for (const gateway of candidates) {
+    // Fence-blocked candidates (cleanup still running or wedged) must not
+    // consume mutation budget, or ten of them would starve every later
+    // deletable tombstone on each pass.
+    if (context.mutations >= PLACEMENT_POLICY_MUTATION_LIMIT) return;
+    const deleted = await context.deps.deleteRetiredDisposableGateway({
+      gatewayId: gateway.gatewayId,
+      ownerUid: gateway.ownerUid!,
+    });
+    if (deleted) {
+      claimPlacementMutation(context);
+      context.result.swept += 1;
+    }
+  }
 }
 
 async function placementMaintenanceFrozen(
@@ -2798,6 +2869,67 @@ export function retirementAuthorityFenceAllows(
     retirementAssignmentFenceAllows(input);
 }
 
+async function deleteRetiredDisposableGatewayFirestore(
+  input: FirestorePlacementPolicyInput,
+  request: DeleteRetiredDisposableGatewayInput,
+): Promise<boolean> {
+  const operationId = `placement-retire-${request.ownerUid}-${request.gatewayId}`;
+  const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
+  const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
+  const ownerRef = input.db.collection("users").doc(request.ownerUid);
+  const deletable = await input.db.runTransaction(async (transaction) => {
+    const [rootSnapshot, operationSnapshot, ownerSnapshot] = await Promise.all([
+      transaction.get(gatewayRef),
+      transaction.get(operationRef),
+      transaction.get(ownerRef),
+    ]);
+    const root = projectGatewayDesiredRootForGateway(
+      rootSnapshot.exists ? rootSnapshot.data() : undefined,
+      request.gatewayId,
+    );
+    const claim = record(
+      (rootSnapshot.data() as Record<string, unknown> | undefined)?.retirementClaim,
+    );
+    const operation = operationSnapshot.data() as Record<string, unknown> | undefined;
+    // A user mirror still pointing at the runtime would trip the reconciler's
+    // missing-gateway guard after deletion — the record must outlive the pointer.
+    const ownerMirrorGatewayId = ownerSnapshot.exists
+      ? currentGatewayId(ownerSnapshot.data() as Record<string, unknown>)
+      : null;
+    return [
+      root !== null,
+      root?.desiredStatus === "retired",
+      root?.ownerUid === request.ownerUid,
+      root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+      !isOperatorManaged(root?.managedBy),
+      claim?.operationId === operationId,
+      operationSnapshot.exists,
+      operation?.kind === "retire-gateway",
+      operation?.status === "succeeded",
+      ownerMirrorGatewayId !== request.gatewayId,
+    ].every(Boolean);
+  });
+  if (!deletable) return false;
+  // Deletion order makes every partial failure re-drivable: auxiliary docs
+  // first (idempotent), the root next (its claim + the retire op are the
+  // re-verification fence), and the retire op only once nothing else remains.
+  await Promise.all([
+    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-activate-${request.gatewayId}`).delete(),
+    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-return-${request.gatewayId}`).delete(),
+    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-recover-${request.gatewayId}`).delete(),
+    input.db
+      .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
+      .doc(`builder-recover-${request.gatewayId}`)
+      .delete(),
+  ]);
+  await input.db.recursiveDelete(gatewayRef);
+  await operationRef.delete();
+  input.log(
+    `[placement-policy] deleted retired disposable runtime ${request.gatewayId} for ${request.ownerUid}`,
+  );
+  return true;
+}
+
 export function createFirestorePlacementPolicyReconcilerDeps(
   input: FirestorePlacementPolicyInput,
 ): PlacementPolicyReconcilerDeps {
@@ -2824,6 +2956,8 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
+    deleteRetiredDisposableGateway: (request) =>
+      deleteRetiredDisposableGatewayFirestore(input, request),
   };
 }
 

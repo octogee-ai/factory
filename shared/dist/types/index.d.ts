@@ -44,6 +44,8 @@ export type { GatewayMonthlyCost, FleetMonthlyCost } from './cost-estimator.js';
 export { AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR, AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 export { builderGatewayIdForSlug, disposableBuilderGatewayId } from './builder-gateway-id.js';
+export { PLACEMENT_RECEIPTS_SUBCOLLECTION, placementReceiptDocId, } from './placement-receipts.js';
+export type { PlacementReceipt, PlacementReceiptKind } from './placement-receipts.js';
 export type { DeviceIdentity, DeviceAuthPayloadV3Params, SignedDevicePayload, SignConnectDeviceParams, } from './device-identity.js';
 export type { PtyFrame, PtyClientFrame, PtyServerFrame, PtyStdinFrame, PtyStdoutFrame, PtyResizeFrame, PtySignalFrame, PtyExitFrame, PtyErrorFrame, PtyFrameType, PtySignalName, } from './builder-shell-pty.js';
 export { PTY_FRAME, PTY_SIGNALS, PTY_BUDGET, PTY_DEFAULT, ALLOWED_DRIVER_SIGNALS, encodeStdin, encodeStdout, encodeResize, encodeSignal, encodeExit, encodeError, decodeFrame, } from './builder-shell-pty.js';

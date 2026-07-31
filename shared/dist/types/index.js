@@ -20,6 +20,7 @@ export { SIZING_TIERS, TIER_PRESETS, GATEWAY_CLASS_DEFAULT_TIER, PROFILE_DEFAULT
 export { AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR, AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR, HOURS_PER_MONTH, estimateGatewayMonthlyCost, estimateFleetMonthlyCost, } from './cost-estimator.js';
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 export { builderGatewayIdForSlug, disposableBuilderGatewayId } from './builder-gateway-id.js';
+export { PLACEMENT_RECEIPTS_SUBCOLLECTION, placementReceiptDocId, } from './placement-receipts.js';
 export { PTY_FRAME, PTY_SIGNALS, PTY_BUDGET, PTY_DEFAULT, ALLOWED_DRIVER_SIGNALS, encodeStdin, encodeStdout, encodeResize, encodeSignal, encodeExit, encodeError, decodeFrame, } from './builder-shell-pty.js';
 export { OpenclawWireError, isResponseFrame, waitForWsOpen, startConnectChallengeTracker, sendWsRequest, } from './openclaw-wire-core.js';
 export { AGENT_CONVERSATION_SCHEMA_VERSION, AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION, AGENT_ACTIVITY_RESERVED_ITEM_IDS, agentActivityCanonicalKey, } from './agent-conversation.js';

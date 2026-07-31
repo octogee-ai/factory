@@ -161,7 +161,6 @@ export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gateway
     cleanupError: string | null;
     error: string | null;
     terminationAvailable: boolean;
-    retryAvailable: boolean;
     targetPodStatus: GatewayPodDiagnosticsStatus | null;
     targetPodCount: number | null;
 } | null;

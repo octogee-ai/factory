@@ -354,3 +354,132 @@ describe("aggregateBrokerDiagnostics — the where-did-my-window-go projection",
     expect(out.recentCalls[0].at).toBe(JULY3 + 39);
   });
 });
+
+describe("GET /api/admin/customer/:uid/placements", () => {
+  function receipt(overrides: DocData): DocData {
+    return {
+      schemaVersion: 1,
+      kind: "activated",
+      at: 1_000,
+      builderSlug: "builder",
+      leaseId: "lease-1",
+      generation: 1,
+      cause: "run-start",
+      sizingTier: "xs",
+      entitlementTier: "hobby",
+      gatewayId: "builder-xs-feedf00d",
+      sharedGatewayId: "default",
+      requestedAt: 500,
+      wakeDurationMs: 500,
+      activeDurationMs: null,
+      operationId: "builder-activate-builder-xs-feedf00d",
+      retirementOperationId: null,
+      operatorTerminated: false,
+      error: null,
+      ...overrides,
+    };
+  }
+
+  const failedLeaseUser = customerDoc({
+    provisioning: {
+      openclaw: {
+        status: "complete",
+        slug: "builder",
+        gatewayId: "default",
+        activationLease: {
+          leaseId: "lease-2",
+          generation: 2,
+          status: "failed",
+          cause: "run-start",
+          sizingTier: "xs",
+          targetGatewayId: "builder-xs-feedf00d",
+          lastError: { message: "restore failed" },
+        },
+      },
+    },
+  });
+
+  it("returns placement receipts newest-first with the lease and retry state", async () => {
+    const app = makeApp({
+      "users/uid-1": failedLeaseUser,
+      "users/uid-1/placement_receipts/lease-1-1-activated": receipt({}),
+      "users/uid-1/placement_receipts/lease-1-1-returned": receipt({
+        kind: "returned",
+        at: 2_000,
+        activeDurationMs: 60_000,
+        operationId: "builder-return-builder-xs-feedf00d",
+        retirementOperationId: "placement-retire-uid-1-builder-xs-feedf00d",
+      }),
+      "users/uid-1/placement_receipts/lease-2-2-activation-failed": receipt({
+        kind: "activation-failed",
+        at: 3_000,
+        leaseId: "lease-2",
+        generation: 2,
+        error: "restore failed",
+      }),
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1/placements").expect(200);
+
+    expect(res.body.items.map((item: { kind: string }) => item.kind)).toEqual([
+      "activation-failed",
+      "returned",
+      "activated",
+    ]);
+    expect(res.body.items[1]).toMatchObject({
+      kind: "returned",
+      gatewayId: "builder-xs-feedf00d",
+      sharedGatewayId: "default",
+      sizingTier: "xs",
+      activeDurationMs: 60_000,
+      operatorTerminated: false,
+    });
+    expect(res.body.lease).toMatchObject({
+      leaseId: "lease-2",
+      generation: 2,
+      status: "failed",
+      targetGatewayId: "builder-xs-feedf00d",
+      error: "restore failed",
+    });
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.retryAvailable).toBe(true);
+  });
+
+  it("truncates loudly with hasMore when history exceeds the requested limit", async () => {
+    const app = makeApp({
+      "users/uid-1": failedLeaseUser,
+      "users/uid-1/placement_receipts/lease-1-1-activated": receipt({}),
+      "users/uid-1/placement_receipts/lease-1-1-returned": receipt({ kind: "returned", at: 2_000 }),
+      "users/uid-1/placement_receipts/lease-2-2-activation-failed": receipt({
+        kind: "activation-failed",
+        at: 3_000,
+        leaseId: "lease-2",
+        generation: 2,
+      }),
+    });
+
+    const res = await request(app)
+      .get("/api/admin/customer/uid-1/placements?limit=2")
+      .expect(200);
+
+    expect(res.body.items.map((item: { at: number }) => item.at)).toEqual([3_000, 2_000]);
+    expect(res.body.hasMore).toBe(true);
+  });
+
+  it("withholds retry while the failed runtime record still exists", async () => {
+    const app = makeApp({
+      "users/uid-1": failedLeaseUser,
+      "gateways/builder-xs-feedf00d": { gatewayId: "builder-xs-feedf00d", desiredStatus: "retired" },
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1/placements").expect(200);
+
+    expect(res.body.retryAvailable).toBe(false);
+    expect(res.body.items).toEqual([]);
+  });
+
+  it("rejects an unknown customer", async () => {
+    const app = makeApp({});
+    await request(app).get("/api/admin/customer/uid-missing/placements").expect(404);
+  });
+});

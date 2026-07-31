@@ -403,6 +403,12 @@ export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
 export { builderGatewayIdForSlug, disposableBuilderGatewayId } from './builder-gateway-id.js';
 
+export {
+  PLACEMENT_RECEIPTS_SUBCOLLECTION,
+  placementReceiptDocId,
+} from './placement-receipts.js';
+export type { PlacementReceipt, PlacementReceiptKind } from './placement-receipts.js';
+
 export type {
   DeviceIdentity,
   DeviceAuthPayloadV3Params,

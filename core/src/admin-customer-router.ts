@@ -13,6 +13,8 @@ import {
   type CustomerSummary,
 } from "./admin-shape.js";
 import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
@@ -403,6 +405,48 @@ function dottedRead(path: string, src: Record<string, unknown>): unknown {
     }
     return undefined;
   }, src);
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function projectPlacementReceipt(id: string, data: Record<string, unknown>) {
+  return {
+    id,
+    kind: stringValue(data.kind) ?? "unknown",
+    at: finiteNumber(data.at),
+    builderSlug: stringValue(data.builderSlug),
+    leaseId: stringValue(data.leaseId),
+    generation: finiteNumber(data.generation),
+    cause: stringValue(data.cause),
+    sizingTier: stringValue(data.sizingTier),
+    gatewayId: stringValue(data.gatewayId),
+    sharedGatewayId: stringValue(data.sharedGatewayId),
+    wakeDurationMs: finiteNumber(data.wakeDurationMs),
+    activeDurationMs: finiteNumber(data.activeDurationMs),
+    operationId: stringValue(data.operationId),
+    retirementOperationId: stringValue(data.retirementOperationId),
+    operatorTerminated: data.operatorTerminated === true,
+    error: stringValue(data.error),
+  };
+}
+
+function activationLeaseSummary(userData: Record<string, unknown>) {
+  const openclaw = objectValue(objectValue(userData.provisioning)?.openclaw);
+  const lease = objectValue(openclaw?.activationLease);
+  const generation = finiteNumber(lease?.generation);
+  const leaseId = stringValue(lease?.leaseId);
+  if (!lease || !leaseId || generation === null) return null;
+  return {
+    leaseId,
+    generation,
+    status: stringValue(lease.status),
+    cause: stringValue(lease.cause),
+    sizingTier: stringValue(lease.sizingTier),
+    targetGatewayId: stringValue(lease.targetGatewayId),
+    error: stringValue(objectValue(lease.lastError)?.message),
+  };
 }
 
 function warnIfNoSlug(
@@ -825,6 +869,41 @@ router.get(
     },
   );
 
+
+  router.get(
+    "/customer/:uid/placements",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const uid = req.params.uid as string;
+        const userDoc = await db.collection("users").doc(uid).get();
+        if (!userDoc.exists) { res.status(404).json({ error: "User not found" }); return; }
+
+        const limit = Math.max(1, Math.min(200,
+          parseInt((req.query.limit as string) ?? "50", 10) || 50,
+        ));
+        const snap = await db
+          .collection(`users/${uid}/${PLACEMENT_RECEIPTS_SUBCOLLECTION}`)
+          .orderBy("at", "desc")
+          .limit(limit + 1)
+          .get();
+        const sorted = snap.docs
+          .map((doc) => projectPlacementReceipt(doc.id, doc.data() as Record<string, unknown>))
+          .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+        const items = sorted.slice(0, limit);
+        const hasMore = sorted.length > limit;
+
+        const lease = activationLeaseSummary(userDoc.data() as Record<string, unknown>);
+        let retryAvailable = false;
+        if (lease?.status === "failed") {
+          retryAvailable = lease.targetGatewayId === null
+            ? true
+            : !(await db.collection(GATEWAYS_COLLECTION).doc(lease.targetGatewayId).get()).exists;
+        }
+
+        res.json({ items, hasMore, lease, retryAvailable, generatedAt: new Date().toISOString() });
+      } catch (e) { next(e); }
+    },
+  );
 
   router.get(
     "/customer/:uid/audit",

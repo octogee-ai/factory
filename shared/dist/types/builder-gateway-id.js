@@ -1,7 +1,8 @@
 import { isValidNewGatewayId } from "./glm.js";
 import { USERNAME_RE } from "./identity.js";
+import { SIZING_TIERS } from "./sizing.js";
 const SHORT_SLUG_LENGTH = 13;
-const DISPOSABLE_SLUG_LENGTH = 19;
+const DISPOSABLE_SLUG_LENGTH = 20;
 function stableHash(value) {
     let hash = 0x811c9dc5;
     for (let index = 0; index < value.length; index += 1) {
@@ -26,7 +27,7 @@ export function builderGatewayIdForSlug(slug) {
     }
     return shortened;
 }
-export function disposableBuilderGatewayId(slug, generation, leaseId) {
+export function disposableBuilderGatewayId(slug, generation, leaseId, sizingTier) {
     if (!USERNAME_RE.test(slug))
         throw new Error("invalid Builder slug");
     if (!Number.isSafeInteger(generation) || generation < 1) {
@@ -34,11 +35,14 @@ export function disposableBuilderGatewayId(slug, generation, leaseId) {
     }
     if (leaseId.length === 0)
         throw new Error("invalid Builder runtime lease");
+    if (!SIZING_TIERS.includes(sizingTier)) {
+        throw new Error("invalid Builder runtime sizing tier");
+    }
     let shortSlug = slug.slice(0, DISPOSABLE_SLUG_LENGTH);
     while (shortSlug.endsWith("-"))
         shortSlug = shortSlug.slice(0, -1);
     const runtimeIdentity = `${slug}:${generation}:${leaseId}`;
-    const id = `run-${shortSlug}-${stableHash(runtimeIdentity)}`;
+    const id = `${shortSlug}-${sizingTier}-${stableHash(runtimeIdentity)}`;
     if (!isValidNewGatewayId(id)) {
         throw new Error("Builder runtime cannot produce a valid gateway id");
     }

@@ -58,6 +58,10 @@
       "types": "./dist/types/builder-gateway-id.d.ts",
       "default": "./dist/types/builder-gateway-id.js"
     },
+    "./types/placement-receipts": {
+      "types": "./dist/types/placement-receipts.d.ts",
+      "default": "./dist/types/placement-receipts.js"
+    },
     "./types/channel": {
       "types": "./dist/types/channel.d.ts",
       "default": "./dist/types/channel.js"
@@ -242,6 +246,9 @@
       ],
       "types/builder-gateway-id": [
         "dist/types/builder-gateway-id.d.ts"
+      ],
+      "types/placement-receipts": [
+        "dist/types/placement-receipts.d.ts"
       ],
       "types/channel": [
         "dist/types/channel.d.ts"

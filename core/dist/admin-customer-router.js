@@ -1,5 +1,7 @@
 import { buildCustomerSummary, toISODate, } from "./admin-shape.js";
 import { getTierConfig } from "@octogee/shared/types/billing-tiers";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
 import { ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION, anonymousOperationalEnvironment, anonymousOperationalGatewayClass, anonymousOperationalPlanTier, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
@@ -257,6 +259,46 @@ function dottedRead(path, src) {
         }
         return undefined;
     }, src);
+}
+function finiteNumber(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function projectPlacementReceipt(id, data) {
+    return {
+        id,
+        kind: stringValue(data.kind) ?? "unknown",
+        at: finiteNumber(data.at),
+        builderSlug: stringValue(data.builderSlug),
+        leaseId: stringValue(data.leaseId),
+        generation: finiteNumber(data.generation),
+        cause: stringValue(data.cause),
+        sizingTier: stringValue(data.sizingTier),
+        gatewayId: stringValue(data.gatewayId),
+        sharedGatewayId: stringValue(data.sharedGatewayId),
+        wakeDurationMs: finiteNumber(data.wakeDurationMs),
+        activeDurationMs: finiteNumber(data.activeDurationMs),
+        operationId: stringValue(data.operationId),
+        retirementOperationId: stringValue(data.retirementOperationId),
+        operatorTerminated: data.operatorTerminated === true,
+        error: stringValue(data.error),
+    };
+}
+function activationLeaseSummary(userData) {
+    const openclaw = objectValue(objectValue(userData.provisioning)?.openclaw);
+    const lease = objectValue(openclaw?.activationLease);
+    const generation = finiteNumber(lease?.generation);
+    const leaseId = stringValue(lease?.leaseId);
+    if (!lease || !leaseId || generation === null)
+        return null;
+    return {
+        leaseId,
+        generation,
+        status: stringValue(lease.status),
+        cause: stringValue(lease.cause),
+        sizingTier: stringValue(lease.sizingTier),
+        targetGatewayId: stringValue(lease.targetGatewayId),
+        error: stringValue(objectValue(lease.lastError)?.message),
+    };
 }
 function warnIfNoSlug(logger, slugs, uid) {
     if (slugs.length === 0) {
@@ -597,6 +639,38 @@ export function addAdminCustomerRoutes(router, deps) {
                 diagnostic = { kind: "ok", message: null };
             }
             res.json({ uid, workspaces, diagnostic, generatedAt: new Date().toISOString() });
+        }
+        catch (e) {
+            next(e);
+        }
+    });
+    router.get("/customer/:uid/placements", async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const userDoc = await db.collection("users").doc(uid).get();
+            if (!userDoc.exists) {
+                res.status(404).json({ error: "User not found" });
+                return;
+            }
+            const limit = Math.max(1, Math.min(200, parseInt(req.query.limit ?? "50", 10) || 50));
+            const snap = await db
+                .collection(`users/${uid}/${PLACEMENT_RECEIPTS_SUBCOLLECTION}`)
+                .orderBy("at", "desc")
+                .limit(limit + 1)
+                .get();
+            const sorted = snap.docs
+                .map((doc) => projectPlacementReceipt(doc.id, doc.data()))
+                .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+            const items = sorted.slice(0, limit);
+            const hasMore = sorted.length > limit;
+            const lease = activationLeaseSummary(userDoc.data());
+            let retryAvailable = false;
+            if (lease?.status === "failed") {
+                retryAvailable = lease.targetGatewayId === null
+                    ? true
+                    : !(await db.collection(GATEWAYS_COLLECTION).doc(lease.targetGatewayId).get()).exists;
+            }
+            res.json({ items, hasMore, lease, retryAvailable, generatedAt: new Date().toISOString() });
         }
         catch (e) {
             next(e);

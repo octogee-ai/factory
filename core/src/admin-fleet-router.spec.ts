@@ -388,6 +388,33 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     });
   });
 
+  it("omits a failed activation once its cleanup succeeded or its runtime record is gone", () => {
+    const targetGatewayId = "alice-xs-12345678";
+    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const failedLease = {
+      leaseId: "lease-1",
+      generation: 1,
+      status: "failed",
+      requestedAt: now - 300_000,
+      failedAt: now - 10_000,
+      sourceGatewayId: "shared-blue",
+      targetGatewayId,
+    };
+
+    expect(projectBuilderRuntime(
+      user(failedLease),
+      new Map([[targetGatewayId, {
+        gatewayId: targetGatewayId,
+        desiredStatus: "retired",
+        retirementClaim: { operationId: cleanupOperationId },
+      }]]),
+      new Map([[cleanupOperationId, { status: "succeeded" }]]),
+      now,
+    )).toBeNull();
+
+    expect(projectBuilderRuntime(user(failedLease), new Map(), new Map(), now)).toBeNull();
+  });
+
   it("omits parked leases after teardown receipts have completed", () => {
     expect(projectBuilderRuntime(
       user({
@@ -1035,17 +1062,15 @@ describe("fleet gateway projection", () => {
 
     const fleet = await request(app).get("/gateways").expect(200);
 
-    expect(fleet.body.builderRuntimes).toEqual([
-      expect.objectContaining({
-        lifecycle: "failed",
-        retryAvailable: true,
-        targetPodStatus: "missing",
-        targetPodCount: 0,
-      }),
-    ]);
+    expect(fleet.body.builderRuntimes).toEqual([]);
+    expect(fleet.body.gateways).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ gatewayId: targetGatewayId }),
+      ]),
+    );
   });
 
-  it("withholds retry until the disposable cleanup operation succeeds", async () => {
+  it("keeps a failed runtime on Fleet only while its cleanup is unfinished", async () => {
     const targetGatewayId = "run-alice-cleaning";
     const cleanupOperationId = "placement-retire-uid-alice-run-alice-cleaning";
     const { app } = mkAdminFleetRouteApp({
@@ -1114,9 +1139,9 @@ describe("fleet gateway projection", () => {
       expect.objectContaining({
         lifecycle: "failed",
         cleanupOperationStatus: "running",
-        retryAvailable: false,
       }),
     ]);
+    expect(fleet.body.builderRuntimes[0]).not.toHaveProperty("retryAvailable");
   });
 
   it("keeps an old disposable visible after a new lease replaces the user target", async () => {
@@ -1217,9 +1242,36 @@ describe("fleet gateway projection", () => {
                 status: "failed",
                 requestedAt: now - 60_000,
                 failedAt: now - 30_000,
+                targetGatewayId: "fail-xs-deadbeef",
               },
             },
           },
+        },
+      },
+      gateways: {
+        "fail-xs-deadbeef": durableGatewayRoot("fail-xs-deadbeef", {
+          desiredStatus: "retired",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          sizingTier: "xs",
+          ownerUid: "failed",
+          builderSlug: "failed",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-failed",
+            generation: 1,
+            claimedByUid: "failed",
+          },
+          retirementClaim: { operationId: "placement-retire-failed-fail-xs-deadbeef" },
+        }),
+      },
+      operations: {
+        "placement-retire-failed-fail-xs-deadbeef": {
+          kind: "retire-gateway",
+          status: "running",
+          input: { gatewayId: "fail-xs-deadbeef" },
         },
       },
     });
@@ -1360,6 +1412,38 @@ describe("fleet gateway projection", () => {
     expect(details.body.mountedCustomers).toEqual([
       expect.objectContaining({ uid: "uid-alice", slug: "alice" }),
     ]);
+  });
+
+  it("excludes retired gateways from the customer distribution", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default" },
+      users: {},
+      gateways: {
+        default: durableGatewayRoot("default", { liveRelease: 1 }),
+        "alice-xs-deadbeef": durableGatewayRoot("alice-xs-deadbeef", {
+          desiredStatus: "retired",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
+          sizingTier: "xs",
+          ownerUid: "uid-alice",
+          builderSlug: "alice",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: "lease-old",
+            generation: 1,
+            claimedByUid: "uid-alice",
+          },
+        }),
+      },
+    });
+
+    const distribution = await request(app).get("/customer-distribution").expect(200);
+
+    expect(
+      distribution.body.perGateway.map((row: { gatewayId: string }) => row.gatewayId),
+    ).toEqual(["default"]);
   });
 
   it("renders one fleet entry per durable gateway from its bare-id runtime doc", async () => {

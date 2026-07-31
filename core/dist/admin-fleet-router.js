@@ -844,13 +844,12 @@ export function projectGatewaySummary(doc, glmDoc, now) {
         disposableRuntime: projectDisposableRuntime(glmDoc),
     };
 }
-const BUILDER_RUNTIME_STATUSES = new Set([
+const LIVE_BUILDER_RUNTIME_STATUSES = new Set([
     "requested",
     "provisioning",
     "activating",
     "active",
     "returning",
-    "failed",
 ]);
 const BUILDER_RUNTIME_STALE_AFTER_MS = 10 * 60_000;
 const BUILDER_RUNTIME_STATUS_FIELDS = {
@@ -947,15 +946,16 @@ function builderRuntimeRetirementContext(uid, lease, gatewaysById, operationsByI
     };
 }
 function builderRuntimeLifecycle(leaseStatus, retirement) {
-    const visible = BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
-        (leaseStatus === "parked" &&
-            retirement.started &&
-            !retirement.complete);
+    // Terminal leases surface on Fleet only while their disposable teardown is
+    // unfinished; completed history lives on the customer's placement receipts.
+    const teardownLingers = retirement.target !== undefined && !retirement.complete;
+    const visible = LIVE_BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
+        ((leaseStatus === "parked" || leaseStatus === "failed") && teardownLingers);
     if (!visible)
         return null;
     if (retirement.failed || leaseStatus === "failed")
         return "failed";
-    if (retirement.started)
+    if (retirement.started || leaseStatus === "parked")
         return "retiring";
     return leaseStatus;
 }
@@ -1064,7 +1064,6 @@ export function projectBuilderRuntime(userDoc, gatewaysById, operationsById, now
             leaseFailed,
             stale,
         }),
-        retryAvailable: false,
         targetPodStatus: null,
         targetPodCount: null,
     };
@@ -3470,17 +3469,10 @@ export function addAdminFleetRoutes(router, deps) {
                 const target = runtime.targetGatewayId
                     ? gatewayById.get(runtime.targetGatewayId)
                     : undefined;
-                const targetPodStatus = target?.podDiagnostics?.status ?? null;
-                const targetPodCount = target?.podDiagnostics?.totalPods ?? null;
                 return {
                     ...runtime,
-                    targetPodStatus,
-                    targetPodCount,
-                    retryAvailable: runtime.lifecycle === "failed" &&
-                        runtime.cleanupOperationStatus === "succeeded" &&
-                        target?.desiredStatus === "retired" &&
-                        targetPodStatus === "missing" &&
-                        targetPodCount === 0,
+                    targetPodStatus: target?.podDiagnostics?.status ?? null,
+                    targetPodCount: target?.podDiagnostics?.totalPods ?? null,
                 };
             });
             const sharedPoolConfig = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
@@ -3711,6 +3703,21 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
+    function activeDistributionGateways(glmById, legacyById) {
+        const gateways = new Map();
+        for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
+            if (projectDesiredStatus(glmById.get(gatewayId)) === "retired")
+                continue;
+            const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
+            const mounted = [...readMountedSlugs(hb)];
+            gateways.set(gatewayId, {
+                status: typeof hb?.status === "string" ? hb.status : "unknown",
+                mountedCustomers: new Set(mounted),
+                mountedCount: mounted.length,
+            });
+        }
+        return gateways;
+    }
     router.get("/customer-distribution", async (_req, res, next) => {
         try {
             const [gwSnap, glmSnap, usersSnap] = await Promise.all([
@@ -3723,16 +3730,7 @@ export function addAdminFleetRoutes(router, deps) {
                 gatewayDocs: gwSnap.docs,
                 glmDocs: glmSnap.docs,
             });
-            const gateways = new Map();
-            for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
-                const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
-                const mounted = [...readMountedSlugs(hb)];
-                gateways.set(gatewayId, {
-                    status: typeof hb?.status === "string" ? hb.status : "unknown",
-                    mountedCustomers: new Set(mounted),
-                    mountedCount: mounted.length,
-                });
-            }
+            const gateways = activeDistributionGateways(glmById, legacyById);
             const assignedByGateway = new Map();
             const mountedByGateway = new Map();
             const pendingPlacements = [];
