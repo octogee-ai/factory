@@ -343,15 +343,7 @@ function mkFakeChild(opts: {
   const stderr = new Readable({ read() { /* noop */ } });
   for (const chunk of opts.stderr ?? []) stderr.push(chunk);
   stderr.push(null);
-  let child: EventEmitter & {
-    stdout: Readable;
-    stderr: Readable;
-    stdin: Writable;
-    exitCode: number | null;
-    signalCode: NodeJS.Signals | null;
-    kill: () => boolean;
-  };
-  child = Object.assign(new EventEmitter(), {
+  const child = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
     stdin: new Writable({
