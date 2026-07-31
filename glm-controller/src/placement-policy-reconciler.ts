@@ -1957,6 +1957,10 @@ function placementAssignmentFromDocument(
   return { uid, slug, gatewayId, state, epoch };
 }
 
+function gatewayRuntimeStartedAt(value: unknown): number | null {
+  return isGatewayRuntimeDoc(value) ? millis(value.heartbeat.startedAt) : null;
+}
+
 function placementGatewayFromDocument(input: {
   doc: QueryDocumentSnapshot;
   runtimes: ReadonlyMap<string, Record<string, unknown>>;
@@ -1997,7 +2001,7 @@ function placementGatewayFromDocument(input: {
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
     heartbeatFresh,
-    runtimeStartedAt: millis(runtime?.heartbeat.startedAt),
+    runtimeStartedAt: gatewayRuntimeStartedAt(runtime),
     liveReleaseReady: [
       runtime !== null,
       root.liveRelease !== null,
