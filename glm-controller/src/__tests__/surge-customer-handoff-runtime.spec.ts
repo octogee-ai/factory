@@ -71,10 +71,13 @@ describe("surge handoff Kubernetes projection", () => {
   });
 });
 
+type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
+type FetchInput = string | URL | Request;
+
 describe("surge handoff direct pod transport", () => {
   it("transfers customer keys before final state and verifies each direct pod", async () => {
-    const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
-    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = String(input);
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
@@ -169,8 +172,8 @@ describe("surge handoff direct pod transport", () => {
   });
 
   it("does not transfer final state when the key transfer fails", async () => {
-    const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
-    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = String(input);
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
@@ -205,7 +208,7 @@ describe("surge handoff direct pod transport", () => {
   });
 
   it("reports a latched runtime as booting when the live OpenClaw probe is down", async () => {
-    const fetch = vi.fn(async (input: string | URL | Request) => {
+    const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
       if (url.endsWith("/health")) {
         return new Response(JSON.stringify({ status: "ready", version: "new" }));

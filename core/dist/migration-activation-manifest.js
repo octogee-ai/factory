@@ -139,20 +139,25 @@ function sourceAgents(parsed) {
     const list = parsed.agents?.list;
     return Array.isArray(list) ? list.filter(isRecord) : [];
 }
-async function sourceManifestAgent(agent, accountId, bindings, opts, sourceAccount, isWorkspace) {
-    const token = opts.resolveBotToken
-        ? await opts.resolveBotToken(accountId)
-        : isWorkspace && opts.botToken !== undefined
-            ? opts.botToken
-            : isRecord(sourceAccount)
-                ? sourceAccount.botToken
-                : undefined;
+async function sourceManifestAgent(input) {
+    let token;
+    if (input.opts.resolveBotToken) {
+        token = await input.opts.resolveBotToken(input.accountId);
+    }
+    else if (input.isWorkspace && input.opts.botToken !== undefined) {
+        token = input.opts.botToken;
+    }
+    else if (isRecord(input.sourceAccount)) {
+        token = input.sourceAccount.botToken;
+    }
     return {
-        agentId: agent?.id,
-        accountId,
-        agent,
-        mattermostAccount: isRecord(sourceAccount) ? { ...sourceAccount, botToken: token } : sourceAccount,
-        bindings,
+        agentId: input.agent?.id,
+        accountId: input.accountId,
+        agent: input.agent,
+        mattermostAccount: isRecord(input.sourceAccount)
+            ? { ...input.sourceAccount, botToken: token }
+            : input.sourceAccount,
+        bindings: input.bindings,
     };
 }
 export async function extractOpenClawActivationManifest(configPath, slug, opts = {}) {
@@ -162,13 +167,27 @@ export async function extractOpenClawActivationManifest(configPath, slug, opts =
     const accountId = expectedAccountId(slug);
     const agents = sourceAgents(parsed);
     const bindings = Array.isArray(parsed.bindings) ? parsed.bindings : [];
-    const workspace = await sourceManifestAgent(agents.find((agent) => agent.id === agentId), accountId, bindings.filter((binding) => isRecord(binding) && binding.agentId === agentId), opts, parsed.channels?.mattermost?.accounts?.[accountId], true);
+    const workspace = await sourceManifestAgent({
+        agent: agents.find((agent) => agent.id === agentId),
+        accountId,
+        bindings: bindings.filter((binding) => isRecord(binding) && binding.agentId === agentId),
+        opts,
+        sourceAccount: parsed.channels?.mattermost?.accounts?.[accountId],
+        isWorkspace: true,
+    });
     const projectAgents = await Promise.all(agents
         .filter((agent) => typeof agent.id === "string" && expectedProjectAccountId(slug, agent.id))
         .sort((left, right) => String(left.id).localeCompare(String(right.id)))
         .map(async (agent) => {
         const projectAccountId = expectedProjectAccountId(slug, agent.id);
-        return sourceManifestAgent(agent, projectAccountId, bindings.filter((binding) => isRecord(binding) && binding.agentId === agent.id), opts, parsed.channels?.mattermost?.accounts?.[projectAccountId], false);
+        return sourceManifestAgent({
+            agent,
+            accountId: projectAccountId,
+            bindings: bindings.filter((binding) => isRecord(binding) && binding.agentId === agent.id),
+            opts,
+            sourceAccount: parsed.channels?.mattermost?.accounts?.[projectAccountId],
+            isWorkspace: false,
+        });
     }));
     return validateManifestShape({
         version: 1,
