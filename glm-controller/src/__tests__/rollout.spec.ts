@@ -353,7 +353,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       targetRelease: 2,
       operationId: "op-1",
     });
-    expect(deps.requestReconcileTick).toHaveBeenCalled();
+    expect(deps.requestReconcileTick).toHaveBeenCalledWith("default");
   });
 
   it("does not reconcile when exact release activation is rejected", async () => {

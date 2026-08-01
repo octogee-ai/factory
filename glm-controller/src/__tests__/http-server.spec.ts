@@ -650,6 +650,64 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body.stats.customersMounted).toBe(2);
   });
 
+  it("reads only operations referenced by the Fleet projection", async () => {
+    store.users["uid-alice"] = {
+      username: "alice",
+      provisioning: {
+        openclaw: {
+          slug: "alice",
+          gatewayId: "shared-a",
+          activationLease: {
+            leaseId: "lease-1",
+            generation: 1,
+            status: "provisioning",
+            sourceGatewayId: "shared-a",
+            targetGatewayId: "alice-xs-12345678",
+            activationOperationId: "activate-alice",
+            requestedAt: Date.now() - 2_000,
+          },
+        },
+      },
+    };
+    store.glmOperations.push({
+      id: "activate-alice",
+      data: { status: "running", steps: [{ name: "provision", status: "running" }] },
+    });
+    for (let index = 0; index < 100; index += 1) {
+      store.glmOperations.push({
+        id: `irrelevant-${index}`,
+        data: { status: "succeeded" },
+      });
+    }
+    const db = buildDb(store) as ReturnType<typeof buildDb>;
+    const originalCollection = db.collection.bind(db);
+    const fullOperationRead = vi.fn(async () => {
+      throw new Error("Fleet must not scan glmOperations");
+    });
+    db.collection = ((name: string) => {
+      const collection = originalCollection(name) as Record<string, unknown>;
+      return name === "glmOperations"
+        ? { ...collection, get: fullOperationRead }
+        : collection;
+    }) as typeof db.collection;
+    const app = createHttpServer(buildDeps(store, { db: db as any }));
+
+    const res = await request(app)
+      .get("/api/admin/gateways")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status, res.text).toBe(200);
+    expect(fullOperationRead).not.toHaveBeenCalled();
+    expect(res.body.builderRuntimes).toEqual([
+      expect.objectContaining({
+        uid: "uid-alice",
+        operationId: "activate-alice",
+        operationStatus: "running",
+        operationSteps: [{ name: "provision", status: "running" }],
+      }),
+    ]);
+  });
+
   it("includes Cowboy pod diagnostics in the gateway summaries when available", async () => {
     store.gateways["bender"] = durableSharedGateway("bender");
     store.glmGateways["bender"] = servingRuntime("bender", {

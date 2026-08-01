@@ -299,7 +299,7 @@ const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
   process.env.DISRUPTION_OBSERVER_MS,
   15_000,
 );
-const OPERATOR_READY_REFRESH_MS_DEFAULT = 60_000;
+const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
@@ -331,7 +331,7 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
-const requestReconcileTickRef: { fire?: () => void } = {};
+const requestReconcileTickRef: { fire?: (gatewayId?: string) => void } = {};
 const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -428,7 +428,7 @@ interface ControllerDeps {
 
   reconcileRetryMs?: number;
 
-  operatorReadyRefreshMs?: number;
+  reconcileSafetyRefreshMs?: number;
 
   chartFingerprint?: string;
 
@@ -909,12 +909,18 @@ async function runGatewayConvergencePass(
   const { db, helm, log } = passDeps;
   const state = await readDurableRuntimeGateways(db);
   assertDurableRuntimeState(state);
-  const instances = await helm.readDeployedInstances({ namespace: NAMESPACE });
   const runtimeById = new Map(state.runtimeDocs.map((doc) => [doc.gatewayId, doc]));
   const failures: string[] = [];
   const selected = gatewayIds ? new Set(gatewayIds) : null;
-  for (const gateway of state.gateways) {
-    if (selected && !selected.has(gateway.gatewayId)) continue;
+  const gateways = selected
+    ? state.gateways.filter((gateway) => selected.has(gateway.gatewayId))
+    : state.gateways;
+  const instances = await readGatewayConvergenceInstances(
+    helm,
+    NAMESPACE,
+    selected ? gateways.map((gateway) => gateway.gatewayId) : undefined,
+  );
+  for (const gateway of gateways) {
     try {
       await convergeOneGateway(passDeps, gateway, instances, runtimeById);
     } catch (err) {
@@ -926,6 +932,20 @@ async function runGatewayConvergencePass(
   if (failures.length > 0) {
     throw new Error(`(source=converge-gateway) ${failures.join("; ")}`);
   }
+}
+
+export async function readGatewayConvergenceInstances(
+  helm: Pick<HelmRunner, "readDeployedInstance" | "readDeployedInstances">,
+  namespace: string,
+  gatewayIds?: readonly string[],
+): Promise<HelmInstancesMap> {
+  if (!gatewayIds) return helm.readDeployedInstances({ namespace });
+  const entries: Array<[string, HelmInstancesMap[string]]> = [];
+  for (const gatewayId of gatewayIds) {
+    const instance = await helm.readDeployedInstance({ namespace, gatewayId });
+    if (instance) entries.push([gatewayId, instance]);
+  }
+  return Object.fromEntries(entries);
 }
 
 async function convergeOneGateway(
@@ -1170,6 +1190,16 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   await runReconcilePhase(deps, "fleet-ingress", () => syncFleetIngressIfConfigured(deps));
 }
 
+async function reconcileGatewayChanges(
+  deps: ControllerDeps,
+  gatewayIds: readonly string[],
+): Promise<void> {
+  if (await controllerWorkFrozen(deps, "targeted reconcile")) return;
+  await runReconcilePhase(deps, "convergence", () =>
+    convergeGatewaysIfConfigured(deps, gatewayIds)
+  );
+}
+
 function clearTimer(timer: NodeJS.Timeout | null): null {
   if (timer) clearTimeout(timer);
   return null;
@@ -1195,12 +1225,19 @@ function reconcileFingerprintStableStringify(v: unknown): string {
   return `{${parts.join(",")}}`;
 }
 
-// Reconcile-relevant fingerprint of a glmGateways doc: everything EXCEPT the
-// heartbeat sub-doc. A heartbeat-only write (the poller, publishPlatformGateway-
-// Ready) leaves this unchanged.
 function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
-  const { heartbeat: _heartbeat, ...rest } = data;
-  return reconcileFingerprintStableStringify(rest);
+  const { heartbeat, ...rest } = data;
+  const heartbeatRecord =
+    heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
+      ? heartbeat as Record<string, unknown>
+      : {};
+  return reconcileFingerprintStableStringify({
+    ...rest,
+    heartbeat: {
+      status: heartbeatRecord.status,
+      version: heartbeatRecord.version,
+    },
+  });
 }
 
 interface ReconcileSnapshotDocChange {
@@ -1217,18 +1254,25 @@ export function snapshotHasReconcileRelevantChange(
   changes: ReadonlyArray<ReconcileSnapshotDocChange>,
   fingerprints: Map<string, string>,
 ): boolean {
-  let relevant = false;
+  return snapshotReconcileRelevantGatewayIds(changes, fingerprints).length > 0;
+}
+
+export function snapshotReconcileRelevantGatewayIds(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+): string[] {
+  const gatewayIds = new Set<string>();
   for (const change of changes) {
     if (change.type === "removed") {
       fingerprints.delete(change.doc.id);
-      relevant = true;
+      gatewayIds.add(change.doc.id);
       continue;
     }
     const fp = reconcileRelevantFingerprint(change.doc.data());
-    if (fingerprints.get(change.doc.id) !== fp) relevant = true;
+    if (fingerprints.get(change.doc.id) !== fp) gatewayIds.add(change.doc.id);
     fingerprints.set(change.doc.id, fp);
   }
-  return relevant;
+  return [...gatewayIds].sort(compareFingerprintKeys);
 }
 
 export function startReconciler(deps: ControllerDeps): () => void {
@@ -1236,7 +1280,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
   let retryTimer: NodeJS.Timeout | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
   let inFlight = false;
-  let pendingTick = false;
+  let pendingFullReconcile = false;
+  const pendingGatewayIds = new Set<string>();
   let stopped = false;
   const retryMs = deps.reconcileRetryMs ?? RECONCILE_RETRY_MS_DEFAULT;
 
@@ -1245,24 +1290,53 @@ export function startReconciler(deps: ControllerDeps): () => void {
     retryTimer = setTimeout(() => void tick(), retryMs);
   };
 
-  const scheduleDebouncedTick = () => {
+  const armDebouncedTick = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
   };
+  const scheduleDebouncedTick = (gatewayId?: string) => {
+    if (gatewayId) {
+      if (!pendingFullReconcile) pendingGatewayIds.add(gatewayId);
+    } else {
+      pendingFullReconcile = true;
+      pendingGatewayIds.clear();
+    }
+    armDebouncedTick();
+  };
   requestReconcileTickRef.fire = scheduleDebouncedTick;
 
-  const tick = async () => {
-    if (inFlight) {
-      pendingTick = true;
+  const requeueReconcile = (fullReconcile: boolean, gatewayIds: readonly string[]) => {
+    if (fullReconcile) {
+      pendingFullReconcile = true;
+      pendingGatewayIds.clear();
       return;
     }
+    if (pendingFullReconcile) return;
+    for (const gatewayId of gatewayIds) pendingGatewayIds.add(gatewayId);
+  };
+
+  const hasPendingReconcile = () =>
+    pendingFullReconcile || pendingGatewayIds.size > 0;
+
+  const tick = async () => {
+    if (inFlight) return;
     debounceTimer = clearTimer(debounceTimer);
     retryTimer = clearTimer(retryTimer);
+    const fullReconcile = pendingFullReconcile;
+    const gatewayIds = fullReconcile ? [] : [...pendingGatewayIds].sort(compareFingerprintKeys);
+    if (!fullReconcile && gatewayIds.length === 0) return;
+    pendingFullReconcile = false;
+    pendingGatewayIds.clear();
     inFlight = true;
     try {
-      await reconcileOnce(deps);
+      if (fullReconcile) {
+        await reconcileOnce(deps);
+      } else {
+        await reconcileGatewayChanges(deps, gatewayIds);
+      }
       recordReconcile("ok");
     } catch (err) {
+      requeueReconcile(fullReconcile, gatewayIds);
       recordReconcile("fail");
       const message = err instanceof Error ? err.message : String(err);
       const source = message.startsWith("(source=") ? "" : "(source=helm) ";
@@ -1272,10 +1346,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
       scheduleRetryTick();
     } finally {
       inFlight = false;
-      if (!stopped && pendingTick) {
-        pendingTick = false;
-        retryTimer = clearTimer(retryTimer);
-        scheduleDebouncedTick();
+      if (!stopped && hasPendingReconcile() && !retryTimer) {
+        armDebouncedTick();
       }
     }
   };
@@ -1286,11 +1358,15 @@ export function startReconciler(deps: ControllerDeps): () => void {
     (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
       if (stopped) return;
       const changes = snap?.docChanges?.();
-      // No snapshot payload (test fakes / defensive) → schedule a tick. With a
-      // payload, skip heartbeat-only changes so a heartbeat write into the
-      // watched collection doesn't self-trigger reconcile churn.
-      if (!changes || snapshotHasReconcileRelevantChange(changes, reconcileFingerprints)) {
+      if (!changes) {
         scheduleDebouncedTick();
+        return;
+      }
+      for (const gatewayId of snapshotReconcileRelevantGatewayIds(
+        changes,
+        reconcileFingerprints,
+      )) {
+        scheduleDebouncedTick(gatewayId);
       }
     },
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
@@ -1307,8 +1383,11 @@ export function startReconciler(deps: ControllerDeps): () => void {
     (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
   );
 
-  if (deps.operatorReadyRefreshMs && deps.operatorReadyRefreshMs > 0) {
-    refreshTimer = setInterval(() => void tick(), deps.operatorReadyRefreshMs);
+  if (deps.reconcileSafetyRefreshMs && deps.reconcileSafetyRefreshMs > 0) {
+    refreshTimer = setInterval(
+      () => scheduleDebouncedTick(),
+      deps.reconcileSafetyRefreshMs,
+    );
   }
 
   return () => {
@@ -1321,7 +1400,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
     if (debounceTimer) clearTimeout(debounceTimer);
     if (retryTimer) clearTimeout(retryTimer);
     if (refreshTimer) clearInterval(refreshTimer);
-    pendingTick = false;
+    pendingFullReconcile = false;
+    pendingGatewayIds.clear();
   };
 }
 
@@ -2224,7 +2304,7 @@ async function createControllerRuntime(
     maintenanceGate,
     syncFleetIngress: syncEdgeIngressForGateways,
     convergeGateways,
-    operatorReadyRefreshMs: OPERATOR_READY_REFRESH_MS_DEFAULT,
+    reconcileSafetyRefreshMs: RECONCILE_SAFETY_REFRESH_MS_DEFAULT,
     chartFingerprint,
     ensureGatewayAuthSecret: authSecretEnsurer.ensureAuthSecret,
     startDisruptionObserver: () => startDisruptionObserver({
@@ -3036,7 +3116,7 @@ async function buildHandlers(
         transaction.update(gatewayRef, activation.patch);
         return { success: true as const };
       }),
-    requestReconcileTick: () => requestReconcileTickRef.fire?.(),
+    requestReconcileTick: (gatewayId) => requestReconcileTickRef.fire?.(gatewayId),
     releaseRecordTimeoutMs: 60_000,
     convergeTimeoutMs: 45 * 60_000,
     pollIntervalMs: 5_000,
@@ -3759,7 +3839,10 @@ export async function resolveSourceRevisionFromFirestore(
   );
   if (!authorization) return null;
   const gateway = authorization.gateway as DurableGateway;
-  if (gateway.desiredStatus !== "running" || assignment.gatewayId !== gatewayId) {
+  if (
+    (gateway.desiredStatus !== "running" && gateway.desiredStatus !== "draining") ||
+    assignment.gatewayId !== gatewayId
+  ) {
     return null;
   }
   if (typeof gateway.liveRelease !== "number") return null;

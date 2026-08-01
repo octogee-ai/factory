@@ -294,6 +294,39 @@ describe("helm-runner helpers", () => {
 });
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {
+  it("reads one known gateway release without listing the fleet", async () => {
+    const { runHelm, calls } = mockSubprocess([
+      {
+        stdout: JSON.stringify({
+          gatewayId: "default",
+          imageTag: "abc1234",
+          image: { repository: REPO },
+        }),
+      },
+    ]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    const instance = await runner.readDeployedInstance({
+      namespace: "octogee-test",
+      gatewayId: "default",
+    });
+
+    expect(calls).toEqual([[
+      "get",
+      "values",
+      "octogee-gw-default",
+      "-n",
+      "octogee-test",
+      "-o",
+      "json",
+    ]]);
+    expect(instance).toEqual({
+      enabled: true,
+      image: { repository: REPO, tag: "abc1234" },
+      gatewayId: "default",
+    });
+  });
+
   it("filters helm list to octogee-gw-* releases and pulls each release's values", async () => {
     const { runHelm, calls } = mockSubprocess([
       

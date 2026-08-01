@@ -620,6 +620,53 @@ function indexGlmDocs(docs) {
         out.set(doc.id, doc.data());
     return out;
 }
+function addOperationId(ids, value) {
+    if (typeof value === "string" && value.length > 0)
+        ids.add(value);
+}
+function fleetProjectionOperationIds(userDocs, gatewaysById) {
+    const ids = new Set();
+    for (const userDoc of userDocs) {
+        const resolved = activationLeaseFromUser(userDoc.data());
+        if (!resolved)
+            continue;
+        addOperationId(ids, resolved.lease.activationOperationId);
+        addOperationId(ids, resolved.lease.returnOperationId);
+        const targetGatewayId = asStringOrNull(resolved.lease.targetGatewayId);
+        if (!targetGatewayId)
+            continue;
+        const target = gatewaysById.get(targetGatewayId);
+        const retirementClaim = isPlainRecord(target?.retirementClaim)
+            ? target.retirementClaim
+            : null;
+        ids.add(asStringOrNull(retirementClaim?.operationId) ??
+            `placement-retire-${userDoc.id}-${targetGatewayId}`);
+    }
+    for (const [gatewayId, gateway] of gatewaysById) {
+        if (projectDesiredStatus(gateway) !== "retired" ||
+            projectDisposableRuntime(gateway) === null) {
+            continue;
+        }
+        const retirementClaim = isPlainRecord(gateway.retirementClaim)
+            ? gateway.retirementClaim
+            : null;
+        ids.add(asStringOrNull(retirementClaim?.operationId) ??
+            `placement-retire-${asStringOrNull(gateway.ownerUid) ?? "unknown"}-${gatewayId}`);
+    }
+    return [...ids].sort();
+}
+async function readFleetProjectionOperations(db, operationIds) {
+    const docs = await Promise.all(operationIds.map(async (operationId) => {
+        const snapshot = await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get();
+        if (!snapshot.exists)
+            return null;
+        return {
+            id: operationId,
+            data: () => (snapshot.data() ?? {}),
+        };
+    }));
+    return docs.filter((doc) => doc !== null);
+}
 function indexFirestoreDocs(docs) {
     const out = new Map();
     for (const doc of docs)
@@ -3486,11 +3533,10 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap, operationsSnap, configSnap, settings] = await Promise.all([
+            const [gwSnap, glmSnap, usersSnap, configSnap, settings] = await Promise.all([
                 db.collection("gateways").get(),
                 db.collection(GLM_GATEWAYS_COLLECTION).get(),
                 db.collection("users").get(),
-                db.collection(GLM_OPERATIONS_COLLECTION).get(),
                 db.doc("config/orchestrator").get(),
                 readFleetRuntimeSettings(),
             ]);
@@ -3498,7 +3544,8 @@ export function addAdminFleetRoutes(router, deps) {
                 gatewayDocs: gwSnap.docs,
                 glmDocs: glmSnap.docs,
             });
-            const operationsById = indexGlmDocs(operationsSnap.docs);
+            const operationDocs = await readFleetProjectionOperations(db, fleetProjectionOperationIds(usersSnap.docs, glmByGatewayId));
+            const operationsById = indexGlmDocs(operationDocs);
             const now = Date.now();
             const builderRuntimes = usersSnap.docs.flatMap((doc) => {
                 const runtime = projectBuilderRuntime(doc, glmByGatewayId, operationsById, now);

@@ -124,6 +124,30 @@ describe("durable migration root resolution", () => {
     });
   });
 
+  it("keeps an assigned draining gateway valid as a migration source", async () => {
+    const db = database({
+      "gateways/source": durableGateway("source", { desiredStatus: "draining" }),
+      "gateways/source/assignments/uid-alice": {
+        uid: "uid-alice",
+        slug: "alice",
+        gatewayId: "source",
+        source: "migrate-customer",
+        state: "serving",
+        epoch: 7,
+      },
+      "glmGateways/source": servingRuntime("source"),
+    });
+
+    await expect(
+      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+    ).resolves.toEqual({
+      revisionId: "source",
+      release: 1,
+      epoch: 7,
+      assignmentMode: "assigned",
+    });
+  });
+
   it("does not bind an unassigned source while its durable root is unconverged", async () => {
     const db = database({
       "gateways/source": durableGateway("source", {

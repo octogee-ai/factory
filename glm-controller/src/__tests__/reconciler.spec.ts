@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  readGatewayConvergenceInstances,
   serializeGatewayConvergence,
   snapshotHasReconcileRelevantChange,
   startReconciler,
@@ -143,10 +144,23 @@ async function runTick(callbacks: SnapshotCallbacks): Promise<void> {
 }
 
 describe("snapshot reconciliation filters", () => {
-  it("ignores a heartbeat-only runtime doc change", () => {
+  it("ignores heartbeat telemetry-only runtime doc changes", () => {
     const fingerprints = new Map<string, string>();
     snapshotHasReconcileRelevantChange(
-      [{ type: "added", doc: { id: "default", data: () => servingRuntime() } }],
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            heartbeat: {
+              status: "ready",
+              version: "abc1234",
+              lastHeartbeatAt: 1,
+              mountedCustomers: ["alice"],
+            },
+          }),
+        },
+      }],
       fingerprints,
     );
 
@@ -157,13 +171,52 @@ describe("snapshot reconciliation filters", () => {
             type: "modified",
             doc: {
               id: "default",
-              data: () => ({ ...servingRuntime(), heartbeat: { lastHeartbeatAt: 2 } }),
+              data: () => servingRuntime({
+                heartbeat: {
+                  status: "ready",
+                  version: "abc1234",
+                  lastHeartbeatAt: 2,
+                  mountedCustomers: ["alice", "bob"],
+                },
+              }),
             },
           },
         ],
         fingerprints,
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    ["status", { status: "unreachable", version: "abc1234" }],
+    ["version", { status: "ready", version: "def5678" }],
+  ])("schedules when heartbeat %s changes", (_field, heartbeat) => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            heartbeat: { status: "ready", version: "abc1234", lastHeartbeatAt: 1 },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({ heartbeat: { ...heartbeat, lastHeartbeatAt: 2 } }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(true);
   });
 
   it("schedules on a release-bearing runtime change", () => {
@@ -183,6 +236,45 @@ describe("snapshot reconciliation filters", () => {
         fingerprints,
       ),
     ).toBe(true);
+  });
+});
+
+describe("gateway convergence observations", () => {
+  it("reads only selected Helm releases for targeted convergence", async () => {
+    const readDeployedInstances = vi.fn(async () => ({}));
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    const readDeployedInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await Promise.resolve();
+      activeReads -= 1;
+      return gatewayId === "default"
+        ? {
+            enabled: true,
+            image: { repository: "repo", tag: "abc1234" },
+            gatewayId,
+          }
+        : null;
+    });
+
+    await expect(readGatewayConvergenceInstances(
+      { readDeployedInstance, readDeployedInstances },
+      "octogee-test",
+      ["default", "canary"],
+    )).resolves.toEqual({
+      default: {
+        enabled: true,
+        image: { repository: "repo", tag: "abc1234" },
+        gatewayId: "default",
+      },
+    });
+    expect(readDeployedInstance.mock.calls).toEqual([
+      [{ namespace: "octogee-test", gatewayId: "default" }],
+      [{ namespace: "octogee-test", gatewayId: "canary" }],
+    ]);
+    expect(maxActiveReads).toBe(1);
+    expect(readDeployedInstances).not.toHaveBeenCalled();
   });
 });
 
@@ -501,6 +593,89 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     stop();
 
     expect(convergeGateways).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits runtime changes to targeted gateway convergence", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const syncFleetIngress = vi.fn(async () => {});
+    const convergeGateways = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: { default: servingRuntime() },
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      syncFleetIngress,
+      convergeGateways,
+      log: vi.fn(),
+    });
+
+    callbacks.glm?.({
+      docChanges: () => [{
+        type: "added",
+        doc: { id: "default", data: () => servingRuntime() },
+      }],
+    });
+    callbacks.roots?.({
+      docChanges: () => [{
+        type: "added",
+        doc: { id: "default", data: () => durableRoot() },
+      }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    reconcileImagePins.mockClear();
+    syncFleetIngress.mockClear();
+    convergeGateways.mockClear();
+
+    callbacks.glm?.({
+      docChanges: () => [{
+        type: "modified",
+        doc: { id: "default", data: () => servingRuntime({ release: 3 }) },
+      }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    stop();
+
+    expect(convergeGateways).toHaveBeenCalledWith(["default"]);
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(syncFleetIngress).not.toHaveBeenCalled();
+  });
+
+  it("runs a full safety reconciliation only after the configured interval", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const convergeGateways = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: { default: servingRuntime() },
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      convergeGateways,
+      reconcileSafetyRefreshMs: 5_000,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+    reconcileImagePins.mockClear();
+    convergeGateways.mockClear();
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    stop();
+
+    expect(reconcileImagePins).toHaveBeenCalledTimes(1);
+    expect(convergeGateways).toHaveBeenCalledWith(undefined);
   });
 
   it("logs bounded timing for each reconciliation phase", async () => {

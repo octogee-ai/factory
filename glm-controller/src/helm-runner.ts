@@ -23,6 +23,11 @@ export interface HelmRunner {
 
 readDeployedInstances(opts: { namespace: string }): Promise<HelmInstancesMap>;
 
+readDeployedInstance(opts: {
+  namespace: string;
+  gatewayId: string;
+}): Promise<HelmInstancesMap[string] | null>;
+
 upsertInstance(opts: {
     namespace: string;
     gatewayId: string;
@@ -727,6 +732,10 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
       return Object.fromEntries(entries);
     },
 
+    async readDeployedInstance({ namespace, gatewayId }) {
+      return readInstanceValue(deps, namespace, releaseNameForGateway(gatewayId));
+    },
+
     async upsertInstance(opts) {
       const { namespace, gatewayId, imageTag, chartFingerprint } = opts;
       // The Helm release + per-instance resources key off the revision id
@@ -909,6 +918,12 @@ export function createLoggingHelmRunner(log: (msg: string) => void): HelmRunner 
     readDeployedInstances: async ({ namespace }) => {
       log(`[helm-runner:stub] readDeployedInstances ns=${namespace} — returning empty`);
       return {};
+    },
+    readDeployedInstance: async ({ namespace, gatewayId }) => {
+      log(
+        `[helm-runner:stub] readDeployedInstance ns=${namespace} gatewayId=${gatewayId} — returning missing`,
+      );
+      return null;
     },
     upsertInstance: async (opts) => {
       log(

@@ -10,7 +10,7 @@ export interface RolloutDeps {
     targetRelease: number;
     operationId: string;
   }) => Promise<{ success: true } | { success: false; error: string }>;
-  requestReconcileTick?: () => void;
+  requestReconcileTick?: (gatewayId: string) => void;
   releaseRecordTimeoutMs: number;
   convergeTimeoutMs: number;
   pollIntervalMs: number;
@@ -143,7 +143,7 @@ async function runReleaseRoll(
     operationId,
   });
   if (!activation.success) return activation;
-  deps.requestReconcileTick?.();
+  deps.requestReconcileTick?.(target.gatewayId);
   return awaitConvergence(deps, target, progress);
 }
 
