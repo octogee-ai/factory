@@ -364,9 +364,16 @@ function activationPolicyGatewayId(input) {
     });
     return placement.targetGatewayId || null;
 }
+function projectionAssignment(assignmentsByUid, uid, mirroredGatewayId) {
+    const assignments = assignmentsByUid.get(uid) ?? [];
+    return assignments.find((candidate) => candidate.gatewayId === mirroredGatewayId) ??
+        (assignments.length === 1 ? assignments[0] : null);
+}
 function buildCustomerPlacementProjection(input) {
     const slug = resolveCustomerSlug(input.data, (userData) => asStringOrNull(userData.username) ? [asStringOrNull(userData.username)] : []);
-    const assignedGatewayId = readUserGatewayId(input.data);
+    const mirroredGatewayId = readUserGatewayId(input.data);
+    const assignment = projectionAssignment(input.assignmentsByUid, input.uid, mirroredGatewayId);
+    const assignedGatewayId = assignment?.gatewayId ?? mirroredGatewayId;
     const policyTargetGatewayId = activationPolicyGatewayId({
         uid: input.uid,
         data: input.data,
@@ -393,7 +400,6 @@ function buildCustomerPlacementProjection(input) {
         driftState,
         latestOperation: latestOp,
     });
-    const assignment = input.assignmentByUid.get(input.uid) ?? null;
     return {
         uid: input.uid,
         username: asStringOrNull(input.data.username) ?? "",
@@ -405,6 +411,7 @@ function buildCustomerPlacementProjection(input) {
         provisioningStatus: readProvisioningStatus(input.data),
         driftState,
         rosterState: assignment ? assignment.state : null,
+        rosterRevisionId: assignment ? assignment.gatewayId : null,
         rosterEpoch: assignment ? assignment.epoch : null,
         warnings,
         latestOperation: latestOp,
@@ -424,8 +431,11 @@ function indexAssignmentDocs(docs) {
     const byUid = new Map();
     for (const doc of docs) {
         const parsed = parseAssignmentDoc(doc.id, doc.data());
-        if (parsed)
-            byUid.set(parsed.uid, parsed);
+        if (!parsed)
+            continue;
+        const assignments = byUid.get(parsed.uid) ?? [];
+        assignments.push(parsed);
+        byUid.set(parsed.uid, assignments);
     }
     return byUid;
 }
@@ -435,7 +445,7 @@ function buildOnboardingPlacementResponse(opts) {
         glmDocs: opts.glmDocs,
     });
     const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
-    const assignmentByUid = indexAssignmentDocs(opts.assignmentDocs);
+    const assignmentsByUid = indexAssignmentDocs(opts.assignmentDocs);
     const operations = opts.operationDocs.map((doc) => shapeOnboardingOperation(doc.id, doc.data()));
     const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
     const customers = opts.userDocs
@@ -449,7 +459,7 @@ function buildOnboardingPlacementResponse(opts) {
         mountedBySlug,
         operations,
         glmByGatewayId,
-        assignmentByUid,
+        assignmentsByUid,
     }))
         .sort((a, b) => (a.slug ?? a.username ?? a.email ?? a.uid).localeCompare(b.slug ?? b.username ?? b.email ?? b.uid, undefined, { sensitivity: "base" }));
     const mountedCountsByGateway = countBy(customers, (customer) => customer.mountedGatewayId);

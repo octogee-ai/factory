@@ -42,7 +42,7 @@ export function cowboyMayMarkGatewayLive(
 }
 
 export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean {
-  return gateway.desiredStatus === "running" &&
+  return (gateway.desiredStatus === "running" || gateway.desiredStatus === "draining") &&
     gateway.liveRelease !== null &&
     gateway.liveRelease !== gateway.desiredRelease;
 }

@@ -290,6 +290,18 @@ gatewayEdge:
     repository: ""
     tag: ""  # inherits from imageTag
   port: 3001
+  probes:
+    startup:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 60
+      timeoutSeconds: 2
+    readiness:
+      initialDelaySeconds: 0
+      periodSeconds: 10
+    liveness:
+      initialDelaySeconds: 0
+      periodSeconds: 30
   env:
     GITEA_URL: ""  # auto-computed from K8S_NAMESPACE
     GITEA_ORG: "octogee"

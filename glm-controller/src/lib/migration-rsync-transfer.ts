@@ -309,21 +309,23 @@ async function resolveRunningGatewayPod(params: {
   const running = (parsed.items ?? []).filter((item) => {
     if (!item.metadata?.name || !item.status?.podIP || item.metadata.deletionTimestamp) return false;
     if (item.status?.phase !== "Running") return false;
-    if (!params.requireReady) return true;
-    return (item.status.conditions ?? []).some(
-      (condition) => condition.type === "Ready" && condition.status === "True",
-    );
+    return true;
   });
-  if (running.length !== 1) {
-    const state = params.requireReady ? "ready" : "running";
+  const ready = running.filter((item) => (item.status?.conditions ?? []).some(
+    (condition) => condition.type === "Ready" && condition.status === "True",
+  ));
+  const selectionRequiresReady = params.requireReady || running.length > 1;
+  const candidates = selectionRequiresReady ? ready : running;
+  if (candidates.length !== 1) {
+    const state = selectionRequiresReady ? "ready" : "running";
     throw Object.assign(
       new Error(
-        `expected exactly one ${state} pod for transport=${params.transportId}; found ${running.length}`,
+        `expected exactly one ${state} pod for transport=${params.transportId}; found ${candidates.length}`,
       ),
       { retryable: true },
     );
   }
-  const item = running[0];
+  const item = candidates[0];
   return { name: item.metadata!.name!, podIP: item.status!.podIP! };
 }
 

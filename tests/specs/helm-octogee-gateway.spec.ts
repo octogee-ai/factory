@@ -783,7 +783,10 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock = containerBlock(dep, "gateway-edge");
     expect(wsBlock).toMatch(/containerPort:\s*3001/);
-    expect(wsBlock).toMatch(/path:\s*\/health/);
+    expect(wsBlock).toMatch(
+      /startupProbe:[\s\S]*?path:\s*\/health[\s\S]*?periodSeconds:\s*10[\s\S]*?failureThreshold:\s*60/,
+    );
+    expect(wsBlock).toMatch(/livenessProbe:[\s\S]*?path:\s*\/health/);
   });
 
   it("cattle gateway-edge sidecar does not wire platform secrets from the chart's secrets list", () => {

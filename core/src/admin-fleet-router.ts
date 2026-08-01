@@ -406,6 +406,7 @@ interface AdminOnboardingCustomerProjection {
   // the customer has no assignment doc (legacy/un-backfilled gateway) — the
   // client falls back to derivation only in that case.
   rosterState: AssignmentState | null;
+  rosterRevisionId: string | null;
   rosterEpoch: number | null;
   warnings: AdminOnboardingPlacementWarning[];
   latestOperation: AdminOnboardingLatestOperation | null;
@@ -772,6 +773,16 @@ function activationPolicyGatewayId(input: {
   return placement.targetGatewayId || null;
 }
 
+function projectionAssignment(
+  assignmentsByUid: ReadonlyMap<string, AssignmentDoc[]>,
+  uid: string,
+  mirroredGatewayId: string | null,
+): AssignmentDoc | null {
+  const assignments = assignmentsByUid.get(uid) ?? [];
+  return assignments.find((candidate) => candidate.gatewayId === mirroredGatewayId) ??
+    (assignments.length === 1 ? assignments[0]! : null);
+}
+
 function buildCustomerPlacementProjection(input: {
   uid: string;
   data: Record<string, unknown>;
@@ -779,12 +790,18 @@ function buildCustomerPlacementProjection(input: {
   mountedBySlug: Map<string, string>;
   operations: ReadonlyArray<AdminOnboardingLatestOperation>;
   glmByGatewayId: Map<string, GlmDoc>;
-  assignmentByUid: Map<string, AssignmentDoc>;
+  assignmentsByUid: Map<string, AssignmentDoc[]>;
 }): AdminOnboardingCustomerProjection {
   const slug = resolveCustomerSlug(input.data, (userData) =>
     asStringOrNull(userData.username) ? [asStringOrNull(userData.username)!] : [],
   );
-  const assignedGatewayId = readUserGatewayId(input.data);
+  const mirroredGatewayId = readUserGatewayId(input.data);
+  const assignment = projectionAssignment(
+    input.assignmentsByUid,
+    input.uid,
+    mirroredGatewayId,
+  );
+  const assignedGatewayId = assignment?.gatewayId ?? mirroredGatewayId;
   const policyTargetGatewayId = activationPolicyGatewayId({
     uid: input.uid,
     data: input.data,
@@ -816,7 +833,6 @@ function buildCustomerPlacementProjection(input: {
     driftState,
     latestOperation: latestOp,
   });
-  const assignment = input.assignmentByUid.get(input.uid) ?? null;
   return {
     uid: input.uid,
     username: asStringOrNull(input.data.username) ?? "",
@@ -828,6 +844,7 @@ function buildCustomerPlacementProjection(input: {
     provisioningStatus: readProvisioningStatus(input.data),
     driftState,
     rosterState: assignment ? assignment.state : null,
+    rosterRevisionId: assignment ? assignment.gatewayId : null,
     rosterEpoch: assignment ? assignment.epoch : null,
     warnings,
     latestOperation: latestOp,
@@ -849,11 +866,14 @@ function countBy<T extends string | null>(
 
 function indexAssignmentDocs(
   docs: ReadonlyArray<FirestoreDocLike>,
-): Map<string, AssignmentDoc> {
-  const byUid = new Map<string, AssignmentDoc>();
+): Map<string, AssignmentDoc[]> {
+  const byUid = new Map<string, AssignmentDoc[]>();
   for (const doc of docs) {
     const parsed = parseAssignmentDoc(doc.id, doc.data());
-    if (parsed) byUid.set(parsed.uid, parsed);
+    if (!parsed) continue;
+    const assignments = byUid.get(parsed.uid) ?? [];
+    assignments.push(parsed);
+    byUid.set(parsed.uid, assignments);
   }
   return byUid;
 }
@@ -871,7 +891,7 @@ function buildOnboardingPlacementResponse(opts: {
     glmDocs: opts.glmDocs,
   });
   const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
-  const assignmentByUid = indexAssignmentDocs(opts.assignmentDocs);
+  const assignmentsByUid = indexAssignmentDocs(opts.assignmentDocs);
   const operations = opts.operationDocs.map((doc) =>
     shapeOnboardingOperation(doc.id, doc.data()),
   );
@@ -890,7 +910,7 @@ function buildOnboardingPlacementResponse(opts: {
         mountedBySlug,
         operations,
         glmByGatewayId,
-        assignmentByUid,
+        assignmentsByUid,
       }),
     )
     .sort((a, b) =>

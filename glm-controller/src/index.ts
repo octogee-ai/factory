@@ -869,7 +869,10 @@ export async function refineGatewayConvergenceAction(input: {
     action,
   } = input;
   if (!cowboyMayMutateGateway(gateway)) return { kind: "steady" };
-  if (action.kind !== "steady" || !artifact || gateway.desiredStatus !== "running") {
+  const surgeEligible = gateway.desiredStatus === "running" || (
+    gateway.desiredStatus === "draining" && gateway.liveRelease !== gateway.desiredRelease
+  );
+  if (action.kind !== "steady" || !artifact || !surgeEligible) {
     return action;
   }
   if (!(await cowboyMayMutateGatewayNow(passDeps.db, gateway.gatewayId))) {

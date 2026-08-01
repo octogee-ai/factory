@@ -2051,22 +2051,19 @@ function drainingSharedGatewayBuilder(
   user: PlacementPolicyUser,
   fromGatewayId: string,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
-  if (currentGatewayId(user.data) !== fromGatewayId || context.migrations.has(user.uid)) {
-    return null;
-  }
+  if (context.migrations.has(user.uid)) return null;
   const openclaw = record(record(user.data.provisioning)?.openclaw);
   if (isOperatorManaged(openclaw?.managedBy)) return null;
   const lease = builderActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
-  const eligibility = resolveOnboardingPlacementEligibility(user.data);
-  if (!eligibility.eligible) return null;
   const assignment = context.assignments.get(
     placementAssignmentKey(fromGatewayId, user.uid),
   );
-  if (assignment?.state !== "serving" || assignment.slug !== eligibility.slug) return null;
+  const builderSlug = assignment ? nonEmptyString(assignment.slug) : null;
+  if (assignment?.state !== "serving" || builderSlug === null) return null;
   const sourceAssignmentEpoch = nonNegativeInteger(assignment.epoch);
   if (sourceAssignmentEpoch === null) return null;
-  return { uid: user.uid, builderSlug: eligibility.slug, sourceAssignmentEpoch };
+  return { uid: user.uid, builderSlug, sourceAssignmentEpoch };
 }
 
 async function reconcileDrainingSharedGateway(

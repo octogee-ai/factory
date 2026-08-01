@@ -230,6 +230,11 @@ describe("surge customer migration boundary", () => {
     expect(requiresSurgeCustomerMigration(gateway({
       liveRelease: 1,
       desiredRelease: 2,
+      desiredStatus: "draining",
+    }))).toBe(true);
+    expect(requiresSurgeCustomerMigration(gateway({
+      liveRelease: 1,
+      desiredRelease: 2,
       desiredStatus: "paused",
     }))).toBe(false);
   });

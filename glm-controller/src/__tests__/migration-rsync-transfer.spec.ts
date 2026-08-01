@@ -255,9 +255,65 @@ describe("createRsyncMigrationTransfer", () => {
       slug: "alice",
       mode: "pre",
     })).rejects.toMatchObject({
-      message: "expected exactly one running pod for transport=gw-to; found 2",
+      message: "expected exactly one ready pod for transport=gw-to; found 0",
       retryable: true,
     });
+  });
+
+  it("selects the sole Ready target during a surge overlap", async () => {
+    const store: Store = {};
+    const fetchCalls: string[] = [];
+    const runCommand: CommandRunner = async (_command, args) => {
+      const selector = args[args.indexOf("-l") + 1] ?? "";
+      if (selector.includes("gateway-instance=gw-to")) {
+        return {
+          stdout: JSON.stringify({
+            items: [
+              {
+                metadata: { name: "gw-to-serving" },
+                status: {
+                  phase: "Running",
+                  podIP: TARGET_POD_IP,
+                  conditions: [{ type: "Ready", status: "True" }],
+                },
+              },
+              {
+                metadata: { name: "gw-to-candidate" },
+                status: {
+                  phase: "Running",
+                  podIP: "10.1.0.21",
+                  conditions: [{ type: "Ready", status: "False" }],
+                },
+              },
+            ],
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: await readyPod("gw-from-pod").text(), stderr: "", code: 0 };
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch(fetchCalls),
+      runCommand,
+    });
+
+    await transfer({
+      migrationId: "mig-surge-target",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "pre",
+    });
+
+    expect(fetchCalls[0]).toBe(
+      `http://${TARGET_POD_IP}:${FLEET_CONTROLLER_PORT}/prepare-rsync-import/gw-to`,
+    );
   });
 
   it("signals a missing source pod as retryable so a preempted shared gateway can recover in place", async () => {

@@ -580,14 +580,22 @@ spec:
             httpGet:
               path: /health
               port: {{ .Values.gatewayEdge.port }}
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.readiness.periodSeconds }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.gatewayEdge.port }}
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.gatewayEdge.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.gatewayEdge.probes.startup.timeoutSeconds }}
           livenessProbe:
             httpGet:
               path: /health
               port: {{ .Values.gatewayEdge.port }}
-            initialDelaySeconds: 10
-            periodSeconds: 30
+            initialDelaySeconds: {{ .Values.gatewayEdge.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gatewayEdge.probes.liveness.periodSeconds }}
         {{- end }}
       volumes:
         # Durable product state is substrate-backed; every pod disk is disposable.

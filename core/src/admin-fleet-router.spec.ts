@@ -2018,7 +2018,62 @@ describe("onboarding placement (post-cohorts)", () => {
     const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
     expect(customer).toMatchObject({
       rosterState: "quiescing",
+      rosterRevisionId: "default",
       rosterEpoch: 5,
+    });
+  });
+
+  it("projects draining gateway counts and rosters from durable assignments", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {
+        defaultGatewayId: "shared-a",
+        sharedGatewayIds: ["shared-a", "shared-c"],
+      },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          email: "alice@example.com",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "shared-a" } },
+        },
+      },
+      glmGateways: {
+        "shared-a": {
+          gatewayClass: "shared",
+          desiredStatus: "running",
+          heartbeat: { status: "ready", mountedCustomers: [] },
+        },
+        "shared-c": {
+          gatewayClass: "shared",
+          desiredStatus: "draining",
+          heartbeat: { status: "ready", mountedCustomers: ["alice"] },
+        },
+      },
+      assignments: {
+        "shared-c": {
+          "uid-alice": {
+            uid: "uid-alice",
+            slug: "alice",
+            gatewayId: "shared-c",
+            source: "migrate-customer",
+            state: "serving",
+            epoch: 7,
+          },
+        },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+    const draining = res.body.gateways.find(
+      (gateway: { gatewayId: string }) => gateway.gatewayId === "shared-c",
+    );
+
+    expect(draining).toMatchObject({ assignedCount: 1, mountedCount: 1 });
+    expect(res.body.customers[0]).toMatchObject({
+      assignedGatewayId: "shared-c",
+      mountedGatewayId: "shared-c",
+      rosterRevisionId: "shared-c",
+      rosterState: "serving",
+      rosterEpoch: 7,
     });
   });
 
@@ -2039,6 +2094,7 @@ describe("onboarding placement (post-cohorts)", () => {
     const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
     expect(customer).toMatchObject({
       rosterState: null,
+      rosterRevisionId: null,
       rosterEpoch: null,
     });
   });

@@ -123,6 +123,45 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "mark-live" });
   });
 
+  it("finishes an in-flight release after autoscaling marks the gateway draining", async () => {
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
+    const drainingGateway = { ...gateway(), desiredStatus: "draining" as const };
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, drainingGateway),
+      gateway: drainingGateway,
+      artifact,
+      runtime: runtime("def5678-oc2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "bender",
+      requiresCustomerMigration: true,
+    }));
+  });
+
+  it("does not start a new handoff for a fully converged draining gateway", async () => {
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
+    const drainingGateway = {
+      ...gateway(),
+      desiredStatus: "draining" as const,
+      liveRelease: 2,
+    };
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, drainingGateway),
+      gateway: drainingGateway,
+      artifact,
+      runtime: runtime("def5678-oc2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "steady" });
+
+    expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
+  });
+
   it("uses the operator image receipt for operator gateway handoff and readiness", async () => {
     const standardImageTag = `def5678-oc2026.7.1@sha256:${"a".repeat(64)}`;
     const operatorImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
