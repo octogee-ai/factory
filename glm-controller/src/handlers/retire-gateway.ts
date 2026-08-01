@@ -180,8 +180,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     if (heartbeatFenceFailure) return heartbeatFenceFailure;
     await quiesceGatewayHeartbeat(ctx, deps, gatewayId);
 
-    const ingressFailure = await syncFleetIngress(ctx, deps);
-    if (ingressFailure) return ingressFailure;
+    await syncFleetIngress(ctx, deps);
 
     return { steps: [], success: true };
   };
@@ -387,13 +386,12 @@ async function quiesceGatewayHeartbeat(
 async function syncFleetIngress(
   ctx: OperationContext,
   deps: RetireGatewayDeps,
-): Promise<OperationResult | null> {
+): Promise<void> {
   const result = await runReportedStep(ctx, deps, "fleet-ingress", () => deps.syncFleetIngress());
-  if (result.ok) return null;
+  if (result.ok) return;
   deps.log(
     `[retire-gateway] cleanup committed but fleet-ingress sync failed; reconciler will heal within 30s — ${result.error ?? UNKNOWN_ERROR}`,
   );
-  return failure(result.error ?? "fleet-ingress sync failed");
 }
 
 async function runReportedStep(

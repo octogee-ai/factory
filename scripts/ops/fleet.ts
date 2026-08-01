@@ -14,6 +14,7 @@ import {
 import {
   GLM_OPERATIONS_COLLECTION,
   isValidGatewayId,
+  type GatewayDesiredStatus,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
 import { projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
@@ -1340,7 +1341,7 @@ function heartbeatView(heartbeat: Record<string, unknown> | undefined): GatewayH
 
 export interface FleetGatewayRuntime {
   gatewayId: string;
-  desiredStatus: "running" | "paused" | "retired";
+  desiredStatus: GatewayDesiredStatus;
   profile: GatewayProfile;
   heartbeat: GatewayHeartbeatView;
 }

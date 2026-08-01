@@ -51,6 +51,7 @@ describe("glmGateways doc-kind discriminators", () => {
 
   it("isGatewayDesiredDoc: only the GatewayDoc, never a legacy desired or runtime doc", () => {
     expect(isGatewayDesiredDoc(gatewayDoc)).toBe(true);
+    expect(isGatewayDesiredDoc({ ...gatewayDoc, desiredStatus: "draining" })).toBe(true);
     expect(isGatewayDesiredDoc(legacyDesiredDoc)).toBe(false);
     expect(isGatewayDesiredDoc(runtimeDoc)).toBe(false);
     expect(isGatewayDesiredDoc(null)).toBe(false);

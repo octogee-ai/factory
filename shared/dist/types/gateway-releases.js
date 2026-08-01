@@ -171,7 +171,10 @@ export function isGatewayDesiredDoc(data) {
     return (typeof d.gatewayId === "string" &&
         typeof d.desiredRelease === "number" &&
         typeof d.latestRelease === "number" &&
-        (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired"));
+        (d.desiredStatus === "running" ||
+            d.desiredStatus === "paused" ||
+            d.desiredStatus === "draining" ||
+            d.desiredStatus === "retired"));
 }
 export function projectGatewayDesiredRootForGateway(value, gatewayId) {
     if (!isGatewayDesiredDoc(value) || value.gatewayId !== gatewayId)

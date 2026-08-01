@@ -1,8 +1,8 @@
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
-import type { ManagedBy } from "./glm.js";
+import type { GatewayDesiredStatus, ManagedBy } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
-export type GatewayLifecycleStatus = "running" | "paused" | "retired";
+export type GatewayLifecycleStatus = GatewayDesiredStatus;
 export interface GatewayRetirementClaim {
     operationId: string;
     version: number;

@@ -13,6 +13,7 @@ import {
   isOperatorManaged,
 } from "./glm.js";
 import type {
+  GatewayDesiredStatus,
   ManagedBy,
 } from "./glm.js";
 
@@ -28,7 +29,7 @@ export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 
 // gateways/{gatewayId} desired-identity lifecycle. Pausing scales the gateway
 // to zero; retirement is its own terminal state.
-export type GatewayLifecycleStatus = "running" | "paused" | "retired";
+export type GatewayLifecycleStatus = GatewayDesiredStatus;
 
 export interface GatewayRetirementClaim {
   operationId: string;
@@ -442,7 +443,10 @@ export function isGatewayDesiredDoc(data: unknown): data is GatewayDoc {
     typeof d.gatewayId === "string" &&
     typeof d.desiredRelease === "number" &&
     typeof d.latestRelease === "number" &&
-    (d.desiredStatus === "running" || d.desiredStatus === "paused" || d.desiredStatus === "retired")
+    (d.desiredStatus === "running" ||
+      d.desiredStatus === "paused" ||
+      d.desiredStatus === "draining" ||
+      d.desiredStatus === "retired")
   );
 }
 

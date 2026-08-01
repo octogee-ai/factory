@@ -260,6 +260,24 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(deleteGatewayHeartbeat.mock.calls.length).toBe(2);
   });
 
+  it("completes retirement when post-cleanup ingress sync fails", async () => {
+    const state = baseState();
+    const deps = makeDeps(state, {
+      syncFleetIngress: vi.fn(async () => {
+        throw new Error("ingress sync unavailable");
+      }),
+    });
+
+    const res = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(res.success).toBe(true);
+    expect(state.deletedGlm.has("canary")).toBe(true);
+    expect(state.deletedHeartbeat.has("canary")).toBe(true);
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining("reconciler will heal within 30s"),
+    );
+  });
+
   it("rejects a malformed request before touching anything", async () => {
     const state = baseState();
     const deps = makeDeps(state);
