@@ -1226,17 +1226,23 @@ function reconcileFingerprintStableStringify(v: unknown): string {
 }
 
 function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
-  const { heartbeat, ...rest } = data;
+  const { heartbeat, kubernetes, ...rest } = data;
   const heartbeatRecord =
     heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
       ? heartbeat as Record<string, unknown>
       : {};
+  const kubernetesRecord =
+    kubernetes !== null && typeof kubernetes === "object" && !Array.isArray(kubernetes)
+      ? { ...kubernetes as Record<string, unknown> }
+      : {};
+  delete kubernetesRecord.observedAt;
   return reconcileFingerprintStableStringify({
     ...rest,
     heartbeat: {
       status: heartbeatRecord.status,
       version: heartbeatRecord.version,
     },
+    kubernetes: kubernetesRecord,
   });
 }
 

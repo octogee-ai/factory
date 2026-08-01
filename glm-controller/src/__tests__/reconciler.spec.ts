@@ -219,6 +219,70 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(true);
   });
 
+  it("ignores Kubernetes observation freshness-only changes", () => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            kubernetes: { status: "ready", totalPods: 1, readyPods: 1, observedAt: 1 },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({
+              kubernetes: { status: "ready", totalPods: 1, readyPods: 1, observedAt: 2 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["status", { status: "not-ready", totalPods: 1, readyPods: 1 }],
+    ["totalPods", { status: "ready", totalPods: 2, readyPods: 1 }],
+    ["readyPods", { status: "ready", totalPods: 1, readyPods: 0 }],
+  ])("schedules when Kubernetes %s changes", (_field, kubernetes) => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            kubernetes: { status: "ready", totalPods: 1, readyPods: 1, observedAt: 1 },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({ kubernetes: { ...kubernetes, observedAt: 2 } }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(true);
+  });
+
   it("schedules on a release-bearing runtime change", () => {
     const fingerprints = new Map<string, string>();
     snapshotHasReconcileRelevantChange(
