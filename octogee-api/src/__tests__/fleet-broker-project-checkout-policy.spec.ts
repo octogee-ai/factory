@@ -37,13 +37,16 @@ function gatewayRoot(
 }
 
 describe("projectCheckoutScopeForGatewayRoot", () => {
-  it("keeps shared and non-disposable operator gateways workspace-only", () => {
+  it("restores project checkouts on shared gateways", () => {
     expect(projectCheckoutScopeForGatewayRoot(
       gatewayRoot("shared"),
       "default",
       "uid-alice",
       "alice",
-    )).toBe("workspace-only");
+    )).toBe("workspace-and-projects");
+  });
+
+  it("keeps non-disposable operator gateways workspace-only", () => {
     expect(projectCheckoutScopeForGatewayRoot(
       gatewayRoot("operator"),
       "default",

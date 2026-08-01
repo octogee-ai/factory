@@ -10,8 +10,8 @@ import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js
 //
 // `projectCloneSet` is fingerprinted for targets that restore project checkouts because the
 // clone only ever runs for an ACTIVE project (listProjectsNeedingClone skips the rest), while
-// project create writes the MM channel BEFORE it flips provisioningState to active. Shared
-// targets project this set away, matching their workspace-only lifecycle convergence.
+// project create writes the MM channel BEFORE it flips provisioningState to active. Targets
+// explicitly scoped to workspace-only project this set away.
 //
 // It hashes the SET the ensure would actually clone — repo present AND active (or legacy
 // undefined), mirroring listProjectsNeedingClone's own filter — rather than raw project
