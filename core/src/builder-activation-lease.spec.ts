@@ -392,6 +392,23 @@ describe("requestBuilderActivationLease", () => {
     });
   });
 
+  it("does not request an isolated gateway for a live Personal-only trial", async () => {
+    const personalOnly = state(activeTrial({
+      trialGrant: {
+        ...activeTrial().trialGrant as Data,
+        builderTier: null,
+      },
+    }));
+
+    await expect(request(personalOnly.db)).resolves.toMatchObject({
+      statusCode: 403,
+      body: { code: "builder-runtime-not-entitled" },
+    });
+    expect(
+      (personalOnly.docs["users/uid-alice"].provisioning as Data).openclaw,
+    ).not.toHaveProperty("activationLease");
+  });
+
   it("activates every Builder tier for a shell request, Hobby included", async () => {
     const { db, docs } = state();
 

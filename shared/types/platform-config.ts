@@ -61,7 +61,7 @@ export interface PlatformTrialConfig {
   offerVersion: number;
   durationDays: number;
   defaultPersonalTier: PersonalTierName;
-  defaultBuilderTier: TrialBuilderTier;
+  defaultBuilderTier: TrialBuilderTier | null;
   updatedAt?: unknown;
   updatedBy?: string;
 }
@@ -100,7 +100,7 @@ function validTrialOfferTerms(raw: Record<string, unknown>): boolean {
     (raw.durationDays as number) >= 1 &&
     (raw.durationDays as number) <= 30 &&
     isPersonalTier(raw.defaultPersonalTier) &&
-    isTrialBuilderTier(raw.defaultBuilderTier);
+    (raw.defaultBuilderTier === null || isTrialBuilderTier(raw.defaultBuilderTier));
 }
 
 function validConfigEditor(value: unknown): boolean {
@@ -123,7 +123,7 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     offerVersion: raw.offerVersion as number,
     durationDays: raw.durationDays as number,
     defaultPersonalTier: raw.defaultPersonalTier as PersonalTierName,
-    defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier,
+    defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier | null,
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
     ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy as string } : {}),
   };

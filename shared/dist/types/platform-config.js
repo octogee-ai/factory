@@ -61,7 +61,7 @@ function validTrialOfferTerms(raw) {
         raw.durationDays >= 1 &&
         raw.durationDays <= 30 &&
         isPersonalTier(raw.defaultPersonalTier) &&
-        isTrialBuilderTier(raw.defaultBuilderTier);
+        (raw.defaultBuilderTier === null || isTrialBuilderTier(raw.defaultBuilderTier));
 }
 function validConfigEditor(value) {
     return value === undefined || typeof value === "string";

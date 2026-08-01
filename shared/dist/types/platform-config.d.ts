@@ -21,7 +21,7 @@ export interface PlatformTrialConfig {
     offerVersion: number;
     durationDays: number;
     defaultPersonalTier: PersonalTierName;
-    defaultBuilderTier: TrialBuilderTier;
+    defaultBuilderTier: TrialBuilderTier | null;
     updatedAt?: unknown;
     updatedBy?: string;
 }

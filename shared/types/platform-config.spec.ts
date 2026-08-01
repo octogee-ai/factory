@@ -62,7 +62,7 @@ describe("parsePlatformTrialConfig", () => {
     expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(2);
   });
 
-  it("accepts every Personal tier and only concrete Builder tiers", () => {
+  it("accepts every Personal tier, no Builder tier, and only concrete Builder tiers", () => {
     for (const personalTier of ["personal_free", "personal", "personal_pro", "personal_pro_max"]) {
       expect(
         parsePlatformTrialConfig({
@@ -79,6 +79,12 @@ describe("parsePlatformTrialConfig", () => {
         }),
       ).not.toBeNull();
     }
+    expect(
+      parsePlatformTrialConfig({
+        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+        defaultBuilderTier: null,
+      }),
+    ).toMatchObject({ defaultBuilderTier: null });
     expect(
       parsePlatformTrialConfig({
         ...DEFAULT_PLATFORM_TRIAL_CONFIG,
@@ -109,6 +115,9 @@ describe("parsePlatformTrialConfig", () => {
     ).toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "team" }),
+    ).not.toBe(hash);
+    expect(
+      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: null }),
     ).not.toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 14 }),

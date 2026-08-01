@@ -334,11 +334,14 @@ router.get("/platform-trial-config", async (_req, res) => {
         name,
         displayName: TIERS[name as keyof typeof TIERS].displayName,
       })),
-      builderPlans: ["hobby", "pro", "team"].map((name) => ({
-        name,
-        displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
-        sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
-      })),
+      builderPlans: [
+        { name: null, displayName: "No", sizingTier: null },
+        ...["hobby", "pro", "team"].map((name) => ({
+          name,
+          displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
+          sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
+        })),
+      ],
     });
   } catch (err) {
     logger.error("[admin] platform-trial-config read failed", { err });

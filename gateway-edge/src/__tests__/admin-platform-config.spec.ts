@@ -357,7 +357,7 @@ describe("admin platform-trial-config", () => {
     setCalls.length = 0;
   });
 
-  it("GET returns strict location-free defaults and concrete plan choices", async () => {
+  it("GET returns strict location-free defaults including no Builder plan", async () => {
     platformDocs["platformConfig/trial"] = {
       schemaVersion: 2,
       offerId: "builder-signup",
@@ -383,7 +383,12 @@ describe("admin platform-trial-config", () => {
       displayName: "Builder Pro",
       sizingTier: "m",
     });
-    expect(res.body.builderPlans.map((plan: { name: string }) => plan.name)).not.toContain("enterprise");
+    expect(res.body.builderPlans).toContainEqual({
+      name: null,
+      displayName: "No",
+      sizingTier: null,
+    });
+    expect(res.body.builderPlans.map((plan: { name: string | null }) => plan.name)).not.toContain("enterprise");
     expect(res.body).not.toHaveProperty("provisioning");
     expect(aggregateCalls).toEqual([]);
   });
@@ -420,6 +425,25 @@ describe("admin platform-trial-config", () => {
         updatedAt: "server-now",
         updatedBy: "admin-user",
       },
+    });
+  });
+
+  it("PUT writes a Personal-only default with no Builder gateway plan", async () => {
+    const res = await request(app)
+      .put("/api/admin/platform-trial-config")
+      .send({
+        schemaVersion: 2,
+        offerId: "builder-signup",
+        offerVersion: 2,
+        durationDays: 7,
+        defaultPersonalTier: "personal",
+        defaultBuilderTier: null,
+      });
+
+    expect(res.status).toBe(200);
+    expect(setCalls[0].data).toMatchObject({
+      defaultPersonalTier: "personal",
+      defaultBuilderTier: null,
     });
   });
 
