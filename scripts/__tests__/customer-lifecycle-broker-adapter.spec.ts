@@ -545,7 +545,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("relies on config hot reload after applying changed channel bindings", async () => {
+  it("restarts the customer Mattermost monitor after applying changed channel bindings", async () => {
     const events: string[] = [];
     patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");
@@ -588,12 +588,18 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
 
-    expect(rpc.channelsStop).not.toHaveBeenCalled();
-    expect(rpc.channelsStart).not.toHaveBeenCalled();
-    expect(events).toEqual(["config-patch"]);
+    expect(rpc.channelsStop).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "alice-coach",
+    });
+    expect(events).toEqual(["config-patch", "channels-stop", "channels-start"]);
   });
 
-  it("waits for the lifecycle config.changed hash before completing the changed patch", async () => {
+  it("waits for the lifecycle config.changed hash before restarting Mattermost monitors", async () => {
     const events: string[] = [];
     let publishConfigChanged: (() => void) | undefined;
     const configChanged = new Promise<void>((resolve) => {
@@ -658,9 +664,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual(["config-persisted", "config-changed"]);
-    expect(rpc.channelsStop).not.toHaveBeenCalled();
-    expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      "config-persisted",
+      "config-changed",
+      "channels-stop",
+      "channels-start",
+    ]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
   });
@@ -1452,6 +1461,9 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       source: "file",
       provider: "octogee-mattermost",
       id: "/alice-proj-orbit",
+    });
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+      groups: { "po-1": { requireMention: true } },
     });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });

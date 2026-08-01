@@ -234,12 +234,15 @@ export interface MattermostAccountInput {
   uid: string;
   slug: string;
   customerMmUserId?: string | null;
+  channels?: ReadonlyArray<BindingChannelInput>;
+  agentProjects?: ReadonlySet<string>;
 }
 
 export interface MattermostAccountEntry {
   botToken: MattermostAccountSecretRef;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
+  groups?: Record<string, { requireMention: true }> | null;
 
 commands?: {
     native: false;
@@ -266,11 +269,29 @@ export function buildMattermostAccounts(
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
+    const groups = Object.fromEntries(
+      (c.channels ?? [])
+        .filter(
+          (channel) =>
+            channel.scope === "project" &&
+            channel.projectId !== undefined &&
+            c.agentProjects?.has(channel.projectId) === true,
+        )
+        .map((channel) => [channel.channelId, { requireMention: true }] as const),
+    );
+    const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
+    let groupsPatch: Pick<MattermostAccountEntry, "groups"> = {};
+    if (Object.keys(groups).length > 0) {
+      groupsPatch = { groups };
+    } else if (managesGroups) {
+      groupsPatch = { groups: null };
+    }
     const accountId = `${c.slug}-coach`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
       groupPolicy: "open",
       ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+      ...groupsPatch,
       commands: { native: false },
     };
   }

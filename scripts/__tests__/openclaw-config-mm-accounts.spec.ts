@@ -226,6 +226,44 @@ describe("buildMattermostAccounts", () => {
     });
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("mention-gates the workspace coach only in channels owned by active project agents", () => {
+    const accounts = buildMattermostAccounts(
+      [
+        {
+          uid: "uid-a",
+          slug: "chris",
+          channels: [
+            { channelId: "ws-general", scope: "workspace" },
+            { channelId: "proj-orbit", scope: "project", projectId: "orbit" },
+            { channelId: "proj-nova", scope: "project", projectId: "nova" },
+          ],
+          agentProjects: new Set(["orbit"]),
+        },
+      ],
+      new Map([["uid-a", "tok-chris"]]),
+    );
+
+    expect(accounts["chris-coach"].groups).toEqual({
+      "proj-orbit": { requireMention: true },
+    });
+  });
+
+  it("clears stale workspace coach mention gates when no project agent remains active", () => {
+    const accounts = buildMattermostAccounts(
+      [
+        {
+          uid: "uid-a",
+          slug: "chris",
+          channels: [{ channelId: "proj-orbit", scope: "project", projectId: "orbit" }],
+          agentProjects: new Set(),
+        },
+      ],
+      new Map([["uid-a", "tok-chris"]]),
+    );
+
+    expect(accounts["chris-coach"].groups).toBeNull();
+  });
 });
 
 describe("buildCustomerBindings", () => {

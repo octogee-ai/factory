@@ -370,12 +370,15 @@ async function applyAddCustomerConfigPatch(
   }
 
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
+  const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
   const accountsMap = buildMattermostAccounts(
     [
       {
         uid: snapshot.uid,
         slug: snapshot.slug,
         customerMmUserId: brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId,
+        channels: snapshot.channels,
+        agentProjects: activeAgentProjectIds(projectAgents),
       },
     ],
     new Map([[snapshot.uid, coachPat]]),
@@ -405,7 +408,6 @@ async function applyAddCustomerConfigPatch(
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
       : {}),
   });
-  const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
@@ -443,7 +445,7 @@ async function applyAddCustomerConfigPatch(
       options?: { replacePaths?: readonly string[] },
     ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
   };
-  const configPatch = await applyConfigPatch(
+  await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
@@ -488,12 +490,10 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  if (configPatch.noop) {
-    await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
-      accountId,
-      ...Object.keys(projectAccounts),
-    ]);
-  }
+  await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
+    accountId,
+    ...Object.keys(projectAccounts),
+  ]);
   return {
     elapsedMs: Date.now() - startedAt,
     ...(brokerSnapshot
