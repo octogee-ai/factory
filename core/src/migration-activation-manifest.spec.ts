@@ -165,6 +165,26 @@ describe("migration activation manifest", () => {
     });
   });
 
+  it("normalizes the previous rollout manifest with the target desired fingerprint", async () => {
+    const dir = await mkTmp();
+    const legacy = { ...manifest(), version: 1 } as Record<string, unknown>;
+    delete legacy.appliedFingerprint;
+    const manifestPath = path.join(dir, activationManifestTarPath("alice"));
+    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+    await fs.writeFile(manifestPath, `${JSON.stringify(legacy)}\n`, "utf-8");
+
+    await expect(readActivationManifest(dir, "alice", {
+      legacyAppliedFingerprint: "target-desired-fingerprint",
+    })).resolves.toMatchObject({
+      version: 2,
+      slug: "alice",
+      appliedFingerprint: "target-desired-fingerprint",
+    });
+    await expect(readActivationManifest(dir, "alice")).rejects.toThrow(
+      "legacy activation manifest requires target fingerprint",
+    );
+  });
+
   it("patches agent, account, and bindings without keeping stale entries for the same agent", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",

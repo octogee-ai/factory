@@ -21,6 +21,7 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
+import { LegacyActivationManifestFingerprintError } from "../lib/migration-activation-manifest.js";
 
 const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
   return {
     ...actual,
+    LegacyActivationManifestFingerprintError: actual.LegacyActivationManifestFingerprintError,
     readActivationManifest: mocks.readActivationManifest,
     applyOpenClawActivationManifest: mocks.applyOpenClawActivationManifest,
     removeActivationManifest: mocks.removeActivationManifest,
@@ -211,6 +213,60 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
+  });
+
+  it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-tester10",
+      slug: "tester10",
+      tier: "trial",
+      gatewayId: "shared-a",
+      status: "complete",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: null,
+      customerMmUserId: null,
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Tester",
+      coachToken: null,
+      coachMmUserId: null,
+    };
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+    } as unknown as GatewayRpcClient;
+    mocks.readActivationManifest
+      .mockRejectedValueOnce(new LegacyActivationManifestFingerprintError("legacy"))
+      .mockResolvedValueOnce({ slug: "tester10", appliedFingerprint: "desired-fingerprint" });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+      appliedFingerprint: "desired-fingerprint",
+    });
+
+    expect(mocks.readActivationManifest).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(".openclaw"),
+      "tester10",
+    );
+    expect(mocks.readActivationManifest).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining(".openclaw"),
+      "tester10",
+      {
+        legacyAppliedFingerprint: snapshotConfigFingerprint({
+          ...snapshot,
+          projectCheckoutScope: "workspace-only",
+        }),
+      },
+    );
   });
 
   it("fails before mutating config when the activation manifest is absent", async () => {

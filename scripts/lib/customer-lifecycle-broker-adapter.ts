@@ -95,9 +95,11 @@ import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
   applyOpenClawActivationManifest,
+  LegacyActivationManifestFingerprintError,
   MIGRATION_ACTIVATION_DIR,
   readActivationManifest,
   removeActivationManifest,
+  type MigrationActivationManifest,
 } from "./migration-activation-manifest.js";
 import {
   exportActivationManifestWithSecret,
@@ -796,7 +798,17 @@ async function activateImportedCustomer(
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<string> {
-  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  let manifest: MigrationActivationManifest;
+  try {
+    manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  } catch (error) {
+    if (!(error instanceof LegacyActivationManifestFingerprintError)) throw error;
+    const desiredSnapshot = await snapshotForSlug(ctx, slug);
+    if (!desiredSnapshot) throw error;
+    manifest = await readActivationManifest(OPENCLAW_DIR, slug, {
+      legacyAppliedFingerprint: snapshotConfigFingerprint(desiredSnapshot),
+    });
+  }
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   await pruneWorkspaceOnlyProjectCheckouts(
     CUSTOMERS_DIR,

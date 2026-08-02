@@ -92,6 +92,7 @@ import {
   assertSurgeAssignmentCoverage,
   reconcileSurgeCustomerHandoff,
 } from "./surge-customer-handoff.js";
+import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
   createSurgePodTransport,
   listSurgePods,
@@ -2340,8 +2341,16 @@ async function createControllerRuntime(
         if (!slug) throw new Error(`assigned user ${doc.id} has no gateway slug`);
         return { uid: doc.id, slug };
       });
-      assertSurgeAssignmentCoverage(projected, assignedUsers);
-      return projected;
+      const retained = await pruneSurgeOrphanAssignments({
+        db,
+        gatewayId,
+        assignments: projected,
+        users: assignedUsers,
+        now: Date.now(),
+        log,
+      });
+      assertSurgeAssignmentCoverage(retained, assignedUsers);
+      return retained;
     },
     readDurableSessionDigest: ({ pod, slug }: {
       pod: { uid: string; name: string; podIP: string; ready: boolean };

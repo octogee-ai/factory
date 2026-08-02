@@ -7,6 +7,8 @@ import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterRe
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
+export class LegacyActivationManifestFingerprintError extends Error {
+}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -90,18 +92,28 @@ function validateManifestAgent(value, slug, expectedId, expectedAccount) {
         bindings,
     };
 }
-function validateManifestShape(value, slug) {
+function manifestAppliedFingerprint(value, slug, legacyAppliedFingerprint) {
+    const appliedFingerprint = value.version === 2
+        ? value.appliedFingerprint
+        : legacyAppliedFingerprint;
+    if (typeof appliedFingerprint === "string" && appliedFingerprint.length > 0) {
+        return appliedFingerprint;
+    }
+    if (value.version === 1) {
+        throw new LegacyActivationManifestFingerprintError(`[migration-activation:${slug}] legacy activation manifest requires target fingerprint`);
+    }
+    throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
+}
+function validateManifestShape(value, slug, opts = {}) {
     if (!isRecord(value)) {
         throw new Error(`[migration-activation:${slug}] activation manifest is not an object`);
     }
     const agentId = expectedAgentId(slug);
     const accountId = expectedAccountId(slug);
-    if (value.version !== 2
-        || value.slug !== slug
-        || typeof value.appliedFingerprint !== "string"
-        || value.appliedFingerprint.length === 0) {
+    if (value.slug !== slug || (value.version !== 1 && value.version !== 2)) {
         throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
     }
+    const appliedFingerprint = manifestAppliedFingerprint(value, slug, opts.legacyAppliedFingerprint);
     const workspace = validateManifestAgent(value, slug, agentId, accountId);
     const rawProjects = value.projectAgents;
     if (rawProjects !== undefined && !Array.isArray(rawProjects)) {
@@ -129,7 +141,7 @@ function validateManifestShape(value, slug) {
     return {
         version: 2,
         slug,
-        appliedFingerprint: value.appliedFingerprint,
+        appliedFingerprint,
         ...workspace,
         projectAgents,
     };
@@ -213,10 +225,10 @@ export async function writeActivationManifest(rootDir, manifest) {
     await fs.writeFile(fullPath, `${JSON.stringify(manifest)}\n`, "utf-8");
     return { cwd: rootDir, path: relPath };
 }
-export async function readActivationManifest(openclawDir, slug) {
+export async function readActivationManifest(openclawDir, slug, opts = {}) {
     const manifestPath = activationManifestDiskPath(openclawDir, slug);
     const raw = await fs.readFile(manifestPath, "utf-8");
-    return validateManifestShape(JSON.parse(raw), slug);
+    return validateManifestShape(JSON.parse(raw), slug, opts);
 }
 export async function removeActivationManifest(openclawDir, slug) {
     const manifestDir = path.join(openclawDir, MIGRATION_ACTIVATION_DIR, slug);
