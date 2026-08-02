@@ -59,6 +59,7 @@ locals {
     "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt", disable_indexes = true }
     "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt", disable_indexes = true }
     "productivityApprovals.expireAt"       = { collection = "productivityApprovals", field = "expireAt" }
+    "glmOperations.expireAt"               = { collection = "glmOperations", field = "expireAt" }
   }
 }
 

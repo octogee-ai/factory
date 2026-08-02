@@ -114,6 +114,7 @@ export type FinishOperationAuditInput = {
     error: string;
     now?: () => number;
 };
+export declare const OPERATION_AUDIT_RETENTION_MS: number;
 export declare function finishOperationAudit(db: OperationsDb, auditId: string, opts: FinishOperationAuditInput): Promise<void>;
 export declare function runWithOperationAuditIntent<T>(db: OperationsDb, opts: OperationAuditIntentInput, claimOpts: ClaimOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;
 export declare function resumeOperationAuditAction<T>(db: OperationsDb, opts: RecoverOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;

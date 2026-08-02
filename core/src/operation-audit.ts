@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Timestamp } from "firebase-admin/firestore";
 import {
   GLM_OPERATIONS_COLLECTION,
   OPERATION_AUDIT_RECORD_TYPE,
@@ -288,8 +289,17 @@ export type FinishOperationAuditInput =
   | { outcome: "partial"; expectedClaimId: string; aliasOutcomes?: OperationAuditAliasOutcome[]; partialOutcome: OperationAuditPartialOutcome; releaseRollout?: OperationAuditReleaseRolloutLinkage; now?: () => number }
   | { outcome: "failed"; expectedClaimId: string; aliasOutcomes?: OperationAuditAliasOutcome[]; partialOutcome?: OperationAuditPartialOutcome; releaseRollout?: OperationAuditReleaseRolloutLinkage; error: string; now?: () => number };
 
+// `completedAt` is a plain epoch number, which a native Firestore TTL policy
+// cannot read; `expireAt` is its Timestamp twin. Terminal rows only — a row that
+// can still change must never carry an expiry.
+export const OPERATION_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+function auditExpiry(completedAt: number): Timestamp {
+  return Timestamp.fromMillis(completedAt + OPERATION_AUDIT_RETENTION_MS);
+}
+
 function completionPatch(opts: FinishOperationAuditInput): Record<string, unknown> {
-  const now = opts.now ?? Date.now;
+  const completedAt = (opts.now ?? Date.now)();
   if (opts.outcome === "failed") {
     return {
       status: "failed",
@@ -299,7 +309,8 @@ function completionPatch(opts: FinishOperationAuditInput): Record<string, unknow
       ...(opts.partialOutcome ? { partialOutcome: opts.partialOutcome } : {}),
       ...(opts.releaseRollout ? { releaseRollout: opts.releaseRollout } : {}),
       error: opts.error,
-      completedAt: now(),
+      completedAt,
+      expireAt: auditExpiry(completedAt),
     };
   }
   return {
@@ -309,7 +320,8 @@ function completionPatch(opts: FinishOperationAuditInput): Record<string, unknow
     ...(opts.aliasOutcomes ? { aliasOutcomes: opts.aliasOutcomes } : {}),
     ...(opts.outcome === "partial" ? { partialOutcome: opts.partialOutcome } : {}),
     ...(opts.releaseRollout ? { releaseRollout: opts.releaseRollout } : {}),
-    completedAt: now(),
+    completedAt,
+    expireAt: auditExpiry(completedAt),
   };
 }
 
