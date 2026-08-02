@@ -144,6 +144,25 @@ spec:
             seccompProfile:
               type: RuntimeDefault
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gmp-kube-state-metrics
+  labels:
+    app: gmp-kube-state-metrics
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app: gmp-kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: http-metrics
+    - name: telemetry
+      port: 8081
+      targetPort: telemetry
+---
 # GMP scrapes the KSM into Monarch. targetLabels.metadata: [] keeps the metric's
 # OWN namespace/pod labels (KSM describes other objects) instead of the scrape
 # target's — the documented fix for the kube_* label collision.
