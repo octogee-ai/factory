@@ -584,6 +584,70 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("users/u1")).toMatchObject({ "provisioning.openclaw.gatewayId": "default" });
   });
 
+  it("creates a guarded user field and its side document in the placement transaction", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial" },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+    });
+
+    await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "onboarding",
+      now: 100,
+      mirrorPatch: mirror,
+      atomicCreate: {
+        userField: "trialGrant",
+        userPatch: { trialGrant: { offerVersion: 3 } },
+        writes: [{
+          collection: "modelBrokerSignupOfferBudgets",
+          document: "so_new",
+          data: { chargeUsd: 0 },
+        }],
+      },
+    });
+
+    expect(store.get("users/u1")?.trialGrant).toEqual({ offerVersion: 3 });
+    expect(store.get("modelBrokerSignupOfferBudgets/so_new")).toEqual({ chargeUsd: 0 });
+  });
+
+  it("preserves a user field created after caller preparation and skips its stale side write", async () => {
+    const concurrentReceipt = { offerVersion: 2, configHash: "winner" };
+    const { db, store } = mkDb(
+      {
+        "users/u1": { tier: "trial" },
+        "gateways/default": backfilled(),
+        "glmGateways/default": runtimeDoc(),
+      },
+      (transactionStore) => {
+        transactionStore.set("users/u1", { tier: "trial", trialGrant: concurrentReceipt });
+      },
+    );
+
+    await commitPlacementAtomic(db, {
+      uid: "u1",
+      slug: "s1",
+      gatewayId: "default",
+      source: "onboarding",
+      now: 100,
+      mirrorPatch: mirror,
+      atomicCreate: {
+        userField: "trialGrant",
+        userPatch: { trialGrant: { offerVersion: 3, configHash: "stale" } },
+        writes: [{
+          collection: "modelBrokerSignupOfferBudgets",
+          document: "so_stale",
+          data: { chargeUsd: 0 },
+        }],
+      },
+    });
+
+    expect(store.get("users/u1")?.trialGrant).toEqual(concurrentReceipt);
+    expect(store.get("modelBrokerSignupOfferBudgets/so_stale")).toBeUndefined();
+  });
+
   it("places through an empty retired co-owner mirror but rejects a non-empty one", async () => {
     const empty = mkDb({
       "users/u1": { tier: "trial" },

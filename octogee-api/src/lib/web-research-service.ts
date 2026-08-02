@@ -56,6 +56,10 @@ interface WebResearchServiceOptions {
   tavilyCostPerCreditUsd: number;
   markupMultiplier: number;
   onError?: (error: unknown) => void;
+  onSignupOfferBudgetInterruption?: (input: {
+    uid: string;
+    reason: "waiting_for_unlock" | "hard_cap_exhausted";
+  }) => void | Promise<void>;
 }
 
 const EMPTY_USAGE = {
@@ -65,24 +69,77 @@ const EMPTY_USAGE = {
   cacheReadInputTokens: 0,
 };
 
-async function requireAllowance(input: {
+interface AllowanceInput {
   usageStore: ModelBrokerUsageStore;
   grant: OwnerModelBrokerGrant;
   gatewayId: string;
   ownerUid: string;
   now: number;
-}): Promise<{ debitsCreditBalance: boolean; countsTowardSpendWindow: boolean }> {
-  if (input.grant.rail === "prepaid_credits") {
-    if (!input.usageStore.readCreditBalance) {
-      throw new WebResearchError("billing_unavailable", 503, "Platform Credit gate unavailable");
-    }
-    const balance = await input.usageStore.readCreditBalance(input.ownerUid);
-    if (balance <= 0) {
-      throw new WebResearchError("credits_exhausted", 402, "Platform Credits exhausted");
-    }
-    return { debitsCreditBalance: true, countsTowardSpendWindow: false };
-  }
+  onSignupOfferBudgetInterruption?: WebResearchServiceOptions["onSignupOfferBudgetInterruption"];
+  onError?: (error: unknown) => void;
+}
 
+interface AllowanceResult {
+  debitsCreditBalance: boolean;
+  countsTowardSpendWindow: boolean;
+  signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
+}
+
+async function requireCreditBalance(input: AllowanceInput): Promise<AllowanceResult> {
+  if (!input.usageStore.readCreditBalance) {
+    throw new WebResearchError("billing_unavailable", 503, "Platform Credit gate unavailable");
+  }
+  const balance = await input.usageStore.readCreditBalance(input.ownerUid);
+  if (balance <= 0) {
+    throw new WebResearchError("credits_exhausted", 402, "Platform Credits exhausted");
+  }
+  return { debitsCreditBalance: true, countsTowardSpendWindow: false };
+}
+
+async function reportSignupOfferInterruption(
+  input: AllowanceInput,
+  reason: "waiting_for_unlock" | "hard_cap_exhausted",
+): Promise<void> {
+  try {
+    await input.onSignupOfferBudgetInterruption?.({ uid: input.ownerUid, reason });
+  } catch (error) {
+    input.onError?.(error);
+  }
+}
+
+async function requireSignupOfferAllowance(input: AllowanceInput): Promise<AllowanceResult> {
+  const budget = input.grant.signupOfferBudget;
+  if (!budget || !input.usageStore.readSignupOfferBudget) {
+    throw new WebResearchError("billing_unavailable", 503, "Signup Offer budget gate unavailable");
+  }
+  const ledger = await input.usageStore.readSignupOfferBudget(budget);
+  if (!ledger) {
+    throw new WebResearchError("billing_unavailable", 503, "Signup Offer budget ledger unavailable");
+  }
+  if (ledger.chargeUsd < budget.unlockedCapUsd) {
+    return {
+      debitsCreditBalance: false,
+      countsTowardSpendWindow: false,
+      signupOfferBudget: budget,
+    };
+  }
+  if (input.usageStore.readCreditBalance) {
+    const balance = await input.usageStore.readCreditBalance(input.ownerUid);
+    if (balance > 0) {
+      return { debitsCreditBalance: true, countsTowardSpendWindow: false };
+    }
+  }
+  const reason = budget.nextUnlockAtMs !== null && ledger.chargeUsd < budget.hardCapUsd
+    ? "waiting_for_unlock"
+    : "hard_cap_exhausted";
+  await reportSignupOfferInterruption(input, reason);
+  const message = reason === "waiting_for_unlock"
+    ? "Signup Offer capacity unlocks again soon"
+    : "Signup Offer model allowance is complete";
+  throw new WebResearchError("allowance_exhausted", 402, message);
+}
+
+async function requireSubscriptionAllowance(input: AllowanceInput): Promise<AllowanceResult> {
   const state = await readPlatformSpendState({
     usageStore: input.usageStore,
     gatewayId: input.gatewayId,
@@ -96,18 +153,17 @@ async function requireAllowance(input: {
   }
   if (state.exhausted) {
     if (input.grant.policy.houseFallback === false) {
-      if (!input.usageStore.readCreditBalance) {
-        throw new WebResearchError("billing_unavailable", 503, "Platform Credit gate unavailable");
-      }
-      const balance = await input.usageStore.readCreditBalance(input.ownerUid);
-      if (balance <= 0) {
-        throw new WebResearchError("credits_exhausted", 402, "Platform Credits exhausted");
-      }
-      return { debitsCreditBalance: true, countsTowardSpendWindow: false };
+      return requireCreditBalance(input);
     }
     throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
   }
   return { debitsCreditBalance: false, countsTowardSpendWindow: true };
+}
+
+async function requireAllowance(input: AllowanceInput): Promise<AllowanceResult> {
+  if (input.grant.rail === "prepaid_credits") return requireCreditBalance(input);
+  if (input.grant.rail === "signup_offer") return requireSignupOfferAllowance(input);
+  return requireSubscriptionAllowance(input);
 }
 
 async function requireRequestRate(input: {
@@ -168,6 +224,8 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         gatewayId: input.gatewayId,
         ownerUid: input.ownerUid,
         now: at,
+        onSignupOfferBudgetInterruption: options.onSignupOfferBudgetInterruption,
+        onError: options.onError,
       });
       await requireRequestRate({
         usageStore: options.usageStore,
@@ -176,10 +234,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         ownerUid: input.ownerUid,
         now: at,
       });
-      return {
-        at,
-        billing,
-      };
+      return { at, billing };
     } catch (error) {
       if (error instanceof WebResearchError) throw error;
       options.onError?.(error);
@@ -195,7 +250,11 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
     model: string;
     costUsd: number;
     at: number;
-    billing: { debitsCreditBalance: boolean; countsTowardSpendWindow: boolean };
+    billing: {
+      debitsCreditBalance: boolean;
+      countsTowardSpendWindow: boolean;
+      signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
+    };
     metadata: Record<string, unknown>;
   }): Promise<void> {
     try {
@@ -218,6 +277,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         chargeUsd: input.costUsd * options.markupMultiplier,
         debitsCreditBalance: input.billing.debitsCreditBalance,
         countsTowardSpendWindow: input.billing.countsTowardSpendWindow,
+        signupOfferBudget: input.billing.signupOfferBudget,
         providerMetadata: input.metadata,
       });
     } catch (error) {

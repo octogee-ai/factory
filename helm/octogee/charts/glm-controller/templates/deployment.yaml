@@ -87,6 +87,20 @@ spec:
                 secretKeyRef:
                   name: stripe-secrets
                   key: secret_key
+            {{- if .Values.posthog.host }}
+            - name: POSTHOG_HOST
+              value: {{ .Values.posthog.host | quote }}
+            {{- end }}
+            {{- if .Values.posthog.projectId }}
+            - name: POSTHOG_PROJECT_ID
+              value: {{ .Values.posthog.projectId | quote }}
+            {{- end }}
+            - name: POSTHOG_PERSONAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.posthog.personalApiKeySecretName | quote }}
+                  key: {{ .Values.posthog.personalApiKeySecretKey | quote }}
+                  optional: true
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_MS

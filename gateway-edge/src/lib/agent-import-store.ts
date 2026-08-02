@@ -2,6 +2,7 @@ import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import type { AgentImportWorkspacePolicy } from "@octogee/shared/types/agent-import";
 
+import type { AgentImportAuthorizationIntent } from "@octogee/shared/types/agent-import";
 import { internalFetch } from "./internal-fetch.js";
 import type { AgentImportManifestEntry } from "./agent-import-git.js";
 import type {
@@ -172,14 +173,14 @@ export function createAgentImportStore(deps: StoreDeps) {
   });
 
   return {
-    async authorize(): Promise<{
+    async authorize(intent: AgentImportAuthorizationIntent): Promise<{
       slug: string;
       gatewayId: string;
       workspacePolicy: AgentImportWorkspacePolicy;
     }> {
       const value = object(await jsonRequest("/authorize", {
         method: "POST",
-        ...jsonBody({ gatewayId: deps.gatewayId }),
+        ...jsonBody({ gatewayId: deps.gatewayId, intent }),
       }));
       const workspacePolicy = object(value?.workspacePolicy);
       if (

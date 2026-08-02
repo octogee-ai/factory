@@ -44,22 +44,23 @@ locals {
     "roles/serviceusage.serviceUsageConsumer",
   ])
   firestore_ttl_fields = {
-    "ocTickets.expiresAt"                  = { collection = "ocTickets", field = "expiresAt" }
-    "gatewayTickets.expireAt"              = { collection = "gatewayTickets", field = "expireAt" }
-    "gatewayTicketMintLog.expireAt"        = { collection = "gatewayTicketMintLog", field = "expireAt" }
-    "connectFlows.expireAt"                = { collection = "connectFlows", field = "expireAt" }
-    "builderShellMintLog.expireAt"         = { collection = "builderShellMintLog", field = "expireAt" }
-    "openclawControlTickets.expireAt"      = { collection = "openclawControlTickets", field = "expireAt" }
-    "openclawControlSessions.expireAt"     = { collection = "openclawControlSessions", field = "expireAt" }
-    "agentControls.gcAt"                   = { collection = "agentControls", field = "gcAt", disable_indexes = true }
-    "modelBrokerUsageEvents.expiresAt"     = { collection = "modelBrokerUsageEvents", field = "expiresAt", disable_indexes = true }
-    "modelBrokerUsageWindows.expiresAt"    = { collection = "modelBrokerUsageWindows", field = "expiresAt", disable_indexes = true }
-    "modelBrokerWeekWindows.expiresAt"     = { collection = "modelBrokerWeekWindows", field = "expiresAt", disable_indexes = true }
-    "modelBrokerHouseDayWindows.expiresAt" = { collection = "modelBrokerHouseDayWindows", field = "expiresAt", disable_indexes = true }
-    "modelBrokerRateWindows.expiresAt"     = { collection = "modelBrokerRateWindows", field = "expiresAt", disable_indexes = true }
-    "usage_models.expiresAt"               = { collection = "usage_models", field = "expiresAt", disable_indexes = true }
-    "productivityApprovals.expireAt"       = { collection = "productivityApprovals", field = "expireAt" }
-    "glmOperations.expireAt"               = { collection = "glmOperations", field = "expireAt" }
+    "ocTickets.expiresAt"                     = { collection = "ocTickets", field = "expiresAt" }
+    "gatewayTickets.expireAt"                 = { collection = "gatewayTickets", field = "expireAt" }
+    "gatewayTicketMintLog.expireAt"           = { collection = "gatewayTicketMintLog", field = "expireAt" }
+    "connectFlows.expireAt"                   = { collection = "connectFlows", field = "expireAt" }
+    "builderShellMintLog.expireAt"            = { collection = "builderShellMintLog", field = "expireAt" }
+    "openclawControlTickets.expireAt"         = { collection = "openclawControlTickets", field = "expireAt" }
+    "openclawControlSessions.expireAt"        = { collection = "openclawControlSessions", field = "expireAt" }
+    "agentControls.gcAt"                      = { collection = "agentControls", field = "gcAt", disable_indexes = true }
+    "modelBrokerUsageEvents.expiresAt"        = { collection = "modelBrokerUsageEvents", field = "expiresAt", disable_indexes = true }
+    "modelBrokerUsageWindows.expiresAt"       = { collection = "modelBrokerUsageWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerWeekWindows.expiresAt"        = { collection = "modelBrokerWeekWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerSignupOfferBudgets.expiresAt" = { collection = "modelBrokerSignupOfferBudgets", field = "expiresAt", disable_indexes = true }
+    "modelBrokerHouseDayWindows.expiresAt"    = { collection = "modelBrokerHouseDayWindows", field = "expiresAt", disable_indexes = true }
+    "modelBrokerRateWindows.expiresAt"        = { collection = "modelBrokerRateWindows", field = "expiresAt", disable_indexes = true }
+    "usage_models.expiresAt"                  = { collection = "usage_models", field = "expiresAt", disable_indexes = true }
+    "productivityApprovals.expireAt"          = { collection = "productivityApprovals", field = "expireAt" }
+    "glmOperations.expireAt"                  = { collection = "glmOperations", field = "expireAt" }
   }
 }
 

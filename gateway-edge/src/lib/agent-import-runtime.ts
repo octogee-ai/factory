@@ -8,6 +8,7 @@ import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/dev
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
+import type { AgentImportAuthorizationIntent } from "@octogee/shared/types/agent-import";
 import { agentImportBrokerBaseUrlFromEnv, createAgentImportStore } from "./agent-import-store.js";
 import {
   agentImportRepositoryApplied,
@@ -203,7 +204,7 @@ export function createAgentImportRuntime(options: {
   });
   return {
     service,
-    authorize: () => store.authorize(),
+    authorize: (intent: AgentImportAuthorizationIntent) => store.authorize(intent),
     listGithubSources: () => store.listGithubSources(),
   };
 }

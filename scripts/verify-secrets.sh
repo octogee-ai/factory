@@ -138,6 +138,14 @@ REQUIRED_KEYS=(
   "connect-state-secret:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
+if posthog_cloud_required_for_env "$ENV"; then
+  REQUIRED_SECRETS+=("posthog-cloud")
+  REQUIRED_KEYS+=(
+    "posthog-cloud:project_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+    "posthog-cloud:personal_api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  )
+fi
+
 echo ""
 echo -e "${BOLD}Pre-deploy secret check — ${ENV}${NC}"
 echo -e "Namespace: ${NS} | Context: ${KUBE_CTX}"
@@ -221,6 +229,24 @@ else
 fi
 rm -f "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"
 
+if ! posthog_cloud_required_for_env "$ENV"; then
+  POSTHOG_PROJECT_TOKEN="$(kubectl get secret posthog-cloud -n "$NS" --context "$KUBE_CTX" \
+    -o jsonpath='{.data.project_token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  POSTHOG_PERSONAL_API_KEY="$(kubectl get secret posthog-cloud -n "$NS" --context "$KUBE_CTX" \
+    -o jsonpath='{.data.personal_api_key}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [[ -n "$(configured_secret_value "$POSTHOG_PROJECT_TOKEN")" \
+    || -n "$(configured_secret_value "$POSTHOG_PERSONAL_API_KEY")" ]]; then
+    if [[ -z "$(configured_secret_value "$POSTHOG_PROJECT_TOKEN")" \
+      || -z "$(configured_secret_value "$POSTHOG_PERSONAL_API_KEY")" ]]; then
+      echo -e "  ${RED}✗${NC} posthog-cloud — ${RED}PARTIAL CONFIGURATION${NC}"
+      echo -e "    Fix: ./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+      FAILURES=$((FAILURES + 1))
+    else
+      echo -e "  ${GREEN}✓${NC} posthog-cloud/project_token + personal_api_key"
+    fi
+  fi
+fi
+
 # ── Optional-but-important secrets (warn only) ──────────────────────────────
 OPTIONAL_SECRETS=(
   "mattermost-cloud-sql"
@@ -230,6 +256,9 @@ OPTIONAL_SECRETS=(
   "gitea-admin"
   "gitea-credentials"
 )
+if ! posthog_cloud_required_for_env "$ENV"; then
+  OPTIONAL_SECRETS+=("posthog-cloud")
+fi
 
 echo ""
 echo -e "${BOLD}Optional secrets:${NC}"

@@ -32,6 +32,9 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string): boolea
   if (bound.actor === "artifact-worker") {
     return path === "/internal/chat-artifacts" || path.startsWith("/internal/chat-artifacts/");
   }
+  if (bound.actor === "llm-broker") {
+    return path === "/internal/product-analytics/events";
+  }
   return PLATFORM_INTERNAL_ROUTES.has(path);
 }
 

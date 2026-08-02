@@ -158,6 +158,11 @@ import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
+import {
+  createPostHogErasureClient,
+  postHogErasureConfigFromEnvironment,
+  type PostHogErasureState,
+} from "./lib/customer-ops/posthog-erasure.js";
 import { buildAnonymousOperationalArchive } from "./lib/customer-ops/deletion-archive.js";
 import {
   eraseCustomerFirestore,
@@ -3364,6 +3369,13 @@ async function ensureAnonymousDeletionArchive(
 
 function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) {
   const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
+  const postHogErasure = createPostHogErasureClient(
+    postHogErasureConfigFromEnvironment(),
+    {
+      fetch,
+      wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    },
+  );
   return createEraseCustomerHandler({
     loadDeletionJob: async (deletionId) => {
       const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
@@ -3392,6 +3404,37 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
       };
     },
     ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, deletionId),
+    erasePostHog: async (uid, deletionId) => {
+      const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
+      const job = await jobRef.get();
+      if (!job.exists) throw new Error(`deletion job missing: ${deletionId}`);
+      const data = job.data() as Record<string, unknown>;
+      if (data.uid !== uid) throw new Error(`deletion job uid mismatch: ${deletionId}`);
+      let state: PostHogErasureState | null = null;
+      if (data.posthogErasure !== undefined) {
+        const persisted = data.posthogErasure;
+        if (
+          !persisted ||
+          typeof persisted !== "object" ||
+          !Array.isArray((persisted as PostHogErasureState).personUuids) ||
+          (persisted as PostHogErasureState).personUuids.some(
+            (personUuid) => typeof personUuid !== "string" || personUuid.length === 0,
+          )
+        ) {
+          throw new Error(`deletion job has malformed PostHog erasure state: ${deletionId}`);
+        }
+        state = {
+          personUuids: [...new Set((persisted as PostHogErasureState).personUuids)].sort(),
+        };
+      }
+      return postHogErasure.erase({
+        uid,
+        state,
+        persistState: async (nextState) => {
+          await jobRef.set({ posthogErasure: nextState, updatedAt: Date.now() }, { merge: true });
+        },
+      });
+    },
     deleteStripeCustomer: (customerId) =>
       deleteStripeCustomer(
         fetch,

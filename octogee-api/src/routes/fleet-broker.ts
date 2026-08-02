@@ -181,6 +181,10 @@ interface FleetBrokerRouteDeps {
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
+  onSignupOfferBudgetInterruption?: (input: {
+    uid: string;
+    reason: "waiting_for_unlock" | "hard_cap_exhausted";
+  }) => void | Promise<void>;
   requestBuilderActivation?: (
     input: BuilderRuntimeDemandRequest,
   ) => ReturnType<typeof requestBuilderActivationLease>;
@@ -273,7 +277,10 @@ function positiveConfigNumber(raw: string | undefined, fallback: number, name: s
   return value;
 }
 
-function createDefaultWebResearch(db: Firestore) {
+function createDefaultWebResearch(
+  db: Firestore,
+  onSignupOfferBudgetInterruption?: FleetBrokerRouteDeps["onSignupOfferBudgetInterruption"],
+) {
   const braveKey = process.env.BRAVE_API_KEY?.trim();
   const tavilyKey = process.env.TAVILY_API_KEY?.trim();
   const brave = braveKey ? createBraveSearchClient({ apiKey: braveKey }) : null;
@@ -303,6 +310,7 @@ function createDefaultWebResearch(db: Firestore) {
       "PLATFORM_WEB_MARKUP_MULTIPLIER",
     ),
     onError: (error) => logger.error("web research usage recording failed", { error }),
+    onSignupOfferBudgetInterruption,
   });
 }
 
@@ -1260,7 +1268,10 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
-    webResearch: opts.webResearch ?? createDefaultWebResearch(opts.db),
+    webResearch: opts.webResearch ?? createDefaultWebResearch(
+      opts.db,
+      opts.onSignupOfferBudgetInterruption,
+    ),
     requestBuilderActivation:
       opts.requestBuilderActivation ?? requestBuilderActivationLease,
     now: opts.now ?? Date.now,

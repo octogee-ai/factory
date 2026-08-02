@@ -300,11 +300,9 @@ async function preserveExistingAssignment(txn, assignmentRef, userRef, params) {
     txn.update(userRef, params.mirrorPatch);
     return true;
 }
-async function automaticBuilderRejectReason(txn, userRef, params) {
+function automaticBuilderRejectReason(userData, params) {
     if (!params.automatic)
         return null;
-    const userSnap = await txn.get(userRef);
-    const userData = userSnap.exists ? userSnap.data() : undefined;
     return builderIsOperatorManaged(userData)
         ? "builder-operator-managed"
         : null;
@@ -317,6 +315,45 @@ function placementGatewayRejectReason(gatewayData, params) {
     }
     return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
 }
+async function placementUserWriteContext(db, txn, userRef, params) {
+    const userSnap = params.automatic || params.atomicCreate
+        ? await txn.get(userRef)
+        : null;
+    const userData = userSnap?.exists ? userSnap.data() : undefined;
+    const atomicCreate = params.atomicCreate;
+    const shouldCreate = Boolean(atomicCreate &&
+        !Object.prototype.hasOwnProperty.call(userData ?? {}, atomicCreate.userField));
+    const mirrorPatch = shouldCreate
+        ? { ...params.mirrorPatch, ...atomicCreate.userPatch }
+        : params.mirrorPatch;
+    return {
+        userData,
+        mirrorPatch,
+        applyAtomicWrites() {
+            if (!shouldCreate || !atomicCreate)
+                return;
+            for (const write of atomicCreate.writes) {
+                txn.set(db.collection(write.collection).doc(write.document), write.data);
+            }
+        },
+    };
+}
+function commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites) {
+    if (params.requireDurableGateway) {
+        return { kind: "rejected", reason: "gateway-root-invalid" };
+    }
+    txn.update(userRef, mirrorPatch);
+    applyAtomicWrites();
+    return { kind: "mirror-only" };
+}
+async function readServingRuntime(db, txn, gatewayId) {
+    const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId));
+    const reason = placementRuntimeRejectReason(runtimeSnap, gatewayId);
+    if (reason)
+        return { reason };
+    const runtime = runtimeSnap.data();
+    return runtime ? { runtime } : { reason: "gateway-not-serving" };
+}
 export async function commitPlacementAtomic(db, params) {
     const userRef = db.collection("users").doc(params.uid);
     const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
@@ -324,48 +361,40 @@ export async function commitPlacementAtomic(db, params) {
         .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
         .doc(params.uid);
     return db.runTransaction(async (txn) => {
+        const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
         const gatewaySnap = await txn.get(gatewayRef);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-        const builderRejectReason = await automaticBuilderRejectReason(txn, userRef, params);
+        const builderRejectReason = automaticBuilderRejectReason(userData, params);
         if (builderRejectReason)
             return { kind: "rejected", reason: builderRejectReason };
         if (!gatewaySnap.exists) {
-            if (params.requireDurableGateway) {
-                return { kind: "rejected", reason: "gateway-root-invalid" };
-            }
-            txn.update(userRef, params.mirrorPatch);
-            return { kind: "mirror-only" };
+            return commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites);
         }
         const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
         if (gatewayRejectReason)
             return { kind: "rejected", reason: gatewayRejectReason };
-        if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
+        if (!isDurablePlacementRoot(gatewayData, params.gatewayId))
             return { kind: "rejected", reason: "gateway-root-invalid" };
-        }
-        const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId));
-        const runtimeRejectReason = placementRuntimeRejectReason(runtimeSnap, params.gatewayId);
-        if (runtimeRejectReason) {
-            return { kind: "rejected", reason: runtimeRejectReason };
-        }
-        const runtimeData = runtimeSnap.data();
-        if (!runtimeData) {
-            return { kind: "rejected", reason: "gateway-not-serving" };
-        }
+        const runtimeResult = await readServingRuntime(db, txn, params.gatewayId);
+        if ("reason" in runtimeResult)
+            return { kind: "rejected", reason: runtimeResult.reason };
         if (params.validateTarget) {
             const targetRejectReason = await params.validateTarget({
                 txn,
                 gatewayRef,
                 assignmentRef,
                 gateway: gatewayData,
-                runtime: runtimeData,
+                runtime: runtimeResult.runtime,
             });
             if (targetRejectReason)
                 return { kind: "rejected", reason: targetRejectReason };
         }
-        if (await preserveExistingAssignment(txn, assignmentRef, userRef, params)) {
+        if (await preserveExistingAssignment(txn, assignmentRef, userRef, { ...params, mirrorPatch })) {
+            applyAtomicWrites();
             return { kind: "assignment-preserved" };
         }
-        txn.update(userRef, params.mirrorPatch);
+        txn.update(userRef, mirrorPatch);
+        applyAtomicWrites();
         const assignmentDoc = {
             uid: params.uid,
             slug: params.slug,

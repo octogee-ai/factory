@@ -1,5 +1,7 @@
 import { catalogEntryForModelRef } from "./agent-models.js";
 import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
+import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, } from "./signup-offer.js";
+export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
 // invalid doc → the compiled default below, so the free tier always has a
@@ -36,10 +38,11 @@ export function parsePlatformFreeConfig(value) {
 export const DEFAULT_PLATFORM_TRIAL_CONFIG = {
     schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
     offerId: "builder-signup",
-    offerVersion: 1,
+    offerVersion: 3,
     durationDays: 7,
     defaultPersonalTier: "personal",
-    defaultBuilderTier: "hobby",
+    defaultBuilderTier: null,
+    budgetPolicy: DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
 };
 function isPersonalTier(value) {
     return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
@@ -66,13 +69,24 @@ function validTrialOfferTerms(raw) {
 function validConfigEditor(value) {
     return value === undefined || typeof value === "string";
 }
+function validTrialBudgetPolicy(raw, budgetPolicy) {
+    if (raw.budgetPolicy !== undefined && budgetPolicy === null)
+        return false;
+    if (budgetPolicy === null)
+        return true;
+    return raw.durationDays === 7 && raw.defaultBuilderTier === null;
+}
 export function parsePlatformTrialConfig(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;
     const raw = value;
+    const budgetPolicy = raw.budgetPolicy === undefined
+        ? null
+        : parseSignupOfferBudgetPolicy(raw.budgetPolicy);
     if (!validTrialOfferIdentity(raw) ||
         !validTrialOfferTerms(raw) ||
-        !validConfigEditor(raw.updatedBy)) {
+        !validConfigEditor(raw.updatedBy) ||
+        !validTrialBudgetPolicy(raw, budgetPolicy)) {
         return null;
     }
     return {
@@ -82,6 +96,7 @@ export function parsePlatformTrialConfig(value) {
         durationDays: raw.durationDays,
         defaultPersonalTier: raw.defaultPersonalTier,
         defaultBuilderTier: raw.defaultBuilderTier,
+        ...(budgetPolicy ? { budgetPolicy } : {}),
         ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
         ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
     };
@@ -104,6 +119,7 @@ export function trialConfigHash(config) {
         durationDays: config.durationDays,
         defaultPersonalTier: config.defaultPersonalTier,
         defaultBuilderTier: config.defaultBuilderTier,
+        budgetPolicy: config.budgetPolicy ?? null,
     }));
 }
 export const DEFAULT_PLATFORM_CONNECT_CONFIG = {

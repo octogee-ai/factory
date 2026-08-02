@@ -22,6 +22,13 @@ import {
   weekWindowStartMs,
   windowOwnerKey,
 } from "@octogee/shared/types/model-broker-usage";
+import {
+  MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION,
+  SIGNUP_OFFER_LEDGER_RETENTION_MS,
+  parseModelBrokerSignupOfferBudget,
+  type ModelBrokerSignupOfferBudget,
+  type SignupOfferBudgetIdentity,
+} from "@octogee/shared/types/signup-offer";
 
 export type ModelBrokerUsageProvider =
   | "anthropic"
@@ -77,6 +84,7 @@ export interface ModelBrokerUsageRecordInput {
   // modelBrokerCredits balance by the priced cost. The final call may push the
   // balance slightly negative; the pre-flight gate blocks the next one.
   debitsCreditBalance?: boolean;
+  signupOfferBudget?: SignupOfferBudgetIdentity & { budgetKey: string };
   // The upstream's own USD accounting (OpenRouter `usage.cost`). Authoritative
   // over the static pricing table when present — the table is fallback only.
   reportedCostUsd?: number | null;
@@ -93,6 +101,9 @@ export interface ModelBrokerUsageStore {
   readWeekUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerWeekSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
   readCreditBalance?(ownerUid: string): Promise<number>;
+  readSignupOfferBudget?(
+    input: SignupOfferBudgetIdentity & { budgetKey: string },
+  ): Promise<ModelBrokerSignupOfferBudget | null>;
 }
 
 export interface ModelBrokerWeekSnapshot {
@@ -542,6 +553,7 @@ function eventDocument(
     agentId: input.agentId ?? null,
     toolName: input.toolName ?? null,
     providerMetadata: input.providerMetadata ?? {},
+    signupOfferBudgetKey: input.signupOfferBudget?.budgetKey ?? null,
     ...traceFields(input),
     model: input.model,
     modelKey: modelRollupKey(input.model),
@@ -569,6 +581,18 @@ function eventDocument(
   };
 }
 
+function requireSignupOfferLedger(
+  budgets: Map<string, ModelBrokerSignupOfferBudget>,
+  budget: ModelBrokerUsageRecordInput["signupOfferBudget"],
+): ModelBrokerSignupOfferBudget | undefined {
+  if (!budget) return undefined;
+  const ledger = parseModelBrokerSignupOfferBudget(budgets.get(budget.budgetKey), budget);
+  if (!ledger) {
+    throw new Error("signup offer budget ledger missing or does not match the active receipt");
+  }
+  return ledger;
+}
+
 export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly events: Array<Record<string, unknown>> = [];
   readonly rollups = new Map<string, Record<string, unknown> & { totalTokens: number; costUsd: number; chargeUsd: number; requestCount: number }>();
@@ -576,6 +600,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly weekWindows = new Map<string, ModelBrokerWeekSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
   readonly creditBalances = new Map<string, number>();
+  readonly signupOfferBudgets = new Map<string, ModelBrokerSignupOfferBudget>();
   private readonly eventIds = new Set<string>();
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
@@ -585,6 +610,7 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     const chargeUsd = resolvedChargeUsd(input, cost);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
+    const signupOfferLedger = requireSignupOfferLedger(this.signupOfferBudgets, input.signupOfferBudget);
     this.eventIds.add(eventId);
     const windowStartMs = usageWindowStartMs(now);
     const ownerKey = windowOwnerKey(input);
@@ -666,10 +692,27 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         (this.creditBalances.get(input.ownerUid) ?? 0) - chargeUsd,
       );
     }
+    if (input.signupOfferBudget) {
+      const ledger = signupOfferLedger!;
+      this.signupOfferBudgets.set(input.signupOfferBudget.budgetKey, {
+        ...ledger,
+        chargeUsd: ledger.chargeUsd + chargeUsd,
+        requestCount: ledger.requestCount + 1,
+        totalTokens: ledger.totalTokens + totalTokens(input.usage),
+        updatedAt: now,
+        expiresAt: new Date(now + SIGNUP_OFFER_LEDGER_RETENTION_MS),
+      });
+    }
   }
 
   async readCreditBalance(ownerUid: string): Promise<number> {
     return this.creditBalances.get(ownerUid) ?? 0;
+  }
+
+  async readSignupOfferBudget(
+    input: SignupOfferBudgetIdentity & { budgetKey: string },
+  ): Promise<ModelBrokerSignupOfferBudget | null> {
+    return parseModelBrokerSignupOfferBudget(this.signupOfferBudgets.get(input.budgetKey), input);
   }
 
   async readWindowUsage(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot> {
@@ -738,12 +781,14 @@ interface UsageWriteArgs {
     windowRef: DocumentReference;
     weekRef: DocumentReference;
     creditRef: DocumentReference | null;
+    signupOfferRef: DocumentReference | null;
   };
   snaps: {
     rollup: DocumentData;
     window: DocumentData;
     week: DocumentData;
     credit: DocumentData;
+    signupOffer: DocumentData;
   };
 }
 
@@ -831,6 +876,26 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       { merge: true },
     );
   }
+  if (refs.signupOfferRef && input.signupOfferBudget) {
+    const ledger = parseModelBrokerSignupOfferBudget(
+      snaps.signupOffer,
+      input.signupOfferBudget,
+    );
+    if (!ledger) {
+      throw new Error("signup offer budget ledger missing or does not match the active receipt");
+    }
+    t.set(
+      refs.signupOfferRef,
+      {
+        chargeUsd: ledger.chargeUsd + chargeUsd,
+        requestCount: ledger.requestCount + 1,
+        totalTokens: ledger.totalTokens + totalTokens(input.usage),
+        updatedAt: now,
+        expiresAt: new Date(now + SIGNUP_OFFER_LEDGER_RETENTION_MS),
+      },
+      { merge: true },
+    );
+  }
 }
 
 export function createFirestoreModelBrokerUsageStore(
@@ -858,17 +923,22 @@ export function createFirestoreModelBrokerUsageStore(
       const creditRef = debitsCredits
         ? db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(input.ownerUid as string)
         : null;
+      const signupOfferRef = input.signupOfferBudget
+        ? db.collection(MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION)
+          .doc(input.signupOfferBudget.budgetKey)
+        : null;
       const modelKey = modelRollupKey(input.model);
 
       const countsTowardWindow = input.countsTowardSpendWindow !== false;
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, weekSnap, creditSnap] = await Promise.all([
+        const [rollupSnap, windowSnap, weekSnap, creditSnap, signupOfferSnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
           countsTowardWindow ? t.get(weekRef) : Promise.resolve(null),
           creditRef ? t.get(creditRef) : Promise.resolve(null),
+          signupOfferRef ? t.get(signupOfferRef) : Promise.resolve(null),
         ]);
         applyUsageWrites(t, {
           input,
@@ -882,12 +952,13 @@ export function createFirestoreModelBrokerUsageStore(
           windowStartMs,
           weekStartMs,
           countsTowardWindow,
-          refs: { eventRef, rollupRef, windowRef, weekRef, creditRef },
+          refs: { eventRef, rollupRef, windowRef, weekRef, creditRef, signupOfferRef },
           snaps: {
             rollup: rollupSnap.data() ?? {},
             window: windowSnap.data() ?? {},
             week: weekSnap?.data() ?? {},
             credit: creditSnap?.data() ?? {},
+            signupOffer: signupOfferSnap?.data() ?? {},
           },
         });
       });
@@ -934,6 +1005,15 @@ export function createFirestoreModelBrokerUsageStore(
     async readCreditBalance(ownerUid) {
       const snap = await db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(ownerUid).get();
       return numberField((snap.data() ?? {}) as Record<string, unknown>, "balanceUsd");
+    },
+
+    async readSignupOfferBudget(input) {
+      const snap = await db
+        .collection(MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION)
+        .doc(input.budgetKey)
+        .get();
+      const data = snap.data() as Record<string, unknown> | undefined;
+      return parseModelBrokerSignupOfferBudget(data, input);
     },
 
     async reserveRateWindow(input) {

@@ -76,6 +76,25 @@ export interface AgentImportWorkspacePolicy {
   preserveConvergedContextFiles: boolean;
 }
 
+export const AGENT_IMPORT_AUTHORIZATION_INTENTS = [
+  "source_listing",
+  "preview",
+  "apply",
+  "status",
+  "abandon",
+  "rollback",
+] as const;
+
+export type AgentImportAuthorizationIntent =
+  typeof AGENT_IMPORT_AUTHORIZATION_INTENTS[number];
+
+export function isAgentImportAuthorizationIntent(
+  value: unknown,
+): value is AgentImportAuthorizationIntent {
+  return typeof value === "string" &&
+    (AGENT_IMPORT_AUTHORIZATION_INTENTS as readonly string[]).includes(value);
+}
+
 export interface AgentImportApprovalFields {
   source: Record<string, string>;
   destinationHead: string;

@@ -6,6 +6,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type {
+  AgentImportAuthorizationIntent,
   AgentImportConfigArtifacts,
   AgentImportWorkspacePolicy,
 } from "@octogee/shared/types/agent-import";
@@ -19,7 +20,7 @@ const COMMIT_RE = /^[0-9a-f]{40}$/;
 interface AgentImportsRouterDeps {
   createRuntime(input: { authorization: string; gatewayId: string }): {
     service: Pick<AgentImportService, "previewGithub" | "previewLocal" | "apply" | "get" | "latest" | "rollback" | "abandon">;
-    authorize(): Promise<{
+    authorize(intent: AgentImportAuthorizationIntent): Promise<{
       slug: string;
       gatewayId: string;
       workspacePolicy: AgentImportWorkspacePolicy;
@@ -133,6 +134,7 @@ async function authorize(
   req: Request,
   res: Response,
   deps: AgentImportsRouterDeps,
+  intent: AgentImportAuthorizationIntent,
 ): Promise<{
   slug: string;
   gatewayId: string;
@@ -149,7 +151,7 @@ async function authorize(
   if (!authorization) throw Object.assign(new Error("Firebase authorization is required"), { code: "forbidden" });
   try {
     const runtime = deps.createRuntime({ authorization, gatewayId: requested });
-    return { ...await runtime.authorize(), runtime };
+    return { ...await runtime.authorize(intent), runtime };
   } catch (error) {
     req.resume();
     throw error;
@@ -243,7 +245,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.get("/sources/github", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "source_listing");
       if (!authorized) return;
       res.json(await authorized.runtime.listGithubSources());
     } catch (error) {
@@ -253,7 +255,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/preview/github", async (req, res, next) => {
     try {
-      const resolved = await authorize(req, res, deps);
+      const resolved = await authorize(req, res, deps, "preview");
       if (!resolved) return;
       const body = object(req.body);
       if (
@@ -283,7 +285,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     let archive: StagedLocalArchive | null = null;
     let acquired = false;
     try {
-      const resolved = await authorize(req, res, deps);
+      const resolved = await authorize(req, res, deps, "preview");
       if (!resolved) return;
       if (localImportActive) {
         req.resume();
@@ -311,7 +313,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/:importId/apply", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "apply");
       if (!authorized) return;
       const id = importId(req, res);
       const body = object(req.body);
@@ -333,7 +335,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.get("/latest", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "status");
       if (!authorized) return;
       res.json(await authorized.runtime.service.latest({ uid: req.uid! }));
     } catch (error) {
@@ -343,7 +345,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.get("/:importId", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "status");
       if (!authorized) return;
       const id = importId(req, res);
       if (!id) return;
@@ -355,7 +357,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/:importId/rollback", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "rollback");
       if (!authorized) return;
       const id = importId(req, res);
       if (!id) return;
@@ -367,7 +369,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
 
   router.post("/:importId/abandon", async (req, res, next) => {
     try {
-      const authorized = await authorize(req, res, deps);
+      const authorized = await authorize(req, res, deps, "abandon");
       if (!authorized) return;
       const id = importId(req, res);
       if (!id) return;

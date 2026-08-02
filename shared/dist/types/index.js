@@ -1,9 +1,12 @@
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
-export { AGENT_IMPORT_FORMAT_VERSION, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
+export { AGENT_IMPORT_FORMAT_VERSION, AGENT_IMPORT_AUTHORIZATION_INTENTS, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, isAgentImportAuthorizationIntent, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
+export { FEATURE_FLAGS, FEATURE_FLAG_KEYS, USER_VISIBLE_FEATURE_FLAG_KEYS, isFeatureFlagKey, } from './feature-flags.js';
+export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';
-export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, } from './billing.js';
+export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, resolveSignupOfferBudget, signupOfferBudgetForOwner, signupOfferDayIndex, } from './billing.js';
 export { resolveCommercialEntitlements } from './commercial-entitlements.js';
+export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, SIGNUP_OFFER_LEDGER_RETENTION_MS, modelBrokerSignupOfferBudgetDocId, parseModelBrokerSignupOfferBudget, parseSignupOfferBudgetPolicy, } from './signup-offer.js';
 export { DEFAULT_PLATFORM_FREE_CONFIG, DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_FREE_CONFIG_DOC, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformFreeConfig, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';

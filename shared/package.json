@@ -98,6 +98,10 @@
       "types": "./dist/types/fleet-controller.d.ts",
       "default": "./dist/types/fleet-controller.js"
     },
+    "./types/feature-flags": {
+      "types": "./dist/types/feature-flags.d.ts",
+      "default": "./dist/types/feature-flags.js"
+    },
     "./types/gateway-releases": {
       "types": "./dist/types/gateway-releases.d.ts",
       "default": "./dist/types/gateway-releases.js"
@@ -162,6 +166,10 @@
       "types": "./dist/types/platform-config.d.ts",
       "default": "./dist/types/platform-config.js"
     },
+    "./types/signup-offer": {
+      "types": "./dist/types/signup-offer.d.ts",
+      "default": "./dist/types/signup-offer.js"
+    },
     "./types/secret-redaction": {
       "types": "./dist/types/secret-redaction.d.ts",
       "default": "./dist/types/secret-redaction.js"
@@ -189,6 +197,10 @@
     "./types/project": {
       "types": "./dist/types/project.d.ts",
       "default": "./dist/types/project.js"
+    },
+    "./types/product-analytics": {
+      "types": "./dist/types/product-analytics.d.ts",
+      "default": "./dist/types/product-analytics.js"
     },
     "./types/project-retention": {
       "types": "./dist/types/project-retention.d.ts",
@@ -277,6 +289,9 @@
       "types/fleet-controller": [
         "dist/types/fleet-controller.d.ts"
       ],
+      "types/feature-flags": [
+        "dist/types/feature-flags.d.ts"
+      ],
       "types/gateway-releases": [
         "dist/types/gateway-releases.d.ts"
       ],
@@ -343,8 +358,14 @@
       "types/project": [
         "dist/types/project.d.ts"
       ],
+      "types/product-analytics": [
+        "dist/types/product-analytics.d.ts"
+      ],
       "types/project-retention": [
         "dist/types/project-retention.d.ts"
+      ],
+      "types/signup-offer": [
+        "dist/types/signup-offer.d.ts"
       ],
       "types/shells": [
         "dist/types/shells.d.ts"

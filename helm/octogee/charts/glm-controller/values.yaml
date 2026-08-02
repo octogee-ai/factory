@@ -44,6 +44,12 @@ env:
   mmUrl: ""
   systemNotificationUrl: ""
 
+posthog:
+  host: ""
+  projectId: ""
+  personalApiKeySecretName: posthog-cloud
+  personalApiKeySecretKey: personal_api_key
+
 modelKeyIssuer:
   enabled: true
   issueUrl: ""

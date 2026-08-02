@@ -66,6 +66,9 @@ export interface AgentImportConfigPlan {
 export interface AgentImportWorkspacePolicy {
     preserveConvergedContextFiles: boolean;
 }
+export declare const AGENT_IMPORT_AUTHORIZATION_INTENTS: readonly ["source_listing", "preview", "apply", "status", "abandon", "rollback"];
+export type AgentImportAuthorizationIntent = typeof AGENT_IMPORT_AUTHORIZATION_INTENTS[number];
+export declare function isAgentImportAuthorizationIntent(value: unknown): value is AgentImportAuthorizationIntent;
 export interface AgentImportApprovalFields {
     source: Record<string, string>;
     destinationHead: string;

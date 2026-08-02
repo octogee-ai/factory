@@ -124,6 +124,19 @@ describe("admin platform-config", () => {
     expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
+  it("GET normalizes the configured PostHog project URL", async () => {
+    const previous = process.env.POSTHOG_PROJECT_URL;
+    process.env.POSTHOG_PROJECT_URL = "  https://us.posthog.com/project/539070  ";
+    try {
+      const res = await request(app).get("/api/admin/platform-config");
+      expect(res.status).toBe(200);
+      expect(res.body.posthogProjectUrl).toBe("https://us.posthog.com/project/539070");
+    } finally {
+      if (previous === undefined) delete process.env.POSTHOG_PROJECT_URL;
+      else process.env.POSTHOG_PROJECT_URL = previous;
+    }
+  });
+
   it("GET resolves each model dial independently when its sibling is invalid", async () => {
     platformDocs["platformConfig/models"] = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",

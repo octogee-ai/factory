@@ -622,6 +622,15 @@ export interface CommitPlacementParams {
   // Passed in so this helper stays agnostic to per-caller mirror shaping and
   // preserves each entry point's field set byte-for-byte.
   mirrorPatch: Record<string, unknown>;
+  atomicCreate?: {
+    userField: string;
+    userPatch: Record<string, unknown>;
+    writes: ReadonlyArray<{
+      collection: string;
+      document: string;
+      data: Record<string, unknown>;
+    }>;
+  };
   updatedByOperationId?: string | null;
   assignmentWrite?: "upsert" | "create-if-missing";
   requireDurableGateway?: boolean;
@@ -688,14 +697,11 @@ async function preserveExistingAssignment(
   return true;
 }
 
-async function automaticBuilderRejectReason(
-  txn: PlacementTxn,
-  userRef: PlacementDocRef,
+function automaticBuilderRejectReason(
+  userData: Record<string, unknown> | undefined,
   params: CommitPlacementParams,
-): Promise<PlacementRejectReason | null> {
+): PlacementRejectReason | null {
   if (!params.automatic) return null;
-  const userSnap = await txn.get(userRef);
-  const userData = userSnap.exists ? userSnap.data() : undefined;
   return builderIsOperatorManaged(userData)
     ? "builder-operator-managed"
     : null;
@@ -712,6 +718,67 @@ function placementGatewayRejectReason(
   return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
 }
 
+async function placementUserWriteContext(
+  db: PlacementFirestore,
+  txn: PlacementTxn,
+  userRef: PlacementDocRef,
+  params: CommitPlacementParams,
+): Promise<{
+  userData: Record<string, unknown> | undefined;
+  mirrorPatch: Record<string, unknown>;
+  applyAtomicWrites(): void;
+}> {
+  const userSnap = params.automatic || params.atomicCreate
+    ? await txn.get(userRef)
+    : null;
+  const userData = userSnap?.exists ? userSnap.data() : undefined;
+  const atomicCreate = params.atomicCreate;
+  const shouldCreate = Boolean(
+    atomicCreate &&
+    !Object.prototype.hasOwnProperty.call(userData ?? {}, atomicCreate.userField),
+  );
+  const mirrorPatch = shouldCreate
+    ? { ...params.mirrorPatch, ...atomicCreate!.userPatch }
+    : params.mirrorPatch;
+  return {
+    userData,
+    mirrorPatch,
+    applyAtomicWrites() {
+      if (!shouldCreate || !atomicCreate) return;
+      for (const write of atomicCreate.writes) {
+        txn.set(db.collection(write.collection).doc(write.document), write.data);
+      }
+    },
+  };
+}
+
+function commitMissingGateway(
+  txn: PlacementTxn,
+  userRef: PlacementDocRef,
+  params: CommitPlacementParams,
+  mirrorPatch: Record<string, unknown>,
+  applyAtomicWrites: () => void,
+): CommitPlacementResult {
+  if (params.requireDurableGateway) {
+    return { kind: "rejected", reason: "gateway-root-invalid" };
+  }
+  txn.update(userRef, mirrorPatch);
+  applyAtomicWrites();
+  return { kind: "mirror-only" };
+}
+
+async function readServingRuntime(
+  db: PlacementFirestore,
+  txn: PlacementTxn,
+  gatewayId: string,
+): Promise<{ runtime: Record<string, unknown> } | { reason: PlacementRejectReason }> {
+  const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId));
+  const reason = placementRuntimeRejectReason(runtimeSnap, gatewayId);
+  if (reason) return { reason };
+  const runtime = runtimeSnap.data();
+  return runtime ? { runtime } : { reason: "gateway-not-serving" };
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -722,44 +789,32 @@ export async function commitPlacementAtomic(
     .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
     .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
+    const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
+      db,
+      txn,
+      userRef,
+      params,
+    );
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-    const builderRejectReason = await automaticBuilderRejectReason(txn, userRef, params);
+    const builderRejectReason = automaticBuilderRejectReason(userData, params);
     if (builderRejectReason) return { kind: "rejected", reason: builderRejectReason };
 
     if (!gatewaySnap.exists) {
-      if (params.requireDurableGateway) {
-        return { kind: "rejected", reason: "gateway-root-invalid" };
-      }
-      txn.update(userRef, params.mirrorPatch);
-      return { kind: "mirror-only" };
+      return commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites);
     }
     const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
     if (gatewayRejectReason) return { kind: "rejected", reason: gatewayRejectReason };
-    if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) {
-      return { kind: "rejected", reason: "gateway-root-invalid" };
-    }
-    const runtimeSnap = await txn.get(
-      db.collection(GLM_GATEWAYS_COLLECTION).doc(params.gatewayId),
-    );
-    const runtimeRejectReason = placementRuntimeRejectReason(
-      runtimeSnap,
-      params.gatewayId,
-    );
-    if (runtimeRejectReason) {
-      return { kind: "rejected", reason: runtimeRejectReason };
-    }
-    const runtimeData = runtimeSnap.data();
-    if (!runtimeData) {
-      return { kind: "rejected", reason: "gateway-not-serving" };
-    }
+    if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) return { kind: "rejected", reason: "gateway-root-invalid" };
+    const runtimeResult = await readServingRuntime(db, txn, params.gatewayId);
+    if ("reason" in runtimeResult) return { kind: "rejected", reason: runtimeResult.reason };
     if (params.validateTarget) {
       const targetRejectReason = await params.validateTarget({
         txn,
         gatewayRef,
         assignmentRef,
         gateway: gatewayData,
-        runtime: runtimeData,
+        runtime: runtimeResult.runtime,
       });
       if (targetRejectReason) return { kind: "rejected", reason: targetRejectReason };
     }
@@ -767,12 +822,14 @@ export async function commitPlacementAtomic(
       txn,
       assignmentRef,
       userRef,
-      params,
+      { ...params, mirrorPatch },
     )) {
+      applyAtomicWrites();
       return { kind: "assignment-preserved" };
     }
 
-    txn.update(userRef, params.mirrorPatch);
+    txn.update(userRef, mirrorPatch);
+    applyAtomicWrites();
     const assignmentDoc: AssignmentDoc = {
       uid: params.uid,
       slug: params.slug,

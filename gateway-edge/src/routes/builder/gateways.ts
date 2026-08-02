@@ -40,9 +40,8 @@ import {
   recordGatewayAccessDenial,
   setGatewayAccessDenialAudit,
 } from "../../lib/gateway-access-audit.js";
+import type { FeaturePolicy, FeatureSubject } from "@octogee/shared/types/feature-flags";
 
-const router = Router();
-router.use(requireAuth);
 const NOT_FOUND = "not-found";
 const CAPABILITY_DISABLED = "capability-disabled";
 const NOT_READY = "not-ready";
@@ -321,14 +320,16 @@ async function builderGatewaysFor(uid: string): Promise<BuilderGatewayListEntry[
     a.workspaceSlug.localeCompare(b.workspaceSlug));
 }
 
-router.get("/gateways/me", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body: BuilderGatewaysMeResponse = { gateways: await builderGatewaysFor(req.uid!) };
-    res.json(body);
-  } catch (err) {
-    next(err);
-  }
-});
+function registerGatewayListRoute(router: Router): void {
+  router.get("/gateways/me", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body: BuilderGatewaysMeResponse = { gateways: await builderGatewaysFor(req.uid!) };
+      res.json(body);
+    } catch (err) {
+      next(err);
+    }
+  });
+}
 
 function apiOrigin(): string {
   const configured = process.env.API_PUBLIC_URL?.trim();
@@ -475,10 +476,46 @@ async function mintOpenClawTicket(
   });
 }
 
-router.post(
-  "/gateways/:gatewayId/openclaw-ticket",
-  openClawTicketRateLimit,
-  async (req: Request, res: Response, next: NextFunction) => {
+async function openClawReleaseAllowed(
+  req: Request,
+  res: Response,
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  scope: GatewayWorkspaceScope,
+  featurePolicy: FeaturePolicy | undefined,
+): Promise<boolean> {
+  if (!featurePolicy) return true;
+  const subject: FeatureSubject = {
+    uid: req.uid!,
+    isAdmin: req.isAdmin === true,
+    workspaceSlug: scope.workspaceSlug,
+    gatewayClass: resolveGatewayClass({
+      gatewayClass: authorization.config.gatewayClass,
+      profile: authorization.config.profile ?? undefined,
+      imageProfile: authorization.config.imageProfile,
+    }),
+    ...(authorization.config.profile ? { gatewayProfile: authorization.config.profile } : {}),
+  };
+  const decision = await featurePolicy.evaluate(
+    "release-openclaw-dashboard",
+    subject,
+    "openclaw-dashboard",
+  );
+  if (decision.state === "disabled") {
+    res.status(404).json({ error: "feature_unavailable" });
+    return false;
+  }
+  if (decision.state === "unavailable") {
+    res.status(503).json({ error: "feature_evaluation_unavailable" });
+    return false;
+  }
+  return true;
+}
+
+function registerOpenClawTicketRoute(router: Router, featurePolicy: FeaturePolicy | undefined): void {
+  router.post(
+    "/gateways/:gatewayId/openclaw-ticket",
+    openClawTicketRateLimit,
+    async (req: Request, res: Response, next: NextFunction) => {
     try {
       const gatewayId = req.params.gatewayId;
       if (!isValidGatewayId(gatewayId)) {
@@ -526,6 +563,7 @@ router.post(
         res.status(403).json({ error: CAPABILITY_DISABLED });
         return;
       }
+      if (!(await openClawReleaseAllowed(req, res, authorization, scope, featurePolicy))) return;
       const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid);
       if (result.kind === NOT_FOUND) {
         res.status(404).json({ error: "not-found" });
@@ -547,6 +585,15 @@ router.post(
       next(err);
     }
   },
-);
+    );
+}
 
-export default router;
+export function createBuilderGatewayRoutes({ featurePolicy }: { featurePolicy?: FeaturePolicy } = {}): Router {
+  const router = Router();
+  router.use(requireAuth);
+  registerGatewayListRoute(router);
+  registerOpenClawTicketRoute(router, featurePolicy);
+  return router;
+}
+
+export default createBuilderGatewayRoutes();

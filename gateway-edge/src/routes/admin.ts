@@ -131,6 +131,18 @@ function resolvedFallbackDial(value: unknown): string | null {
   return validCatalogRef(value) ? value : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
 }
 
+function postHogProjectUrl(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 // Field-tolerant read of the stored dial doc: each invalid field defaults
 // independently so one bad ref never blanks the whole Admin panel.
 function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
@@ -192,6 +204,7 @@ router.get("/platform-config", async (_req, res) => {
       defaultBuilderAgentFallbackModelRef: DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
       catalog: platformCatalog,
       opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),
+      posthogProjectUrl: postHogProjectUrl(process.env.POSTHOG_PROJECT_URL),
     });
   } catch (err) {
     logger.error("[admin] platform-config read failed", { err });
@@ -363,6 +376,7 @@ router.put("/platform-trial-config", async (req, res) => {
       durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
+      ...(config.budgetPolicy ? { budgetPolicy: config.budgetPolicy } : {}),
       updatedAt: FieldValue.serverTimestamp(),
       updatedBy: req.uid ?? null,
     });
@@ -372,6 +386,7 @@ router.put("/platform-trial-config", async (req, res) => {
       durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
+      budgetPolicy: config.budgetPolicy ?? null,
       updatedBy: req.uid,
     });
     res.json({ ok: true });

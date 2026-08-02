@@ -206,6 +206,15 @@ export interface CommitPlacementParams {
     source: AssignmentSource;
     now: number;
     mirrorPatch: Record<string, unknown>;
+    atomicCreate?: {
+        userField: string;
+        userPatch: Record<string, unknown>;
+        writes: ReadonlyArray<{
+            collection: string;
+            document: string;
+            data: Record<string, unknown>;
+        }>;
+    };
     updatedByOperationId?: string | null;
     assignmentWrite?: "upsert" | "create-if-missing";
     requireDurableGateway?: boolean;

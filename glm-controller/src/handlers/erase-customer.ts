@@ -19,6 +19,7 @@ export interface ErasureDeletionJob {
 export interface EraseCustomerDeps {
   loadDeletionJob: (deletionId: string) => Promise<ErasureDeletionJob | null>;
   ensureAnonymousArchive: (deletionId: string) => Promise<string>;
+  erasePostHog: (uid: string, deletionId: string) => Promise<{ skipped: boolean }>;
   deleteStripeCustomer: (customerId: string) => Promise<void>;
   discoverStripeCustomerIds: (uid: string) => Promise<string[]>;
   persistStripeCustomerIds: (deletionId: string, customerIds: string[]) => Promise<void>;
@@ -147,6 +148,25 @@ async function eraseStripeCustomers(
   }
 }
 
+async function erasePostHog(
+  context: EraseCustomerContext,
+  ctx: OperationContext,
+  deps: EraseCustomerDeps,
+): Promise<OperationResult | null> {
+  try {
+    const outcome = await deps.erasePostHog(context.job.uid, context.deletionId);
+    await report(ctx, deps, {
+      name: "delete-posthog-person-data",
+      status: outcome.skipped ? "skipped" : "done",
+    });
+    return null;
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await report(ctx, deps, { name: "delete-posthog-person-data", status: "failed", error });
+    return cleanupRetry(context.deletionId, error);
+  }
+}
+
 function cloudStepStatus(result: NukeCloudStepResult): OperationStep["status"] {
   if (result.skipped) return "skipped";
   return result.ok ? "done" : "failed";
@@ -183,6 +203,9 @@ async function runEraseCustomer(
 
     const stripeFailure = await eraseStripeCustomers(loaded.context, ctx, deps);
     if (stripeFailure) return stripeFailure;
+
+    const postHogFailure = await erasePostHog(loaded.context, ctx, deps);
+    if (postHogFailure) return postHogFailure;
 
     const retirement = await deps.ensureOwnedGatewayRetired(cleanup, deletionId);
     if (retirement === "retirement-pending") {

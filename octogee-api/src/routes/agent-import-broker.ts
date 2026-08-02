@@ -6,7 +6,12 @@ import { pipeline } from "node:stream/promises";
 
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
+import {
+  isAgentImportAuthorizationIntent,
+  type AgentImportAuthorizationIntent,
+} from "@octogee/shared/types/agent-import";
 import { resolveBillingProfile, type TierResolvable } from "@octogee/shared/types/billing";
+import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import type { AgentImportManifestEntry } from "../../../gateway-edge/src/lib/agent-import-git.js";
@@ -54,12 +59,15 @@ export interface AgentImportBrokerDeps {
   maxArchiveBytes?: number;
   maxBlobBytes?: number;
   newUploadId?(): string;
+  featurePolicy?: FeaturePolicy;
 }
 
 interface OwnerContext {
   uid: string;
   slug: string;
   gatewayId: string;
+  isAdmin: boolean;
+  planTier?: string;
   workspacePolicy: { preserveConvergedContextFiles: boolean };
 }
 
@@ -84,6 +92,25 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return bound;
 }
 
+function assignedWorkspaceSlug(
+  user: Record<string, unknown> | undefined,
+  gatewayId: string,
+  res: Response,
+): string | null {
+  const slug = slugFromAssignedUser(user);
+  const provisioning = object(user?.provisioning);
+  const openclaw = object(provisioning?.openclaw);
+  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== gatewayId) {
+    res.status(404).json({ error: "not_found" });
+    return null;
+  }
+  if (openclaw.status !== "complete") {
+    res.status(409).json({ error: "openclaw_not_ready" });
+    return null;
+  }
+  return slug;
+}
+
 async function ownerContext(
   req: Request,
   res: Response,
@@ -95,18 +122,12 @@ async function ownerContext(
   if (!uid) return null;
   const userSnapshot = await deps.db.doc(`users/${uid}`).get();
   const user = userSnapshot.exists ? userSnapshot.data() : undefined;
-  const slug = slugFromAssignedUser(user);
-  const provisioning = object(object(user)?.provisioning);
-  const openclaw = object(provisioning?.openclaw);
-  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== bound.gatewayId) {
-    res.status(404).json({ error: "not_found" });
-    return null;
-  }
-  if (openclaw.status !== "complete") {
-    res.status(409).json({ error: "openclaw_not_ready" });
-    return null;
-  }
-  const workspace = await deps.db.doc(`workspaces/${slug}`).get();
+  const slug = assignedWorkspaceSlug(user, bound.gatewayId, res);
+  if (!slug) return null;
+  const [workspace, systemConfig] = await Promise.all([
+    deps.db.doc(`workspaces/${slug}`).get(),
+    deps.db.doc(`users/${uid}/system/config`).get(),
+  ]);
   if (!workspace.exists || workspace.data()?.ownerUid !== uid) {
     res.status(403).json({ error: "forbidden" });
     return null;
@@ -115,6 +136,8 @@ async function ownerContext(
     uid,
     slug,
     gatewayId: bound.gatewayId,
+    isAdmin: systemConfig.exists && systemConfig.data()?.role === "admin",
+    ...(typeof user?.selectedTier === "string" ? { planTier: user.selectedTier } : {}),
     workspacePolicy: {
       preserveConvergedContextFiles:
         resolveBillingProfile(user as TierResolvable, deps.now()).modelAccess === "house_only",
@@ -246,19 +269,49 @@ function context(res: Response): OwnerContext {
   return res.locals.agentImportOwner as OwnerContext;
 }
 
+function releaseGateIntent(intent: AgentImportAuthorizationIntent): boolean {
+  return intent === "source_listing" || intent === "preview" || intent === "apply";
+}
+
 function registerAccessRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
-  router.post("/authorize", (req, res) => {
+  router.post("/authorize", async (req, res, next) => {
     const owner = context(res);
     const body = object(req.body);
-    if (!body || Object.keys(body).length !== 1 || !isValidGatewayId(body.gatewayId) || body.gatewayId !== owner.gatewayId) {
+    if (
+      !body ||
+      Object.keys(body).length !== 2 ||
+      !isValidGatewayId(body.gatewayId) ||
+      body.gatewayId !== owner.gatewayId ||
+      !isAgentImportAuthorizationIntent(body.intent)
+    ) {
       res.status(403).json({ error: "forbidden" });
       return;
     }
-    res.json({
-      slug: owner.slug,
-      gatewayId: owner.gatewayId,
-      workspacePolicy: owner.workspacePolicy,
-    });
+    try {
+      if (deps.featurePolicy && releaseGateIntent(body.intent)) {
+        const decision = await deps.featurePolicy.evaluate("release-agent-import", {
+          uid: owner.uid,
+          isAdmin: owner.isAdmin,
+          workspaceSlug: owner.slug,
+          ...(owner.planTier ? { planTier: owner.planTier } : {}),
+        }, "agent-import");
+        if (decision.state === "disabled") {
+          res.status(404).json({ error: "feature_unavailable" });
+          return;
+        }
+        if (decision.state === "unavailable") {
+          res.status(503).json({ error: "feature_evaluation_unavailable" });
+          return;
+        }
+      }
+      res.json({
+        slug: owner.slug,
+        gatewayId: owner.gatewayId,
+        workspacePolicy: owner.workspacePolicy,
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get("/github/sources", async (_req, res, next) => {

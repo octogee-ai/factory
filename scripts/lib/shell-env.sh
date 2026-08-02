@@ -98,6 +98,14 @@ configured_stripe_price_ids_value() {
   printf '%s' "$value"
 }
 
+posthog_cloud_required_for_env() {
+  case "$1" in
+    test|prod) return 0 ;;
+    build-week|custom) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
 materialize_stripe_price_ids_json() {
   if [[ -n "$1" ]]; then
     printf '%s' "$1"

@@ -1,5 +1,5 @@
 
-import express, { Request, Response } from "express";
+import express, { Request, Response, type RequestHandler } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
 import { corsMiddleware } from "../../gateway-edge/src/middleware/cors.js";
@@ -35,6 +35,21 @@ import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import { createSignupOfferRoutes } from "./routes/signup-offer.js";
+import { createFeatureRoutes } from "./routes/features.js";
+import { createProductAnalyticsRoutes } from "./routes/product-analytics.js";
+import { createInternalProductAnalyticsRoutes } from "./routes/internal-product-analytics.js";
+import { FeaturePolicy } from "./lib/feature-policy.js";
+import {
+  captureProductAnalyticsEvent,
+  type ProductAnalytics,
+} from "./lib/product-analytics.js";
+import type { ProductAnalyticsEvent } from "@octogee/shared/types/product-analytics";
+import { createPostHogServices, type PostHogServices } from "./lib/posthog.js";
+import { createProductObservability } from "./lib/product-observability.js";
+import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
+import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
+import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
+import { createStripeSessionRoutes } from "../../gateway-edge/src/routes/billing/stripe-session.js";
 import {
   createChatArtifactRoutes,
   createChatArtifactWorkerRoutes,
@@ -97,6 +112,9 @@ export interface CreateAppOptions {
   modelKeyIssuerTtlSeconds?: number | null;
   askOpsAgent?: AskOpsAgent;
   resolveOpsAgentModel?: OpsAgentModelResolver;
+  featurePolicy?: FeaturePolicy;
+  productAnalytics?: ProductAnalytics;
+  postHogServices?: PostHogServices;
 }
 
 function defaultChatArtifactRoutes() {
@@ -165,6 +183,107 @@ export function shouldEnforceTenantBinding(req: Request): boolean {
   return Boolean(req.boundTenant || req.get("x-k8s-sa-token"));
 }
 
+function productRuntime(opts: CreateAppOptions, metricsRegistry: Registry) {
+  const observability = createProductObservability(metricsRegistry);
+  const postHog = opts.postHogServices ?? createPostHogServices(process.env, {
+    featureMetrics: observability,
+    logger,
+  });
+  return {
+    observability,
+    postHog,
+    featurePolicy: opts.featurePolicy ?? postHog.featurePolicy,
+    analytics: opts.productAnalytics ?? postHog.productAnalytics,
+  };
+}
+
+function mountProductRoutes(app: ReturnType<typeof express>, runtime: ReturnType<typeof productRuntime>): void {
+  app.use("/api/features", createFeatureRoutes({ featurePolicy: runtime.featurePolicy }));
+  app.use("/api/analytics", createProductAnalyticsRoutes({
+    analytics: runtime.analytics,
+    featurePolicy: runtime.featurePolicy,
+    metrics: runtime.observability,
+  }));
+}
+
+function recordProductEvent(
+  runtime: ReturnType<typeof productRuntime>,
+  uid: string,
+  event: ProductAnalyticsEvent,
+): void {
+  try {
+    captureProductAnalyticsEvent({
+      analytics: runtime.analytics,
+      metrics: runtime.observability,
+      uid,
+      event,
+    });
+  } catch (error) {
+    runtime.observability.event(event.name, "dropped");
+    logger.error("product analytics capture failed", { event: event.name, error });
+  }
+}
+
+function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
+  return {
+    mmRestProxyHandler,
+    mattermostMintRoutes,
+    billingRoutes: createBillingRoutes({
+      stripeRoutes: createStripeSessionRoutes({ featurePolicy }),
+    }),
+    builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
+  };
+}
+
+function createHttpRequestMetrics(metricsRegistry: Registry): RequestHandler {
+  const httpRequestDuration = new Histogram({
+    name: "http_request_duration_seconds",
+    help: "Duration of HTTP requests in seconds",
+    labelNames: ["method", "route", "status"] as const,
+    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    registers: [metricsRegistry],
+  });
+  const httpRequestTotal = new Counter({
+    name: "http_requests_total",
+    help: "Total number of HTTP requests",
+    labelNames: ["method", "route", "status"] as const,
+    registers: [metricsRegistry],
+  });
+  return (req, res, next) => {
+    if (req.path === "/metrics") return next();
+    const end = httpRequestDuration.startTimer();
+    res.on("finish", () => {
+      const route = req.route?.path || "unmatched";
+      const labels = { method: req.method, route, status: String(res.statusCode) };
+      end(labels);
+      httpRequestTotal.inc(labels);
+    });
+    next();
+  };
+}
+
+function mountDiagnosticRoutes(
+  app: ReturnType<typeof express>,
+  metricsRegistry: Registry,
+  tenantBindingHealth: ReturnType<typeof createTenantBindingHealthState>,
+): void {
+  app.get("/metrics", async (_req, res) => {
+    res.set("Content-Type", metricsRegistry.contentType);
+    res.end(await metricsRegistry.metrics());
+  });
+  const healthHandler = (_req: Request, res: Response) => {
+    const tenantBinding = tenantBindingHealth.get();
+    res.status(tenantBinding.status === "unhealthy" ? 503 : 200).json({
+      status: tenantBinding.status === "unhealthy" ? "degraded" : "ok",
+      service: "octogee-api",
+      tenantBinding,
+      timestamp: new Date().toISOString(),
+    });
+  };
+  app.get("/health", healthHandler);
+  app.get("/api/health", healthHandler);
+}
+
 export function createApp(opts: CreateAppOptions = {}) {
   // Fail the rollout, not customer checkouts, if the stripe-secrets price_ids
   // value is malformed JSON.
@@ -187,23 +306,11 @@ export function createApp(opts: CreateAppOptions = {}) {
 
   const metricsRegistry = new Registry();
   collectDefaultMetrics({ register: metricsRegistry });
-
-  const httpRequestDuration = new Histogram({
-    name: "http_request_duration_seconds",
-    help: "Duration of HTTP requests in seconds",
-    labelNames: ["method", "route", "status"] as const,
-    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
-    registers: [metricsRegistry],
-  });
-
-  const httpRequestTotal = new Counter({
-    name: "http_requests_total",
-    help: "Total number of HTTP requests",
-    labelNames: ["method", "route", "status"] as const,
-    registers: [metricsRegistry],
-  });
-
+  const httpRequestMetrics = createHttpRequestMetrics(metricsRegistry);
   setEmailMetrics(createEmailMetrics(metricsRegistry));
+  const product = productRuntime(opts, metricsRegistry);
+  const featurePolicy = product.featurePolicy;
+  app.locals.postHogShutdown = product.postHog.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
   const tenantBindingReviewer = opts.tenantBindingReviewer ?? createKubernetesTokenReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
@@ -225,40 +332,14 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use(corsMiddleware);
   app.use(globalRateLimit);
   app.use(internalRateLimit);
-
-  app.use((req, res, next) => {
-    if (req.path === "/metrics") return next();
-    const end = httpRequestDuration.startTimer();
-    res.on("finish", () => {
-      const route = req.route?.path || "unmatched";
-      const labels = { method: req.method, route, status: String(res.statusCode) };
-      end(labels);
-      httpRequestTotal.inc(labels);
-    });
-    next();
-  });
+  app.use(httpRequestMetrics);
 
   app.use(requestLogger);
 
   installBodyParsers(app);
-
-  app.get("/metrics", async (_req, res) => {
-    res.set("Content-Type", metricsRegistry.contentType);
-    res.end(await metricsRegistry.metrics());
-  });
-
-  const healthHandler = (_req: Request, res: Response) => {
-    const tenantBinding = tenantBindingHealth.get();
-    res.status(tenantBinding.status === "unhealthy" ? 503 : 200).json({
-      status: tenantBinding.status === "unhealthy" ? "degraded" : "ok",
-      service: "octogee-api",
-      tenantBinding,
-      timestamp: new Date().toISOString(),
-    });
-  };
-  app.get("/health", healthHandler);
-  app.get("/api/health", healthHandler);
+  mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
   app.use("/api/signup-offer", createSignupOfferRoutes({ db }));
+  mountProductRoutes(app, product);
 
   app.use((req, res, next) => {
     if (!shouldAttemptTenantBinding(req.path)) {
@@ -274,10 +355,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     }
     tenantEnforcementMiddleware(req, res, next);
   });
-  mountClusterRoutes(app, {
-    mmRestProxyHandler,
-    mattermostMintRoutes,
-  });
+  mountClusterRoutes(app, clusterRouteOverrides(featurePolicy));
   const chatArtifacts = defaultChatArtifactRoutes();
   app.use("/api/chat/artifacts", chatArtifacts.public);
   // App-facing, Firebase-authed: Codex-style link unfurl (SSRF-guarded). Lives
@@ -291,13 +369,23 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use("/internal/gitea", internalGiteaAdminRoutes);
   app.use("/internal/activity-pairs", createDefaultActivityPairReportRoutes(db));
   app.use("/internal/chat-artifacts", chatArtifacts.worker);
+  app.use("/internal/product-analytics", createInternalProductAnalyticsRoutes({
+    analytics: product.analytics,
+    metrics: product.observability,
+  }));
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
   // octogee-api-only: broker standard gateway fleet-mount Firestore/MM
   // operations. The shell-bearing gateway sees only assigned roster snapshots
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({
+    db,
+    onSignupOfferBudgetInterruption: ({ uid, reason }) => recordProductEvent(product, uid, {
+      name: "model_budget_interrupted",
+      properties: { reason },
+    }),
+  }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({
@@ -313,7 +401,13 @@ export function createApp(opts: CreateAppOptions = {}) {
   // octogee-api-only: agent project CRUD — roster-scoped like /internal/byok;
   // the owner + workspace derive from the pod's assignment, and plan
   // entitlements are enforced by the same service the UI create uses.
-  app.use("/internal/agent-projects", createAgentProjectRoutes({ db }));
+  app.use("/internal/agent-projects", createAgentProjectRoutes({
+    db,
+    onProjectCreated: (uid) => recordProductEvent(product, uid, {
+      name: "project_created",
+      properties: { source: "agent" },
+    }),
+  }));
   app.use("/internal/agent-productivity", createAgentProductivityRoutes({ db }));
   app.use(
     "/internal/agent-support",
@@ -380,6 +474,7 @@ export function createApp(opts: CreateAppOptions = {}) {
       },
       replaceIdentity: replaceCoachTextIdentity,
       now: () => new Date(),
+      featurePolicy,
     }),
   );
   // octogee-api-only: mint/revoke opaque model broker tokens. GLM mirrors
@@ -404,7 +499,7 @@ export function createApp(opts: CreateAppOptions = {}) {
 const app = createApp();
 
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logger.info(`octogee-api boot — listening on port ${PORT}`, {
       port: PORT,
       env: process.env.K8S_NAMESPACE || "local",
@@ -412,6 +507,16 @@ if (process.env.NODE_ENV !== "test") {
       node: process.version,
     });
   });
+  const shutdown = createGracefulShutdown({
+    server,
+    flushPostHog: app.locals.postHogShutdown as (() => Promise<void>) | undefined,
+    onError(message, error) {
+      process.exitCode = 1;
+      logger.error(message, { error });
+    },
+  });
+  process.once("SIGTERM", () => { void shutdown(); });
+  process.once("SIGINT", () => { void shutdown(); });
 }
 
 export default app;

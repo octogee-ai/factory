@@ -1,5 +1,8 @@
 import { type BuilderTierName, type PersonalTierName } from "./billing-tiers.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
+import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, type SignupOfferBudgetPolicy } from "./signup-offer.js";
+export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
+export type { SignupOfferBudgetPolicy };
 export declare const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export declare const PLATFORM_MODEL_CONFIG_DOC = "models";
 export declare const PLATFORM_CONNECT_CONFIG_DOC = "connect";
@@ -22,6 +25,7 @@ export interface PlatformTrialConfig {
     durationDays: number;
     defaultPersonalTier: PersonalTierName;
     defaultBuilderTier: TrialBuilderTier | null;
+    budgetPolicy?: SignupOfferBudgetPolicy;
     updatedAt?: unknown;
     updatedBy?: string;
 }

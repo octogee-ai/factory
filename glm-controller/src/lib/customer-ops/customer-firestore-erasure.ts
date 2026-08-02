@@ -26,6 +26,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   modelBrokerUsageRollups: { uidFields: ["ownerUid"] },
   modelBrokerUsageWindows: { uidFields: ["ownerUid"] },
   modelBrokerWeekWindows: { uidFields: ["ownerUid"] },
+  modelBrokerSignupOfferBudgets: { uidFields: ["ownerUid"] },
   modelBrokerRateWindows: { uidFields: ["ownerKey"] },
   modelBrokerTokens: { uidFields: ["ownerUid"] },
   modelBrokerGatewayTokens: { uidFields: ["ownerUid"] },

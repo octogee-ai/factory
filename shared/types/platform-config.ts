@@ -6,6 +6,17 @@ import {
   type PersonalTierName,
 } from "./billing-tiers.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
+import {
+  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
+  parseSignupOfferBudgetPolicy,
+  type SignupOfferBudgetPolicy,
+} from "./signup-offer.js";
+
+export {
+  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
+  parseSignupOfferBudgetPolicy,
+};
+export type { SignupOfferBudgetPolicy };
 
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
@@ -62,6 +73,7 @@ export interface PlatformTrialConfig {
   durationDays: number;
   defaultPersonalTier: PersonalTierName;
   defaultBuilderTier: TrialBuilderTier | null;
+  budgetPolicy?: SignupOfferBudgetPolicy;
   updatedAt?: unknown;
   updatedBy?: string;
 }
@@ -69,10 +81,11 @@ export interface PlatformTrialConfig {
 export const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig = {
   schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
   offerId: "builder-signup",
-  offerVersion: 1,
+  offerVersion: 3,
   durationDays: 7,
   defaultPersonalTier: "personal",
-  defaultBuilderTier: "hobby",
+  defaultBuilderTier: null,
+  budgetPolicy: DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
 };
 
 function isPersonalTier(value: unknown): value is PersonalTierName {
@@ -107,13 +120,26 @@ function validConfigEditor(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
+function validTrialBudgetPolicy(
+  raw: Record<string, unknown>,
+  budgetPolicy: SignupOfferBudgetPolicy | null,
+): boolean {
+  if (raw.budgetPolicy !== undefined && budgetPolicy === null) return false;
+  if (budgetPolicy === null) return true;
+  return raw.durationDays === 7 && raw.defaultBuilderTier === null;
+}
+
 export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
+  const budgetPolicy = raw.budgetPolicy === undefined
+    ? null
+    : parseSignupOfferBudgetPolicy(raw.budgetPolicy);
   if (
     !validTrialOfferIdentity(raw) ||
     !validTrialOfferTerms(raw) ||
-    !validConfigEditor(raw.updatedBy)
+    !validConfigEditor(raw.updatedBy) ||
+    !validTrialBudgetPolicy(raw, budgetPolicy)
   ) {
     return null;
   }
@@ -124,6 +150,7 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     durationDays: raw.durationDays as number,
     defaultPersonalTier: raw.defaultPersonalTier as PersonalTierName,
     defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier | null,
+    ...(budgetPolicy ? { budgetPolicy } : {}),
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
     ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy as string } : {}),
   };
@@ -148,6 +175,7 @@ export function trialConfigHash(config: PlatformTrialConfig): string {
     durationDays: config.durationDays,
     defaultPersonalTier: config.defaultPersonalTier,
     defaultBuilderTier: config.defaultBuilderTier,
+    budgetPolicy: config.budgetPolicy ?? null,
   }));
 }
 

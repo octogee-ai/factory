@@ -66,6 +66,10 @@ export interface LlmBrokerAppDeps {
   // Structured gate-decision log: one line per proxied model call with the
   // owner, budget, and model routing needed to verify billing in TEST.
   log?: (msg: string, fields?: Record<string, unknown>) => void;
+  onSignupOfferBudgetInterruption?: (input: {
+    uid: string;
+    reason: "waiting_for_unlock" | "hard_cap_exhausted";
+  }) => void | Promise<void>;
 }
 
 const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
@@ -564,6 +568,8 @@ interface GateDecisionAllowed {
   windowCostUsd: number | null;
   weekCostUsd: number | null;
   creditBalanceUsd: number | null;
+  offerFunded: boolean;
+  offerChargeUsd: number | null;
 }
 
 interface GateDecisionDenied {
@@ -571,6 +577,8 @@ interface GateDecisionDenied {
   status: 402 | 429 | 503;
   error: string;
   retryAfterSeconds?: number;
+  signupOfferReason?: "waiting_for_unlock" | "hard_cap_exhausted";
+  offerChargeUsd?: number;
 }
 
 type GateDecision = GateDecisionAllowed | GateDecisionDenied;
@@ -589,6 +597,7 @@ interface MeteringContext {
   onMeteringError: (err: unknown) => void;
   countsTowardSpendWindow: boolean;
   debitsCreditBalance: boolean;
+  signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
 }
 
 // The metered outcome of one proxied call, collected identically from a
@@ -641,6 +650,7 @@ async function recordUsage(
       now: ctx.now(),
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
       debitsCreditBalance: ctx.debitsCreditBalance,
+      signupOfferBudget: ctx.signupOfferBudget,
       reportedCostUsd,
       usageKind:
         ctx.record.purpose === "embeddings" ? "embedding" : "model",
@@ -719,6 +729,7 @@ async function rateWindowDenial(
 }
 
 function gateDecisionName(gate: GateDecisionAllowed): string {
+  if (gate.offerChargeUsd !== null && gate.creditBalanceUsd !== null) return "credits";
   if (!gate.degrade) return "forward";
   if (gate.degradeReason === "free") return "degrade_free";
   return gate.degradeReason === "credits" ? "degrade_credits" : "degrade_budget";
@@ -726,9 +737,11 @@ function gateDecisionName(gate: GateDecisionAllowed): string {
 
 type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
 
-function deniedDecisionName(status: GateDecisionDenied["status"]): string {
-  if (status === 402) return "denied_no_token_path";
-  if (status === 429) return "rate_limited";
+function deniedDecisionName(gate: GateDecisionDenied): string {
+  if (gate.signupOfferReason === "waiting_for_unlock") return "denied_waiting";
+  if (gate.signupOfferReason === "hard_cap_exhausted") return "denied_exhausted";
+  if (gate.status === 402) return "denied_no_token_path";
+  if (gate.status === 429) return "rate_limited";
   return "gate_unavailable";
 }
 
@@ -740,9 +753,11 @@ function sendGateDenied(
   if (gate.retryAfterSeconds) {
     res.setHeader("retry-after", String(gate.retryAfterSeconds));
   }
-  logGate(deniedDecisionName(gate.status), {
+  logGate(deniedDecisionName(gate), {
     status: gate.status,
     error: gate.error,
+    signupOfferReason: gate.signupOfferReason,
+    offerChargeUsd: gate.offerChargeUsd,
   });
   res.status(gate.status).json({ error: gate.error });
 }
@@ -753,7 +768,12 @@ async function grantForRecord(
   nowMs: number,
 ): Promise<OwnerModelBrokerGrant> {
   if (record.purpose === "embeddings" || !deps.resolveGrant) {
-    return { limits: record.limits, policy: record.policy, rail: "subscription" };
+    return {
+      limits: record.limits,
+      policy: record.policy,
+      rail: "subscription",
+      signupOfferBudget: null,
+    };
   }
   return deps.resolveGrant({
     gatewayId: record.gatewayId,
@@ -769,6 +789,8 @@ const GATE_PASS: GateDecisionAllowed = {
   windowCostUsd: null,
   weekCostUsd: null,
   creditBalanceUsd: null,
+  offerFunded: false,
+  offerChargeUsd: null,
 };
 
 type DegradeOutcome =
@@ -780,6 +802,8 @@ type DegradeOutcome =
       windowCostUsd: number | null;
       weekCostUsd: number | null;
       creditBalanceUsd: number | null;
+      offerFunded?: boolean;
+      offerChargeUsd?: number | null;
     };
 
 // Free tier rides the house model against the same weekly-ledger + burst
@@ -843,6 +867,63 @@ function deniedNoTokenPath(): DegradeOutcome {
   };
 }
 
+async function signupOfferGateOutcome(input: PreflightGateInput): Promise<DegradeOutcome> {
+  const budget = input.grant.signupOfferBudget;
+  if (!budget || !input.usageStore?.readSignupOfferBudget) {
+    return {
+      kind: "denied",
+      decision: { allowed: false, status: 503, error: "signup offer budget gate unavailable" },
+    };
+  }
+  const ledger = await input.usageStore.readSignupOfferBudget(budget);
+  if (!ledger) {
+    throw new Error("signup offer budget ledger missing or does not match the active receipt");
+  }
+  if (ledger.chargeUsd < budget.unlockedCapUsd) {
+    return {
+      kind: "state",
+      degrade: false,
+      degradeReason: null,
+      windowCostUsd: null,
+      weekCostUsd: null,
+      creditBalanceUsd: null,
+      offerFunded: true,
+      offerChargeUsd: ledger.chargeUsd,
+    };
+  }
+  if (input.record.ownerUid && input.usageStore.readCreditBalance) {
+    const creditBalanceUsd = await input.usageStore.readCreditBalance(input.record.ownerUid);
+    if (creditBalanceUsd > 0) {
+      return {
+        kind: "state",
+        degrade: false,
+        degradeReason: null,
+        windowCostUsd: null,
+        weekCostUsd: null,
+        creditBalanceUsd,
+        offerFunded: false,
+        offerChargeUsd: ledger.chargeUsd,
+      };
+    }
+  }
+  const waiting = budget.nextUnlockAtMs !== null && ledger.chargeUsd < budget.hardCapUsd;
+  return {
+    kind: "denied",
+    decision: {
+      allowed: false,
+      status: 402,
+      error: waiting
+        ? "Signup Offer capacity unlocks again soon — add prepaid credits, upgrade Personal, or connect your own subscription to continue now"
+        : "Signup Offer model allowance is complete — add prepaid credits, upgrade Personal, or connect your own subscription to continue",
+      ...(waiting
+        ? { retryAfterSeconds: Math.max(1, Math.ceil((budget.nextUnlockAtMs! - input.now()) / 1000)) }
+        : {}),
+      signupOfferReason: waiting ? "waiting_for_unlock" : "hard_cap_exhausted",
+      offerChargeUsd: ledger.chargeUsd,
+    },
+  };
+}
+
 async function purchasedCreditOutcome(input: PreflightGateInput): Promise<DegradeOutcome> {
   if (!input.usageStore?.readCreditBalance) {
     return {
@@ -870,6 +951,7 @@ async function degradeStateForGrant(
   spendWindowUsd: number | null,
   spendWeekUsd: number | null,
 ): Promise<DegradeOutcome> {
+  if (input.grant.rail === "signup_offer") return signupOfferGateOutcome(input);
   if (input.grant.policy.freeTier) {
     return freeTierGateOutcome(input, spendWindowUsd, spendWeekUsd);
   }
@@ -924,25 +1006,26 @@ async function degradeStateForGrant(
   };
 }
 
-async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
+function requiresPreflightGate(input: PreflightGateInput): boolean {
+  if (input.source === "owner_model_credential") return false;
+  if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") return false;
   const { grant } = input;
-  if (input.source === "owner_model_credential") return GATE_PASS;
-  if (input.req.method.toUpperCase() === "GET" && input.url.pathname === "/v1/models") {
-    return GATE_PASS;
-  }
   const spendWindowUsd = grant.limits.spendWindowUsd;
   const spendWeekUsd = grant.limits.spendWeekUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
   const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
-  if (
-    !prepaid &&
-    !grant.policy.freeTier &&
-    spendWindowUsd === null &&
-    spendWeekUsd === null &&
-    requestsPerMinute === null
-  ) {
-    return GATE_PASS;
-  }
+  const signupOffer = grant.rail === "signup_offer" && Boolean(input.record.ownerUid);
+  return prepaid || signupOffer || grant.policy.freeTier ||
+    spendWindowUsd !== null || spendWeekUsd !== null || requestsPerMinute !== null;
+}
+
+async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
+  if (!requiresPreflightGate(input)) return GATE_PASS;
+  const { grant } = input;
+  const spendWindowUsd = grant.limits.spendWindowUsd;
+  const spendWeekUsd = grant.limits.spendWeekUsd;
+  const requestsPerMinute = grant.limits.requestsPerMinute;
+  const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
   try {
     const outcome = await degradeStateForGrant(input, prepaid, spendWindowUsd, spendWeekUsd);
     if (outcome.kind === "denied") return outcome.decision;
@@ -951,7 +1034,16 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
       if (denial) return denial;
     }
     const { degrade, degradeReason, windowCostUsd, weekCostUsd, creditBalanceUsd } = outcome;
-    return { allowed: true, degrade, degradeReason, windowCostUsd, weekCostUsd, creditBalanceUsd };
+    return {
+      allowed: true,
+      degrade,
+      degradeReason,
+      windowCostUsd,
+      weekCostUsd,
+      creditBalanceUsd,
+      offerFunded: outcome.offerFunded === true,
+      offerChargeUsd: outcome.offerChargeUsd ?? null,
+    };
   } catch (err) {
     input.onMeteringError(err);
     return { allowed: false, status: 503, error: "model broker limit check failed" };
@@ -1072,6 +1164,7 @@ async function logAndForwardAllowed(args: {
   requestModel: string | null;
   logGate: GateLogger;
   rail: OwnerModelBrokerGrant["rail"];
+  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
   now: () => number;
@@ -1092,6 +1185,7 @@ async function logAndForwardAllowed(args: {
       windowCostUsd: gate.windowCostUsd,
       weekCostUsd: gate.weekCostUsd,
       creditBalanceUsd: gate.creditBalanceUsd,
+      offerChargeUsd: gate.offerChargeUsd,
     });
   }
   await forwardAllowed({ ...args, houseModel });
@@ -1130,8 +1224,10 @@ function meteringContextFor(args: {
   now: () => number;
   onMeteringError: (err: unknown) => void;
   usingCredits: boolean;
+  offerFunded: boolean;
+  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
 }): MeteringContext {
-  const { providerKey, gate, usingCredits } = args;
+  const { providerKey, gate, usingCredits, offerFunded } = args;
   const platformFundedEmbedding = args.record.purpose === "embeddings";
   return {
     req: args.req,
@@ -1153,12 +1249,16 @@ function meteringContextFor(args: {
       !platformFundedEmbedding &&
       providerKey.source !== "owner_model_credential" &&
       !usingCredits &&
+      !offerFunded &&
       (!gate.degrade || gate.degradeReason === "free"),
     debitsCreditBalance:
       !platformFundedEmbedding &&
       usingCredits &&
       providerKey.source !== "owner_model_credential" &&
       !gate.degrade,
+    ...(offerFunded && args.signupOfferBudget
+      ? { signupOfferBudget: args.signupOfferBudget }
+      : {}),
   };
 }
 
@@ -1173,6 +1273,7 @@ async function forwardAllowed(args: {
   upstreamBaseUrl: string;
   houseModel: string;
   rail: OwnerModelBrokerGrant["rail"];
+  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
   now: () => number;
@@ -1229,6 +1330,8 @@ async function forwardAllowed(args: {
         now: args.now,
         onMeteringError: args.onMeteringError,
         usingCredits,
+        offerFunded: gate.offerFunded,
+        signupOfferBudget: args.signupOfferBudget,
       })
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
@@ -1330,6 +1433,162 @@ async function resolveGrantForBrokerRequest(
   }
 }
 
+interface BrokerRequestHandlerOptions {
+  deps: LlmBrokerAppDeps;
+  fetchImpl: typeof fetch;
+  upstreamBaseUrls: Record<ModelBrokerProvider, string>;
+  houseModels: Record<ModelBrokerProvider, string>;
+  now: () => number;
+  upstreamHeaderTimeoutMs: number;
+}
+
+interface ResolvedBrokerRequest {
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  requestModel: string | null;
+  providerKey: ModelBrokerProviderKey;
+  grant: OwnerModelBrokerGrant;
+}
+
+async function resolveBrokerRequest(
+  options: BrokerRequestHandlerOptions,
+  req: Request,
+  res: ExpressResponse,
+): Promise<ResolvedBrokerRequest | null> {
+  const { deps, now } = options;
+  const url = requestUrl(req);
+  if (!allowedEndpoint(req, url)) {
+    res.status(404).json({ error: "unsupported LLM broker endpoint" });
+    return null;
+  }
+  const record = await deps.store.lookupToken(authToken(req), now());
+  if (!record || record.capped !== true) {
+    res.status(401).json({ error: "invalid broker token" });
+    return null;
+  }
+  if (!(await ownerAllowsBrokerRequest(deps, record, res))) return null;
+  if (!providerAllowedEndpoint(record, req, url)) {
+    res.status(404).json({ error: "unsupported LLM broker endpoint" });
+    return null;
+  }
+  const requestModel = readRequestMetadata(req.body).model;
+  if (record.purpose === "embeddings" && requestModel !== PLATFORM_OPENAI_EMBEDDING_MODEL) {
+    res.status(400).json({ error: "unsupported embedding model" });
+    return null;
+  }
+  const providerKey = await resolveProviderKeyForRequest({
+    record,
+    providerKeys: deps.providerKeys,
+    providerKeyResolver: deps.providerKeyResolver,
+    onError: deps.onMeteringError ?? (() => undefined),
+  });
+  if (!providerKey) {
+    res.status(503).json({ error: `${record.provider} upstream is not configured` });
+    return null;
+  }
+  const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
+  return grant ? { url, record, requestModel, providerKey, grant } : null;
+}
+
+function brokerGateLogger(
+  deps: LlmBrokerAppDeps,
+  context: ResolvedBrokerRequest,
+): GateLogger {
+  const { record, providerKey, grant, requestModel, url } = context;
+  return (decision, extra = {}) => {
+    deps.log?.("llm-broker gate", {
+      decision,
+      gatewayId: record.gatewayId,
+      ownerUid: record.ownerUid,
+      provider: record.provider,
+      purpose: record.purpose,
+      path: url.pathname,
+      keySource: providerKey.source,
+      spendWindowUsd: grant.limits.spendWindowUsd,
+      spendWeekUsd: grant.limits.spendWeekUsd,
+      requestsPerMinute: grant.limits.requestsPerMinute,
+      freeTier: grant.policy.freeTier,
+      rail: grant.rail,
+      offerId: grant.signupOfferBudget?.offerId,
+      offerVersion: grant.signupOfferBudget?.offerVersion,
+      receiptConfigHash: grant.signupOfferBudget?.receiptConfigHash,
+      budgetSchemaVersion: grant.signupOfferBudget?.budgetSchemaVersion,
+      offerDayIndex: grant.signupOfferBudget?.offerDayIndex,
+      unlockedCapUsd: grant.signupOfferBudget?.unlockedCapUsd,
+      hardCapUsd: grant.signupOfferBudget?.hardCapUsd,
+      nextUnlockAtMs: grant.signupOfferBudget?.nextUnlockAtMs,
+      requestModel,
+      ...extra,
+    });
+  };
+}
+
+async function reportSignupOfferGateDenial(
+  deps: LlmBrokerAppDeps,
+  record: ModelBrokerTokenRecord,
+  gate: GateDecisionDenied,
+): Promise<void> {
+  if (!gate.signupOfferReason || !record.ownerUid || !deps.onSignupOfferBudgetInterruption) return;
+  try {
+    await deps.onSignupOfferBudgetInterruption({
+      uid: record.ownerUid,
+      reason: gate.signupOfferReason,
+    });
+  } catch (error) {
+    reportBrokerResolutionError(deps, error);
+  }
+}
+
+function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
+  return async (req: Request, res: ExpressResponse, next: NextFunction): Promise<void> => {
+    try {
+      const context = await resolveBrokerRequest(options, req, res);
+      if (!context) return;
+      const { deps, fetchImpl, upstreamBaseUrls, houseModels, now, upstreamHeaderTimeoutMs } = options;
+      const { url, record, requestModel, providerKey, grant } = context;
+      const logGate = brokerGateLogger(deps, context);
+      const gate = await preflightGate({
+        req,
+        url,
+        record,
+        grant,
+        source: providerKey.source,
+        usageStore: deps.usageStore,
+        now,
+        onMeteringError: deps.onMeteringError ?? (() => undefined),
+      });
+      if (!gate.allowed) {
+        await reportSignupOfferGateDenial(deps, record, gate);
+        sendGateDenied(res, gate, logGate);
+        return;
+      }
+      await logAndForwardAllowed({
+        req,
+        res,
+        url,
+        record,
+        providerKey,
+        gate,
+        fetchImpl,
+        upstreamBaseUrl: upstreamBaseUrls[record.provider],
+        houseModels,
+        resolveFreeTierModel: deps.resolveFreeTierModel,
+        requestModel,
+        logGate,
+        rail: grant.rail,
+        signupOfferBudget: grant.signupOfferBudget,
+        usageStore: deps.usageStore,
+        upstreamHeaderTimeoutMs,
+        now,
+        onMeteringError: deps.onMeteringError ?? (() => undefined),
+        log: deps.log,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   const app = express();
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -1390,99 +1649,14 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
   app.use(
     "/v1",
     express.raw({ type: "*/*", limit: deps.bodyLimit ?? DEFAULT_BODY_LIMIT }),
-    async (req: Request, res: ExpressResponse, next: NextFunction) => {
-      try {
-        const url = requestUrl(req);
-        if (!allowedEndpoint(req, url)) {
-          res.status(404).json({ error: "unsupported LLM broker endpoint" });
-          return;
-        }
-        const record = await deps.store.lookupToken(authToken(req), now());
-        if (!record || record.capped !== true) {
-          res.status(401).json({ error: "invalid broker token" });
-          return;
-        }
-        if (!(await ownerAllowsBrokerRequest(deps, record, res))) return;
-        if (!providerAllowedEndpoint(record, req, url)) {
-          res.status(404).json({ error: "unsupported LLM broker endpoint" });
-          return;
-        }
-        const requestModel = readRequestMetadata(req.body).model;
-        if (
-          record.purpose === "embeddings" &&
-          requestModel !== PLATFORM_OPENAI_EMBEDDING_MODEL
-        ) {
-          res.status(400).json({ error: "unsupported embedding model" });
-          return;
-        }
-        const providerKey = await resolveProviderKeyForRequest({
-          record,
-          providerKeys: deps.providerKeys,
-          providerKeyResolver: deps.providerKeyResolver,
-          onError: deps.onMeteringError ?? (() => undefined),
-        });
-        if (!providerKey) {
-          res.status(503).json({ error: `${record.provider} upstream is not configured` });
-          return;
-        }
-        const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
-        if (!grant) return;
-        const logGate: GateLogger = (decision, extra = {}) => {
-          deps.log?.("llm-broker gate", {
-            decision,
-            gatewayId: record.gatewayId,
-            ownerUid: record.ownerUid,
-            provider: record.provider,
-            purpose: record.purpose,
-            path: url.pathname,
-            keySource: providerKey.source,
-            spendWindowUsd: grant.limits.spendWindowUsd,
-            spendWeekUsd: grant.limits.spendWeekUsd,
-            requestsPerMinute: grant.limits.requestsPerMinute,
-            freeTier: grant.policy.freeTier,
-            rail: grant.rail,
-            requestModel,
-            ...extra,
-          });
-        };
-        const gate = await preflightGate({
-          req,
-          url,
-          record,
-          grant,
-          source: providerKey.source,
-          usageStore: deps.usageStore,
-          now,
-          onMeteringError: deps.onMeteringError ?? (() => undefined),
-        });
-        if (!gate.allowed) {
-          sendGateDenied(res, gate, logGate);
-          return;
-        }
-        await logAndForwardAllowed({
-          req,
-          res,
-          url,
-          record,
-          providerKey,
-          gate,
-          fetchImpl,
-          upstreamBaseUrl: upstreamBaseUrls[record.provider],
-          houseModels,
-          resolveFreeTierModel: deps.resolveFreeTierModel,
-          requestModel,
-          logGate,
-          rail: grant.rail,
-          usageStore: deps.usageStore,
-          upstreamHeaderTimeoutMs,
-          now,
-          onMeteringError: deps.onMeteringError ?? (() => undefined),
-          log: deps.log,
-        });
-      } catch (err) {
-        next(err);
-      }
-    },
+    createBrokerRequestHandler({
+      deps,
+      fetchImpl,
+      upstreamBaseUrls,
+      houseModels,
+      now,
+      upstreamHeaderTimeoutMs,
+    }),
   );
 
   app.use((err: Error, _req: Request, res: ExpressResponse, _next: NextFunction) => {

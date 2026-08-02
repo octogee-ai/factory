@@ -19,6 +19,7 @@ import {
   parsePlatformFreeConfig,
   parsePlatformModelConfig,
   parsePlatformTrialConfig,
+  parseSignupOfferBudgetPolicy,
   resolveFreeTierModel,
   resolveOpsAgentModel,
   trialConfigHash,
@@ -49,20 +50,26 @@ describe("parsePlatformFreeConfig", () => {
 });
 
 describe("parsePlatformTrialConfig", () => {
-  it("seeds the seven-day Personal + Builder Hobby signup offer", () => {
+  it("seeds the seven-day Personal-only momentum Signup Offer", () => {
     expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
       schemaVersion: 2,
       offerId: "builder-signup",
-      offerVersion: 1,
+      offerVersion: 3,
       durationDays: 7,
       defaultPersonalTier: "personal",
-      defaultBuilderTier: "hobby",
+      defaultBuilderTier: null,
+      budgetPolicy: {
+        schemaVersion: 1,
+        currency: "USD",
+        cumulativeUnlockUsd: [4.8, 5.6, 6.4, 6.8, 7.2, 7.6, 8],
+        hardCapUsd: 8,
+      },
     });
     expect(PLATFORM_TRIAL_CONFIG_DOC).toBe("trial");
     expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(2);
   });
 
-  it("accepts every Personal tier, no Builder tier, and only concrete Builder tiers", () => {
+  it("accepts every Personal tier and keeps the momentum offer Personal-only", () => {
     for (const personalTier of ["personal_free", "personal", "personal_pro", "personal_pro_max"]) {
       expect(
         parsePlatformTrialConfig({
@@ -75,7 +82,9 @@ describe("parsePlatformTrialConfig", () => {
       expect(
         parsePlatformTrialConfig({
           ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+          offerVersion: 1,
           defaultBuilderTier: builderTier,
+          budgetPolicy: undefined,
         }),
       ).not.toBeNull();
     }
@@ -88,9 +97,19 @@ describe("parsePlatformTrialConfig", () => {
     expect(
       parsePlatformTrialConfig({
         ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+        offerVersion: 1,
         defaultBuilderTier: "enterprise",
+        budgetPolicy: undefined,
       }),
     ).toBeNull();
+    expect(parsePlatformTrialConfig({
+      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+      defaultBuilderTier: "hobby",
+    })).toBeNull();
+    expect(parsePlatformTrialConfig({
+      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+      durationDays: 14,
+    })).toBeNull();
   });
 
   it("rejects malformed and unsupported configs", () => {
@@ -102,6 +121,10 @@ describe("parsePlatformTrialConfig", () => {
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 0 })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 0 })).toBeNull();
     expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 31 })).toBeNull();
+    expect(parsePlatformTrialConfig({
+      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+      budgetPolicy: undefined,
+    })).toMatchObject({ offerVersion: 3 });
   });
 
   it("hashes only the canonical grant-shaping fields", () => {
@@ -113,18 +136,46 @@ describe("parsePlatformTrialConfig", () => {
         updatedBy: "operator-2",
       }),
     ).toBe(hash);
-    expect(
-      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "team" }),
-    ).not.toBe(hash);
-    expect(
-      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: null }),
-    ).not.toBe(hash);
+    expect(trialConfigHash({
+      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+      offerVersion: 1,
+      defaultBuilderTier: "team",
+      budgetPolicy: undefined,
+    })).not.toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 14 }),
     ).not.toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 2 }),
     ).not.toBe(hash);
+    expect(
+      trialConfigHash({
+        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
+        budgetPolicy: {
+          ...DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy!,
+          cumulativeUnlockUsd: [4.9, 5.6, 6.4, 6.8, 7.2, 7.6, 8],
+        },
+      }),
+    ).not.toBe(hash);
+  });
+
+  it("validates the complete immutable momentum schedule", () => {
+    const valid = DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy!;
+    expect(parseSignupOfferBudgetPolicy(valid)).toEqual(valid);
+    for (const invalid of [
+      undefined,
+      { ...valid, schemaVersion: 2 },
+      { ...valid, currency: "EUR" },
+      { ...valid, cumulativeUnlockUsd: [4.8, 5.6] },
+      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, 5.5, 6.8, 7.2, 7.6, 8] },
+      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, -1, 6.8, 7.2, 7.6, 8] },
+      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, Number.NaN, 6.8, 7.2, 7.6, 8] },
+      { ...valid, hardCapUsd: 0 },
+      { ...valid, hardCapUsd: 9 },
+      { ...valid, unrecognizedPromise: true },
+    ]) {
+      expect(parseSignupOfferBudgetPolicy(invalid)).toBeNull();
+    }
   });
 });
 

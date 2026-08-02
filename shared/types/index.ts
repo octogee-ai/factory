@@ -45,6 +45,7 @@ export type {
 
 export type {
   AgentImportApprovalFields,
+  AgentImportAuthorizationIntent,
   AgentImportConfigArtifacts,
   AgentImportConfigDecision,
   AgentImportConfigDisposition,
@@ -57,13 +58,36 @@ export type {
 } from './agent-import.js';
 export {
   AGENT_IMPORT_FORMAT_VERSION,
+  AGENT_IMPORT_AUTHORIZATION_INTENTS,
   AgentImportConfigError,
   buildAgentImportApprovalInput,
   buildAgentImportConfigArtifacts,
   classifyAgentImportArchivePath,
+  isAgentImportAuthorizationIntent,
   planAgentImportConfig,
   validateAgentImportConfigArtifacts,
 } from './agent-import.js';
+
+export type {
+  FeatureDecision,
+  FeatureFlagDefinition,
+  FeatureFlagKey,
+  FeaturePolicy,
+  FeatureSubject,
+} from './feature-flags.js';
+export {
+  FEATURE_FLAGS,
+  FEATURE_FLAG_KEYS,
+  USER_VISIBLE_FEATURE_FLAG_KEYS,
+  isFeatureFlagKey,
+} from './feature-flags.js';
+
+export type {
+  ProductAnalyticsEvent,
+  ProductAnalyticsEventName,
+  ProductAnalyticsEventProperties,
+} from './product-analytics.js';
+export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 
 export type {
   Workspace,
@@ -108,6 +132,9 @@ export {
   resolvePaidBuilderTier,
   resolvePaidPersonalTier,
   resolveTier,
+  resolveSignupOfferBudget,
+  signupOfferBudgetForOwner,
+  signupOfferDayIndex,
 } from './billing.js';
 export type {
   BillingProfile,
@@ -116,6 +143,10 @@ export type {
   PlanInputs,
   TierResolvable,
   TrialGrant,
+  LegacyTrialGrant,
+  ParsedTrialGrant,
+  ResolvedSignupOfferBudget,
+  OwnedSignupOfferBudget,
 } from './billing.js';
 
 export type {
@@ -129,6 +160,19 @@ export type {
   PlatformTrialConfig,
   TrialBuilderTier,
 } from './platform-config.js';
+export {
+  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
+  MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION,
+  SIGNUP_OFFER_LEDGER_RETENTION_MS,
+  modelBrokerSignupOfferBudgetDocId,
+  parseModelBrokerSignupOfferBudget,
+  parseSignupOfferBudgetPolicy,
+} from './signup-offer.js';
+export type {
+  ModelBrokerSignupOfferBudget,
+  SignupOfferBudgetIdentity,
+  SignupOfferBudgetPolicy,
+} from './signup-offer.js';
 export {
   DEFAULT_PLATFORM_FREE_CONFIG,
   DEFAULT_PLATFORM_TRIAL_CONFIG,

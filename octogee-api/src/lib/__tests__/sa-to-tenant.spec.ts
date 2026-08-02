@@ -349,5 +349,12 @@ describe("mapSaToTenant", () => {
       result: "ok_platform",
       tenant: { kind: "platform", actor: "artifact-worker" },
     });
+    await expect(
+      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "llm-broker" }, "octogee"),
+    ).resolves.toEqual({
+      attached: true,
+      result: "ok_platform",
+      tenant: { kind: "platform", actor: "llm-broker" },
+    });
   });
 });

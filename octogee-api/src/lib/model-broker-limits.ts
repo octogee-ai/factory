@@ -1,6 +1,11 @@
 import type { Firestore } from "firebase-admin/firestore";
 
-import { resolveBillingProfile, type BillingRail } from "@octogee/shared/types/billing";
+import {
+  resolveBillingProfile,
+  signupOfferBudgetForOwner,
+  type BillingRail,
+  type OwnedSignupOfferBudget,
+} from "@octogee/shared/types/billing";
 import {
   readGatewayAuthorization,
   type GatewayAuthorization,
@@ -23,6 +28,7 @@ export interface OwnerModelBrokerGrant {
   // Which rail bills platform calls: subscription = window budgets; Builders
   // ride prepaid_credits (their credit balance is the gate, not a window).
   rail: BillingRail;
+  signupOfferBudget?: OwnedSignupOfferBudget | null;
 }
 
 type ModelBrokerFirestore = Pick<Firestore, "collection" | "doc">;
@@ -57,6 +63,7 @@ async function readOwnerTier(
   freeTier: boolean;
   houseFallback: boolean;
   rail: BillingRail;
+  signupOfferBudget: OwnedSignupOfferBudget | null;
 } | null> {
   if (!db || !ownerUid) return null;
   const snap = await db.collection("users").doc(ownerUid).get();
@@ -72,6 +79,7 @@ async function readOwnerTier(
     // Builders with no live paid token path get denied instead of degraded.
     houseFallback: profile.houseFallback,
     rail: profile.rail,
+    signupOfferBudget: signupOfferBudgetForOwner(data, ownerUid, new Date(now)),
   };
 }
 
@@ -114,7 +122,7 @@ export async function resolveOwnerModelBrokerGrant(input: {
   const limits = normalizeModelBrokerTokenLimits({
     ...(input.defaults ?? {}),
     // Prepaid-rail owners carry no window/week budget — the credit balance gates.
-    ...(tier === null || rail === "prepaid_credits"
+    ...(tier === null || rail === "prepaid_credits" || rail === "signup_offer"
       ? {}
       : { spendWindowUsd: tier.spendWindowUsd, spendWeekUsd: tier.spendWeekUsd }),
     ...overrides,
@@ -123,7 +131,7 @@ export async function resolveOwnerModelBrokerGrant(input: {
     freeTier: tier?.freeTier === true,
     houseFallback: tier?.houseFallback !== false,
   });
-  return { limits, policy, rail };
+  return { limits, policy, rail, signupOfferBudget: tier?.signupOfferBudget ?? null };
 }
 
 export interface LiveOwnerGrantInput {
@@ -139,6 +147,18 @@ export type LiveOwnerGrantResolver = (
 const DEFAULT_GRANT_CACHE_TTL_MS = 60_000;
 const DEFAULT_GRANT_CACHE_MAX_ENTRIES = 10_000;
 
+function cachedGrantIsFresh(
+  entry: { grant: OwnerModelBrokerGrant; resolvedAt: number },
+  now: number,
+  ttlMs: number,
+): boolean {
+  if (now - entry.resolvedAt >= ttlMs) return false;
+  const budget = entry.grant.signupOfferBudget;
+  if (!budget) return true;
+  if (now >= budget.endsAtMs) return false;
+  return budget.nextUnlockAtMs === null || now < budget.nextUnlockAtMs;
+}
+
 function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
   const limits = authorization.config.modelBrokerLimits;
   return [
@@ -150,10 +170,6 @@ function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
   ].join(":");
 }
 
-// The gate resolves the owner grant live on every call so tier changes and the
-// trial daily decay take effect within one TTL — broker tokens carry identity,
-// not limits. The cache bounds Firestore reads on the hot path; the cap +
-// expired-entry sweep bounds memory under owner churn on a long-lived broker.
 export function createCachedOwnerModelBrokerGrantResolver(opts: {
   db: ModelBrokerFirestore;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
@@ -192,7 +208,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
     }
     const key = `${gatewayId}:${mutableLimitFingerprint(authorization)}:${ownerUid ?? ""}`;
     const cached = cache.get(key);
-    if (cached && now - cached.resolvedAt < ttlMs) return cached.grant;
+    if (cached && cachedGrantIsFresh(cached, now, ttlMs)) return cached.grant;
     if (cached) cache.delete(key);
     sweepExpired(now);
 
@@ -213,6 +229,9 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
       requestsPerMinute: grant.limits.requestsPerMinute,
       freeTier: grant.policy.freeTier,
       rail: grant.rail,
+      offerId: grant.signupOfferBudget?.offerId,
+      offerVersion: grant.signupOfferBudget?.offerVersion,
+      offerDayIndex: grant.signupOfferBudget?.offerDayIndex,
     });
     return grant;
   };

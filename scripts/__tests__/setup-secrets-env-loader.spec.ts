@@ -141,6 +141,13 @@ function stripeKeyModeValidity(env: string, value: string): string {
   ].join("\n"));
 }
 
+function posthogCloudRequired(env: string): boolean {
+  return runShellStatus([
+    `source ${JSON.stringify(helperPath)}`,
+    `posthog_cloud_required_for_env ${JSON.stringify(env)}`,
+  ].join("\n")) === 0;
+}
+
 function stripeWebhookValidity(value: string): string {
   return runShell([
     `source ${JSON.stringify(helperPath)}`,
@@ -161,6 +168,13 @@ function selectedSecretValue(
 }
 
 describe("setup-secrets env loader", () => {
+  it("requires PostHog Cloud credentials exactly where Helm enables PostHog", () => {
+    expect(posthogCloudRequired("test")).toBe(true);
+    expect(posthogCloudRequired("prod")).toBe(true);
+    expect(posthogCloudRequired("build-week")).toBe(false);
+    expect(posthogCloudRequired("custom")).toBe(false);
+  });
+
   it("reads one named env value without exporting unrelated secrets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "octogee-env-reader-"));
     const envFile = path.join(dir, ".env.test-west");

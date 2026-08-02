@@ -1,4 +1,16 @@
 export const AGENT_IMPORT_FORMAT_VERSION = 1;
+export const AGENT_IMPORT_AUTHORIZATION_INTENTS = [
+    "source_listing",
+    "preview",
+    "apply",
+    "status",
+    "abandon",
+    "rollback",
+];
+export function isAgentImportAuthorizationIntent(value) {
+    return typeof value === "string" &&
+        AGENT_IMPORT_AUTHORIZATION_INTENTS.includes(value);
+}
 export class AgentImportConfigError extends Error {
     code;
     constructor(code, message) {

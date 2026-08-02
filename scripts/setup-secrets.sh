@@ -945,6 +945,20 @@ ksecret stripe-secrets \
   --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}" \
   --from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"
 
+# ── 10a. PostHog Cloud ────────────────────────────────────────────────────
+info "posthog-cloud"
+POSTHOG_PROJECT_TOKEN="$(resolve_environment_secret_value "${POSTHOG_PROJECT_TOKEN:-}" POSTHOG_PROJECT_TOKEN posthog-cloud project_token configured_secret_value)"
+POSTHOG_PERSONAL_API_KEY="$(resolve_environment_secret_value "${POSTHOG_PERSONAL_API_KEY:-}" POSTHOG_PERSONAL_API_KEY posthog-cloud personal_api_key configured_secret_value)"
+if [[ "$ENV" != "custom" ]]; then
+  [[ -n "$POSTHOG_PROJECT_TOKEN" ]] && sync_secret_manager_value POSTHOG_PROJECT_TOKEN "$POSTHOG_PROJECT_TOKEN" "$FIREBASE_PROJECT"
+  [[ -n "$POSTHOG_PERSONAL_API_KEY" ]] && sync_secret_manager_value POSTHOG_PERSONAL_API_KEY "$POSTHOG_PERSONAL_API_KEY" "$FIREBASE_PROJECT"
+fi
+[[ -n "$POSTHOG_PROJECT_TOKEN" ]] || warn "POSTHOG_PROJECT_TOKEN not found — PostHog capture and flags remain disabled"
+[[ -n "$POSTHOG_PERSONAL_API_KEY" ]] || warn "POSTHOG_PERSONAL_API_KEY not found — do not configure a PostHog project for this environment yet"
+ksecret posthog-cloud \
+  --from-literal=project_token="$POSTHOG_PROJECT_TOKEN" \
+  --from-literal=personal_api_key="$POSTHOG_PERSONAL_API_KEY"
+
 # ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
 # Used by gateway-edge for email digest delivery via Resend.
 # Required env vars: RESEND_API_KEY, RESEND_FROM_EMAIL

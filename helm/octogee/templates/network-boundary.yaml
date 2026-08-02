@@ -140,7 +140,25 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: [glm-controller, octogee-artifact-worker, octogee-cron, octogee-gateway]
+                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-cron, octogee-gateway]
+      ports:
+        - protocol: TCP
+          port: 3001
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-broker-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: llm-broker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
       ports:
         - protocol: TCP
           port: 3001

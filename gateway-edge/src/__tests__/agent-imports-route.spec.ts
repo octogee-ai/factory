@@ -77,7 +77,7 @@ describe("agent imports route", () => {
   });
 
   it("previews a GitHub repository for the authenticated local gateway owner", async () => {
-    const { app, service } = harness();
+    const { app, authorize, service } = harness();
     await request(app)
       .post("/api/g/gw-alice/agent-imports/preview/github")
       .send({ owner: "jack", repo: "moof", branch: "main", artifacts })
@@ -93,13 +93,16 @@ describe("agent imports route", () => {
       branch: "main",
       artifacts,
     });
+    expect(authorize).toHaveBeenCalledWith("preview");
   });
 
   it("does not reveal whether an import exists across gateway boundaries", async () => {
-    const { app, service } = harness();
+    const { app, authorize, deps, service } = harness();
 
     await request(app).get("/api/g/gw-other/agent-imports/imp-1").expect(404, { error: "not_found" });
     expect(service.get).not.toHaveBeenCalled();
+    expect(deps.createRuntime).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
   });
 
   it("requires completed OpenClaw provisioning", async () => {
@@ -115,12 +118,13 @@ describe("agent imports route", () => {
   });
 
   it("lists import-only GitHub sources with the existing connector", async () => {
-    const { app, listGithubSources } = harness();
+    const { app, authorize, listGithubSources } = harness();
     await request(app).get("/api/g/gw-alice/agent-imports/sources/github").expect(200, {
       repos: [{ owner: "jack", repo: "moof", defaultBranch: "main" }],
       truncated: false,
     });
     expect(listGithubSources).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledWith("source_listing");
   });
 
   it("returns a typed reconnect response without leaking connector failures", async () => {
@@ -185,7 +189,7 @@ describe("agent imports route", () => {
   });
 
   it("accepts exactly one normalized local archive", async () => {
-    const { app, service } = harness();
+    const { app, authorize, service } = harness();
     await request(app)
       .post("/api/g/gw-alice/agent-imports/preview/local")
       .attach("archive", Buffer.from("normalized"), { filename: "moof.zip", contentType: "application/zip" })
@@ -197,6 +201,7 @@ describe("agent imports route", () => {
       workspacePolicy: { preserveConvergedContextFiles: false },
       archive: Buffer.from("normalized"),
     });
+    expect(authorize).toHaveBeenCalledWith("preview");
   });
 
   it("rejects multipart requests containing more than one local archive", async () => {
@@ -236,8 +241,8 @@ describe("agent imports route", () => {
     await first;
   });
 
-  it("binds apply, status, and rollback to the authenticated owner", async () => {
-    const { app, service } = harness();
+  it("binds each intent to the authenticated local gateway owner", async () => {
+    const { app, service, authorize } = harness();
     await request(app)
       .post("/api/g/gw-alice/agent-imports/imp-1/apply")
       .send({ approvalHash: "sha256:approval" })
@@ -245,6 +250,7 @@ describe("agent imports route", () => {
     await request(app).get("/api/g/gw-alice/agent-imports/imp-1").expect(200);
     await request(app).get("/api/g/gw-alice/agent-imports/latest").expect(200);
     await request(app).post("/api/g/gw-alice/agent-imports/imp-1/rollback").expect(200);
+    await request(app).post("/api/g/gw-alice/agent-imports/imp-1/abandon").expect(200);
 
     expect(service.apply).toHaveBeenCalledWith({
       importId: "imp-1",
@@ -255,5 +261,13 @@ describe("agent imports route", () => {
     expect(service.get).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
     expect(service.latest).toHaveBeenCalledWith({ uid: "uid-alice" });
     expect(service.rollback).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
+    expect(service.abandon).toHaveBeenCalledWith({ importId: "imp-1", uid: "uid-alice" });
+    expect(authorize.mock.calls.map(([intent]) => intent)).toEqual([
+      "apply",
+      "status",
+      "status",
+      "rollback",
+      "abandon",
+    ]);
   });
 });

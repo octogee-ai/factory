@@ -135,6 +135,7 @@ function app(opts: {
   a.post("/internal/activity-pairs/report", enforcement, handler);
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
+  a.post("/internal/product-analytics/events", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
@@ -235,6 +236,23 @@ describe("tenant enforcement middleware", () => {
     expect(lease.status).toBe(200);
     expect(billing.status).toBe(403);
     expect(cronClaim.status).toBe(403);
+  });
+
+  it("allows the LLM broker only on its product-event route", async () => {
+    const broker = { kind: "platform", actor: "llm-broker" } as const;
+    const productEvent = await request(app({ boundTenant: broker }))
+      .post("/internal/product-analytics/events")
+      .send({ uid: "uid-alice" });
+    const billing = await request(app({ boundTenant: broker }))
+      .post("/internal/billing/check-trial-expiry")
+      .send({});
+    const cronProductEvent = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/product-analytics/events")
+      .send({ uid: "uid-alice" });
+
+    expect(productEvent.status).toBe(200);
+    expect(billing.status).toBe(403);
+    expect(cronProductEvent.status).toBe(403);
   });
 
   it("does not honor a legacy X-Internal-Service-Key", async () => {

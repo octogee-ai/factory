@@ -75,7 +75,7 @@ describe("agent import broker client", () => {
     });
 
     await store.putRecord(record);
-    await expect(store.authorize()).resolves.toEqual({
+    await expect(store.authorize("preview")).resolves.toEqual({
       slug: "jack",
       gatewayId: "gw-jack",
       workspacePolicy: { preserveConvergedContextFiles: false },
@@ -97,6 +97,14 @@ describe("agent import broker client", () => {
     await expect(store.listGithubSources()).resolves.toEqual({ repos: [], truncated: false });
     await expect(store.readGithubToken()).resolves.toBe("github-oauth");
     await expect(store.readGithubRepoSize("jack", "moof")).resolves.toBe(12);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://octogee-api.octogee.svc.cluster.local/internal/agent-imports/authorize",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ gatewayId: "gw-jack", intent: "preview" }),
+      }),
+    );
 
     expect(fetchImpl).toHaveBeenCalledWith(
       expect.stringContaining("/records/imp-1/abandon"),

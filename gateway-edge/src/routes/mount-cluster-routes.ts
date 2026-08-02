@@ -57,6 +57,8 @@ import { requireAuth } from "../middleware/auth.js";
 export interface MountClusterRoutesOpts {
   mmRestProxyHandler?: RequestHandler;
   mattermostMintRoutes?: Router;
+  billingRoutes?: Router;
+  builderGatewaysRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -142,7 +144,11 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   // in RAW_BODY_WEBHOOK_PATHS (see body-parsers.ts) or signature verification
   // breaks. Non-raw-body sub-routes (e.g. urlencoded one-click unsubscribe)
   // fall through to normal parsing and are fine alongside.
-  mountRouteTable(app, PUBLIC_API_ROUTES);
+  mountRouteTable(app, PUBLIC_API_ROUTES.map(([path, route]) => {
+    if (path === "/api/billing") return [path, opts.billingRoutes ?? route] as const;
+    if (path === "/api/builder") return [path, opts.builderGatewaysRoutes ?? route] as const;
+    return [path, route] as const;
+  }));
   mountRouteTable(app, INTERNAL_ROUTES);
 }
 
