@@ -245,6 +245,7 @@ async function awaitConvergence(
       };
     }
     await deps.wait(deps.pollIntervalMs);
+    deps.requestReconcileTick?.(target.gatewayId);
     await progress.refreshLiveness();
   }
 }

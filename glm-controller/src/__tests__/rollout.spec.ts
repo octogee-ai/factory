@@ -353,6 +353,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
       targetRelease: 2,
       operationId: "op-1",
     });
+    expect(deps.requestReconcileTick).toHaveBeenCalledTimes(2);
     expect(deps.requestReconcileTick).toHaveBeenCalledWith("default");
   });
 
