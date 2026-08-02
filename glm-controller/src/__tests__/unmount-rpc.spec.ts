@@ -134,6 +134,85 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
   });
 });
 
+describe("operator heartbeat poll — a converged gateway writes nothing", () => {
+  function pollerDb(store: Map<string, Record<string, unknown>>) {
+    const writes: Array<{ doc: string; data: Record<string, unknown> }> = [];
+    const db = {
+      collection: (name: string) => ({
+        get: async () => ({
+          docs: [...store.entries()].map(([id, data]) => ({ id, data: () => data })),
+        }),
+        doc: (id: string) => ({ _collection: name, _doc: id }),
+      }),
+      batch: () => ({
+        set: (ref: { _doc: string }, data: Record<string, unknown>) => {
+          writes.push({ doc: ref._doc, data });
+        },
+        commit: async () => {},
+      }),
+    } as unknown as Firestore;
+    return { db, writes };
+  }
+
+  function landWrite(
+    store: Map<string, Record<string, unknown>>,
+    write: { data: Record<string, unknown> },
+  ): void {
+    const heartbeat = write.data.heartbeat as Record<string, unknown>;
+    store.set("bender", {
+      ...store.get("bender")!,
+      heartbeat: { ...heartbeat, lastHeartbeatAt: Date.now() },
+    });
+  }
+
+  function runtimeStore(): Map<string, Record<string, unknown>> {
+    return new Map([
+      ["bender", { docKind: "runtime", gatewayId: "bender", release: 2, lifecycle: "serving" }],
+    ]);
+  }
+
+  it("writes the first poll and skips an identical second poll", async () => {
+    const store = runtimeStore();
+    const { db, writes } = pollerDb(store);
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey);
+    const health = { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 };
+
+    expect(await deps.listGatewayIds()).toEqual(["bender"]);
+    await deps.writeHeartbeat("bender", health);
+    expect(writes).toHaveLength(1);
+    landWrite(store, writes[0]);
+
+    await deps.listGatewayIds();
+    await deps.writeHeartbeat("bender", health);
+
+    expect(writes).toHaveLength(1);
+  });
+
+  it("writes exactly once more when the poll reports a new mounted set", async () => {
+    const store = runtimeStore();
+    const { db, writes } = pollerDb(store);
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey);
+
+    await deps.listGatewayIds();
+    await deps.writeHeartbeat("bender", {
+      status: "ready",
+      mountedCustomers: ["ceckert"],
+      startedAt: 42,
+    });
+    landWrite(store, writes[0]);
+
+    await deps.listGatewayIds();
+    await deps.writeHeartbeat("bender", {
+      status: "ready",
+      mountedCustomers: [],
+      startedAt: 42,
+    });
+
+    expect(writes).toHaveLength(2);
+    expect(writes[1].data.heartbeat).toMatchObject({ mountedCustomers: [] });
+  });
+});
+
 describe("runtime heartbeat polling", () => {
   it("polls only live runtime realizations", () => {
     expect(

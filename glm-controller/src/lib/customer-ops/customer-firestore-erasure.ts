@@ -1,7 +1,13 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  GrpcStatus,
+  type DocumentReference,
+  type Firestore,
+} from "firebase-admin/firestore";
 
 export interface CustomerErasureCollectionPolicy {
   customerKey?: "uid" | "slug" | "email";
+  ownsSubcollections?: true;
   uidFields?: readonly string[];
   slugFields?: readonly string[];
   emailFields?: readonly string[];
@@ -57,7 +63,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   },
   cleanupJobs: { slugFields: ["slug"] },
   gateways: { uidArrayFields: ["coOwnerUids"] },
-  email: { emailFields: ["to"], emailArrayFields: ["to"] },
+  email: { emailFields: ["to"], emailArrayFields: ["to"], ownsSubcollections: true },
   gatewayAccessGrants: {
     uidFields: ["ownerUid", "granteeUid", "createdByUid", "updatedByUid", "revokedByUid"],
   },
@@ -110,7 +116,23 @@ const CUSTOMER_EMAIL_KEYED_ROOTS = POLICY_ENTRIES
   .filter(([, policy]) => policy.customerKey === "email")
   .map(([collection]) => collection);
 
-type ErasureFirestore = Pick<Firestore, "collection" | "collectionGroup" | "recursiveDelete">;
+const SUBCOLLECTION_OWNING_COLLECTIONS = new Set(POLICY_ENTRIES
+  .filter(([, policy]) => policy.ownsSubcollections)
+  .map(([collection]) => collection));
+
+const RETRYABLE_LEAF_DELETE_CODES = new Set<number>([
+  GrpcStatus.DEADLINE_EXCEEDED,
+  GrpcStatus.RESOURCE_EXHAUSTED,
+  GrpcStatus.ABORTED,
+  GrpcStatus.INTERNAL,
+  GrpcStatus.UNAVAILABLE,
+]);
+const MAX_LEAF_DELETE_ATTEMPTS = 5;
+
+type ErasureFirestore = Pick<
+  Firestore,
+  "collection" | "collectionGroup" | "recursiveDelete" | "bulkWriter"
+>;
 type VerificationFirestore = Pick<Firestore, "collection" | "collectionGroup">;
 
 function customerRootRefs(
@@ -182,6 +204,30 @@ function normalizedEmail(email: string | null): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function ownsSubcollections(path: string): boolean {
+  const segments = path.split("/");
+  const collection = segments[segments.length - 2];
+  return collection !== undefined && SUBCOLLECTION_OWNING_COLLECTIONS.has(collection);
+}
+
+async function deleteLeafRefs(db: ErasureFirestore, refs: DocumentReference[]): Promise<void> {
+  if (refs.length === 0) return;
+  const writer = db.bulkWriter();
+  writer.onWriteError((error) =>
+    RETRYABLE_LEAF_DELETE_CODES.has(error.code)
+    && error.failedAttempts < MAX_LEAF_DELETE_ATTEMPTS);
+  const settled = Promise.allSettled(refs.map((ref) => writer.delete(ref)));
+  await writer.close();
+  const failures = (await settled).filter((result) => result.status === "rejected");
+  const first = failures[0];
+  if (!first) return;
+  throw new Error(
+    `customer erasure: ${failures.length} of ${refs.length} reference deletes failed — `
+    + `${first.reason instanceof Error ? first.reason.message : String(first.reason)}`,
+    { cause: first.reason },
+  );
+}
+
 export async function eraseCustomerFirestore(
   db: ErasureFirestore,
   uid: string,
@@ -190,7 +236,8 @@ export async function eraseCustomerFirestore(
   currentOperationId: string,
 ): Promise<void> {
   const normalized = normalizedEmail(email);
-  const refs = customerRootRefs(db, uid, slug, normalized);
+  const roots = customerRootRefs(db, uid, slug, normalized);
+  const refs: DocumentReference[] = [...roots];
   const [references, arrays, emailArrays] = await Promise.all([
     referenceDocs(db, uid, slug, normalized),
     arrayReferenceDocs(db, uid),
@@ -204,8 +251,17 @@ export async function eraseCustomerFirestore(
     refs.push(doc.ref);
   }
   for (const doc of emailArrays) refs.push(doc.ref);
+  const rootPaths = new Set(roots.map((ref) => ref.path));
   const uniqueRefs = new Map(refs.map((ref) => [ref.path, ref]));
-  for (const ref of uniqueRefs.values()) await db.recursiveDelete(ref);
+  const leafRefs: DocumentReference[] = [];
+  for (const [path, ref] of uniqueRefs) {
+    if (rootPaths.has(path) || ownsSubcollections(path)) {
+      await db.recursiveDelete(ref);
+      continue;
+    }
+    leafRefs.push(ref);
+  }
+  await deleteLeafRefs(db, leafRefs);
 }
 
 export async function verifyCustomerFirestoreErasure(

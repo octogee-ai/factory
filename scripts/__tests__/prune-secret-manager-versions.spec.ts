@@ -41,7 +41,7 @@ esac
 set -euo pipefail
 printf 'gcloud %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2 $3" in
-  "secrets list --project=octogee")
+  "secrets list --project="*)
     printf '%s\\n' '[{"name":"projects/octogee/secrets/alpha"},{"name":"projects/octogee/secrets/beta"},{"name":"projects/octogee/secrets/byok-builder-openai","labels":{"uid":"builder-uid"}},{"name":"projects/octogee/secrets/byosub-builder-openai"},{"name":"projects/octogee/secrets/gateway-model-key-builder","labels":{"octogee_kind":"gateway_model_key"}}]'
     ;;
   "secrets versions list")
@@ -162,7 +162,42 @@ describe("Secret Manager version pruning", () => {
     const result = runPruner({ project: "other" });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Project must be octogee, octogee-data-test, or octogee-data-prod");
+    expect(result.stderr).toContain(
+      "Project must be octogee, octogee-test, octogee-data-test, or octogee-data-prod",
+    );
     expect(result.calls).toEqual([]);
+  });
+
+  it("prunes the octogee-test data project", () => {
+    const dryRun = runPruner({ project: "octogee-test" });
+    const applied = runPruner({ project: "octogee-test", apply: true });
+
+    expect(dryRun.status, dryRun.stderr).toBe(0);
+    expect(JSON.parse(dryRun.stdout)).toMatchObject({ project: "octogee-test", mode: "dry-run" });
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(applied.calls.filter((call) => call.includes("versions destroy"))).toHaveLength(2);
+    expect(JSON.parse(applied.stdout)).toMatchObject({
+      project: "octogee-test",
+      mode: "apply",
+      destroyedVersions: 2,
+      cleanup: "verified",
+    });
+  });
+
+  it("derives the confirmation string from the octogee-test project", () => {
+    const result = runPruner({ project: "octogee-test", apply: true, confirmation: "octogee/secret-versions/octogee" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("requires --confirm=octogee/secret-versions/octogee-test");
+    expect(result.calls).toEqual([]);
+  });
+
+  it("still accepts the previously allowed platform projects", () => {
+    for (const project of ["octogee", "octogee-data-test", "octogee-data-prod"]) {
+      const result = runPruner({ project });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ project, mode: "dry-run" });
+    }
   });
 });

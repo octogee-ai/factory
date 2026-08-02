@@ -55,7 +55,9 @@ import {
   revisionHeartbeatMerge,
   readHeartbeatLiveness,
   readMountedCustomers,
+  heartbeatMergeIsRedundant,
   heartbeatTeardownAction,
+  HEARTBEAT_FIELD,
   LEGACY_HEARTBEAT_FIELDS,
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
@@ -724,6 +726,32 @@ async function readDurableRuntimeGateways(db: Firestore): Promise<DurableRuntime
   };
 }
 
+// A targeted pass converges named gateways, so it reads named documents. The
+// stray/invalid assertions still run, bounded to the documents actually read;
+// whole-fleet assertions stay with the full pass.
+export async function readTargetedDurableRuntimeGateways(
+  db: Firestore,
+  gatewayIds: readonly string[],
+): Promise<DurableRuntimeState> {
+  const ids = [...new Set(gatewayIds)];
+  if (ids.length === 0) {
+    return { gateways: [], runtimeDocs: [], invalidRootIds: [], strayGlmDocIds: [] };
+  }
+  const [rootSnaps, glmSnaps] = await Promise.all([
+    db.getAll(...ids.map((id) => db.collection(GATEWAYS_COLLECTION).doc(id))),
+    db.getAll(...ids.map((id) => db.collection(GLM_GATEWAYS_COLLECTION).doc(id))),
+  ]);
+  const roots = collectDurableRuntimeRoots(rootSnaps.filter((snap) => snap.exists));
+  const glm = classifyDurableRuntimeGlmDocs(
+    glmSnaps.filter((snap) => snap.exists),
+    roots.gateways,
+  );
+  return {
+    ...roots,
+    ...glm,
+  };
+}
+
 function assertDurableRuntimeState(state: DurableRuntimeState): void {
   if (state.invalidRootIds.length > 0) {
     throw new Error(
@@ -902,12 +930,14 @@ export async function refineGatewayConvergenceAction(input: {
   });
 }
 
-async function runGatewayConvergencePass(
+export async function runGatewayConvergencePass(
   passDeps: GatewayConvergencePassDeps,
   gatewayIds?: readonly string[],
 ): Promise<void> {
   const { db, helm, log } = passDeps;
-  const state = await readDurableRuntimeGateways(db);
+  const state = gatewayIds
+    ? await readTargetedDurableRuntimeGateways(db, gatewayIds)
+    : await readDurableRuntimeGateways(db);
   assertDurableRuntimeState(state);
   const runtimeById = new Map(state.runtimeDocs.map((doc) => [doc.gatewayId, doc]));
   const failures: string[] = [];
@@ -1226,7 +1256,7 @@ function reconcileFingerprintStableStringify(v: unknown): string {
 }
 
 function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
-  const { heartbeat, kubernetes, ...rest } = data;
+  const { heartbeat, kubernetes, helm, ...rest } = data;
   const heartbeatRecord =
     heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
       ? heartbeat as Record<string, unknown>
@@ -1236,6 +1266,12 @@ function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
       ? { ...kubernetes as Record<string, unknown> }
       : {};
   delete kubernetesRecord.observedAt;
+  const helmRecord =
+    helm !== null && typeof helm === "object" && !Array.isArray(helm)
+      ? { ...helm as Record<string, unknown> }
+      : {};
+  delete helmRecord.lastAppliedAt;
+  delete helmRecord.availableReplicas;
   return reconcileFingerprintStableStringify({
     ...rest,
     heartbeat: {
@@ -1243,7 +1279,16 @@ function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
       version: heartbeatRecord.version,
     },
     kubernetes: kubernetesRecord,
+    helm: helmRecord,
   });
+}
+
+// Root lastError is a gateway pod's self-report, not desired state, and it churns
+// for as long as a customer mount keeps failing. updatedAt/updatedBy stay in the
+// fingerprint: they are the durable migration fence (rootUpdatedAt).
+function rootReconcileRelevantFingerprint(data: Record<string, unknown>): string {
+  const { lastError: _lastError, ...rest } = data;
+  return reconcileRelevantFingerprint(rest);
 }
 
 interface ReconcileSnapshotDocChange {
@@ -1263,9 +1308,24 @@ export function snapshotHasReconcileRelevantChange(
   return snapshotReconcileRelevantGatewayIds(changes, fingerprints).length > 0;
 }
 
+export function snapshotHasReconcileRelevantRootChange(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+): boolean {
+  return changedGatewayIds(changes, fingerprints, rootReconcileRelevantFingerprint).length > 0;
+}
+
 export function snapshotReconcileRelevantGatewayIds(
   changes: ReadonlyArray<ReconcileSnapshotDocChange>,
   fingerprints: Map<string, string>,
+): string[] {
+  return changedGatewayIds(changes, fingerprints, reconcileRelevantFingerprint);
+}
+
+function changedGatewayIds(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+  fingerprint: (data: Record<string, unknown>) => string,
 ): string[] {
   const gatewayIds = new Set<string>();
   for (const change of changes) {
@@ -1274,7 +1334,7 @@ export function snapshotReconcileRelevantGatewayIds(
       gatewayIds.add(change.doc.id);
       continue;
     }
-    const fp = reconcileRelevantFingerprint(change.doc.data());
+    const fp = fingerprint(change.doc.data());
     if (fingerprints.get(change.doc.id) !== fp) gatewayIds.add(change.doc.id);
     fingerprints.set(change.doc.id, fp);
   }
@@ -1382,7 +1442,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
     (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
       if (stopped) return;
       const changes = snap?.docChanges?.();
-      if (!changes || snapshotHasReconcileRelevantChange(changes, rootFingerprints)) {
+      if (!changes || snapshotHasReconcileRelevantRootChange(changes, rootFingerprints)) {
         scheduleDebouncedTick();
       }
     },
@@ -1877,10 +1937,16 @@ async function runClaimedOperation(
 function buildHeartbeatPollerCoreDeps(
   db: Firestore,
   log: (msg: string) => void,
-  listGatewayIds: () => Promise<string[]>,
+  listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
 ): Omit<OperatorHeartbeatPollerDeps, "evictSlug"> {
+  const polledHeartbeats = new Map<string, unknown>();
   return {
-    listGatewayIds,
+    listGatewayIds: async () => {
+      const docs = await listGatewayDocs();
+      polledHeartbeats.clear();
+      for (const doc of docs) polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
+      return heartbeatPollInstanceIds(docs);
+    },
     fetchHealth: async (gatewayId) => {
       const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
       const controller = new AbortController();
@@ -1907,9 +1973,14 @@ function buildHeartbeatPollerCoreDeps(
       // flat write recreates the heartbeat fields the identity backfill refuses
       // on, blocking it forever. Out-of-lane readers read the heartbeat sub-doc.
       const lastHeartbeatAt = FieldValue.serverTimestamp();
-      const batch = db.batch();
       const merge = revisionHeartbeatMerge(record, lastHeartbeatAt);
       merge.heartbeat.internalUrl = gatewayServiceInternalUrl(gatewayId);
+      if (
+        heartbeatMergeIsRedundant(polledHeartbeats.get(gatewayId), merge.heartbeat, Date.now())
+      ) {
+        return;
+      }
+      const batch = db.batch();
       batch.set(
         db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId),
         merge,
@@ -1929,7 +2000,7 @@ export function buildOperatorHeartbeatPollerDeps(
   return {
     ...buildHeartbeatPollerCoreDeps(db, log, async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-      return heartbeatPollInstanceIds(snap.docs);
+      return snap.docs;
     }),
     evictSlug: async (gatewayId: string, slug: string) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();

@@ -65,6 +65,57 @@ export function revisionHeartbeatMerge(
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 
+// Must stay a poll interval inside GATEWAY_UNREACHABLE_AFTER_MS.
+export const HEARTBEAT_REFRESH_MS = 120_000;
+
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function withoutPollerStamps(heartbeat: Record<string, unknown>): Record<string, unknown> {
+  const comparable: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(heartbeat)) {
+    if (field === "lastHeartbeatAt") continue;
+    const configStatus = field === "configStatus" ? plainRecord(value) : null;
+    comparable[field] = configStatus
+      ? Object.fromEntries(
+        Object.entries(configStatus).filter(([marker]) => marker !== "observedAt"),
+      )
+      : value;
+  }
+  return comparable;
+}
+
+function alreadyStored(stored: unknown, candidate: unknown): boolean {
+  if (Array.isArray(candidate)) {
+    return Array.isArray(stored) &&
+      stored.length === candidate.length &&
+      candidate.every((item, index) => alreadyStored(stored[index], item));
+  }
+  const candidateRecord = plainRecord(candidate);
+  if (!candidateRecord) return Object.is(stored, candidate);
+  const storedRecord = plainRecord(stored);
+  return storedRecord !== null &&
+    Object.entries(candidateRecord).every(
+      ([field, value]) => alreadyStored(storedRecord[field], value),
+    );
+}
+
+export function heartbeatMergeIsRedundant(
+  stored: unknown,
+  candidate: Record<string, unknown>,
+  now: number,
+): boolean {
+  const current = plainRecord(stored);
+  if (!current) return false;
+  const lastHeartbeatAt = coerceMillis(current.lastHeartbeatAt);
+  if (lastHeartbeatAt === null) return false;
+  if (lastHeartbeatAt > now || now - lastHeartbeatAt >= HEARTBEAT_REFRESH_MS) return false;
+  return alreadyStored(withoutPollerStamps(current), withoutPollerStamps(candidate));
+}
+
 function heartbeatSubDoc(glmData: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   const hb = glmData?.[HEARTBEAT_FIELD];
   return hb && typeof hb === "object" && !Array.isArray(hb) ? (hb as Record<string, unknown>) : undefined;

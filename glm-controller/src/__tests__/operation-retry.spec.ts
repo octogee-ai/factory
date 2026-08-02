@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   MAX_OPERATION_ATTEMPTS,
   MAX_OPERATION_ATTEMPT_HISTORY,
+  OPERATION_JOURNAL_RETENTION_MS,
   buildOperationCompletionUpdate,
   classifyOperationFailure,
   retryBackoffMs,
@@ -173,6 +174,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update).toEqual({
       status: "succeeded",
       completedAt: now,
+      expireAt: Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS),
       attempts: 1,
       steps: [{ name: "spawn-green", status: "done" }],
       error: FieldValue.delete(),
@@ -181,6 +183,42 @@ describe("buildOperationCompletionUpdate", () => {
       waitingOn: FieldValue.delete(),
       output: FieldValue.delete(),
     });
+  });
+
+  it("stamps a 30-day TTL twin on every terminal journal row", () => {
+    const succeeded = buildOperationCompletionUpdate({
+      op: { attempts: 0, attemptHistory: [] },
+      result: { steps: [], success: true },
+      steps: [],
+      now,
+    });
+    const failed = buildOperationCompletionUpdate({
+      op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
+      result: { steps: [], success: false, error: "missing gatewayId in op.input" },
+      steps: [],
+      now,
+    });
+
+    expect(failed.status).toBe("failed");
+    expect(OPERATION_JOURNAL_RETENTION_MS).toBe(30 * 24 * 60 * 60_000);
+    for (const update of [succeeded, failed]) {
+      expect(update.expireAt).toBeInstanceOf(Timestamp);
+      expect((update.expireAt as Timestamp).toMillis()).toBe(
+        now + OPERATION_JOURNAL_RETENTION_MS,
+      );
+    }
+  });
+
+  it("clears a stale TTL twin when a transient failure requeues the operation", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { attempts: 1, attemptHistory: [] },
+      result: { steps: [], success: false, error: "context deadline exceeded" },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.expireAt).toEqual(FieldValue.delete());
   });
 
   it("atomically scrubs identifying operation input only on verified success", () => {

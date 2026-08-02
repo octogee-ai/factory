@@ -1,4 +1,4 @@
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type {
   CustomerMigrationV2State,
   OperationAttemptRecord,
@@ -50,6 +50,15 @@ export function classifyOperationFailure(
 
 export const MAX_OPERATION_ATTEMPTS = 3;
 export const MAX_OPERATION_ATTEMPT_HISTORY = 20;
+
+// `completedAt` is a plain epoch number, which a native Firestore TTL policy
+// cannot read; `expireAt` is its Timestamp twin. Terminal rows only — a row that
+// can still change must never carry an expiry.
+export const OPERATION_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+function journalExpiry(now: number): Timestamp {
+  return Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS);
+}
 
 const RETRY_BACKOFF_MS_BY_ATTEMPT: Readonly<Record<number, number>> = {
   1: 30_000,
@@ -143,6 +152,7 @@ function successfulCompletion(
   return {
     status: "succeeded",
     completedAt: input.now,
+    expireAt: journalExpiry(input.now),
     attempts,
     steps: persistedSteps,
     error: FieldValue.delete(),
@@ -228,6 +238,7 @@ function pendingCompletion(
     status: "pending",
     startedAt: null,
     steps: [],
+    expireAt: FieldValue.delete(),
     attempts,
     attemptHistory: failure.attemptHistory,
     nextAttemptAt: input.now + backoffMs,
@@ -246,6 +257,7 @@ function failedCompletion(
   return {
     status: "failed",
     completedAt: input.now,
+    expireAt: journalExpiry(input.now),
     attempts,
     attemptHistory: failure.attemptHistory,
     steps: persistedSteps,

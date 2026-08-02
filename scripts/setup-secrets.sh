@@ -156,6 +156,90 @@ sm_get() {
   gcloud secrets versions access latest --secret="$1" --project="${2:-$SM_PROJECT}" 2>/dev/null || echo ""
 }
 
+secret_manager_destroy_superseded_versions() {
+  local name="$1" project="$2"
+  local listing version state newest=0 newest_state="" failures=0
+  listing="$(mktemp)"
+  if ! gcloud secrets versions list "$name" --project="$project" --format='value(name,state)' >"$listing"; then
+    rm -f "$listing"
+    printf 'Could not list Secret Manager versions for %s/%s\n' "$project" "$name" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r version state || [[ -n "$version" ]]; do
+    version="${version##*/}"
+    if [[ ! "$version" =~ ^[0-9]+$ || "$state" == "DESTROYED" ]]; then
+      continue
+    fi
+    if (( version > newest )); then
+      newest="$version"
+      newest_state="$state"
+    fi
+  done <"$listing"
+  if [[ "$newest_state" != "ENABLED" ]]; then
+    rm -f "$listing"
+    printf 'Refusing to prune %s/%s: newest live version is %s\n' "$project" "$name" "${newest_state:-absent}" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r version state || [[ -n "$version" ]]; do
+    version="${version##*/}"
+    if [[ ! "$version" =~ ^[0-9]+$ || "$state" == "DESTROYED" ]]; then
+      continue
+    fi
+    if (( version >= newest )); then
+      continue
+    fi
+    if ! gcloud secrets versions destroy "$version" --secret="$name" --project="$project" --quiet >/dev/null; then
+      printf 'Failed to destroy superseded Secret Manager version %s/%s/%s\n' "$project" "$name" "$version" >&2
+      failures=$((failures + 1))
+    fi
+  done <"$listing"
+  rm -f "$listing"
+  if (( failures > 0 )); then
+    return 1
+  fi
+  return 0
+}
+
+secret_manager_persist_version_file() {
+  local name="$1" file="$2" project="$3"
+  local current
+  if ! gcloud secrets describe "$name" --project="$project" >/dev/null 2>&1; then
+    if ! gcloud secrets create "$name" --data-file="$file" --project="$project" \
+      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null; then
+      printf 'Could not create Secret Manager secret %s/%s\n' "$project" "$name" >&2
+      return 1
+    fi
+    return 0
+  fi
+  current="$(mktemp)"
+  chmod 600 "$current"
+  if gcloud secrets versions access latest --secret="$name" --project="$project" >"$current" 2>/dev/null \
+    && cmp -s "$current" "$file"; then
+    rm -f "$current"
+    return 0
+  fi
+  rm -f "$current"
+  if ! gcloud secrets versions add "$name" --data-file="$file" --project="$project" --quiet >/dev/null; then
+    printf 'Could not add Secret Manager version for %s/%s\n' "$project" "$name" >&2
+    return 1
+  fi
+  if ! secret_manager_destroy_superseded_versions "$name" "$project"; then
+    printf 'Superseded Secret Manager versions remain for %s/%s\n' "$project" "$name" >&2
+  fi
+  return 0
+}
+
+secret_manager_persist_value() {
+  local name="$1" value="$2" project="$3"
+  local payload status=0
+  payload="$(mktemp)"
+  chmod 600 "$payload"
+  printf '%s' "$value" >"$payload"
+  secret_manager_persist_version_file "$name" "$payload" "$project" || status=$?
+  rm -f "$payload"
+  return "$status"
+}
+
 sync_secret_manager_value() {
   local name="$1"
   local value="$2"
@@ -179,9 +263,7 @@ sync_secret_manager_value() {
       ok "Secret Manager: $name"
       ;;
     absent)
-      printf '%s' "$value" | gcloud secrets create "$name" \
-        --data-file=- --project="$project" \
-        --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null \
+      secret_manager_persist_value "$name" "$value" "$project" \
         || fail "Could not create absent Secret Manager value: $name"
       ok "Secret Manager: $name"
       ;;
@@ -355,16 +437,8 @@ AGENT_CONTROL_SIGNING_SECRET=$(sm_get "$AGENT_CONTROL_SIGNING_SM_KEY" octogee 2>
 if [[ -z "$AGENT_CONTROL_SIGNING_SECRET" ]]; then
   AGENT_CONTROL_SIGNING_SECRET=$(openssl rand -hex 32)
   info "  Generated new agent-control-signing secret — saving to Secret Manager..."
-  if echo -n "$AGENT_CONTROL_SIGNING_SECRET" | gcloud secrets create "$AGENT_CONTROL_SIGNING_SM_KEY" \
-       --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
-    :
-  else
-    # Already exists — add a new version so we can read it back next run.
-    echo -n "$AGENT_CONTROL_SIGNING_SECRET" | gcloud secrets versions add "$AGENT_CONTROL_SIGNING_SM_KEY" \
-      --data-file=- --project=octogee \
-      || fail "Could not persist agent-control-signing secret to Secret Manager (key=${AGENT_CONTROL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
-  fi
+  secret_manager_persist_value "$AGENT_CONTROL_SIGNING_SM_KEY" "$AGENT_CONTROL_SIGNING_SECRET" octogee \
+    || fail "Could not persist agent-control-signing secret to Secret Manager (key=${AGENT_CONTROL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
 ksecret agent-control-signing --from-literal=secret="$AGENT_CONTROL_SIGNING_SECRET"
 
@@ -376,15 +450,8 @@ AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" octogee 2>/d
 if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
   AGENT_CONTROL_ROUTER_SECRET=$(openssl rand -hex 32)
   info "  Generated new agent-control-router secret — saving to Secret Manager..."
-  if echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets create "$AGENT_CONTROL_ROUTER_SM_KEY" \
-       --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
-    :
-  else
-    echo -n "$AGENT_CONTROL_ROUTER_SECRET" | gcloud secrets versions add "$AGENT_CONTROL_ROUTER_SM_KEY" \
-      --data-file=- --project=octogee \
-      || fail "Could not persist agent-control-router secret to Secret Manager (key=${AGENT_CONTROL_ROUTER_SM_KEY})."
-  fi
+  secret_manager_persist_value "$AGENT_CONTROL_ROUTER_SM_KEY" "$AGENT_CONTROL_ROUTER_SECRET" octogee \
+    || fail "Could not persist agent-control-router secret to Secret Manager (key=${AGENT_CONTROL_ROUTER_SM_KEY})."
 fi
 ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET"
 
@@ -396,15 +463,8 @@ BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" octogee 2>/dev/n
 if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
   BYOT_SYNC_INTERNAL_SECRET=$(openssl rand -hex 32)
   info "  Generated new BYOT sync signing secret — saving to Secret Manager..."
-  if echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets create "$BYOT_SYNC_INTERNAL_SM_KEY" \
-       --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
-    :
-  else
-    echo -n "$BYOT_SYNC_INTERNAL_SECRET" | gcloud secrets versions add "$BYOT_SYNC_INTERNAL_SM_KEY" \
-      --data-file=- --project=octogee \
-      || fail "Could not persist BYOT sync signing secret to Secret Manager (key=${BYOT_SYNC_INTERNAL_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
-  fi
+  secret_manager_persist_value "$BYOT_SYNC_INTERNAL_SM_KEY" "$BYOT_SYNC_INTERNAL_SECRET" octogee \
+    || fail "Could not persist BYOT sync signing secret to Secret Manager (key=${BYOT_SYNC_INTERNAL_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
 ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET"
 
@@ -415,11 +475,8 @@ GITEA_ADMIN_PASS=$(sm_get "$GITEA_ADMIN_PASSWORD_SM_KEY" octogee 2>/dev/null || 
 if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   GITEA_ADMIN_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
   info "  Generated new Gitea admin password — saving to Secret Manager..."
-  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets create "$GITEA_ADMIN_PASSWORD_SM_KEY" \
-    --data-file=- --project=octogee \
-    --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
-  echo -n "$GITEA_ADMIN_PASS" | gcloud secrets versions add "$GITEA_ADMIN_PASSWORD_SM_KEY" \
-    --data-file=- --project=octogee 2>/dev/null || true
+  secret_manager_persist_value "$GITEA_ADMIN_PASSWORD_SM_KEY" "$GITEA_ADMIN_PASS" octogee \
+    || warn "  Could not persist Gitea admin password to Secret Manager (key=${GITEA_ADMIN_PASSWORD_SM_KEY})"
 fi
 ksecret gitea-admin \
   --from-literal=username="octogee-admin" \
@@ -499,16 +556,8 @@ if [[ -z "$OPENAI_API_KEY" ]]; then
 fi
 if [[ -n "$OPENAI_API_KEY" ]]; then
   if [[ "$OPENAI_API_KEY_SOURCE" == "env" ]]; then
-    if gcloud secrets describe OPENAI_API_KEY --project="$FIREBASE_PROJECT" >/dev/null 2>&1; then
-      echo -n "$OPENAI_API_KEY" | gcloud secrets versions add OPENAI_API_KEY \
-        --data-file=- \
-        --project="$FIREBASE_PROJECT" >/dev/null
-    else
-      echo -n "$OPENAI_API_KEY" | gcloud secrets create OPENAI_API_KEY \
-        --data-file=- \
-        --project="$FIREBASE_PROJECT" \
-        --replication-policy=user-managed --locations="$TARGET_REGION" >/dev/null
-    fi
+    secret_manager_persist_value OPENAI_API_KEY "$OPENAI_API_KEY" "$FIREBASE_PROJECT" \
+      || fail "Could not persist OPENAI_API_KEY to Secret Manager ($FIREBASE_PROJECT)"
   fi
   ok "Secret Manager: OPENAI_API_KEY"
   # The llm-broker's platform-openai provider rides the same key (gpt-5.4-mini
@@ -648,15 +697,8 @@ CONNECT_STATE_SECRET=$(sm_get "$CONNECT_STATE_SM_KEY" octogee 2>/dev/null || ech
 if [[ -z "$CONNECT_STATE_SECRET" ]]; then
   CONNECT_STATE_SECRET=$(openssl rand -hex 32)
   info "  Generated new connect-state secret — saving to Secret Manager..."
-  if echo -n "$CONNECT_STATE_SECRET" | gcloud secrets create "$CONNECT_STATE_SM_KEY" \
-       --data-file=- --project=octogee \
-       --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null; then
-    :
-  else
-    echo -n "$CONNECT_STATE_SECRET" | gcloud secrets versions add "$CONNECT_STATE_SM_KEY" \
-      --data-file=- --project=octogee \
-      || fail "Could not persist connect-state secret to Secret Manager (key=${CONNECT_STATE_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
-  fi
+  secret_manager_persist_value "$CONNECT_STATE_SM_KEY" "$CONNECT_STATE_SECRET" octogee \
+    || fail "Could not persist connect-state secret to Secret Manager (key=${CONNECT_STATE_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
 ksecret connect-state-secret --from-literal=secret="$CONNECT_STATE_SECRET"
 
@@ -671,21 +713,13 @@ if [[ -z "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" ]]; then
   if [[ -n "$EXISTING_MODEL_ISSUER" ]]; then
     info "  Reusing existing GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN from K8s, back-filling Secret Manager"
     GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN="$EXISTING_MODEL_ISSUER"
-    echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
-      --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null || \
-    echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
-      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+    secret_manager_persist_value "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$FIREBASE_PROJECT" \
+      || warn "  Could not back-fill GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN into Secret Manager"
   else
     GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN=$(openssl rand -hex 32)
     info "  First install — generating GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN, saving to Secret Manager ($FIREBASE_PROJECT)"
-    if echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets create "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
-         --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null; then
-      ok "  Created SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
-    elif echo -n "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" | gcloud secrets versions add "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" \
-         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
-      ok "  Updated SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
+    if secret_manager_persist_value "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$FIREBASE_PROJECT"; then
+      ok "  Saved SM secret: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN"
     else
       warn "  Could not persist to SM — key only in K8s this run; re-run to persist"
     fi
@@ -717,21 +751,13 @@ if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
   if [[ -n "$EXISTING_SNB" ]]; then
     info "  Reusing existing social bearer from K8s, back-filling Secret Manager"
     SOCIAL_NOTIFICATION_BEARER="$EXISTING_SNB"
-    echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
-      --data-file=- --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null || \
-    echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
-      --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null || true
+    secret_manager_persist_value "SOCIAL_NOTIFICATION_BEARER_TOKEN" "$SOCIAL_NOTIFICATION_BEARER" "$FIREBASE_PROJECT" \
+      || warn "  Could not back-fill SOCIAL_NOTIFICATION_BEARER_TOKEN into Secret Manager"
   else
     SOCIAL_NOTIFICATION_BEARER=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 40)
     info "  First install — generating social bearer, saving to Secret Manager ($FIREBASE_PROJECT)"
-    if echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets create "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
-         --data-file=- --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations="$TARGET_REGION" --quiet 2>/dev/null; then
-      ok "  Created SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
-    elif echo -n "$SOCIAL_NOTIFICATION_BEARER" | gcloud secrets versions add "SOCIAL_NOTIFICATION_BEARER_TOKEN" \
-         --data-file=- --project="$FIREBASE_PROJECT" --quiet 2>/dev/null; then
-      ok "  Updated SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
+    if secret_manager_persist_value "SOCIAL_NOTIFICATION_BEARER_TOKEN" "$SOCIAL_NOTIFICATION_BEARER" "$FIREBASE_PROJECT"; then
+      ok "  Saved SM secret: SOCIAL_NOTIFICATION_BEARER_TOKEN"
     else
       warn "  Could not persist to SM — bearer only in K8s this run; re-run to persist"
     fi
@@ -769,14 +795,9 @@ info "octogee-fleet-controller (fleet controller Ed25519 keypair)"
 
 persist_sm_file() {
   local name="$1" file="$2"
-  if gcloud secrets describe "$name" --project="$FIREBASE_PROJECT" >/dev/null 2>&1; then
-    gcloud secrets versions add "$name" --data-file="$file" --project="$FIREBASE_PROJECT" --quiet >/dev/null
-    ok "  Updated SM secret: $name"
-  else
-    gcloud secrets create "$name" --data-file="$file" --project="$FIREBASE_PROJECT" \
-      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null
-    ok "  Created SM secret: $name"
-  fi
+  secret_manager_persist_version_file "$name" "$file" "$FIREBASE_PROJECT" \
+    || fail "Could not persist Secret Manager secret: $name"
+  ok "  Persisted SM secret: $name"
 }
 
 FLEET_PRIVATE_TMP=$(mktemp)
@@ -855,11 +876,7 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
     # detects this exact string and rejects it with `empty-token` so the
     # bootstrap window surfaces as a clean 503 instead of a doomed
     # auth-failed dance.
-    if echo -n "placeholder-awaiting-gateway-boot" | gcloud secrets create "$SECRET_NAME" \
-         --data-file=- \
-         --project="$FIREBASE_PROJECT" \
-         --replication-policy=user-managed --locations="$TARGET_REGION" \
-         --quiet 2>/dev/null; then
+    if secret_manager_persist_value "$SECRET_NAME" "placeholder-awaiting-gateway-boot" "$FIREBASE_PROJECT"; then
       ok "  Created SM secret: $SECRET_NAME (placeholder)"
     else
       warn "  Could not create $SECRET_NAME"
@@ -1003,30 +1020,15 @@ function_secret_value() {
 }
 
 sync_function_secret() {
-  local secret="$1" configured="$2" current
-  if gcloud secrets describe "$secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
-    if [[ -z "$configured" ]]; then
-      info "  $secret already exists in SM ($SM_PROJECT_CF)"
-      return 0
-    fi
-    current="$(sm_get "$secret" "$SM_PROJECT_CF" 2>/dev/null || echo "")"
-    if [[ "$current" == "$configured" ]]; then
-      info "  $secret already configured in SM ($SM_PROJECT_CF)"
-      return 0
-    fi
-    printf '%s' "$configured" | gcloud secrets versions add "$secret" \
-      --data-file=- --project="$SM_PROJECT_CF" --quiet >/dev/null
-    ok "  Updated SM secret: $secret"
+  local secret="$1" configured="$2"
+  if [[ -z "$configured" ]] && gcloud secrets describe "$secret" --project="$SM_PROJECT_CF" >/dev/null 2>&1; then
+    info "  $secret already exists in SM ($SM_PROJECT_CF)"
     return 0
   fi
 
   [[ -n "$configured" ]] || configured="placeholder"
-  printf '%s' "$configured" | gcloud secrets create "$secret" \
-    --data-file=- \
-    --project="$SM_PROJECT_CF" \
-    --replication-policy=user-managed --locations="$TARGET_REGION" \
-    --quiet >/dev/null
-  ok "  Created SM secret: $secret"
+  secret_manager_persist_value "$secret" "$configured" "$SM_PROJECT_CF" || return 1
+  ok "  Synced SM secret: $secret"
 }
 
 # Full list of all defineSecret() references in Cloud Functions — must exist before firebase deploy

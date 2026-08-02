@@ -73,6 +73,7 @@ export interface HttpServerDeps {
   ) => Promise<Record<string, GatewayPodDiagnostics>>;
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
+  fleetEventListenerLingerMs?: number;
 }
 
 function adaptLogger(log: (msg: string) => void): FleetLogger {
@@ -91,7 +92,117 @@ function writeSseEvent(res: Response, event: string, data: Record<string, unknow
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
+// A dropped SSE stream (LB idle timeout, tab reconnect) must not re-buy the
+// initial snapshot of every watched collection: watchers are shared across all
+// connections and outlive the last one by lingerMs.
+const FLEET_EVENT_LINGER_MS_DEFAULT = 10 * 60_000;
+
+const ACTIVE_OPERATION_STATUSES = ["pending", "running"] as const;
+
+type FleetEvent =
+  | { kind: "changed"; collection: string; at: number }
+  | { kind: "error"; collection: string; error: string };
+
+interface FleetEventHub {
+  subscribe(handler: (event: FleetEvent) => void): () => void;
+}
+
+interface FleetEventWatchTarget {
+  onSnapshot(
+    next: (snap: unknown) => void,
+    onError: (err: unknown) => void,
+  ): () => void;
+}
+
+function createFleetEventHub(deps: {
+  db: Firestore;
+  log: (msg: string) => void;
+  lingerMs: number;
+}): FleetEventHub {
+  const subscribers = new Set<(event: FleetEvent) => void>();
+  const primed = new Set<string>();
+  let unsubscribes: Array<() => void> | null = null;
+  let lingerTimer: NodeJS.Timeout | null = null;
+
+  const emit = (event: FleetEvent) => {
+    for (const subscriber of [...subscribers]) subscriber(event);
+  };
+
+  const watch = (collection: string, target: FleetEventWatchTarget) =>
+    target.onSnapshot(
+      () => {
+        if (!primed.has(collection)) {
+          primed.add(collection);
+          return;
+        }
+        emit({ kind: "changed", collection, at: Date.now() });
+      },
+      (err) => {
+        deps.log(
+          `[glm-controller] fleet event watch failed collection=${collection}: ${
+            (err as Error)?.message ?? String(err)
+          }`,
+        );
+        emit({
+          kind: "error",
+          collection,
+          error: (err as Error)?.message ?? "watch failed",
+        });
+      },
+    );
+
+  const ensureWatchers = () => {
+    if (unsubscribes) return;
+    primed.clear();
+    unsubscribes = [
+      watch("users", deps.db.collection("users")),
+      watch("gateways", deps.db.collection("gateways")),
+      watch("config", deps.db.collection("config")),
+      watch(GLM_GATEWAYS_COLLECTION, deps.db.collection(GLM_GATEWAYS_COLLECTION)),
+      watch(
+        GLM_OPERATIONS_COLLECTION,
+        deps.db
+          .collection(GLM_OPERATIONS_COLLECTION)
+          .where("status", "in", [...ACTIVE_OPERATION_STATUSES]),
+      ),
+    ];
+  };
+
+  const teardown = () => {
+    for (const unsubscribe of unsubscribes ?? []) unsubscribe();
+    unsubscribes = null;
+    primed.clear();
+  };
+
+  return {
+    subscribe(handler) {
+      if (lingerTimer) {
+        clearTimeout(lingerTimer);
+        lingerTimer = null;
+      }
+      subscribers.add(handler);
+      ensureWatchers();
+      return () => {
+        subscribers.delete(handler);
+        if (subscribers.size > 0 || lingerTimer) return;
+        if (deps.lingerMs <= 0) {
+          teardown();
+          return;
+        }
+        lingerTimer = setTimeout(() => {
+          lingerTimer = null;
+          if (subscribers.size === 0) teardown();
+        }, deps.lingerMs);
+        lingerTimer.unref?.();
+      };
+    },
+  };
+}
+
+function addAdminFleetEventRoute(
+  router: Router,
+  hub: FleetEventHub,
+): void {
   router.get("/fleet-events", (req: Request, res: Response) => {
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream");
@@ -101,8 +212,7 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
     res.flushHeaders?.();
 
     let closed = false;
-    const primed = new Set<string>();
-    const unsubscribes: Array<() => void> = [];
+    let unsubscribe: () => void = () => undefined;
     const closeAfterFirstChange = req.query.once === "1";
     const keepalive = setInterval(() => {
       if (!closed) res.write(": keepalive\n\n");
@@ -111,45 +221,20 @@ function addAdminFleetEventRoute(router: Router, deps: HttpServerDeps): void {
       if (closed) return;
       closed = true;
       clearInterval(keepalive);
-      for (const unsubscribe of unsubscribes) unsubscribe();
+      unsubscribe();
       res.end();
     };
 
-    const watch = (collection: string) => {
-      const unsubscribe = deps.db.collection(collection).onSnapshot(
-        () => {
-          if (closed) return;
-          if (!primed.has(collection)) {
-            primed.add(collection);
-            return;
-          }
-          writeSseEvent(res, "changed", { collection, at: Date.now() });
-          if (closeAfterFirstChange) close();
-        },
-        (err) => {
-          deps.log(
-            `[glm-controller] fleet event watch failed collection=${collection}: ${
-              (err as Error)?.message ?? String(err)
-            }`,
-          );
-          if (!closed) {
-            writeSseEvent(res, "error", {
-              collection,
-              error: (err as Error)?.message ?? "watch failed",
-            });
-          }
-        },
-      );
-      unsubscribes.push(unsubscribe);
-    };
-
     writeSseEvent(res, "ready", { at: Date.now() });
-    watch("users");
-    watch("gateways");
-    watch("config");
-    watch(GLM_GATEWAYS_COLLECTION);
-    watch(GLM_OPERATIONS_COLLECTION);
-
+    unsubscribe = hub.subscribe((event) => {
+      if (closed) return;
+      if (event.kind === "changed") {
+        writeSseEvent(res, "changed", { collection: event.collection, at: event.at });
+        if (closeAfterFirstChange) close();
+        return;
+      }
+      writeSseEvent(res, "error", { collection: event.collection, error: event.error });
+    });
     req.on("close", close);
   });
 }
@@ -187,7 +272,14 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     }),
   );
 
-  addAdminFleetEventRoute(adminRouter, deps);
+  addAdminFleetEventRoute(
+    adminRouter,
+    createFleetEventHub({
+      db: deps.db,
+      log: deps.log,
+      lingerMs: deps.fleetEventListenerLingerMs ?? FLEET_EVENT_LINGER_MS_DEFAULT,
+    }),
+  );
 
   addAdminCustomerRoutes(adminRouter, {
     db: deps.db,

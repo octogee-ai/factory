@@ -385,7 +385,7 @@ describe("setup-secrets env loader", () => {
     expect(setup).toContain('SOCIAL_NOTIFICATION_BEARER_TOKEN) configured_secret_value "${SOCIAL_NOTIFICATION_BEARER:-}"');
     expect(setup).toContain("DISCORD_OPS_WEBHOOK_URL");
     expect(setup).toContain('sync_function_secret "$sm_secret" "$function_value"');
-    expect(setup).toContain('gcloud secrets versions add "$secret"');
+    expect(setup).toContain('secret_manager_persist_value "$secret" "$configured" "$SM_PROJECT_CF"');
     for (const staleSecret of [
       "GITEA_TOKEN",
       "STRIPE_SECRET_KEY",

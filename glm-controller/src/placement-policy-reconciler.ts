@@ -368,6 +368,23 @@ interface ActivationTargetContext {
   target: ContinuousPlacementOwnedGateway;
 }
 
+// The 15s tick must not re-read the terminal journal. Only unfinished operations
+// need a scan; the terminal rows any consumer looks up are addressed by
+// deterministic id derived from a live activation lease, so they are fetched by
+// document read instead.
+export const PLACEMENT_ACTIVE_OPERATION_STATUSES = ["pending", "running"] as const;
+
+const TERMINAL_LEASE_OPERATION_STATUSES: ReadonlySet<string> = new Set([
+  "failed",
+  ROLLED_BACK_STATUS,
+]);
+
+export function leaseJournalOperationIds(userData: Record<string, unknown>): string[] {
+  const targetGatewayId = builderActivationLease(userData)?.targetGatewayId;
+  if (!targetGatewayId) return [];
+  return [`builder-activate-${targetGatewayId}`, `builder-return-${targetGatewayId}`];
+}
+
 function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
   const provisioning = record(data.provisioning);
   const openclaw = record(provisioning?.openclaw);
@@ -2356,10 +2373,56 @@ async function readCompletedReturnSnapshots(
   return refs.length === 0 ? [] : db.getAll(...refs);
 }
 
+// A failed or rolled-back activation/return operation stays reconcile-relevant
+// until its lease is cleaned up, so it is read by deterministic id rather than
+// left in the tick's collection scan.
+async function readTerminalLeaseOperationSnapshots(
+  db: Firestore,
+  userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+) {
+  const operationIds = [...new Set(
+    userDocuments.flatMap((doc) => leaseJournalOperationIds(doc.data() as Record<string, unknown>)),
+  )];
+  if (operationIds.length === 0) return [];
+  const snapshots = await db.getAll(
+    ...operationIds.map((operationId) =>
+      db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId)),
+  );
+  return snapshots.filter((snapshot) => {
+    if (!snapshot.exists) return false;
+    const status = (snapshot.data() as Record<string, unknown> | undefined)?.status;
+    return typeof status === "string" && TERMINAL_LEASE_OPERATION_STATUSES.has(status);
+  });
+}
+
 function placementPolicyIdleMs(value: unknown, fallbackIdleMs: number): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : fallbackIdleMs;
+}
+
+// Must stay a reconcile tick inside GATEWAY_UNREACHABLE_AFTER_MS.
+export const KUBERNETES_OBSERVATION_REFRESH_MS = 120_000;
+
+interface KubernetesObservation {
+  status: string;
+  totalPods: number;
+  readyPods: number;
+}
+
+function kubernetesObservationIsCurrent(
+  stored: unknown,
+  observed: KubernetesObservation,
+  now: number,
+): boolean {
+  const current = record(stored);
+  if (!current) return false;
+  const observedAt = current.observedAt;
+  if (typeof observedAt !== "number") return false;
+  if (observedAt > now || now - observedAt >= KUBERNETES_OBSERVATION_REFRESH_MS) return false;
+  return current.status === observed.status &&
+    current.totalPods === observed.totalPods &&
+    current.readyPods === observed.readyPods;
 }
 
 export async function persistKubernetesObservations(
@@ -2371,16 +2434,18 @@ export async function persistKubernetesObservations(
   if (runtimeDocuments.length === 0) return;
   await Promise.all(runtimeDocuments.map(async (runtimeDocument) => {
     const diagnostics = kubernetesByGatewayId[runtimeDocument.id];
+    const observed: KubernetesObservation = {
+      status: placementKubernetesStatus(diagnostics),
+      totalPods: diagnostics?.totalPods ?? 0,
+      readyPods: diagnostics?.readyPods ?? 0,
+    };
+    const scanned = record(runtimeDocument.data());
+    if (kubernetesObservationIsCurrent(scanned?.kubernetes, observed, now)) return;
     await db.runTransaction(async (transaction) => {
       const current = await transaction.get(runtimeDocument.ref);
       if (!current.exists || !isGatewayRuntimeDoc(current.data())) return;
       transaction.set(runtimeDocument.ref, {
-        kubernetes: {
-          status: placementKubernetesStatus(diagnostics),
-          totalPods: diagnostics?.totalPods ?? 0,
-          readyPods: diagnostics?.readyPods ?? 0,
-          observedAt: now,
-        },
+        kubernetes: { ...observed, observedAt: now },
       }, { merge: true });
     });
   }));
@@ -2490,7 +2555,7 @@ async function readPlacementPolicySnapshot(
       db.collection(GATEWAYS_COLLECTION).get(),
       db.collection(GLM_GATEWAYS_COLLECTION).get(),
       db.collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", ["pending", "running", "failed", ROLLED_BACK_STATUS])
+        .where("status", "in", [...PLACEMENT_ACTIVE_OPERATION_STATUSES])
         .get(),
       db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
       db.collectionGroup("assignments").get(),
@@ -2498,11 +2563,10 @@ async function readPlacementPolicySnapshot(
   const pool = parseSharedGatewayPoolConfig(configSnap.data());
   if (!pool) throw new Error("config/orchestrator shared gateway pool is invalid");
   const { defaultGatewayId, sharedGatewayIds } = pool;
-  const completedReturnSnapshots = await readCompletedReturnSnapshots(
-    db,
-    usersSnap.docs,
-    sharedGatewayIds,
-  );
+  const [completedReturnSnapshots, terminalLeaseSnapshots] = await Promise.all([
+    readCompletedReturnSnapshots(db, usersSnap.docs, sharedGatewayIds),
+    readTerminalLeaseOperationSnapshots(db, usersSnap.docs),
+  ]);
   const idleMs = placementPolicyIdleMs(
     configSnap.data()?.disposableGatewayIdleMs,
     fallbackIdleMs,
@@ -2555,6 +2619,7 @@ async function readPlacementPolicySnapshot(
       ...completedReturnSnapshots.filter(
         (snapshot) => snapshot.exists && snapshot.data()?.status === "succeeded",
       ),
+      ...terminalLeaseSnapshots,
     ].flatMap((doc) => activeMigration(doc as QueryDocumentSnapshot) ?? []),
   };
 }

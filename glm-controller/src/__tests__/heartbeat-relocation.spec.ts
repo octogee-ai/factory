@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  GATEWAY_HEARTBEAT_INTERVAL_MS,
+  GATEWAY_UNREACHABLE_AFTER_MS,
+} from "@octogee/shared/types/fleet-controller";
+import {
+  HEARTBEAT_REFRESH_MS,
+  heartbeatMergeIsRedundant,
   revisionHeartbeatMerge,
   readHeartbeatLiveness,
   readMountedCustomers,
@@ -91,6 +97,119 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
         5,
       ).heartbeat,
     ).toMatchObject({ openclawVersion: "2026.7.1" });
+  });
+});
+
+describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => {
+  const NOW = 1_000_000;
+  const SERVER_TIMESTAMP = { _methodName: "serverTimestamp" };
+  const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";
+  const REPORTED = {
+    status: "ready",
+    mountedCustomers: ["ceckert"],
+    startedAt: 42,
+    version: "abc1234",
+    openclawVersion: "2026.7.1",
+  };
+
+  function candidate(configStatus?: Record<string, unknown>): Record<string, unknown> {
+    const merge = revisionHeartbeatMerge(
+      configStatus ? { ...REPORTED, configStatus } : REPORTED,
+      SERVER_TIMESTAMP,
+    );
+    merge.heartbeat.internalUrl = INTERNAL_URL;
+    return merge.heartbeat;
+  }
+
+  function stored(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      ...REPORTED,
+      internalUrl: INTERNAL_URL,
+      lastHeartbeatAt: NOW - GATEWAY_HEARTBEAT_INTERVAL_MS,
+      ...overrides,
+    };
+  }
+
+  it("skips the write when every merged field already matches a fresh stored heartbeat", () => {
+    expect(heartbeatMergeIsRedundant(stored(), candidate(), NOW)).toBe(true);
+  });
+
+  it("reads a Firestore Timestamp lastHeartbeatAt for the freshness gate", () => {
+    expect(heartbeatMergeIsRedundant(
+      stored({ lastHeartbeatAt: { toMillis: () => NOW - GATEWAY_HEARTBEAT_INTERVAL_MS } }),
+      candidate(),
+      NOW,
+    )).toBe(true);
+  });
+
+  it.each([
+    ["status", { status: "degraded" }],
+    ["mountedCustomers", { mountedCustomers: ["ceckert", "bender"] }],
+    ["startedAt", { startedAt: 41 }],
+    ["version", { version: "0000000" }],
+    ["openclawVersion", { openclawVersion: "2026.7.0" }],
+    ["internalUrl", { internalUrl: "http://elsewhere:18789" }],
+  ])("writes when the poll reports a new %s", (_field, drift) => {
+    expect(heartbeatMergeIsRedundant(stored(drift), candidate(), NOW)).toBe(false);
+  });
+
+  it("writes once the stored heartbeat reaches the refresh deadline", () => {
+    expect(heartbeatMergeIsRedundant(
+      stored({ lastHeartbeatAt: NOW - HEARTBEAT_REFRESH_MS }),
+      candidate(),
+      NOW,
+    )).toBe(false);
+  });
+
+  it("writes when the stored heartbeat is absent or carries no lastHeartbeatAt", () => {
+    expect(heartbeatMergeIsRedundant(undefined, candidate(), NOW)).toBe(false);
+    expect(heartbeatMergeIsRedundant({ status: "ready" }, candidate(), NOW)).toBe(false);
+  });
+
+  it("writes when the stored stamp is ahead of the poller clock", () => {
+    expect(heartbeatMergeIsRedundant(
+      stored({ lastHeartbeatAt: NOW + 1 }),
+      candidate(),
+      NOW,
+    )).toBe(false);
+  });
+
+  it("ignores stored fields the poller's merge never writes", () => {
+    expect(heartbeatMergeIsRedundant(
+      stored({ lastError: { message: "boom", at: 5 } }),
+      candidate(),
+      NOW,
+    )).toBe(true);
+  });
+
+  it("compares the pod-authored configStatus while ignoring the poller's own observedAt stamp", () => {
+    const reported = {
+      runtimeReady: true,
+      openclawVersion: "2026.7.1",
+      dashboardControlState: "ready",
+      dashboardControlObservedAt: "2026-08-02T14:00:00.000Z",
+    };
+    expect(heartbeatMergeIsRedundant(
+      stored({ configStatus: { ...reported, observedAt: NOW - GATEWAY_HEARTBEAT_INTERVAL_MS } }),
+      candidate(reported),
+      NOW,
+    )).toBe(true);
+    expect(heartbeatMergeIsRedundant(
+      stored({
+        configStatus: {
+          ...reported,
+          dashboardControlObservedAt: "2026-08-02T13:59:45.000Z",
+          observedAt: NOW - GATEWAY_HEARTBEAT_INTERVAL_MS,
+        },
+      }),
+      candidate(reported),
+      NOW,
+    )).toBe(false);
+  });
+
+  it("keeps a full poll interval of headroom under the fleet staleness bound", () => {
+    expect(HEARTBEAT_REFRESH_MS + GATEWAY_HEARTBEAT_INTERVAL_MS)
+      .toBeLessThan(GATEWAY_UNREACHABLE_AFTER_MS);
   });
 });
 

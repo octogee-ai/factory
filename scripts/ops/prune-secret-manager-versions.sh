@@ -18,8 +18,8 @@ for argument in "$@"; do
 done
 
 case "${PROJECT_ID}" in
-  octogee|octogee-data-test|octogee-data-prod) ;;
-  *) echo "Project must be octogee, octogee-data-test, or octogee-data-prod" >&2; exit 2 ;;
+  octogee|octogee-test|octogee-data-test|octogee-data-prod) ;;
+  *) echo "Project must be octogee, octogee-test, octogee-data-test, or octogee-data-prod" >&2; exit 2 ;;
 esac
 if [[ ! "${RUN_ID}" =~ ^[a-z0-9-]+$ ]]; then
   echo "SECRET_PRUNE_RUN_ID must contain only lowercase letters, digits, and hyphens" >&2

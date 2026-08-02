@@ -83,6 +83,7 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 
 const FORBIDDEN = { error: "forbidden" } as const;
 const OPENCLAW_GATEWAY_ID_FIELD = "provisioning.openclaw.gatewayId";
+const RECONCILE_ERROR_REPORT_WINDOW_MS = 60_000;
 
 type RecordUsageEvent = (input: {
   db: Firestore;
@@ -1520,7 +1521,11 @@ function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership } = deps;
+  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership, now } = deps;
+  // A pod re-reports the same mount failure every reconcile cycle, and each write
+  // to gateways/{id} costs the fleet a Firestore snapshot event. Repeats inside
+  // the window are acknowledged without a write; anything new lands immediately.
+  const reportedReconcileErrors = new Map<string, { report: string; at: number }>();
 
   router.post("/set-provisioning-status", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);
@@ -1656,17 +1661,31 @@ function installProvisioningRoutes(
       res.status(400).json({ error: "invalid_message" });
       return;
     }
+    const { gatewayId } = assigned.bound;
+    const truncated = message.slice(0, 2000);
+    const report = `${assigned.slug} ${truncated}`;
+    const at = now();
+    const reported = reportedReconcileErrors.get(gatewayId);
+    if (
+      reported &&
+      reported.report === report &&
+      at - reported.at < RECONCILE_ERROR_REPORT_WINDOW_MS
+    ) {
+      res.status(204).end();
+      return;
+    }
     await runBrokered(res, async () => {
-      await db.collection("gateways").doc(assigned.bound.gatewayId).set(
+      await db.collection("gateways").doc(gatewayId).set(
         {
           lastError: {
             slug: assigned.slug,
-            message: message.slice(0, 2000),
+            message: truncated,
             at: FieldValue.serverTimestamp(),
           },
         },
         { merge: true },
       );
+      reportedReconcileErrors.set(gatewayId, { report, at });
       res.status(204).end();
     });
   });
@@ -1683,6 +1702,7 @@ function installProvisioningRoutes(
           txn.set(ref, { lastError: null }, { merge: true });
         }
       });
+      reportedReconcileErrors.delete(assigned.bound.gatewayId);
       res.status(204).end();
     });
   });

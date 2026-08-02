@@ -321,3 +321,21 @@ spec:
           annotations:
             summary: "Trial-expiry cron hasn't succeeded in >2h"
             description: "trial-expiry (ns octogee, hourly) last succeeded >2h ago, or its metric is absent — trial state may be going stale."
+    - name: octogee.firestore
+      rules:
+        - alert: FirestoreReadRateHigh
+          expr: sum(rate(firestore_googleapis_com:document_read_count{monitored_resource="firestore.googleapis.com/Database"}[10m])) > 150
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Firestore document reads are sustained at {{ $value }}/s"
+            description: "Reads have held above 150/s for 15m against a healthy fleet baseline near 27/s. A read storm is almost always amplification, not customer load: a listener whose watchers redeliver every document on each change, or a reconciler rewriting documents that did not change. Read-rate storms have run 750-1,150/s for days. Check the fleet-event listener hub, Cowboy's reconcile fingerprints, and the placement and heartbeat write paths."
+        - alert: FirestoreWriteRateHigh
+          expr: sum(rate(firestore_googleapis_com:document_write_count{monitored_resource="firestore.googleapis.com/Database"}[10m])) > 50
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Firestore document writes are sustained at {{ $value }}/s"
+            description: "Writes have held above 50/s for 15m. Each write republishes its document to every watcher, so a write loop is the leading indicator of a read storm. Check Cowboy's Kubernetes observation and operator-heartbeat writers, which suppress a write only when the observed state and its freshness stamp are both unchanged, and the operations journal."

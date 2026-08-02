@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readGatewayConvergenceInstances,
+  readTargetedDurableRuntimeGateways,
+  runGatewayConvergencePass,
   serializeGatewayConvergence,
   snapshotHasReconcileRelevantChange,
+  snapshotHasReconcileRelevantRootChange,
   startReconciler,
 } from "../index";
 
@@ -250,6 +253,68 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
+  it("ignores converge-authored helm bookkeeping-only changes", () => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            helm: { imageTag: "abc1234", lastAppliedAt: 1, availableReplicas: 1 },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({
+              helm: { imageTag: "abc1234", lastAppliedAt: 2, availableReplicas: 0 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+  });
+
+  it("still reconciles when the applied helm image changes", () => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            helm: { imageTag: "abc1234", lastAppliedAt: 1 },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({
+              helm: { imageTag: "def5678", lastAppliedAt: 2 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ["status", { status: "not-ready", totalPods: 1, readyPods: 1 }],
     ["totalPods", { status: "ready", totalPods: 2, readyPods: 1 }],
@@ -300,6 +365,183 @@ describe("snapshot reconciliation filters", () => {
         fingerprints,
       ),
     ).toBe(true);
+  });
+});
+
+describe("root snapshot reconciliation filters", () => {
+  it("ignores a gateway pod's reconcile-error report", () => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantRootChange(
+      [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantRootChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => durableRoot({
+              lastError: { slug: "alice", message: "mount failed", at: 2 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+
+    expect(
+      snapshotHasReconcileRelevantRootChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => durableRoot({
+              lastError: { slug: "alice", message: "mount failed again", at: 3 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+
+    expect(
+      snapshotHasReconcileRelevantRootChange(
+        [{
+          type: "modified",
+          doc: { id: "default", data: () => durableRoot({ lastError: null }) },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["desiredRelease", { desiredRelease: 3 }],
+    ["desiredStatus", { desiredStatus: "draining" }],
+    ["liveRelease", { liveRelease: 1 }],
+    ["updatedAt", { updatedAt: 2 }],
+  ])("still reconciles when the root %s changes", (_field, overrides) => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantRootChange(
+      [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantRootChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => durableRoot({
+              ...overrides,
+              lastError: { slug: "alice", message: "mount failed", at: 2 },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("targeted durable state reads", () => {
+  function targetedDb(input: {
+    roots: Record<string, Record<string, unknown>>;
+    runtimes: Record<string, Record<string, unknown>>;
+  }) {
+    const scanned: string[] = [];
+    const fetched: string[] = [];
+    const store = (name: string) => (name === "gateways" ? input.roots : input.runtimes);
+    const db = {
+      collection: (name: string) => ({
+        get: async () => {
+          scanned.push(name);
+          return {
+            docs: Object.entries(store(name)).map(([id, data]) => ({ id, data: () => data })),
+          };
+        },
+        doc: (id: string) => ({ collection: name, id }),
+      }),
+      getAll: async (...refs: Array<{ collection: string; id: string }>) => {
+        for (const ref of refs) fetched.push(`${ref.collection}/${ref.id}`);
+        return refs.map((ref) => {
+          const data = store(ref.collection)[ref.id];
+          return { id: ref.id, exists: data !== undefined, data: () => data };
+        });
+      },
+    };
+    return { db, scanned, fetched };
+  }
+
+  it("reads only the selected roots and runtimes", async () => {
+    const { db, scanned, fetched } = targetedDb({
+      roots: { default: durableRoot(), other: durableRoot({ gatewayId: "other" }) },
+      runtimes: {
+        default: servingRuntime(),
+        other: servingRuntime({ gatewayId: "other" }),
+      },
+    });
+
+    const state = await readTargetedDurableRuntimeGateways(db as never, ["default"]);
+
+    expect(scanned).toEqual([]);
+    expect(fetched.sort()).toEqual(["gateways/default", "glmGateways/default"]);
+    expect(state.gateways.map((gateway) => gateway.gatewayId)).toEqual(["default"]);
+    expect(state.runtimeDocs.map((doc) => doc.gatewayId)).toEqual(["default"]);
+    expect(state.invalidRootIds).toEqual([]);
+    expect(state.strayGlmDocIds).toEqual([]);
+  });
+
+  it("treats a fully removed gateway as absent, not invalid", async () => {
+    const { db } = targetedDb({ roots: {}, runtimes: {} });
+
+    await expect(readTargetedDurableRuntimeGateways(db as never, ["gone"])).resolves.toEqual({
+      gateways: [],
+      runtimeDocs: [],
+      invalidRootIds: [],
+      strayGlmDocIds: [],
+    });
+  });
+
+  it("still refuses a selected invalid root or stray runtime doc", async () => {
+    const invalid = targetedDb({
+      roots: { legacy: { gatewayId: "legacy", desiredStatus: "running" } },
+      runtimes: {},
+    });
+    await expect(readTargetedDurableRuntimeGateways(invalid.db as never, ["legacy"]))
+      .resolves.toMatchObject({ invalidRootIds: ["legacy"] });
+
+    const stray = targetedDb({
+      roots: {},
+      runtimes: { orphan: servingRuntime({ gatewayId: "orphan" }) },
+    });
+    await expect(readTargetedDurableRuntimeGateways(stray.db as never, ["orphan"]))
+      .resolves.toMatchObject({ strayGlmDocIds: ["orphan"] });
+  });
+
+  it("does not scan either fleet collection for a targeted convergence pass", async () => {
+    const { db, scanned } = targetedDb({ roots: {}, runtimes: {} });
+    const passDeps = {
+      db: db as never,
+      helm: {
+        readDeployedInstance: vi.fn(async () => null),
+        readDeployedInstances: vi.fn(async () => ({})),
+      } as never,
+      kubeOps: {} as never,
+      chartFingerprint: "chart",
+      prepareGatewayConfig: vi.fn(async (config) => config),
+      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
+      log: vi.fn(),
+    };
+
+    await runGatewayConvergencePass(passDeps, ["ghost"]);
+    expect(scanned).toEqual([]);
+
+    await runGatewayConvergencePass(passDeps);
+    expect(scanned).toEqual(["gateways", "glmGateways"]);
   });
 });
 
@@ -708,6 +950,52 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(convergeGateways).toHaveBeenCalledWith(["default"]);
     expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(syncFleetIngress).not.toHaveBeenCalled();
+  });
+
+  it("does not reconcile the fleet when a root doc only records a reconcile error", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const convergeGateways = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: { default: servingRuntime() },
+        releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      convergeGateways,
+      log: vi.fn(),
+    });
+
+    callbacks.roots?.({
+      docChanges: () => [{
+        type: "added",
+        doc: { id: "default", data: () => durableRoot() },
+      }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    reconcileImagePins.mockClear();
+    convergeGateways.mockClear();
+
+    callbacks.roots?.({
+      docChanges: () => [{
+        type: "modified",
+        doc: {
+          id: "default",
+          data: () => durableRoot({
+            lastError: { slug: "alice", message: "mount failed", at: 2 },
+          }),
+        },
+      }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    stop();
+
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(convergeGateways).not.toHaveBeenCalled();
   });
 
   it("runs a full safety reconciliation only after the configured interval", async () => {

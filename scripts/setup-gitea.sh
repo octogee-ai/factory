@@ -149,6 +149,90 @@ save_env() {
   fi
 }
 
+secret_manager_destroy_superseded_versions() {
+  local name="$1" project="$2"
+  local listing version state newest=0 newest_state="" failures=0
+  listing="$(mktemp)"
+  if ! gcloud secrets versions list "$name" --project="$project" --format='value(name,state)' >"$listing"; then
+    rm -f "$listing"
+    printf 'Could not list Secret Manager versions for %s/%s\n' "$project" "$name" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r version state || [[ -n "$version" ]]; do
+    version="${version##*/}"
+    if [[ ! "$version" =~ ^[0-9]+$ || "$state" == "DESTROYED" ]]; then
+      continue
+    fi
+    if (( version > newest )); then
+      newest="$version"
+      newest_state="$state"
+    fi
+  done <"$listing"
+  if [[ "$newest_state" != "ENABLED" ]]; then
+    rm -f "$listing"
+    printf 'Refusing to prune %s/%s: newest live version is %s\n' "$project" "$name" "${newest_state:-absent}" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r version state || [[ -n "$version" ]]; do
+    version="${version##*/}"
+    if [[ ! "$version" =~ ^[0-9]+$ || "$state" == "DESTROYED" ]]; then
+      continue
+    fi
+    if (( version >= newest )); then
+      continue
+    fi
+    if ! gcloud secrets versions destroy "$version" --secret="$name" --project="$project" --quiet >/dev/null; then
+      printf 'Failed to destroy superseded Secret Manager version %s/%s/%s\n' "$project" "$name" "$version" >&2
+      failures=$((failures + 1))
+    fi
+  done <"$listing"
+  rm -f "$listing"
+  if (( failures > 0 )); then
+    return 1
+  fi
+  return 0
+}
+
+secret_manager_persist_version_file() {
+  local name="$1" file="$2" project="$3"
+  local current
+  if ! gcloud secrets describe "$name" --project="$project" >/dev/null 2>&1; then
+    if ! gcloud secrets create "$name" --data-file="$file" --project="$project" \
+      --replication-policy=user-managed --locations="$TARGET_REGION" --quiet >/dev/null; then
+      printf 'Could not create Secret Manager secret %s/%s\n' "$project" "$name" >&2
+      return 1
+    fi
+    return 0
+  fi
+  current="$(mktemp)"
+  chmod 600 "$current"
+  if gcloud secrets versions access latest --secret="$name" --project="$project" >"$current" 2>/dev/null \
+    && cmp -s "$current" "$file"; then
+    rm -f "$current"
+    return 0
+  fi
+  rm -f "$current"
+  if ! gcloud secrets versions add "$name" --data-file="$file" --project="$project" --quiet >/dev/null; then
+    printf 'Could not add Secret Manager version for %s/%s\n' "$project" "$name" >&2
+    return 1
+  fi
+  if ! secret_manager_destroy_superseded_versions "$name" "$project"; then
+    printf 'Superseded Secret Manager versions remain for %s/%s\n' "$project" "$name" >&2
+  fi
+  return 0
+}
+
+secret_manager_persist_value() {
+  local name="$1" value="$2" project="$3"
+  local payload status=0
+  payload="$(mktemp)"
+  chmod 600 "$payload"
+  printf '%s' "$value" >"$payload"
+  secret_manager_persist_version_file "$name" "$payload" "$project" || status=$?
+  rm -f "$payload"
+  return "$status"
+}
+
 gitea_field() {
   local response="$1" field="$2" json_file value
   json_file=$(mktemp)
@@ -322,14 +406,13 @@ fi
 save_env "GIT_API_TOKEN" "$GIT_API_TOKEN"
 ok "Token saved to $ENV_FILE"
 
-# Store in Secret Manager (safe to re-add same version)
-echo -n "$GIT_API_TOKEN" | gcloud secrets versions add "$GITEA_API_TOKEN_SM_KEY" \
-  --data-file=- --project=octogee 2>/dev/null || \
-echo -n "$GIT_API_TOKEN" | gcloud secrets create "$GITEA_API_TOKEN_SM_KEY" \
-  --data-file=- --project=octogee \
-  --replication-policy=user-managed --locations="$TARGET_REGION" 2>/dev/null || \
-warn "Could not save token to Secret Manager — it's in .env file"
-ok "Token saved to Secret Manager: $GITEA_API_TOKEN_SM_KEY"
+SM_TOKEN_PERSIST_STATUS=0
+secret_manager_persist_value "$GITEA_API_TOKEN_SM_KEY" "$GIT_API_TOKEN" octogee || SM_TOKEN_PERSIST_STATUS=$?
+if [[ "$SM_TOKEN_PERSIST_STATUS" -eq 0 ]]; then
+  ok "Token saved to Secret Manager: $GITEA_API_TOKEN_SM_KEY"
+else
+  warn "Could not save token to Secret Manager — it's in $ENV_FILE"
+fi
 
 # ── 7. Apply K8s secret (atomic) ─────────────────────────────────────────
 info "Applying gitea-token K8s secret..."

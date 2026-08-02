@@ -1,4 +1,5 @@
 import request from "supertest";
+import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHttpServer,
@@ -149,10 +150,48 @@ function applyPatch(
   }
 }
 
+interface WatchRegistry {
+  attach(
+    collection: string,
+    filters: Array<{ field: string; value: unknown }>,
+    next: (snap: { docs: unknown[] }) => void,
+  ): () => void;
+  attachCount(collection: string): number;
+  filtersFor(collection: string): Array<{ field: string; value: unknown }> | undefined;
+  activeCount(): number;
+}
+
+function createWatchRegistry(): WatchRegistry {
+  const attachCounts = new Map<string, number>();
+  const filtersByCollection = new Map<string, Array<{ field: string; value: unknown }>>();
+  let active = 0;
+  return {
+    attach(collection, filters, next) {
+      attachCounts.set(collection, (attachCounts.get(collection) ?? 0) + 1);
+      filtersByCollection.set(collection, filters);
+      active += 1;
+      next({ docs: [] });
+      const timer = setInterval(() => next({ docs: [] }), 5);
+      timer.unref?.();
+      let unsubscribed = false;
+      return () => {
+        if (unsubscribed) return;
+        unsubscribed = true;
+        active -= 1;
+        clearInterval(timer);
+      };
+    },
+    attachCount: (collection) => attachCounts.get(collection) ?? 0,
+    filtersFor: (collection) => filtersByCollection.get(collection),
+    activeCount: () => active,
+  };
+}
+
 function makeQuery(
   collectionName: string,
   store: FakeStore,
   filters: Array<{ field: string; value: unknown }> = [],
+  watchRegistry?: WatchRegistry,
 ) {
   const matches = (data: Record<string, unknown>): boolean =>
     filters.every((f) => {
@@ -163,9 +202,21 @@ function makeQuery(
     });
   return {
     where: (field: string, _op: string, value: unknown) =>
-      makeQuery(collectionName, store, [...filters, { field, value }]),
-    orderBy: () => makeQuery(collectionName, store, filters),
-    limit: () => makeQuery(collectionName, store, filters),
+      makeQuery(collectionName, store, [...filters, { field, value }], watchRegistry),
+    orderBy: () => makeQuery(collectionName, store, filters, watchRegistry),
+    limit: () => makeQuery(collectionName, store, filters, watchRegistry),
+    onSnapshot: (
+      next: (snap: { docs: unknown[] }) => void,
+      _onError?: (err: unknown) => void,
+    ) => {
+      if (watchRegistry) return watchRegistry.attach(collectionName, filters, next);
+      const unsubscribe = vi.fn();
+      queueMicrotask(() => {
+        next({ docs: [] });
+        next({ docs: [] });
+      });
+      return unsubscribe;
+    },
     get: async () => {
       if (collectionName === "gateways") {
         const docs = Object.entries(store.gateways)
@@ -196,7 +247,7 @@ function makeQuery(
   };
 }
 
-function buildDb(store: FakeStore) {
+function buildDb(store: FakeStore, watchRegistry?: WatchRegistry) {
   let docSeq = 0;
   return {
     batch: () => {
@@ -388,10 +439,11 @@ function buildDb(store: FakeStore) {
         };
       },
       where: (field: string, _op: string, value: unknown) =>
-        makeQuery(name, store, [{ field, value }]),
-      orderBy: () => makeQuery(name, store),
-      limit: () => makeQuery(name, store),
+        makeQuery(name, store, [{ field, value }], watchRegistry),
+      orderBy: () => makeQuery(name, store, [], watchRegistry),
+      limit: () => makeQuery(name, store, [], watchRegistry),
       onSnapshot: (next: (snap: { docs: unknown[] }) => void) => {
+        if (watchRegistry) return watchRegistry.attach(name, [], next);
         const unsubscribe = vi.fn();
         queueMicrotask(() => {
           next({ docs: [] });
@@ -1025,6 +1077,78 @@ it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory 
     expect(res.body).toEqual({ error: "User not found" });
   });
 
+});
+
+describe("createHttpServer — fleet-events watcher sharing", () => {
+  let store: FakeStore;
+
+  beforeEach(() => {
+    store = emptyStore();
+    store.users["admin-uid"] = { email: "admin@octogee.com" };
+    store.configs["admin-uid"] = { role: "admin" };
+  });
+
+  const streamOnce = (app: Express) =>
+    request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+  it("shares one watcher set across concurrent stream connections", async () => {
+    const registry = createWatchRegistry();
+    const app = createHttpServer(
+      buildDeps(store, { db: buildDb(store, registry) as any }),
+    );
+
+    const [first, second] = await Promise.all([streamOnce(app), streamOnce(app)]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    for (const collection of ["users", "gateways", "config", "glmGateways", "glmOperations"]) {
+      expect(registry.attachCount(collection), collection).toBe(1);
+    }
+  });
+
+  it("keeps watchers warm across sequential reconnects", async () => {
+    const registry = createWatchRegistry();
+    const app = createHttpServer(
+      buildDeps(store, { db: buildDb(store, registry) as any }),
+    );
+
+    expect((await streamOnce(app)).status).toBe(200);
+    expect((await streamOnce(app)).status).toBe(200);
+
+    expect(registry.attachCount("glmOperations")).toBe(1);
+    expect(registry.activeCount()).toBe(5);
+  });
+
+  it("filters the glmOperations watch to active operations", async () => {
+    const registry = createWatchRegistry();
+    const app = createHttpServer(
+      buildDeps(store, { db: buildDb(store, registry) as any }),
+    );
+
+    expect((await streamOnce(app)).status).toBe(200);
+
+    expect(registry.filtersFor("glmOperations")).toEqual([
+      { field: "status", value: ["pending", "running"] },
+    ]);
+  });
+
+  it("tears down watchers after the last connection closes when linger is disabled", async () => {
+    const registry = createWatchRegistry();
+    const app = createHttpServer(
+      buildDeps(store, {
+        db: buildDb(store, registry) as any,
+        fleetEventListenerLingerMs: 0,
+      }),
+    );
+
+    expect((await streamOnce(app)).status).toBe(200);
+    expect(registry.activeCount()).toBe(0);
+
+    expect((await streamOnce(app)).status).toBe(200);
+    expect(registry.attachCount("users")).toBe(2);
+  });
 });
 
 describe("createMaintenanceHttpServer", () => {
