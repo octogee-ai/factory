@@ -7,6 +7,7 @@ import {
 
 const ALLOWED_KINDS = new Set<ReconcileAction["kind"]>([
   "ensure-org",
+  "ensure-system-config-repo",
   "transfer-repo",
   "rename-repo",
   "firestore-repoint",
@@ -28,6 +29,7 @@ function base(over: Partial<ReconcileState> = {}): ReconcileState {
     slug: "tester90",
     oldOrg: "octogee",
     orgExists: false,
+    systemConfigRepoExists: true,
     firestoreStale: true,
     repos: [wsRepo()],
     ...over,
@@ -82,6 +84,25 @@ describe("planGiteaReconcile", () => {
       }),
     );
     expect(plan).toEqual({ actions: [], problems: [] });
+  });
+
+  it("repairs a missing durable system_config repo", () => {
+    const plan = planGiteaReconcile({
+      ...base({
+        orgExists: true,
+        firestoreStale: false,
+        repos: [wsRepo({ atOldOrgOldName: false, atNewOrgNewName: true })],
+      }),
+      systemConfigRepoExists: false,
+    });
+
+    expect(plan).toEqual({
+      actions: [
+        { kind: "ensure-org", slug: "tester90" },
+        { kind: "ensure-system-config-repo", slug: "tester90" },
+      ],
+      problems: [],
+    });
   });
 
   it("resumable: transferred-not-renamed → only rename (+ ensures, repoint)", () => {

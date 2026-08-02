@@ -2,6 +2,7 @@
 
 export type ReconcileAction =
   | { kind: "ensure-org"; slug: string }
+  | { kind: "ensure-system-config-repo"; slug: string }
   | { kind: "transfer-repo"; fromOwner: string; repo: string; toOwner: string }
   | { kind: "rename-repo"; owner: string; from: string; to: string }
   | { kind: "firestore-repoint"; slug: string };
@@ -26,6 +27,7 @@ export interface ReconcileState {
   
   oldOrg: string;
   orgExists: boolean;
+  systemConfigRepoExists: boolean;
 
 firestoreStale: boolean;
   
@@ -70,6 +72,7 @@ export function planGiteaReconcile(state: ReconcileState): ReconcilePlan {
 const fullyMigrated =
     problems.length === 0 &&
     state.orgExists &&
+    state.systemConfigRepoExists &&
     !state.firestoreStale &&
     allReposDone;
 
@@ -77,6 +80,9 @@ const fullyMigrated =
 
   const actions: ReconcileAction[] = [
     { kind: "ensure-org", slug },
+    ...(!state.systemConfigRepoExists
+      ? [{ kind: "ensure-system-config-repo", slug } as ReconcileAction]
+      : []),
     ...repoWork,
     ...(state.firestoreStale
       ? [{ kind: "firestore-repoint", slug } as ReconcileAction]

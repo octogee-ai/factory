@@ -76,12 +76,16 @@ gateway_class_by_instance = {
         item.get("metadata", {}).get("labels", {}).get("gateway-class")
     for item in live_deployments
 }
-shared_instances = {
-    item.get("metadata", {}).get("labels", {}).get("gateway-instance")
+shared_gateway_ids = {
+    item.get("spec", {})
+        .get("template", {})
+        .get("metadata", {})
+        .get("labels", {})
+        .get("gateway-id")
     for item in live_deployments
     if item.get("metadata", {}).get("labels", {}).get("gateway-class") == "shared"
 }
-shared_instances.discard(None)
+shared_gateway_ids.discard(None)
 shared_pdbs = [
     item for item in live_pdbs
     if (
@@ -91,24 +95,24 @@ shared_pdbs = [
         .get("gateway-class")
     ) == "shared"
 ]
-if shared_instances:
-    if len(shared_pdbs) != len(shared_instances):
+if shared_gateway_ids:
+    if len(shared_pdbs) != len(shared_gateway_ids):
         errors.append(
-            f"expected {len(shared_instances)} per-identity shared PDBs, found {len(shared_pdbs)}"
+            f"expected {len(shared_gateway_ids)} per-identity shared PDBs, found {len(shared_pdbs)}"
         )
     for pdb in shared_pdbs:
         pdb_name = pdb.get("metadata", {}).get("name", "unnamed")
         pdb_spec = pdb.get("spec", {})
         pdb_selector = pdb_spec.get("selector", {})
         pdb_labels = pdb_selector.get("matchLabels") or {}
-        pdb_instance = pdb_labels.get("gateway-instance")
+        pdb_gateway_id = pdb_labels.get("gateway-id")
         expected_labels = {
             "app": "octogee-gateway",
             "gateway-class": "shared",
-            "gateway-instance": pdb_instance,
+            "gateway-id": pdb_gateway_id,
         }
         if (
-            pdb_instance not in shared_instances
+            pdb_gateway_id not in shared_gateway_ids
             or pdb_labels != expected_labels
             or pdb_selector.get("matchExpressions")
         ):
@@ -135,6 +139,7 @@ for deployment in live_deployments:
         .get("labels", {})
     )
     pod_spec = deployment.get("spec", {}).get("template", {}).get("spec", {})
+    gateway_id = pod_labels.get("gateway-id")
     node_selector = pod_spec.get("nodeSelector") or {}
     compute_class = node_selector.get(compute_class_label)
     if gateway_class == "shared":
@@ -189,13 +194,13 @@ for deployment in live_deployments:
         expected_labels = {
             "app": "octogee-gateway",
             "gateway-class": "shared",
-            "gateway-instance": instance,
+            "gateway-id": gateway_id,
         }
         if (
             (pdb_selector.get("matchLabels") or {}) != expected_labels
             or pdb_selector.get("matchExpressions")
         ):
-            errors.append(f"shared PDB for Deployment {name} must exactly select its shared gateway-instance")
+            errors.append(f"shared PDB for Deployment {name} must exactly select its stable gateway-id")
     else:
         if "minAvailable" in pdb_spec:
             errors.append(f"PDB for Deployment {name} must not set minAvailable")

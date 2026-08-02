@@ -102,6 +102,39 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("reclaims the same managed key when a predecessor owns its title", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(200, [
+          {
+            id: 9,
+            title: "octogee-gateway-predecessor",
+            key: "ssh-ed25519 WANT predecessor-pod",
+          },
+        ]))
+        .mockResolvedValueOnce(res(204))
+        .mockResolvedValueOnce(res(201, {}));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+
+      await expect(
+        ensureGiteaUser("acme", "ssh-ed25519 WANT successor-pod", "bender/pod-new"),
+      ).resolves.toBeUndefined();
+
+      expect(callsTo(fetchMock)).toEqual([
+        expect.objectContaining({ method: "POST", url: `${BASE}/admin/users` }),
+        expect.objectContaining({ method: "GET", url: `${BASE}/users/ws-acme/keys?limit=50&page=1` }),
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/admin/users/ws-acme/keys/9` }),
+        expect.objectContaining({
+          method: "POST",
+          url: `${BASE}/admin/users/ws-acme/keys`,
+          body: {
+            title: "octogee-gateway-b1171f5ba2aca02a",
+            key: "ssh-ed25519 WANT successor-pod",
+          },
+        }),
+      ]);
+    });
+
     it("replaces only the retrying pod's prior key and keeps the predecessor key", async () => {
       fetchMock
         .mockResolvedValueOnce(res(422, {}))

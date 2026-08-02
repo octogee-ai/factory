@@ -6,6 +6,7 @@ import {
   deploymentEnvironmentSettings,
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
+import { systemConfigRepoName } from "@octogee/core/gitea-naming";
 import {
   planGiteaReconcile,
   type ReconcileAction,
@@ -197,6 +198,7 @@ async function loadState(ctx: Ctx): Promise<ReconcileState> {
     slug,
     oldOrg: OLD_ORG,
     orgExists: await exists(io, `/orgs/${slug}`),
+    systemConfigRepoExists: await exists(io, `/repos/${slug}/${systemConfigRepoName()}`),
     firestoreStale,
     repos,
   };
@@ -265,6 +267,19 @@ async function applyAction(action: ReconcileAction, ctx: Ctx): Promise<void> {
       body: { username: slug, visibility: "private" },
       okStatuses: [422],
       label: `org ensured: ${slug}`,
+    });
+  } else if (action.kind === "ensure-system-config-repo") {
+    await giteaWrite(io, {
+      path: `/orgs/${slug}/repos`,
+      method: "POST",
+      body: {
+        name: systemConfigRepoName(),
+        private: true,
+        description: `Octogee gateway system config for ${slug}`,
+        auto_init: false,
+      },
+      okStatuses: [409],
+      label: `durable repo ensured: ${slug}/${systemConfigRepoName()}`,
     });
   } else if (action.kind === "transfer-repo") {
     await giteaWrite(io, {

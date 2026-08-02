@@ -29,6 +29,7 @@ function deployment(instance: string, overrides: Record<string, unknown> = {}) {
         metadata: {
           labels: {
             app: "octogee-gateway",
+            "gateway-id": instance,
             "gateway-instance": instance,
             "gateway-class": gatewayClassName,
           },
@@ -54,6 +55,7 @@ function pod(
       name: `octogee-gateway-${instance}-abc`,
       labels: {
         app: "octogee-gateway",
+        "gateway-id": instance,
         "gateway-instance": instance,
         "gateway-class": gatewayClass(instance),
       },
@@ -143,7 +145,7 @@ function sharedPdb(instance: string, overrides: Record<string, unknown> = {}) {
         matchLabels: {
           app: "octogee-gateway",
           "gateway-class": "shared",
-          "gateway-instance": instance,
+          "gateway-id": instance,
         },
       },
       ...overrides,
@@ -162,7 +164,7 @@ function legacySharedPoolPdb() {
           "gateway-class": "shared",
         },
         matchExpressions: [{
-          key: "gateway-instance",
+          key: "gateway-id",
           operator: "In",
           values: ["shared-a", "shared-b"],
         }],
