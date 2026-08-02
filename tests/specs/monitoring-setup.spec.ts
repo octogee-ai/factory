@@ -118,6 +118,59 @@ describe("monitoring setup", () => {
     expect(setupMonitoringSecrets).not.toContain("set -x");
   });
 
+  it("opens the Octogee overview as the managed Grafana home screen", () => {
+    const rendered = execFileSync(
+      "helm",
+      [
+        "template",
+        "grafana",
+        resolve(root, "helm/monitoring"),
+        "--namespace",
+        "monitoring",
+      ],
+      { encoding: "utf8" },
+    );
+    const resources = parseAllDocuments(rendered)
+      .map((document) => document.toJSON() as Record<string, unknown> | null)
+      .filter((document): document is Record<string, unknown> => document !== null);
+    const grafana = resources.find((resource) =>
+      resource.kind === "Deployment" &&
+      (resource.metadata as { name?: string } | undefined)?.name === "grafana",
+    );
+    const config = resources.find((resource) =>
+      resource.kind === "ConfigMap" &&
+      (resource.metadata as { name?: string } | undefined)?.name === "grafana",
+    );
+    if (!grafana || !config) throw new Error("Grafana resources did not render");
+
+    const pod = (grafana.spec as {
+      template: {
+        spec: {
+          containers: Array<{
+            name: string;
+            volumeMounts?: Array<Record<string, unknown>>;
+          }>;
+          volumes?: Array<Record<string, unknown>>;
+        };
+      };
+    }).template.spec;
+    const server = pod.containers.find((container) => container.name === "grafana");
+
+    expect(server?.volumeMounts).toContainEqual({
+      name: "home-dashboard",
+      mountPath: "/etc/grafana/home-dashboard.json",
+      subPath: "octogee-overview.json",
+      readOnly: true,
+    });
+    expect(pod.volumes).toContainEqual({
+      name: "home-dashboard",
+      configMap: { name: "grafana-dash-octogee-overview" },
+    });
+    expect((config.data as { "grafana.ini": string })["grafana.ini"]).toContain(
+      "[dashboards]\ndefault_home_dashboard_path = /etc/grafana/home-dashboard.json",
+    );
+  });
+
   it("grants the dashboard sidecar only namespace-scoped ConfigMap access", () => {
     const values = chart("values.yaml");
     const dashboardReader = chart("templates/grafana-dashboard-reader.yaml");
@@ -179,6 +232,10 @@ describe("monitoring setup", () => {
     expect(verifyMonitoring).toContain("ingress grafana");
     expect(verifyMonitoring).toContain("networking\\.gke\\.io/managed-certificates");
     expect(verifyMonitoring).toContain("compute backend-services describe");
+    expect(verifyMonitoring).toContain(
+      "terraform/environments/control-plane/variables.tf",
+    );
+    expect(verifyMonitoring).toContain("monitoring_iap_operator_principal");
     expect(verifyMonitoring).toContain("iap_policy_grants_principal");
     expect(verifyMonitoring).toContain("is_expected_iap_redirect");
   });

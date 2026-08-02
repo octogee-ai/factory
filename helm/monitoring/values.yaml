@@ -11,6 +11,15 @@ iap:
   oauthSecretName: grafana-iap-oauth
 
 grafana:
+  grafana.ini:
+    dashboards:
+      default_home_dashboard_path: /etc/grafana/home-dashboard.json
+  extraConfigmapMounts:
+    - name: home-dashboard
+      mountPath: /etc/grafana/home-dashboard.json
+      subPath: octogee-overview.json
+      configMap: grafana-dash-octogee-overview
+      readOnly: true
   rbac:
     namespaced: true
     useExistingRole: octogee-monitoring-grafana-dashboard-reader

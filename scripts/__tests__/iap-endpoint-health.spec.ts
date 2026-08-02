@@ -56,6 +56,12 @@ describe("IAP endpoint health classification", () => {
     );
     expect(healthy.status).toBe(0);
     expect(healthy.stdout.trim()).toBe("k8s1-monitoring-backend");
+    const healthyWithFallback = runLibrary(
+      "iap_backend_from_ingress_annotation",
+      '{"k8s1-kube-system-default-http-backend-80":"HEALTHY","k8s1-monitoring-backend":"HEALTHY"}',
+    );
+    expect(healthyWithFallback.status).toBe(0);
+    expect(healthyWithFallback.stdout.trim()).toBe("k8s1-monitoring-backend");
     expect(
       runLibrary(
         "iap_backend_from_ingress_annotation",

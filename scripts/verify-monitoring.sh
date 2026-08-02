@@ -124,10 +124,12 @@ if $IAP_ENABLED; then
   iap_principal="$(node -e '
 const fs = require("node:fs");
 const source = fs.readFileSync(process.argv[1], "utf8");
-const matches = [...source.matchAll(/^operator_iap_principal\s*=\s*"([^"]+)"\s*$/gm)];
+const declaration = source.match(/variable\s+"monitoring_iap_operator_principal"\s*\{([\s\S]*?)\n\}/);
+if (!declaration) process.exit(1);
+const matches = [...declaration[1].matchAll(/^\s*default\s*=\s*"([^"]+)"\s*$/gm)];
 if (matches.length !== 1) process.exit(1);
 process.stdout.write(matches[0][1]);
-' "$REPO_DIR/terraform/environments/west-platform/terraform.tfvars")" || {
+' "$REPO_DIR/terraform/environments/control-plane/variables.tf")" || {
     echo "Could not resolve the declared monitoring IAP principal" >&2
     exit 1
   }

@@ -19,7 +19,9 @@ iap_backend_from_ingress_annotation() {
   printf '%s' "$1" | node -e '
 const fs = require("node:fs");
 const backends = JSON.parse(fs.readFileSync(0, "utf8"));
-const entries = Object.entries(backends);
+const entries = Object.entries(backends).filter(
+  ([name]) => !name.includes("default-http-backend"),
+);
 if (entries.length !== 1 || entries[0][1] !== "HEALTHY") process.exit(1);
 process.stdout.write(entries[0][0]);
 '
