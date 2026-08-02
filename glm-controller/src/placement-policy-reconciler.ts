@@ -539,13 +539,21 @@ function sharedGatewayCandidates(
     const incomingMigrationCount = context.state.activeMigrations.filter(
       (operation) =>
         (operation.status === "pending" || operation.status === "running") &&
-        operation.toGatewayId === gateway.gatewayId,
+        operation.toGatewayId === gateway.gatewayId &&
+        !context.assignments.has(placementAssignmentKey(gateway.gatewayId, operation.uid)),
+    ).length;
+    const outgoingMigrationCount = context.state.activeMigrations.filter(
+      (operation) =>
+        (operation.status === "pending" || operation.status === "running") &&
+        operation.fromGatewayId === gateway.gatewayId &&
+        context.assignments.has(placementAssignmentKey(gateway.gatewayId, operation.uid)),
     ).length;
     const assignmentCount = (
       gateway.assignmentCount ?? context.state.assignments.filter(
         (assignment) => assignment.gatewayId === gateway.gatewayId,
       ).length
-    ) + (context.projectedSharedGatewayPlacements.get(gateway.gatewayId) ?? 0);
+    ) - outgoingMigrationCount +
+      (context.projectedSharedGatewayPlacements.get(gateway.gatewayId) ?? 0);
     return {
       gatewayId: gateway.gatewayId,
       gatewayClass: gateway.gatewayClass,
@@ -570,6 +578,7 @@ function sharedGatewayPoolStableForRebalance(
     const gateway = context.gateways.get(gatewayId);
     if (!gateway) return false;
     if (gateway.desiredStatus !== "running") return true;
+    if (gateway.rollActive === true || gateway.liveReleaseReady === false) return false;
     const startedAt = gateway.runtimeStartedAt;
     return typeof startedAt === "number" &&
       Number.isFinite(startedAt) &&
