@@ -195,7 +195,7 @@ export interface Operation {
     output?: Record<string, unknown>;
     customerMigrationV2?: CustomerMigrationV2State;
 }
-export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "targetRestored" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
+export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
 export interface CustomerMigrationV2GatewayRootFence {
     gatewayId: string;
     updatedAt: number;

@@ -92,7 +92,10 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     const byos = await restoreByos(adapter, slug);
     steps.push(...byos.steps);
     throwIfAborted(signal, uid);
-    await applyConfigPatchAndMount(adapter, snapshot, null, byos.present, signal);
+    await applyConfigPatchAndMount(adapter, snapshot, null, {
+        byosActive: byos.present,
+        signal,
+    });
     steps.push("config-patch");
     throwIfAborted(signal, uid);
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
@@ -193,7 +196,12 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     snapshot = mm.snapshot;
     steps.push(...mm.steps);
     throwIfAborted(signal, uid);
-    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, byos.present, signal);
+    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
+        byosActive: byos.present,
+        signal,
+        evictionBatch: opts.evictionBatch,
+        currentEvictionBatch: opts.currentEvictionBatch,
+    });
     steps.push("config-patch");
     throwIfAborted(signal, uid);
     steps.push(...(await reassertConvergedState(adapter, snapshot)));
@@ -466,10 +474,12 @@ async function provisionMattermostIfMissing(adapter, uid, snapshot, ctx) {
         steps: ["mattermost-provision"],
     };
 }
-async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, byosActive, signal) {
+async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
     const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
-        signal,
-        byosActive,
+        signal: options.signal,
+        byosActive: options.byosActive,
+        evictionBatch: options.evictionBatch,
+        currentEvictionBatch: options.currentEvictionBatch,
     });
     adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
     if (adapter.onMounted)
@@ -542,7 +552,7 @@ async function notifyOpsIfNew(adapter, ctx, newCustomer) {
         return [];
     }
 }
-export async function removeCustomerFromGateway(adapter, uid) {
+export async function removeCustomerFromGateway(adapter, uid, opts = {}) {
     const steps = [];
     const snapshot = await adapter.loadUserSnapshot(uid);
     if (!snapshot) {
@@ -555,9 +565,19 @@ export async function removeCustomerFromGateway(adapter, uid) {
         return { wasMounted: false, steps };
     }
     const coachAgentId = `octogee-${slug}-coach`;
-    await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId);
+    const remaining = opts.evictionBatch
+        ? await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId, opts.evictionBatch, opts.currentEvictionBatch)
+        : await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId, undefined, opts.currentEvictionBatch);
     steps.push("config-patch-remove");
     adapter.log(`[remove:${slug}] removed from openclaw config`);
+    if (remaining && !remaining.includes(slug)) {
+        adapter.cancelPendingEviction?.(slug);
+        return { wasMounted: true, steps, retained: true };
+    }
+    if (opts.currentEvictionBatch && !(await opts.currentEvictionBatch()).includes(slug)) {
+        adapter.cancelPendingEviction?.(slug);
+        return { wasMounted: true, steps, retained: true };
+    }
     if (adapter.hasCustomerDir(slug)) {
         await adapter.deleteCustomerDir(slug);
         steps.push("delete-dir");

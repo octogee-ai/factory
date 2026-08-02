@@ -1,30 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
 import type { MigrationClient } from "./fleet-migration-client";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-
-const SNAPSHOT: FleetBrokerUserSnapshot = {
-  uid: "uid-alice",
-  slug: "alice",
-  tier: "trial",
-  gatewayId: "gw-blue",
-  status: "complete",
-  agentIds: ["octogee-alice-coach"],
-  repoUrl: "git@gitea:octogee/alice.git",
-  mattermostUserId: "mm-alice",
-  customerMmUserId: "mm-alice",
-  greetingPosted: true,
-  channels: [],
-  projects: [],
-  ownerName: "Alice",
-  email: "alice@example.com",
-  displayName: "Alice",
-  lastName: "",
-  photoURL: "",
-  onboardingVibe: null,
-  coachToken: "coach-token",
-  coachMmUserId: "mm-coach",
-} as unknown as FleetBrokerUserSnapshot;
 
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
@@ -92,7 +68,6 @@ function harness(options: HarnessOptions = {}) {
     slug: "alice",
     fromGatewayId: "gw-blue",
     toGatewayId: options.toGatewayId ?? "gw-green",
-    restoreSnapshot: SNAPSHOT,
     includeActivationManifest: true,
     ...(options.gateAssignment !== undefined ? { gateAssignment: options.gateAssignment } : {}),
   };
@@ -100,14 +75,14 @@ function harness(options: HarnessOptions = {}) {
 }
 
 describe("runMigration — happy path", () => {
-  it("executes restore → pre → quiesce → final → verify → cutover → unmount without copying source credentials", async () => {
+  it("executes keys → pre → quiesce → final → verify → cutover → unmount with zero target restore", async () => {
     const { client, deps, input } = harness();
 
     const result = await runMigration(input, deps);
 
     expect(result).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
     expect(client.calls).toEqual([
-      "restore:alice",
+      "transfer:alice:keys",
       "transfer:alice:pre",
       "quiesce:alice",
       "flush:alice:migration-final",
@@ -115,6 +90,7 @@ describe("runMigration — happy path", () => {
       "verify:alice",
       "unmount:gw-blue:alice",
     ]);
+    expect(client.restoreTarget).not.toHaveBeenCalled();
     expect(client.calls.every((call) => !/config/u.test(call))).toBe(true);
   });
 
@@ -125,7 +101,7 @@ describe("runMigration — happy path", () => {
 
     const reports = events.filter((event) => event.startsWith("report:"));
     expect(reports).toEqual([
-      "report:restore-target:running", "report:restore-target:done",
+      "report:keys-sync-state:running", "report:keys-sync-state:done",
       "report:pre-sync-state:running", "report:pre-sync-state:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
       "report:flush-source:running", "report:flush-source:done",
@@ -159,15 +135,28 @@ describe("runMigration — happy path", () => {
     "carries %s checkout scope through both state transfers",
     async (projectCheckoutScope) => {
       const { client, deps, input } = harness();
-      input.restoreSnapshot = { ...SNAPSHOT, projectCheckoutScope };
+      input.projectCheckoutScope = projectCheckoutScope;
 
       await runMigration(input, deps);
 
       const transferCalls = (client.transferState as ReturnType<typeof vi.fn>).mock.calls;
-      expect(transferCalls).toHaveLength(2);
+      expect(transferCalls).toHaveLength(3);
       expect(transferCalls.map(([call]) => call)).toEqual([
-        expect.objectContaining({ mode: "pre", projectCheckoutScope }),
-        expect.objectContaining({ mode: "final", projectCheckoutScope }),
+        expect.objectContaining({
+          mode: "keys",
+          projectCheckoutScope,
+          includeActivationManifest: false,
+        }),
+        expect.objectContaining({
+          mode: "pre",
+          projectCheckoutScope,
+          includeActivationManifest: false,
+        }),
+        expect.objectContaining({
+          mode: "final",
+          projectCheckoutScope,
+          includeActivationManifest: true,
+        }),
       ]);
     },
   );

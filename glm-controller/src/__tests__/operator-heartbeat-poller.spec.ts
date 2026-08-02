@@ -343,6 +343,21 @@ describe("pollOperatorHeartbeatsOnce — Cowboy-driven local eviction", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalled();
   });
 
+  it("never issues Cowboy eviction when the gateway owns eviction in-pod", async () => {
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      ownsEviction: vi.fn(async () => false),
+    });
+    const streaks: EvictionStreaks = new Map();
+
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+    expect(deps.writeHeartbeat).toHaveBeenCalledTimes(2);
+    expect(streaks.has("bender")).toBe(false);
+  });
+
   it("logs and continues the poll when an eviction call fails", async () => {
     const deps = evictDeps({
       evictAfterStreak: 1,

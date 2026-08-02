@@ -9,11 +9,14 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
+  cancelRemovedEviction,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   evictLocalCustomer,
+  evictLocalCustomerIfStillUndesired,
   gatewayServiceName,
   settleConvergence,
+  selectStableContentStale,
   getEvictObservedSlugs,
   getMountObservedSlugs,
   pathGatewayIdMatchesPod,
@@ -119,6 +122,41 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
     expect(cloneRetryDelayMs(1)).toBeLessThan(cloneRetryDelayMs(2));
     expect(cloneRetryDelayMs(2)).toBeLessThan(cloneRetryDelayMs(3));
     expect(cloneRetryDelayMs(99)).toBe(cloneRetryDelayMs(CLONE_RETRY_DELAYS_MS.length));
+  });
+});
+
+describe("selectStableContentStale", () => {
+  it("coalesces intermediate project provisioning fingerprints into one final re-ensure", () => {
+    const pending = new Map<string, string>();
+    const applied = new Map([["alice", "before-project"]]);
+
+    expect(selectStableContentStale(
+      ["alice"],
+      new Map([["alice", "project-provisioning"]]),
+      applied,
+      pending,
+    )).toEqual([]);
+    expect(selectStableContentStale(
+      ["alice"],
+      new Map([["alice", "project-active"]]),
+      applied,
+      pending,
+    )).toEqual([]);
+    expect(selectStableContentStale(
+      ["alice"],
+      new Map([["alice", "project-active"]]),
+      applied,
+      pending,
+    )).toEqual(["alice"]);
+
+    applied.set("alice", "project-active");
+    expect(selectStableContentStale(
+      ["alice"],
+      new Map([["alice", "project-active"]]),
+      applied,
+      pending,
+    )).toEqual([]);
+    expect(pending.has("alice")).toBe(false);
   });
 });
 
@@ -319,7 +357,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       onLocalStateRemoved,
     })).resolves.toBe("deleted-user");
 
-    expect(removeImportedCustomerBySlug).toHaveBeenCalledWith("departed");
+    expect(removeImportedCustomerBySlug).toHaveBeenCalledWith("departed", undefined, undefined);
     expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
     expect(a.deleteCustomerDir).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
@@ -342,6 +380,8 @@ describe("evictLocalCustomer — complete local teardown", () => {
     expect(a.applyRemoveCustomerConfigPatch).toHaveBeenCalledWith(
       "departed",
       "octogee-departed-coach",
+      undefined,
+      undefined,
     );
     expect(a.deleteCustomerDir).toHaveBeenCalledWith("departed");
     expect(onUnmounted).toHaveBeenCalledWith("departed");
@@ -397,6 +437,88 @@ describe("evictLocalCustomer — complete local teardown", () => {
 
     expect(stampMounted).toHaveBeenCalledWith("uid-alice", false);
     expect(onLocalStateRemoved).toHaveBeenCalledWith("alice");
+  });
+
+  it("retains local state and invalidates mount completion when re-admitted after config removal", async () => {
+    const onRetainedAfterConfigRemoval = vi.fn();
+    const onLocalStateRemoved = vi.fn();
+    const a = adapter({
+      removeImportedCustomerBySlug: vi.fn(async () => ({
+        wasMounted: true,
+        steps: ["config-patch-remove"] as const,
+        retained: true,
+      })),
+    });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "alice",
+      currentEvictionBatch: vi.fn(async () => []),
+      onRetainedAfterConfigRemoval,
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved,
+    })).resolves.toBe("noop");
+
+    expect(onRetainedAfterConfigRemoval).toHaveBeenCalledWith("alice");
+    expect(onLocalStateRemoved).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelRemovedEviction", () => {
+  it("invalidates a re-admitted Builder only when its config-removal marker existed", () => {
+    const invalidate = vi.fn();
+    const removed = {
+      cancelPendingEviction: vi.fn(() => true),
+    } as unknown as CustomerLifecycleAdapter;
+    const untouched = {
+      cancelPendingEviction: vi.fn(() => false),
+    } as unknown as CustomerLifecycleAdapter;
+
+    expect(cancelRemovedEviction(removed, "b", invalidate)).toBe(true);
+    expect(cancelRemovedEviction(untouched, "c", invalidate)).toBe(false);
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledWith("b");
+  });
+});
+
+describe("evictLocalCustomerIfStillUndesired", () => {
+  it("does not run stale cleanup after the Builder is re-admitted", async () => {
+    const evict = vi.fn(async () => "drained" as const);
+
+    await expect(evictLocalCustomerIfStillUndesired({
+      slug: "alice",
+      evictionBatch: ["alice"],
+      readDesired: vi.fn(async () => ["alice"]),
+      evict,
+    })).resolves.toBe("noop");
+
+    expect(evict).not.toHaveBeenCalled();
+  });
+
+  it("runs cleanup once when the latest desired roster still excludes the Builder", async () => {
+    const evict = vi.fn(async () => "drained" as const);
+
+    await expect(evictLocalCustomerIfStillUndesired({
+      slug: "alice",
+      evictionBatch: ["alice"],
+      readDesired: vi.fn(async () => ["bob"]),
+      evict,
+    })).resolves.toBe("drained");
+
+    expect(evict).toHaveBeenCalledWith(["alice"], expect.any(Function));
+  });
+
+  it("filters re-admitted Builders from the shared config-removal batch", async () => {
+    const evict = vi.fn(async () => "drained" as const);
+
+    await expect(evictLocalCustomerIfStillUndesired({
+      slug: "alice",
+      evictionBatch: ["alice", "bob"],
+      readDesired: vi.fn(async () => ["bob"]),
+      evict,
+    })).resolves.toBe("drained");
+
+    expect(evict).toHaveBeenCalledWith(["alice"], expect.any(Function));
   });
 });
 

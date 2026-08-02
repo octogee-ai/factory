@@ -166,11 +166,15 @@ export interface CustomerLifecycleAdapter {
     applyAddCustomerConfigPatch: (snapshot: UserSnapshot, mmUpdate: MmUpdate | null, opts?: {
         signal?: AbortSignal;
         byosActive?: boolean;
+        evictionBatch?: readonly string[];
+        currentEvictionBatch?: () => Promise<readonly string[]>;
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;
     }>;
-    applyRemoveCustomerConfigPatch: (slug: string, agentId: string) => Promise<void>;
+    applyRemoveCustomerConfigPatch: (slug: string, agentId: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<readonly string[] | void>;
+    cancelPendingEviction?: (slug: string) => boolean | void;
+    clearMountMarker?: (slug: string) => void;
     warmAgentRuntimePlugins?: (slug: string) => Promise<void>;
     waitForAccountHealthy: (params: {
         slug: string;
@@ -192,9 +196,12 @@ export interface CustomerLifecycleAdapter {
     prepareKeyImportDir: (slug: string) => Promise<string>;
     activateImportedCustomer: (slug: string, opts?: {
         signal?: AbortSignal;
-    }) => Promise<void>;
+    }) => Promise<{
+        appliedFingerprint: string;
+    }>;
+    recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
     exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;
-    removeImportedCustomerBySlug?: (slug: string) => Promise<RemoveCustomerResult>;
+    removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<RemoveCustomerResult>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";
 export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "warm-runtime-plugins" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
@@ -212,6 +219,7 @@ export type RemoveCustomerStep = "config-patch-remove" | "delete-dir";
 export interface RemoveCustomerResult {
     wasMounted: boolean;
     steps: RemoveCustomerStep[];
+    retained?: boolean;
 }
 export declare class ConcurrentMountError extends Error {
     readonly name = "ConcurrentMountError";
@@ -224,10 +232,15 @@ export interface AddCustomerOptions {
     customersDir?: string;
     mountDeadlineMs?: number;
     convergeContent?: boolean;
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
 }
 export declare function addCustomerToGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: AddCustomerOptions): Promise<AddCustomerResult>;
 export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, opts?: AddCustomerOptions): Promise<RestoreCustomerRuntimeResult>;
-export declare function removeCustomerFromGateway(adapter: CustomerLifecycleAdapter, uid: string): Promise<RemoveCustomerResult>;
+export declare function removeCustomerFromGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: {
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
+}): Promise<RemoveCustomerResult>;
 export declare function pubKeysMatch(a: string, b: string): boolean;

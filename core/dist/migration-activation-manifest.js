@@ -96,7 +96,10 @@ function validateManifestShape(value, slug) {
     }
     const agentId = expectedAgentId(slug);
     const accountId = expectedAccountId(slug);
-    if (value.version !== 1 || value.slug !== slug) {
+    if (value.version !== 2
+        || value.slug !== slug
+        || typeof value.appliedFingerprint !== "string"
+        || value.appliedFingerprint.length === 0) {
         throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
     }
     const workspace = validateManifestAgent(value, slug, agentId, accountId);
@@ -124,8 +127,9 @@ function validateManifestShape(value, slug) {
         accounts.add(entry.accountId);
     }
     return {
-        version: 1,
+        version: 2,
         slug,
+        appliedFingerprint: value.appliedFingerprint,
         ...workspace,
         projectAgents,
     };
@@ -161,7 +165,7 @@ async function sourceManifestAgent(input) {
         bindings: input.bindings,
     };
 }
-export async function extractOpenClawActivationManifest(configPath, slug, opts = {}) {
+export async function extractOpenClawActivationManifest(configPath, slug, opts) {
     const raw = await fs.readFile(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     const agentId = expectedAgentId(slug);
@@ -191,8 +195,9 @@ export async function extractOpenClawActivationManifest(configPath, slug, opts =
         });
     }));
     return validateManifestShape({
-        version: 1,
+        version: 2,
         slug,
+        appliedFingerprint: opts.appliedFingerprint,
         ...workspace,
         projectAgents,
     }, slug);

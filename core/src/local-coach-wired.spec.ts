@@ -8,6 +8,7 @@ import {
   coachWiredInParsedConfig,
   customerCoachWiredInOpenclawConfig,
   hasMountedMarker,
+  clearMountedMarker,
   isMigratingInPinned,
   listLocalCoachWiredSlugs,
   listLocalCustomerDirs,
@@ -197,6 +198,17 @@ describe("mounted marker (the post-config completion gate)", () => {
     fs.mkdirSync(path.join(root, "bob"));
     writeMountedMarker(root, "bob");
     expect(hasMountedMarker(root, "bob")).toBe(true);
+  });
+
+  it("clearMountedMarker makes a completed mount observable as incomplete", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mark-"));
+    tmp.push(root);
+    fs.mkdirSync(path.join(root, "alice"));
+    writeMountedMarker(root, "alice");
+
+    clearMountedMarker(root, "alice");
+
+    expect(hasMountedMarker(root, "alice")).toBe(false);
   });
 
   it("stamps the marker under .system/ (gitignored — pod-local, never cloned back)", () => {

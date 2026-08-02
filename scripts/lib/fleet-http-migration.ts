@@ -163,8 +163,10 @@ async function activateImportedCustomerForMigration(input: {
 }): Promise<void> {
   const { deps, slug, mode, signal } = input;
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
-  if (signal) await deps.adapter.activateImportedCustomer(slug, { signal });
-  else await deps.adapter.activateImportedCustomer(slug);
+  const activation = signal
+    ? await deps.adapter.activateImportedCustomer(slug, { signal })
+    : await deps.adapter.activateImportedCustomer(slug);
+  deps.adapter.recordAppliedFingerprint?.(slug, activation.appliedFingerprint);
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }
@@ -872,6 +874,27 @@ function pushStateFailureStatus(
   return { status: 500, error: "push-state failed" };
 }
 
+function respondPushStateFailure(input: {
+  res: Response;
+  body: PushStateRequestBody;
+  abort: ReturnType<typeof attachPushStateAbortHandlers>;
+  sourceTarError: unknown;
+  cause: unknown;
+  log: (msg: string) => void;
+}): void {
+  const { res, body, abort, sourceTarError, cause, log } = input;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+  if (res.headersSent) {
+    res.destroy(cause instanceof Error ? cause : new Error(message));
+    return;
+  }
+  const failure = sourceTarError
+    ? { status: 500, error: "source tar failed" }
+    : pushStateFailureStatus(abort.didTimeout(), abort.controller.signal);
+  res.status(failure.status).json({ error: failure.error, message });
+}
+
 type MigrationImportMode = "keys" | "pre" | "final" | "default";
 
 function parseMigrationImportMode(value: string | undefined): MigrationImportMode {
@@ -1393,7 +1416,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      const activationManifest = mode === "keys"
+      const activationManifest = mode !== "final"
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
       cleanupActivationManifest = activationManifest.cleanup;
@@ -1474,7 +1497,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         return;
       }
       await copyStageToOpenClaw(session.stageDir, session.importDir);
-      if (mode !== "keys") {
+      if (mode === "final") {
         deps.adapter.markCustomerMigratingIn?.(body.slug);
         await activateImportedCustomerForMigration({
           deps,
@@ -1591,7 +1614,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      const activationManifest = body.mode === "keys"
+      const activationManifest = body.mode !== "final" && body.mode !== undefined
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
       cleanupActivationManifest = activationManifest.cleanup;
@@ -1647,19 +1670,14 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         log,
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] ❌ push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
-      if (!res.headersSent) {
-        const { status, error } = sourceTarError
-          ? { status: 500, error: "source tar failed" }
-          : pushStateFailureStatus(
-              abort.didTimeout(),
-              abort.controller.signal,
-            );
-        res.status(status).json({ error, message });
-      } else {
-        res.destroy(err instanceof Error ? err : new Error(message));
-      }
+      respondPushStateFailure({
+        res,
+        body,
+        abort,
+        sourceTarError,
+        cause: err,
+        log,
+      });
     } finally {
       abort.detach();
       await cleanupActivationManifest();
@@ -1791,14 +1809,16 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
       // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
       // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
       deps.adapter.markCustomerMigratingIn?.(slug);
-      await activateImportedCustomerForMigration({
-        deps,
-        slug,
-        mode,
-        signal: controller.signal,
-      });
-      deps.adapter.writeMountMarker?.(slug);
-      deps.adapter.onMounted?.(slug);
+      if (mode === "final" || mode === "default") {
+        await activateImportedCustomerForMigration({
+          deps,
+          slug,
+          mode,
+          signal: controller.signal,
+        });
+        deps.adapter.writeMountMarker?.(slug);
+        deps.adapter.onMounted?.(slug);
+      }
 
       const response: ImportResponse = { migrationId, slug, imported: true };
       log(`[migration-http] ✅ import migrationId=${migrationId} slug=${slug} done`);

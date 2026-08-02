@@ -252,9 +252,10 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
-    activateImportedCustomer: vi.fn(async () => {}),
+    activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
     reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
+    onMounted: vi.fn(),
     waitForAccountHealthy: vi.fn(async () => true),
     hasCustomerDir: vi.fn(() => true),
     customerCoachWiredInOpenclawConfig: vi.fn(() => true),
@@ -1345,8 +1346,9 @@ describe("queued-rsync migration control handlers", () => {
 
   it("createActivationManifestExportHandler returns the source manifest as signed JSON", async () => {
     const manifest = {
-      version: 1,
+      version: 2,
       slug: "chris",
+      appliedFingerprint: "fp-chris",
       agentId: "octogee-chris-coach",
       accountId: "chris-coach",
       agent: { id: "octogee-chris-coach" },
@@ -1375,9 +1377,11 @@ describe("queued-rsync migration control handlers", () => {
   it("createActivateImportHandler activates and marks the imported customer mounted", async () => {
     const markCustomerMigratingIn = vi.fn();
     const onMounted = vi.fn();
+    const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
       markCustomerMigratingIn,
-      activateImportedCustomer: vi.fn(async () => undefined),
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      recordAppliedFingerprint,
       onMounted,
     });
     const body: ActivateImportRequestBody = {
@@ -1395,6 +1399,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getStatus()).toBe(200);
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
   });
@@ -1551,8 +1556,9 @@ describe("queued-rsync migration control handlers", () => {
         { cwd: "/openclaw", path: "customer-keys/chris" },
       ]),
       exportOpenClawActivationManifest: vi.fn(async () => ({
-        version: 1,
+        version: 2,
         slug: "chris",
+        appliedFingerprint: "fp-chris",
         agentId: "octogee-chris-coach",
         accountId: "chris-coach",
         agent: { id: "octogee-chris-coach" },
@@ -1564,7 +1570,7 @@ describe("queued-rsync migration control handlers", () => {
     const body: PushRsyncStateRequestBody = {
       migrationId: "mig-rsync",
       slug: "chris",
-      mode: "pre",
+      mode: "final",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
       transferUser: "migration",
@@ -1594,7 +1600,7 @@ describe("queued-rsync migration control handlers", () => {
   it("createFinishRsyncImportHandler copies staged bytes and activates the customer", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      activateImportedCustomer: vi.fn(async () => undefined),
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       markCustomerMigratingIn: vi.fn(),
       onMounted: vi.fn(),
     });
@@ -1604,7 +1610,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-finish",
       slug: "chris",
-      mode: "pre",
+      mode: "final",
       transferUser: "migration",
       transferKey: "c".repeat(64),
     };
@@ -1640,7 +1646,7 @@ describe("queued-rsync migration control handlers", () => {
     const finishBody: FinishRsyncImportRequestBody = {
       migrationId: "mig-finish",
       slug: "chris",
-      mode: "pre",
+      mode: "final",
     };
     const finishRaw = JSON.stringify(finishBody);
     const finishSig = signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw);
@@ -1880,8 +1886,9 @@ describe("createPushStateHandler", () => {
         { cwd: "/state", path: "agents/octogee-chris-coach" },
       ]),
       exportOpenClawActivationManifest: vi.fn(async () => ({
-        version: 1,
+        version: 2,
         slug: "chris",
+        appliedFingerprint: "fp-chris",
         agentId: "octogee-chris-coach",
         accountId: "chris-coach",
         agent: { id: "octogee-chris-coach" },
@@ -1921,8 +1928,9 @@ describe("createPushStateHandler", () => {
 
   it("operator gateway transfers contain only the movable customer agent", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => ({
-      version: 1 as const,
+      version: 2 as const,
       slug: "eggman",
+      appliedFingerprint: "fp-eggman",
       agentId: "octogee-eggman-coach",
       accountId: "eggman-coach",
       agent: { id: "octogee-eggman-coach" },
@@ -2311,6 +2319,34 @@ describe("createImportHandler", () => {
     expect(adapter.writeMountMarker).not.toHaveBeenCalled();
   });
 
+  it("stages pre-sync state without activating or marking the target mounted", async () => {
+    const adapter = mkAdapter();
+    const fakeListChild = mkFakeChild({
+      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\ncustomers/chris/README.md\n"],
+      exitCode: 0,
+    });
+    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+
+    const handler = createImportHandler(mkDeps({ adapter }));
+    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const req = mkImportRequest({
+      migrationId: "mig-1",
+      slug: "chris",
+      mode: "pre",
+      signature: sig,
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.writeMountMarker).not.toHaveBeenCalled();
+    expect(adapter.onMounted).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when the tarball contains a path-traversal entry (no extract attempted)", async () => {
     const adapter = mkAdapter();
     const fakeListChild = mkFakeChild({
@@ -2387,7 +2423,7 @@ describe("createImportHandler", () => {
     adapter.activateImportedCustomer = vi.fn(async (_slug: string, opts?: { signal?: AbortSignal }) => {
       signalSeenByActivate = opts?.signal;
       resolveActivateStarted();
-      return new Promise<void>((_resolve, reject) => {
+      return new Promise<{ appliedFingerprint: string }>((_resolve, reject) => {
         const reject_ = () => reject(new Error("aborted"));
         if (opts?.signal?.aborted) {
           reject_();

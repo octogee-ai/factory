@@ -27,10 +27,15 @@ export interface ReconcileLoopDeps {
    *  reverts to pure membership convergence. */
   getContentStale?: () => string[];
   /** Idempotent mount/restore — safe to call every tick until observed catches up. */
-  ensureSlug: (slug: string) => Promise<EnsureOutcome>;
+  ensureSlug: (
+    slug: string,
+    evictionBatch: readonly string[],
+    currentEvictionBatch: () => readonly string[],
+  ) => Promise<EnsureOutcome>;
   shouldEnsureSlug?: (slug: string) => boolean;
   shouldDeferRemainingMounts?: (error: unknown) => boolean;
-  unmountSlug: (slug: string) => Promise<UnmountOutcome>;
+  unmountSlug: (slug: string, evictionBatch: readonly string[]) => Promise<UnmountOutcome>;
+  onPendingEvictionCancelled?: (slug: string) => void;
   log: (msg: string) => void;
   /** Cap concurrent mounts/evicts so a cold pod doesn't thundering-herd. */
   maxConcurrent?: number;
@@ -46,9 +51,17 @@ const DEFAULT_MAX_CONCURRENT = 4;
 // Module-level so overlapping ticks never double-act on a slug. Cleared each action's
 // finally, so a slug that failed this tick is retried next tick (never wedged).
 const inFlight = new Set<string>();
+const pendingEvictions = new Set<string>();
+const queuedEvictions = new Set<string>();
+const evictionQueue: Array<{ slug: string; deps: ReconcileLoopDeps }> = [];
+let evictionWorker: Promise<void> | null = null;
 
 export function _resetReconcileInFlightForTests(): void {
   inFlight.clear();
+  pendingEvictions.clear();
+  queuedEvictions.clear();
+  evictionQueue.length = 0;
+  evictionWorker = null;
 }
 
 function errMessage(err: unknown): string {
@@ -73,13 +86,23 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
   // A desired slug is (re-)ensured when it is not yet mount-observed OR its applied
   // content has drifted. Staleness never resurrects an unassigned slug — the filter is
   // over `desired`, so a stale slug that is no longer desired falls through to evict.
+  for (const slug of [...pendingEvictions]) {
+    if (desired.has(slug)) {
+      pendingEvictions.delete(slug);
+      deps.onPendingEvictionCancelled?.(slug);
+    }
+  }
+  const evictionCandidates = [...evictObserved].filter((s) => !desired.has(s));
+  for (const slug of evictionCandidates) pendingEvictions.add(slug);
+
   const toMount = [...desired].filter(
     (s) =>
       (!mountObserved.has(s) || contentStale.has(s)) &&
       !inFlight.has(s) &&
       (deps.shouldEnsureSlug?.(s) ?? true),
   );
-  const toEvict = [...evictObserved].filter((s) => !desired.has(s) && !inFlight.has(s));
+  const toEvict = evictionCandidates.filter((s) => !queuedEvictions.has(s));
+  const currentPendingEvictions = (): string[] => [...pendingEvictions];
 
   if (toMount.length === 0 && toEvict.length === 0) return;
 
@@ -89,31 +112,6 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
     `[reconcile] ${deps.gatewayId}: +${toMount.length} mount${mountList} / -${toEvict.length} evict${evictList}`,
   );
 
-  let evictionFailed = false;
-  const evictions: Array<() => Promise<void>> = [];
-
-  for (const slug of toEvict) {
-    evictions.push(async () => {
-      inFlight.add(slug);
-      try {
-        const outcome = await deps.unmountSlug(slug);
-        deps.log(`[reconcile] ${deps.gatewayId}: evicted ${slug} (${outcome})`);
-      } catch (err) {
-        evictionFailed = true;
-        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ evict failed for ${slug}: ${errMessage(err)}`);
-      } finally {
-        inFlight.delete(slug);
-      }
-    });
-  }
-
-  await runBounded(evictions, deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
-
-  if (evictionFailed) {
-    deps.log(`[reconcile] ${deps.gatewayId}: deferring ${toMount.length} mount(s) until eviction succeeds`);
-    return;
-  }
-
   const mounts: Array<() => Promise<void>> = [];
   let deferRemainingMounts = false;
   for (const slug of toMount) {
@@ -121,7 +119,7 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
       if (deferRemainingMounts) return;
       inFlight.add(slug);
       try {
-        const outcome = await deps.ensureSlug(slug);
+        const outcome = await deps.ensureSlug(slug, currentPendingEvictions(), currentPendingEvictions);
         deps.log(`[reconcile] ${deps.gatewayId}: mounted ${slug} (${outcome})`);
         fireSafely(deps, () => deps.onEnsureSuccess?.(slug));
       } catch (err) {
@@ -142,6 +140,41 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
     mounts,
     deps.shouldDeferRemainingMounts ? 1 : (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT),
   );
+  for (const slug of toEvict) {
+    queuedEvictions.add(slug);
+    evictionQueue.push({ slug, deps });
+  }
+  startEvictionWorker();
+}
+
+function startEvictionWorker(): void {
+  if (evictionWorker || evictionQueue.length === 0) return;
+  evictionWorker = runEvictionQueue().finally(() => {
+    evictionWorker = null;
+    startEvictionWorker();
+  });
+}
+
+async function runEvictionQueue(): Promise<void> {
+  while (evictionQueue.length > 0) {
+    const job = evictionQueue.shift()!;
+    const { slug, deps } = job;
+    if (!pendingEvictions.has(slug)) {
+      queuedEvictions.delete(slug);
+      continue;
+    }
+    inFlight.add(slug);
+    try {
+      const outcome = await deps.unmountSlug(slug, [...pendingEvictions]);
+      pendingEvictions.delete(slug);
+      deps.log(`[reconcile] ${deps.gatewayId}: evicted ${slug} (${outcome})`);
+    } catch (err) {
+      deps.log(`[reconcile] ${deps.gatewayId}: ⚠ evict failed for ${slug}: ${errMessage(err)}`);
+    } finally {
+      inFlight.delete(slug);
+      queuedEvictions.delete(slug);
+    }
+  }
 }
 
 async function runBounded(actions: Array<() => Promise<void>>, max: number): Promise<void> {

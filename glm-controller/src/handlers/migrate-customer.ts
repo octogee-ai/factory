@@ -6,7 +6,10 @@ import type {
   StepStatus,
 } from "@octogee/shared/types/glm";
 import { resolveOperationOrigin } from "@octogee/shared/types/glm";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type {
+  FleetBrokerProjectCheckoutScope,
+  FleetBrokerUserSnapshot,
+} from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import {
@@ -362,13 +365,13 @@ async function assertV2InitialBindings(
 }
 
 const V2_SOURCE_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
-  "initialized", "targetRestored", "preSynced", "cutover", "abortIntent",
+  "initialized", "keysSynced", "preSynced", "cutover", "abortIntent",
 ]);
 const V2_BOTH_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
   "sourceQuiesced",
 ]);
 const V2_TARGET_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
-  "keysSynced", "finalSynced", "targetVerified", "sourceRetired",
+  "finalSynced", "targetVerified", "sourceRetired",
 ]);
 
 function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
@@ -400,16 +403,8 @@ async function buildV2DriverDeps(
     }
     return url;
   });
-  const needsRestoreSnapshot = state.phase === "initialized" || state.phase === "keysSynced";
-  const restoreSnapshot = needsRestoreSnapshot
-    ? await deps.readUserSnapshot(state.uid, state.targetGatewayId)
-    : undefined;
-  if (needsRestoreSnapshot && !restoreSnapshot) {
-    throw new Error(`durable snapshot not found for ${state.uid}`);
-  }
   return {
     client,
-    ...(restoreSnapshot ? { restoreSnapshot } : {}),
     setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
       deps.setAssignmentState({
         gatewayId: state.sourceGatewayId,
@@ -526,7 +521,7 @@ interface PreparedMigration {
   user: UserGatewayInfo;
   migrationId: string;
   targets: MigrationTargets;
-  restoreSnapshot: FleetBrokerUserSnapshot;
+  projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   urls: Map<string, string>;
 }
 
@@ -666,11 +661,11 @@ async function prepareMigration(
       resolved.targets.toGatewayId,
       await deps.resolveGatewayUrl(resolved.targets.toGatewayId),
     );
-    const restoreSnapshot = await deps.readUserSnapshot(
+    const migrationSnapshot = await deps.readUserSnapshot(
       request.uid,
       resolved.targets.toGatewayId,
     );
-    if (!restoreSnapshot) {
+    if (!migrationSnapshot) {
       return { error: `durable snapshot not found for ${request.uid}` };
     }
     return {
@@ -678,7 +673,9 @@ async function prepareMigration(
       user,
       migrationId,
       targets: resolved.targets,
-      restoreSnapshot,
+      ...(migrationSnapshot.projectCheckoutScope
+        ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
+        : {}),
       urls,
     };
   } catch (error) {
@@ -730,7 +727,7 @@ async function executeMigration(
       toGatewayId: prepared.toGatewayId,
       crossGateway: prepared.user.currentGatewayId !== prepared.toGatewayId,
       gateAssignment: true,
-      restoreSnapshot: prepared.restoreSnapshot,
+      projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,
     },
     buildRunnerDeps({ deps, client, ctx, automatic }),

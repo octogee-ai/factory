@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type {
   CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2Phase,
@@ -133,7 +132,6 @@ export function customerMigrationV2GatewayRootFenceMatches(
 
 export interface CustomerMigrationV2Deps {
   client: MigrationClient;
-  restoreSnapshot?: FleetBrokerUserSnapshot;
   setSourceAssignmentState: (state: "serving" | "quiescing") => Promise<void>;
   commitCutover: (fence: CustomerMigrationV2CutoverFence) => Promise<void>;
   now: () => number;
@@ -157,20 +155,18 @@ async function advancePreparation(
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
     case "initialized":
-    case "keysSynced":
-      if (!deps.restoreSnapshot) {
-        throw new Error("customer migration V2 restore phase lacks its durable snapshot");
-      }
-      await deps.client.restoreTarget({
+      await deps.client.transferState({
         migrationId: state.migrationId,
-        gatewayId: state.targetGatewayId,
-        transportId: state.targetGatewayId,
-        uid: state.uid,
+        fromGatewayId: state.sourceGatewayId,
+        fromTransportId: state.sourceGatewayId,
+        toGatewayId: state.targetGatewayId,
+        toTransportId: state.targetGatewayId,
         slug: state.slug,
-        snapshot: deps.restoreSnapshot,
+        mode: "keys",
+        includeActivationManifest: false,
       });
-      return { ...state, phase: "targetRestored" };
-    case "targetRestored":
+      return { ...state, phase: "keysSynced" };
+    case "keysSynced":
       await deps.client.transferState({
         migrationId: state.migrationId,
         fromGatewayId: state.sourceGatewayId,
@@ -179,7 +175,7 @@ async function advancePreparation(
         toTransportId: state.targetGatewayId,
         slug: state.slug,
         mode: "pre",
-        includeActivationManifest: true,
+        includeActivationManifest: false,
       });
       return { ...state, phase: "preSynced" };
     default:
@@ -304,7 +300,6 @@ async function terminalState(
 const ADVANCE_HANDLERS: Record<CustomerMigrationV2Phase, AdvanceHandler> = {
   initialized: advancePreparation,
   keysSynced: advancePreparation,
-  targetRestored: advancePreparation,
   preSynced: advanceForward,
   sourceQuiesced: advanceForward,
   finalSynced: advanceForward,
@@ -328,9 +323,8 @@ export function isCustomerMigrationV2PostIntent(state: CustomerMigrationV2State)
 }
 
 const NEXT_PHASE: Readonly<Partial<Record<CustomerMigrationV2Phase, CustomerMigrationV2Phase>>> = {
-  initialized: "targetRestored",
-  keysSynced: "targetRestored",
-  targetRestored: "preSynced",
+  initialized: "keysSynced",
+  keysSynced: "preSynced",
   preSynced: "sourceQuiesced",
   sourceQuiesced: "finalSynced",
   finalSynced: "targetVerified",

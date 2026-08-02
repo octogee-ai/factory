@@ -8,6 +8,7 @@ import {
   materializeActivationManifestSecret,
 } from "../lib/migration-activation-secrets.js";
 import { updateMattermostAccountSecrets } from "../lib/mattermost-account-secrets.js";
+import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 
 const dirs: string[] = [];
 
@@ -22,6 +23,16 @@ afterEach(async () => {
 });
 
 describe("migration activation Mattermost secrets", () => {
+  it("rejects export until the source has an applied fingerprint", async () => {
+    const openclawDir = await tmp();
+
+    await expect(exportActivationManifestWithSecret(
+      path.join(openclawDir, "system_config", "openclaw.json"),
+      openclawDir,
+      "alice",
+    )).rejects.toThrow("source has no applied fingerprint; converge it before migration");
+  });
+
   it("exports a transient manifest with the token resolved outside tracked config", async () => {
     const openclawDir = await tmp();
     const configPath = path.join(openclawDir, "system_config", "openclaw.json");
@@ -48,10 +59,15 @@ describe("migration activation Mattermost secrets", () => {
     await updateMattermostAccountSecrets(openclawDir, {
       set: { "alice-coach": "coach-pat", "alice-proj-orbit": "orbit-pat" },
     });
+    saveAppliedFingerprints(
+      path.join(openclawDir, "applied-fingerprints.json"),
+      new Map([["alice", "fp-alice-v1"]]),
+    );
 
     const manifest = await exportActivationManifestWithSecret(configPath, openclawDir, "alice");
 
     expect(manifest.mattermostAccount.botToken).toBe("coach-pat");
+    expect(manifest.appliedFingerprint).toBe("fp-alice-v1");
     expect(manifest.projectAgents).toMatchObject([
       {
         agentId: "octogee-alice-proj-orbit-coach",
@@ -69,8 +85,9 @@ describe("migration activation Mattermost secrets", () => {
       set: { "alice-proj-retired": "retired-pat", "bob-proj-orbit": "foreign-pat" },
     });
     const manifest = {
-      version: 1 as const,
+      version: 2 as const,
       slug: "alice",
+      appliedFingerprint: "fp-alice-v1",
       agentId: "octogee-alice-coach",
       accountId: "alice-coach",
       agent: { id: "octogee-alice-coach" },

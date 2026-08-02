@@ -79,28 +79,100 @@ async function backfillCoachIdentity(
   return { coachUserId, personalToken: minted.token };
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function existingTeamId(existing: unknown, workspace: unknown): string | null {
+  return existing === null || existing === undefined
+    ? nonEmptyString(workspace)
+    : nonEmptyString(existing);
+}
+
+interface ExistingMattermostTopology {
+  teamId: string;
+  coachChannelId: string;
+  generalChannelId: string;
+  adminChannelId: string;
+  channelName: string;
+}
+
+async function loadExistingMattermostTopology(
+  slug: string,
+  existingMattermost: Record<string, unknown>,
+): Promise<ExistingMattermostTopology | null> {
+  const [workspaceSnap, coachDmSnap, generalSnap, adminSnap] = await Promise.all([
+    db.doc(`workspaces/${slug}`).get(),
+    db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
+    db.doc(`workspaces/${slug}/channels/general`).get(),
+    db.doc(`workspaces/${slug}/channels/admin`).get(),
+  ]);
+  const teamId = existingTeamId(
+    existingMattermost.teamId,
+    workspaceSnap.data()?.mattermost?.teamId,
+  );
+  const coachChannelId = nonEmptyString(coachDmSnap.data()?.mattermost?.channelId);
+  const generalChannelId = nonEmptyString(generalSnap.data()?.mattermost?.channelId);
+  const adminChannelId = nonEmptyString(adminSnap.data()?.mattermost?.channelId);
+  if (!teamId || !coachChannelId || !generalChannelId || !adminChannelId) return null;
+  return {
+    teamId,
+    coachChannelId,
+    generalChannelId,
+    adminChannelId,
+    channelName: nonEmptyString(coachDmSnap.data()?.name) ?? workspaceCoachChannelName(slug),
+  };
+}
+
+function existingProvisioningUpdate(input: {
+  builderUserId: string;
+  slug: string;
+  existingMattermost: Record<string, unknown>;
+  topology: ExistingMattermostTopology;
+  coachUserId: string | null;
+  personalToken: string | null;
+}): Record<string, unknown> {
+  const { builderUserId, slug, existingMattermost, topology, coachUserId, personalToken } = input;
+  const update: Record<string, unknown> = {
+    "mattermost.userId": builderUserId,
+    "mattermost.username": nonEmptyString(existingMattermost.username) ?? slug,
+    "mattermost.teamId": topology.teamId,
+    "mattermost.channelId": topology.coachChannelId,
+    "mattermost.channelName": topology.channelName,
+    "mattermost.dmChannelId": topology.coachChannelId,
+    "mattermost.generalChannelId": topology.generalChannelId,
+    "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
+    "mattermost.adminChannelId": topology.adminChannelId,
+  };
+  if (coachUserId) update["mattermost.coachUserId"] = coachUserId;
+  if (personalToken) update._coachPersonalToken = personalToken;
+  return update;
+}
+
 async function backfillExistingProvisioning(
   uid: string,
   slug: string,
 ): Promise<Record<string, unknown> | null> {
   const existingData = (await db.collection("users").doc(uid).get()).data() || {};
-  if (!existingData.mattermost?.userId) return null;
+  const existingMattermost = (existingData.mattermost as Record<string, unknown> | undefined) ?? {};
+  const builderUserId = nonEmptyString(existingMattermost.userId);
+  if (!builderUserId) return null;
 
-  const coachDmSnap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
-  const existingChannelId = coachDmSnap.data()?.mattermost?.channelId;
-  if (!existingChannelId) return null;
+  const topology = await loadExistingMattermostTopology(slug, existingMattermost);
+  if (!topology) return null;
 
-  log(`[mattermost] user already provisioned (userId=${existingData.mattermost.userId}) — skipping MM creation`);
-  const { coachUserId, personalToken } = await backfillCoachIdentity(uid, slug);
-
-  return {
-    "mattermost.userId": existingData.mattermost.userId,
-    "mattermost.username": existingData.mattermost.username || slug,
-    "mattermost.channelId": existingChannelId,
-    "mattermost.dmChannelId": existingChannelId,
-    ...(coachUserId ? { "mattermost.coachUserId": coachUserId } : {}),
-    ...(personalToken ? { _coachPersonalToken: personalToken } : {}),
-  };
+  log(`[mattermost] user already provisioned (userId=${builderUserId}) — skipping MM creation`);
+  const backfilledCoach = await backfillCoachIdentity(uid, slug);
+  const coachUserId = backfilledCoach.coachUserId
+    ?? nonEmptyString(existingMattermost.coachUserId);
+  return existingProvisioningUpdate({
+    builderUserId,
+    slug,
+    existingMattermost,
+    topology,
+    coachUserId,
+    personalToken: backfilledCoach.personalToken,
+  });
 }
 
 async function createOrFindBuilderUser(input: {

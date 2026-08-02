@@ -111,6 +111,10 @@ export function writeMountedMarker(customersDir: string, slug: string): void {
   fs.writeFileSync(markerPath, "");
 }
 
+export function clearMountedMarker(customersDir: string, slug: string): void {
+  fs.rmSync(mountedMarkerPath(customersDir, slug), { force: true });
+}
+
 // The migrating-in pin guards a freshly-imported customer (coach-wired on the target before
 // cutover makes it desired-there) from the reconcile's EVICT direction only. Time-bounded by
 // mtime so it needs no explicit clear (post-cutover the slug is desired anyway; a failed-

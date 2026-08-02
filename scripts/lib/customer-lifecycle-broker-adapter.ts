@@ -60,6 +60,7 @@ import {
 import { ensureGiteaOrgForWorkspace } from "./gitea-admin-broker-client.js";
 import {
   hasMountedMarker,
+  clearMountedMarker,
   isMigratingInPinned,
   customerCoachWiredInOpenclawConfig,
   listLocalCoachWiredSlugs,
@@ -119,6 +120,40 @@ const DEFAULT_COACH = {
   model: DEFAULT_BUILDER_AGENT_MODEL_REF,
 };
 
+type AddCustomerConfigPatchOptions = Parameters<
+  CustomerLifecycleAdapter["applyAddCustomerConfigPatch"]
+>[2];
+
+function evictionSlugsExcept(
+  mountedSlug: string,
+  batch: readonly string[] | undefined,
+): string[] {
+  return [...new Set(batch ?? [])].filter((slug) => slug !== mountedSlug);
+}
+
+async function currentEvictionSlugs(
+  mountedSlug: string,
+  fallback: readonly string[],
+  readCurrent: (() => Promise<readonly string[]>) | undefined,
+): Promise<string[]> {
+  const batch = readCurrent ? await readCurrent() : fallback;
+  return evictionSlugsExcept(mountedSlug, batch);
+}
+
+function brokerProjectAgents(
+  brokerSnapshot: FleetBrokerUserSnapshot | null,
+  snapshot: UserSnapshot,
+): NonNullable<UserSnapshot["projectAgents"]> {
+  return brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+}
+
+function brokerCustomerMattermostUserId(
+  brokerSnapshot: FleetBrokerUserSnapshot | null,
+  snapshot: UserSnapshot,
+): string | null | undefined {
+  return brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId;
+}
+
 interface BuildBrokeredLifecycleAdapterOptions {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
@@ -137,12 +172,12 @@ interface BrokerCtx {
   snapshotsByUid: Map<string, FleetBrokerUserSnapshot>;
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
+  configRemovedForEviction: Set<string>;
 }
 
 function buildRemoveCustomerPatchLocal(
   current: unknown,
-  slug: string,
-  agentId: string,
+  slugs: readonly string[],
 ): {
   agents: ReturnType<typeof customerAgentRosterPatch>;
   bindings: unknown[];
@@ -153,36 +188,34 @@ function buildRemoveCustomerPatchLocal(
   const currentAccounts =
     (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
       ?.channels?.mattermost?.accounts ?? {};
-  const accounts: Record<string, null> = { [`${slug}-coach`]: null };
-  for (const accountId of Object.keys(currentAccounts)) {
-    if (accountId.startsWith(`${slug}-proj-`)) accounts[accountId] = null;
+  const accounts: Record<string, null> = {};
+  for (const slug of slugs) {
+    accounts[`${slug}-coach`] = null;
+    for (const accountId of Object.keys(currentAccounts)) {
+      if (accountId.startsWith(`${slug}-proj-`)) accounts[accountId] = null;
+    }
+  }
+  const rosterPatches = slugs.map((slug) => customerAgentRosterPatch(current, slug, []));
+  const keyed = rosterPatches.every((patch) => "entries" in patch);
+  let nextAgents = replaceCustomerAgentsInFullAgentList(current, slugs[0]!, []);
+  for (const slug of slugs.slice(1)) {
+    nextAgents = replaceCustomerAgentsInFullAgentList({ agents: { list: nextAgents } }, slug, []);
   }
   return {
-    agents: customerAgentRosterPatch(
-      current,
-      slug,
-      rebindPlatformEmbeddingRefs(
-        replaceCustomerAgentsInFullAgentList(current, slug, []).filter(
-          (agent) =>
-            !(
-              agent &&
-              typeof agent === "object" &&
-              (agent as { id?: unknown }).id === agentId
-            ),
-        ),
-      ),
-    ),
-    bindings: filterOutCustomerBindings(
-      currentBindings.filter(
-        (binding) =>
-          !(
-            binding &&
-            typeof binding === "object" &&
-            (binding as { agentId?: unknown }).agentId === agentId
+    agents: keyed
+      ? {
+          entries: Object.assign(
+            {},
+            ...rosterPatches.map((patch) => "entries" in patch ? patch.entries : {}),
           ),
-      ),
-      slug,
-    ),
+        }
+      : { list: rebindPlatformEmbeddingRefs(nextAgents) },
+    bindings: currentBindings.filter((binding) => {
+      const agentId = binding && typeof binding === "object"
+        ? (binding as { agentId?: unknown }).agentId
+        : undefined;
+      return typeof agentId !== "string" || !slugs.some((slug) => agentIdBelongsToSlug(agentId, slug));
+    }),
     channels: { mattermost: { accounts } },
   };
 }
@@ -361,8 +394,9 @@ async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
   mmUpdate: MmUpdate | null,
-  callOpts: { signal?: AbortSignal; byosActive?: boolean } | undefined,
+  callOpts: AddCustomerConfigPatchOptions,
 ): Promise<{ elapsedMs: number }> {
+  let evictionSlugs = evictionSlugsExcept(snapshot.slug, callOpts?.evictionBatch);
   const brokerSnapshot = await snapshotForUid(ctx, snapshot.uid);
   const coachPat = coachToken(mmUpdate, brokerSnapshot);
   if (!coachPat) {
@@ -370,13 +404,13 @@ async function applyAddCustomerConfigPatch(
   }
 
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
-  const projectAgents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot);
   const accountsMap = buildMattermostAccounts(
     [
       {
         uid: snapshot.uid,
         slug: snapshot.slug,
-        customerMmUserId: brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId,
+        customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
         channels: snapshot.channels,
         agentProjects: activeAgentProjectIds(projectAgents),
       },
@@ -421,12 +455,21 @@ async function applyAddCustomerConfigPatch(
   );
   materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
   const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
+  evictionSlugs = await currentEvictionSlugs(
+    snapshot.slug,
+    evictionSlugs,
+    callOpts?.currentEvictionBatch,
+  );
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     set: {
       [accountId]: coachPat,
       ...projectSecretChange.set,
     },
-    remove: projectSecretChange.remove,
+    remove: [
+      ...projectSecretChange.remove,
+      ...evictionSlugs.map((slug) => `${slug}-coach`),
+    ],
+    removePrefixes: evictionSlugs.map((slug) => `${slug}-proj-`),
   });
   const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
   const bindings = buildCustomerBindings([
@@ -449,21 +492,34 @@ async function applyAddCustomerConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
-        const existingBindings = filterOutCustomerBindings(
-          Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [],
+        let existingBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
+        for (const slug of [snapshot.slug, ...evictionSlugs]) {
+          existingBindings = filterOutCustomerBindings(existingBindings, slug);
+        }
+        let nextAgents = replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
+          agentEntry,
+          ...projectAgentEntries,
+        ]);
+        for (const slug of evictionSlugs) {
+          nextAgents = replaceCustomerAgentsInFullAgentList(
+            { agents: { list: nextAgents } },
+            slug,
+            [],
+          );
+        }
+        const targetAgents = customerAgentRosterPatch(
+          current,
           snapshot.slug,
+          rebindPlatformEmbeddingRefs(nextAgents),
         );
+        const evictionPatch = evictionSlugs.length > 0
+          ? buildRemoveCustomerPatchLocal(current, evictionSlugs)
+          : null;
+        const agents = evictionPatch && "entries" in targetAgents && "entries" in evictionPatch.agents
+          ? { entries: { ...targetAgents.entries, ...evictionPatch.agents.entries } }
+          : targetAgents;
         return {
-          agents: customerAgentRosterPatch(
-            current,
-            snapshot.slug,
-            rebindPlatformEmbeddingRefs(
-              replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
-                agentEntry,
-                ...projectAgentEntries,
-              ]),
-            ),
-          ),
+          agents,
           bindings: [...existingBindings, ...bindings],
           channels: {
             mattermost: {
@@ -475,12 +531,17 @@ async function applyAddCustomerConfigPatch(
                   snapshot.slug,
                   Object.keys(projectAccounts),
                 ),
+                ...(evictionPatch?.channels.mattermost.accounts ?? {}),
               },
             },
           },
         };
       },
-      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, snapshot.slug),
+      buildReplacePaths: (current) => [...new Set(
+        [snapshot.slug, ...evictionSlugs].flatMap((slug) =>
+          customerConfigAgentRosterReplacePaths(current, slug)
+        ),
+      )],
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
@@ -490,10 +551,20 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
-    accountId,
-    ...Object.keys(projectAccounts),
-  ]);
+  for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
+  try {
+    await restartMattermostRoutingMonitors(ctx, snapshot.slug, [
+      accountId,
+      ...Object.keys(projectAccounts),
+    ]);
+  } catch (error) {
+    ctx.log(
+      `[add:${snapshot.slug}] ⚠ Mattermost monitor restart failed after config convergence; ` +
+        `channel readiness verification will decide the mount: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+    );
+  }
   return {
     elapsedMs: Date.now() - startedAt,
     ...(brokerSnapshot
@@ -505,20 +576,38 @@ async function applyAddCustomerConfigPatch(
 async function applyRemoveCustomerConfigPatch(
   ctx: BrokerCtx,
   slug: string,
-  agentId: string,
-): Promise<void> {
-  await applyConfigPatch(
-    {
-      buildPatch: (current) => buildRemoveCustomerPatchLocal(current, slug, agentId),
-      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, slug),
-      logPrefix: `[remove:${slug}]`,
-    },
-    { rpc: ctx.rpc, cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS },
-  );
+  _agentId: string,
+  evictionBatch?: readonly string[],
+  currentEvictionBatch?: () => Promise<readonly string[]>,
+): Promise<readonly string[]> {
+  const slugs = [...new Set([slug, ...(evictionBatch ?? [])])];
+  if (!ctx.configRemovedForEviction.has(slug)) {
+    await applyConfigPatch(
+      {
+        buildPatch: (current) => buildRemoveCustomerPatchLocal(current, slugs),
+        buildReplacePaths: (current) => [...new Set(
+          slugs.flatMap((batchSlug) => customerConfigAgentRosterReplacePaths(current, batchSlug)),
+        )],
+        logPrefix: `[remove:${slug}]`,
+      },
+      {
+        rpc: ctx.rpc,
+        cache: ctx.configCache,
+        totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
+        maxRetries: 1,
+      },
+    );
+    for (const batchSlug of slugs) ctx.configRemovedForEviction.add(batchSlug);
+  }
+  const remaining = currentEvictionBatch
+    ? [...new Set(await currentEvictionBatch())].filter((batchSlug) => slugs.includes(batchSlug))
+    : slugs;
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
-    remove: [`${slug}-coach`],
-    removePrefixes: [`${slug}-proj-`],
+    remove: remaining.map((batchSlug) => `${batchSlug}-coach`),
+    removePrefixes: remaining.map((batchSlug) => `${batchSlug}-proj-`),
   });
+  ctx.configRemovedForEviction.delete(slug);
+  return remaining;
 }
 
 async function waitForAccountHealthy(
@@ -670,7 +759,7 @@ async function prepareImportDir(
   mode: CustomerStateImportMode,
 ): Promise<string> {
   const stateDir = resolveOpenClawStateDir();
-  const wipePaths = [
+  const wipePaths = mode === "final" ? [] : [
     ...agentIdsForMigration(slug).flatMap((agentId) => [
       path.join(stateDir, "agents", agentId),
       path.join(stateDir, "memory", `${agentId}.sqlite`),
@@ -706,7 +795,7 @@ async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
-): Promise<void> {
+): Promise<string> {
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   await pruneWorkspaceOnlyProjectCheckouts(
@@ -741,6 +830,7 @@ async function activateImportedCustomer(
   }
   await logActivatedCoachModel(ctx, slug);
   ctx.log(`[import:${slug}] activation complete`);
+  return manifest.appliedFingerprint;
 }
 
 export async function pruneWorkspaceOnlyProjectCheckouts(
@@ -763,12 +853,28 @@ export function projectCheckoutScopeForRuntime(): FleetBrokerProjectCheckoutScop
 async function removeImportedCustomerBySlug(
   ctx: BrokerCtx,
   slug: string,
+  evictionBatch?: readonly string[],
+  currentEvictionBatch?: () => Promise<readonly string[]>,
 ): Promise<RemoveCustomerResult> {
   const wasMounted =
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
   if (!wasMounted) return { wasMounted: false, steps: [] };
-  await applyRemoveCustomerConfigPatch(ctx, slug, customerCoachAgentId(slug));
+  const remaining = await applyRemoveCustomerConfigPatch(
+    ctx,
+    slug,
+    customerCoachAgentId(slug),
+    evictionBatch,
+    currentEvictionBatch,
+  );
+  if (!remaining.includes(slug)) {
+    ctx.configRemovedForEviction.delete(slug);
+    return { wasMounted: true, steps: ["config-patch-remove"], retained: true };
+  }
+  if (currentEvictionBatch && !(await currentEvictionBatch()).includes(slug)) {
+    ctx.configRemovedForEviction.delete(slug);
+    return { wasMounted: true, steps: ["config-patch-remove"], retained: true };
+  }
   await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
   if (!isConfiguredGatewayBuilder(slug)) {
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
@@ -801,6 +907,7 @@ export function buildBrokeredLifecycleAdapter(
     snapshotsByUid: new Map(),
     snapshotsBySlug: new Map(),
     projectCheckoutScope: opts.projectCheckoutScope,
+    configRemovedForEviction: new Set(),
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
@@ -820,6 +927,7 @@ export function buildBrokeredLifecycleAdapter(
     listLocalCustomerDirs: () => listLocalCustomerDirs(CUSTOMERS_DIR),
     customerMountMarked: (slug) => hasMountedMarker(CUSTOMERS_DIR, slug),
     writeMountMarker: (slug) => writeMountedMarker(CUSTOMERS_DIR, slug),
+    clearMountMarker: (slug) => clearMountedMarker(CUSTOMERS_DIR, slug),
     customerMigratingIn: (slug) => isMigratingInPinned(CUSTOMERS_DIR, slug, MIGRATING_IN_PIN_TTL_MS),
     markCustomerMigratingIn: (slug) => writeMigratingInPin(CUSTOMERS_DIR, slug),
     listMigratingInSlugs: () => listMigratingInSlugs(CUSTOMERS_DIR, MIGRATING_IN_PIN_TTL_MS),
@@ -901,8 +1009,9 @@ export function buildBrokeredLifecycleAdapter(
     scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
       applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts),
-    applyRemoveCustomerConfigPatch: (slug, agentId) =>
-      applyRemoveCustomerConfigPatch(ctx, slug, agentId),
+    applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
+      applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch),
+    cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
@@ -910,10 +1019,13 @@ export function buildBrokeredLifecycleAdapter(
     listExportPaths,
     prepareImportDir,
     prepareKeyImportDir,
-    activateImportedCustomer: (slug, callOpts) => activateImportedCustomer(ctx, slug, callOpts),
+    activateImportedCustomer: async (slug, callOpts) => ({
+      appliedFingerprint: await activateImportedCustomer(ctx, slug, callOpts),
+    }),
     exportOpenClawActivationManifest: (slug) =>
       exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
-    removeImportedCustomerBySlug: (slug) => removeImportedCustomerBySlug(ctx, slug),
+    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
+      removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch),
   };
   return adapter;
 }

@@ -13,6 +13,7 @@ import {
 import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
 
 const tmpDirs: string[] = [];
+const APPLIED_FINGERPRINT = "fp-alice-v1";
 
 async function mkTmp(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activation-manifest-"));
@@ -26,8 +27,9 @@ afterEach(async () => {
 
 function manifest(): MigrationActivationManifest {
   return {
-    version: 1,
+    version: 2,
     slug: "alice",
+    appliedFingerprint: APPLIED_FINGERPRINT,
     agentId: "octogee-alice-coach",
     accountId: "alice-coach",
     agent: { id: "octogee-alice-coach", model: "custom-model" },
@@ -65,7 +67,9 @@ describe("migration activation manifest", () => {
       }),
     );
 
-    await expect(extractOpenClawActivationManifest(configPath, "alice")).resolves.toMatchObject({
+    await expect(extractOpenClawActivationManifest(configPath, "alice", {
+      appliedFingerprint: APPLIED_FINGERPRINT,
+    })).resolves.toMatchObject({
       slug: "alice",
       agent: { id: "octogee-alice-coach", model: "custom-model" },
       mattermostAccount: { botToken: "coach-pat" },
@@ -85,7 +89,9 @@ describe("migration activation manifest", () => {
       }),
     );
 
-    await expect(extractOpenClawActivationManifest(configPath, "alice")).resolves.toMatchObject({
+    await expect(extractOpenClawActivationManifest(configPath, "alice", {
+      appliedFingerprint: APPLIED_FINGERPRINT,
+    })).resolves.toMatchObject({
       agent: { id: "octogee-alice-coach", model: "custom-model" },
     });
   });
@@ -123,7 +129,9 @@ describe("migration activation manifest", () => {
       }),
     );
 
-    await expect(extractOpenClawActivationManifest(configPath, "alice")).resolves.toMatchObject({
+    await expect(extractOpenClawActivationManifest(configPath, "alice", {
+      appliedFingerprint: APPLIED_FINGERPRINT,
+    })).resolves.toMatchObject({
       projectAgents: [
         {
           agentId: "octogee-alice-proj-orbit-coach",
@@ -417,7 +425,9 @@ describe("migration activation manifest", () => {
       close: vi.fn(async () => undefined),
     };
 
-    const betaManifest = await extractOpenClawActivationManifest(sourceConfigPath, "alice");
+    const betaManifest = await extractOpenClawActivationManifest(sourceConfigPath, "alice", {
+      appliedFingerprint: APPLIED_FINGERPRINT,
+    });
     await applyOpenClawActivationManifest(betaManifest, { rpc: rpc as never, log: vi.fn() });
 
     const patch = configPatch.mock.calls[0][0] as {

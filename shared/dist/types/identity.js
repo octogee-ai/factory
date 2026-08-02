@@ -18,6 +18,25 @@ export const RESERVED_USERNAMES = new Set([
     PROJECT_DISCRIMINATOR,
     COMMUNITY_PREFIX,
 ]);
+export const RESERVED_MATTERMOST_TEAM_PREFIXES = [
+    'admin',
+    'api',
+    'channel',
+    'claim',
+    'error',
+    'files',
+    'help',
+    'landing',
+    'login',
+    'mfa',
+    'oauth',
+    'plug',
+    'plugins',
+    'post',
+    'signup',
+    'boards',
+    'playbooks',
+];
 export function isValidUsername(name) {
     if (typeof name !== 'string')
         return false;
@@ -28,6 +47,8 @@ export function isValidUsername(name) {
     if (!USERNAME_RE.test(name))
         return false;
     if (RESERVED_USERNAMES.has(name))
+        return false;
+    if (RESERVED_MATTERMOST_TEAM_PREFIXES.some((prefix) => name.startsWith(prefix)))
         return false;
     for (const segment of name.split('-')) {
         if (RESERVED_USERNAMES.has(segment))
@@ -49,6 +70,9 @@ export function usernameValidationError(name) {
     }
     if (RESERVED_USERNAMES.has(name)) {
         return `"${name}" is reserved.`;
+    }
+    if (RESERVED_MATTERMOST_TEAM_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+        return 'Username starts with a reserved chat workspace name.';
     }
     for (const segment of name.split('-')) {
         if (RESERVED_USERNAMES.has(segment)) {

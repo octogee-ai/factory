@@ -2007,6 +2007,14 @@ export function buildOperatorHeartbeatPollerDeps(
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
       return snap.docs;
     }),
+    ownsEviction: async (gatewayId: string) => {
+      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const root = projectGatewayDesiredRootForGateway(
+        snap.exists ? snap.data() : undefined,
+        gatewayId,
+      );
+      return root !== null && root.gatewayClass !== "shared";
+    },
     evictSlug: async (gatewayId: string, slug: string) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       const runtime = snap.exists ? snap.data() : undefined;

@@ -234,7 +234,7 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
 
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(client.calls).toEqual([
-      "restore:gw-green",
+      "transfer:keys:gw-blue->gw-green",
       "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
@@ -244,6 +244,7 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(events).toContain("assignment:gw-blue:quiescing");
     expect(events).toContain("cutover:gw-blue->gw-green:mirror=true");
     expect(client.calls.every((call) => !/config/u.test(call))).toBe(true);
+    expect(client.restoreTarget).not.toHaveBeenCalled();
     expect(deps.readUserSnapshot).toHaveBeenCalledWith("uid-alice", "gw-green");
   });
 
@@ -284,19 +285,20 @@ describe("migrate-customer — durable V2 migration", () => {
       targetRelease: 2,
     });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ]);
     expect(client.calls).toEqual([
-      "restore:gw-green",
+      "transfer:keys:gw-blue->gw-green",
       "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
       "verify:gw-green",
       "unmount:gw-blue",
     ]);
+    expect(client.restoreTarget).not.toHaveBeenCalled();
     expect(events).toContain("v2-cutover:gw-blue->gw-green");
-    expect(deps.readUserSnapshot).toHaveBeenCalledWith("uid-alice", "gw-green");
+    expect(deps.readUserSnapshot).not.toHaveBeenCalled();
     expect(client.flushGateway).toHaveBeenLastCalledWith(expect.objectContaining({
       gatewayId: "gw-green",
       expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
@@ -391,7 +393,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/retry pending: status 503/u);
-    expect(persisted.map((state) => state.phase)).toEqual(["initialized", "targetRestored"]);
+    expect(persisted.map((state) => state.phase)).toEqual(["initialized"]);
   });
 
   it("aborts a transient final-sync failure after source quiesce before returning retry", async () => {
@@ -412,7 +414,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -457,7 +459,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);

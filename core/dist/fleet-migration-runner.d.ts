@@ -1,6 +1,6 @@
 import { type MigrationPhase } from "./fleet-migration.js";
 import type { MigrationClient } from "./fleet-migration-client.js";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
@@ -32,7 +32,7 @@ export interface MigrationRunnerInput {
     toGatewayId: string;
     crossGateway?: boolean;
     gateAssignment?: boolean;
-    restoreSnapshot: FleetBrokerUserSnapshot;
+    projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
 }
 export interface MigrationRunnerResult {

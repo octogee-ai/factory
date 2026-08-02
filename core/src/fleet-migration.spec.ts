@@ -23,29 +23,19 @@ function s(phase: MigrationPhase): MigrationState {
 }
 
 describe("nextMigrationStep — forward path", () => {
-  it("initial → restore target, which creates target-owned credentials", () => {
+  it("initial → keys-only sync before state transfer", () => {
     const step = nextMigrationStep(s("initial"));
     expect(step).toEqual({
-      action: "restore-target",
-      gateway: "gw-prod-v2",
-      uid: "uid-ceckert",
+      action: "sync-state",
+      mode: "keys",
+      from: "gw-prod",
+      to: "gw-prod-v2",
       slug: "ceckert",
     });
   });
 
-  it("resumes a legacy keys-synced operation by restoring the target", () => {
-    const step = nextMigrationStep(s("keys-synced"));
-    expect(step).toEqual({
-      action: "restore-target",
-      gateway: "gw-prod-v2",
-      uid: "uid-ceckert",
-      slug: "ceckert",
-    });
-  });
-
-  it("target-restored → pre-sync state from source to target", () => {
-    const step = nextMigrationStep(s("target-restored"));
-    expect(step).toEqual({
+  it("keys-synced → pre-sync without restoring or provisioning the target", () => {
+    expect(nextMigrationStep(s("keys-synced"))).toEqual({
       action: "sync-state",
       mode: "pre",
       from: "gw-prod",
@@ -123,9 +113,8 @@ describe("nextMigrationStep — forward path", () => {
 
 describe("advancePhase", () => {
   it("walks the canonical sequence", () => {
-    expect(advancePhase("initial")).toBe("target-restored");
-    expect(advancePhase("keys-synced")).toBe("target-restored");
-    expect(advancePhase("target-restored")).toBe("pre-synced");
+    expect(advancePhase("initial")).toBe("keys-synced");
+    expect(advancePhase("keys-synced")).toBe("pre-synced");
     expect(advancePhase("pre-synced")).toBe("source-quiesced");
     expect(advancePhase("source-quiesced")).toBe("source-flushed");
     expect(advancePhase("source-flushed")).toBe("final-synced");
@@ -149,7 +138,7 @@ describe("fullPlan", () => {
     const plan = fullPlan(s("initial"));
     expect(plan).toHaveLength(8);
     expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
-      "restore-target",
+      "keys-sync-state",
       "pre-sync-state",
       "quiesce-source",
       "flush-source",
@@ -179,8 +168,8 @@ describe("rollbackPlan — pre-cutover", () => {
     expect(rollbackPlan(s("initial"))).toEqual([]);
   });
 
-  it("keys-synced/target-restored/pre-synced → unmount target import; source still owns", () => {
-    const plan = rollbackPlan(s("keys-synced"));
+  it("pre-synced → unmount target import; source still owns", () => {
+    const plan = rollbackPlan(s("pre-synced"));
     expect(plan).toHaveLength(1);
     expect(plan[0]).toEqual({
       action: "unmount-gateway",
@@ -188,8 +177,6 @@ describe("rollbackPlan — pre-cutover", () => {
       gateway: "gw-prod-v2",
       slug: "ceckert",
     });
-    expect(rollbackPlan(s("target-restored"))).toEqual(plan);
-    expect(rollbackPlan(s("pre-synced"))).toEqual(plan);
   });
 
   it("source-quiesced/source-flushed/final-synced/target-verified → unmount target import; source still owns", () => {
@@ -243,7 +230,6 @@ describe("describeStep", () => {
     const variants: ReturnType<typeof nextMigrationStep>[] = [
       { action: "quiesce-source", gateway: "g", slug: "s" },
       { action: "flush-source", gateway: "g", slug: "s" },
-      { action: "restore-target", gateway: "g", uid: "u", slug: "s" },
       { action: "sync-state", mode: "pre", from: "a", to: "b", slug: "s" },
       { action: "verify-target", gateway: "b", slug: "s" },
       { action: "cutover-firestore", uid: "u", from: "a", to: "b" },

@@ -7,13 +7,24 @@ import {
   readMattermostAccountSecret,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import * as path from "node:path";
+import { loadAppliedFingerprints } from "./applied-fingerprint-store.js";
 
 export async function exportActivationManifestWithSecret(
   configPath: string,
   openclawDir: string,
   slug: string,
 ): Promise<MigrationActivationManifest> {
+  const appliedFingerprint = loadAppliedFingerprints(
+    path.join(openclawDir, "applied-fingerprints.json"),
+  ).get(slug);
+  if (!appliedFingerprint) {
+    throw new Error(
+      `[migration-activation:${slug}] source has no applied fingerprint; converge it before migration`,
+    );
+  }
   return extractOpenClawActivationManifest(configPath, slug, {
+    appliedFingerprint,
     resolveBotToken: async (accountId) =>
       (await readMattermostAccountSecret(openclawDir, accountId)) ?? undefined,
   });

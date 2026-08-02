@@ -1,19 +1,7 @@
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
 async function executeStep(params) {
-    const { step, deps, migrationId, slug, restoreSnapshot, includeActivationManifest, crossGateway, } = params;
+    const { step, deps, migrationId, slug, projectCheckoutScope, includeActivationManifest, crossGateway, } = params;
     switch (step.action) {
-        case "restore-target":
-            if (!restoreSnapshot) {
-                throw new Error("restore-target requires a durable snapshot");
-            }
-            await deps.client.restoreTarget({
-                migrationId,
-                gatewayId: step.gateway,
-                uid: step.uid,
-                slug: step.slug,
-                snapshot: restoreSnapshot,
-            });
-            return;
         case "quiesce-source":
             await deps.client.quiesce({
                 migrationId,
@@ -36,8 +24,8 @@ async function executeStep(params) {
                 toGatewayId: step.to,
                 slug: step.slug,
                 mode: step.mode,
-                includeActivationManifest,
-                projectCheckoutScope: restoreSnapshot?.projectCheckoutScope,
+                includeActivationManifest: step.mode === "final" && includeActivationManifest,
+                projectCheckoutScope,
             });
             return;
         case "verify-target":
@@ -126,7 +114,7 @@ function executeForwardStep(execution, step) {
         deps,
         migrationId: input.migrationId,
         slug: input.slug,
-        restoreSnapshot: input.restoreSnapshot,
+        projectCheckoutScope: input.projectCheckoutScope,
         includeActivationManifest: input.includeActivationManifest,
         crossGateway: execution.crossGateway,
     });
@@ -219,7 +207,7 @@ async function tryRollback(state, deps, migrationId, transports) {
                 deps,
                 migrationId,
                 slug: state.slug,
-                restoreSnapshot: null,
+                projectCheckoutScope: undefined,
                 includeActivationManifest: undefined,
                 // Rollback's cutover-firestore restores the SOURCE: flip the mirror
                 // back when the migration crossed gateways.

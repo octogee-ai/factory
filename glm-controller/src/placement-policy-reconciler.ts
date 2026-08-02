@@ -126,7 +126,11 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   latestRelease?: number;
   desiredRelease?: number;
   liveRelease?: number | null;
+  rollActive?: boolean;
+  recoveryGraceUntil?: number;
 }
+
+export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
 
 export interface PlacementPolicyAssignment {
   uid: string;
@@ -482,6 +486,29 @@ function knownKubernetesUnavailable(gateway: PlacementPolicyGateway | undefined)
   return gateway?.kubernetesStatus === "missing" || gateway?.kubernetesStatus === "not-ready";
 }
 
+function transientRecoveryFence(
+  context: PlacementPolicyReconcileContext,
+  gateway: PlacementPolicyGateway,
+): string | null {
+  if (
+    gateway.kubernetesStatus === "not-ready"
+    && gatewayHeartbeatFresh(gateway)
+  ) {
+    return `source ${gateway.gatewayId} still has a fresh runtime heartbeat while its Kubernetes pod restarts or boots`;
+  }
+  if (!isSharedPoolGateway(context, gateway.gatewayId)) return null;
+  if (gateway.rollActive) {
+    return `shared source ${gateway.gatewayId} is in an active roll`;
+  }
+  if (
+    typeof gateway.recoveryGraceUntil === "number"
+    && context.deps.now() < gateway.recoveryGraceUntil
+  ) {
+    return `shared source ${gateway.gatewayId} is inside its post-change recovery grace`;
+  }
+  return null;
+}
+
 function gatewayRuntimeServing(gateway: PlacementPolicyGateway): boolean {
   return gateway.serving ?? gateway.ready;
 }
@@ -832,6 +859,16 @@ async function reconcileUnavailableServingGateway(
 ): Promise<boolean> {
   const source = currentGatewayId ? context.gateways.get(currentGatewayId) : null;
   if (!source || !knownKubernetesUnavailable(source)) return false;
+
+  const transientFence = transientRecoveryFence(context, source);
+  if (transientFence) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "transient-kubernetes-unavailability",
+      reason: transientFence,
+    });
+    return true;
+  }
 
   const assignment = context.assignments.get(
     placementAssignmentKey(source.gatewayId, user.uid),
@@ -2521,6 +2558,11 @@ function placementGatewayFromDocument(input: {
     ].every(Boolean),
     rosterComplete: assigned.every((assignment) => mounted.has(assignment.slug)),
     assignmentCount: assigned.length,
+    latestRelease: root.latestRelease,
+    desiredRelease: root.desiredRelease,
+    liveRelease: root.liveRelease,
+    rollActive: root.desiredRelease !== root.liveRelease,
+    recoveryGraceUntil: root.updatedAt + SHARED_GATEWAY_RECOVERY_GRACE_MS,
   };
 }
 

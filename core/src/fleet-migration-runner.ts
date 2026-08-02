@@ -9,7 +9,7 @@ import {
   type MigrationStep,
 } from "./fleet-migration.js";
 import type { MigrationClient } from "./fleet-migration-client.js";
-import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 
 export interface ReportedStep {
   name: string;
@@ -60,7 +60,7 @@ export interface MigrationRunnerInput {
   // mark before quiesce, restored on rollback). Absent = legacy migration with
   // no assignment layer.
   gateAssignment?: boolean;
-  restoreSnapshot: FleetBrokerUserSnapshot;
+  projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   includeActivationManifest?: boolean;
 }
 
@@ -76,7 +76,7 @@ async function executeStep(params: {
   deps: MigrationRunnerDeps;
   migrationId: string;
   slug: string;
-  restoreSnapshot: FleetBrokerUserSnapshot | null;
+  projectCheckoutScope: FleetBrokerProjectCheckoutScope | undefined;
   includeActivationManifest: boolean | undefined;
   crossGateway: boolean;
 }): Promise<void> {
@@ -85,23 +85,11 @@ async function executeStep(params: {
     deps,
     migrationId,
     slug,
-    restoreSnapshot,
+    projectCheckoutScope,
     includeActivationManifest,
     crossGateway,
   } = params;
   switch (step.action) {
-    case "restore-target":
-      if (!restoreSnapshot) {
-        throw new Error("restore-target requires a durable snapshot");
-      }
-      await deps.client.restoreTarget({
-        migrationId,
-        gatewayId: step.gateway,
-        uid: step.uid,
-        slug: step.slug,
-        snapshot: restoreSnapshot,
-      });
-      return;
     case "quiesce-source":
       await deps.client.quiesce({
         migrationId,
@@ -124,8 +112,8 @@ async function executeStep(params: {
         toGatewayId: step.to,
         slug: step.slug,
         mode: step.mode,
-        includeActivationManifest,
-        projectCheckoutScope: restoreSnapshot?.projectCheckoutScope,
+        includeActivationManifest: step.mode === "final" && includeActivationManifest,
+        projectCheckoutScope,
       });
       return;
     case "verify-target":
@@ -238,7 +226,7 @@ function executeForwardStep(execution: MigrationExecution, step: MigrationStep):
     deps,
     migrationId: input.migrationId,
     slug: input.slug,
-    restoreSnapshot: input.restoreSnapshot,
+    projectCheckoutScope: input.projectCheckoutScope,
     includeActivationManifest: input.includeActivationManifest,
     crossGateway: execution.crossGateway,
   });
@@ -370,7 +358,7 @@ async function tryRollback(
         deps,
         migrationId,
         slug: state.slug,
-        restoreSnapshot: null,
+        projectCheckoutScope: undefined,
         includeActivationManifest: undefined,
         // Rollback's cutover-firestore restores the SOURCE: flip the mirror
         // back when the migration crossed gateways.

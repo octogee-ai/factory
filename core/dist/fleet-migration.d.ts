@@ -1,4 +1,4 @@
-export type MigrationPhase = "initial" | "keys-synced" | "target-restored" | "pre-synced" | "source-quiesced" | "source-flushed" | "final-synced" | "target-verified" | "cutover-done" | "source-unmounted" | "done";
+export type MigrationPhase = "initial" | "keys-synced" | "pre-synced" | "source-quiesced" | "source-flushed" | "final-synced" | "target-verified" | "cutover-done" | "source-unmounted" | "done";
 export interface MigrationState {
     phase: MigrationPhase;
     slug: string;
@@ -8,11 +8,6 @@ export interface MigrationState {
 }
 export type MigrationSyncMode = "keys" | "pre" | "final";
 export type MigrationStep = {
-    action: "restore-target";
-    gateway: string;
-    uid: string;
-    slug: string;
-} | {
     action: "quiesce-source";
     gateway: string;
     slug: string;

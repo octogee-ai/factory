@@ -9,7 +9,7 @@ import {
   projectCheckoutScopeForRuntime,
   pruneWorkspaceOnlyProjectCheckouts,
 } from "../lib/customer-lifecycle-broker-adapter.js";
-import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
+import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   applyConfigPatch,
   customerConfigFullAgentListReplacePaths,
@@ -155,7 +155,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     secretMocks.materializeActivationManifestSecret.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     tempStateDir = null;
-    mocks.readActivationManifest.mockResolvedValue({ slug: "tester10" });
+    mocks.readActivationManifest.mockResolvedValue({
+      slug: "tester10",
+      appliedFingerprint: "fp-tester10",
+    });
     mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
   });
@@ -189,14 +192,16 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     });
     const signal = new AbortController().signal;
 
-    await adapter.activateImportedCustomer("tester10", { signal });
+    await expect(adapter.activateImportedCustomer("tester10", { signal })).resolves.toEqual({
+      appliedFingerprint: "fp-tester10",
+    });
 
     expect(mocks.readActivationManifest).toHaveBeenCalledWith(
       expect.stringContaining(".openclaw"),
       "tester10",
     );
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledWith(
-      { slug: "tester10" },
+      expect.objectContaining({ slug: "tester10", appliedFingerprint: "fp-tester10" }),
       expect.objectContaining({ rpc, signal }),
     );
     expect(mocks.removeActivationManifest).toHaveBeenCalledWith(
@@ -377,6 +382,7 @@ describe("buildBrokeredLifecycleAdapter template files", () => {
 describe("buildBrokeredLifecycleAdapter remove config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
+    secretMocks.updateMattermostAccountSecrets.mockClear();
   });
 
   it("removes only the customer's agent/bindings/account and confirms shrink paths", async () => {
@@ -419,6 +425,114 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     });
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
+  });
+
+  it("removes one stale eviction batch with one config mutation", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    const batch = ["alice", "bob"] as const;
+
+    await adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", batch);
+    await adapter.applyRemoveCustomerConfigPatch("bob", "octogee-bob-coach", batch);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
+    const args = vi.mocked(applyConfigPatch).mock.calls[0]![0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string }> };
+        bindings: Array<{ agentId?: string }>;
+        channels: { mattermost: { accounts: Record<string, null> } };
+      };
+    };
+    const patch = args.buildPatch({
+      agents: {
+        list: [
+          { id: "octogee-alice-coach" },
+          { id: "octogee-bob-coach" },
+          { id: "octogee-carol-coach" },
+        ],
+      },
+      bindings: [
+        { agentId: "octogee-alice-coach" },
+        { agentId: "octogee-bob-coach" },
+        { agentId: "octogee-carol-coach" },
+      ],
+      channels: {
+        mattermost: {
+          accounts: { "alice-coach": {}, "bob-coach": {}, "carol-coach": {} },
+        },
+      },
+    });
+    expect(patch.agents.list.map((agent) => agent.id)).toEqual(["octogee-carol-coach"]);
+    expect(patch.bindings).toEqual([{ agentId: "octogee-carol-coach" }]);
+    expect(patch.channels.mattermost.accounts).toEqual({
+      "alice-coach": null,
+      "bob-coach": null,
+    });
+  });
+
+  it("does not replay a completed config mutation when secret cleanup retries", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    secretMocks.updateMattermostAccountSecrets.mockRejectedValueOnce(
+      new Error("secret file busy"),
+    );
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach"),
+    ).rejects.toThrow("secret file busy");
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach"),
+    ).resolves.toEqual(["alice"]);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry cleanup after an admission wins the config CAS", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    patchMocks.applyConfigPatch.mockRejectedValueOnce(
+      new OpenclawWireError("hash-mismatch", "admission won"),
+    );
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach"),
+    ).rejects.toMatchObject({ code: "hash-mismatch" });
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
+    expect(patchMocks.applyConfigPatch.mock.calls[0]![1]).toMatchObject({ maxRetries: 1 });
+    expect(secretMocks.updateMattermostAccountSecrets).not.toHaveBeenCalled();
+  });
+
+  it("preserves refreshed secrets when the Builder is re-admitted after config quarantine", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch(
+        "alice",
+        "octogee-alice-coach",
+        ["alice"],
+        async () => [],
+      ),
+    ).resolves.toEqual([]);
+
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: [], removePrefixes: [] },
     );
   });
 
@@ -599,6 +713,43 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(events).toEqual(["config-patch", "channels-stop", "channels-start"]);
   });
 
+  it("does not replay a successful roster patch when monitor restart fails", async () => {
+    const log = vi.fn();
+    const rpc = {
+      channelsStop: vi.fn(async () => {
+        throw new Error("monitor unavailable");
+      }),
+      channelsStart: vi.fn(async () => {
+        throw new Error("monitor unavailable");
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+    };
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }),
+    ).resolves.toEqual(expect.objectContaining({ elapsedMs: expect.any(Number) }));
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("channel readiness verification"));
+  });
+
   it("waits for the lifecycle config.changed hash before restarting Mattermost monitors", async () => {
     const events: string[] = [];
     let publishConfigChanged: (() => void) | undefined;
@@ -747,7 +898,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
   });
 
-  it("attempts every coach and project monitor before aggregating restart failures", async () => {
+  it("attempts every coach and project monitor and leaves readiness verification authoritative", async () => {
     const stopAccounts: string[] = [];
     const startAccounts: string[] = [];
     const rpc = {
@@ -798,15 +949,9 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       coachMmUserId: "mm-alice-coach",
     };
 
-    let caught: unknown;
-    try {
-      await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(AggregateError);
-    expect((caught as Error).message).toContain("alice-proj-orbit");
+    await expect(
+      adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }),
+    ).resolves.toEqual(expect.objectContaining({ elapsedMs: expect.any(Number) }));
     expect(stopAccounts).toEqual([
       "alice-coach",
       "alice-proj-orbit",
@@ -888,6 +1033,96 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigFullAgentListReplacePaths(current, "alice"),
+    );
+  });
+
+  it("adds a fresh Builder and removes only the still-undesired batch in one config mutation", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-fresh",
+      slug: "fresh",
+      tier: "standard",
+      gatewayId: "default",
+      status: "",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-fresh",
+      customerMmUserId: "mm-fresh",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Fresh",
+      coachToken: "pat-fresh",
+      coachMmUserId: "mm-fresh-coach",
+    };
+    const currentEvictionBatch = vi.fn(async () => ["stale"]);
+
+    await adapter.applyAddCustomerConfigPatch(
+      snapshot,
+      { _coachPersonalToken: "pat-fresh" },
+      {
+        evictionBatch: ["stale", "readmitted"],
+        currentEvictionBatch,
+      },
+    );
+
+    expect(currentEvictionBatch).toHaveBeenCalledOnce();
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
+    const args = vi.mocked(applyConfigPatch).mock.calls[0]![0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string }> };
+        bindings: Array<{ agentId?: string }>;
+        channels: { mattermost: { accounts: Record<string, unknown> } };
+      };
+    };
+    const patch = args.buildPatch({
+      agents: {
+        list: [
+          { id: "octogee-stale-coach" },
+          { id: "octogee-readmitted-coach" },
+          { id: "octogee-keeper-coach" },
+        ],
+      },
+      bindings: [
+        { agentId: "octogee-stale-coach" },
+        { agentId: "octogee-readmitted-coach" },
+        { agentId: "octogee-keeper-coach" },
+      ],
+      channels: {
+        mattermost: {
+          accounts: {
+            "stale-coach": {},
+            "readmitted-coach": {},
+            "keeper-coach": {},
+          },
+        },
+      },
+    });
+
+    expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-readmitted-coach",
+      "octogee-keeper-coach",
+      "octogee-fresh-coach",
+    ]);
+    expect(patch.bindings).toEqual([
+      { agentId: "octogee-readmitted-coach" },
+      { agentId: "octogee-keeper-coach" },
+    ]);
+    expect(patch.channels.mattermost.accounts).toMatchObject({
+      "fresh-coach": expect.any(Object),
+      "stale-coach": null,
+    });
+    expect(patch.channels.mattermost.accounts).not.toHaveProperty("readmitted-coach");
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        remove: expect.arrayContaining(["stale-coach"]),
+        removePrefixes: ["stale-proj-"],
+      }),
     );
   });
 

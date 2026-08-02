@@ -210,9 +210,21 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
     snapshot: UserSnapshot,
     mmUpdate: MmUpdate | null,
 
-opts?: { signal?: AbortSignal; byosActive?: boolean },
+opts?: {
+  signal?: AbortSignal;
+  byosActive?: boolean;
+  evictionBatch?: readonly string[];
+  currentEvictionBatch?: () => Promise<readonly string[]>;
+},
   ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
-  applyRemoveCustomerConfigPatch: (slug: string, agentId: string) => Promise<void>;
+  applyRemoveCustomerConfigPatch: (
+    slug: string,
+    agentId: string,
+    evictionBatch?: readonly string[],
+    currentEvictionBatch?: () => Promise<readonly string[]>,
+  ) => Promise<readonly string[] | void>;
+  cancelPendingEviction?: (slug: string) => boolean | void;
+  clearMountMarker?: (slug: string) => void;
 
   warmAgentRuntimePlugins?: (slug: string) => Promise<void>;
 
@@ -235,11 +247,19 @@ listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>
 prepareImportDir: (slug: string, mode: CustomerStateImportMode) => Promise<string>;
 prepareKeyImportDir: (slug: string) => Promise<string>;
 
-  activateImportedCustomer: (slug: string, opts?: { signal?: AbortSignal }) => Promise<void>;
+  activateImportedCustomer: (
+    slug: string,
+    opts?: { signal?: AbortSignal },
+  ) => Promise<{ appliedFingerprint: string }>;
+  recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
 
   exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;
 
-  removeImportedCustomerBySlug?: (slug: string) => Promise<RemoveCustomerResult>;
+  removeImportedCustomerBySlug?: (
+    slug: string,
+    evictionBatch?: readonly string[],
+    currentEvictionBatch?: () => Promise<readonly string[]>,
+  ) => Promise<RemoveCustomerResult>;
 }
 
 export type CustomerStateImportMode = "pre" | "final" | "default";
@@ -289,6 +309,7 @@ export type RemoveCustomerStep =
 export interface RemoveCustomerResult {
   wasMounted: boolean;
   steps: RemoveCustomerStep[];
+  retained?: boolean;
 }
 
 const inFlightUids = new Set<string>();
@@ -313,6 +334,8 @@ export interface AddCustomerOptions {
   customersDir?: string;
   mountDeadlineMs?: number;
   convergeContent?: boolean;
+  evictionBatch?: readonly string[];
+  currentEvictionBatch?: () => Promise<readonly string[]>;
 
 signal?: AbortSignal;
 
@@ -432,7 +455,10 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
-  await applyConfigPatchAndMount(adapter, snapshot, null, byos.present, signal);
+  await applyConfigPatchAndMount(adapter, snapshot, null, {
+    byosActive: byos.present,
+    signal,
+  });
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
@@ -522,6 +548,8 @@ async function addCustomerToGatewayInner(
     customersDir?: string;
     signal?: AbortSignal;
     convergeContent?: boolean;
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
   } = {},
 ): Promise<AddCustomerResult> {
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
@@ -577,8 +605,12 @@ async function addCustomerToGatewayInner(
     adapter,
     snapshot,
     mm.mmUpdate,
-    byos.present,
-    signal,
+    {
+      byosActive: byos.present,
+      signal,
+      evictionBatch: opts.evictionBatch,
+      currentEvictionBatch: opts.currentEvictionBatch,
+    },
   );
   steps.push("config-patch");
   throwIfAborted(signal, uid);
@@ -956,12 +988,18 @@ async function applyConfigPatchAndMount(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
   mmUpdate: MmUpdate | null,
-  byosActive: boolean,
-  signal: AbortSignal | undefined,
+  options: {
+    byosActive: boolean;
+    signal?: AbortSignal;
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
+  },
 ): Promise<string | undefined> {
   const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
-    signal,
-    byosActive,
+    signal: options.signal,
+    byosActive: options.byosActive,
+    evictionBatch: options.evictionBatch,
+    currentEvictionBatch: options.currentEvictionBatch,
   });
   adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
   if (adapter.onMounted) adapter.onMounted(snapshot.slug);
@@ -1066,6 +1104,10 @@ async function notifyOpsIfNew(
 export async function removeCustomerFromGateway(
   adapter: CustomerLifecycleAdapter,
   uid: string,
+  opts: {
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
+  } = {},
 ): Promise<RemoveCustomerResult> {
   const steps: RemoveCustomerStep[] = [];
   const snapshot = await adapter.loadUserSnapshot(uid);
@@ -1081,9 +1123,31 @@ export async function removeCustomerFromGateway(
   }
 
   const coachAgentId = `octogee-${slug}-coach`;
-  await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId);
+  const remaining = opts.evictionBatch
+    ? await adapter.applyRemoveCustomerConfigPatch(
+        slug,
+        coachAgentId,
+        opts.evictionBatch,
+        opts.currentEvictionBatch,
+      )
+    : await adapter.applyRemoveCustomerConfigPatch(
+        slug,
+        coachAgentId,
+        undefined,
+        opts.currentEvictionBatch,
+      );
   steps.push("config-patch-remove");
   adapter.log(`[remove:${slug}] removed from openclaw config`);
+
+  if (remaining && !remaining.includes(slug)) {
+    adapter.cancelPendingEviction?.(slug);
+    return { wasMounted: true, steps, retained: true };
+  }
+
+  if (opts.currentEvictionBatch && !(await opts.currentEvictionBatch()).includes(slug)) {
+    adapter.cancelPendingEviction?.(slug);
+    return { wasMounted: true, steps, retained: true };
+  }
 
   if (adapter.hasCustomerDir(slug)) {
     await adapter.deleteCustomerDir(slug);

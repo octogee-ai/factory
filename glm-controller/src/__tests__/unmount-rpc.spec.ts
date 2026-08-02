@@ -132,6 +132,43 @@ describe("buildOperatorHeartbeatPollerDeps", () => {
       verifyFleetRequest("gateway-token", body.migrationId, rawBody, signature),
     ).toBe(false);
   });
+
+  it("leaves shared eviction to the in-pod reconciler and owns builder eviction", async () => {
+    const durableGateway = (gatewayClass: "shared" | "builder") => ({
+      gatewayId: "bender",
+      latestRelease: 1,
+      desiredRelease: 1,
+      desiredStatus: "running",
+      configSchemaVersion: 1,
+      profile: null,
+      gatewayClass,
+      imageProfile: "standard",
+      sizingTier: null,
+      gcpProject: null,
+      gatewayContainerSecurityContext: null,
+      serviceAccountName: null,
+      serviceAccount: null,
+      operatorAccess: null,
+      ownerUid: gatewayClass === "shared" ? null : "uid-bender",
+      builderSlug: gatewayClass === "shared" ? null : "bender",
+      openclawOverrides: null,
+      modelBrokerLimits: null,
+      preemption: null,
+    });
+    let gateway = durableGateway("shared");
+    const db = {
+      collection: () => ({
+        doc: () => ({
+          get: async () => ({ exists: true, data: () => gateway }),
+        }),
+      }),
+    } as unknown as Firestore;
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey);
+
+    await expect(deps.ownsEviction?.("bender")).resolves.toBe(false);
+    gateway = durableGateway("builder");
+    await expect(deps.ownsEviction?.("bender")).resolves.toBe(true);
+  });
 });
 
 describe("operator heartbeat poll — a converged gateway writes nothing", () => {

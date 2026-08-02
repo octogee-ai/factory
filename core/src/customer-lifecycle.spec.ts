@@ -246,7 +246,7 @@ return "ssh-pubkey";
     listExportPaths: async () => [],
     prepareImportDir: async () => "/tmp/import",
     prepareKeyImportDir: async () => "/tmp/import",
-    activateImportedCustomer: async () => {},
+    activateImportedCustomer: async () => ({ appliedFingerprint: "fp-test" }),
   };
 }
 
@@ -1843,6 +1843,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     prepareImportDir: false,
     prepareKeyImportDir: false,
     activateImportedCustomer: false,
+    recordAppliedFingerprint: false,
   };
 
   const REPO_TOUCHING = (

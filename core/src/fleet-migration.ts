@@ -3,7 +3,6 @@
 export type MigrationPhase =
   | "initial"
   | "keys-synced"
-  | "target-restored"
   | "pre-synced"
   | "source-quiesced"
   | "source-flushed"
@@ -24,7 +23,6 @@ export interface MigrationState {
 export type MigrationSyncMode = "keys" | "pre" | "final";
 
 export type MigrationStep =
-  | { action: "restore-target"; gateway: string; uid: string; slug: string }
   | { action: "quiesce-source"; gateway: string; slug: string }
   | { action: "flush-source"; gateway: string; slug: string }
   | { action: "sync-state"; mode: MigrationSyncMode; from: string; to: string; slug: string }
@@ -36,14 +34,14 @@ export type MigrationStep =
 export function nextMigrationStep(state: MigrationState): MigrationStep {
   switch (state.phase) {
     case "initial":
-    case "keys-synced":
       return {
-        action: "restore-target",
-        gateway: state.toGatewayId,
-        uid: state.uid,
+        action: "sync-state",
+        mode: "keys",
+        from: state.fromGatewayId,
+        to: state.toGatewayId,
         slug: state.slug,
       };
-    case "target-restored":
+    case "keys-synced":
       return {
         action: "sync-state",
         mode: "pre",
@@ -100,9 +98,8 @@ export function nextMigrationStep(state: MigrationState): MigrationStep {
 export function advancePhase(p: MigrationPhase): MigrationPhase {
   switch (p) {
     case "initial":
+      return "keys-synced";
     case "keys-synced":
-      return "target-restored";
-    case "target-restored":
       return "pre-synced";
     case "pre-synced":
       return "source-quiesced";
@@ -142,7 +139,6 @@ export function rollbackPlan(state: MigrationState): MigrationStep[] {
     case "initial":
       return [];
     case "keys-synced":
-    case "target-restored":
     case "pre-synced":
     case "source-quiesced":
     case "source-flushed":
@@ -185,8 +181,6 @@ export function describeStep(step: MigrationStep): string {
       return `quiesce ${step.slug} on ${step.gateway} (stop accepting new prompts; let in-flight runs settle)`;
     case "flush-source":
       return `flush durable state for ${step.slug} on ${step.gateway} after quiescence`;
-    case "restore-target":
-      return `restore durable state for ${step.slug} onto ${step.gateway} before live sync`;
     case "sync-state":
       if (step.mode === "keys") {
         return `seed per-customer SSH key for ${step.slug} directly from ${step.from} → ${step.to}`;

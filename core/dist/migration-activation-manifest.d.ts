@@ -10,8 +10,9 @@ export interface MigrationActivationManifestProjectAgent {
     bindings: unknown[];
 }
 export interface MigrationActivationManifest {
-    version: 1;
+    version: 2;
     slug: string;
+    appliedFingerprint: string;
     agentId: string;
     accountId: string;
     agent: Record<string, unknown>;
@@ -20,7 +21,8 @@ export interface MigrationActivationManifest {
     projectAgents: MigrationActivationManifestProjectAgent[];
 }
 export declare function activationManifestTarPath(slug: string): string;
-export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts?: {
+export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts: {
+    appliedFingerprint: string;
     botToken?: string;
     resolveBotToken?: (accountId: string) => Promise<string | undefined>;
 }): Promise<MigrationActivationManifest>;

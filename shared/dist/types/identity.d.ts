@@ -13,6 +13,7 @@ export declare const COMMUNITY_PREFIX: 'community';
 export declare const RESERVED_WORKSPACE_CHANNELS: readonly ['general', 'coach', 'admin'];
 export declare const MM_SYSTEM_CHANNELS: ReadonlySet<string>;
 export declare const RESERVED_USERNAMES: ReadonlySet<string>;
+export declare const RESERVED_MATTERMOST_TEAM_PREFIXES: readonly string[];
 export declare function isValidUsername(name: unknown): name is string;
 export declare function usernameValidationError(name: unknown): string | null;
 export declare function isValidProjectId(id: unknown): id is string;

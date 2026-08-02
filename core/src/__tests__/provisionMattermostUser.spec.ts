@@ -134,19 +134,63 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
 describe("provisionMattermostUser — already provisioned (idempotent backfill)", () => {
   beforeEach(() => {
     h.setDocs({
-      "users/u1": { mattermost: { userId: "existing-builder", username: "acme" } },
-      "workspaces/acme/channels/coach-dm": { mattermost: { channelId: "existing-ch" } },
+      "users/u1": {
+        mattermost: {
+          userId: "existing-builder",
+          username: "acme",
+          teamId: "existing-team",
+          coachUserId: "existing-coach",
+        },
+      },
+      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme/channels/coach-dm": {
+        name: "acme-coach",
+        mattermost: { channelId: "existing-coach-ch" },
+      },
+      "workspaces/acme/channels/general": { mattermost: { channelId: "existing-general-ch" } },
+      "workspaces/acme/channels/admin": { mattermost: { channelId: "existing-admin-ch" } },
       "users/u1/secrets/coachMattermost": { personalToken: "existing-coach-pat" },
     });
   });
 
-  it("returns the existing identifiers without creating a new user or team", async () => {
+  it("returns the complete persisted topology without creating a new user or team", async () => {
     const result = await call(HAPPY);
     expect(result["mattermost.userId"]).toBe("existing-builder");
-    expect(result["mattermost.channelId"]).toBe("existing-ch");
+    expect(result["mattermost.teamId"]).toBe("existing-team");
+    expect(result["mattermost.coachUserId"]).toBe("existing-coach");
+    expect(result["mattermost.channelId"]).toBe("existing-coach-ch");
+    expect(result["mattermost.generalChannelId"]).toBe("existing-general-ch");
+    expect(result["mattermost.adminChannelId"]).toBe("existing-admin-ch");
     expect(result["_coachPersonalToken"]).toBe("existing-coach-pat");
     expect(seq()).not.toContain("POST /users");
     expect(seq()).not.toContain("POST /teams");
+  });
+
+  it("re-enters provisioning when the persisted topology has no team", async () => {
+    h.setDocs({
+      "users/u1": { mattermost: { userId: "existing-builder", username: "acme" } },
+      "workspaces/acme/channels/coach-dm": { mattermost: { channelId: "existing-coach-ch" } },
+    });
+
+    const result = await call(HAPPY);
+
+    expect(result["mattermost.teamId"]).toBe("team-1");
+    expect(seq()).toContain("POST /teams");
+  });
+
+  it("re-enters provisioning when a persisted team is missing canonical channels", async () => {
+    h.setDocs({
+      "users/u1": {
+        mattermost: { userId: "existing-builder", username: "acme", teamId: "existing-team" },
+      },
+      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme/channels/coach-dm": { mattermost: { channelId: "existing-coach-ch" } },
+    });
+
+    const result = await call(HAPPY);
+
+    expect(result["mattermost.teamId"]).toBe("team-1");
+    expect(seq()).toContain("POST /teams");
   });
 });
 

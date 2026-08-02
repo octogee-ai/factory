@@ -556,7 +556,6 @@ export interface Operation {
 export type CustomerMigrationV2Phase =
   | "initialized"
   | "keysSynced"
-  | "targetRestored"
   | "preSynced"
   | "sourceQuiesced"
   | "finalSynced"

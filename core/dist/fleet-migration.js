@@ -1,14 +1,14 @@
 export function nextMigrationStep(state) {
     switch (state.phase) {
         case "initial":
-        case "keys-synced":
             return {
-                action: "restore-target",
-                gateway: state.toGatewayId,
-                uid: state.uid,
+                action: "sync-state",
+                mode: "keys",
+                from: state.fromGatewayId,
+                to: state.toGatewayId,
                 slug: state.slug,
             };
-        case "target-restored":
+        case "keys-synced":
             return {
                 action: "sync-state",
                 mode: "pre",
@@ -64,9 +64,8 @@ export function nextMigrationStep(state) {
 export function advancePhase(p) {
     switch (p) {
         case "initial":
+            return "keys-synced";
         case "keys-synced":
-            return "target-restored";
-        case "target-restored":
             return "pre-synced";
         case "pre-synced":
             return "source-quiesced";
@@ -105,7 +104,6 @@ export function rollbackPlan(state) {
         case "initial":
             return [];
         case "keys-synced":
-        case "target-restored":
         case "pre-synced":
         case "source-quiesced":
         case "source-flushed":
@@ -145,8 +143,6 @@ export function describeStep(step) {
             return `quiesce ${step.slug} on ${step.gateway} (stop accepting new prompts; let in-flight runs settle)`;
         case "flush-source":
             return `flush durable state for ${step.slug} on ${step.gateway} after quiescence`;
-        case "restore-target":
-            return `restore durable state for ${step.slug} onto ${step.gateway} before live sync`;
         case "sync-state":
             if (step.mode === "keys") {
                 return `seed per-customer SSH key for ${step.slug} directly from ${step.from} → ${step.to}`;

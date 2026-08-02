@@ -75,7 +75,6 @@ function deps(): CustomerMigrationV2Deps {
   } as unknown as MigrationClient;
   return {
     client,
-    restoreSnapshot: { uid: "uid-1" } as never,
     setSourceAssignmentState: vi.fn(async () => undefined),
     commitCutover: vi.fn(async () => undefined),
     now: vi.fn(() => 1_000),
@@ -135,23 +134,34 @@ describe("advanceCustomerMigrationV2", () => {
     }
 
     expect(phases).toEqual([
-      "targetRestored", "preSynced", "sourceQuiesced",
+      "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ]);
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(client.transferState.mock.calls.map((call) => call[0].mode)).toEqual([
-      "pre", "final",
+      "keys", "pre", "final",
     ]);
-    expect(client.transferState).toHaveBeenCalledWith(expect.objectContaining({
-      fromTransportId: "source",
-      toTransportId: "target",
-      includeActivationManifest: true,
-    }));
-    expect(client.restoreTarget).toHaveBeenCalledWith(expect.objectContaining({
-      gatewayId: "target",
-      transportId: "target",
-      uid: "uid-1",
-    }));
+    expect(client.transferState.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({
+        mode: "keys",
+        fromTransportId: "source",
+        toTransportId: "target",
+        includeActivationManifest: false,
+      }),
+      expect.objectContaining({
+        mode: "pre",
+        fromTransportId: "source",
+        toTransportId: "target",
+        includeActivationManifest: false,
+      }),
+      expect.objectContaining({
+        mode: "final",
+        fromTransportId: "source",
+        toTransportId: "target",
+        includeActivationManifest: true,
+      }),
+    ]);
+    expect(client.restoreTarget).not.toHaveBeenCalled();
     expect(d.setSourceAssignmentState).toHaveBeenCalledWith("quiescing");
     expect(client.quiesce).toHaveBeenCalledWith(expect.objectContaining({
       gatewayId: "source",
@@ -291,23 +301,14 @@ describe("advanceCustomerMigrationV2", () => {
   it("advances state only after the RPC response so a lost response is reissued", async () => {
     const d = deps();
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    client.restoreTarget.mockRejectedValueOnce(new MigrationTransportError("response lost"));
+    client.transferState.mockRejectedValueOnce(new MigrationTransportError("response lost"));
 
     await expect(advanceCustomerMigrationV2(state("initialized"), d)).rejects.toThrow(
       /response lost/u,
     );
     const retried = await advanceCustomerMigrationV2(state("initialized"), d);
-    expect(retried.phase).toBe("targetRestored");
-    expect(client.restoreTarget).toHaveBeenCalledTimes(2);
-  });
-
-  it("refuses to restore without a durable snapshot", async () => {
-    const d = deps();
-    delete (d as { restoreSnapshot?: unknown }).restoreSnapshot;
-
-    await expect(advanceCustomerMigrationV2(state("keysSynced"), d)).rejects.toThrow(
-      /durable snapshot/u,
-    );
+    expect(retried.phase).toBe("keysSynced");
+    expect(client.transferState).toHaveBeenCalledTimes(2);
   });
 
   it("drives the abort path: unmount target, restore source serving", async () => {
@@ -362,15 +363,13 @@ describe("customer migration V2 failure boundary", () => {
 
   it("accepts only the next durable phase or the legal pre-cutover abort branch", () => {
     const forward: CustomerMigrationV2Phase[] = [
-      "initialized", "targetRestored", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ];
     for (let index = 0; index < forward.length - 1; index += 1) {
       expect(isCustomerMigrationV2Transition(forward[index], forward[index + 1])).toBe(true);
       expect(isCustomerMigrationV2Transition(forward[index], forward[index])).toBe(true);
     }
-    expect(isCustomerMigrationV2Transition("keysSynced", "targetRestored")).toBe(true);
-    expect(isCustomerMigrationV2Transition("keysSynced", "preSynced")).toBe(false);
     expect(isCustomerMigrationV2Transition("initialized", "abortIntent")).toBe(false);
     expect(isCustomerMigrationV2Transition("targetVerified", "abortIntent")).toBe(true);
     expect(isCustomerMigrationV2Transition("cutover", "abortIntent")).toBe(false);

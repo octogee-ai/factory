@@ -27,8 +27,9 @@ export interface MigrationActivationManifestProjectAgent {
 }
 
 export interface MigrationActivationManifest {
-  version: 1;
+  version: 2;
   slug: string;
+  appliedFingerprint: string;
   agentId: string;
   accountId: string;
   agent: Record<string, unknown>;
@@ -154,7 +155,12 @@ function validateManifestShape(
   }
   const agentId = expectedAgentId(slug);
   const accountId = expectedAccountId(slug);
-  if (value.version !== 1 || value.slug !== slug) {
+  if (
+    value.version !== 2
+    || value.slug !== slug
+    || typeof value.appliedFingerprint !== "string"
+    || value.appliedFingerprint.length === 0
+  ) {
     throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
   }
   const workspace = validateManifestAgent(value, slug, agentId, accountId);
@@ -182,8 +188,9 @@ function validateManifestShape(
     accounts.add(entry.accountId);
   }
   return {
-    version: 1,
+    version: 2,
     slug,
+    appliedFingerprint: value.appliedFingerprint,
     ...workspace,
     projectAgents,
   };
@@ -240,9 +247,10 @@ export async function extractOpenClawActivationManifest(
   configPath: string,
   slug: string,
   opts: {
+    appliedFingerprint: string;
     botToken?: string;
     resolveBotToken?: (accountId: string) => Promise<string | undefined>;
-  } = {},
+  },
 ): Promise<MigrationActivationManifest> {
   const raw = await fs.readFile(configPath, "utf-8");
   const parsed = JSON.parse(raw) as {
@@ -280,8 +288,9 @@ export async function extractOpenClawActivationManifest(
   );
   return validateManifestShape(
     {
-      version: 1,
+      version: 2,
       slug,
+      appliedFingerprint: opts.appliedFingerprint,
       ...workspace,
       projectAgents,
     },

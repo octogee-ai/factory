@@ -130,6 +130,12 @@ describe('identity: isValidUsername', () => {
     }
   });
 
+  it('rejects Mattermost-reserved team prefixes', () => {
+    for (const prefix of ['admin', 'api', 'channel', 'post', 'signup', 'plugins']) {
+      expect(isValidUsername(`${prefix}builder`)).toBe(false);
+    }
+  });
+
   it('rejects non-string input', () => {
     expect(isValidUsername(undefined as unknown as string)).toBe(false);
     expect(isValidUsername(null as unknown as string)).toBe(false);

@@ -49,7 +49,6 @@ import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { isPermanentConfigPatchFailure } from "@octogee/core/apply-config-patch";
 import { startReconcileLoop, type UnmountOutcome } from "./reconcile-loop.js";
-import { selectStale } from "./content-convergence.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -86,6 +85,31 @@ export function permanentConfigPatchRetryReady(
 
 export function desiredEnsureLaneFingerprint(fingerprints: ReadonlyMap<string, string>): string {
   return JSON.stringify([...fingerprints].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+export function selectStableContentStale(
+  mounted: readonly string[],
+  desired: ReadonlyMap<string, string>,
+  applied: ReadonlyMap<string, string>,
+  pending: Map<string, string>,
+): string[] {
+  const mountedSet = new Set(mounted);
+  const stable: string[] = [];
+  for (const slug of [...pending.keys()]) {
+    if (!mountedSet.has(slug) || desired.get(slug) === applied.get(slug)) {
+      pending.delete(slug);
+    }
+  }
+  for (const slug of mounted) {
+    const fingerprint = desired.get(slug);
+    if (fingerprint === undefined || fingerprint === applied.get(slug)) continue;
+    if (pending.get(slug) === fingerprint) {
+      stable.push(slug);
+    } else {
+      pending.set(slug, fingerprint);
+    }
+  }
+  return stable;
 }
 
 function desiredEnsureLaneRosterFingerprint(slugs: readonly string[]): string {
@@ -260,8 +284,24 @@ export function registerAgentImportDoctor(
 
 export function reconcileAddCustomerOptions(
   contentConvergenceEnabled: boolean,
+  evictionBatch: readonly string[] = [],
+  currentEvictionBatch?: () => Promise<readonly string[]>,
 ): AddCustomerOptions {
-  return contentConvergenceEnabled ? { convergeContent: true } : {};
+  return {
+    ...(contentConvergenceEnabled ? { convergeContent: true } : {}),
+    ...(evictionBatch.length > 0 ? { evictionBatch } : {}),
+    ...(currentEvictionBatch ? { currentEvictionBatch } : {}),
+  };
+}
+
+export function cancelRemovedEviction(
+  adapter: CustomerLifecycleAdapter,
+  slug: string,
+  invalidate: (slug: string) => void,
+): boolean {
+  if (adapter.cancelPendingEviction?.(slug) !== true) return false;
+  invalidate(slug);
+  return true;
 }
 
 export interface StartedFleetController {
@@ -541,42 +581,131 @@ function clearReconcileError(opts: StartFleetOptions, slug: string): void {
     .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`));
 }
 
-export async function evictLocalCustomer(input: {
+interface EvictLocalCustomerInput {
   adapter: CustomerLifecycleAdapter;
   slug: string;
+  evictionBatch?: readonly string[];
+  currentEvictionBatch?: () => Promise<readonly string[]>;
+  onRetainedAfterConfigRemoval?: (slug: string) => void;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   onLocalStateRemoved: (slug: string) => void;
-}): Promise<UnmountOutcome> {
-  const { adapter, slug, stampMounted, onLocalStateRemoved } = input;
-  const uid = await adapter.uidForSlug(slug);
-  if (uid) {
-    const result = await removeCustomerFromGateway(adapter, uid);
-    await stampMounted(uid, false);
-    onLocalStateRemoved(slug);
-    return result.wasMounted ? "drained" : "noop";
+}
+
+function retainLocalCustomer(input: EvictLocalCustomerInput): UnmountOutcome {
+  input.onRetainedAfterConfigRemoval?.(input.slug);
+  return "noop";
+}
+
+async function evictKnownCustomer(
+  input: EvictLocalCustomerInput,
+  uid: string,
+): Promise<UnmountOutcome> {
+  const result = await removeCustomerFromGateway(input.adapter, uid, {
+    evictionBatch: input.evictionBatch,
+    currentEvictionBatch: input.currentEvictionBatch,
+  });
+  if (result.retained) return retainLocalCustomer(input);
+  await input.stampMounted(uid, false);
+  input.onLocalStateRemoved(input.slug);
+  return result.wasMounted ? "drained" : "noop";
+}
+
+async function evictImportedCustomer(
+  input: EvictLocalCustomerInput,
+  removeImported: NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>,
+): Promise<UnmountOutcome> {
+  const result = await removeImported(
+    input.slug,
+    input.evictionBatch,
+    input.currentEvictionBatch,
+  );
+  if (result.retained) return retainLocalCustomer(input);
+  if (!result.wasMounted) input.adapter.cancelPendingEviction?.(input.slug);
+  input.adapter.onUnmounted?.(input.slug);
+  input.onLocalStateRemoved(input.slug);
+  return result.wasMounted ? "deleted-user" : "noop";
+}
+
+async function evictSlugOnlyCustomer(
+  input: EvictLocalCustomerInput,
+): Promise<UnmountOutcome> {
+  const { adapter, slug, evictionBatch, currentEvictionBatch } = input;
+  const agentId = `octogee-${slug}-coach`;
+  const remaining = await adapter.applyRemoveCustomerConfigPatch(
+    slug,
+    agentId,
+    evictionBatch,
+    currentEvictionBatch,
+  );
+  if (remaining && !remaining.includes(slug)) {
+    adapter.cancelPendingEviction?.(slug);
+    return retainLocalCustomer(input);
   }
+  if (currentEvictionBatch && !(await currentEvictionBatch()).includes(slug)) {
+    adapter.cancelPendingEviction?.(slug);
+    return retainLocalCustomer(input);
+  }
+  if (adapter.hasCustomerDir(slug)) await adapter.deleteCustomerDir(slug);
+  adapter.onUnmounted?.(slug);
+  input.onLocalStateRemoved(slug);
+  return "deleted-user";
+}
 
+export async function evictLocalCustomer(
+  input: EvictLocalCustomerInput,
+): Promise<UnmountOutcome> {
+  const uid = await input.adapter.uidForSlug(input.slug);
+  if (uid) return evictKnownCustomer(input, uid);
   try {
-    if (adapter.removeImportedCustomerBySlug) {
-      const result = await adapter.removeImportedCustomerBySlug(slug);
-      adapter.onUnmounted?.(slug);
-      onLocalStateRemoved(slug);
-      return result.wasMounted ? "deleted-user" : "noop";
-    }
-
-    const agentId = `octogee-${slug}-coach`;
-    await adapter.applyRemoveCustomerConfigPatch(slug, agentId);
-    if (adapter.hasCustomerDir(slug)) {
-      await adapter.deleteCustomerDir(slug);
-    }
-    adapter.onUnmounted?.(slug);
-    onLocalStateRemoved(slug);
-    return "deleted-user";
+    const removeImported = input.adapter.removeImportedCustomerBySlug;
+    return removeImported
+      ? evictImportedCustomer(input, removeImported)
+      : evictSlugOnlyCustomer(input);
   } catch (err) {
     throw new Error(
-      `slug-only cleanup failed for ${slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
+      `slug-only cleanup failed for ${input.slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+export async function evictLocalCustomerIfStillUndesired(input: {
+  slug: string;
+  evictionBatch: readonly string[];
+  readDesired: () => Promise<string[]>;
+  cancelPendingEviction?: (slug: string) => void;
+  evict: (
+    currentEvictionBatch: readonly string[],
+    readCurrentEvictionBatch: () => Promise<readonly string[]>,
+  ) => Promise<UnmountOutcome>;
+}): Promise<UnmountOutcome> {
+  const desired = new Set(await input.readDesired());
+  for (const slug of input.evictionBatch) {
+    if (desired.has(slug)) input.cancelPendingEviction?.(slug);
+  }
+  if (desired.has(input.slug)) return "noop";
+  const currentEvictionBatch = input.evictionBatch.filter((slug) => !desired.has(slug));
+  return input.evict(currentEvictionBatch, async () => {
+    const latest = new Set(await input.readDesired());
+    for (const slug of input.evictionBatch) {
+      if (latest.has(slug)) input.cancelPendingEviction?.(slug);
+    }
+    return input.evictionBatch.filter((slug) => !latest.has(slug));
+  });
+}
+
+function createCurrentEvictionBatchReader(input: {
+  readDesired: () => Promise<string[]>;
+  pendingEvictions: () => readonly string[];
+  cancelPendingEviction: (slug: string) => void;
+}): () => Promise<readonly string[]> {
+  return async () => {
+    const desired = new Set(await input.readDesired());
+    const current = input.pendingEvictions();
+    for (const staleSlug of current) {
+      if (desired.has(staleSlug)) input.cancelPendingEviction(staleSlug);
+    }
+    return current.filter((staleSlug) => !desired.has(staleSlug));
+  };
 }
 
 function startMaybeReconcileLoop(params: {
@@ -604,6 +733,7 @@ function startMaybeReconcileLoop(params: {
       ? path.join(opts.openclawDir, "applied-fingerprints.json")
       : null;
   const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
+  const pendingContentFp = new Map<string, string>();
   // Backoff state for slugs whose project checkout has not landed. Process-local on purpose:
   // a pod restart is itself a fresh chance for the clone to land.
   const cloneRetry = new Map<string, CloneRetryState>();
@@ -617,6 +747,28 @@ function startMaybeReconcileLoop(params: {
       opts.log(`[reconcile] ⚠ applied-fingerprint persist failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+  const invalidateConfigRemovedSlug = (slug: string): void => {
+    wrappedAdapter.clearMountMarker?.(slug);
+    appliedFp.delete(slug);
+    const current = desiredFp.get(slug);
+    if (current !== undefined) pendingContentFp.set(slug, current);
+    persistAppliedFp();
+  };
+  const cancelPendingEviction = (slug: string): void => {
+    cancelRemovedEviction(wrappedAdapter, slug, invalidateConfigRemovedSlug);
+  };
+  const onLocalStateRemoved = (slug: string): void => {
+    cloneRetry.delete(slug);
+    pendingContentFp.delete(slug);
+    permanentConfigPatchRetry = undefined;
+    if (appliedFp.delete(slug)) persistAppliedFp();
+  };
+  if (fingerprintSource) {
+    wrappedAdapter.recordAppliedFingerprint = (slug, fingerprint) => {
+      appliedFp.set(slug, fingerprint);
+      persistAppliedFp();
+    };
+  }
 
   let readDesired: (() => Promise<string[]>) | null = null;
   if (fingerprintSource) {
@@ -645,10 +797,12 @@ function startMaybeReconcileLoop(params: {
   const getContentStale = fingerprintSource
     ? (): string[] => {
         const now = Date.now();
-        // A slug whose checkout has not landed stays stale forever (we never record its
-        // fingerprint), so it must be held off the hot path between backed-off attempts —
-        // otherwise it re-ensures every 15s and starves the pod's serial mount slot.
-        return selectStale(getMountObservedSlugs(wrappedAdapter), desiredFp, appliedFp).filter(
+        return selectStableContentStale(
+          getMountObservedSlugs(wrappedAdapter),
+          desiredFp,
+          appliedFp,
+          pendingContentFp,
+        ).filter(
           (slug) => cloneRetryReady(cloneRetry.get(slug), desiredFp.get(slug), now),
         );
       }
@@ -674,13 +828,28 @@ function startMaybeReconcileLoop(params: {
     shouldEnsureSlug: () =>
       permanentConfigPatchRetryReady(permanentConfigPatchRetry, desiredEnsureFingerprint),
     shouldDeferRemainingMounts: isPermanentConfigPatchFailure,
-    ensureSlug: async (slug: string) => {
+    onPendingEvictionCancelled: cancelPendingEviction,
+    ensureSlug: async (
+      slug: string,
+      evictionBatch: readonly string[],
+      pendingEvictions: () => readonly string[],
+    ) => {
+      wrappedAdapter.cancelPendingEviction?.(slug);
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
+      const readCurrentEvictionBatch = createCurrentEvictionBatchReader({
+        readDesired,
+        pendingEvictions,
+        cancelPendingEviction,
+      });
       const result = await addCustomerToGateway(
         wrappedAdapter,
         uid,
-        reconcileAddCustomerOptions(fingerprintSource !== undefined),
+        reconcileAddCustomerOptions(
+          fingerprintSource !== undefined,
+          evictionBatch,
+          readCurrentEvictionBatch,
+        ),
       );
       await stampMounted(uid, true);
       // LAST step (after add succeeds AND the mounted mirror is stamped): write the on-disk
@@ -721,16 +890,21 @@ function startMaybeReconcileLoop(params: {
       permanentConfigPatchRetry = undefined;
       clearReconcileError(opts, slug);
     },
-    unmountSlug: (slug: string) =>
-      evictLocalCustomer({
-        adapter: wrappedAdapter,
+    unmountSlug: (slug: string, evictionBatch: readonly string[]) =>
+      evictLocalCustomerIfStillUndesired({
         slug,
-        stampMounted,
-        onLocalStateRemoved: (removedSlug) => {
-          cloneRetry.delete(removedSlug);
-          permanentConfigPatchRetry = undefined;
-          if (appliedFp.delete(removedSlug)) persistAppliedFp();
-        },
+        evictionBatch,
+        readDesired,
+        cancelPendingEviction,
+        evict: (currentEvictionBatch, readCurrentEvictionBatch) => evictLocalCustomer({
+          adapter: wrappedAdapter,
+          slug,
+          evictionBatch: currentEvictionBatch,
+          currentEvictionBatch: readCurrentEvictionBatch,
+          onRetainedAfterConfigRemoval: invalidateConfigRemovedSlug,
+          stampMounted,
+          onLocalStateRemoved,
+        }),
       }),
   });
   return startAfterSurgeReadiness({

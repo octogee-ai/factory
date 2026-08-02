@@ -59,6 +59,7 @@ export interface OperatorHeartbeatPollerDeps {
   readAssignedSlugs: (gatewayId: string) => Promise<string[]>;
   /** Persist live telemetry; the impl stamps lastHeartbeatAt. */
   writeHeartbeat: (gatewayId: string, record: OperatorHeartbeatRecord) => Promise<void>;
+  ownsEviction?: (gatewayId: string) => Promise<boolean>;
   /** Tear down a departed customer's local footprint on the gateway (pod /unmount).
    *  Omit to disable Cowboy-driven eviction (e.g. no fleet secret configured). */
   evictSlug?: (gatewayId: string, slug: string) => Promise<void>;
@@ -266,6 +267,10 @@ export async function pollOperatorHeartbeatsOnce(
       if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
       if (health.configStatus) record.configStatus = health.configStatus;
       await deps.writeHeartbeat(gatewayId, record);
+      if (deps.ownsEviction && !(await deps.ownsEviction(gatewayId))) {
+        streaks.delete(gatewayId);
+        continue;
+      }
       await evictDepartedForGateway(
         deps,
         gatewayId,

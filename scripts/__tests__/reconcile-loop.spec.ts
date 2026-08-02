@@ -67,9 +67,8 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(d.evicted).toEqual(["d"]);
   });
 
-  it("evicts stale local state before mounting the assigned roster", async () => {
+  it("admits the assigned roster before detached stale-state cleanup completes", async () => {
     const actions: string[] = [];
-    let staleConfigPresent = true;
     const eviction = deferred();
     const d = mkDeps({
       maxConcurrent: 4,
@@ -78,26 +77,24 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
       unmountSlug: async (slug) => {
         actions.push(`evict:${slug}`);
         await eviction.promise;
-        staleConfigPresent = false;
         return "drained";
       },
       ensureSlug: async (slug) => {
         actions.push(`mount:${slug}`);
-        if (staleConfigPresent) throw new Error("stale unauthorized SecretRef remains configured");
         return "mounted";
       },
     });
 
-    const reconcile = reconcileFleet(d);
+    await reconcileFleet(d);
     await flushMicrotasks();
-    expect(actions).toEqual(["evict:test31"]);
+    expect(actions).toEqual(["mount:alice", "mount:bob", "evict:test31"]);
     eviction.resolve();
-    await reconcile;
+    await flushMicrotasks();
 
-    expect(actions).toEqual(["evict:test31", "mount:alice", "mount:bob"]);
+    expect(actions).toEqual(["mount:alice", "mount:bob", "evict:test31"]);
   });
 
-  it("defers mounts when stale local state cannot be evicted", async () => {
+  it("admits a fresh mount when stale local state cannot be evicted", async () => {
     const d = mkDeps({
       ...observed(["test31"]),
       readDesired: async () => ["alice"],
@@ -107,9 +104,96 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     });
 
     await reconcileFleet(d);
+    await flushMicrotasks();
 
-    expect(d.ensured).toEqual([]);
-    expect(d.logs.some((line) => line.includes("deferring 1 mount"))).toBe(true);
+    expect(d.ensured).toEqual(["alice"]);
+    expect(d.logs.some((line) => line.includes("evict failed"))).toBe(true);
+  });
+
+  it("carries blocked cleanup across ticks into fresh admission and keeps one cleanup lane", async () => {
+    const blockedA = deferred();
+    let evictObserved = ["a"];
+    let desired: string[] = [];
+    let activeCleanup = 0;
+    let maxActiveCleanup = 0;
+    const cleanupStarts: string[] = [];
+    const admissionBatches: string[][] = [];
+    const d = mkDeps({
+      getMountObserved: () => [],
+      getEvictObserved: () => evictObserved,
+      readDesired: async () => desired,
+      ensureSlug: async (_slug, batch, currentBatch) => {
+        admissionBatches.push([...batch].sort(), [...currentBatch()].sort());
+        return "mounted";
+      },
+      unmountSlug: async (slug) => {
+        cleanupStarts.push(slug);
+        activeCleanup++;
+        maxActiveCleanup = Math.max(maxActiveCleanup, activeCleanup);
+        if (slug === "a") await blockedA.promise;
+        activeCleanup--;
+        return "drained";
+      },
+    });
+
+    await reconcileFleet(d);
+    await flushMicrotasks();
+    expect(cleanupStarts).toEqual(["a"]);
+
+    evictObserved = ["a", "b"];
+    desired = ["fresh"];
+    await reconcileFleet(d);
+
+    expect(admissionBatches).toEqual([
+      ["a", "b"],
+      ["a", "b"],
+    ]);
+    expect(cleanupStarts).toEqual(["a"]);
+    expect(maxActiveCleanup).toBe(1);
+
+    blockedA.resolve();
+    await vi.waitFor(() => expect(cleanupStarts).toEqual(["a", "b"]));
+    await vi.waitFor(() => expect(activeCleanup).toBe(0));
+    expect(maxActiveCleanup).toBe(1);
+  });
+
+  it("repairs a re-admitted batch member once when the batch owner already quarantined it", async () => {
+    const ownerCleanup = deferred();
+    let desired: string[] = [];
+    const mounted = new Set<string>();
+    const ensured: string[] = [];
+    const cleanupStarts: string[] = [];
+    const cancelled: string[] = [];
+    const d = mkDeps({
+      getMountObserved: () => [...mounted],
+      getEvictObserved: () => ["a", "b"],
+      readDesired: async () => desired,
+      ensureSlug: async (slug) => {
+        ensured.push(slug);
+        mounted.add(slug);
+        return "mounted";
+      },
+      unmountSlug: async (slug) => {
+        cleanupStarts.push(slug);
+        if (slug === "a") await ownerCleanup.promise;
+        return "drained";
+      },
+      onPendingEvictionCancelled: (slug) => cancelled.push(slug),
+    });
+
+    await reconcileFleet(d);
+    await flushMicrotasks();
+    expect(cleanupStarts).toEqual(["a"]);
+
+    desired = ["b"];
+    await reconcileFleet(d);
+    expect(cancelled).toEqual(["b"]);
+    expect(ensured).toEqual(["b"]);
+
+    ownerCleanup.resolve();
+    await vi.waitFor(() => expect(cleanupStarts).toEqual(["a"]));
+    await reconcileFleet(d);
+    expect(ensured).toEqual(["b"]);
   });
 
   it("stops the serial mount lane after a permanent config failure", async () => {

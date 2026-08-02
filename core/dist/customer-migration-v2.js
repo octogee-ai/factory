@@ -88,20 +88,18 @@ export async function advanceCustomerMigrationV2(state, deps) {
 async function advancePreparation(state, deps) {
     switch (state.phase) {
         case "initialized":
-        case "keysSynced":
-            if (!deps.restoreSnapshot) {
-                throw new Error("customer migration V2 restore phase lacks its durable snapshot");
-            }
-            await deps.client.restoreTarget({
+            await deps.client.transferState({
                 migrationId: state.migrationId,
-                gatewayId: state.targetGatewayId,
-                transportId: state.targetGatewayId,
-                uid: state.uid,
+                fromGatewayId: state.sourceGatewayId,
+                fromTransportId: state.sourceGatewayId,
+                toGatewayId: state.targetGatewayId,
+                toTransportId: state.targetGatewayId,
                 slug: state.slug,
-                snapshot: deps.restoreSnapshot,
+                mode: "keys",
+                includeActivationManifest: false,
             });
-            return { ...state, phase: "targetRestored" };
-        case "targetRestored":
+            return { ...state, phase: "keysSynced" };
+        case "keysSynced":
             await deps.client.transferState({
                 migrationId: state.migrationId,
                 fromGatewayId: state.sourceGatewayId,
@@ -110,7 +108,7 @@ async function advancePreparation(state, deps) {
                 toTransportId: state.targetGatewayId,
                 slug: state.slug,
                 mode: "pre",
-                includeActivationManifest: true,
+                includeActivationManifest: false,
             });
             return { ...state, phase: "preSynced" };
         default:
@@ -221,7 +219,6 @@ async function terminalState(state) {
 const ADVANCE_HANDLERS = {
     initialized: advancePreparation,
     keysSynced: advancePreparation,
-    targetRestored: advancePreparation,
     preSynced: advanceForward,
     sourceQuiesced: advanceForward,
     finalSynced: advanceForward,
@@ -242,9 +239,8 @@ export function isCustomerMigrationV2PostIntent(state) {
     return POST_INTENT_PHASES.has(state.phase);
 }
 const NEXT_PHASE = {
-    initialized: "targetRestored",
-    keysSynced: "targetRestored",
-    targetRestored: "preSynced",
+    initialized: "keysSynced",
+    keysSynced: "preSynced",
     preSynced: "sourceQuiesced",
     sourceQuiesced: "finalSynced",
     finalSynced: "targetVerified",
