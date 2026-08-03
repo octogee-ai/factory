@@ -500,6 +500,70 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     }
   }
 
+  let channelsStatusWs: WebSocket | null = null;
+  let channelsStatusConnection: Promise<WebSocket> | null = null;
+  let channelsStatusGeneration = 0;
+
+  function closeChannelsStatusConnection(ws: WebSocket): void {
+    if (channelsStatusWs === ws) channelsStatusWs = null;
+    try {
+      ws.close();
+    } catch { /* */ }
+  }
+
+  async function getChannelsStatusConnection(): Promise<WebSocket> {
+    if (channelsStatusWs?.readyState === WebSocket.OPEN) return channelsStatusWs;
+    if (channelsStatusConnection) return await channelsStatusConnection;
+
+    const generation = channelsStatusGeneration;
+    const pending = (async () => {
+      const ws = await openAndConnect({
+        url,
+        ...auth,
+        connectTimeoutMs,
+        identity: resolveIdentity(),
+        scopes,
+        onConnectTrace,
+      });
+      if (channelsStatusGeneration !== generation) {
+        closeChannelsStatusConnection(ws);
+        throw new OpenclawWireError(
+          "connect-failed",
+          "gateway RPC client closed while channels.status was connecting",
+        );
+      }
+      channelsStatusWs = ws;
+      ws.once("close", () => {
+        if (channelsStatusWs === ws) channelsStatusWs = null;
+      });
+      return ws;
+    })();
+    channelsStatusConnection = pending;
+    try {
+      return await pending;
+    } finally {
+      if (channelsStatusConnection === pending) channelsStatusConnection = null;
+    }
+  }
+
+  async function channelsStatus(): Promise<unknown> {
+    const ws = await getChannelsStatusConnection();
+    try {
+      return await sendWsRequest({
+        ws,
+        id: randomUUID(),
+        method: "channels.status",
+        params: {},
+        timeoutMs: callTimeoutMs,
+      });
+    } catch (err) {
+      if (!(err instanceof OpenclawWireError) || err.code !== "rpc-error") {
+        closeChannelsStatusConnection(ws);
+      }
+      throw err;
+    }
+  }
+
   return {
     async configGet() {
       const payload = await call("config.get", {});
@@ -538,7 +602,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       );
     },
 
-    channelsStatus: async () => await call("channels.status", {}),
+    channelsStatus,
 
     async channelsStop(params) {
       const payload = await call("channels.stop", params);
@@ -664,7 +728,20 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       }
     },
 
-    close: async () => {},
+    async close() {
+      channelsStatusGeneration++;
+      const ws = channelsStatusWs;
+      channelsStatusWs = null;
+      if (ws) closeChannelsStatusConnection(ws);
+
+      const pending = channelsStatusConnection;
+      channelsStatusConnection = null;
+      if (pending) {
+        try {
+          closeChannelsStatusConnection(await pending);
+        } catch { /* */ }
+      }
+    },
   };
 }
 

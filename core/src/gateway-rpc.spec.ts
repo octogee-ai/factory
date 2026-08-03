@@ -640,6 +640,21 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("channelsStatus", () => {
+    it("reuses one authenticated connection across health polls", async () => {
+      server.setHandler("channels.status", () => ({
+        ok: true,
+        payload: { channels: [] },
+      }));
+
+      await client.channelsStatus();
+      await client.channelsStatus();
+
+      expect(server.callCount("channels.status")).toBe(2);
+      expect(server.callCount("connect")).toBe(1);
+    });
+  });
+
   describe("secretsReload", () => {
     it("calls the `secrets.reload` method with empty params and returns the payload", async () => {
       let captured: unknown = "not-called";
