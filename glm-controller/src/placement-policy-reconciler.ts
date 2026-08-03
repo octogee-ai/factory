@@ -58,6 +58,7 @@ import {
   readBuilderActivityFirestore,
   readShellsAtRiskFirestore,
 } from "./disposable-gateway-lifecycle.js";
+import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
@@ -2395,6 +2396,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  informer: FleetInformer;
   namespace: string;
   idleMs: number;
   idleWarningMs: number;
@@ -2617,26 +2619,26 @@ export function assertConfiguredSharedGateways(
 async function readPlacementPolicySnapshot(
   input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
-  const { db, idleMs: fallbackIdleMs, now: nowFn } = input;
+  const { db, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
   const now = nowFn();
-  const [configSnap, usersSnap, gatewaysSnap, runtimeSnap, opsSnap, liveRunsSnap, assignmentsSnap] =
+  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, liveRunsSnap, assignmentDocs] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
-      db.collection("users").get(),
-      db.collection(GATEWAYS_COLLECTION).get(),
-      db.collection(GLM_GATEWAYS_COLLECTION).get(),
+      mirroredOrScan(informer.users(), () => db.collection("users").get()),
+      mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
+      mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
       db.collection(GLM_OPERATIONS_COLLECTION)
         .where("status", "in", [...PLACEMENT_ACTIVE_OPERATION_STATUSES])
         .get(),
       db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
-      db.collectionGroup("assignments").get(),
+      mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
     ]);
   const pool = parseSharedGatewayPoolConfig(configSnap.data());
   if (!pool) throw new Error("config/orchestrator shared gateway pool is invalid");
   const { defaultGatewayId, sharedGatewayIds } = pool;
   const [completedReturnSnapshots, terminalLeaseSnapshots] = await Promise.all([
-    readCompletedReturnSnapshots(db, usersSnap.docs, sharedGatewayIds),
-    readTerminalLeaseOperationSnapshots(db, usersSnap.docs),
+    readCompletedReturnSnapshots(db, userDocs, sharedGatewayIds),
+    readTerminalLeaseOperationSnapshots(db, userDocs),
   ]);
   const idleMs = placementPolicyIdleMs(
     configSnap.data()?.disposableGatewayIdleMs,
@@ -2646,24 +2648,24 @@ async function readPlacementPolicySnapshot(
     configSnap.data()?.disposableGatewayIdleWarningMs,
     input.idleWarningMs,
   );
-  const runtimes = docsById(runtimeSnap.docs);
+  const runtimes = docsById(runtimeDocs);
   const kubernetesByGatewayId = await input.readGatewayPodDiagnosticsBatch({
     namespace: input.namespace,
-    gatewayIds: gatewaysSnap.docs.map((doc) => doc.id),
+    gatewayIds: gatewayDocs.map((doc) => doc.id),
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     input.log(`[placement-policy] Kubernetes diagnostics unreadable; treating fleet as unknown: ${message}`);
-    return Object.fromEntries(gatewaysSnap.docs.map((doc) => [doc.id, {
+    return Object.fromEntries(gatewayDocs.map((doc) => [doc.id, {
       status: "unknown",
       totalPods: 0,
       readyPods: 0,
     }]));
   });
-  await persistKubernetesObservations(db, runtimeSnap.docs, kubernetesByGatewayId, now);
-  const assignments = assignmentsSnap.docs
+  await persistKubernetesObservations(db, runtimeDocs, kubernetesByGatewayId, now);
+  const assignments = assignmentDocs
     .map(placementAssignmentFromDocument)
     .filter((assignment): assignment is PlacementPolicyAssignment => assignment !== null);
-  const gateways = gatewaysSnap.docs
+  const gateways = gatewayDocs
     .map((doc) => placementGatewayFromDocument({
       doc,
       runtimes,
@@ -2682,7 +2684,7 @@ async function readPlacementPolicySnapshot(
       const parts = doc.ref.path.split("/");
       return parts[0] === "workspaces" && parts[1] ? [parts[1]] : [];
     }))],
-    users: usersSnap.docs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
+    users: userDocs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     assignments,
     activeMigrations: [

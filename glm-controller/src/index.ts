@@ -256,6 +256,12 @@ import { recordReconcile, recordSharedGatewayMaxCapacity } from "./metrics.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
+import {
+  assignedSlugsFromUserMirror,
+  createFleetInformer,
+  type FleetInformer,
+  type MirrorDocChange,
+} from "./fleet-informer.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
@@ -443,6 +449,10 @@ interface ControllerDeps {
   ensureGatewayAuthSecret: AuthSecretEnsurer["ensureAuthSecret"];
 
   startDisruptionObserver?: () => ControllerStopper;
+
+  // Fed by the reconciler's fleet listeners; absent in unit fixtures that only
+  // exercise reconcile scheduling.
+  informer?: FleetInformer;
 }
 
 function maintenanceFreezeReasonSuffix(reason: string | null): string {
@@ -1426,14 +1436,25 @@ export function startReconciler(deps: ControllerDeps): () => void {
 
   const reconcileFingerprints = new Map<string, string>();
   const rootFingerprints = new Map<string, string>();
+  const informer = deps.informer;
+
+  // The first delivery of a freshly attached listener carries the whole
+  // collection, so it resets the mirror; later deliveries are deltas.
+  let glmMirrorPrimed = false;
+  let rootMirrorPrimed = false;
+
   const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
-    (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
+    (snap?: { docChanges?: () => MirrorDocChange[] }) => {
       if (stopped) return;
       const changes = snap?.docChanges?.();
       if (!changes) {
+        informer?.markGlmGatewaysStale("snapshot delivered without document changes");
+        glmMirrorPrimed = false;
         scheduleDebouncedTick();
         return;
       }
+      informer?.ingestGlmGateways(changes, { reset: !glmMirrorPrimed });
+      glmMirrorPrimed = true;
       for (const gatewayId of snapshotReconcileRelevantGatewayIds(
         changes,
         reconcileFingerprints,
@@ -1441,18 +1462,34 @@ export function startReconciler(deps: ControllerDeps): () => void {
         scheduleDebouncedTick(gatewayId);
       }
     },
-    (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
+    (err) => {
+      informer?.markGlmGatewaysStale(String(err));
+      glmMirrorPrimed = false;
+      deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`);
+    },
   );
 
   const rootUnsub = deps.db.collection(GATEWAYS_COLLECTION).onSnapshot(
-    (snap?: { docChanges?: () => ReconcileSnapshotDocChange[] }) => {
+    (snap?: { docChanges?: () => MirrorDocChange[] }) => {
       if (stopped) return;
       const changes = snap?.docChanges?.();
-      if (!changes || snapshotHasReconcileRelevantRootChange(changes, rootFingerprints)) {
+      if (!changes) {
+        informer?.markGatewaysStale("snapshot delivered without document changes");
+        rootMirrorPrimed = false;
+        scheduleDebouncedTick();
+        return;
+      }
+      informer?.ingestGateways(changes, { reset: !rootMirrorPrimed });
+      rootMirrorPrimed = true;
+      if (snapshotHasReconcileRelevantRootChange(changes, rootFingerprints)) {
         scheduleDebouncedTick();
       }
     },
-    (err) => deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`),
+    (err) => {
+      informer?.markGatewaysStale(String(err));
+      rootMirrorPrimed = false;
+      deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`);
+    },
   );
 
   if (deps.reconcileSafetyRefreshMs && deps.reconcileSafetyRefreshMs > 0) {
@@ -1943,12 +1980,13 @@ async function runClaimedOperation(
 function buildHeartbeatPollerCoreDeps(
   db: Firestore,
   log: (msg: string) => void,
+  informer: FleetInformer,
   listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
 ): Omit<OperatorHeartbeatPollerDeps, "evictSlug"> {
   const polledHeartbeats = new Map<string, unknown>();
   return {
     listGatewayIds: async () => {
-      const docs = await listGatewayDocs();
+      const docs = informer.glmGateways() ?? await listGatewayDocs();
       polledHeartbeats.clear();
       for (const doc of docs) polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
       return heartbeatPollInstanceIds(docs);
@@ -1968,10 +2006,16 @@ function buildHeartbeatPollerCoreDeps(
       }
     },
     readAssignedSlugs: async (instanceId) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(instanceId).get();
-      const target = heartbeatRosterTarget(instanceId, snap.data());
+      const mirroredRuntime = informer.glmGateways()?.find((doc) => doc.id === instanceId);
+      const runtime = mirroredRuntime
+        ? mirroredRuntime.data()
+        : (await db.collection(GLM_GATEWAYS_COLLECTION).doc(instanceId).get()).data();
+      const target = heartbeatRosterTarget(instanceId, runtime);
       if (!target) return [];
-      return readAssignedSlugsForGateway(db, target.gatewayId);
+      const mirroredUsers = informer.users();
+      return mirroredUsers
+        ? assignedSlugsFromUserMirror(mirroredUsers, target.gatewayId)
+        : readAssignedSlugsForGateway(db, target.gatewayId);
     },
     writeHeartbeat: async (gatewayId, record) => {
       // Live telemetry lands only at glmGateways/{id}.heartbeat (the collision
@@ -2002,18 +2046,20 @@ export function buildOperatorHeartbeatPollerDeps(
   db: Firestore,
   log: (msg: string) => void,
   privateKey: string,
+  informer: FleetInformer,
 ): OperatorHeartbeatPollerDeps {
   return {
-    ...buildHeartbeatPollerCoreDeps(db, log, async () => {
+    ...buildHeartbeatPollerCoreDeps(db, log, informer, async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
       return snap.docs;
     }),
     ownsEviction: async (gatewayId: string) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const root = projectGatewayDesiredRootForGateway(
-        snap.exists ? snap.data() : undefined,
-        gatewayId,
-      );
+      const mirrored = informer.gateways()?.find((doc) => doc.id === gatewayId);
+      const data = mirrored
+        ? mirrored.data()
+        : await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()
+          .then((snap) => (snap.exists ? snap.data() : undefined));
+      const root = projectGatewayDesiredRootForGateway(data, gatewayId);
       return root !== null && root.gatewayClass !== "shared";
     },
     evictSlug: async (gatewayId: string, slug: string) => {
@@ -2081,15 +2127,20 @@ function startControllerBackgroundTasks({
   if (!deps.kubeOps) {
     throw new Error("controller background tasks require Kubernetes operations");
   }
-  const stopReconciler = startReconciler(deps);
+  // One mirror set for the whole process: the reconciler's listeners fill the two
+  // fleet collections, the informer owns users + assignments, and every periodic
+  // tick below reads memory instead of re-querying Firestore.
+  const informer = createFleetInformer({ db, log });
+  const stopReconciler = startReconciler({ ...deps, informer });
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
   const stopPoller = startOperatorHeartbeatPoller(
-    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey),
+    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey, informer),
     OPERATOR_HEARTBEAT_POLL_MS,
   );
   const stopReaper = startOrphanHeartbeatReaper({
     db,
+    informer,
     log,
     intervalMs: 60_000,
     stalenessMs: 5 * 60 * 1000,
@@ -2114,6 +2165,7 @@ function startControllerBackgroundTasks({
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
+      informer,
       namespace: NAMESPACE,
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       idleWarningMs: DISPOSABLE_GATEWAY_IDLE_WARNING_MS,
@@ -2171,6 +2223,7 @@ function startControllerBackgroundTasks({
     stopPlacementPolicyReconciler,
     stopDisruptionObserver,
     stopHttp,
+    informer.stop,
   ];
 }
 
