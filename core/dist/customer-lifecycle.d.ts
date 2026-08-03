@@ -203,7 +203,7 @@ export interface CustomerLifecycleAdapter {
     removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<RemoveCustomerResult>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";
-export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
+export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "mark-complete" | "notify-ops";
 export interface AddCustomerResult {
     newCustomer: boolean;
     steps: AddCustomerStep[];

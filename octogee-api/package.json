@@ -71,7 +71,7 @@
   "overrides": {
     "@modelcontextprotocol/sdk": {
       "@hono/node-server": "^2.0.10",
-      "hono": "^4.12.27"
+      "hono": "^4.12.34"
     },
     "@protobufjs/utf8": "^1.1.1",
     "@tootallnate/once": "^3.0.1",
