@@ -36,7 +36,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /system config writer lock is busy/i,
   /system config mutation unavailable: writer-lock-busy/i,
   /fleet will retry/i,
-  /active or unconverged release roll/i,
+  /gateway .* is not migration-ready/i,
 ];
 
 export function classifyOperationFailure(

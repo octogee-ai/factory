@@ -134,6 +134,10 @@ import {
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
+  migrationSourceRootIsStable,
+  migrationTargetRootIsStable,
+} from "./migration-root-stability.js";
+import {
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
@@ -3104,15 +3108,19 @@ async function buildHandlers(
       }
       const sourceData = sourceAuthorization.gateway as DurableGateway;
       const targetData = targetAuthorization.gateway as DurableGateway;
-      const rootIsStable = (data: DurableGateway) =>
-        data.desiredStatus === "running" &&
-        data.liveRelease !== null &&
-        data.desiredRelease === data.liveRelease;
-      if (!rootIsStable(sourceData)) {
-        throw new Error(`source gateway ${fromGatewayId} has an active or unconverged release roll`);
+      if (!migrationSourceRootIsStable(sourceData)) {
+        throw new Error(
+          `source gateway ${fromGatewayId} is not migration-ready ` +
+          `(desiredStatus=${sourceData.desiredStatus}, desiredRelease=${sourceData.desiredRelease}, ` +
+          `liveRelease=${sourceData.liveRelease}); requires running or draining with a converged release`,
+        );
       }
-      if (!rootIsStable(targetData)) {
-        throw new Error(`target gateway ${toGatewayId} has an active or unconverged release roll`);
+      if (!migrationTargetRootIsStable(targetData)) {
+        throw new Error(
+          `target gateway ${toGatewayId} is not migration-ready ` +
+          `(desiredStatus=${targetData.desiredStatus}, desiredRelease=${targetData.desiredRelease}, ` +
+          `liveRelease=${targetData.liveRelease}); requires running with a converged release`,
+        );
       }
       const gatewayClass = (data: typeof sourceData) => resolveGatewayClass({
         gatewayClass: data.gatewayClass ?? undefined,

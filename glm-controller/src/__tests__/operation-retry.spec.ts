@@ -108,7 +108,11 @@ describe("classifyOperationFailure", () => {
       ),
     ).toBe("transient");
     expect(
-      classifyOperationFailure("target gateway shared-b has an active or unconverged release roll"),
+      classifyOperationFailure(
+        "target gateway shared-b is not migration-ready " +
+          "(desiredStatus=draining, desiredRelease=12, liveRelease=12); " +
+          "requires running with a converged release",
+      ),
     ).toBe("transient");
   });
 
@@ -514,7 +518,10 @@ describe("buildOperationCompletionUpdate", () => {
       result: {
         steps: [],
         success: false,
-        error: "target gateway shared-b has an active or unconverged release roll",
+        error:
+          "target gateway shared-b is not migration-ready " +
+          "(desiredStatus=draining, desiredRelease=12, liveRelease=12); " +
+          "requires running with a converged release",
       },
       steps: [],
       now,
