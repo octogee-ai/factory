@@ -360,27 +360,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 });
 
-describe("buildBrokeredLifecycleAdapter runtime plugin prewarm", () => {
-  it("loads the mounted coach plugin catalog with the migration startup budget", async () => {
-    const toolsCatalog = vi.fn(async () => ({ tools: [] }));
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
-      rpc: mkGatewayRpc({ toolsCatalog }),
-      log: vi.fn(),
-    });
-
-    await adapter.warmAgentRuntimePlugins?.("tester10");
-
-    expect(toolsCatalog).toHaveBeenCalledWith(
-      {
-        agentId: "octogee-tester10-coach",
-        includePlugins: true,
-      },
-      180_000,
-    );
-  });
-});
-
 describe("buildBrokeredLifecycleAdapter template files", () => {
   const previousTemplatesDir = process.env.OCTOGEE_TEMPLATES_DIR;
   let tempRoot: string;
@@ -715,7 +694,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("restarts the customer Mattermost monitor after applying changed channel bindings", async () => {
+  it("leaves Mattermost monitor reload to OpenClaw after applying changed channel bindings", async () => {
     const events: string[] = [];
     patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");
@@ -758,55 +737,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
 
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(events).toEqual(["config-patch", "channels-stop", "channels-start"]);
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(events).toEqual(["config-patch"]);
   });
 
-  it("does not replay a successful roster patch when monitor restart fails", async () => {
-    const log = vi.fn();
-    const rpc = {
-      channelsStop: vi.fn(async () => {
-        throw new Error("monitor unavailable");
-      }),
-      channelsStart: vi.fn(async () => {
-        throw new Error("monitor unavailable");
-      }),
-    } as unknown as GatewayRpcClient;
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
-    const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-alice",
-      slug: "alice",
-      tier: "standard",
-      gatewayId: "default",
-      status: "",
-      agentIds: [],
-      repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
-      greetingPosted: false,
-      channels: [],
-      projects: [],
-      ownerName: "Alice",
-      coachToken: "pat-1",
-      coachMmUserId: "mm-alice-coach",
-    };
-
-    await expect(
-      adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }),
-    ).resolves.toEqual(expect.objectContaining({ elapsedMs: expect.any(Number) }));
-
-    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("channel readiness verification"));
-  });
-
-  it("waits for the lifecycle config.changed hash before restarting Mattermost monitors", async () => {
+  it("waits for the lifecycle config.changed hash without explicitly restarting Mattermost", async () => {
     const events: string[] = [];
     let publishConfigChanged: (() => void) | undefined;
     const configChanged = new Promise<void>((resolve) => {
@@ -822,14 +758,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         await configChanged;
         events.push("config-changed");
         return { ok: true as const, hash: "persisted-hash" };
-      }),
-      channelsStop: vi.fn(async () => {
-        events.push("channels-stop");
-        return { channel: "mattermost", accountId: "alice-coach", stopped: true as const };
-      }),
-      channelsStart: vi.fn(async () => {
-        events.push("channels-start");
-        return { channel: "mattermost", accountId: "alice-coach", started: true as const };
       }),
     } as unknown as GatewayRpcClient;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
@@ -866,158 +794,13 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       { _coachPersonalToken: "pat-1" },
     );
     await vi.waitFor(() => expect(events).toEqual(["config-persisted"]));
-    expect(rpc.channelsStop).not.toHaveBeenCalled();
 
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual([
-      "config-persisted",
-      "config-changed",
-      "channels-stop",
-      "channels-start",
-    ]);
+    expect(events).toEqual(["config-persisted", "config-changed"]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
-  });
-
-  it("restarts stale affected monitors when the lifecycle config patch is already a no-op", async () => {
-    const rpc = {
-      configPatchAndWaitForChange: vi.fn(),
-      channelsStop: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => ({
-        channel,
-        accountId,
-        stopped: true as const,
-      })),
-      channelsStart: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => ({
-        channel,
-        accountId,
-        started: true as const,
-      })),
-    } as unknown as GatewayRpcClient;
-    patchMocks.applyConfigPatch.mockResolvedValueOnce({
-      mode: "rpc",
-      attempts: 1,
-      noop: true,
-    });
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
-      rpc,
-      log: vi.fn(),
-    });
-    const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-alice",
-      slug: "alice",
-      tier: "standard",
-      gatewayId: "default",
-      status: "",
-      agentIds: [],
-      repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
-      greetingPosted: false,
-      channels: [
-        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
-      ],
-      projects: [],
-      projectAgents: [
-        { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
-      ],
-      ownerName: "Alice",
-      coachToken: "pat-1",
-      coachMmUserId: "mm-alice-coach",
-    };
-
-    await adapter.applyAddCustomerConfigPatch(
-      snapshot,
-      { _coachPersonalToken: "pat-1" },
-    );
-
-    expect(rpc.configPatchAndWaitForChange).not.toHaveBeenCalled();
-    expect(rpc.channelsStop).toHaveBeenCalledTimes(2);
-    expect(rpc.channelsStart).toHaveBeenCalledTimes(2);
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-proj-orbit",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-coach",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "alice-proj-orbit",
-    });
-  });
-
-  it("attempts every coach and project monitor and leaves readiness verification authoritative", async () => {
-    const stopAccounts: string[] = [];
-    const startAccounts: string[] = [];
-    const rpc = {
-      channelsStop: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => {
-        stopAccounts.push(accountId);
-        if (accountId === "alice-proj-orbit") {
-          throw new Error("orbit stop failed");
-        }
-        return { channel, accountId, stopped: true as const };
-      }),
-      channelsStart: vi.fn(async ({ channel, accountId }: { channel: string; accountId: string }) => {
-        startAccounts.push(accountId);
-        return { channel, accountId, started: true as const };
-      }),
-    } as unknown as GatewayRpcClient;
-    patchMocks.applyConfigPatch.mockResolvedValueOnce({
-      mode: "rpc",
-      attempts: 1,
-      noop: true,
-    });
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
-      rpc,
-      log: vi.fn(),
-    });
-    const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-alice",
-      slug: "alice",
-      tier: "standard",
-      gatewayId: "default",
-      status: "",
-      agentIds: [],
-      repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
-      greetingPosted: false,
-      channels: [
-        { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
-        { scope: "project", projectId: "nova", kind: "general", channelId: "nova-general" },
-      ],
-      projects: [],
-      projectAgents: [
-        { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
-        { projectId: "nova", enabled: true, mmUserId: "mm-nova", token: "pat-nova" },
-      ],
-      ownerName: "Alice",
-      coachToken: "pat-1",
-      coachMmUserId: "mm-alice-coach",
-    };
-
-    await expect(
-      adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }),
-    ).resolves.toEqual(expect.objectContaining({ elapsedMs: expect.any(Number) }));
-    expect(stopAccounts).toEqual([
-      "alice-coach",
-      "alice-proj-orbit",
-      "alice-proj-nova",
-    ]);
-    expect(startAccounts).toEqual([
-      "alice-coach",
-      "alice-proj-orbit",
-      "alice-proj-nova",
-    ]);
   });
 
   it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {

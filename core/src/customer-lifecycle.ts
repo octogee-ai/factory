@@ -226,8 +226,6 @@ opts?: {
   cancelPendingEviction?: (slug: string) => boolean | void;
   clearMountMarker?: (slug: string) => void;
 
-  warmAgentRuntimePlugins?: (slug: string) => Promise<void>;
-
   waitForAccountHealthy: (params: { slug: string; timeoutMs: number }) => Promise<boolean>;
 
   notifyOpsOfSignup: (ctx: CustomerContext) => Promise<void>;
@@ -280,7 +278,6 @@ export type AddCustomerStep =
   | "mattermost-provision"
   | "community-membership"
   | "config-patch"
-  | "warm-runtime-plugins"
   | "verify-channel-ready"
   | "schedule-greeting-cron"
   | "mark-complete"
@@ -468,9 +465,6 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
   throwIfAborted(signal, uid);
 
-  steps.push(...(await warmAgentRuntimePluginsIfSupported(adapter, slug)));
-  throwIfAborted(signal, uid);
-
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push("verify-channel-ready");
   throwIfAborted(signal, uid);
@@ -619,9 +613,6 @@ async function addCustomerToGatewayInner(
   throwIfAborted(signal, uid);
 
   steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
-  throwIfAborted(signal, uid);
-
-  steps.push(...(await warmAgentRuntimePluginsIfSupported(adapter, slug)));
   throwIfAborted(signal, uid);
 
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -1023,18 +1014,6 @@ async function verifyChannelReady(
     );
   }
   adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
-}
-
-async function warmAgentRuntimePluginsIfSupported(
-  adapter: CustomerLifecycleAdapter,
-  slug: string,
-): Promise<AddCustomerStep[]> {
-  if (!adapter.warmAgentRuntimePlugins) return [];
-  const startedAt = Date.now();
-  adapter.log(`[add:${slug}] warming agent runtime plugins`);
-  await adapter.warmAgentRuntimePlugins(slug);
-  adapter.log(`[add:${slug}] agent runtime plugins warm in ${Date.now() - startedAt}ms`);
-  return ["warm-runtime-plugins"];
 }
 
 async function scheduleGreetingIfNeeded(

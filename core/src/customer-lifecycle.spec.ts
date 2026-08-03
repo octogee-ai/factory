@@ -51,7 +51,6 @@ giteaReadShouldThrow: boolean;
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   configPatchFingerprint?: string;
-  warmRuntimePluginsShouldFail?: boolean;
   healthy: boolean;
   pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
   cloneProjectThrows?: boolean;
@@ -223,13 +222,6 @@ return "ssh-pubkey";
     applyRemoveCustomerConfigPatch: async () => {
       record("applyRemoveCustomerConfigPatch");
     },
-    warmAgentRuntimePlugins: async () => {
-      record("warmAgentRuntimePlugins");
-      if (state.warmRuntimePluginsShouldFail) {
-        throw new Error("runtime plugin warm failed");
-      }
-    },
-
     waitForAccountHealthy: async () => {
       record("waitForAccountHealthy");
       return state.healthy;
@@ -319,7 +311,6 @@ expect(result.steps).toEqual([
       "config-patch",
       "byot-reassert",
       "context-files-reassert",
-      "warm-runtime-plugins",
       "verify-channel-ready",
       "blob-sync",
       "schedule-greeting-cron",
@@ -328,31 +319,15 @@ expect(result.steps).toEqual([
     ]);
   });
 
-  it("warms the final agent plugin set before exposing the coach channel", async () => {
+  it("uses channel readiness as the gate after config convergence", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const patchIndex = state.calls.indexOf("applyAddCustomerConfigPatch");
     const reassertIndex = state.calls.indexOf("reassertByotForCustomer");
-    const warmIndex = state.calls.indexOf("warmAgentRuntimePlugins");
     const verifyIndex = state.calls.indexOf("waitForAccountHealthy");
 
-    expect(warmIndex).toBeGreaterThan(patchIndex);
-    expect(warmIndex).toBeGreaterThan(reassertIndex);
-    expect(verifyIndex).toBeGreaterThan(warmIndex);
-  });
-
-  it("does not expose or complete a mount when agent plugin warm-up fails", async () => {
-    state.warmRuntimePluginsShouldFail = true;
-
-    await expect(addCustomerToGateway(makeAdapter(state), "uid-test"))
-      .rejects.toThrow("runtime plugin warm failed");
-
-    expect(state.calls).not.toContain("waitForAccountHealthy");
-    expect(state.calls).not.toContain("scheduleBootGreetingCron");
-    expect(state.writes).not.toContainEqual({
-      field: "provisioning.openclaw.status",
-      value: "complete",
-    });
+    expect(verifyIndex).toBeGreaterThan(patchIndex);
+    expect(verifyIndex).toBeGreaterThan(reassertIndex);
   });
 
   it("ensures the per-workspace Gitea org BEFORE the workspace repo (#963)", async () => {
