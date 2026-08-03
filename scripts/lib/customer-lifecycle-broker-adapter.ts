@@ -6,7 +6,12 @@ import type {
   FleetBrokerProjectCheckoutScope,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
-import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
+import { resolveBillingProfile } from "../../shared/types/billing.js";
+import {
+  DEFAULT_BUILDER_AGENT_MODEL_REF,
+  parseBuilderAgentModelDefault,
+  type BuilderAgentModelDefault,
+} from "../../shared/types/platform-config.js";
 import {
   CONFIG_PATCH_DEADLINE_MS,
   MIGRATING_IN_PIN_TTL_MS,
@@ -86,6 +91,7 @@ import {
   refreshModelCredentialRuntimeSessions,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
+import { isPlatformProviderRef } from "./byot-sync.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
@@ -349,6 +355,22 @@ function agentIdsFromEntries(entries: ReadonlyArray<Record<string, unknown>>): s
   return entries.flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : []));
 }
 
+function initialCoachModelSelection(snapshot: UserSnapshot): BuilderAgentModelDefault | null {
+  if (snapshot.byotActive === true) return null;
+  if (resolveBillingProfile(snapshot).modelAccess === "house_only") return null;
+  const agentId = `octogee-${snapshot.slug}-coach`;
+  return snapshot.systemConfig?.agentModels?.[agentId]
+    ?? parseBuilderAgentModelDefault(snapshot.builderAgentDefault);
+}
+
+function platformModelDefaults(
+  selection: BuilderAgentModelDefault | null,
+): Record<string, object> | null {
+  if (!selection) return null;
+  const refs = [selection.primary, ...selection.fallbacks].filter(isPlatformProviderRef);
+  return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : null;
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -386,6 +408,8 @@ async function applyAddCustomerConfigPatch(
 
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
+  const coachModelSelection = initialCoachModelSelection(snapshot);
+  const coachModelDefaults = platformModelDefaults(coachModelSelection);
   const agentEntry = buildCustomerAgent({
     uid: snapshot.uid,
     slug: snapshot.slug,
@@ -401,6 +425,7 @@ async function applyAddCustomerConfigPatch(
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
       : {}),
   });
+  if (coachModelSelection) agentEntry.model = coachModelSelection;
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
@@ -478,7 +503,12 @@ async function applyAddCustomerConfigPatch(
           ? { entries: { ...targetAgents.entries, ...evictionPatch.agents.entries } }
           : targetAgents;
         return {
-          agents,
+          agents: {
+            ...(coachModelDefaults
+              ? { defaults: { models: coachModelDefaults } }
+              : {}),
+            ...agents,
+          },
           bindings: [...existingBindings, ...bindings],
           channels: {
             mattermost: {

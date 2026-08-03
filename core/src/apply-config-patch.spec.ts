@@ -115,6 +115,76 @@ describe("applyConfigPatch — RPC happy path", () => {
 
     expect(seen).toEqual(current);
   });
+
+  it("skips an opted-in RPC when the merge patch is already reflected in current config", async () => {
+    const current = {
+      agents: {
+        defaults: {
+          models: {
+            "platform-openrouter/openai/gpt-5.6-luna": {},
+          },
+        },
+        list: [
+          {
+            id: "octogee-alice-coach",
+            model: {
+              primary: "platform-openrouter/openai/gpt-5.6-luna",
+              fallbacks: [],
+            },
+            tools: { fs: { workspaceOnly: true } },
+          },
+        ],
+      },
+    };
+    const configPatch = vi.fn(async () => ({ ok: true as const }));
+    const rpc = makeFakeRpc({
+      configGet: vi.fn(async () => ({ config: current, hash: "current-hash" })),
+      configPatch,
+    });
+
+    const result = await applyConfigPatch(
+      {
+        buildPatch: () => ({
+          agents: {
+            defaults: {
+              models: {
+                "platform-openrouter/openai/gpt-5.6-luna": {},
+              },
+            },
+            list: current.agents.list,
+          },
+        }),
+        skipIfAlreadyApplied: true,
+      },
+      { ...baseOpts(), rpc },
+    );
+
+    expect(result).toEqual({ mode: "rpc", attempts: 1, noop: true });
+    expect(configPatch).not.toHaveBeenCalled();
+  });
+
+  it("still sends an opted-in patch when any requested value differs", async () => {
+    const configPatch = vi.fn(async () => ({ ok: true as const }));
+    const rpc = makeFakeRpc({
+      configGet: vi.fn(async () => ({
+        config: { agents: { list: [{ id: "octogee-alice-coach", model: "old" }] } },
+        hash: "current-hash",
+      })),
+      configPatch,
+    });
+
+    await applyConfigPatch(
+      {
+        buildPatch: () => ({
+          agents: { list: [{ id: "octogee-alice-coach", model: "new" }] },
+        }),
+        skipIfAlreadyApplied: true,
+      },
+      { ...baseOpts(), rpc },
+    );
+
+    expect(configPatch).toHaveBeenCalledOnce();
+  });
 });
 
 describe("applyConfigPatch — hash-mismatch", () => {

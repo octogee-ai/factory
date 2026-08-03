@@ -61,6 +61,7 @@ import {
   runAgentImportDoctor,
   type AgentImportDoctorResult,
 } from "./agent-import-doctor.js";
+import { probeOpenClawHealth } from "./system-config-runtime-health.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 
@@ -463,15 +464,25 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
-const SURGE_READINESS_RPC_TIMEOUT_MS = 2_000;
+export async function waitForOpenClawHealthz(input: {
+  probeHealthz: () => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const sleep = input.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  while (true) {
+    if (await input.probeHealthz()) return;
+    await sleep(1_000);
+  }
+}
 
 export async function probeSurgeReadiness(input: {
   runtimeStatus: FleetRuntime["status"];
   handoffReleased: boolean;
-  isGatewayUp: (timeoutMs: number) => Promise<boolean>;
+  probeHealthz: () => Promise<boolean>;
 }): Promise<{ ready: boolean; openclawUp: boolean }> {
   const openclawUp = input.runtimeStatus === "ready"
-    ? await input.isGatewayUp(SURGE_READINESS_RPC_TIMEOUT_MS)
+    ? await input.probeHealthz()
     : false;
   return {
     ready: input.handoffReleased && openclawUp,
@@ -482,7 +493,7 @@ export async function probeSurgeReadiness(input: {
 function createSurgeReadinessHandler(input: {
   runtime: FleetRuntime;
   surgeReadiness: SurgeReadinessGate;
-  rpc: GatewayRpcClient;
+  probeHealthz: () => Promise<boolean>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
@@ -491,7 +502,7 @@ function createSurgeReadinessHandler(input: {
       const { ready, openclawUp } = await probeSurgeReadiness({
         runtimeStatus: input.runtime.status,
         handoffReleased,
-        isGatewayUp: (timeoutMs) => input.rpc.isGatewayUp(timeoutMs),
+        probeHealthz: input.probeHealthz,
       });
       res.status(ready ? 200 : 503).json({
         ready,
@@ -1085,23 +1096,18 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     }
   };
 
-const waitForGatewayReady = async (): Promise<void> => {
-    while (runtime.status !== "ready") {
-      try {
-        const up = await opts.rpc.isGatewayUp(10_000);
-        if (up) {
-          runtime.status = "ready";
-          opts.log(
-            `[fleet] gateway RPC up; transitioning gateways/${opts.gatewayId} to status=ready`,
-          );
-          await emitHeartbeat("ready");
-          return;
-        }
-      } catch {
-        // ignore
-      }
-      await new Promise<void>((r) => setTimeout(r, 1_000));
-    }
+  const waitForGatewayReady = async (): Promise<void> => {
+    if (runtime.status === "ready") return;
+    await waitForOpenClawHealthz({
+      probeHealthz: () => probeOpenClawHealth(
+        `http://127.0.0.1:${gatewayPort}/healthz`,
+      ),
+    });
+    runtime.status = "ready";
+    opts.log(
+      `[fleet] OpenClaw healthz ready; transitioning gateways/${opts.gatewayId} to status=ready`,
+    );
+    await emitHeartbeat("ready");
   };
 
   const app = express();
@@ -1133,7 +1139,9 @@ const waitForGatewayReady = async (): Promise<void> => {
   app.get("/surge-ready", createSurgeReadinessHandler({
     runtime,
     surgeReadiness,
-    rpc: opts.rpc,
+    probeHealthz: () => probeOpenClawHealth(
+      `http://127.0.0.1:${gatewayPort}/healthz`,
+    ),
     log: opts.log,
   }));
 

@@ -24,6 +24,7 @@ import {
   reconcileAddCustomerOptions,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
+  waitForOpenClawHealthz,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import {
@@ -523,30 +524,45 @@ describe("evictLocalCustomerIfStillUndesired", () => {
 });
 
 describe("in-pod gateway heartbeat", () => {
-  it("requires both the handoff marker and a live OpenClaw probe for surge readiness", async () => {
-    const isGatewayUp = vi.fn(async () => true);
+  it("waits on the lightweight health endpoint instead of retrying authenticated RPC", async () => {
+    const probeHealthz = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(waitForOpenClawHealthz({ probeHealthz, sleep })).resolves.toBeUndefined();
+
+    expect(probeHealthz).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenNthCalledWith(1, 1_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 1_000);
+  });
+
+  it("uses lightweight local health without opening an authenticated RPC on every probe", async () => {
+    const probeHealthz = vi.fn(async () => true);
 
     await expect(probeSurgeReadiness({
       runtimeStatus: "ready",
       handoffReleased: true,
-      isGatewayUp,
+      probeHealthz,
     })).resolves.toEqual({ ready: true, openclawUp: true });
-    expect(isGatewayUp).toHaveBeenCalledWith(2_000);
+    expect(probeHealthz).toHaveBeenCalledOnce();
 
-    isGatewayUp.mockResolvedValueOnce(false);
+    probeHealthz.mockResolvedValueOnce(false);
     await expect(probeSurgeReadiness({
       runtimeStatus: "ready",
       handoffReleased: true,
-      isGatewayUp,
+      probeHealthz,
     })).resolves.toEqual({ ready: false, openclawUp: false });
 
-    isGatewayUp.mockClear();
+    probeHealthz.mockClear();
     await expect(probeSurgeReadiness({
       runtimeStatus: "booting",
       handoffReleased: true,
-      isGatewayUp,
+      probeHealthz,
     })).resolves.toEqual({ ready: false, openclawUp: false });
-    expect(isGatewayUp).not.toHaveBeenCalled();
+    expect(probeHealthz).not.toHaveBeenCalled();
   });
 
   it("reports the OpenClaw runtime version through the poller health endpoint", () => {

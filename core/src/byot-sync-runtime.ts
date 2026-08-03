@@ -183,6 +183,7 @@ export async function applyCoachToolsConvergence(
         buildPatch,
         buildReplacePaths: coachAgentPatchReplacePaths,
         logPrefix: `[coach-tools:${slug}]`,
+        skipIfAlreadyApplied: true,
       },
       { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
     );
@@ -253,6 +254,7 @@ export async function applyAgentModelOverrides(
           buildPatch,
           buildReplacePaths: coachAgentPatchReplacePaths,
           logPrefix: `[agent-models:${slug}]`,
+          skipIfAlreadyApplied: true,
         },
         { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
       );

@@ -7,6 +7,7 @@ export interface ApplyConfigPatchArgs {
      *  as buildPatch, which it always accompanies on retry). */
     buildReplacePaths?: (current: unknown) => string[];
     logPrefix?: string;
+    skipIfAlreadyApplied?: boolean;
 }
 export interface ConfigCache {
     current: unknown;

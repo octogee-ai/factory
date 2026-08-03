@@ -14,6 +14,7 @@ export interface ApplyConfigPatchArgs {
    *  as buildPatch, which it always accompanies on retry). */
   buildReplacePaths?: (current: unknown) => string[];
   logPrefix?: string;
+  skipIfAlreadyApplied?: boolean;
 }
 
 export interface ConfigCache {
@@ -130,6 +131,25 @@ function configPatchReplacePathOptions(
   return replacePaths && replacePaths.length > 0 ? { replacePaths } : undefined;
 }
 
+function isMergePatchObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergePatchValueAlreadyApplied(current: unknown, patch: unknown): boolean {
+  if (Array.isArray(patch)) {
+    return Array.isArray(current) &&
+      current.length === patch.length &&
+      patch.every((value, index) => mergePatchValueAlreadyApplied(current[index], value));
+  }
+  if (!isMergePatchObject(patch)) return Object.is(current, patch);
+  if (!isMergePatchObject(current)) return false;
+  return Object.entries(patch).every(([key, value]) => {
+    const present = Object.prototype.hasOwnProperty.call(current, key);
+    if (value === null) return !present;
+    return present && mergePatchValueAlreadyApplied(current[key], value);
+  });
+}
+
 async function readConfigForPatch(
   rpc: GatewayRpcClient,
   cache: ConfigCache | undefined,
@@ -188,6 +208,12 @@ async function runConfigPatchAttempt(
 ): Promise<ApplyConfigPatchResult> {
   const { config, hash, getMs } = await readConfigForPatch(ctx.rpc, ctx.cache, ctx.now);
   const patch = args.buildPatch(config);
+  if (args.skipIfAlreadyApplied && mergePatchValueAlreadyApplied(config, patch)) {
+    ctx.log(
+      `${ctx.prefix}config.patch local noop attempt=${ctx.attempts} configGet=${getMs}ms totalMs=${ctx.now() - ctx.startedAt}`,
+    );
+    return { mode: "rpc", attempts: ctx.attempts, noop: true };
+  }
   const replacePaths = args.buildReplacePaths?.(config);
   const patchStart = ctx.now();
   const patchResult = await ctx.rpc.configPatch(

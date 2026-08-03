@@ -875,6 +875,61 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
+  it("puts a catalog Builder's final coach model and fallbacks in the initial mount patch", async () => {
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "trial",
+      selectedTier: "personal",
+      gatewayId: "default",
+      status: "provisioning",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: "mm-alice",
+      customerMmUserId: "mm-alice",
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      email: "alice@example.com",
+      displayName: "Alice",
+      lastName: "",
+      photoURL: "",
+      onboardingVibe: null,
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+      byotActive: false,
+      builderAgentDefault: {
+        primary: "platform-openrouter/openai/gpt-5.6-luna",
+        fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+      },
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => {
+        agents: {
+          defaults?: { models?: Record<string, unknown> };
+          list: Array<{ id?: string; model?: unknown }>;
+        };
+      };
+    };
+    const patch = args.buildPatch({ agents: { list: [] }, bindings: [] });
+    const coach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
+
+    expect(coach?.model).toEqual(snapshot.builderAgentDefault);
+    expect(patch.agents.defaults?.models).toEqual({
+      "platform-openrouter/openai/gpt-5.6-luna": {},
+      "platform-openrouter/z-ai/glm-5.2": {},
+    });
+  });
+
   it("adds a fresh Builder and removes only the still-undesired batch in one config mutation", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),

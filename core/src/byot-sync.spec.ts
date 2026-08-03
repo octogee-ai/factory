@@ -943,14 +943,17 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
   it("catalog (houseOnly:false) strips a lingering trim on the next re-assert without touching the model", async () => {
     const calls: object[] = [];
     let replacePaths: string[] | undefined;
+    let skipIfAlreadyApplied: boolean | undefined;
     const r = await applyCoachToolsConvergence("tester-70", false, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch(CURRENT));
         replacePaths = args.buildReplacePaths?.(CURRENT);
+        skipIfAlreadyApplied = args.skipIfAlreadyApplied;
         return { mode: "rpc", attempts: 1 };
       },
     });
     expect(r).toBe(true);
+    expect(skipIfAlreadyApplied).toBe(true);
     expect(replacePaths).toEqual([
       "agents.list",
       "agents.list[].model.fallbacks",
@@ -2256,6 +2259,7 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
   it("patches each owned agent's full list; openrouter refs get a defaults.models allowlist entry", async () => {
     const calls: object[] = [];
     const paths: (string[] | undefined)[] = [];
+    const skipIfAlreadyApplied: Array<boolean | undefined> = [];
     const r = await applyAgentModelOverrides(
       "tester-70",
       {
@@ -2273,12 +2277,14 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
         applyConfigPatch: async (args) => {
           calls.push(args.buildPatch(CURRENT));
           paths.push(args.buildReplacePaths?.(CURRENT));
+          skipIfAlreadyApplied.push(args.skipIfAlreadyApplied);
           return { mode: "rpc", attempts: 1 };
         },
         logFn: () => {},
       },
     );
     expect(r).toBe(true);
+    expect(skipIfAlreadyApplied).toEqual([true, true]);
     const fullListPaths = [
       "agents.list",
       "agents.list[].model.fallbacks",

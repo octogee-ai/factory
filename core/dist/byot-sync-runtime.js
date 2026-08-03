@@ -96,6 +96,7 @@ export async function applyCoachToolsConvergence(slug, houseOnly, deps) {
             buildPatch,
             buildReplacePaths: coachAgentPatchReplacePaths,
             logPrefix: `[coach-tools:${slug}]`,
+            skipIfAlreadyApplied: true,
         }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
         logFn(`[byot-sync] ${slug}: coach tools ${houseOnly ? "trimmed to the free-tier surface" : "converged to the inherited gateway surface"}`);
         return true;
@@ -150,6 +151,7 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
                 buildPatch,
                 buildReplacePaths: coachAgentPatchReplacePaths,
                 logPrefix: `[agent-models:${slug}]`,
+                skipIfAlreadyApplied: true,
             }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
             logFn(`[byot-sync] ${slug}: ${agentId} model → ${selection.primary}${selection.fallbacks.length ? ` (fallback ${selection.fallbacks.join(", ")})` : ""}`);
             patched = true;

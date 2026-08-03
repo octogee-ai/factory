@@ -1549,6 +1549,7 @@ function installProvisioningRoutes(
     await runBrokered(res, async () => {
       await db.collection("users").doc(assigned.uid).update({
         "provisioning.openclaw.status": status,
+        "provisioning.status": status === "complete" ? "complete" : "in_progress",
       });
       res.status(204).end();
     });
