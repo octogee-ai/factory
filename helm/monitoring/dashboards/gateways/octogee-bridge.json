@@ -37,7 +37,7 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(kube_pod_info, namespace)",
+          "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
         "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
@@ -81,7 +81,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_event_received_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(octogee_bridge_event_received_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "received",
           "refId": "A"
         },
@@ -90,7 +90,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_event_posted_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(octogee_bridge_event_posted_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "posted",
           "refId": "B"
         },
@@ -99,7 +99,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_event_dropped_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(octogee_bridge_event_dropped_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "dropped",
           "refId": "C"
         }
@@ -156,7 +156,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -210,7 +210,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -296,7 +296,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -334,7 +334,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(chat_proxy_openclaw_ws_connections_active{namespace=\"$namespace\"})",
+          "expr": "sum(chat_proxy_openclaw_ws_connections_active{namespace=\"$namespace\"}) or vector(0)",
           "legendFormat": "active",
           "refId": "A"
         }
@@ -388,7 +388,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(chat_proxy_openclaw_ws_handshakes_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(chat_proxy_openclaw_ws_handshakes_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "handshakes/s",
           "refId": "A"
         },
@@ -397,7 +397,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "rotations/s",
           "refId": "B"
         }
@@ -454,7 +454,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(chat_proxy_builder_shell_session_close_total{namespace=\"$namespace\"}[5m])) by (reason)",
+          "expr": "sum(rate(chat_proxy_builder_shell_session_close_total{namespace=\"$namespace\"}[5m])) by (reason) or vector(0)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }

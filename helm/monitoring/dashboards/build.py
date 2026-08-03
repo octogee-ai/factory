@@ -12,10 +12,26 @@ Gateway boards add a `$gateway` job selector.
 """
 import json
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DS = "${datasource}"
 NS = '$namespace'
+KSM_JOB = 'gmp-kube-state-metrics'
+
+
+def pin_ksm(expr):
+    def replace(match):
+        metric = match.group(1)
+        labels = match.group(3)
+        if labels is None:
+            return f'{metric}{{job="{KSM_JOB}"}}'
+        if re.search(r'(^|,)\s*job\s*=~?', labels):
+            return match.group(0)
+        separator = ',' if labels else ''
+        return f'{metric}{{job="{KSM_JOB}"{separator}{labels}}}'
+
+    return re.sub(r'\b(kube_[a-z0-9_]+)(\{([^}]*)\})?', replace, expr)
 
 
 def ds():
@@ -37,7 +53,7 @@ def tmpl_namespace():
     return {
         "name": "namespace", "label": "Namespace", "type": "query",
         "datasource": ds(),
-        "query": {"query": "label_values(kube_pod_info, namespace)", "refId": "ns"},
+        "query": {"query": f'label_values(kube_pod_info{{job="{KSM_JOB}"}}, namespace)', "refId": "ns"},
         "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
         "current": {"text": "octogee", "value": "octogee"},
         "includeAll": False, "multi": False, "refresh": 2, "sort": 1,
@@ -75,7 +91,7 @@ def nid():
 
 
 def target(expr, legend="", refId="A"):
-    return {"datasource": ds(), "expr": expr, "legendFormat": legend, "refId": refId}
+    return {"datasource": ds(), "expr": pin_ksm(expr), "legendFormat": legend, "refId": refId}
 
 
 def cloud_target(metric_type, legend="", refId="A", group_bys=None,
@@ -139,15 +155,18 @@ def _targets(exprs):
     return out
 
 
-def stat(title, exprs, unit="short", w=6, h=4, thresholds=None, color="thresholds", text_mode="auto"):
+def stat(title, exprs, unit="short", w=6, h=4, thresholds=None, color="thresholds", text_mode="auto", drilldown=None):
     steps = thresholds or [{"color": "green", "value": None}]
+    defaults = {"unit": unit, "color": {"mode": color},
+                "thresholds": {"mode": "absolute", "steps": steps}}
+    if drilldown:
+        defaults["links"] = drilldown
     return {
         "id": nid(), "type": "stat", "title": title, "datasource": ds(),
         "targets": _targets(exprs),
-        "fieldConfig": {"defaults": {"unit": unit, "color": {"mode": color},
-                        "thresholds": {"mode": "absolute", "steps": steps}}, "overrides": []},
+        "fieldConfig": {"defaults": defaults, "overrides": []},
         "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
-                    "textMode": text_mode, "colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+                    "textMode": text_mode, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
         "gridPos": {"h": h, "w": w, "x": 0, "y": 0},
     }
 
@@ -228,28 +247,62 @@ def dlink(title, dash_tag):
             "includeVars": True, "keepTime": True, "icon": "external link"}
 
 
+def panel_link(title, path):
+    separator = '&' if '?' in path else '?'
+    return [{
+        "title": title,
+        "url": f'{path}{separator}var-namespace=${{namespace}}&var-datasource=${{datasource}}&from=${{__from}}&to=${{__to}}',
+    }]
+
+
 # ─────────────────────────── PLATFORM ───────────────────────────
 PLAT_JOBS = 'octogee-api|gateway-edge'
 
 
 def d_overview():
     p = [
-        row("Health at a glance"),
-        stat("Pods Running", [f'count(kube_pod_status_phase{{namespace="{NS}",phase="Running"}})']),
-        stat("Pods Not Ready", [f'count(kube_pod_status_ready{{namespace="{NS}",condition="false"}}==1) or vector(0)'],
-             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        stat("Restarts 24h", [f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h]))'],
-             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 10}]),
-        stat("Firing Alerts", ['count(ALERTS{alertstate="firing"}) or vector(0)'],
-             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        stat("Gateways Up", [f'count(up{{namespace="{NS}",job=~"octogee-gateway.*"}}==1) or vector(0)']),
-        stat("Customers", [f'sum(octogee_customers_total{{namespace="{NS}"}}) or vector(0)']),
-        stat("API req/s", [f'sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api"}}[5m]))'], unit="reqps"),
-        stat("API 5xx %", [f'100*sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api",status=~"5.."}}[5m]))/clamp_min(sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api"}}[5m])),0.001)'],
-             unit="percent", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]),
-        row("Platform throughput"),
-        ts("API + Edge request rate", [(f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{PLAT_JOBS}"}}[5m])) by (job)', "{{job}}")], unit="reqps"),
-        ts("Agent turns / min (fleet)", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}"}}[5m]))*60', "turns/min")]),
+        text("Start here", "**Green means no action. Click any number to open the one dashboard that explains it.** "
+             "Use the Namespace picker for PROD (`octogee`) or TEST (`octogee-test`).", h=3),
+        row("Act now"),
+        stat("Firing alerts", [f'count(ALERTS{{alertstate="firing",namespace="{NS}"}}) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
+             drilldown=panel_link("Open Alerting", "/alerting/list")),
+        stat("Unavailable deployments", [f'sum(kube_deployment_status_replicas_unavailable{{namespace="{NS}"}}) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
+             drilldown=panel_link("Open workload health", "/d/octogee-container-health/workload-health")),
+        stat("Scrape targets down", [f'count((up{{namespace="{NS}",job=~"octogee-api|octogee-gateway|gateway-edge|gitea|glm-controller"}} == 0) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}],
+             drilldown=panel_link("Open service health", "/d/octogee-services/service-health")),
+        stat("Active restarts (24h)", [f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h]) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 10}],
+             drilldown=panel_link("Open restart offenders", "/d/octogee-container-health/workload-health")),
+        row("Can customers use the platform?"),
+        stat("Core services down", [f'4 - (count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-api|octogee-gitea|mattermost|glm-controller"}} >= 1) or vector(0))'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
+             drilldown=panel_link("Open workload health", "/d/octogee-container-health/workload-health")),
+        stat("Ready gateways", [f'count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-gateway-.*"}} >= 1) or vector(0)'],
+             thresholds=[{"color": "red", "value": None}, {"color": "yellow", "value": 2}, {"color": "green", "value": 3}],
+             drilldown=panel_link("Open fleet health", "/d/octogee-fleet/fleet-health")),
+        stat("Cowboy reconcile age", [f'(time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})) or vector(0)'],
+             unit="s", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}],
+             drilldown=panel_link("Open fleet health", "/d/octogee-fleet/fleet-health")),
+        stat("Bridge connected", [f'min(octogee_bridge_boot_status{{namespace="{NS}",status="connected"}}) or vector(0)'],
+             thresholds=[{"color": "red", "value": None}, {"color": "green", "value": 1}],
+             drilldown=panel_link("Open Activity bridge", "/d/octogee-bridge/activity-bridge")),
+        row("Traffic and outcomes"),
+        stat("API req/s", [f'sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api"}}[5m])) or vector(0)'], unit="reqps",
+             drilldown=panel_link("Open API health", "/d/octogee-services/service-health")),
+        stat("API 5xx %", [f'(100*sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api",status=~"5.."}}[5m]))/clamp_min(sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api"}}[5m])),0.001)) or vector(0)'],
+             unit="percent", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}],
+             drilldown=panel_link("Open API health", "/d/octogee-services/service-health")),
+        stat("Agent turns/min", [f'sum(rate(octogee_agent_end_total{{namespace="{NS}"}}[5m]))*60 or vector(0)'],
+             drilldown=panel_link("Open agent activity", "/d/octogee-gateway/agent-activity")),
+        stat("Email failures (24h)", [f'(sum(increase(octogee_email_sent_total{{namespace="{NS}",result="error"}}[24h])) or vector(0)) + (sum(increase(octogee_email_delivery_total{{namespace="{NS}",event="failed"}}[24h])) or vector(0))'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
+             drilldown=panel_link("Open email health", "/d/octogee-email/email-health")),
+        row("Trends"),
+        ts("API + Edge request rate", [(f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{PLAT_JOBS}"}}[5m])) by (job) or vector(0)', "{{job}}")], unit="reqps"),
+        ts("Agent turns / min", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}"}}[5m]))*60 or vector(0)', "turns/min")]),
     ]
     return dashboard("octogee-overview", "Octogee — Overview", p,
                      [tmpl_datasource(), tmpl_namespace()],
@@ -264,8 +317,8 @@ def d_services():
         ts("Request rate by job", [(f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}"}}[5m])) by (job)', "{{job}}")], unit="reqps", legend=True),
         ts("p99 latency by job", [(f'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{{namespace="{NS}",job=~"{j}"}}[5m])) by (le,job))', "{{job}}")], unit="s", legend=True),
         ts("Error rate (4xx/5xx) by job", [
-            (f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}",status=~"5.."}}[5m])) by (job)', "5xx {{job}}"),
-            (f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}",status=~"4.."}}[5m])) by (job)', "4xx {{job}}")],
+            (f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}",status=~"5.."}}[5m])) by (job) or vector(0)', "5xx {{job}}"),
+            (f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}",status=~"4.."}}[5m])) by (job) or vector(0)', "4xx {{job}}")],
            unit="reqps", legend=True),
         ts("Requests by route (top)", [(f'topk(10, sum(rate(http_requests_total{{namespace="{NS}",job=~"{j}"}}[5m])) by (route))', "{{route}}")], unit="reqps", legend=True),
         row("Node.js runtime"),
@@ -283,13 +336,54 @@ def d_services():
 
 
 def d_container_health():
+    deployment_columns = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True, "job": True, "instance": True},
+            "renameByName": {
+                "namespace": "Environment",
+                "deployment": "Deployment",
+                "Value #A": "Planned",
+                "Value #B": "Ready",
+                "Value #C": "Unavailable",
+            },
+        },
+    }
+    container_columns = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True, "job": True, "instance": True, "uid": True},
+            "renameByName": {
+                "namespace": "Environment",
+                "pod": "Pod",
+                "container": "Container",
+                "node": "Node",
+                "Value": "Ready",
+            },
+        },
+    }
     p = [
-        row("Pod health (kube-state-metrics)"),
-        table("Pod restarts (24h)", [(f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h])) by (pod)', "{{pod}}")]),
+        text("Use this when the home page is not green", "This board answers **which workload is unhealthy and which container restarted**. "
+             "Start with the red stat, then the offender tables; use CPU and memory only after workload state is healthy.", h=3),
+        row("Workload state"),
+        stat("Unavailable deployments", [f'sum(kube_deployment_status_replicas_unavailable{{namespace="{NS}"}}) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+        stat("Crash-looping containers", [f'count(kube_pod_container_status_waiting_reason{{namespace="{NS}",reason="CrashLoopBackOff"}} == 1) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+        stat("Active restarted containers (24h)", [f'count((sum by (namespace,pod,container) (increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h])) > 0) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)) or vector(0)'],
+             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]),
+        table("Deployments — planned vs ready", [
+            (f'sum by (namespace,deployment) (kube_deployment_spec_replicas{{namespace="{NS}"}})', "planned"),
+            (f'sum by (namespace,deployment) (kube_deployment_status_replicas_ready{{namespace="{NS}"}})', "ready"),
+            (f'sum by (namespace,deployment) (kube_deployment_status_replicas_unavailable{{namespace="{NS}"}})', "unavailable"),
+        ], w=24, h=8, transformations=[{"id": "merge", "options": {}}, deployment_columns]),
+        table("Active restart offenders (24h)", [(f'topk(20, (sum by (namespace,pod,container) (increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h])) > 0) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1))', "{{pod}}/{{container}}")]),
+        table("Active service containers", [
+            (f'sum by (namespace,pod,node,container) ((kube_pod_container_status_ready{{namespace="{NS}",container!=""}} == 1) * on(namespace,pod) group_left(node) kube_pod_info{{namespace="{NS}"}})', "{{pod}}/{{container}}"),
+        ], w=24, h=10, transformations=[container_columns]),
+        row("Resources"),
         ts("CPU usage by pod", [(f'sum(rate(container_cpu_usage_seconds_total{{namespace="{NS}",container!=""}}[5m])) by (pod)', "{{pod}}")], unit="short", legend=True),
         ts("Memory working set by pod", [(f'sum(container_memory_working_set_bytes{{namespace="{NS}",container!=""}}) by (pod)', "{{pod}}")], unit="bytes", legend=True),
-        ts("Container restarts rate", [(f'sum(rate(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[15m])) by (pod)', "{{pod}}")], unit="short", legend=True),
-        ts("Pods not ready", [(f'sum(kube_pod_status_ready{{namespace="{NS}",condition="false"}}==1) by (pod)', "{{pod}}")], legend=True),
     ]
     return dashboard("octogee-container-health", "Platform — Container Health", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "platform"])
@@ -323,9 +417,9 @@ def d_mattermost():
              "latency + error counters) plus container metrics. Native MM metrics light up automatically if a license "
              "is added.", h=5),
         row("Bridge → Mattermost interaction (gateway-edge)"),
-        ts("MM post-create latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{{namespace="{NS}"}}[5m])) by (le))', "p95 create")], unit="ms"),
-        ts("MM post-edit latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{{namespace="{NS}"}}[5m])) by (le))', "p95 edit")], unit="ms"),
-        ts("Bridge member-resolve failures", [(f'sum(rate(octogee_bridge_member_resolve_failures_total{{namespace="{NS}"}}[5m]))', "fail/s")], unit="short"),
+        ts("MM post-create latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95 create")], unit="ms"),
+        ts("MM post-edit latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95 edit")], unit="ms"),
+        ts("Bridge member-resolve failures", [(f'sum(rate(octogee_bridge_member_resolve_failures_total{{namespace="{NS}"}}[5m])) or vector(0)', "fail/s")], unit="short"),
         row("Container health"),
         ts("Mattermost pod memory", [(f'sum(container_memory_working_set_bytes{{namespace="{NS}",pod=~"mattermost.*",container!=""}})', "mem")], unit="bytes"),
         ts("Mattermost pod restarts", [(f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}",pod=~"mattermost.*"}}[1h]))', "restarts/h")]),
@@ -354,16 +448,16 @@ def d_agent():
     g = '$gateway'
     p = [
         row("Agent activity"),
-        stat("Customers on fleet", [f'sum(octogee_customers_total{{namespace="{NS}",job=~"{g}"}})']),
+        stat("Customers on fleet", [f'sum(octogee_customers_total{{namespace="{NS}",job=~"{g}"}}) or vector(0)']),
         stat("Throttle level (max)", [f'max(octogee_throttle_level{{namespace="{NS}",job=~"{g}"}}) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]),
-        stat("Agent turns/min", [f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m]))*60']),
-        stat("Classifications/min", [f'sum(rate(octogee_classify_total{{namespace="{NS}",job=~"{g}"}}[5m]))*60']),
+        stat("Agent turns/min", [f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m]))*60 or vector(0)']),
+        stat("Classifications/min", [f'sum(rate(octogee_classify_total{{namespace="{NS}",job=~"{g}"}}[5m]))*60 or vector(0)']),
         row("Throughput by gateway"),
-        ts("Agent turns/min by gateway", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60', "{{job}}")], legend=True),
-        ts("Classify rate by gateway", [(f'sum(rate(octogee_classify_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60', "{{job}}")], legend=True),
-        ts("Classify duration p95", [(f'histogram_quantile(0.95, sum(rate(octogee_classify_duration_seconds_bucket{{namespace="{NS}",job=~"{g}"}}[5m])) by (le,job))', "{{job}}")], unit="s", legend=True),
-        ts("Customers per gateway", [(f'octogee_customers_total{{namespace="{NS}",job=~"{g}"}}', "{{job}}")], legend=True),
+        ts("Agent turns/min by gateway", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60 or vector(0)', "{{job}}")], legend=True),
+        ts("Classify rate by gateway", [(f'sum(rate(octogee_classify_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60 or vector(0)', "{{job}}")], legend=True),
+        ts("Classify duration p95", [(f'histogram_quantile(0.95, sum(rate(octogee_classify_duration_seconds_bucket{{namespace="{NS}",job=~"{g}"}}[5m])) by (le,job)) or vector(0)', "{{job}}")], unit="s", legend=True),
+        ts("Customers per gateway", [(f'octogee_customers_total{{namespace="{NS}",job=~"{g}"}} or vector(0)', "{{job}}")], legend=True),
     ]
     return dashboard("octogee-gateway", "Gateways — Agent Observability", p,
                      [tmpl_datasource(), tmpl_namespace(), tmpl_gateway()], tags=["octogee", "gateway"])
@@ -390,23 +484,79 @@ def d_runner():
 
 
 def d_fleet():
+    deployment_columns = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True, "job": True, "instance": True},
+            "renameByName": {
+                "namespace": "Environment",
+                "deployment": "Gateway deployment",
+                "Value #A": "Planned",
+                "Value #B": "Ready",
+                "Value #C": "Available",
+            },
+        },
+    }
+    pod_columns = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True, "job": True, "instance": True, "uid": True},
+            "renameByName": {
+                "namespace": "Environment",
+                "pod": "Active gateway pod",
+                "node": "Node",
+                "label_gateway_id": "Gateway",
+                "label_gateway_class": "Class",
+                "label_octogee_ai_builder_slug": "Builder",
+                "Value": "Ready",
+            },
+        },
+    }
+    container_columns = {
+        "id": "organize",
+        "options": {
+            "excludeByName": {"Time": True, "job": True, "instance": True, "uid": True},
+            "renameByName": {
+                "namespace": "Environment",
+                "pod": "Gateway pod",
+                "container": "Container",
+                "node": "Node",
+                "Value": "Ready",
+            },
+        },
+    }
     p = [
+        text("Current fleet only", "This board uses the current Kubernetes desired and Ready state. "
+             "Deleted rollout pods do not appear. A temporary surge is visible as **Ready > Planned**, rather than as a second gateway.", h=3),
         row("Fleet reconcile (Cowboy / glm-controller)"),
         stat("Reconcile last-success age", [f'time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})'],
              unit="s", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}]),
         stat("Reconciles (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}"}}[1h])) or vector(0)']),
         stat("Reconcile errors (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}",result="fail"}}[1h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        stat("Gateways up", [f'count(up{{namespace="{NS}",job=~"octogee-gateway.*"}}==1) or vector(0)']),
+        stat("Ready gateways", [f'count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-gateway-.*"}} >= 1) or vector(0)']),
         row("Shared Barn capacity"),
         stat("Barn assignments at last ceiling", [f'max(glm_shared_gateway_assignment_count{{namespace="{NS}"}}) or vector(0)']),
         stat("Barn hot members at last ceiling", [f'max(glm_shared_gateway_hot_members{{namespace="{NS}"}}) or vector(0)']),
         stat("Barn ceiling observations (1h)", [f'sum(increase(glm_shared_gateway_max_capacity_total{{namespace="{NS}"}}[1h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        row("Reconcile + fleet inventory"),
+        row("Planned vs actual gateway deployments"),
+        table("Gateway deployments — planned vs ready", [
+            (f'sum by (namespace,deployment) (kube_deployment_spec_replicas{{namespace="{NS}",deployment=~"octogee-gateway-.*"}})', "planned"),
+            (f'sum by (namespace,deployment) (kube_deployment_status_replicas_ready{{namespace="{NS}",deployment=~"octogee-gateway-.*"}})', "ready"),
+            (f'sum by (namespace,deployment) (kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-gateway-.*"}})', "available"),
+        ], w=24, h=8, transformations=[{"id": "merge", "options": {}}, deployment_columns]),
+        row("Active gateway runtime"),
+        table("Active gateway pods and nodes", [
+            (f'sum by (namespace,pod,node,label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) ((kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}}) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1))', "{{pod}}"),
+        ], w=24, h=10, transformations=[pod_columns]),
+        table("Active gateway containers", [
+            (f'sum by (namespace,pod,node,container) ((kube_pod_container_status_ready{{namespace="{NS}",pod=~"octogee-gateway-.*",container=~"gateway|gateway-edge"}} == 1) * on(namespace,pod) group_left(node) kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}})', "{{pod}}/{{container}}"),
+        ], w=24, h=10, transformations=[container_columns]),
+        row("Reconcile and scrape signals"),
         ts("Reconcile rate by result", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}"}}[5m])) by (result)', "{{result}}")], unit="ops", legend=True),
-        table("Gateway up/down", [(f'up{{namespace="{NS}",job=~"octogee-gateway.*"}}', "{{job}}")]),
-        ts("gateway-edge up by instance", [(f'up{{namespace="{NS}",job=~"gateway-edge.*"}}', "{{job}}")], legend=True),
+        table("Current gateway scrape health", [(f'up{{namespace="{NS}",job=~"octogee-gateway.*"}} and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}}")]),
+        ts("Current gateway-edge scrape health", [(f'up{{namespace="{NS}",job=~"gateway-edge.*"}} and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}}")], legend=True),
     ]
     return dashboard("octogee-fleet", "Gateways — Fleet / Cowboy", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
@@ -416,18 +566,18 @@ def d_bridge():
     p = [
         row("Activity bridge (gateway-edge → Mattermost)"),
         ts("Events received / posted / dropped", [
-            (f'sum(rate(octogee_bridge_event_received_total{{namespace="{NS}"}}[5m]))', "received"),
-            (f'sum(rate(octogee_bridge_event_posted_total{{namespace="{NS}"}}[5m]))', "posted"),
-            (f'sum(rate(octogee_bridge_event_dropped_total{{namespace="{NS}"}}[5m]))', "dropped")], unit="ops", legend=True),
-        ts("E2E root-post latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{{namespace="{NS}"}}[5m])) by (le))', "p95")], unit="ms"),
-        ts("E2E approval-visible latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{{namespace="{NS}"}}[5m])) by (le))', "p95")], unit="ms"),
+            (f'sum(rate(octogee_bridge_event_received_total{{namespace="{NS}"}}[5m])) or vector(0)', "received"),
+            (f'sum(rate(octogee_bridge_event_posted_total{{namespace="{NS}"}}[5m])) or vector(0)', "posted"),
+            (f'sum(rate(octogee_bridge_event_dropped_total{{namespace="{NS}"}}[5m])) or vector(0)', "dropped")], unit="ops", legend=True),
+        ts("E2E root-post latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95")], unit="ms"),
+        ts("E2E approval-visible latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95")], unit="ms"),
         stat("Bridge boot status", [f'max(octogee_bridge_boot_status{{namespace="{NS}"}}) or vector(0)']),
         row("OpenClaw WS proxy (folded chat-proxy)"),
-        ts("Active WS connections", [(f'sum(chat_proxy_openclaw_ws_connections_active{{namespace="{NS}"}})', "active")]),
+        ts("Active WS connections", [(f'sum(chat_proxy_openclaw_ws_connections_active{{namespace="{NS}"}}) or vector(0)', "active")]),
         ts("WS handshakes / rotations recovered", [
-            (f'sum(rate(chat_proxy_openclaw_ws_handshakes_total{{namespace="{NS}"}}[5m]))', "handshakes/s"),
-            (f'sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{{namespace="{NS}"}}[5m]))', "rotations/s")], unit="ops", legend=True),
-        ts("Builder-shell session closes", [(f'sum(rate(chat_proxy_builder_shell_session_close_total{{namespace="{NS}"}}[5m])) by (reason)', "{{reason}}")], unit="ops", legend=True),
+            (f'sum(rate(chat_proxy_openclaw_ws_handshakes_total{{namespace="{NS}"}}[5m])) or vector(0)', "handshakes/s"),
+            (f'sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{{namespace="{NS}"}}[5m])) or vector(0)', "rotations/s")], unit="ops", legend=True),
+        ts("Builder-shell session closes", [(f'sum(rate(chat_proxy_builder_shell_session_close_total{{namespace="{NS}"}}[5m])) by (reason) or vector(0)', "{{reason}}")], unit="ops", legend=True),
     ]
     return dashboard("octogee-bridge", "Gateways — Activity Bridge & WS", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
@@ -541,11 +691,11 @@ def d_email():
              "Alerts: `ResendBounceRateHigh` (>5%/1h), `ResendComplaintRateHigh` (>0.1%/1h), "
              "`ResendWebhookStale` (sends but no events in 1h).", h=5),
         row("Send rate + outcomes"),
-        ts("Send rate by type", [(f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) by (type)', "{{type}}")], unit="ops", legend=True),
+        ts("Send rate by type", [(f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) by (type) or vector(0)', "{{type}}")], unit="ops", legend=True),
         ts("Send outcomes (5m rate)", [
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m]))', "sent"),
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[5m]))', "suppressed"),
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="error"}}[5m]))', "error"),
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) or vector(0)', "sent"),
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[5m])) or vector(0)', "suppressed"),
+            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="error"}}[5m])) or vector(0)', "error"),
         ], unit="ops", legend=True),
         stat("Sent (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[24h])) or vector(0)']),
         stat("Suppressed (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[24h])) or vector(0)'],
@@ -554,24 +704,24 @@ def d_email():
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         row("Delivery feedback (Resend webhook)"),
         ts("Delivery events by type", [
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="delivered"}}[5m])) by (type)', "delivered {{type}}"),
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[5m])) by (type)', "bounced {{type}}"),
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[5m])) by (type)', "complained {{type}}"),
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="delivered"}}[5m])) by (type) or vector(0)', "delivered {{type}}"),
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[5m])) by (type) or vector(0)', "bounced {{type}}"),
+            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[5m])) by (type) or vector(0)', "complained {{type}}"),
         ], unit="ops", legend=True),
         stat("Bounce rate (1h)",
-             [f'100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)'],
+             [f'(100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)) or vector(0)'],
              unit="percent",
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 2}, {"color": "red", "value": 5}]),
         stat("Complaint rate (1h)",
-             [f'100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)'],
+             [f'(100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)) or vector(0)'],
              unit="percent",
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.1}]),
         stat("Failed (24h)", [f'sum(increase(octogee_email_delivery_total{{namespace="{NS}",event="failed"}}[24h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         row("Suppression list"),
         ts("New suppressions / hour", [
-            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="bounce"}}[1h]))*3600', "bounces/h"),
-            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="complaint"}}[1h]))*3600', "complaints/h"),
+            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="bounce"}}[1h]))*3600 or vector(0)', "bounces/h"),
+            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="complaint"}}[1h]))*3600 or vector(0)', "complaints/h"),
         ], unit="short", legend=True),
         stat("Total suppressed (cumulative)", [f'sum(octogee_email_suppressions_total{{namespace="{NS}"}}) or vector(0)']),
     ]
@@ -605,14 +755,14 @@ def d_spot_disruptions():
         stat("On-demand nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="on-demand"}}) or count(kube_node_labels{{label_cloud_google_com_gke_provisioning="standard"}}) or vector(0)']),
         stat("Unknown capacity nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="unknown"}}) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}]),
-        stat("Gateway pods", [f'count(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}}) or vector(0)']),
+        stat("Ready gateway pods", [f'count(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)) or vector(0)']),
         stat("Gateway pods Pending", [f'count(kube_pod_status_phase{{namespace="{NS}",pod=~"octogee-gateway-.*",phase="Pending"}}==1) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]),
         table("Spot node inventory", [
             ('kube_node_info * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels', "{{node}}"),
         ], w=24, h=8),
         table("Gateway pod → node → Octogee identity", [
-            (f'kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels', "{{namespace}}/{{pod}} node={{node}} zone={{label_topology_kubernetes_io_zone}} spot={{label_cloud_google_com_gke_spot}} provisioning={{label_cloud_google_com_gke_provisioning}} gateway={{label_gateway_id}} builder={{label_octogee_ai_builder_slug}}"),
+            (f'(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}} → {{node}} · {{label_gateway_id}} · {{label_topology_kubernetes_io_zone}}"),
         ], w=24, h=9),
         row("Authoritative GCP evidence"),
         cloud_panel("Confirmed Spot preemptions by zone", "logging.googleapis.com/user/octogee_spot_preemptions",

@@ -37,7 +37,7 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(kube_pod_info, namespace)",
+          "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
         "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
@@ -101,7 +101,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(octogee_customers_total{namespace=\"$namespace\",job=~\"$gateway\"})",
+          "expr": "sum(octogee_customers_total{namespace=\"$namespace\",job=~\"$gateway\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -134,7 +134,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -199,7 +199,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -223,7 +223,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_agent_end_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m]))*60",
+          "expr": "sum(rate(octogee_agent_end_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m]))*60 or vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -256,7 +256,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -280,7 +280,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_classify_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m]))*60",
+          "expr": "sum(rate(octogee_classify_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m]))*60 or vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -313,7 +313,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -351,7 +351,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_agent_end_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (job) * 60",
+          "expr": "sum(rate(octogee_agent_end_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (job) * 60 or vector(0)",
           "legendFormat": "{{job}}",
           "refId": "A"
         }
@@ -408,7 +408,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_classify_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (job) * 60",
+          "expr": "sum(rate(octogee_classify_total{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (job) * 60 or vector(0)",
           "legendFormat": "{{job}}",
           "refId": "A"
         }
@@ -465,7 +465,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_classify_duration_seconds_bucket{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (le,job))",
+          "expr": "histogram_quantile(0.95, sum(rate(octogee_classify_duration_seconds_bucket{namespace=\"$namespace\",job=~\"$gateway\"}[5m])) by (le,job)) or vector(0)",
           "legendFormat": "{{job}}",
           "refId": "A"
         }
@@ -522,7 +522,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "octogee_customers_total{namespace=\"$namespace\",job=~\"$gateway\"}",
+          "expr": "octogee_customers_total{namespace=\"$namespace\",job=~\"$gateway\"} or vector(0)",
           "legendFormat": "{{job}}",
           "refId": "A"
         }

@@ -84,10 +84,13 @@ for resource_and_name in \
   read -r resource name <<<"$resource_and_name"
   assert_release_ownership "$resource" "$name" monitoring
 done
-for monitor in gmp-kube-state-metrics octogee-api octogee-gateway gateway-edge gitea mattermost glm-controller; do
+for monitor in gmp-kube-state-metrics octogee-api octogee-gateway gateway-edge gitea glm-controller; do
   assert_release_ownership clusterpodmonitoring "$monitor"
 done
 assert_release_ownership clusterrules octogee-alerts
+for namespace in octogee octogee-test; do
+  assert_release_ownership networkpolicy allow-gateway-edge-monitoring-scrape "$namespace"
+done
 
 if $IAP_ENABLED; then
   for resource_and_name in \

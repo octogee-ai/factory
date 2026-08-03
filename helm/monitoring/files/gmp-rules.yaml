@@ -12,7 +12,12 @@ spec:
     - name: octogee.gateway
       rules:
         - alert: GatewayDown
-          expr: absent(up{job="octogee-gateway"})
+          expr: |
+            (
+              sum by (namespace) (up{job="octogee-gateway",namespace=~"octogee|octogee-test"} == 1)
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"})
+            ) < 1
           for: 2m
           labels:
             severity: critical
@@ -20,7 +25,7 @@ spec:
             summary: "Octogee gateway is unreachable"
             description: "No gateway metrics for 2m. Pod may be crashlooping or stuck."
         - alert: GatewayHighRestarts
-          expr: kube_pod_container_status_restarts_total{container="gateway"} > 3
+          expr: kube_pod_container_status_restarts_total{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",container="gateway"} > 3
           for: 5m
           labels:
             severity: warning
@@ -28,7 +33,7 @@ spec:
             summary: "Gateway pod has restarted {{ $value }} times"
             description: "Container {{ $labels.container }} in {{ $labels.namespace }} has restarted {{ $value }} times."
         - alert: GatewayPodNotReady
-          expr: kube_pod_status_ready{pod=~"octogee-gateway-.*", condition="true"} == 0
+          expr: kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*", condition="true"} == 0
           for: 3m
           labels:
             severity: critical
@@ -36,7 +41,7 @@ spec:
             summary: "Gateway pod not ready for 3m"
             description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not-ready for 3 minutes."
         - alert: GatewayDesiredRunningUnavailable
-          expr: glm_gateway_desired_running_unavailable == 1
+          expr: glm_gateway_desired_running_unavailable{namespace=~"octogee|octogee-test"} == 1
           for: 3m
           labels:
             severity: critical
@@ -46,12 +51,12 @@ spec:
         - alert: GatewayOnDemandFallback
           expr: |
             (
-              kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+              kube_pod_info{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
               * on(namespace,pod) group_left()
-              kube_pod_labels{namespace=~"octogee|octogee-test",label_gateway_class=~"builder|operator"}
+              kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",label_gateway_class=~"builder|operator"}
             )
             * on(node) group_left()
-            kube_node_labels{label_cloud_google_com_gke_spot!="true"}
+            kube_node_labels{job="gmp-kube-state-metrics",label_cloud_google_com_gke_spot!="true"}
           for: 2m
           labels:
             severity: warning
@@ -62,12 +67,12 @@ spec:
           expr: |
             (
               count by (namespace) (
-                (kube_pod_status_ready{namespace=~"octogee|octogee-test",condition="true"} == 1)
+                (kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",condition="true"} == 1)
                 * on(namespace,pod) group_left()
-                kube_pod_labels{label_gateway_class="shared"}
+                kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",label_gateway_class="shared"}
               )
               or on(namespace)
-              (0 * kube_namespace_created{namespace=~"octogee|octogee-test"})
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"})
             ) < 2
           for: 2m
           labels:
@@ -81,18 +86,18 @@ spec:
               count by (namespace) (
                 count by (namespace, label_topology_kubernetes_io_zone) (
                   (
-                    (kube_pod_status_ready{namespace=~"octogee|octogee-test",condition="true"} == 1)
+                    (kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",condition="true"} == 1)
                     * on(namespace,pod) group_left(node)
-                    kube_pod_info{namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
+                    kube_pod_info{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
                     * on(namespace,pod) group_left()
-                    kube_pod_labels{label_gateway_class="shared"}
+                    kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",label_gateway_class="shared"}
                     * on(node) group_left(label_topology_kubernetes_io_zone)
-                    kube_node_labels{label_topology_kubernetes_io_zone!=""}
+                    kube_node_labels{job="gmp-kube-state-metrics",label_topology_kubernetes_io_zone!=""}
                   )
                 )
               )
               or on(namespace)
-              (0 * kube_namespace_created{namespace=~"octogee|octogee-test"})
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"})
             ) < 2
           for: 5m
           labels:
@@ -101,7 +106,7 @@ spec:
             summary: "Shared gateway pool lost zone diversity in {{ $labels.namespace }}"
             description: "Ready shared gateway pods occupy fewer than two Central zones. Capacity remains available, but a zonal disruption can now remove the entire shared pool."
         - alert: SharedGatewayMaxCapacity
-          expr: increase(glm_shared_gateway_max_capacity_total[5m]) > 0
+          expr: increase(glm_shared_gateway_max_capacity_total{namespace=~"octogee|octogee-test"}[5m]) > 0
           for: 0m
           labels:
             severity: warning
@@ -109,7 +114,7 @@ spec:
             summary: "Shared Barn reached its configured member limit"
             description: "Cowboy needs another whole Shared Barn member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
         - alert: GlmControllerReconcileStalled
-          expr: (time() - glm_reconcile_last_success_timestamp_seconds) > 600
+          expr: (time() - glm_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
           for: 5m
           labels:
             severity: critical
@@ -119,7 +124,7 @@ spec:
     - name: octogee.mattermost
       rules:
         - alert: MattermostDown
-          expr: absent(up{job="mattermost"})
+          expr: kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",deployment="mattermost"} == 0
           for: 2m
           labels:
             severity: critical
@@ -127,7 +132,7 @@ spec:
             summary: "Mattermost is unreachable"
             description: "No Mattermost metrics for 2m. Chat is broken for all customers."
         - alert: MattermostPodNotReady
-          expr: kube_pod_status_ready{pod=~"mattermost-.*", condition="true"} == 0
+          expr: kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"mattermost-.*", condition="true"} == 0
           for: 3m
           labels:
             severity: critical
@@ -137,7 +142,7 @@ spec:
     - name: octogee.activity
       rules:
         - alert: ActivityFinalMissing
-          expr: sum(increase(octogee_activity_missing_final_total[10m])) > 0
+          expr: sum by (namespace) (increase(octogee_activity_missing_final_total{namespace=~"octogee|octogee-test"}[10m])) > 0
           for: 0m
           labels:
             severity: critical
@@ -145,7 +150,7 @@ spec:
             summary: "An agent run ended without a durable final response"
             description: "The Activity journal reached a terminal run state but the primary Mattermost conversation has no final answer or failure notice."
         - alert: ActivityRoutineDeliveredNormally
-          expr: sum(increase(octogee_activity_routine_normal_delivery_total[10m])) > 0
+          expr: sum by (namespace) (increase(octogee_activity_routine_normal_delivery_total{namespace=~"octogee|octogee-test"}[10m])) > 0
           for: 0m
           labels:
             severity: critical
@@ -153,7 +158,7 @@ spec:
             summary: "Routine Activity created ordinary Mattermost attention"
             description: "A routine journal post was delivered without silent semantics. Disable Activity intake and verify the exact Mattermost capability artifact."
         - alert: ActivityOrphansSustained
-          expr: sum(increase(octogee_activity_orphan_total[15m])) > 2
+          expr: sum by (namespace) (increase(octogee_activity_orphan_total{namespace=~"octogee|octogee-test"}[15m])) > 2
           for: 10m
           labels:
             severity: warning
@@ -161,7 +166,7 @@ spec:
             summary: "Activity items are arriving without committed run roots"
             description: "Multiple normalized Activity events could not resolve their run root. Check producer ordering, receipt health, and pair integrity."
         - alert: ActivityAttachmentResultUnknown
-          expr: sum(increase(octogee_activity_attachment_unknown_total[10m])) > 0
+          expr: sum by (namespace) (increase(octogee_activity_attachment_unknown_total{namespace=~"octogee|octogee-test"}[10m])) > 0
           for: 0m
           labels:
             severity: warning
@@ -171,7 +176,7 @@ spec:
     - name: octogee.cloudsql
       rules:
         - alert: CloudSQLProxyDown
-          expr: kube_deployment_status_replicas_available{deployment="cloud-sql-proxy"} == 0
+          expr: kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",deployment="cloud-sql-proxy"} == 0
           for: 2m
           labels:
             severity: critical
@@ -181,7 +186,7 @@ spec:
     - name: octogee.pods
       rules:
         - alert: PodCrashLooping
-          expr: rate(kube_pod_container_status_restarts_total{namespace=~"octogee|octogee-test"}[5m]) > 0
+          expr: rate(kube_pod_container_status_restarts_total{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"}[5m]) > 0
           for: 5m
           labels:
             severity: warning
@@ -189,7 +194,7 @@ spec:
             summary: "Pod {{ $labels.pod }} is crash-looping"
             description: "Container {{ $labels.container }} in {{ $labels.namespace }} is restarting frequently."
         - alert: PodOOMKilled
-          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace=~"octogee|octogee-test"} == 1
+          expr: kube_pod_container_status_last_terminated_reason{job="gmp-kube-state-metrics",reason="OOMKilled", namespace=~"octogee|octogee-test"} == 1
           for: 0m
           labels:
             severity: warning
@@ -207,7 +212,7 @@ spec:
             summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
             description: "PVC in {{ $labels.namespace }} is above 85% capacity. Expand or clean up."
         - alert: PodStuckPending
-          expr: kube_pod_status_phase{namespace=~"octogee|octogee-test", phase="Pending"} == 1
+          expr: kube_pod_status_phase{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test", phase="Pending"} == 1
           for: 15m
           labels:
             severity: critical
@@ -217,7 +222,7 @@ spec:
     - name: octogee.runners
       rules:
         - alert: RunnerDown
-          expr: octogee_runner_up == 0
+          expr: octogee_runner_up{namespace=~"octogee|octogee-test"} == 0
           for: 5m
           labels:
             severity: warning
@@ -225,7 +230,7 @@ spec:
             summary: "In-pod runner {{ $labels.runner }} is down"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} has reported down (or its supervisor's heartbeat went stale) for 5m."
         - alert: RunnerCrashLooping
-          expr: increase(octogee_runner_restart_total[10m]) > 3
+          expr: increase(octogee_runner_restart_total{namespace=~"octogee|octogee-test"}[10m]) > 3
           for: 5m
           labels:
             severity: warning
@@ -233,7 +238,7 @@ spec:
             summary: "In-pod runner {{ $labels.runner }} is crash-looping"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
         - alert: ShellReconcilerStalled
-          expr: (time() - octogee_shell_reconcile_last_success_timestamp_seconds) > 600
+          expr: (time() - octogee_shell_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
           for: 5m
           labels:
             severity: warning
@@ -290,7 +295,7 @@ spec:
     - name: octogee.cronjobs
       rules:
         - alert: ActivityPairAuditCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"} > 3600) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"})
+          expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"} > 3600) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"})
           for: 15m
           labels:
             severity: critical
@@ -298,7 +303,7 @@ spec:
             summary: "Activity pair report has not completed cleanly in {{ $labels.namespace }}"
             description: "The report-only Activity pair inventory has not produced a drift-free success within one hour. Inspect the CronJob output; it never mutates pairs."
         - alert: DigestDailyCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-daily"} > 90000) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-daily"})
+          expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-daily"} > 90000) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-daily"})
           for: 30m
           labels:
             severity: warning
@@ -306,7 +311,7 @@ spec:
             summary: "Daily digest cron hasn't succeeded in >25h"
             description: "notification-digest-daily (ns octogee) last succeeded >25h ago, or its metric is absent — Builders are not getting digest emails. Check `kubectl -n octogee get cronjob notification-digest-daily` and recent job logs."
         - alert: DigestWeeklyCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-weekly"} > 691200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="notification-digest-weekly"})
+          expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-weekly"} > 691200) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-weekly"})
           for: 30m
           labels:
             severity: warning
@@ -314,7 +319,7 @@ spec:
             summary: "Weekly digest cron hasn't succeeded in >8d"
             description: "notification-digest-weekly (ns octogee) last succeeded >8 days ago, or its metric is absent."
         - alert: TrialExpiryCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="trial-expiry"} > 7200) or absent(kube_cronjob_status_last_successful_time{namespace=~"octogee",cronjob="trial-expiry"})
+          expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="trial-expiry"} > 7200) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="trial-expiry"})
           for: 30m
           labels:
             severity: warning

@@ -54,8 +54,36 @@ secret_args=(--target="$TARGET_ID")
 [[ -n "$SECRET_MODE" ]] && secret_args+=("$SECRET_MODE")
 "$SCRIPT_DIR/setup-monitoring-secrets.sh" "${secret_args[@]}"
 
+DASHBOARD_CHECKSUM="$(node - "$REPO_DIR/helm/monitoring/dashboards" <<'NODE'
+const { createHash } = require("node:crypto");
+const { readdirSync, readFileSync } = require("node:fs");
+const path = require("node:path");
+
+const root = process.argv[2];
+const files = [];
+function collect(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) collect(fullPath);
+    else if (entry.name.endsWith(".json")) files.push(fullPath);
+  }
+}
+collect(root);
+
+const hash = createHash("sha256");
+for (const file of files.sort()) {
+  hash.update(path.relative(root, file));
+  hash.update("\0");
+  hash.update(readFileSync(file));
+  hash.update("\0");
+}
+process.stdout.write(hash.digest("hex"));
+NODE
+)"
+
 helm_values=(
   --set "gmp.projectId=$TARGET_CLUSTER_PROJECT"
+  --set-string "grafana.podAnnotations.octogee\\.ai/dashboard-checksum=$DASHBOARD_CHECKSUM"
 )
 $IAP_ENABLED && helm_values+=(--set iap.enabled=true)
 

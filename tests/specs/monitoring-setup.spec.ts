@@ -65,6 +65,15 @@ describe("monitoring setup", () => {
     expect(setupMonitoringIap).not.toContain("gcloud compute addresses create");
   });
 
+  it("recreates Grafana when the as-code dashboard set changes so deletions converge", () => {
+    expect(setupMonitoring).toContain("DASHBOARD_CHECKSUM=");
+    expect(setupMonitoring).toContain("helm/monitoring/dashboards");
+    expect(setupMonitoring).toContain(
+      'grafana.podAnnotations.octogee\\\\.ai/dashboard-checksum=$DASHBOARD_CHECKSUM',
+    );
+    expect(chart("values.yaml")).toContain("disableDelete: false");
+  });
+
   it("hands monitoring Helm no compute class and keeps no ComputeClass preflight", () => {
     for (const script of [setupMonitoring, setupMonitoringIap]) {
       expect(script).not.toContain("platformComputeClass");
@@ -187,6 +196,74 @@ describe("monitoring setup", () => {
     expect(dashboardReader).not.toContain("secrets");
     expect(verifyMonitoring).toContain("role octogee-monitoring-grafana-dashboard-reader");
     expect(verifyMonitoring).toContain("rolebinding grafana");
+  });
+
+  it("opens gateway-edge metrics to GMP in every active monitoring namespace", () => {
+    const rendered = execFileSync(
+      "helm",
+      [
+        "template",
+        "grafana",
+        resolve(root, "helm/monitoring"),
+        "--namespace",
+        "monitoring",
+      ],
+      { encoding: "utf8" },
+    );
+    const policies = parseAllDocuments(rendered)
+      .map((document) => document.toJSON() as Record<string, unknown> | null)
+      .filter((document) =>
+        document?.kind === "NetworkPolicy" &&
+        (document.metadata as { name?: string } | undefined)?.name ===
+          "allow-gateway-edge-monitoring-scrape",
+      );
+
+    expect(policies.map((policy) =>
+      (policy?.metadata as { namespace: string }).namespace,
+    ).sort()).toEqual(["octogee", "octogee-test"]);
+    for (const policy of policies) {
+      const spec = policy?.spec as {
+        podSelector: { matchLabels: Record<string, string> };
+        ingress: Array<{
+          from: Array<{ namespaceSelector: { matchLabels: Record<string, string> } }>;
+          ports: Array<{ port: number; protocol: string }>;
+        }>;
+      };
+      expect(spec.podSelector.matchLabels).toEqual({ app: "octogee-gateway" });
+      expect(spec.ingress[0].from[0].namespaceSelector.matchLabels).toEqual({
+        "kubernetes.io/metadata.name": "gke-gmp-system",
+      });
+      expect(spec.ingress[0].ports).toEqual([{ port: 3001, protocol: "TCP" }]);
+    }
+    expect(verifyMonitoring).toContain("allow-gateway-edge-monitoring-scrape");
+  });
+
+  it("renders every supported app monitor as a separate cluster resource", () => {
+    const rendered = execFileSync(
+      "helm",
+      [
+        "template",
+        "grafana",
+        resolve(root, "helm/monitoring"),
+        "--namespace",
+        "monitoring",
+      ],
+      { encoding: "utf8" },
+    );
+    const names = parseAllDocuments(rendered)
+      .map((document) => document.toJSON() as Record<string, unknown> | null)
+      .filter((document) => document?.kind === "ClusterPodMonitoring")
+      .map((document) => (document?.metadata as { name: string }).name);
+
+    expect(names).toEqual(expect.arrayContaining([
+      "gmp-kube-state-metrics",
+      "octogee-api",
+      "octogee-gateway",
+      "gateway-edge",
+      "gitea",
+      "glm-controller",
+    ]));
+    expect(names).not.toContain("mattermost");
   });
 
   it("keeps the GKE-owned singleton as the explicit verified patch exception", () => {

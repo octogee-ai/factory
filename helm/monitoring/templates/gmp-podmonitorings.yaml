@@ -75,21 +75,6 @@ spec:
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterPodMonitoring
 metadata:
-  name: mattermost
-  labels:
-    {{- include "octogee-monitoring.labels" . | nindent 4 }}
-spec:
-  selector:
-    matchLabels:
-      app: mattermost
-  endpoints:
-    - port: 8067
-      path: /metrics
-      interval: 30s
----
-apiVersion: monitoring.googleapis.com/v1
-kind: ClusterPodMonitoring
-metadata:
   name: glm-controller
   labels:
     {{- include "octogee-monitoring.labels" . | nindent 4 }}

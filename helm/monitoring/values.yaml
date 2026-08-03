@@ -4,6 +4,10 @@ gmp:
     image: gke.gcr.io/prometheus-engine/frontend:v0.18.0-gke.2
     replicas: 2
 
+monitoredNamespaces:
+  - octogee
+  - octogee-test
+
 iap:
   enabled: false
   domain: monitoring.octogee.com
@@ -75,6 +79,7 @@ grafana:
       folderAnnotation: grafana_folder
       provider:
         foldersFromFilesStructure: true
+        disableDelete: false
         allowUiUpdates: true
       searchNamespace: monitoring
       resource: configmap

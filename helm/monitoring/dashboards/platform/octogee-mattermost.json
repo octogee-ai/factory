@@ -37,7 +37,7 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(kube_pod_info, namespace)",
+          "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
         "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
@@ -96,7 +96,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
           "legendFormat": "p95 create",
           "refId": "A"
         }
@@ -150,7 +150,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
           "legendFormat": "p95 edit",
           "refId": "A"
         }
@@ -204,7 +204,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_member_resolve_failures_total{namespace=\"$namespace\"}[5m]))",
+          "expr": "sum(rate(octogee_bridge_member_resolve_failures_total{namespace=\"$namespace\"}[5m])) or vector(0)",
           "legendFormat": "fail/s",
           "refId": "A"
         }
@@ -325,7 +325,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\",pod=~\"mattermost.*\"}[1h]))",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"mattermost.*\"}[1h]))",
           "legendFormat": "restarts/h",
           "refId": "A"
         }

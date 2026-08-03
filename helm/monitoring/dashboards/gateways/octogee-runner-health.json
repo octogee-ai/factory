@@ -37,7 +37,7 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(kube_pod_info, namespace)",
+          "query": "label_values(kube_pod_info{job=\"gmp-kube-state-metrics\"}, namespace)",
           "refId": "ns"
         },
         "regex": "/^(octogee|octogee-west|octogee-test|octogee-test-west)$/",
@@ -149,7 +149,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -210,7 +210,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {
@@ -275,7 +275,7 @@
         },
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto"
       },
       "gridPos": {

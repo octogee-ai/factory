@@ -9,7 +9,6 @@
         "{job=\"octogee-gateway\"}",
         "{job=\"gateway-edge\"}",
         "{job=\"gitea\"}",
-        "{job=\"mattermost\"}",
         "{job=\"glm-controller\"}"
       ]
     }
