@@ -104,10 +104,11 @@ COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ and projected into ~/.openclaw/extensions/.
-# octogee-chat-tools, octogee-preview-tools, octogee-workspace-tools,
-# octogee-publish-tools, and octogee-connector-tools are small, so we npm
-# install them inline below.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
+COPY --chown=node:node infra/gateway/build-extensions.mjs /octogee/infra/gateway/
+RUN node /octogee/infra/gateway/build-extensions.mjs \
+      /octogee/extensions \
+      /octogee/scripts/node_modules/.bin/esbuild
 
 # octogee-chat-tools runtime deps
 WORKDIR /octogee/extensions/octogee-chat-tools
