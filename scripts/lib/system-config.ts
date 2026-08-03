@@ -51,7 +51,10 @@ import {
   readSystemConfigStatus,
   updateSystemConfigStatus,
 } from "./system-config-status.js";
-import { validateOpenClawConfig } from "./openclaw-config-validation.js";
+import {
+  OpenClawConfigValidationUnavailableError,
+  validateOpenClawConfig,
+} from "./openclaw-config-validation.js";
 import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
@@ -74,6 +77,7 @@ const GIT_REV_PARSE_HEAD = ["rev-parse", "HEAD"];
 const MAIN_REF = "refs/heads/main";
 const ACCEPTED_HEAD_UNAVAILABLE = "accepted-head-unavailable";
 const VALIDATION_RESTORE_FAILED = "validation-restore-failed";
+const VALIDATION_UNAVAILABLE = "validation-unavailable";
 
 function fingerprintContents(contents: Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
@@ -1082,7 +1086,6 @@ function validateCandidate(
       throw new Error("openclaw.json must contain an object");
     }
     if (context.opts.durablePolicy) assertPlatformInvariants(parsed as UnknownRecord, context.env);
-    (context.opts.validateConfig ?? validateOpenClawConfig)(context.repoConfigPath);
     if (dirtyPaths.has(SYSTEM_CONFIG_METADATA_FILENAME)) {
       assertSystemConfigMetadata(
         fs.readFileSync(path.join(context.repoDir, SYSTEM_CONFIG_METADATA_FILENAME), "utf8"),
@@ -1093,11 +1096,27 @@ function validateCandidate(
         fs.readFileSync(path.join(context.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), "utf8"),
       );
     }
+    (context.opts.validateConfig ?? validateOpenClawConfig)(context.repoConfigPath);
     return {
       validatedFingerprint: systemConfigFingerprint(context.repoConfigPath),
       validatedDurableFingerprint: durableFilesFingerprint(context.repoDir),
     };
   } catch (error) {
+    if (error instanceof OpenClawConfigValidationUnavailableError) {
+      if (context.opts.durablePolicy) {
+        recordSyncError(context.openclawDir, VALIDATION_UNAVAILABLE, context.now);
+      }
+      context.log(`[system_config] ${context.slug}: OpenClaw validation unavailable; scheduling another pass`);
+      return {
+        result: {
+          committed: false,
+          pushed: false,
+          pending: true,
+          errorCode: VALIDATION_UNAVAILABLE,
+          processedFingerprint: candidateFingerprint,
+        },
+      };
+    }
     return {
       result: rejectedCandidateResult({
         context,

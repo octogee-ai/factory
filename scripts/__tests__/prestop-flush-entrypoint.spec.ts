@@ -46,40 +46,24 @@ describe("prestop-flush entrypoint config", () => {
     }));
   });
 
-  it("verifies every mounted customer's durable system config on a shared gateway", async () => {
-    const sync = vi.fn();
-    const readAcceptedCommit = vi.fn(() => "a".repeat(40));
-    const flush = createPreStopSystemConfigFlush(
-      "",
-      () => {},
-      sync,
-      () => ["alice", "bob"],
-      readAcceptedCommit,
-    );
+  it("reports the dedicated builder's accepted system config commit", async () => {
+    const acceptedCommit = "a".repeat(40);
+    const sync = vi.fn(() => ({
+      committed: true,
+      pushed: true,
+      pending: false,
+      acceptedCommit,
+    }));
+    const flush = createPreStopSystemConfigFlush("alice", () => {}, sync);
 
-    await flush();
-
-    expect(sync).not.toHaveBeenCalled();
-    expect(readAcceptedCommit.mock.calls.map(([slug]) => slug)).toEqual(["alice", "bob"]);
+    await expect(flush?.()).resolves.toEqual({ acceptedCommit });
   });
 
-  it("attempts every shared system config verification and reports all failures", async () => {
+  it("skips system config on shared gateways", () => {
     const sync = vi.fn();
-    const readAcceptedCommit = vi.fn((slug: string) => {
-      if (slug === "alice") throw new Error("remote-head-unavailable");
-      return "b".repeat(40);
-    });
-    const flush = createPreStopSystemConfigFlush(
-      "",
-      () => {},
-      sync,
-      () => ["alice", "bob"],
-      readAcceptedCommit,
-    );
 
-    await expect(flush()).rejects.toThrow(/alice.*remote-head-unavailable/i);
+    expect(createPreStopSystemConfigFlush("", () => {}, sync)).toBeUndefined();
     expect(sync).not.toHaveBeenCalled();
-    expect(readAcceptedCommit).toHaveBeenCalledTimes(2);
   });
 
   it("quiesces only the dedicated builder before its preStop checkpoint", async () => {

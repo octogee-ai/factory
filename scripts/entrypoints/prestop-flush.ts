@@ -19,7 +19,6 @@ import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
 import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
-  readDurableSystemConfigHeadForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
@@ -80,27 +79,11 @@ export function createPreStopSystemConfigFlush(
   builderSlug: string,
   logFn: (message: string) => void = log,
   sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
-  listCustomerSlugs: () => string[] = listOnDiskCustomerSlugs,
-  readAcceptedCommit: typeof readDurableSystemConfigHeadForSlug =
-    readDurableSystemConfigHeadForSlug,
-): () => Promise<void> {
+): (() => Promise<{ acceptedCommit: string }>) | undefined {
+  if (!builderSlug) return undefined;
   return async () => {
-    const slugs = builderSlug ? [builderSlug] : listCustomerSlugs();
-    const failures: string[] = [];
-    for (const slug of slugs) {
-      try {
-        if (builderSlug) {
-          checkpointDurableSystemConfigForSlug(slug, { log: logFn }, sync);
-        } else {
-          readAcceptedCommit(slug);
-        }
-      } catch (err) {
-        failures.push(`${slug}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    if (failures.length > 0) {
-      throw new Error(`[prestop-flush] system config checkpoint failed: ${failures.join("; ")}`);
-    }
+    const result = checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
+    return { acceptedCommit: result.acceptedCommit! };
   };
 }
 
