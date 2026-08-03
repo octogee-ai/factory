@@ -49,12 +49,12 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreIdx).toBeLessThan(openclawStartIdx);
   });
 
-  it("hydrates the configured builder credential after restore and before config repair", () => {
+  it("hydrates the configured builder credential after restore and before OpenClaw", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
-    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(hydrateIdx).toBeGreaterThan(restoreIdx);
-    expect(doctorIdx).toBeGreaterThan(hydrateIdx);
+    expect(openclawIdx).toBeGreaterThan(hydrateIdx);
   });
 
   it("gates system_config restore on non-shared class and explicit builder slug", () => {
@@ -98,13 +98,13 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(shellIdx).toBeLessThan(restoreIdx);
   });
 
-  it("keeps the probed runner plane behind repair and bounds each startup attempt", () => {
+  it("starts the probed runner plane only after the actual OpenClaw process", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     const fleetControllerIdx = entrypoint.indexOf("supervise_runner fleet-controller");
 
     expect(fleetControllerIdx).toBeGreaterThan(restoreIdx);
-    expect(fleetControllerIdx).toBeGreaterThan(checkpointIdx);
+    expect(fleetControllerIdx).toBeGreaterThan(openclawIdx);
     expect(gatewayDeployment).toMatch(/startupProbe:[\s\S]*?path:\s*\/health[\s\S]*?port:\s*\{\{ \.Values\.env\.fleetControllerPort/);
     expect(gatewayValues).toMatch(
       /startup:\s+initialDelaySeconds:\s*15\s+periodSeconds:\s*10\s+failureThreshold:\s*60/,
@@ -143,77 +143,29 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(guard).toMatch(/!= "shared"/);
   });
 
-  it("repairs and checkpoints durable config before watcher and OpenClaw while shell starts early", () => {
-    const doctorIdx = entrypoint.indexOf("run_openclaw_doctor");
-    const checkpointIdx = entrypoint.indexOf("system-config-checkpoint.ts");
+  it("starts OpenClaw before the durable watcher and auxiliary runners", () => {
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
+    const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    expect(doctorIdx).toBeGreaterThan(-1);
-    expect(checkpointIdx).toBeGreaterThan(doctorIdx);
-    expect(watcherIdx).toBeGreaterThan(checkpointIdx);
-    expect(openclawIdx).toBeGreaterThan(watcherIdx);
-    expect(shellIdx).toBeLessThan(doctorIdx);
-    expect(entrypoint).toMatch(/OPENCLAW_SERVICE_REPAIR_POLICY=external/);
-    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=ok/);
-    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_RESULT=error/);
+    expect(openclawIdx).toBeGreaterThan(shellIdx);
+    expect(watcherIdx).toBeGreaterThan(openclawIdx);
+    expect(fleetIdx).toBeGreaterThan(openclawIdx);
+    expect(entrypoint).toContain("OpenClaw gateway healthy; starting auxiliary runners");
   });
 
-  it("normalizes legacy config before Doctor validates a durable gateway", () => {
-    const repairLoop = entrypoint.slice(
-      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
-      entrypoint.indexOf("# ── In-pod runners"),
-    );
-    expect(repairLoop.indexOf('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts'))
-      .toBeLessThan(repairLoop.indexOf("run_openclaw_doctor"));
-  });
-
-  it("retries the whole repair unit level-triggered without exiting", () => {
-    const repairLoop = entrypoint.slice(
-      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
-      entrypoint.indexOf("# ── In-pod runners"),
-    );
-    expect(repairLoop).toMatch(/while true/);
-    expect(repairLoop).toMatch(/sleep 5/);
-    expect(repairLoop).toContain("system-config-checkpoint.ts");
-    expect(repairLoop).toContain('"$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts');
-    expect(repairLoop).toMatch(/if \[ -f "\$CLASS_POLICY" \] && ! node "\$CLASS_POLICY"/);
-    expect(repairLoop).not.toMatch(/exit\s+[1-9]/);
-  });
-
-  it("supports an explicit Doctor no-op without reporting a successful Doctor run", () => {
-    expect(entrypoint).toMatch(/OPENCLAW_DOCTOR_MODE:-run/);
-    expect(entrypoint).toMatch(/skip\)[\s\S]*unset OPENCLAW_DOCTOR_RESULT[\s\S]*return 0/);
-    expect(entrypoint).toMatch(/run\)[\s\S]*openclaw doctor --fix --non-interactive/);
-    expect(entrypoint).toMatch(/invalid OPENCLAW_DOCTOR_MODE/);
-  });
-
-  it("runs beta session-SQLite migration and validation after durable state is restored but before Gateway owns the lock", () => {
-    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    const migrationIdx = entrypoint.indexOf("run_session_sqlite_migration");
-    const gatewayIdx = entrypoint.indexOf("openclaw gateway run");
-    expect(migrationIdx).toBeGreaterThan(restoreIdx);
-    expect(migrationIdx).toBeLessThan(gatewayIdx);
-    const migrationBlock = entrypoint.slice(migrationIdx, entrypoint.indexOf("# ── Repair + accept", migrationIdx));
-    expect(migrationBlock).toContain("--session-sqlite dry-run --session-sqlite-all-agents --json");
-    expect(migrationBlock).toContain("--session-sqlite import --session-sqlite-all-agents --json");
-    expect(migrationBlock).toContain("--session-sqlite validate --session-sqlite-all-agents --json");
-    expect(migrationBlock).toContain("OPENCLAW_SESSION_SQLITE_MIGRATION_MODE");
-  });
-
-  it("makes a requested beta session-SQLite migration part of the retrying repair unit", () => {
-    const repairLoop = entrypoint.slice(
-      entrypoint.indexOf("OPENCLAW_SERVICE_REPAIR_POLICY=external"),
-      entrypoint.indexOf("# ── In-pod runners"),
-    );
-    expect(repairLoop).toContain("run_session_sqlite_migration");
-    expect(repairLoop).toMatch(/session SQLite migration failed; retrying/);
+  it("does not launch OpenClaw validation, Doctor, checkpoint, or session migration CLIs during boot", () => {
+    expect(entrypoint).not.toContain("openclaw config validate");
+    expect(entrypoint).not.toContain("openclaw secrets audit");
+    expect(entrypoint).not.toContain("openclaw doctor");
+    expect(entrypoint).not.toContain("system-config-checkpoint.ts");
+    expect(entrypoint).not.toContain("OPENCLAW_SESSION_SQLITE_MIGRATION_MODE");
   });
 
   it("hardens the active config unconditionally — no role-dependent permission arms", () => {
     const hardenBlock = entrypoint.slice(
       entrypoint.indexOf("# ── Harden file permissions"),
-      entrypoint.indexOf("# ── Install plugin extensions"),
+      entrypoint.indexOf("# ── Project immutable plugin extensions"),
     );
     expect(hardenBlock).toMatch(/chmod 600 "\$OPENCLAW_CONFIG_PATH"/);
     expect(hardenBlock).not.toMatch(/SYSTEM_CONFIG_BOOT_ROLE/);
@@ -223,7 +175,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
   it("runs pre-boot env patches without requiring the removed Firebase SA key", () => {
     const prebootBlock = entrypoint.slice(
       entrypoint.indexOf("Pre-boot: sync env/runtime config"),
-      entrypoint.indexOf("Pre-boot: hydrating native GitHub CLI auth"),
+      entrypoint.indexOf("Start OpenClaw before auxiliary runners"),
     );
     expect(prebootBlock).toMatch(/OPENCLAW_CONFIG_PATH/);
     expect(prebootBlock).not.toMatch(/SA_KEY_PATH/);
@@ -233,8 +185,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 
 describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {
   it("invokes the Claude first-run stamper for a tenant-bound operator when the script exists", () => {
-
-expect(entrypoint).toMatch(/GATEWAY_PROFILE[^\n]*=[^\n]*"?operator"?/);
+    expect(entrypoint).toMatch(/GATEWAY_PROFILE[^\n]*=[^\n]*"?operator"?/);
 
     expect(entrypoint).toMatch(
       /\/octogee\/infra\/gateway\/stamp-claude-first-run\.mjs/,
@@ -244,14 +195,21 @@ expect(entrypoint).toMatch(/GATEWAY_PROFILE[^\n]*=[^\n]*"?operator"?/);
   });
 
   it("the stamper is gated by BOTH the env guard AND the file-exists guard (defense in depth — single-guard removal must trip this)", () => {
-
-const stamperRegion = entrypoint.match(
+    const stamperRegion = entrypoint.match(
       /[\s\S]{0,400}stamp-claude-first-run\.mjs[\s\S]{0,200}/,
     )?.[0];
     expect(stamperRegion).toBeDefined();
     expect(stamperRegion).toMatch(/GATEWAY_PROFILE[\s\S]*operator/);
 
-expect(stamperRegion).toMatch(/\[\s*-f\s+/);
+    expect(stamperRegion).toMatch(/\[\s*-f\s+/);
+  });
+
+  it("defers optional operator hydration until OpenClaw is healthy", () => {
+    const healthyIdx = entrypoint.indexOf("OpenClaw gateway healthy");
+    const githubIdx = entrypoint.indexOf("Post-boot: hydrating native GitHub CLI auth");
+    const claudeIdx = entrypoint.indexOf("stamp-claude-first-run.mjs");
+    expect(githubIdx).toBeGreaterThan(healthyIdx);
+    expect(claudeIdx).toBeGreaterThan(healthyIdx);
   });
 
   it("applies the codex YOLO sandbox for a tenant-bound operator when the script exists", () => {

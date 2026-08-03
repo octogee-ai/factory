@@ -243,8 +243,6 @@ spec:
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
-            - name: OPENCLAW_DOCTOR_MODE
-              value: {{ .Values.env.openclawDoctorMode | default "skip" | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
             # Override; unset → gateway code defaults from profile

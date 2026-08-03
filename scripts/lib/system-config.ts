@@ -52,10 +52,6 @@ import {
   updateSystemConfigStatus,
 } from "./system-config-status.js";
 import {
-  OpenClawConfigValidationUnavailableError,
-  validateOpenClawConfig,
-} from "./openclaw-config-validation.js";
-import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
   readSystemConfigCommitBlob,
@@ -66,6 +62,11 @@ import {
 } from "./system-config-durable-files.js";
 
 type UnknownRecord = Record<string, unknown>;
+
+function acceptRuntimeManagedConfig(): void {
+  return;
+}
+
 const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
 const SYSTEM_CONFIG_PATHSPEC_ARGS = ["openclaw.json", ".octogee.json", ".gitignore"];
 const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
@@ -77,7 +78,6 @@ const GIT_REV_PARSE_HEAD = ["rev-parse", "HEAD"];
 const MAIN_REF = "refs/heads/main";
 const ACCEPTED_HEAD_UNAVAILABLE = "accepted-head-unavailable";
 const VALIDATION_RESTORE_FAILED = "validation-restore-failed";
-const VALIDATION_UNAVAILABLE = "validation-unavailable";
 
 function fingerprintContents(contents: Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
@@ -557,7 +557,7 @@ function recoverRestoredSystemConfig(
     repoDir: systemConfigDir(openclawDir),
     configPath: systemConfigPath(openclawDir),
     env,
-    validateConfig: opts.validateConfig ?? validateOpenClawConfig,
+    validateConfig: opts.validateConfig ?? acceptRuntimeManagedConfig,
   });
 }
 
@@ -1096,27 +1096,12 @@ function validateCandidate(
         fs.readFileSync(path.join(context.repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), "utf8"),
       );
     }
-    (context.opts.validateConfig ?? validateOpenClawConfig)(context.repoConfigPath);
+    (context.opts.validateConfig ?? acceptRuntimeManagedConfig)(context.repoConfigPath);
     return {
       validatedFingerprint: systemConfigFingerprint(context.repoConfigPath),
       validatedDurableFingerprint: durableFilesFingerprint(context.repoDir),
     };
   } catch (error) {
-    if (error instanceof OpenClawConfigValidationUnavailableError) {
-      if (context.opts.durablePolicy) {
-        recordSyncError(context.openclawDir, VALIDATION_UNAVAILABLE, context.now);
-      }
-      context.log(`[system_config] ${context.slug}: OpenClaw validation unavailable; scheduling another pass`);
-      return {
-        result: {
-          committed: false,
-          pushed: false,
-          pending: true,
-          errorCode: VALIDATION_UNAVAILABLE,
-          processedFingerprint: candidateFingerprint,
-        },
-      };
-    }
     return {
       result: rejectedCandidateResult({
         context,
@@ -1305,7 +1290,7 @@ function convergeExpectedRemoteSystemConfig(
     expectedCommit: opts.expectedRemoteCommit,
     env: context.env,
     gitExec: opts.gitExec,
-    validateConfig: opts.validateConfig ?? validateOpenClawConfig,
+    validateConfig: opts.validateConfig ?? acceptRuntimeManagedConfig,
     keyPath: context.keyPath,
     readCommitBlob: opts.readCommitBlob,
   });

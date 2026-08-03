@@ -153,7 +153,6 @@ env:
   openaiEmbeddingsEnabled: "true"
   openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
-  openclawDoctorMode: "skip"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
 
@@ -267,17 +266,14 @@ probes:
     periodSeconds: 60
     failureThreshold: 5
     timeoutSeconds: 10
-  # Readiness: fleet-controller surge gate, `successThreshold: 3` prevents
-  # handoff release from flipping the pod Ready before OpenClaw remains healthy
-  # for 30 seconds. failureThreshold
-  # at 12 = 120s of consistent failure before flipping to NotReady,
-  # absorbing transient stalls during customer-add bursts.
+  # Readiness is the fleet-controller surge gate, which already proves both
+  # handoff release and a live OpenClaw RPC on every request.
   readiness:
     initialDelaySeconds: 0
     periodSeconds: 10
     failureThreshold: 12
     timeoutSeconds: 10
-    successThreshold: 3
+    successThreshold: 1
 
 pdb:
   enabled: true

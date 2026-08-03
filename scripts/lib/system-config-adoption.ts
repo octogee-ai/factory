@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { validateOpenClawConfig } from "./openclaw-config-validation.js";
 import { customerSshKeyPath, gitExec } from "./git.js";
 import {
   MATTERMOST_ACCOUNT_SECRET_PROVIDER,
@@ -314,7 +313,7 @@ function prepareAdoption(options: SystemConfigAdoptionOptions, env: NodeJS.Proce
     candidate,
     nextSecrets,
     options.openclawDir,
-    options.validateConfig ?? validateOpenClawConfig,
+    options.validateConfig ?? (() => {}),
   );
   return {
     currentContents,

@@ -2,7 +2,7 @@
 set -e
 
 # OPENCLAW_DIR must be `export`ed: subprocesses (python in the openclaw.json
-# re-sync block below, publish-gateway-token.mjs, openclaw itself) read it
+# re-sync block below, publish-gateway-token.mjs, and openclaw itself) read it
 # from their environment. Caught by independent audit on PR #1166 — the
 # unexported assignment would have crash-looped every operator gateway boot
 # (KeyError in the re-sync block → `set -e` exit). Same pattern as
@@ -58,12 +58,8 @@ trap shutdown TERM INT
 # ── Boot banner ─────────────────────────────────────────────────────────────
 # One grep-able line so operators can confirm what's running without
 # exec'ing in to read package.json. BUILD_SHA + OPENCLAW_VERSION +
-# OPENCLAW_FORK_SHA are baked in by Cloud Build. Second line proves
-# runtime tuning (UV pool, V8 heap limit) actually took effect — kubectl
-# sometimes shows env vars set but the Node process inherits something
-# else; the heap_limit value is from V8 itself, not the env var.
+# OPENCLAW_FORK_SHA are baked in by Cloud Build.
 log "boot: gateway-image=${BUILD_SHA:-unknown} openclaw=${OPENCLAW_VERSION:-unknown} fork=${OPENCLAW_FORK_SHA:-unknown}"
-log "runtime: node=$(node -v) uv_pool=${UV_THREADPOOL_SIZE:-4-default} node_options=${NODE_OPTIONS:-unset} heap_limit=$(node -e 'console.log(Math.round(require("v8").getHeapStatistics().heap_size_limit/1024/1024)+"MB")' 2>/dev/null || echo unknown)"
 
 # ── Ensure workspace structure exists (idempotent) ──────────────────────────
 mkdir -p "$OPENCLAW_DIR/customers"
@@ -171,10 +167,7 @@ else
 fi
 
 # BuilderShell comes up before the durable restore so the operator can shell
-# in and repair while boot is still waiting on the data plane. Boot is a pure
-# function of gateway identity (GATEWAY-SIMPLE-ROLL-SPEC): every step below
-# either succeeds against the data plane or retries — nothing consults fleet
-# or roll state, and nothing fences the shell.
+# in and repair while boot is still waiting on the data plane.
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
   export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
   supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
@@ -297,26 +290,6 @@ else
 fi
 # ── End gateway auth token publish ──────────────────────────────────────────
 
-# ── Operator-profile: Claude Code first-run stamp ──────────────────────────
-# Bender's PVC needed this stamped by hand on first boot — Claude's TUI
-# drops into setup-wizard mode until ~/.claude.json carries
-# hasCompletedOnboarding/_hasCompletedAuthFlow, even when
-# `claude auth status` reports a valid max-tier login. The stamper:
-#   - REQUIRES an existing ~/.claude/.credentials.json (refuses to fake
-#     completion without underlying OAuth)
-#   - PRESERVES every other key in ~/.claude.json
-#   - is idempotent across reboots
-# Operator only by the GATEWAY_PROFILE gate and by
-# COPY-set (only Dockerfile.operator-base ships the script). See
-# tests/specs/stamp-claude-first-run.spec.ts.
-STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
-if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
-  # The stamper writes ~/.claude.json itself with 0600 — the
-  # file-permission hardening block below does NOT cover it. If that
-  # invariant ever moves to the entrypoint, add an explicit chmod here.
-  node "$STAMPER" || log "stamp-claude-first-run: non-fatal failure"
-fi
-
 # ── Operator-profile: codex YOLO sandbox ────────────────────────────────────
 # Operator-class is single-team — the gateway boundary IS the trust boundary,
 # so codex's app-server runs danger-full-access + approvalPolicy=never (the
@@ -334,36 +307,15 @@ fi
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true
 chmod 600 "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true
-find "$OPENCLAW_DIR/agents" -name "sessions.json" -exec chmod 600 {} \; 2>/dev/null || true
 log "File permissions hardened"
 
-# ── Install plugin extensions (staged in image → runtime location) ──────────
-# Use rsync to copy extension source files only (excludes node_modules).
+# ── Project immutable plugin extensions from the image ─────────────────────
 if [ -d /octogee/extensions ]; then
-  mkdir -p "$OPENCLAW_DIR/extensions"
-  for ext_dir in /octogee/extensions/*/; do
-    ext_name=$(basename "$ext_dir")
-    target="$OPENCLAW_DIR/extensions/$ext_name"
-    mkdir -p "$target"
-    # Copy source files only (no node_modules)
-    rsync -a --exclude node_modules "$ext_dir" "$target/" 2>/dev/null || \
-      cp -rn "$ext_dir"*.ts "$ext_dir"*.mjs "$ext_dir"*.json "$target/" 2>/dev/null || true
-    # Symlink node_modules:
-    # 1. Prefer /opt/<ext-name>-deps (pre-built in base image — fast path)
-    # 2. Fall back to staged /octogee/extensions/<ext>/node_modules
-    # Remove stale symlink or dir first (volume may have old data from prior image)
-    if [ -e "$target/node_modules" ] || [ -L "$target/node_modules" ]; then
-      rm -rf "$target/node_modules"
-    fi
-    if [ -d "/opt/${ext_name}-deps/node_modules" ]; then
-      ln -s "/opt/${ext_name}-deps/node_modules" "$target/node_modules"
-      log "Extensions: symlinked ${ext_name} node_modules from base image"
-    elif [ -d "$ext_dir/node_modules" ]; then
-      ln -s "$ext_dir/node_modules" "$target/node_modules"
-      log "Extensions: symlinked ${ext_name} node_modules from staged dir"
-    fi
-  done
-  log "Plugin extensions installed: $(ls "$OPENCLAW_DIR/extensions" 2>/dev/null || true)"
+  if [ -e "$OPENCLAW_DIR/extensions" ] || [ -L "$OPENCLAW_DIR/extensions" ]; then
+    rm -rf "$OPENCLAW_DIR/extensions"
+  fi
+  ln -s /octogee/extensions "$OPENCLAW_DIR/extensions"
+  log "Plugin extensions projected from image"
 fi
 
 # ── Restore staged @openclaw/codex into the emptyDir ────────────────────────
@@ -373,13 +325,10 @@ fi
 # symlink the whole `npm` dir into place so the `codex` harness loads. Same
 # /opt→emptyDir pattern as the extension node_modules symlinks above.
 #
-# The codex package's path within npm moves between OpenClaw releases (flat
-# `node_modules/@openclaw/codex` ≤5.27; `projects/openclaw-codex-<hash>/...`
-# in the 5.28 plugin refactor), so the presence check is layout-agnostic.
 # We symlink the whole `npm` tree regardless of layout; loading is driven by
 # openclaw.json (plugins.entries.codex.enabled) resolving the package from the
 # managed npm root, not by the plugins/installs.json cache.
-if find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q .; then
+if [ -d /opt/openclaw-codex-deps/npm ]; then
   if [ -e "$OPENCLAW_DIR/npm" ] || [ -L "$OPENCLAW_DIR/npm" ]; then
     rm -rf "$OPENCLAW_DIR/npm"
   fi
@@ -399,105 +348,29 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; 
   "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
+# ── Apply Octogee-owned runtime config once ─────────────────────────────────
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Pre-boot: hydrating native GitHub CLI auth from connector state..."
-  timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
+  log "Pre-boot: applying env/runtime config patches..."
+  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  if [ -f "$CLASS_POLICY" ]; then
+    node "$CLASS_POLICY"
+  fi
 fi
 
-run_openclaw_doctor() {
-  case "${OPENCLAW_DOCTOR_MODE:-run}" in
-    run)
-      export OPENCLAW_DOCTOR_RESULT=ok
-      if ! openclaw doctor --fix --non-interactive; then
-        export OPENCLAW_DOCTOR_RESULT=error
-        return 1
-      fi
-      ;;
-    skip)
-      unset OPENCLAW_DOCTOR_RESULT
-      log "Pre-boot: OpenClaw Doctor skipped by OPENCLAW_DOCTOR_MODE=skip"
-      return 0
-      ;;
-    *)
-      export OPENCLAW_DOCTOR_RESULT=error
-      log "FATAL: invalid OPENCLAW_DOCTOR_MODE=${OPENCLAW_DOCTOR_MODE}; expected run or skip"
-      return 1
-      ;;
-  esac
-}
+# ── Start OpenClaw before auxiliary runners compete for cold CPU ────────────
+log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
+openclaw gateway run --bind lan --port 18789 &
+OPENCLAW_PID=$!
 
-run_session_sqlite_migration() {
-  case "${OPENCLAW_SESSION_SQLITE_MIGRATION_MODE:-auto}" in
-    auto)
-      case "${OPENCLAW_VERSION:-}" in
-        2026.7.[2-9]*|2026.7.[1-9][0-9]*|2026.[89].*|2026.[1-9][0-9].*|202[7-9].*) ;;
-        *) return 0 ;;
-      esac
-      ;;
-    run) ;;
-    skip)
-      log "Pre-boot: session SQLite migration skipped by OPENCLAW_SESSION_SQLITE_MIGRATION_MODE=skip"
-      return 0
-      ;;
-    *)
-      log "FATAL: invalid OPENCLAW_SESSION_SQLITE_MIGRATION_MODE=${OPENCLAW_SESSION_SQLITE_MIGRATION_MODE}; expected auto, run, or skip"
-      return 1
-      ;;
-  esac
-
-  log "Pre-boot: validating session SQLite migration inputs..."
-  if ! openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json; then
-    return 1
+until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
+  if ! kill -0 "$OPENCLAW_PID" 2>/dev/null; then
+    log "OpenClaw exited before becoming healthy"
+    wait "$OPENCLAW_PID"
+    exit $?
   fi
-  log "Pre-boot: importing legacy session state into SQLite..."
-  if ! openclaw doctor --session-sqlite import --session-sqlite-all-agents --json; then
-    return 1
-  fi
-  log "Pre-boot: validating imported session SQLite state..."
-  openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
-}
-
-# ── Repair + accept the durable config (identity-pure, level-triggered) ─────
-# Doctor-repair, class policy, env reconciliation, and the durable checkpoint
-# (recovery + commit + push) retry as one unit until the accepted config is
-# durable in Gitea. The loop consults nothing but the data plane and retries
-# until the startup probe's ten-minute budget begins a fresh container attempt.
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  export OPENCLAW_SERVICE_REPAIR_POLICY=external
-  while true; do
-    REPAIR_OK=true
-    log "Pre-boot: repairing and validating durable OpenClaw config..."
-    if ! "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts; then
-      log "Pre-boot: env/runtime reconciliation failed; retrying"
-      REPAIR_OK=false
-    fi
-    if ! run_session_sqlite_migration; then
-      log "Pre-boot: session SQLite migration failed; retrying"
-      REPAIR_OK=false
-    fi
-    if ! run_openclaw_doctor; then
-      log "Pre-boot: OpenClaw Doctor failed; retrying"
-      REPAIR_OK=false
-    fi
-    if [ -f "$CLASS_POLICY" ] && ! node "$CLASS_POLICY"; then
-      log "Pre-boot: gateway class policy failed; retrying"
-      REPAIR_OK=false
-    fi
-    if ! "$TSX" /octogee/scripts/entrypoints/system-config-checkpoint.ts; then
-      log "Pre-boot: durable config checkpoint failed; retrying"
-      REPAIR_OK=false
-    fi
-    if [ "$REPAIR_OK" = "true" ]; then
-      break
-    fi
-    sleep 5
-  done
-else
-  while ! run_session_sqlite_migration; do
-    log "Pre-boot: session SQLite migration failed before shared Gateway startup; retrying"
-    sleep 5
-  done
-fi
+  sleep 1
+done
+log "OpenClaw gateway healthy; starting auxiliary runners"
 
 # ── In-pod runners: supervised + observable ─────────────────────────────────
 # Each remaining runner is wrapped by supervise-runner.ts, which owns respawn AND writes
@@ -536,23 +409,15 @@ fi
   done
 ) &
 
-"$TSX" /octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Post-boot: hydrating native GitHub CLI auth from connector state..."
+  timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
+fi
 
-# ── Start OpenClaw gateway ──────────────────────────────────────────────────
-# Single backgrounded child, no supervisor / respawn loop. OpenClaw 2026.5.x
-# handles config-driven restarts internally: when chokidar detects a change
-# to `openclaw.json`, openclaw forks a successor BEFORE the parent exits.
-# The successor binds :18789 and serves traffic; the parent exits cleanly.
-# Our entrypoint shell sees its tracked job complete but stays alive on the
-# other backgrounded jobs (fleet-controller, site-build, preview-proxy, etc.) —
-# so `wait` at the bottom of this script keeps the pod up.
-#
-# Kubernetes probes: startup + liveness ride the fleet controller's
-# :3003/health (the runner plane — its failure restarts the pod), readiness is
-# OpenClaw's own :18789 (an OpenClaw failure removes the pod from service
-# while BuilderShell and the runner plane stay available for repair).
-log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
-openclaw gateway run --bind lan --port 18789 &
+STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
+  node "$STAMPER" || log "stamp-claude-first-run: non-fatal failure"
+fi
 
 # OpenClaw file-log mirror REMOVED 2026-05-18. The richer log is available
 # on demand via `openclaw logs` from the running gateway, so permanently

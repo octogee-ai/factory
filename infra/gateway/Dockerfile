@@ -103,11 +103,10 @@ RUN node ops/verify-native-modules.mjs
 COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Plugin extensions ────────────────────────────────────────────────────────
-# Staged at /octogee/extensions/ — entrypoint copies to ~/.openclaw/extensions/
+# Staged at /octogee/extensions/ and projected into ~/.openclaw/extensions/.
 # octogee-chat-tools, octogee-preview-tools, octogee-workspace-tools,
 # octogee-publish-tools, and octogee-connector-tools are small, so we npm
-# install them inline below; the entrypoint's
-# `elif [ -d "$ext_dir/node_modules" ]` fallback then symlinks to them.
+# install them inline below.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 
 # octogee-chat-tools runtime deps

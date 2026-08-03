@@ -33,10 +33,6 @@ import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
 import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
-import {
-  OpenClawConfigValidationUnavailableError,
-  validateOpenClawConfig,
-} from "../lib/openclaw-config-validation.js";
 
 vi.mock("../lib/git.js", () => ({
   createGiteaUser: vi.fn(async () => {}),
@@ -49,11 +45,6 @@ vi.mock("../lib/git.js", () => ({
 vi.mock("../lib/gitea-admin-broker-client.js", () => ({
   ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
   ensureSystemConfigRepo: vi.fn(async () => {}),
-}));
-
-vi.mock("../lib/openclaw-config-validation.js", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../lib/openclaw-config-validation.js")>(),
-  validateOpenClawConfig: vi.fn(),
 }));
 
 function writeJson(filePath: string, value: unknown): void {
@@ -926,7 +917,7 @@ describe("system_config restore", () => {
     );
   });
 
-  it("rejects and restores malformed dirty metadata while OpenClaw validation is unavailable", () => {
+  it("rejects and restores malformed dirty metadata", () => {
     const durableEnv = {
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "bender",
@@ -955,7 +946,7 @@ describe("system_config restore", () => {
       env: durableEnv,
       durablePolicy: true,
       validateConfig: () => {
-        throw new OpenClawConfigValidationUnavailableError("validation timed out");
+        throw new Error("validation failed");
       },
       setRepoSshCommand: vi.fn(),
       customerSshKeyPath: () => "/tmp/key",
@@ -1025,7 +1016,6 @@ describe("system_config restore", () => {
       "rev-parse HEAD",
     ]);
     expect(logs.join("\n")).toMatch(/auto-watch pushed/);
-    expect(validateOpenClawConfig).toHaveBeenCalledWith(path.join(repoDir, "openclaw.json"));
   });
 
   it("preStop sync skips a clean system_config checkout", () => {
@@ -1411,56 +1401,6 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(rejected, "utf-8")).toBe("{ invalid");
     expect(fs.statSync(rejected).mode & 0o777).toBe(0o600);
     expect(git).not.toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"], "/tmp/key");
-  });
-
-  it("leaves a dirty candidate pending when OpenClaw validation times out", () => {
-    const durableEnv = {
-      GATEWAY_CLASS: "builder",
-      GATEWAY_ID: "bender",
-      API_PUBLIC_URL: "https://api-test.octogee.com",
-    };
-    const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, durableEnv);
-    writeJson(path.join(repoDir, "openclaw.json"), config);
-    const candidate = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8");
-    const git = vi.fn((_cwd: string, argsArgv: string[]) => {
-      const args = argsArgv.join(" ");
-      if (args === "status --porcelain -- openclaw.json .octogee.json .gitignore") return " M openclaw.json";
-      return "unexpected";
-    });
-
-    const result = syncSystemConfigForSlug("acme", {
-      openclawDir,
-      now: () => new Date("2026-07-14T17:00:00.000Z"),
-      validateConfig: () => {
-        throw new OpenClawConfigValidationUnavailableError("validation timed out");
-      },
-      durablePolicy: true,
-      env: durableEnv,
-      log: () => {},
-      setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
-      gitExec: git,
-    });
-
-    expect(result).toMatchObject({
-      committed: false,
-      pushed: false,
-      pending: true,
-      errorCode: "validation-unavailable",
-    });
-    expect(result.rejected).toBeUndefined();
-    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8")).toBe(candidate);
-    expect(fs.existsSync(path.join(openclawDir, "rejected_config"))).toBe(false);
-    expect(git).not.toHaveBeenCalledWith(
-      repoDir,
-      ["add", "openclaw.json", ".octogee.json", ".gitignore"],
-      "/tmp/key",
-    );
-    expect(readSystemConfigStatus(openclawDir)).toMatchObject({
-      state: "error",
-      lastErrorCode: "validation-unavailable",
-    });
   });
 
   it("restores rejected config from Git bytes without newline-only follow-up churn", () => {

@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
-import { validateOpenClawConfig } from "../lib/openclaw-config-validation.js";
 import {
   auditSystemConfigForSlug,
   syncSystemConfigForSlug,
@@ -76,7 +75,6 @@ export function runSystemConfigWatch(options: RunSystemConfigWatchOptions = {}):
         return (options.sync ?? syncSystemConfigForSlug)(plan.slug, {
           openclawDir,
           log: (message) => console.log(message),
-          validateConfig: validateOpenClawConfig,
           durablePolicy: true,
           env,
           source: "auto-watch",

@@ -106,21 +106,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
-  it("skips OpenClaw Doctor by default and permits an explicit run only in the core gateway", () => {
-    const defaults = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
-    expect(containerBlock(defaults, "gateway")).toMatch(
-      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"skip"/,
-    );
-    expect(containerBlock(defaults, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
-
-    const enabled = findDoc(
-      helmTemplate("octogee-gw-default", { "env.openclawDoctorMode": "run" }),
-      "Deployment",
-      "octogee-gateway-default",
-    ) ?? "";
-    expect(containerBlock(enabled, "gateway")).toMatch(
-      /name:\s*OPENCLAW_DOCTOR_MODE[\s\S]*?value:\s*"run"/,
-    );
+  it("does not inject OpenClaw Doctor into gateway boot", () => {
+    const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    expect(containerBlock(deployment, "gateway")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
+    expect(containerBlock(deployment, "gateway-edge")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
   });
 
   it("keeps the broad durable writer selected by default and enables only the bounded candidate pair", () => {
