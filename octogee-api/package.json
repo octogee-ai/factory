@@ -79,9 +79,9 @@
     "brace-expansion@>=2.0.0 <3.0.0": "2.1.4",
     "brace-expansion@>=5.0.0 <6.0.0": "5.0.9",
     "fast-xml-builder": "^1.1.7",
-    "fast-uri": "^3.1.4",
+    "fast-uri": "^3.1.5",
     "glob": "^13.0.0",
-    "ip-address": "^10.1.1",
+    "ip-address": "^10.2.1",
     "protobufjs": "^7.6.3",
     "re2": "1.25.2",
     "uuid": "^14.0.0",
@@ -89,6 +89,7 @@
     "js-yaml": "^4.2.0",
     "@opentelemetry/core": "^2.8.0",
     "esbuild": "^0.28.1",
-    "postcss": "8.5.25"
+    "postcss": "8.5.25",
+    "undici@<7.0.0": "^6.28.0"
   }
 }
