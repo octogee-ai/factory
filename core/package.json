@@ -644,7 +644,8 @@
   "overrides": {
     "brace-expansion@>=2.0.0 <3.0.0": "2.1.4",
     "fast-xml-parser": "^5.10.1",
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "postcss": "8.5.25"
   },
   "devDependencies": {
     "@octogee/shared": "file:../shared",

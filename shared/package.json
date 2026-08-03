@@ -398,7 +398,8 @@
   },
   "overrides": {
     "uuid": "^11.1.1",
-    "protobufjs": "^7.6.3"
+    "protobufjs": "^7.6.3",
+    "postcss": "8.5.25"
   },
   "peerDependenciesMeta": {
     "firebase": {

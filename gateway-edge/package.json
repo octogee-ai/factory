@@ -89,6 +89,7 @@
     "tmp": "^0.2.7",
     "uuid": "^14.0.0",
     "js-yaml": "^4.2.0",
-    "@opentelemetry/core": "^2.8.0"
+    "@opentelemetry/core": "^2.8.0",
+    "postcss": "8.5.25"
   }
 }
