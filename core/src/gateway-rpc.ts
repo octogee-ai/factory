@@ -449,6 +449,110 @@ async function patchConfigAndWaitForChange(
   }
 }
 
+interface ChannelsStatusConnectionOptions {
+  url: string;
+  auth: GatewayRpcAuth;
+  connectTimeoutMs: number;
+  callTimeoutMs: number;
+  identity: () => DeviceIdentity;
+  scopes: string[];
+  onConnectTrace: (trace: ConnectTrace) => void;
+}
+
+function createChannelsStatusConnection(connection: ChannelsStatusConnectionOptions): {
+  call: () => Promise<unknown>;
+  close: () => Promise<void>;
+} {
+  let ws: WebSocket | null = null;
+  let connecting: Promise<WebSocket> | null = null;
+  let generation = 0;
+
+  function disconnect(activeWs: WebSocket): void {
+    if (ws === activeWs) ws = null;
+    try {
+      activeWs.close();
+    } catch { /* */ }
+  }
+
+  async function getConnection(): Promise<WebSocket> {
+    if (ws?.readyState === WebSocket.OPEN) return ws;
+    if (connecting) return await connecting;
+
+    const activeGeneration = generation;
+    const pending = (async () => {
+      const activeWs = await openAndConnect({
+        url: connection.url,
+        ...connection.auth,
+        connectTimeoutMs: connection.connectTimeoutMs,
+        identity: connection.identity(),
+        scopes: connection.scopes,
+        onConnectTrace: connection.onConnectTrace,
+      });
+      if (generation !== activeGeneration) {
+        disconnect(activeWs);
+        throw new OpenclawWireError(
+          "connect-failed",
+          "gateway RPC client closed while channels.status was connecting",
+        );
+      }
+      ws = activeWs;
+      activeWs.once("close", () => {
+        if (ws === activeWs) ws = null;
+      });
+      return activeWs;
+    })();
+    connecting = pending;
+    try {
+      return await pending;
+    } finally {
+      if (connecting === pending) connecting = null;
+    }
+  }
+
+  return {
+    async call() {
+      const activeWs = await getConnection();
+      try {
+        return await sendWsRequest({
+          ws: activeWs,
+          id: randomUUID(),
+          method: "channels.status",
+          params: {},
+          timeoutMs: connection.callTimeoutMs,
+        });
+      } catch (err) {
+        if (!(err instanceof OpenclawWireError) || err.code !== "rpc-error") {
+          disconnect(activeWs);
+        }
+        throw err;
+      }
+    },
+    async close() {
+      generation++;
+      const activeWs = ws;
+      ws = null;
+      if (activeWs) disconnect(activeWs);
+
+      const pending = connecting;
+      connecting = null;
+      if (pending) {
+        try {
+          disconnect(await pending);
+        } catch { /* */ }
+      }
+    },
+  };
+}
+
+function createIdentityResolver(initialIdentity?: DeviceIdentity): () => DeviceIdentity {
+  let identity = initialIdentity ?? null;
+  return () => {
+    if (identity) return identity;
+    identity = loadOrCreateDeviceIdentity();
+    return identity;
+  };
+}
+
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
   const url =
     opts.url ??
@@ -465,12 +569,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     opts.onConnectTrace ??
     createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
 
-  let identity: DeviceIdentity | null = opts.identity ?? null;
-  function resolveIdentity(): DeviceIdentity {
-    if (identity) return identity;
-    identity = loadOrCreateDeviceIdentity();
-    return identity;
-  }
+  const resolveIdentity = createIdentityResolver(opts.identity);
 
   async function call(
     method: string,
@@ -499,6 +598,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       } catch { /* */ }
     }
   }
+
+  const statusConnection = createChannelsStatusConnection({
+    url, auth, connectTimeoutMs, callTimeoutMs, identity: resolveIdentity,
+    scopes, onConnectTrace,
+  });
 
   return {
     async configGet() {
@@ -538,7 +642,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       );
     },
 
-    channelsStatus: async () => await call("channels.status", {}),
+    channelsStatus: statusConnection.call,
 
     async channelsStop(params) {
       const payload = await call("channels.stop", params);
@@ -664,7 +768,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       }
     },
 
-    close: async () => {},
+    close: statusConnection.close,
   };
 }
 
