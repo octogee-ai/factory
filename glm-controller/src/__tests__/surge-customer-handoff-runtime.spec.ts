@@ -82,7 +82,11 @@ describe("surge handoff direct pod transport", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
       if (url.endsWith("/health")) {
-        return new Response(JSON.stringify({ status: "ready", version: url.includes("10.0.0.2") ? "new" : "old" }));
+        return new Response(JSON.stringify({
+          status: "ready",
+          version: url.includes("10.0.0.2") ? "new" : "old",
+          customers: ["alice"],
+        }));
       }
       if (url.endsWith("/surge-ready")) {
         return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }), { status: 503 });
@@ -109,6 +113,7 @@ describe("surge handoff direct pod transport", () => {
       status: "ready",
       version: "new",
       handoffReleased: false,
+      mountedCustomers: ["alice"],
     });
     await transport.transfer({
       gatewayId: "default",
@@ -211,7 +216,7 @@ describe("surge handoff direct pod transport", () => {
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
       if (url.endsWith("/health")) {
-        return new Response(JSON.stringify({ status: "ready", version: "new" }));
+        return new Response(JSON.stringify({ status: "ready", version: "new", customers: [] }));
       }
       return new Response(JSON.stringify({
         handoffReleased: true,
@@ -228,6 +233,25 @@ describe("surge handoff direct pod transport", () => {
       status: "booting",
       version: "new",
       handoffReleased: true,
+      mountedCustomers: [],
     });
+  });
+
+  it("rejects pod health that does not prove the mounted customer inventory", async () => {
+    const log = vi.fn();
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      return url.endsWith("/health")
+        ? new Response(JSON.stringify({ status: "ready", version: "new" }))
+        : new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log,
+    });
+
+    await expect(transport.readPodHealth(target)).resolves.toBeNull();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("invalid surge health response"));
   });
 });

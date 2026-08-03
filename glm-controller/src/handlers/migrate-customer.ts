@@ -500,6 +500,7 @@ function buildRunnerDeps(
     client: MigrationClient;
     ctx: OperationContext;
     automatic: boolean;
+    operationId: string;
   },
 ): MigrationRunnerDeps {
   const { deps, client, ctx } = input;
@@ -507,7 +508,11 @@ function buildRunnerDeps(
     client,
     commitCutover: (commit) => deps.commitCutover({ ...commit, automatic: input.automatic }),
     setAssignmentState: (assignment) =>
-      deps.setAssignmentState({ ...assignment, automatic: input.automatic }),
+      deps.setAssignmentState({
+        ...assignment,
+        updatedByOperationId: input.operationId,
+        automatic: input.automatic,
+      }),
     log: deps.log,
     reportStep: async (rep: ReportedStep) => {
       await ctx.reportStep(reportedToOperationStep(rep, deps.now()));
@@ -709,6 +714,7 @@ async function executeMigration(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   prepared: PreparedMigration,
+  operationId: string,
   automatic: boolean,
 ): Promise<OperationResult> {
   const client = deps.buildClient((transportId) => {
@@ -730,7 +736,7 @@ async function executeMigration(
       projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,
     },
-    buildRunnerDeps({ deps, client, ctx, automatic }),
+    buildRunnerDeps({ deps, client, ctx, automatic, operationId }),
   );
   return {
     steps: [],
@@ -756,6 +762,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
       deps,
       ctx,
       prepared,
+      op.id,
       resolveOperationOrigin(op.origin) === "automatic",
     );
   };

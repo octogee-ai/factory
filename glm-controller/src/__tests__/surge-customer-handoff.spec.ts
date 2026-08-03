@@ -50,6 +50,7 @@ function harness(input: {
   releaseErrorBeforeCommit?: Error;
   releaseErrorAfterCommit?: Error;
   targetVersion?: string;
+  sourceMountedCustomers?: string[];
 } = {}) {
   const events: string[] = [];
   let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
@@ -67,6 +68,9 @@ function harness(input: {
       status: "ready",
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
+      mountedCustomers: pod.uid === targetPod.uid
+        ? []
+        : input.sourceMountedCustomers ?? assignments.map((item) => item.slug),
     })),
     readAssignments: vi.fn(async () => assignments),
     markAssignment: vi.fn(async ({ uid, state, updatedByOperationId, expected }) => {
@@ -226,6 +230,63 @@ describe("surge customer handoff", () => {
       "release:target-uid",
     ]);
     expect(h.assignments().every((item) => item.updatedByOperationId === h.operationId)).toBe(true);
+  });
+
+  it("gates but does not transfer an assigned customer that the source never mounted", async () => {
+    const pods = [oldPod, targetPod];
+    const h = harness({
+      pods,
+      assignments: [
+        assignment("u1", "alice"),
+        assignment("u2", "posthog-smoke-v0"),
+      ],
+      sourceMountedCustomers: ["alice"],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u2:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+
+    pods.splice(0, pods.length, { ...targetPod, ready: true });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+    })).resolves.toEqual({ ready: true });
+    expect(h.events.slice(-2)).toEqual([
+      "assignment:u1:serving",
+      "assignment:u2:serving",
+    ]);
+  });
+
+  it("fails closed when the source mounts a customer without an assignment", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      sourceMountedCustomers: ["alice", "orphan"],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+    })).rejects.toThrow("source mounted customer orphan has no assignment");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u1:serving",
+    ]);
   });
 
   it("restores owned assignments only after Kubernetes removes the old pod", async () => {

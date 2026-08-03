@@ -239,6 +239,8 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         if (
           (health.status !== "booting" && health.status !== "ready") ||
           typeof health.version !== "string" ||
+          !Array.isArray(health.customers) ||
+          !health.customers.every((slug) => typeof slug === "string") ||
           typeof ready.handoffReleased !== "boolean" ||
           typeof ready.openclawUp !== "boolean"
         ) {
@@ -248,6 +250,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           status: ready.openclawUp ? "ready" : "booting",
           version: health.version,
           handoffReleased: ready.handoffReleased,
+          mountedCustomers: [...new Set(health.customers as string[])],
         };
       } catch (error) {
         opts.log(

@@ -12,13 +12,57 @@ interface FakeOpDoc {
     output?: Record<string, unknown>;
     customerMigrationV2?: { phase: string };
     recordType?: string;
+    input?: Record<string, unknown>;
   };
   updated?: Record<string, unknown>;
 }
 
-function makeFakeDb(ops: FakeOpDoc[]) {
+interface FakeDbState {
+  users?: Record<string, Record<string, unknown>>;
+  assignments?: Record<string, Record<string, unknown>>;
+  beforeTransaction?: () => void;
+  transactionState?: { active: boolean };
+}
+
+function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
+  function operationRef(operation: FakeOpDoc) {
+    return {
+      snapshot: () => ({ exists: true, data: () => operation.data }),
+      apply: (patch: Record<string, unknown>) => {
+        operation.updated = patch;
+        Object.assign(operation.data, patch);
+      },
+      update: async (patch: Record<string, unknown>) => {
+        operation.updated = patch;
+        Object.assign(operation.data, patch);
+      },
+    };
+  }
+  function stateRef(record: Record<string, unknown> | undefined) {
+    return {
+      snapshot: () => ({ exists: record !== undefined, data: () => record }),
+      apply: (patch: Record<string, unknown>) => Object.assign(record ?? {}, patch),
+    };
+  }
   return {
     collection: (name: string) => {
+      if (name === "users") {
+        return { doc: (uid: string) => stateRef(state.users?.[uid]) };
+      }
+      if (name === "gateways") {
+        return {
+          doc: (gatewayId: string) => ({
+            collection: (subcollection: string) => {
+              if (subcollection !== "assignments") {
+                throw new Error(`unexpected subcollection: ${subcollection}`);
+              }
+              return {
+                doc: (uid: string) => stateRef(state.assignments?.[`${gatewayId}/${uid}`]),
+              };
+            },
+          }),
+        };
+      }
       if (name !== "glmOperations") {
         throw new Error(`unexpected collection: ${name}`);
       }
@@ -33,15 +77,26 @@ function makeFakeDb(ops: FakeOpDoc[]) {
               .map((o) => ({
                 id: o.id,
                 data: () => o.data,
-                ref: {
-                  update: async (patch: Record<string, unknown>) => {
-                    o.updated = patch;
-                  },
-                },
+                ref: operationRef(o),
               })),
           }),
         }),
       };
+    },
+    runTransaction: async (callback: (txn: {
+      get: (ref: { snapshot: () => unknown }) => Promise<unknown>;
+      update: (ref: { apply: (patch: Record<string, unknown>) => void }, patch: Record<string, unknown>) => void;
+    }) => Promise<unknown>) => {
+      state.beforeTransaction?.();
+      if (state.transactionState) state.transactionState.active = true;
+      try {
+        return await callback({
+          get: async (ref) => ref.snapshot(),
+          update: (ref, patch) => ref.apply(patch),
+        });
+      } finally {
+        if (state.transactionState) state.transactionState.active = false;
+      }
     },
   };
 }
@@ -117,6 +172,142 @@ describe("runStuckOpReaperTick", () => {
     });
 
     expect(ops[0].updated).not.toHaveProperty("output.configCleanup");
+  });
+
+  it("atomically restores an operation-owned legacy migration gate before failing the stuck op", async () => {
+    const ops: FakeOpDoc[] = [{
+      id: "placement-owned",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        startedAt: NOW - 20 * 60_000,
+        input: {
+          uid: "uid-mike",
+          fromGatewayId: "shared-a",
+          toGatewayId: "shared-b",
+        },
+      },
+    }];
+    const assignment = {
+      uid: "uid-mike",
+      gatewayId: "shared-a",
+      state: "quiescing",
+      source: "migrate-customer",
+      updatedByOperationId: "placement-owned",
+    };
+    const transactionState = { active: false };
+    const db = makeFakeDb(ops, {
+      users: {
+        "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } },
+      },
+      assignments: { "shared-a/uid-mike": assignment },
+      transactionState,
+    });
+    const log = vi.fn(() => expect(transactionState.active).toBe(false));
+
+    const result = await runStuckOpReaperTick({
+      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log,
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 1, reaped: 1 });
+    expect(assignment).toMatchObject({
+      state: "serving",
+      updatedAt: NOW,
+      updatedByOperationId: "placement-owned",
+    });
+    expect(ops[0].updated).toMatchObject({ status: "failed" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("restored source assignment"));
+  });
+
+  it.each([
+    ["a foreign gate owner", "another-operation", "shared-a"],
+    ["a committed user move", "placement-owned", "shared-b"],
+  ])("does not reopen a legacy source assignment with %s", async (_reason, owner, userGatewayId) => {
+    const ops: FakeOpDoc[] = [{
+      id: "placement-owned",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        startedAt: NOW - 20 * 60_000,
+        input: {
+          uid: "uid-mike",
+          fromGatewayId: "shared-a",
+          toGatewayId: "shared-b",
+        },
+      },
+    }];
+    const assignment = {
+      uid: "uid-mike",
+      gatewayId: "shared-a",
+      state: "quiescing",
+      source: "migrate-customer",
+      updatedByOperationId: owner,
+    };
+    const db = makeFakeDb(ops, {
+      users: {
+        "uid-mike": { provisioning: { openclaw: { gatewayId: userGatewayId } } },
+      },
+      assignments: { "shared-a/uid-mike": assignment },
+    });
+
+    await runStuckOpReaperTick({
+      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log: vi.fn(),
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(assignment.state).toBe("quiescing");
+    expect(ops[0].updated).toMatchObject({ status: "failed" });
+  });
+
+  it.each([
+    ["fresh progress", (op: FakeOpDoc) => { op.data.lastProgressAt = NOW; }],
+    ["a terminal status", (op: FakeOpDoc) => { op.data.status = "succeeded"; }],
+  ])("does not reap or reopen a legacy gate after the transaction observes %s", async (_reason, advance) => {
+    const op: FakeOpDoc = {
+      id: "placement-raced",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        startedAt: NOW - 20 * 60_000,
+        input: {
+          uid: "uid-mike",
+          fromGatewayId: "shared-a",
+          toGatewayId: "shared-b",
+        },
+      },
+    };
+    const assignment = {
+      uid: "uid-mike",
+      gatewayId: "shared-a",
+      state: "quiescing",
+      source: "migrate-customer",
+      updatedByOperationId: "placement-raced",
+    };
+    const db = makeFakeDb([op], {
+      users: {
+        "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } },
+      },
+      assignments: { "shared-a/uid-mike": assignment },
+      beforeTransaction: () => advance(op),
+    });
+    const log = vi.fn();
+
+    const result = await runStuckOpReaperTick({
+      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      log,
+      now: () => NOW,
+      stalenessMs: 15 * 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(assignment.state).toBe("quiescing");
+    expect(op.updated).toBeUndefined();
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("leaves a recent `running` op alone", async () => {

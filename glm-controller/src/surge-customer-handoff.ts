@@ -17,6 +17,7 @@ export interface SurgePodHealth {
   status: "booting" | "ready";
   version: string;
   handoffReleased: boolean;
+  mountedCustomers: readonly string[];
 }
 
 export interface SurgeAssignment {
@@ -381,9 +382,28 @@ async function migrateAssignmentsAndReleaseTarget(
         assignment.updatedByOperationId = ownedBy;
       }
     }
+    const sourceHealth = await deps.readPodHealth(sourcePod);
+    if (!sourceHealth) {
+      throw new Error(`source health unavailable after gating assignments on ${input.gatewayId}`);
+    }
+    const assignmentBySlug = new Map(assignments.map((assignment) => [assignment.slug, assignment]));
+    const unassignedMount = sourceHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
+    if (unassignedMount) {
+      throw new Error(`source mounted customer ${unassignedMount} has no assignment on ${input.gatewayId}`);
+    }
+    const mounted = new Set(sourceHealth.mountedCustomers);
+    const assignmentsWithState = assignments.filter((assignment) => mounted.has(assignment.slug));
+    for (const assignment of assignments) {
+      if (!mounted.has(assignment.slug)) {
+        deps.log(
+          `[surge-handoff] retaining unmounted assignment without transfer ` +
+          `gateway=${input.gatewayId} uid=${assignment.uid} slug=${assignment.slug}`,
+        );
+      }
+    }
     await transferAssignments(deps, {
       input,
-      assignments,
+      assignments: assignmentsWithState,
       sourcePod,
       targetPod,
       ownedBy,

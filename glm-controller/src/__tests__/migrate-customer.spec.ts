@@ -183,6 +183,19 @@ describe("migrate-customer — input validation", () => {
     expect(result.error).toMatch(/declared source gw-stale does not match resolved source gw-blue/u);
   });
 
+  it("binds legacy source roster gates to the migration operation", async () => {
+    const { deps, ctx } = mkDeps();
+    const handler = createMigrateCustomerHandler(deps);
+
+    await handler(mkOp({}), ctx);
+
+    expect(deps.setAssignmentState).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "gw-blue",
+      uid: "uid-alice",
+      updatedByOperationId: "op-1",
+    }));
+  });
+
   it("rejects a same-gateway migration — simple-roll has one pod per gateway", async () => {
     const { deps, ctx } = mkDeps({ sourceGatewayId: "gw-green" });
     const handler = createMigrateCustomerHandler(deps);

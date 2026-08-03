@@ -208,6 +208,9 @@ gitea:
     size: 50Gi
   strategy:
     type: Recreate
+  podDisruptionBudget:
+    minAvailable: 1
+    unhealthyPodEvictionPolicy: AlwaysAllow
 
 # ── gateway-edge ────────────────────────────────────────────────────────
 gateway-edge:
