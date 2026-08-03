@@ -37,6 +37,7 @@ interface MockServerHandle {
   setRejectAllAsAuth: (enabled: boolean) => void;
   
   callCount: (method: string) => number;
+  disconnectClients: () => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -134,6 +135,16 @@ const nonce = crypto.randomBytes(12).toString("hex");
       rejectAuth = enabled;
     },
     callCount: (method) => counts.get(method) ?? 0,
+    disconnectClients: async () => {
+      await Promise.all(
+        [...wss.clients].map(
+          (client) => new Promise<void>((resolve) => {
+            client.once("close", resolve);
+            client.close();
+          }),
+        ),
+      );
+    },
     close: () =>
       new Promise<void>((resolve) => {
         
@@ -652,6 +663,20 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(1);
+    });
+
+    it("reconnects after the health connection drops", async () => {
+      server.setHandler("channels.status", () => ({
+        ok: true,
+        payload: { channels: [] },
+      }));
+
+      await client.channelsStatus();
+      await server.disconnectClients();
+      await client.channelsStatus();
+
+      expect(server.callCount("channels.status")).toBe(2);
+      expect(server.callCount("connect")).toBe(2);
     });
   });
 
