@@ -120,7 +120,8 @@ function pdb(instance: string, overrides: Record<string, unknown> = {}) {
       labels: { app: "octogee-gateway", "gateway-instance": instance },
     },
     spec: {
-      maxUnavailable: 1,
+      minAvailable: 1,
+      unhealthyPodEvictionPolicy: "AlwaysAllow",
       selector: {
         matchLabels: {
           app: "octogee-gateway",
@@ -350,7 +351,7 @@ describe("gateway capacity placement verifier", () => {
       pdbs: {
         items: [
           sharedPdb("shared-a", { minAvailable: 0 }),
-          pdb("operator", { minAvailable: 1, maxUnavailable: undefined }),
+          pdb("operator", { minAvailable: 0, unhealthyPodEvictionPolicy: undefined }),
         ],
       },
       computeClasses: {
@@ -381,10 +382,10 @@ describe("gateway capacity placement verifier", () => {
       "shared PDB for Deployment octogee-gateway-shared-a must set minAvailable=1",
     );
     expect(result.stdout).toContain(
-      "PDB for Deployment octogee-gateway-operator must not set minAvailable",
+      "PDB for Deployment octogee-gateway-operator must set minAvailable=1",
     );
     expect(result.stdout).toContain(
-      "PDB for Deployment octogee-gateway-operator must set maxUnavailable=1",
+      "PDB for Deployment octogee-gateway-operator must always allow unhealthy pod eviction",
     );
     expect(result.stdout).toContain(
       "running shared pod octogee-gateway-shared-a-abc must not select a custom ComputeClass",

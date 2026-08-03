@@ -8,7 +8,8 @@ metadata:
     app: octogee-gateway
     {{- include "octogee-gateway.labels" . | nindent 4 }}
 spec:
-  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:
       app: octogee-gateway

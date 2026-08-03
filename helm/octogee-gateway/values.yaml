@@ -257,6 +257,7 @@ probes:
     initialDelaySeconds: 15
     periodSeconds: 10
     failureThreshold: 60
+    sharedFailureThreshold: 90
     timeoutSeconds: 10
   # Non-shared liveness rides the same runner plane — a dead fleet controller
   # restarts the pod; an OpenClaw failure only drops readiness (repair stays
@@ -280,7 +281,7 @@ probes:
 
 pdb:
   enabled: true
-  maxUnavailable: 1
+  minAvailable: 1
 
 
 # ── gateway-edge sidecar ──────────────────────────────────────────────────

@@ -682,15 +682,16 @@ const out = helmTemplate();
     expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
   });
 
-  it("operator gateway PDB uses the same cattle maxUnavailable policy", () => {
+  it("protects a healthy operator gateway from voluntary eviction", () => {
     const pdb =
       findDoc(
         helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
         "PodDisruptionBudget",
         "octogee-gateway-bender",
       ) ?? "";
-    expect(pdb).toMatch(/^\s*maxUnavailable:\s*1\s*$/m);
-    expect(pdb).not.toMatch(/^\s*minAvailable:/m);
+    expect(pdb).toMatch(/^\s*minAvailable:\s*1\s*$/m);
+    expect(pdb).not.toMatch(/^\s*maxUnavailable:/m);
+    expect(pdb).toMatch(/^\s*unhealthyPodEvictionPolicy:\s*AlwaysAllow\s*$/m);
   });
 
   it("pdb.enabled=false renders no PodDisruptionBudget", () => {

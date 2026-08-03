@@ -397,7 +397,11 @@ spec:
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            {{- if eq $gatewayClass "shared" }}
+            failureThreshold: {{ .Values.probes.startup.sharedFailureThreshold }}
+            {{- else }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            {{- end }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
           livenessProbe:
             {{- if eq $gatewayClass "shared" }}

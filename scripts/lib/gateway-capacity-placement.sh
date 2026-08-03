@@ -202,10 +202,14 @@ for deployment in live_deployments:
         ):
             errors.append(f"shared PDB for Deployment {name} must exactly select its stable gateway-id")
     else:
-        if "minAvailable" in pdb_spec:
-            errors.append(f"PDB for Deployment {name} must not set minAvailable")
-        if str(pdb_spec.get("maxUnavailable")) != "1":
-            errors.append(f"PDB for Deployment {name} must set maxUnavailable=1")
+        if str(pdb_spec.get("minAvailable")) != "1":
+            errors.append(f"PDB for Deployment {name} must set minAvailable=1")
+        if "maxUnavailable" in pdb_spec:
+            errors.append(f"PDB for Deployment {name} must not set maxUnavailable")
+        if pdb_spec.get("unhealthyPodEvictionPolicy") != "AlwaysAllow":
+            errors.append(
+                f"PDB for Deployment {name} must always allow unhealthy pod eviction"
+            )
         if (pdb_selector.get("matchLabels") or {}).get("gateway-instance") != instance:
             errors.append(f"PDB for Deployment {name} must select its gateway-instance")
 
