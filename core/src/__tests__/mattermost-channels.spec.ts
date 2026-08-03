@@ -24,6 +24,7 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.mmApiCall.mockReset();
   process.env.MM_URL = "http://mattermost.test";
   process.env.MM_ADMIN_USER_ID = "mm-admin";
 });
@@ -54,10 +55,7 @@ describe("createOrRestoreChannel", () => {
     h.mmApiCall
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce([
-        { id: "other", name: "other", delete_at: 9 },
-        { id: "archived-1", name: "acme-general", delete_at: 7 },
-      ])
+      .mockResolvedValueOnce({ id: "archived-1", name: "acme-general", delete_at: 7 })
       .mockResolvedValueOnce({ id: "archived-1", name: "acme-general" });
 
     const channel = await createOrRestoreChannel(
@@ -69,6 +67,10 @@ describe("createOrRestoreChannel", () => {
     );
 
     expect(channel?.id).toBe("archived-1");
+    expect(h.mmApiCall).toHaveBeenCalledWith(
+      "GET",
+      "/teams/team-1/channels/name/acme-general?include_deleted=true",
+    );
     expect(h.mmApiCall).toHaveBeenCalledWith("POST", "/channels/archived-1/restore");
     expect(h.log).toHaveBeenCalledWith("[mattermost] restored archived channel: acme-general");
   });

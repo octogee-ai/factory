@@ -12,13 +12,8 @@ export async function createOrRestoreChannel(teamId, name, displayName, type, pu
     channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`));
     if (channel)
         return channel;
-    const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
-        term: name, include_deleted: true,
-    });
-    const archived = Array.isArray(search)
-        ? search.find((c) => isArchivedChannel(c, name))
-        : null;
-    if (archived) {
+    const archived = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}?include_deleted=true`);
+    if (isArchivedChannel(archived, name)) {
         channel = (await mmApiCall("POST", `/channels/${archived.id}/restore`));
         if (channel)
             log(`[mattermost] restored archived channel: ${name}`);

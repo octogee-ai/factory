@@ -162,6 +162,7 @@ async function activateImportedCustomerForMigration(input: {
   signal?: AbortSignal;
 }): Promise<void> {
   const { deps, slug, mode, signal } = input;
+  await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
   const activation = signal
     ? await deps.adapter.activateImportedCustomer(slug, { signal })
@@ -170,6 +171,28 @@ async function activateImportedCustomerForMigration(input: {
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }
+}
+
+async function ensureMigrationGiteaKey(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  phase: "source-flush" | "target-activation",
+): Promise<void> {
+  const pubKey = deps.adapter.readLocalCustomerPubKey(slug);
+  if (pubKey === null) {
+    throw new Error(`[migration-http] local SSH public key is missing for ${slug}`);
+  }
+  await deps.adapter.createGiteaUser(slug, pubKey);
+  deps.log?.(`[migration-http] Gitea SSH key claimed slug=${slug} phase=${phase}`);
+}
+
+async function ensureMigrationSourceGiteaKey(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  reason: string,
+): Promise<void> {
+  if (reason !== "migration-final") return;
+  await ensureMigrationGiteaKey(deps, slug, "source-flush");
 }
 
 async function removeCustomerWithSystemConfigWatchPaused<T extends { wasMounted: boolean }>(input: {
@@ -410,6 +433,7 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
       const fenceGeneration = reason === "migration-converge"
         ? await readSystemConfigWatchFenceForBuilder(deps, body.slug)
         : undefined;
+      await ensureMigrationSourceGiteaKey(deps, body.slug, reason);
       const result = await deps.flushLocalState({
         slug: body.slug,
         reason,

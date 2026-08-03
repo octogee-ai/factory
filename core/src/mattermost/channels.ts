@@ -20,16 +20,14 @@ export async function createOrRestoreChannel(
   })) as MattermostChannel | null;
   if (channel) return channel;
 
-channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`)) as MattermostChannel | null;
+  channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`)) as MattermostChannel | null;
   if (channel) return channel;
 
-const search = await mmApiCall("POST", `/teams/${teamId}/channels/search`, {
-    term: name, include_deleted: true,
-  });
-  const archived = Array.isArray(search)
-    ? search.find((c): c is MattermostChannel => isArchivedChannel(c, name))
-    : null;
-  if (archived) {
+  const archived = await mmApiCall(
+    "GET",
+    `/teams/${teamId}/channels/name/${name}?include_deleted=true`,
+  );
+  if (isArchivedChannel(archived, name)) {
     channel = (await mmApiCall("POST", `/channels/${archived.id}/restore`)) as MattermostChannel | null;
     if (channel) log(`[mattermost] restored archived channel: ${name}`);
     return channel;

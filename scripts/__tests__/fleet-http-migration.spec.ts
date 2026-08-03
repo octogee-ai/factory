@@ -252,6 +252,8 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
+    readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 LOCAL chris@gateway"),
+    createGiteaUser: vi.fn(async () => undefined),
     activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
     reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
@@ -487,6 +489,36 @@ describe("createQuiesceHandler", () => {
 });
 
 describe("createFlushHandler", () => {
+  it("reclaims the source SSH key before a migration-final durable flush", async () => {
+    const createGiteaUser = vi.fn(async () => undefined);
+    const flushLocalState = vi.fn(async () => ({
+      ok: true,
+      durationMs: 12,
+      steps: [],
+    }));
+    const adapter = mkAdapter({
+      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 SOURCE chris@gateway"),
+      createGiteaUser,
+    });
+    const handler = createFlushHandler(mkDeps({ adapter, flushLocalState }));
+    const body = { migrationId: "mig-1", slug: "chris", reason: "migration-final" };
+    const req = mkRequest(body, {
+      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(createGiteaUser).toHaveBeenCalledWith(
+      "chris",
+      "ssh-ed25519 SOURCE chris@gateway",
+    );
+    expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
+      flushLocalState.mock.invocationCallOrder[0],
+    );
+  });
+
   it("runs the configured local flush under the signed fleet-control envelope", async () => {
     const flushLocalState = vi.fn(async () => ({
       ok: true,
@@ -1378,8 +1410,11 @@ describe("queued-rsync migration control handlers", () => {
     const markCustomerMigratingIn = vi.fn();
     const onMounted = vi.fn();
     const recordAppliedFingerprint = vi.fn();
+    const createGiteaUser = vi.fn(async () => undefined);
     const adapter = mkAdapter({
       markCustomerMigratingIn,
+      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TARGET chris@gateway"),
+      createGiteaUser,
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       recordAppliedFingerprint,
       onMounted,
@@ -1398,7 +1433,14 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(createGiteaUser).toHaveBeenCalledWith(
+      "chris",
+      "ssh-ed25519 TARGET chris@gateway",
+    );
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
+    );
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });

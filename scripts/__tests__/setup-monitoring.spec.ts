@@ -32,7 +32,11 @@ function createHarness(): {
   const bin = join(root, "bin");
   const log = join(root, "calls.log");
   mkdirSync(join(scripts, "lib"), { recursive: true });
-  mkdirSync(join(root, "helm", "monitoring"), { recursive: true });
+  const monitoring = join(root, "helm", "monitoring");
+  const dashboards = join(monitoring, "dashboards");
+  mkdirSync(dashboards, { recursive: true });
+  writeFileSync(join(dashboards, "smoke.json"), "{}\n");
+  writeFileSync(join(monitoring, "gmp-collection-filter.json"), "{}\n");
   mkdirSync(bin);
   copyFileSync(
     join(repoRoot, "scripts/setup-monitoring.sh"),
