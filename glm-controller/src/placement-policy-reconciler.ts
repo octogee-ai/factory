@@ -79,6 +79,16 @@ const LIVE_LEASE_STATUSES = new Set([
   "returning",
 ]);
 
+export class TerminalPlacementMigrationConflictError extends Error {
+  constructor(
+    readonly operationId: string,
+    readonly status: string,
+  ) {
+    super(`migration operation ${operationId} ended with status ${status}`);
+    this.name = "TerminalPlacementMigrationConflictError";
+  }
+}
+
 export interface PlacementPolicyUser {
   uid: string;
   data: Record<string, unknown>;
@@ -2091,18 +2101,28 @@ async function reconcileSharedGatewayRebalance(
       .map((user) => sharedRebalanceBuilder(context, user, plan.fromGatewayId, scheduled))
       .find((candidate) => candidate !== null);
     if (!builder) return;
-    await context.deps.enqueueMigration({
-      uid: builder.uid,
-      builderSlug: builder.builderSlug,
+    const operationId = continuousPlacementMigrationOperationId({
+      ...builder,
       fromGatewayId: plan.fromGatewayId,
       toGatewayId: plan.toGatewayId,
-      source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-      operationId: continuousPlacementMigrationOperationId({
-        ...builder,
+    });
+    try {
+      await context.deps.enqueueMigration({
+        uid: builder.uid,
+        builderSlug: builder.builderSlug,
         fromGatewayId: plan.fromGatewayId,
         toGatewayId: plan.toGatewayId,
-      }),
-    });
+        source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
+        operationId,
+      });
+    } catch (error) {
+      if (!(error instanceof TerminalPlacementMigrationConflictError)) throw error;
+      scheduled.add(builder.uid);
+      context.deps.log(
+        `[placement-policy] rebalance skipped uid=${builder.uid} operationId=${operationId}: ${error.message}`,
+      );
+      continue;
+    }
     scheduled.add(builder.uid);
     applyProjectedRebalance(candidates, plan.fromGatewayId, plan.toGatewayId);
     context.result.enqueued += 1;
@@ -2766,7 +2786,7 @@ async function enqueuePlacementMigration(
         data.status !== "running" &&
         data.status !== "succeeded"
       ) {
-        throw new Error(`migration operation ${ref.id} ended with status ${String(data.status)}`);
+        throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
       }
       return;
     }
