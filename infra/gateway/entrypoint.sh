@@ -345,13 +345,13 @@ fi
 # pre-boot-config.ts gates its optional Firestore-backed overrides internally.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
+  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
 fi
 
 # ── Apply Octogee-owned runtime config once ─────────────────────────────────
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
   if [ -f "$CLASS_POLICY" ]; then
     node "$CLASS_POLICY"
   fi

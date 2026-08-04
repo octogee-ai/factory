@@ -218,6 +218,31 @@ function manifestAgents(manifest) {
     const { projectAgents, ...workspace } = manifest;
     return [workspace, ...projectAgents];
 }
+function accountBindingKey(value) {
+    if (!isRecord(value) || typeof value.agentId !== "string")
+        return null;
+    const match = value.match;
+    if (!isRecord(match) ||
+        match.channel !== "mattermost" ||
+        typeof match.accountId !== "string" ||
+        match.peer !== undefined) {
+        return null;
+    }
+    return `${match.accountId}\u0000${value.agentId}`;
+}
+function accountBindingsNeedingActivation(current, desired) {
+    const existing = new Set(current.flatMap((binding) => {
+        const key = accountBindingKey(binding);
+        return key ? [key] : [];
+    }));
+    return desired.flatMap((binding) => {
+        const key = accountBindingKey(binding);
+        if (key === null || existing.has(key))
+            return [];
+        const match = binding.match;
+        return [match.accountId];
+    });
+}
 export async function writeActivationManifest(rootDir, manifest) {
     const relPath = activationManifestTarPath(manifest.slug);
     const fullPath = path.join(rootDir, relPath);
@@ -236,6 +261,7 @@ export async function removeActivationManifest(openclawDir, slug) {
 }
 export async function applyOpenClawActivationManifest(manifest, opts) {
     const startedAt = Date.now();
+    let routingActivationRequired = false;
     await applyConfigPatch({
         buildPatch: (current) => {
             const cfg = current;
@@ -246,6 +272,11 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 ...entry,
                 agent: activationAgentForTarget(entry.agent, currentActivationAgent(current, entry.agentId), targetUsesKeyedEntries),
             }));
+            const missingAccountIds = accountBindingsNeedingActivation(currentBindings, activationAgents.flatMap((entry) => entry.bindings));
+            if (missingAccountIds.length > 0 && !routingActivationRequired) {
+                opts.onRoutingActivationRequired?.(missingAccountIds);
+                routingActivationRequired = true;
+            }
             const nextAgents = targetUsesKeyedEntries
                 ? activationAgents.map((entry) => entry.agent)
                 : activationAgents.reduce((agentList, entry) => upsertAgentInFullAgentList({ agents: { list: agentList } }, entry.agentId, entry.agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
@@ -279,5 +310,5 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
         log: opts.log,
         totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
     });
-    return { elapsedMs: Date.now() - startedAt };
+    return { elapsedMs: Date.now() - startedAt, routingActivationRequired };
 }

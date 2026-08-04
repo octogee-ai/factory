@@ -84,6 +84,8 @@ import {
   buildMattermostAccounts,
   buildProjectAgentAccounts,
   buildProjectAgents,
+  gatewayAgentRoster,
+  mattermostAccountBindingsNeedingActivation,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
@@ -121,6 +123,11 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import {
+  activatePendingMattermostRouting,
+  markMattermostRoutingActivationPending,
+  mattermostRoutingActivationPending,
+} from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
@@ -485,6 +492,8 @@ async function applyAddCustomerConfigPatch(
       agentProjects: activeAgentProjectIds(projectAgents),
     },
   ]);
+  let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
+  const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const startedAt = Date.now();
   const convergedRpc = {
     ...ctx.rpc,
@@ -499,6 +508,18 @@ async function applyAddCustomerConfigPatch(
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
         let existingBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
+        const missingAccountIds = mattermostAccountBindingsNeedingActivation(
+          existingBindings,
+          bindings,
+        );
+        if (missingAccountIds.length > 0) {
+          markMattermostRoutingActivationPending(
+            OPENCLAW_DIR,
+            routingActivationReason,
+            missingAccountIds,
+          );
+          routingActivationRequired = true;
+        }
         for (const slug of [snapshot.slug, ...evictionSlugs]) {
           existingBindings = filterOutCustomerBindings(existingBindings, slug);
         }
@@ -516,7 +537,7 @@ async function applyAddCustomerConfigPatch(
         const targetAgents = customerAgentRosterPatch(
           current,
           snapshot.slug,
-          rebindPlatformEmbeddingRefs(nextAgents),
+          rebindPlatformEmbeddingRefs(gatewayAgentRoster(nextAgents)),
         );
         const evictionPatch = evictionSlugs.length > 0
           ? buildRemoveCustomerPatchLocal(current, evictionSlugs)
@@ -562,6 +583,13 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
+  if (routingActivationRequired) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
     elapsedMs: Date.now() - startedAt,
@@ -806,6 +834,7 @@ async function activateImportedCustomer(
     });
   }
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   await pruneWorkspaceOnlyProjectCheckouts(
     CUSTOMERS_DIR,
     slug,
@@ -819,12 +848,23 @@ async function activateImportedCustomer(
     cache: ctx.configCache,
     signal: opts?.signal,
     log: ctx.log,
+    onRoutingActivationRequired: (accountIds) => {
+      markMattermostRoutingActivationPending(
+        OPENCLAW_DIR,
+        routingActivationReason,
+        accountIds,
+      );
+    },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
-  ctx.log(
-    `[import:${slug}] activation relies on config-patch hot-reload; no explicit gateway restart requested`,
-  );
 
   ctx.log(
     `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,

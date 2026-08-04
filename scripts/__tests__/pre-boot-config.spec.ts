@@ -7,6 +7,7 @@ import {
   applyGatewayOverrides,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
+  applySharedMattermostRoutingSafetyPatch,
   buildGitconfigContent,
   hydrateGitIdentity,
   pickSoleTenantSlug,
@@ -18,6 +19,132 @@ import {
 function emptyConfig(): any {
   return {};
 }
+
+describe("shared Mattermost routing safety", () => {
+  it("creates the quarantine roster when a shared config has no explicit agents", () => {
+    const config: any = {};
+
+    expect(
+      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
+    ).toBe(true);
+    expect(config.agents.list).toEqual([
+      expect.objectContaining({ id: "octogee-unmatched-route", default: true }),
+    ]);
+  });
+
+  it("installs a quarantine default and stable account routes inferred from peer bindings", () => {
+    const config: any = {
+      agents: {
+        list: [
+          { id: "octogee-mike-coach", default: true },
+          { id: "octogee-ceckert-coach" },
+        ],
+      },
+      channels: {
+        mattermost: {
+          accounts: {
+            "mike-coach": {},
+            "ceckert-coach": {},
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "octogee-mike-coach",
+          match: {
+            channel: "mattermost",
+            accountId: "mike-coach",
+            peer: { kind: "group", id: "mmmmmmmmmmmmmmmmmmmmmmmmmm" },
+          },
+        },
+        {
+          agentId: "octogee-ceckert-coach",
+          match: {
+            channel: "mattermost",
+            accountId: "ceckert-coach",
+            peer: { kind: "group", id: "cccccccccccccccccccccccccc" },
+          },
+        },
+      ],
+    };
+
+    expect(
+      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
+    ).toBe(true);
+    expect(config.agents.list[0]).toMatchObject({
+      id: "octogee-unmatched-route",
+      default: true,
+    });
+    expect(config.agents.list[1]).not.toHaveProperty("default");
+    expect(config.bindings).toEqual(expect.arrayContaining([
+      {
+        agentId: "octogee-mike-coach",
+        match: { channel: "mattermost", accountId: "mike-coach" },
+      },
+      {
+        agentId: "octogee-ceckert-coach",
+        match: { channel: "mattermost", accountId: "ceckert-coach" },
+      },
+    ]));
+  });
+
+  it("quarantines an account whose peer bindings disagree about the owning agent", () => {
+    const config: any = {
+      agents: { list: [{ id: "octogee-mike-coach" }, { id: "octogee-jack-coach" }] },
+      channels: { mattermost: { accounts: { "mike-coach": {} } } },
+      bindings: [
+        {
+          agentId: "octogee-mike-coach",
+          match: {
+            channel: "mattermost",
+            accountId: "mike-coach",
+            peer: { kind: "group", id: "aaaaaaaaaaaaaaaaaaaaaaaaaa" },
+          },
+        },
+        {
+          agentId: "octogee-jack-coach",
+          match: {
+            channel: "mattermost",
+            accountId: "mike-coach",
+            peer: { kind: "group", id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" },
+          },
+        },
+        {
+          agentId: "octogee-mike-coach",
+          match: { channel: "mattermost", accountId: "mike-coach" },
+        },
+      ],
+    };
+    const log = vi.fn();
+
+    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
+
+    expect(config.bindings).not.toContainEqual({
+      agentId: "octogee-mike-coach",
+      match: { channel: "mattermost", accountId: "mike-coach" },
+    });
+    expect(log).toHaveBeenCalledWith("refused ambiguous account route for mike-coach");
+  });
+
+  it("removes a stale account route when no peer binding verifies its owner", () => {
+    const config: any = {
+      agents: { list: [{ id: "octogee-mike-coach", default: true }] },
+      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
+      bindings: [
+        {
+          agentId: "octogee-mike-coach",
+          match: { channel: "mattermost", accountId: "ceckert-coach" },
+        },
+      ],
+    };
+    const log = vi.fn();
+
+    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
+
+    expect(config.bindings).toEqual([]);
+    expect(log).toHaveBeenCalledWith("refused unverified account route for ceckert-coach");
+  });
+});
 
 describe("applyPreBootPatches — platform model catalog", () => {
   it("allowlists every broker-backed platform model for an operator gateway", () => {

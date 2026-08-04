@@ -236,6 +236,54 @@ describe("migration activation manifest", () => {
     });
   });
 
+  it("requests routing activation before patching only when the stable account route is absent", async () => {
+    const accountBinding = {
+      agentId: "octogee-alice-coach",
+      match: { channel: "mattermost", accountId: "alice-coach" },
+    };
+    const activationManifest = {
+      ...manifest(),
+      bindings: [accountBinding],
+    };
+    const applyWith = async (bindings: unknown[]) => {
+      const events: string[] = [];
+      const onRoutingActivationRequired = vi.fn((accountIds: readonly string[]) => {
+        events.push(`activation:${accountIds.join(",")}`);
+      });
+      const rpc = {
+        configGet: vi.fn(async () => ({
+          hash: "h1",
+          config: {
+            agents: { list: [{ id: "octogee-bob-coach" }] },
+            channels: { mattermost: { accounts: {} } },
+            bindings,
+          },
+        })),
+        configPatch: vi.fn(async (patch: unknown) => {
+          events.push("configPatch");
+          return { hash: "h2", config: patch };
+        }),
+        close: vi.fn(async () => undefined),
+      };
+
+      const result = await applyOpenClawActivationManifest(activationManifest, {
+        rpc: rpc as never,
+        log: vi.fn(),
+        onRoutingActivationRequired,
+      });
+      return { events, onRoutingActivationRequired, result };
+    };
+
+    const missing = await applyWith([]);
+    expect(missing.events).toEqual(["activation:alice-coach", "configPatch"]);
+    expect(missing.result.routingActivationRequired).toBe(true);
+
+    const present = await applyWith([accountBinding]);
+    expect(present.events).toEqual(["configPatch"]);
+    expect(present.onRoutingActivationRequired).not.toHaveBeenCalled();
+    expect(present.result.routingActivationRequired).toBe(false);
+  });
+
   it("rebinds redacted platform embedding refs before replacing the stable agent list", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",

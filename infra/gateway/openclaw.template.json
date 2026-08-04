@@ -231,7 +231,8 @@
         "hooks": {
           "allowPromptInjection": true,
           "timeouts": {
-            "before_prompt_build": 3000
+            "before_prompt_build": 3000,
+            "before_agent_run": 3000
           }
         },
         "config": {

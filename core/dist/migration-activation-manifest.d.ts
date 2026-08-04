@@ -41,6 +41,8 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
     cache?: ConfigCache;
     signal?: AbortSignal;
     log: (msg: string) => void;
+    onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
 }): Promise<{
     elapsedMs: number;
+    routingActivationRequired: boolean;
 }>;

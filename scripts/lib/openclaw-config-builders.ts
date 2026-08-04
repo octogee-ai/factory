@@ -303,8 +303,102 @@ export interface OpenClawBinding {
   match: {
     channel: "mattermost";
     accountId: string;
-    peer: { kind: "group"; id: string };
+    peer?: { kind: "group"; id: string };
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAccountBinding(value: unknown): value is OpenClawBinding {
+  if (!isRecord(value) || typeof value.agentId !== "string") return false;
+  const match = value.match;
+  return isRecord(match) &&
+    match.channel === "mattermost" &&
+    typeof match.accountId === "string" &&
+    match.peer === undefined;
+}
+
+export function mattermostAccountBindingsNeedActivation(
+  current: readonly unknown[],
+  desired: readonly OpenClawBinding[],
+): boolean {
+  return mattermostAccountBindingsNeedingActivation(current, desired).length > 0;
+}
+
+export function mattermostAccountBindingsNeedingActivation(
+  current: readonly unknown[],
+  desired: readonly OpenClawBinding[],
+): string[] {
+  const currentRoutes = new Set(
+    current
+      .filter(isAccountBinding)
+      .map((binding) => `${binding.match.accountId}\u0000${binding.agentId}`),
+  );
+  return desired
+    .filter(isAccountBinding)
+    .filter((binding) => !currentRoutes.has(`${binding.match.accountId}\u0000${binding.agentId}`))
+    .map((binding) => binding.match.accountId);
+}
+
+export const SAFE_DEFAULT_AGENT_ID = "octogee-unmatched-route";
+
+export function buildSafeDefaultAgent(): Record<string, unknown> {
+  return {
+    id: SAFE_DEFAULT_AGENT_ID,
+    name: "Unmatched Mattermost route",
+    default: true,
+    tools: {
+      profile: "minimal",
+      alsoAllow: [],
+      fs: { workspaceOnly: true },
+    },
+  };
+}
+
+function withoutDefault(agent: unknown): unknown {
+  if (agent === null || typeof agent !== "object" || Array.isArray(agent)) return agent;
+  const entry = { ...(agent as Record<string, unknown>) };
+  delete entry.default;
+  return entry;
+}
+
+export function gatewayAgentRoster(
+  agents: readonly unknown[],
+  builderSlug: string | null = gatewayAgentRosterBuilderSlug(),
+): unknown[] {
+  const retained = agents
+    .filter((agent) => !(
+      agent !== null &&
+      typeof agent === "object" &&
+      !Array.isArray(agent) &&
+      (agent as { id?: unknown }).id === SAFE_DEFAULT_AGENT_ID
+    ));
+  if (builderSlug === null) return retained;
+  const withoutExistingDefault = retained.map(withoutDefault);
+  if (!builderSlug) return [buildSafeDefaultAgent(), ...withoutExistingDefault];
+  const dedicatedAgentId = `octogee-${builderSlug}-coach`;
+  return withoutExistingDefault.map((agent) => {
+    if (
+      agent === null ||
+      typeof agent !== "object" ||
+      Array.isArray(agent) ||
+      (agent as { id?: unknown }).id !== dedicatedAgentId
+    ) {
+      return agent;
+    }
+    return { ...(agent as Record<string, unknown>), default: true };
+  });
+}
+
+export function gatewayAgentRosterBuilderSlug(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const gatewayClass = env.GATEWAY_CLASS?.trim();
+  if (gatewayClass === "operator") return null;
+  if (gatewayClass === "shared") return "";
+  return env.GATEWAY_BUILDER_SLUG?.trim() || "";
 }
 
 export interface ProjectAgentState {
@@ -387,7 +481,24 @@ export function buildCustomerBindings(
   return customers.flatMap((c) => {
     const coachAgentId = `octogee-${c.slug}-coach`;
     const coachAccountId = `${c.slug}-coach`;
-    return c.channels.map((binding) => {
+    const projectIds = [...(c.agentProjects ?? [])].sort();
+    const accountBindings: OpenClawBinding[] = [
+      {
+        agentId: coachAgentId,
+        match: {
+          channel: "mattermost",
+          accountId: coachAccountId,
+        },
+      },
+      ...projectIds.map((projectId) => ({
+        agentId: projectAgentId(c.slug, projectId),
+        match: {
+          channel: "mattermost" as const,
+          accountId: `${c.slug}-proj-${projectId}`,
+        },
+      })),
+    ];
+    const peerBindings = c.channels.map((binding) => {
       const projectAgent =
         binding.scope === "project" &&
         binding.projectId !== undefined &&
@@ -403,5 +514,6 @@ export function buildCustomerBindings(
         },
       };
     });
+    return [...accountBindings, ...peerBindings];
   });
 }
