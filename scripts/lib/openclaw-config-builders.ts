@@ -242,7 +242,7 @@ export interface MattermostAccountEntry {
   botToken: MattermostAccountSecretRef;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
-  groups?: Record<string, { requireMention: true }> | null;
+  groups?: Record<string, { enabled: false }> | null;
 
 commands?: {
     native: false;
@@ -277,7 +277,7 @@ export function buildMattermostAccounts(
             channel.projectId !== undefined &&
             c.agentProjects?.has(channel.projectId) === true,
         )
-        .map((channel) => [channel.channelId, { requireMention: true }] as const),
+        .map((channel) => [channel.channelId, { enabled: false }] as const),
     );
     const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
     let groupsPatch: Pick<MattermostAccountEntry, "groups"> = {};

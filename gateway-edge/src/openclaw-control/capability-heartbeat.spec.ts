@@ -15,7 +15,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
     fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
       state: "clean",
       openclawVersion: "2026.7.1",
-      openclawForkSha: "2ddb9a96",
+      openclawForkSha: "e9acc131",
     }));
     let now = 1_000;
     const heartbeat = startOpenClawDashboardCapabilityHeartbeat({
@@ -35,7 +35,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
       version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
       revisionId: "bender-r7",
       openclawVersion: "2026.7.1",
-      openclawForkSha: "2ddb9a96",
+      openclawForkSha: "e9acc131",
       instanceId: "edge-instance-1",
       observedAt: "1970-01-01T00:00:01.000Z",
     });
@@ -70,7 +70,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
     fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
       state: "clean",
       openclawVersion: "2026.7.2",
-      openclawForkSha: "2ddb9a96",
+      openclawForkSha: "e9acc131",
     }));
     expect(() => heartbeat?.publish()).toThrow(/runtime identity/i);
     expect(fs.existsSync(capabilityPath)).toBe(false);
@@ -78,12 +78,12 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
     fs.writeFileSync(path.join(openclawDir, "system_config.status.json"), JSON.stringify({
       state: "clean",
       openclawVersion: "2026.7.1",
-      openclawForkSha: "2ddb9a96",
+      openclawForkSha: "e9acc131",
     }));
     heartbeat?.publish();
     expect(JSON.parse(fs.readFileSync(capabilityPath, "utf8"))).toMatchObject({
       openclawVersion: "2026.7.1",
-      openclawForkSha: "2ddb9a96",
+      openclawForkSha: "e9acc131",
     });
     heartbeat?.stop();
   });

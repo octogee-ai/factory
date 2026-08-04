@@ -1592,7 +1592,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       id: "/alice-proj-orbit",
     });
     expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-      groups: { "po-1": { requireMention: true } },
+      groups: { "po-1": { enabled: false } },
     });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });

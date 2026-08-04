@@ -227,7 +227,7 @@ describe("buildMattermostAccounts", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("mention-gates the workspace coach only in channels owned by active project agents", () => {
+  it("disables workspace coach inbound routing only in channels owned by active project agents", () => {
     const accounts = buildMattermostAccounts(
       [
         {
@@ -245,11 +245,11 @@ describe("buildMattermostAccounts", () => {
     );
 
     expect(accounts["chris-coach"].groups).toEqual({
-      "proj-orbit": { requireMention: true },
+      "proj-orbit": { enabled: false },
     });
   });
 
-  it("clears stale workspace coach mention gates when no project agent remains active", () => {
+  it("clears stale workspace coach inbound exclusions when no project agent remains active", () => {
     const accounts = buildMattermostAccounts(
       [
         {
