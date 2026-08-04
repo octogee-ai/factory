@@ -34,6 +34,7 @@ function encOf(plaintext: string): string {
 
 const { createApp } = await import("../index.js");
 const { default: connectRoutes } = await import("../routes/connect.js");
+const { getConnector } = await import("../lib/connectors/index.js");
 
 type RouteLayer = {
   route?: {
@@ -686,6 +687,38 @@ describe("connect — disconnect", () => {
     expect(res.status).toBe(200);
     expect(await readSecret(UID, "github")).toBeUndefined();
     expect((await readStatus(UID, "github"))?.status).toBe("disconnected");
+  });
+
+  it("attempts to revoke a dedicated Obsidian session and still deletes local fields on provider failure", async () => {
+    await db.doc(`users/${UID}/secrets/obsidian`).set({
+      provider: "obsidian",
+      fields: {
+        authToken: encOf("dedicated-obsidian-token"),
+        connection: encOf("derived-connection"),
+      },
+    });
+    const def = getConnector("obsidian")!;
+    const original = def.revokeStoredFields;
+    const revokeStoredFields = vi.fn(async () => {
+      throw new Error("provider unavailable");
+    });
+    def.revokeStoredFields = revokeStoredFields;
+    try {
+      await request(createApp())
+        .post("/api/connect/disconnect")
+        .set("Authorization", auth.bearer())
+        .send({ connector: "obsidian" })
+        .expect(200, { ok: true });
+    } finally {
+      def.revokeStoredFields = original;
+    }
+
+    expect(revokeStoredFields).toHaveBeenCalledWith({
+      authToken: "dedicated-obsidian-token",
+      connection: "derived-connection",
+    });
+    expect(await readSecret(UID, "obsidian")).toBeUndefined();
+    expect((await readStatus(UID, "obsidian"))?.status).toBe("disconnected");
   });
 });
 

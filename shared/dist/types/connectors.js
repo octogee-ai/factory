@@ -250,6 +250,16 @@ export const CONNECTOR_CATALOG = [
         implemented: true,
     },
     {
+        id: 'obsidian',
+        tagline: 'Search, summarize and write your Markdown notes',
+        displayName: 'Obsidian',
+        family: 'productivity',
+        captureMethods: ['local-pairing'],
+        consumption: AGENT_RUNTIME,
+        scopes: [],
+        implemented: true,
+    },
+    {
         id: 'azure',
         tagline: 'Cloud credentials for your agent',
         displayName: 'Azure',

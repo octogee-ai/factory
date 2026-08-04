@@ -12,6 +12,7 @@ import { dockerConnector } from "./docker.js";
 import { awsConnector } from "./aws.js";
 import { gcpConnector } from "./gcp.js";
 import { azureConnector } from "./azure.js";
+import { obsidianConnector } from "./obsidian.js";
 
 export type {
   ConnectorDef,
@@ -33,6 +34,7 @@ const IMPLEMENTED: Partial<Record<ConnectorId, ConnectorDef>> = {
   aws: awsConnector,
   gcp: gcpConnector,
   azure: azureConnector,
+  obsidian: obsidianConnector,
 };
 
 export function getConnector(id: string): ConnectorDef | undefined {

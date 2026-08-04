@@ -228,6 +228,18 @@ async function revokeFreshConnectorGrant(def: ConnectorDef, tokens: TokenRespons
   }
 }
 
+async function revokeStoredConnectorFields(uid: string, def: ConnectorDef): Promise<void> {
+  if (!def.revokeStoredFields) return;
+  const snap = await userCol(uid, "secrets").doc(def.meta.id).get();
+  const encryptedFields = (snap.data() as { fields?: Record<string, unknown> } | undefined)?.fields;
+  if (!encryptedFields) return;
+  const fields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(encryptedFields)) {
+    if (typeof value === "string") fields[key] = await decryptSecret(value);
+  }
+  await def.revokeStoredFields(fields);
+}
+
 async function cleanupInactiveConnectorCallback(
   error: unknown,
   def: ConnectorDef,
@@ -261,6 +273,13 @@ router.post(
           { connectorId: def.meta.id, revocationUrl: def.oauth.revocationUrl },
           { db, decryptSecret, logger },
         );
+      }
+      if (def.revokeStoredFields) {
+        try {
+          await revokeStoredConnectorFields(req.uid!, def);
+        } catch (error) {
+          logger.warn(`[connect] ${def.meta.id} provider revoke failed for uid=${req.uid}: ${String(error)}`);
+        }
       }
       await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
       await userCol(req.uid!, "integrations").doc(def.meta.id).set({
@@ -339,7 +358,12 @@ async function verifyFieldsConnector(
     for (const [k, v] of Object.entries(encryptedFields)) {
       if (typeof v === "string") fields[k] = await decryptSecret(v);
     }
-    const identity = await def.validateFields!(fields);
+    const validate = def.validateStoredFields ?? def.validateFields;
+    if (!validate) {
+      res.status(422).json({ ok: false, reason: "not_connected" });
+      return;
+    }
+    const identity = await validate(fields);
     await setVerifyStatus(uid, def, { status: "connected" });
     res.json({ ok: true, accountLabel: identity.accountLabel });
   } catch (err) {
@@ -395,7 +419,9 @@ router.post(
         res.status(404).json({ error: "Unknown connector" });
         return;
       }
-      if (def.validateFields && def.meta.captureMethods.includes("fields")) {
+      const canVerifyStoredFields = def.validateStoredFields
+        && def.meta.captureMethods.includes("local-pairing");
+      if (canVerifyStoredFields || (def.validateFields && def.meta.captureMethods.includes("fields"))) {
         await verifyFieldsConnector(req.uid!, def, res);
       } else {
         await verifyTokenConnector(req.uid!, def, res);
@@ -804,7 +830,10 @@ router.post(
 
 function fieldsConnectorDef(connector: string): FieldsConnectorDef | null {
   const def = getConnector(connector);
-  if (!def?.validateFields || !def.meta.captureMethods.includes("fields")) {
+  if (
+    !def?.validateFields
+    || !def.meta.captureMethods.includes("fields")
+  ) {
     return null;
   }
   return def as FieldsConnectorDef;

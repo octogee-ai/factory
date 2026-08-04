@@ -1,6 +1,7 @@
 import express, { type Express, type Request } from "express";
 
 const MM_REST_PROXY_PREFIX = "/api/v4/";
+const OBSIDIAN_PAIRING_COMPLETE_PATH = "/api/connect/obsidian/pair/complete";
 // Webhook paths whose signature is verified against the EXACT bytes received —
 // JSON-parsing would mutate the wire form. The handler reads req.rawBody.
 const RAW_BODY_WEBHOOK_PATHS = new Set([
@@ -26,7 +27,8 @@ export function installBodyParsers(app: Express): void {
       });
       return;
     }
-    express.json({ limit: "10mb" })(req, res, next);
+    const limit = normalisePath(req.path) === OBSIDIAN_PAIRING_COMPLETE_PATH ? "64kb" : "10mb";
+    express.json({ limit })(req, res, next);
   });
   app.use((req, res, next) => {
     if (req.path.startsWith(MM_REST_PROXY_PREFIX)) return next();

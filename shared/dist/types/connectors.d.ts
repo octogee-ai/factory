@@ -1,7 +1,7 @@
-export type ConnectorCaptureMethod = 'oauth-web' | 'device' | 'pat' | 'fields';
+export type ConnectorCaptureMethod = 'oauth-web' | 'device' | 'pat' | 'fields' | 'local-pairing';
 export type ConnectorConsumption = 'platform-read' | 'agent-runtime';
 export type ConnectorFamily = 'code-hosting' | 'deploy-hosting' | 'registry' | 'ai' | 'cloud' | 'productivity';
-export type ConnectorId = 'github' | 'vercel' | 'netlify' | 'cloudflare' | 'npm' | 'docker' | 'openai' | 'anthropic' | 'openrouter' | 'grok' | 'minimax' | 'openai-compatible' | 'gemini' | 'aws' | 'gcp' | 'azure' | 'google' | 'microsoft' | 'yahoo';
+export type ConnectorId = 'github' | 'vercel' | 'netlify' | 'cloudflare' | 'npm' | 'docker' | 'openai' | 'anthropic' | 'openrouter' | 'grok' | 'minimax' | 'openai-compatible' | 'gemini' | 'aws' | 'gcp' | 'azure' | 'google' | 'microsoft' | 'obsidian' | 'yahoo';
 export interface ConnectorCaptureField {
     key: string;
     label: string;

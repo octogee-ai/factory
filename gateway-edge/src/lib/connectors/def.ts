@@ -35,6 +35,8 @@ export interface ConnectorDef {
   fetchIdentity: (accessToken: string) => Promise<ConnectorIdentity>;
   deepProbe?: (accessToken: string, grantedScopes?: string[]) => Promise<ConnectorProbeResult>;
   validateFields?: (fields: Record<string, string>) => Promise<ConnectorIdentity>;
+  validateStoredFields?: (fields: Record<string, string>) => Promise<ConnectorIdentity>;
+  revokeStoredFields?: (fields: Record<string, string>) => Promise<void>;
 }
 
 export function catalogMeta(id: ConnectorId): ConnectorMeta {

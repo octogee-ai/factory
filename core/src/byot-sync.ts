@@ -108,6 +108,8 @@ export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
     "octogee_google_tasks_write",
     "octogee_google_sheets_read",
     "octogee_google_sheets_write",
+    "octogee_obsidian_read",
+    "octogee_obsidian_write",
     "workspace_commit",
     "preview_start",
     "preview_stop",

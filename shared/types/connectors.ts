@@ -1,4 +1,4 @@
-export type ConnectorCaptureMethod = 'oauth-web' | 'device' | 'pat' | 'fields';
+export type ConnectorCaptureMethod = 'oauth-web' | 'device' | 'pat' | 'fields' | 'local-pairing';
 
 export type ConnectorConsumption = 'platform-read' | 'agent-runtime';
 
@@ -31,6 +31,7 @@ export type ConnectorId =
   | 'azure'
   | 'google'
   | 'microsoft'
+  | 'obsidian'
   | 'yahoo';
 
 export interface ConnectorCaptureField {
@@ -327,6 +328,16 @@ export const CONNECTOR_CATALOG: readonly ConnectorMeta[] = [
     captureMethods: ['oauth-web'],
     consumption: AGENT_RUNTIME,
     scopes: MICROSOFT_SCOPES,
+    implemented: true,
+  },
+  {
+    id: 'obsidian',
+    tagline: 'Search, summarize and write your Markdown notes',
+    displayName: 'Obsidian',
+    family: 'productivity',
+    captureMethods: ['local-pairing'],
+    consumption: AGENT_RUNTIME,
+    scopes: [],
     implemented: true,
   },
   {

@@ -82,6 +82,10 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-productivity/google/sheets/create",
   "/internal/agent-productivity/google/sheets/read",
   "/internal/agent-productivity/google/sheets/append",
+  "/internal/agent-productivity/obsidian/notes/list",
+  "/internal/agent-productivity/obsidian/notes/search",
+  "/internal/agent-productivity/obsidian/notes/read",
+  "/internal/agent-productivity/obsidian/notes/write",
 ]);
 
 function isSelfScopedInternalBrokerRoute(path: string): boolean {

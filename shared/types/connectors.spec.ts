@@ -141,6 +141,19 @@ describe("google catalog entry — platform client", () => {
   });
 });
 
+describe("obsidian catalog entry", () => {
+  const obsidian = CONNECTOR_CATALOG.find((m) => m.id === "obsidian")!;
+
+  it("uses local pairing so account and vault passwords never enter the PWA", () => {
+    expect(obsidian).toMatchObject({
+      captureMethods: ["local-pairing"],
+      consumption: "agent-runtime",
+      implemented: true,
+    });
+    expect(obsidian.captureFields).toBeUndefined();
+  });
+});
+
 describe("google drive full-read escalation", () => {
   it("drive-full requests keep drive.file and add the declared read-all scope", () => {
     expect(googleEscalationRequestScopes("drive-full")).toEqual([

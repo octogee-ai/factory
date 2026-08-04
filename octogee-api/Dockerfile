@@ -33,6 +33,13 @@ COPY octogee-api/tsconfig.json ./
 COPY octogee-api/src/ ./src/
 COPY gateway-edge/src/ /gateway-edge/src/
 
+COPY obsidian-connect/package.json obsidian-connect/npm-shrinkwrap.json obsidian-connect/README.md obsidian-connect/LICENSE /obsidian-connect/
+COPY obsidian-connect/bin/ /obsidian-connect/bin/
+COPY obsidian-connect/src/ /obsidian-connect/src/
+COPY obsidian-connect/test/ /obsidian-connect/test/
+RUN mkdir -p /obsidian-connect-dist \
+    && npm pack --prefix /obsidian-connect --ignore-scripts --pack-destination /obsidian-connect-dist
+
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────────
@@ -52,6 +59,8 @@ COPY shared/package.json /shared/package.json
 COPY shared/dist /shared/dist
 COPY octogee-api/.npmrc octogee-api/package.json octogee-api/package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
+RUN npm rebuild better-sqlite3 --foreground-scripts \
+    && node -e "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.close()"
 
 # Runtime module resolution note: the BUILDER stage installs gateway-edge
 # deps at /gateway-edge/node_modules so tsc can resolve npm packages
@@ -63,6 +72,7 @@ RUN npm ci --omit=dev --ignore-scripts
 # gateway-edge's. No /gateway-edge install here (was previously dead
 # weight + a silent divergence trap if the two package.jsons drifted).
 COPY --from=builder /octogee-api/dist ./dist
+COPY --from=builder /obsidian-connect-dist/octogee-obsidian-connect-0.1.0.tgz ./obsidian-connect/octogee-obsidian-connect-0.1.0.tgz
 
 # Bake the build SHA into the image so the boot banner can report it.
 # Passed by Cloud Build via --build-arg BUILD_SHA=$_IMAGE_TAG. Without

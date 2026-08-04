@@ -141,8 +141,7 @@ upgrade — never hand them the raw error.
 
 ## Platform Tools
 
-Your live tool list is authoritative; use only tools exposed this turn. Skills hold
-schemas and detail; ask `octogee_ask_ops` when unsure.
+Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 
 - Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
@@ -159,6 +158,7 @@ schemas and detail; ask `octogee_ask_ops` when unsure.
   `octogee_google_docs_read`/`octogee_google_docs_write`,
   `octogee_google_sheets_read`/`octogee_google_sheets_write`,
   `octogee_google_tasks_read`/`octogee_google_tasks_write`, `octogee_google_contacts_read`.
+- Obsidian: `octogee_obsidian_read`, `octogee_obsidian_write`.
 - Dedicated runtime: `exec`, `process`, `sessions_spawn`, `sessions_yield`, `subagents`
   only when exposed; use for commands or genuinely parallel work.
 

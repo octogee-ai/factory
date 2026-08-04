@@ -33,6 +33,8 @@ const workflowTools = [
   "octogee_google_tasks_write",
   "octogee_google_sheets_read",
   "octogee_google_sheets_write",
+  "octogee_obsidian_read",
+  "octogee_obsidian_write",
 ];
 
 function readTemplate() {
@@ -90,6 +92,7 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     const template = readTemplate();
 
     expect(template.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(template.tools.alsoAllow).toContain("octogee_obsidian_read");
     expect(template.plugins.allow).toContain("octogee-connector-tools");
     expect(template.plugins.entries["octogee-connector-tools"]).toEqual({
       enabled: true,

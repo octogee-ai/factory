@@ -7,6 +7,7 @@ import {
   isConnectorTokenBrokerable,
 } from '../lib/connectors/index.js';
 import { catalogMeta } from '../lib/connectors/def.js';
+import { revokeObsidianConnection } from '../lib/connectors/obsidian.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,7 +60,7 @@ describe('connector catalog (shared)', () => {
 
   it('marks exactly the registry-implemented connectors', () => {
     const implemented = CONNECTOR_CATALOG.filter((m) => m.implemented).map((m) => m.id).sort();
-    expect(implemented).toEqual(['aws', 'azure', 'cloudflare', 'docker', 'gcp', 'gemini', 'github', 'google', 'microsoft', 'netlify', 'npm', 'vercel']);
+    expect(implemented).toEqual(['aws', 'azure', 'cloudflare', 'docker', 'gcp', 'gemini', 'github', 'google', 'microsoft', 'netlify', 'npm', 'obsidian', 'vercel']);
   });
 });
 
@@ -155,6 +156,29 @@ describe('connector registry (gateway-edge)', () => {
     expect(typeof getConnector('google')!.deepProbe).toBe('function');
     expect(getConnector('github')!.deepProbe).toBeUndefined();
     expect(getConnector('microsoft')!.deepProbe).toBeUndefined();
+  });
+
+  it('obsidian uses local pairing and keeps credentials behind brokered agent tools', () => {
+    const def = getConnector('obsidian');
+    expect(def?.meta).toMatchObject({
+      id: 'obsidian',
+      captureMethods: ['local-pairing'],
+      consumption: 'agent-runtime',
+      implemented: true,
+    });
+    expect(def?.validateFields).toBeUndefined();
+    expect(def?.validateStoredFields).toBeTypeOf('function');
+    expect(def?.revokeStoredFields).toBeTypeOf('function');
+    expect(isConnectorAgentRuntimeTokenMaterializable('obsidian')).toBe(false);
+  });
+
+  it('obsidian revokes its dedicated Headless session on disconnect', async () => {
+    const runner = vi.fn(async () => ({ stdout: 'Logged out.', stderr: '' }));
+    await revokeObsidianConnection({ authToken: 'dedicated-token' }, runner);
+    expect(runner).toHaveBeenCalledWith(['logout'], {
+      env: { OBSIDIAN_AUTH_TOKEN: 'dedicated-token' },
+      timeoutMs: 30_000,
+    });
   });
 
   it('google deep probe checks each granted capability and names them all', async () => {

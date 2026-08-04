@@ -29,6 +29,7 @@ describe("GET /api/features", () => {
         "release-agent-import": true,
         "release-agent-export": false,
         "release-builder-gateway": false,
+        "release-obsidian-connection": false,
       },
     });
   });

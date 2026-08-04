@@ -19,6 +19,9 @@ function captureRawBodyApp(): { app: express.Express; received: { value: string 
   app.post("/api/projects/test", (req, res) => {
     res.json({ parsedBody: req.body });
   });
+  app.post("/api/connect/obsidian/pair/complete", (req, res) => {
+    res.json({ parsedBody: req.body });
+  });
   app.post("/api/billing/webhook", (req, res) => {
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
     res.json({ rawBodyLength: rawBody ? rawBody.length : -1 });
@@ -74,5 +77,15 @@ describe("installBodyParsers — non-/api/v4 routes still get express.json parsi
       .expect(200);
     expect(res.body.rawBodyLength).toBe(Buffer.byteLength(payload, "utf8"));
     expect(res.body.rawBodyLength).toBeGreaterThan(payload.length);
+  });
+
+  it("caps unauthenticated Obsidian pairing completion bodies at 64 KiB", async () => {
+    const { app } = captureRawBodyApp();
+    const response = await request(app)
+      .post("/api/connect/obsidian/pair/complete")
+      .set("Content-Type", "application/json")
+      .send({ connection: "x".repeat(70 * 1024) })
+      .expect(413);
+    expect(response.status).toBe(413);
   });
 });

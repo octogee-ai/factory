@@ -120,6 +120,13 @@ describe("resolveScope — ownership", () => {
       ["app", "tests"],
     );
   });
+
+  it("the local Obsidian pairing helper runs its isolated package gate", () => {
+    expectJobs(
+      ["obsidian-connect/src/pairing.mjs"],
+      ["obsidian-connect", "tests"],
+    );
+  });
 });
 
 describe("unit package gates", () => {

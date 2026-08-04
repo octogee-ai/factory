@@ -37,6 +37,8 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_google_tasks_write",
   "octogee_google_sheets_read",
   "octogee_google_sheets_write",
+  "octogee_obsidian_read",
+  "octogee_obsidian_write",
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";

@@ -1,10 +1,10 @@
-export declare const FEATURE_FLAG_KEYS: readonly ["release-openclaw-dashboard", "release-agent-import", "release-agent-export", "release-builder-gateway"];
+export declare const FEATURE_FLAG_KEYS: readonly ["release-openclaw-dashboard", "release-agent-import", "release-agent-export", "release-builder-gateway", "release-obsidian-connection"];
 export type FeatureFlagKey = typeof FEATURE_FLAG_KEYS[number];
 export interface FeatureFlagDefinition {
     userVisible: boolean;
 }
 export declare const FEATURE_FLAGS: Record<FeatureFlagKey, FeatureFlagDefinition>;
-export declare const USER_VISIBLE_FEATURE_FLAG_KEYS: ("release-agent-export" | "release-agent-import" | "release-builder-gateway" | "release-openclaw-dashboard")[];
+export declare const USER_VISIBLE_FEATURE_FLAG_KEYS: ("release-agent-export" | "release-agent-import" | "release-builder-gateway" | "release-obsidian-connection" | "release-openclaw-dashboard")[];
 export interface FeatureSubject {
     uid: string;
     isAdmin: boolean;

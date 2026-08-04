@@ -25,6 +25,8 @@ import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-ide
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createAgentProductivityRoutes } from "./routes/agent-productivity.js";
+import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
+import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
@@ -340,7 +342,10 @@ export function createApp(opts: CreateAppOptions = {}) {
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
   app.use("/api/signup-offer", createSignupOfferRoutes({ db }));
   mountProductRoutes(app, product);
-
+  app.use(
+    "/api/connect/obsidian/pair",
+    createObsidianPairingRoutes({ db, featurePolicy }),
+  );
   app.use((req, res, next) => {
     if (!shouldAttemptTenantBinding(req.path)) {
       next();
@@ -409,6 +414,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     }),
   }));
   app.use("/internal/agent-productivity", createAgentProductivityRoutes({ db }));
+  app.use("/internal/agent-productivity", createAgentObsidianRoutes({ db, featurePolicy }));
   app.use(
     "/internal/agent-support",
     createAgentSupportRoutes({

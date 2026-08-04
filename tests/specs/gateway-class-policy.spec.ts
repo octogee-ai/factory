@@ -37,6 +37,8 @@ const workflowTools = [
   "octogee_google_tasks_write",
   "octogee_google_sheets_read",
   "octogee_google_sheets_write",
+  "octogee_obsidian_read",
+  "octogee_obsidian_write",
 ];
 
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
