@@ -313,6 +313,7 @@ expect(result.steps).toEqual([
       "context-files-reassert",
       "verify-channel-ready",
       "blob-sync",
+      "schedule-greeting-cron",
       "mark-complete",
       "notify-ops",
     ]);
@@ -530,18 +531,49 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(state.writes.find((w) => w.field === "provisioning.git.repoUrl")).toBeUndefined();
   });
 
-  it("completes provisioning without starting an unsolicited agent turn", async () => {
+  it("schedules the boot-greeting cron once and persists the job id", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls).not.toContain("scheduleBootGreetingCron");
-    expect(
-      state.writes.find((w) => w.field === "provisioning.openclaw.greeting"),
-    ).toBeUndefined();
+    expect(state.calls).toContain("scheduleBootGreetingCron");
+    expect(state.lastGreetingCronParams).toMatchObject({
+      slug: "test",
+      agentId: "octogee-test-coach",
+      accountId: "test-coach",
+    });
+    const greetWrite = state.writes.find(
+      (w) => w.field === "provisioning.openclaw.greeting",
+    );
+    expect(greetWrite?.value).toMatchObject({ ok: true, jobId: "cron-job-abc" });
+  });
+
+  it("only schedules the greeting cron AFTER the channel reports ready", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
+    const cronIdx = state.calls.indexOf("scheduleBootGreetingCron");
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(cronIdx).toBeGreaterThan(verifyIdx);
+  });
+
+  it("keeps a successful greeting schedule non-fatal when its fallback throws", async () => {
+    const adapter = {
+      ...makeAdapter(state),
+      ensureBootGreetingFallback: () => {
+        throw new Error("fallback failed");
+      },
+    };
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.steps).toContain("schedule-greeting-cron");
     expect(
       state.writes.find(
         (w) => w.field === "provisioning.openclaw.status" && w.value === "complete",
       ),
     ).toBeDefined();
+    expect(
+      state.writes.find((w) => w.field === "provisioning.openclaw.greeting")?.value,
+    ).toMatchObject({ ok: true, jobId: "cron-job-abc" });
   });
 
   it("aborts loudly if the channel never reaches running+connected (no half-mounts)", async () => {
@@ -553,6 +585,20 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(state.calls).not.toContain("scheduleBootGreetingCron");
     
     expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
+  });
+
+  it("throws on greeting cron failure so the fleet retries the whole mount", async () => {
+    state.greetingCronShouldFail = true;
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
+      /cron\.add rejected/,
+    );
+
+    const greetWrite = state.writes.find(
+      (w) => w.field === "provisioning.openclaw.greeting",
+    );
+    expect(greetWrite?.value).toMatchObject({ ok: false });
+    expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
+    expect(state.calls).not.toContain("notifyOpsOfSignup");
   });
 
   it("notifies ops on first-time provision only", async () => {

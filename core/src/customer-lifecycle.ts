@@ -279,6 +279,7 @@ export type AddCustomerStep =
   | "community-membership"
   | "config-patch"
   | "verify-channel-ready"
+  | "schedule-greeting-cron"
   | "mark-complete"
   | "notify-ops";
 
@@ -627,7 +628,10 @@ async function addCustomerToGatewayInner(
   steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
-  adapter.log(`✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms`);
+  adapter.log(
+    `✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`,
+  );
+  steps.push(...(await scheduleGreetingIfNeeded(adapter, uid, snapshot)));
   steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
   steps.push(...(await notifyOpsIfNew(adapter, ctx, newCustomer)));
 
@@ -1009,6 +1013,44 @@ async function verifyChannelReady(
     );
   }
   adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
+}
+
+async function scheduleGreetingIfNeeded(
+  adapter: CustomerLifecycleAdapter,
+  uid: string,
+  snapshot: UserSnapshot,
+): Promise<AddCustomerStep[]> {
+  if (snapshot.greetingPosted) return [];
+  const { slug } = snapshot;
+  const accountId = `${slug}-coach`;
+  const agentId = `octogee-${slug}-coach`;
+  adapter.log(
+    `[add:${slug}] greeting-cron: scheduling boot-greeting via cron.add (agentId=${agentId} accountId=${accountId})`,
+  );
+  const startedAt = Date.now();
+  try {
+    const result = await adapter.scheduleBootGreetingCron({ slug, agentId, accountId });
+    const elapsed = Date.now() - startedAt;
+    await adapter.setGreetingResult(uid, { ok: true, jobId: result.jobId });
+    adapter.log(
+      `[add:${slug}] ✅ greeting-cron: scheduled (jobId=${result.jobId} elapsedMs=${elapsed}) — agent turn will fire shortly; check gateway logs for 'cron: job created' and the eventual announce delivery`,
+    );
+    try {
+      adapter.ensureBootGreetingFallback?.({ slug, uid });
+    } catch (fallbackError) {
+      adapter.log(
+        `[add:${slug}] ⚠ greeting fallback failed (non-fatal): ${String(fallbackError)}`,
+      );
+    }
+    return ["schedule-greeting-cron"];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    adapter.log(
+      `[add:${slug}] ❌ greeting-cron: scheduleBootGreetingCron FAILED (fatal — mount will retry; provisioning stays incomplete): ${message}`,
+    );
+    await adapter.setGreetingResult(uid, { ok: false, error: message });
+    throw err;
+  }
 }
 
 async function markCompleteIfNeeded(
