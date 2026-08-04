@@ -6,14 +6,21 @@ import { timestampMillis } from "@octogee/core/gateway-principal-access";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 import { db as defaultDb } from "../lib/db.js";
+import {
+  executeApprovedCalendarViaBroker,
+  type ApprovedCalendarExecution,
+  type CalendarApprovalKind,
+} from "../lib/calendar-approval-executor.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
+const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface Deps {
   db: Firestore;
   now: () => number;
+  executeApprovedCalendar: (input: ApprovedCalendarExecution) => Promise<void>;
 }
 
 type ApprovalState = "pending" | "approved" | "denied" | "executing" | "succeeded" | "failed" | "unknown";
@@ -79,6 +86,7 @@ async function loadOwnedApproval(
   uid: string,
   providedNonceHash: string | null,
 ): Promise<Record<string, unknown> | null> {
+  if (!APPROVAL_ID_PATTERN.test(approvalId)) return null;
   const snap = await deps.db.doc(`${PRODUCTIVITY_APPROVALS_COLLECTION}/${approvalId}`).get();
   const data = snap.data();
   if (!snap.exists || !data || data.ownerUid !== uid || !hashesEqual(data.nonceHash, providedNonceHash)) {
@@ -107,6 +115,19 @@ type ResolveOutcome =
   | { kind: "forbidden" }
   | { kind: "resolved"; data: Record<string, unknown> };
 
+function resolvedDecision(
+  data: Record<string, unknown>,
+  targetState: "approved" | "denied",
+): ResolveOutcome | null {
+  if (data.state === "pending" || data.state === "approved") return null;
+  const sameDecision = data.state === targetState;
+  const completedApproval = targetState === "approved"
+    && ["executing", "succeeded", "failed", "unknown"].includes(String(data.state));
+  return sameDecision || completedApproval
+    ? { kind: "resolved", data }
+    : { kind: "expired" };
+}
+
 async function resolveApproval(
   deps: Deps,
   approvalId: string,
@@ -114,6 +135,7 @@ async function resolveApproval(
   providedNonceHash: string,
   targetState: "approved" | "denied",
 ): Promise<ResolveOutcome> {
+  if (!APPROVAL_ID_PATTERN.test(approvalId)) return { kind: "not-found" };
   const ref = deps.db.doc(`${PRODUCTIVITY_APPROVALS_COLLECTION}/${approvalId}`);
   const ownerRef = deps.db.doc(`users/${uid}`);
   return deps.db.runTransaction(async (tx): Promise<ResolveOutcome> => {
@@ -122,14 +144,35 @@ async function resolveApproval(
     if (!snap.exists || !data || data.ownerUid !== uid || !hashesEqual(data.nonceHash, providedNonceHash)) {
       return { kind: "not-found" };
     }
-    if (data.state !== "pending") return { kind: "expired" };
+    const priorDecision = resolvedDecision(data, targetState);
+    if (priorDecision) return priorDecision;
+    if (data.state === "approved" && targetState !== "approved") return { kind: "expired" };
     const approvalExpiresAt = timestampMillis(data.approvalExpiresAt);
     if (typeof approvalExpiresAt !== "number" || approvalExpiresAt <= deps.now()) return { kind: "expired" };
     if (!accountAllowsInteractiveAccess(ownerSnap.data())) return { kind: "forbidden" };
 
+    if (data.state === "approved") return { kind: "resolved", data };
+
     tx.update(ref, { state: targetState, updatedAt: FieldValue.serverTimestamp() });
     return { kind: "resolved", data: { ...data, state: targetState } };
   });
+}
+
+function calendarExecution(approvalId: string, data: Record<string, unknown>): ApprovedCalendarExecution | null {
+  const action = record(data.action);
+  const request = record(data.request);
+  const kind = action?.kind;
+  if (
+    !request
+    || typeof data.agentId !== "string"
+    || (kind !== "calendar-create" && kind !== "calendar-update" && kind !== "calendar-delete")
+  ) return null;
+  return {
+    approvalId,
+    agentId: data.agentId,
+    kind: kind as CalendarApprovalKind,
+    request,
+  };
 }
 
 async function respondToApproval(
@@ -159,7 +202,29 @@ async function respondToApproval(
       res.status(403).json({ error: "forbidden" });
       return;
     }
-    res.json(projectApproval(approvalId, result.data, deps.now()));
+    let data = result.data;
+    const execution = targetState === "approved" && data.state === "approved"
+      ? calendarExecution(approvalId, data)
+      : null;
+    if (execution) {
+      try {
+        await deps.executeApprovedCalendar(execution);
+      } catch (error) {
+        console.error("[productivity-approvals] Calendar execution failed", {
+          approvalId,
+          errorType: error instanceof Error ? error.name : "unknown",
+        });
+        const current = await loadOwnedApproval(deps, approvalId, req.uid!, providedHash);
+        if (!current || current.state === "approved") {
+          res.status(502).json({ error: "execution_unavailable" });
+          return;
+        }
+        data = current;
+      }
+      const current = await loadOwnedApproval(deps, approvalId, req.uid!, providedHash);
+      if (current) data = current;
+    }
+    res.json(projectApproval(approvalId, data, deps.now()));
   } catch (error) {
     next(error);
   }
@@ -169,6 +234,7 @@ export function createProductivityApprovalRoutes(options: Partial<Deps> = {}): R
   const deps: Deps = {
     db: options.db ?? defaultDb,
     now: options.now ?? Date.now,
+    executeApprovedCalendar: options.executeApprovedCalendar ?? executeApprovedCalendarViaBroker,
   };
   const router = Router();
   router.get("/:approvalId", (req, res, next) => preview(deps, req, res, next));
