@@ -38,7 +38,8 @@ COPY obsidian-connect/bin/ /obsidian-connect/bin/
 COPY obsidian-connect/src/ /obsidian-connect/src/
 COPY obsidian-connect/test/ /obsidian-connect/test/
 RUN mkdir -p /obsidian-connect-dist \
-    && npm pack --prefix /obsidian-connect --ignore-scripts --pack-destination /obsidian-connect-dist
+    && (cd /obsidian-connect \
+        && npm pack --ignore-scripts --pack-destination /obsidian-connect-dist)
 
 RUN npm run build
 
