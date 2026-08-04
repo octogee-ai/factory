@@ -19,7 +19,7 @@ export const helmetMiddleware = helmet({
   crossOriginEmbedderPolicy: false,
 });
 
-const DEFAULT_RATE_LIMIT_OPTIONS: Partial<RateLimitOptions> = {
+export const DEFAULT_RATE_LIMIT_OPTIONS: Partial<RateLimitOptions> = {
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipFailedRequests: false,

@@ -4,6 +4,7 @@ export const FEATURE_FLAG_KEYS = [
     "release-agent-export",
     "release-builder-gateway",
     "release-obsidian-connection",
+    "release-workspace-sharing",
 ];
 export const FEATURE_FLAGS = {
     "release-openclaw-dashboard": { userVisible: true },
@@ -11,6 +12,7 @@ export const FEATURE_FLAGS = {
     "release-agent-export": { userVisible: true },
     "release-builder-gateway": { userVisible: true },
     "release-obsidian-connection": { userVisible: true },
+    "release-workspace-sharing": { userVisible: true },
 };
 export const USER_VISIBLE_FEATURE_FLAG_KEYS = FEATURE_FLAG_KEYS.filter((key) => FEATURE_FLAGS[key].userVisible);
 export function isFeatureFlagKey(value) {

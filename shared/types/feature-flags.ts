@@ -4,6 +4,7 @@ export const FEATURE_FLAG_KEYS = [
   "release-agent-export",
   "release-builder-gateway",
   "release-obsidian-connection",
+  "release-workspace-sharing",
 ] as const;
 
 export type FeatureFlagKey = typeof FEATURE_FLAG_KEYS[number];
@@ -18,6 +19,7 @@ export const FEATURE_FLAGS: Record<FeatureFlagKey, FeatureFlagDefinition> = {
   "release-agent-export": { userVisible: true },
   "release-builder-gateway": { userVisible: true },
   "release-obsidian-connection": { userVisible: true },
+  "release-workspace-sharing": { userVisible: true },
 };
 
 export const USER_VISIBLE_FEATURE_FLAG_KEYS = FEATURE_FLAG_KEYS.filter(

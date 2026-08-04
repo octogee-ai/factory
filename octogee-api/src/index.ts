@@ -50,6 +50,7 @@ import { createPostHogServices, type PostHogServices } from "./lib/posthog.js";
 import { createProductObservability } from "./lib/product-observability.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
 import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
+import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
 import { createStripeSessionRoutes } from "../../gateway-edge/src/routes/billing/stripe-session.js";
 import {
@@ -234,6 +235,7 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
       stripeRoutes: createStripeSessionRoutes({ featurePolicy }),
     }),
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
+    sharingRoutes: createSharingRoutes({ featurePolicy }),
   };
 }
 

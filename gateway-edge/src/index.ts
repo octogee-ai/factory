@@ -34,6 +34,8 @@ import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentImportRuntime } from "./lib/agent-import-runtime.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
+import { createSharingRoutes } from "./routes/sharing.js";
+import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { createGatewayRouter } from "./public-router.js";
 import {
   createRollRosterGate,
@@ -84,6 +86,9 @@ export function installRollRosterGate(gate: RequestHandler): void {
 
 export interface CreateAppOptions {
   surface?: GatewayEdgeSurface;
+  // Route tests inject an enabling policy to exercise the workspace sharing
+  // paths; unset means the flag is off, which is what the pod surface wants.
+  featurePolicy?: FeaturePolicy;
 }
 
 export function createApp(opts: CreateAppOptions = {}) {
@@ -179,7 +184,7 @@ if (surface === "sidecar") {
 }
 
 if (surface === "cluster") {
-  mountClusterSurface(app);
+  mountClusterSurface(app, opts.featurePolicy);
 }
 
 mountSidecarLocalitySurface(app, {
@@ -192,7 +197,7 @@ app.use(errorHandler);
 return app;
 }
 
-function mountClusterSurface(app: Express): void {
+function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void {
   app.use("/internal/billing", internalBillingRoutes);
   // Legacy in-process Gitea broker surface. The durable broker lives on octogee-api;
   // the gateway-edge sidecar surface intentionally does not mount this.
@@ -202,7 +207,7 @@ function mountClusterSurface(app: Express): void {
   // (readme) and explicit-auth sequencing aren't shadowed by the locality
   // routers. Express tries handlers in mount order; locality routers are
   // gateway-edge-only and only match their specific paths.
-  mountClusterRoutes(app);
+  mountClusterRoutes(app, featurePolicy ? { sharingRoutes: createSharingRoutes({ featurePolicy }) } : {});
 }
 
 function mountSidecarLocalitySurface(app: Express, options: {

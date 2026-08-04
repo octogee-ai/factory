@@ -14,10 +14,13 @@ import { isValidGithubRepoSource } from "./github.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
+import { setProjectAgentEnabled } from "./project-agent-service.js";
 
+// "workspace" would collide with the workspace repo in Gitea (projectRepoName
+// is the slug itself) — a project by that name adopts and shares the repo.
 const RESERVED_PROJECT_SLUGS = new Set([
   "channels", "members", "files", "canvas", "chat",
-  "settings", "discover", "admin", "new", "create",
+  "settings", "discover", "admin", "new", "create", "workspace",
 ]);
 
 export interface ProjectCreateActor {
@@ -140,6 +143,7 @@ export async function createProjectForActor(
     await provisionProjectActivityPair(projectRef, plan, channel);
     await provisionProjectCodeRepo(plan, artifacts);
     await markProjectActive(projectRef, plan.targetVisibility);
+    await enableProjectAgentByDefault(plan);
     logger.info(`[projects] Created project ${plan.workspaceId}/${plan.slug}`, {
       source: plan.source,
       uid: plan.uid,
@@ -592,6 +596,32 @@ async function markProjectActive(
     pendingVisibility: null,
     updatedAt: FieldValue.serverTimestamp(),
   });
+}
+
+// Every new project gets its scoped agent, so a project is useful the moment it
+// exists and nothing has to reach in from the workspace coach. A mint failure is
+// not a create failure — the project is already active and the owner's toggle
+// retries; the same entitlement that gates project creation gates the agent, so
+// a 402 here means the two have drifted and the log is the signal.
+async function enableProjectAgentByDefault(plan: ProjectCreatePlan): Promise<void> {
+  try {
+    const result = await setProjectAgentEnabled(
+      { uid: plan.uid, userData: plan.userData, workspaceId: plan.workspaceId },
+      plan.slug,
+      true,
+    );
+    if (result.status !== 200) {
+      logger.warn(
+        `[projects] Default project agent not provisioned for ${plan.workspaceId}/${plan.slug}`,
+        { status: result.status, body: result.body },
+      );
+    }
+  } catch (err) {
+    logger.error(
+      `[projects] Default project agent failed for ${plan.workspaceId}/${plan.slug}:`,
+      { err },
+    );
+  }
 }
 
 export function projectSlugAvailability(slug: string): { ok: true } | { ok: false; reason: string } {

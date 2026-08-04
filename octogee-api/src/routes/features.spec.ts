@@ -30,6 +30,7 @@ describe("GET /api/features", () => {
         "release-agent-export": false,
         "release-builder-gateway": false,
         "release-obsidian-connection": false,
+        "release-workspace-sharing": false,
       },
     });
   });

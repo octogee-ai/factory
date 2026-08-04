@@ -41,7 +41,7 @@ function stateForbidden(opts: WithProjectOptions, project: Project): boolean {
     !opts.allowStates.includes(project.provisioningState);
 }
 
-async function projectIsArchived(project: Project): Promise<boolean> {
+export async function projectIsArchived(project: Project): Promise<boolean> {
   if (project.commercialLifecycle?.status === "archived") return true;
   const owner = await db.doc(`users/${project.ownerUid}`).get();
   const ownerData = owner.exists ? owner.data() ?? {} : {};
