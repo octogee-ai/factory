@@ -1263,6 +1263,24 @@ function ownerWorkspaceTurnVerifier(
   return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db);
 }
 
+async function verifyOwnerWorkspaceTurnFailClosed(
+  verify: OwnerWorkspaceTurnVerifier,
+  input: Parameters<OwnerWorkspaceTurnVerifier>[0],
+  operation: string,
+): Promise<boolean> {
+  try {
+    return await verify(input);
+  } catch (error) {
+    logger.error("[fleet-broker] owner turn verification failed", {
+      operation,
+      gatewayId: input.gatewayId,
+      agentId: input.agentId,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return false;
+  }
+}
+
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): ResolvedFleetBrokerRouteDeps {
@@ -2020,16 +2038,19 @@ async function requireAssignedChatIdentity(
     return null;
   }
   const data = await isAssignedToGateway(deps.db, bound.gatewayId, uid);
+  const ownerTurnAllowed = data && agentBelongsToAssignedWorkspace(data, agentId)
+    ? await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {
+        req,
+        gatewayId: bound.gatewayId,
+        agentId,
+        ownerUid: uid,
+        assignedData: data,
+      }, "agent-chat")
+    : false;
   if (
     !data ||
     !agentBelongsToAssignedWorkspace(data, agentId) ||
-    !await deps.verifyOwnerWorkspaceTurn({
-      req,
-      gatewayId: bound.gatewayId,
-      agentId,
-      ownerUid: uid,
-      assignedData: data,
-    })
+    !ownerTurnAllowed
   ) {
     res.status(403).json(FORBIDDEN);
     return null;
@@ -2345,13 +2366,13 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   router.post("/agent/set-coach-identity", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);
     if (!assigned) return;
-    if (!await deps.verifyOwnerWorkspaceTurn({
+    if (!await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {
       req,
       gatewayId: assigned.bound.gatewayId,
       agentId: assigned.agentId,
       ownerUid: assigned.uid,
       assignedData: assigned.data,
-    })) {
+    }, "set-coach-identity")) {
       res.status(403).json(FORBIDDEN);
       return;
     }
