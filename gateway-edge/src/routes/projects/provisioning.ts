@@ -72,7 +72,11 @@ export async function ensureProjectGiteaRepo(input: {
   } catch (error) {
     throw new ProjectRepoProvisioningError(errorMessage(error), created);
   }
-  await seedBoardWelcomeIssue({ workspaceId: input.workspaceId, slug: input.slug, name: input.name });
+  // A provisioning retry re-enters with the repo already created — seeding
+  // again would duplicate the welcome card.
+  if (created) {
+    await seedBoardWelcomeIssue({ workspaceId: input.workspaceId, slug: input.slug, name: input.name });
+  }
   return { created };
 }
 
