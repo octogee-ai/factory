@@ -384,6 +384,7 @@ function mountDiagnosticRoutes(
   app.get("/api/health", healthHandler);
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- application assembly keeps route ownership and dependency wiring explicit
 export function createApp(opts: CreateAppOptions = {}) {
   // Fail the rollout, not customer checkouts, if the stripe-secrets price_ids
   // value is malformed JSON.

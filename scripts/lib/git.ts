@@ -290,6 +290,7 @@ function customerGitEnvironmentForRefresh(
   };
 }
 
+// eslint-disable-next-line max-params -- explicit repository identity and credential controls prevent ambient Git state
 function runFreshCustomerGit(
   repoDir: string,
   gitDir: string,
@@ -843,6 +844,7 @@ export async function cloneProjectRepo(
   );
 }
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- source switching is a rollback-capable filesystem state machine
 async function replaceProjectRepoCheckout(
   slug: string,
   projectSlug: string,
@@ -962,6 +964,7 @@ async function replaceProjectRepoCheckout(
       }
       for (const { original, backup } of metadataBackups) {
         try {
+          // eslint-disable-next-line max-depth -- each rollback artifact is restored independently after a failed source switch
           if (fs.existsSync(backup)) fs.renameSync(backup, original);
         } catch (rollbackError) {
           log(`⚠ [git] Failed to restore prior metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
@@ -1013,6 +1016,7 @@ function existingProjectGitDir(repoDir: string): string | null {
   return null;
 }
 
+// eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGiteaProjectRepo(
   slug: string,
   projectSlug: string,
@@ -1060,6 +1064,7 @@ async function cloneGiteaProjectRepo(
 // GitHub push credentials are the connector token materialized at boot
 // (github-cli-auth-hydrate → `gh auth setup-git`); with no explicit token the clone
 // rides that same ambient credential helper.
+// eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGithubProjectRepo(
   slug: string,
   projectSlug: string,
@@ -1552,6 +1557,7 @@ interface RepositorySyncTarget {
   label: string;
 }
 
+// eslint-disable-next-line max-params -- sync policy and injected mutation controls are intentionally explicit
 function syncOneRepository(
   slug: string,
   target: RepositorySyncTarget,
@@ -1612,6 +1618,7 @@ function projectSyncTargets(slug: string): RepositorySyncTarget[] {
     }));
 }
 
+// eslint-disable-next-line max-params -- batch sync forwards the same explicit mutation controls to every repository
 async function syncRepositoryTargets(
   slug: string,
   targets: RepositorySyncTarget[],

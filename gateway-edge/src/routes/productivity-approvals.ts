@@ -4,6 +4,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { timestampMillis } from "@octogee/core/gateway-principal-access";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
 import {
@@ -138,18 +139,24 @@ function projectOneLinePreview(preview: Record<string, unknown>): Record<string,
 }
 
 function projectCreatePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const expectedKeys = new Set(["name", "slug", "tagline", "projectType", "recipe"]);
+  const keys = Object.keys(preview);
   const name = requiredText(preview.name, 80);
   const slug = requiredText(preview.slug, 16);
   const tagline = preview.tagline;
   const projectType = preview.projectType;
+  const recipe = preview.recipe;
   if (
-    name.trim().length === 0
+    keys.length !== expectedKeys.size
+    || keys.some((key) => !expectedKeys.has(key))
+    || name.trim().length === 0
     || !/^[a-z0-9]{1,16}$/u.test(slug)
     || typeof tagline !== "string"
     || tagline.length > 300
     || (projectType !== null && !["game", "social", "planner", "trip", "other"].includes(String(projectType)))
+    || !isProjectRecipeId(recipe)
   ) throw new Error(MALFORMED_APPROVAL_PREVIEW);
-  return { name, slug, tagline, projectType };
+  return { name, slug, tagline, projectType, recipe };
 }
 
 function validProjectPublishUrl(value: string): boolean {

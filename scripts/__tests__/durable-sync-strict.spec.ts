@@ -74,7 +74,23 @@ describe("strict durable sync", () => {
     execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: repo });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
     execFileSync("git", ["remote", "add", "origin", remote], { cwd: repo });
+    prepareTestRepository(repo);
   }
+
+  it("rejects an unexternalized customer repository before its preparer can run", async () => {
+    const workspace = path.join(paths.customers, "alice");
+    fs.mkdirSync(workspace, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+    const prepareRepository = vi.fn(prepareTestRepository);
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository,
+    })).rejects.toThrow(/workspace git metadata is missing/u);
+
+    expect(prepareRepository).not.toHaveBeenCalled();
+  });
 
   it("strictly commits and pushes one customer's workspace and every project repo", async () => {
     const customer = path.join(paths.customers, "alice");
@@ -159,6 +175,7 @@ describe("strict durable sync", () => {
     execFileSync("git", ["remote", "add", "origin", path.join(paths.customers, "missing.git")], {
       cwd: workspace,
     });
+    prepareTestRepository(workspace);
 
     await expect(syncAllWorkspaces({
       strict: true,

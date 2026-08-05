@@ -777,6 +777,7 @@ export function usesBuilderGithubCredential(
   }
 }
 
+// eslint-disable-next-line complexity -- validates both canonical receipt grammars and their exact remote projections
 function expectedCustomerRemoteUrl(
   cwd: string,
   receiptContents: string,

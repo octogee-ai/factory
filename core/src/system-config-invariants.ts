@@ -4,6 +4,7 @@ type JsonObject = Record<string, unknown>;
 
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array" as const;
+const FORBIDDEN_ARRAY = "forbidden-array" as const;
 
 export type GatewayConfigClass = "shared" | "builder";
 
@@ -26,7 +27,7 @@ type RequiredArrayInvariant = {
 };
 
 type ForbiddenArrayInvariant = {
-  kind: "forbidden-array";
+  kind: typeof FORBIDDEN_ARRAY;
   path: string;
   values: readonly string[];
 };
@@ -253,7 +254,7 @@ function customerToolInvariants(): PlatformInvariant[] {
       values: CUSTOMER_CODE_DENIED_TOOLS,
     },
     {
-      kind: "forbidden-array",
+      kind: FORBIDDEN_ARRAY,
       path: "tools.deny",
       values: CUSTOMER_STRUCTURED_AVAILABLE_TOOLS,
     },
@@ -294,7 +295,7 @@ function customerToolInvariants(): PlatformInvariant[] {
     { kind: "exact", path: "skills.workshop.autonomous", value: { mode: "off" } },
     { kind: "exact", path: "skills.workshop.approvalPolicy", value: "pending" },
     { kind: "exact", path: "skills.workshop.allowSymlinkTargetWrites", value: false },
-    { kind: "forbidden-array", path: "plugins.allow", values: ["codex"] },
+    { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: ["codex"] },
     { kind: "exact", path: "plugins.entries.codex", value: { enabled: false } },
     {
       kind: "customer-agent-workspace",
@@ -313,13 +314,13 @@ function builderToolInvariants(): PlatformInvariant[] {
   return [
     { kind: "exact", path: "tools.elevated.enabled", value: false },
     {
-      kind: "forbidden-array",
+      kind: FORBIDDEN_ARRAY,
       path: "tools.deny",
       values: CUSTOMER_CODE_DENIED_TOOLS,
     },
     { kind: "exact", path: "tools.exec", value: ABSENT },
     {
-      kind: "forbidden-array",
+      kind: FORBIDDEN_ARRAY,
       path: "tools.subagents.tools.deny",
       values: ["exec", "process"],
     },
@@ -400,7 +401,7 @@ export function platformInvariantTable(
     { kind: "mattermost-account-projection", path: "channels.mattermost.accounts" },
     { kind: "exact", path: "plugins.enabled", value: true },
     { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
-    { kind: "forbidden-array", path: "plugins.allow", values: RETIRED_PLUGINS },
+    { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },
     ...RETIRED_PLUGINS.map<PlatformInvariant>((id) => ({
       kind: "exact",
       path: `plugins.entries.${id}`,

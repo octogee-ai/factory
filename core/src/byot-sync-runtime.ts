@@ -35,7 +35,6 @@ import {
 import { applyConfigPatch } from "./apply-config-patch.js";
 import {
   AGENTS_DIR,
-  GATEWAY_CLASS,
   OPENCLAW_DIR,
   isBuilderGateway,
   isSharedGateway,
