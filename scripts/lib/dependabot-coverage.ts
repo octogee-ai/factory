@@ -214,9 +214,14 @@ export function auditDependabotCoverage(input: DependabotAuditInput): {
   const managedReferences: DependencyReferenceIdentity[] = [];
   const npmUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "npm");
   const dockerUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "docker");
+  // npm discovery runs weekly, batched onto one review day. Discovery cadence
+  // governs VERSION updates only — Dependabot raises security advisories
+  // immediately regardless of schedule — so the slower sweep costs advisory
+  // latency nothing and buys a single scheduled review instead of a daily
+  // trickle. An unset interval is still a gap: it must be declared.
   const scheduleException = input.exceptions.some((exception) =>
     exception.kind === "coverage" && exception.manager === "dependabot" &&
-    exception.policyGaps?.some((gap) => gap.includes("weekly")),
+    exception.policyGaps?.some((gap) => gap.includes("daily")),
   );
   for (const reference of input.inventory.references.filter(({ referenceKind }) =>
     referenceKind === "npm" || referenceKind === "npm-lockfile")) {
@@ -227,8 +232,8 @@ export function auditDependabotCoverage(input: DependabotAuditInput): {
     auditDockerfileReference(dockerUpdates, reference, errors, managedReferences);
   }
   for (const update of npmUpdates) {
-    if (update.interval !== "daily" && !scheduleException) {
-      errors.push(`${update.directory}: npm discovery is ${update.interval ?? "unset"}, not weekday`);
+    if (update.interval !== "weekly" && !scheduleException) {
+      errors.push(`${update.directory}: npm discovery is ${update.interval ?? "unset"}, not weekly`);
     }
     for (const ignore of update.ignores) auditIgnore(input, update, ignore, errors);
   }
