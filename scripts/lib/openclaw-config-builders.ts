@@ -37,14 +37,22 @@ export const PRODUCTIVITY_TOOL_NAMES = [
   "octogee_obsidian_write",
 ] as const;
 
-export const WORKSPACE_COACH_ALLOWED_TOOLS = [
+export const RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS = [
   "preview_start",
   "preview_stop",
   "preview_list",
   "octogee_publish",
+] as const;
+
+export const WORKSPACE_COACH_ALLOWED_TOOLS = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -68,6 +76,11 @@ export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "brave_search",
   "tavily_search",
   "tavily_extract",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
 ] as const;
 
 export const PROJECT_AGENT_DENIED_TOOLS = [
@@ -77,11 +90,10 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
   "subagents",
   "sessions_spawn",
   "terminal",
-  "preview_start",
-  "octogee_publish",
+  ...RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
   "workspace_commit",
-  "octogee_project_commit",
   "octogee_project_create",
+  "octogee_project_publish",
   "delegated_access",
   "octogee_status",
   "octogee_chat_search",
@@ -100,6 +112,7 @@ function workspaceCoachTools(): Record<string, unknown> {
   return {
     profile: "coding",
     alsoAllow: WORKSPACE_COACH_ALLOWED_TOOLS,
+    deny: RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
     fs: { workspaceOnly: true },
     toolsBySender: {},
   };
@@ -543,9 +556,9 @@ export function gatewayAgentRosterBuilderSlug(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const gatewayClass = env.GATEWAY_CLASS?.trim();
-  if (gatewayClass === "operator") return null;
   if (gatewayClass === "shared") return "";
-  return env.GATEWAY_BUILDER_SLUG?.trim() || "";
+  if (gatewayClass === "builder") return env.GATEWAY_BUILDER_SLUG?.trim() || "";
+  return "";
 }
 
 export interface ProjectAgentState {

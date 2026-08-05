@@ -13,9 +13,9 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "sessions_spawn",
   "terminal",
   "preview_start",
+  "preview_stop",
+  "preview_list",
   "octogee_publish",
-  "workspace_commit",
-  "octogee_project_commit",
   "bundle-mcp",
   "automations",
   "skill_workshop",
@@ -24,14 +24,24 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "conversations_turn",
   "browser",
 ];
+export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+  "workspace_commit",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
+];
 export const OCTOGEE_WORKFLOW_TOOLS = [
-  "preview_start",
-  "preview_stop",
-  "preview_list",
-  "octogee_publish",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -70,6 +80,11 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
   "brave_search",
   "tavily_search",
   "tavily_extract",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_commit",
 ];
 const PROJECT_AGENT_DENIED_TOOLS = [
   ...PRODUCTIVITY_TOOL_NAMES,
@@ -79,10 +94,12 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "sessions_spawn",
   "terminal",
   "preview_start",
+  "preview_stop",
+  "preview_list",
   "octogee_publish",
   "workspace_commit",
-  "octogee_project_commit",
   "octogee_project_create",
+  "octogee_project_publish",
   "delegated_access",
   "octogee_status",
   "octogee_chat_search",
@@ -103,13 +120,11 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-chat-tools",
   "octogee-connector-tools",
   "octogee-access-tools",
-  "octogee-preview-tools",
   "octogee-project-tools",
   "octogee-status-tools",
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
-  "octogee-publish-tools",
   "openai",
 ];
 const FLEET_BROKER_URL_TEMPLATE = "${FLEET_BROKER_URL}";
@@ -146,7 +161,6 @@ const CUSTOMER_PLUGIN_ENTRIES = {
       tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
-  "octogee-preview-tools": { enabled: true, config: {} },
   "octogee-project-tools": {
     enabled: true,
     config: {
@@ -178,7 +192,6 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     },
   },
   "octogee-workspace-tools": { enabled: true, config: {} },
-  "octogee-publish-tools": { enabled: true, config: {} },
 };
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
@@ -303,6 +316,12 @@ function addTools(list, tools) {
   return tools.reduce((next, tool) => addUnique(next, tool), list);
 }
 
+function removeTools(list, tools) {
+  if (!Array.isArray(list)) return [];
+  const removed = new Set(tools);
+  return list.filter((tool) => !removed.has(tool));
+}
+
 function removeSharedSubagentDefaults(config) {
   if (
     config.agents?.defaults &&
@@ -421,7 +440,10 @@ function customerAgentToolProjection(lane, currentDeny) {
     return {
       profile: "coding",
       alsoAllow: [...OCTOGEE_WORKFLOW_TOOLS],
-      deny: addTools(currentDeny, CUSTOMER_CODE_DENIED_TOOLS),
+      deny: addTools(
+        removeTools(currentDeny, CUSTOMER_STRUCTURED_AVAILABLE_TOOLS),
+        CUSTOMER_CODE_DENIED_TOOLS,
+      ),
     };
   }
   if (lane === "project") {
@@ -465,6 +487,25 @@ function forceCustomerWorkspaceOnly(config) {
   for (const [agentId, rawEntry] of Object.entries(entries)) {
     const entry = objectValue(rawEntry);
     if (entry) projectCustomerAgentTools(config, entry, agentId);
+  }
+}
+
+function forceProjectAgentPolicy(config) {
+  if (Array.isArray(config.agents?.list)) {
+    for (const rawEntry of config.agents.list) {
+      const entry = objectValue(rawEntry);
+      if (entry && customerAgentLane(entry.id) === "project") {
+        projectCustomerAgentTools(config, entry, entry.id);
+      }
+    }
+  }
+  const entries = objectValue(config.agents?.entries);
+  if (!entries) return;
+  for (const [agentId, rawEntry] of Object.entries(entries)) {
+    const entry = objectValue(rawEntry);
+    if (entry && customerAgentLane(agentId) === "project") {
+      projectCustomerAgentTools(config, entry, agentId);
+    }
   }
 }
 
@@ -1246,7 +1287,10 @@ function scrubCustomerOauthDisk(configPath, config, env, resetAgentIds, directRu
 
 function applySharedPolicy(config) {
   config.tools ??= {};
-  config.tools.deny = addTools(config.tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
+  config.tools.deny = addTools(
+    removeTools(config.tools.deny, CUSTOMER_STRUCTURED_AVAILABLE_TOOLS),
+    CUSTOMER_CODE_DENIED_TOOLS,
+  );
   config.tools.exec = { mode: "deny" };
   config.tools.subagents ??= {};
   config.tools.subagents.tools ??= {};
@@ -1271,36 +1315,13 @@ function applySharedPolicy(config) {
 }
 
 function applyBuilderPolicy(config) {
-  config.tools ??= {};
-  config.tools.deny = addTools(config.tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
-  config.tools.exec = { mode: "deny" };
-  config.tools.subagents ??= {};
-  config.tools.subagents.tools ??= {};
-  config.tools.subagents.tools.deny = addTools(config.tools.subagents.tools.deny, [
-    "exec",
-    "process",
-  ]);
-  removeSharedSubagentDefaults(config);
-  setTerminal(config, false);
-  restrictSessionVisibility(config);
-  disableCustomerConfigMutation(config);
-  disableCustomerAutomationsAndSkillWrites(config);
-  forceCustomerMattermostProjection(config);
-  forceCustomerWorkspaceOnly(config);
-  allowOctogeeWorkflowTools(config);
-  enableProjectTools(config);
-  enableOpsTools(config);
-  enableAccessTools(config);
-  removePolicyCodexAuthPlaceholder(config);
-  requireConnectorWriteApproval(config);
-  disableCodex(config);
+  forceProjectAgentPolicy(config);
 }
 
 function resolveGatewayClass(env) {
-  if (env.GATEWAY_CLASS === "builder" || env.GATEWAY_CLASS === "operator") {
+  if (env.GATEWAY_CLASS === "builder") {
     return env.GATEWAY_CLASS;
   }
-  if (env.GATEWAY_PROFILE === "operator") return "operator";
   return "shared";
 }
 
@@ -1341,18 +1362,6 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
   const gatewayClass = resolveGatewayClass(env);
   const before = JSON.stringify(config);
   if (gatewayClass === "builder") {
-    const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
-    projectCustomerPlugins(config);
-    projectCustomerSecretProviders(config, openclawDir);
-    projectCustomerSpawnNamespaces(config);
-    const scrub = scrubCustomerOauthConfig(config, env);
-    scrubCustomerOauthDisk(
-      configPath,
-      config,
-      env,
-      scrub.resetAgentIds,
-      scrub.directRuntimeModelRefs,
-    );
     applyBuilderPolicy(config);
   } else if (gatewayClass === "shared") {
     const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
@@ -1368,8 +1377,6 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
       scrub.directRuntimeModelRefs,
     );
     applySharedPolicy(config);
-  } else {
-    return { applied: false, reason: "operator-handled-separately", gatewayClass };
   }
   if (JSON.stringify(config) === before) {
     return { applied: false, reason: "already-set", gatewayClass };

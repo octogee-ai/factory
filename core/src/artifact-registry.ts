@@ -273,8 +273,8 @@ const RELEASE_VERSION_PATTERN = new RegExp(
 );
 
 const RELEASE_MANIFEST_SURFACE_IMAGES = {
-  gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
-  platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"],
+  gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"],
+  platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"],
 } as const;
 
 export interface ReleaseDigestManifest {
@@ -379,7 +379,7 @@ function validateReleaseDigestManifest(input: unknown, manifestDigest: string, e
     ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"],
     "release digest manifest",
   );
-  if (manifest.schemaVersion !== 1) throw new Error("release digest manifest schemaVersion must be 1");
+  if (manifest.schemaVersion !== 2) throw new Error("release digest manifest schemaVersion must be 2");
   const sourceSha = typeof manifest.sourceSha === "string"
     ? assertSourceSha(manifest.sourceSha)
     : assertSourceSha("");
@@ -417,7 +417,7 @@ function validateResolvedReleaseDigestManifest(
 ): ReleaseDigestManifest {
   return validateReleaseDigestManifest(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceSha: manifest.sourceSha,
       openclawVersion: manifest.openclawVersion,
       repository: manifest.repository,

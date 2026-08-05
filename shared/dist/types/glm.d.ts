@@ -5,11 +5,11 @@ export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
 export declare const DEFAULT_MANAGED_BY: ManagedBy;
 export declare function resolveManagedBy(value: unknown): ManagedBy;
 export declare function isOperatorManaged(value: unknown): boolean;
-export declare const GATEWAY_PROFILES: readonly ["standard", "operator"];
+export declare const GATEWAY_PROFILES: readonly ["standard", "builder"];
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
-export declare const GATEWAY_CLASSES: readonly ["shared", "builder", "operator"];
+export declare const GATEWAY_CLASSES: readonly ["shared", "builder"];
 export type GatewayClass = (typeof GATEWAY_CLASSES)[number];
-export declare const GATEWAY_IMAGE_PROFILES: readonly ["standard", "operator"];
+export declare const GATEWAY_IMAGE_PROFILES: readonly ["standard", "builder"];
 export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
 export interface GatewayDesiredState {
     gatewayId: string;
@@ -37,7 +37,7 @@ export interface GatewayDesiredState {
     serviceAccount?: GatewayServiceAccountSpec;
     gcpProject?: string;
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    operatorAccess?: OperatorGatewayAccessSpec;
+    builderAccess?: BuilderGatewayAccessSpec;
     lastError?: {
         at: number;
         message: string;
@@ -57,7 +57,7 @@ export interface GatewayServiceAccountSpec {
     create?: boolean;
     annotations?: Record<string, string>;
 }
-export interface OperatorGatewayAccessSpec {
+export interface BuilderGatewayAccessSpec {
     shellsEnabled?: boolean;
     controlUiEnabled?: boolean;
     platformMetadataEgress?: boolean;
@@ -66,28 +66,27 @@ export interface OperatorGatewayAccessSpec {
     verifiedAt?: number;
     verifiedBy?: string;
 }
-export declare const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec;
-export declare function defaultOperatorGatewayAccess(ownerUid: string | null | undefined, shellsEnabled?: boolean): OperatorGatewayAccessSpec;
-export declare function resolveOperatorGatewayAccess(ownerUid: string | null | undefined, operatorAccess: OperatorGatewayAccessSpec | null | undefined): OperatorGatewayAccessSpec;
-export declare const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
+export declare const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec;
+export declare function defaultBuilderGatewayAccess(ownerUid: string | null | undefined, shellsEnabled?: boolean): BuilderGatewayAccessSpec;
+export declare function resolveBuilderGatewayAccess(ownerUid: string | null | undefined, builderAccess: BuilderGatewayAccessSpec | null | undefined): BuilderGatewayAccessSpec;
+export declare const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export declare const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export declare const GATEWAY_ID_MAX_LENGTH = 32;
 export declare const GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
-export declare const OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec;
+export declare const BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec;
 export declare function isValidGatewayId(id: unknown): id is string;
 export declare const NEW_GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit; the -blue/-green suffixes are reserved for roll roles";
 export declare function isValidNewGatewayId(id: unknown): id is string;
 export declare function deriveGatewayIdentity(gatewayId: string, explicitGateway?: unknown): string;
-export declare function operatorGatewayServiceAccountName(gatewayId: string): string;
-export declare function isOperatorGatewayShellAccessEnabled(profile: GatewayProfile | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
-export declare function isGatewayClassShellAccessEnabled(gatewayClass: GatewayClass | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
-export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, operatorAccess: OperatorGatewayAccessSpec | undefined): boolean;
+export declare function builderGatewayServiceAccountName(gatewayId: string): string;
+export declare function isGatewayClassShellAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: BuilderGatewayAccessSpec | undefined): boolean;
+export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: BuilderGatewayAccessSpec | undefined): boolean;
 export declare function resolveUserGatewayShellState(data: {
     gatewayClass?: unknown;
     profile?: unknown;
     imageProfile?: unknown;
     ownerUid?: unknown;
-    operatorAccess?: OperatorGatewayAccessSpec;
+    builderAccess?: BuilderGatewayAccessSpec;
 } | undefined, uid: string): {
     gatewayProfile: GatewayProfile;
     shellsEnabled: boolean;
@@ -202,7 +201,7 @@ export interface CustomerMigrationV2GatewayRootFence {
     latestRelease: number;
     desiredRelease: number;
     liveRelease: number;
-    gatewayClass: "builder" | "operator";
+    gatewayClass: "builder";
     ownerUid: string;
     builderSlug: string;
     configHash: string;
@@ -250,7 +249,7 @@ export interface HelmInstanceValue {
     serviceAccountName?: string;
     serviceAccount?: GatewayServiceAccountSpec;
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    operatorAccess?: OperatorGatewayAccessSpec;
+    builderAccess?: BuilderGatewayAccessSpec;
     profile?: GatewayProfile;
     gatewayClass?: GatewayClass;
     imageProfile?: GatewayImageProfile;

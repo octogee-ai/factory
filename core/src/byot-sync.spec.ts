@@ -804,10 +804,15 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
         "octogee_google_sheets_write",
         "octogee_obsidian_read",
         "octogee_obsidian_write",
-        "preview_stop",
-        "preview_list",
         "octogee_project_create",
         "octogee_project_list",
+        "workspace_commit",
+        "octogee_project_commit",
+        "octogee_project_build",
+        "octogee_project_test",
+        "octogee_project_preview",
+        "octogee_project_run_status",
+        "octogee_project_publish",
         "octogee_project_set_recipe",
       ],
     });
@@ -822,8 +827,6 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
       "terminal",
       "preview_start",
       "octogee_publish",
-      "workspace_commit",
-      "octogee_project_commit",
     ]) {
       expect(FREE_TIER_COACH_TOOLS.alsoAllow).not.toContain(denied);
     }
@@ -1340,13 +1343,12 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(r).toBe(false);
   });
 
-  it("operator gateway: applies the same runtime model patch as builder gateways", async () => {
+  it("applies the runtime model patch independently of gateway class", async () => {
     let calls = 0;
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
       {
         applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; },
-        isOperatorGateway: () => true,
       },
     );
     expect(r).toBe(true);
@@ -1358,7 +1360,6 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     const r = await applyCoachModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyConfigPatch: async (_args, o) => {
           opts.push(o ?? {});
@@ -1406,7 +1407,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
     ]);
   });
 
-  it("preserves an existing operator Codex sandbox while adding runtime defaults", async () => {
+  it("preserves an existing Codex sandbox while adding runtime defaults", async () => {
     const calls: object[] = [];
     const r = await applyOauthRuntimeModelAllowlist(["openai"], {
       applyConfigPatch: async (args) => {
@@ -1959,7 +1960,6 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: () => false,
         applyConfigPatch: configWriter,
@@ -1985,7 +1985,6 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2020,7 +2019,6 @@ describe("standard gateway — BYOS materialization", () => {
         trialGrant: LIVE_SIGNUP_OFFER,
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
@@ -2054,7 +2052,6 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2092,7 +2089,6 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "claude-cli" } },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2116,7 +2112,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("purges disconnected stale OAuth runtime state on every non-operator convergence", async () => {
+  it("purges disconnected stale OAuth runtime state on every customer convergence", async () => {
     const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
     const requestGatewayRestartFn = vi.fn(async () => true);
     await syncByotForCustomer(
@@ -2127,7 +2123,6 @@ describe("standard gateway — BYOS materialization", () => {
         provisioning: { openclaw: { status: "complete" } },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -2169,7 +2164,6 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2208,7 +2202,6 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2230,13 +2223,77 @@ describe("standard gateway — BYOS materialization", () => {
   });
 });
 
+describe("Builder gateway — native subscription runtime", () => {
+  it("restores OAuth and preserves direct runtime model selections", async () => {
+    const applyByotStateFn = vi.fn(() => false);
+    const restoreOauthFn = vi.fn(async () => ({
+      restored: true,
+      present: true,
+      providers: ["openai"] as const,
+    }));
+    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
+      patched: true,
+      changed: true,
+      restartRequired: false,
+    }));
+    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
+    const requestGatewayRestartFn = vi.fn(async () => false);
+    const triggerSecretsReloadFn = vi.fn(async () => {});
+    const agentModels = {
+      "octogee-tester-70-coach": {
+        primary: "openai-codex/gpt-5.3-codex",
+        fallbacks: ["claude-cli/claude-opus-4-8"],
+      },
+    };
+
+    await syncByotForCustomer(
+      {
+        byotActive: true,
+        username: "tester-70",
+        selectedTier: "personal",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: {
+          byot: { provider: "openai-codex" },
+          agentModels,
+        },
+      },
+      {
+        isBuilderGateway: () => true,
+        isSharedGateway: () => false,
+        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
+        applyByotState: applyByotStateFn,
+        restoreOauthStoreForSlug: restoreOauthFn,
+        applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
+        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyAgentModelOverrides: applyAgentModelOverridesFn,
+        materializeAnthropicBroker: vi.fn(() => false),
+        hasPendingPlatformCatalogRestart: () => false,
+        requestGatewayRestart: requestGatewayRestartFn,
+        triggerSecretsReload: triggerSecretsReloadFn,
+      },
+    );
+
+    expect(purgeCustomerOauthRuntimeFn).not.toHaveBeenCalled();
+    expect(applyByotStateFn).not.toHaveBeenCalled();
+    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai"]);
+    expect(applyCoachModelPatchFn).toHaveBeenCalledTimes(1);
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
+      houseOnly: false,
+    });
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
+    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("shared gateway — per-customer broker-token materialization", () => {
   const PRESERVE = { preserveAuthProfileStore: true };
   const baseDeps = (overrides: Record<string, unknown>) => {
     let restartPending = false;
     return {
       isSharedGateway: () => true,
-      isOperatorGateway: () => false,
       purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
       applyCoachModelPatch: vi.fn(async () => false),
       applyCoachToolsConvergence: vi.fn(async () => false),
@@ -2391,316 +2448,6 @@ describe("shared gateway — per-customer broker-token materialization", () => {
   });
 });
 
-describe("operator gateway — runtime sync stays narrow", () => {
-  it("restoreOauthStoreForSlug: materializes owner BYOS credentials on operator gateways", async () => {
-    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-byos-"));
-    const fetchByosubCreds = vi.fn(async () => [
-      {
-        provider: "anthropic" as const,
-        secretName: "byosub-uid-anthropic",
-        credential: "sk-ant-oat01-operator-token",
-      },
-    ]);
-    const r = await restoreOauthStoreForSlug("tester-70", {
-      fetchByosubCreds,
-      openclawDir,
-      logFn: () => {},
-    });
-    expect(r).toEqual({ restored: true, present: true, providers: ["anthropic"] });
-    expect(fetchByosubCreds).toHaveBeenCalledWith("octogee-tester-70-coach");
-
-    const store = readAuthProfileStore(codexAgentDir(openclawDir, "octogee-tester-70-coach")) as {
-      profiles: Record<string, { provider?: string; access?: string }>;
-    };
-    expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
-      provider: "claude-cli",
-      access: "sk-ant-oat01-operator-token",
-    });
-  });
-
-  it("syncByotForCustomer: restores OAuth credentials and patches the operator runtime model after the credential is present", async () => {
-    const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({
-      restored: true,
-      present: true,
-      providers: ["openai", "anthropic"] as const,
-    }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
-      patched: true,
-      changed: true,
-      restartRequired: true,
-    }));
-    const requestGatewayRestartFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-
-    await syncByotForCustomer(
-      {
-        byotActive: true,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "openai-codex" } },
-      },
-      {
-        isOperatorGateway: () => true,
-        applyByotState: applyByotStateFn,
-        restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
-        requestGatewayRestart: requestGatewayRestartFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-      },
-    );
-
-    expect(applyByotStateFn).not.toHaveBeenCalled();
-    expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai", "anthropic"]);
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
-      slug: "tester-70",
-      provider: "openai-codex",
-      baseUrl: undefined,
-      model: undefined,
-      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
-    });
-    expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
-    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
-  });
-
-  it("syncByotForCustomer: materializes the platform catalog for an operator customer without OAuth", async () => {
-    let restartPending = false;
-    const materializeBrokerFn = vi.fn(() => true);
-    const requestGatewayRestartFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-
-    await syncByotForCustomer(
-      {
-        username: "tester-70",
-        selectedTier: "personal",
-        provisioning: { openclaw: { status: "complete" } },
-      },
-      {
-        isOperatorGateway: () => true,
-        materializeAnthropicBroker: materializeBrokerFn,
-        requestGatewayRestart: requestGatewayRestartFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-        hasPendingPlatformCatalogRestart: () => restartPending,
-        markPlatformCatalogRestartPending: () => {
-          restartPending = true;
-        },
-        clearPlatformCatalogRestartPending: () => {
-          restartPending = false;
-        },
-      },
-    );
-
-    expect(materializeBrokerFn).toHaveBeenCalledWith("tester-70");
-    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
-    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
-  });
-
-  it("syncByotForCustomer: retries a rejected platform-catalog restart after transitioning to the standard path", async () => {
-    let restartPending = false;
-    let operatorGateway = true;
-    const materializeBrokerFn = vi.fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false);
-    const requestGatewayRestartFn = vi.fn()
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-    const deps = {
-      isOperatorGateway: () => operatorGateway,
-      applyByotState: vi.fn(() => false),
-      applyCoachModelPatch: vi.fn(async () => false),
-      applyCoachToolsConvergence: vi.fn(async () => false),
-      purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
-      materializeAnthropicBroker: materializeBrokerFn,
-      requestGatewayRestart: requestGatewayRestartFn,
-      triggerSecretsReload: triggerSecretsReloadFn,
-      hasPendingPlatformCatalogRestart: () => restartPending,
-      markPlatformCatalogRestartPending: () => {
-        restartPending = true;
-      },
-      clearPlatformCatalogRestartPending: () => {
-        restartPending = false;
-      },
-    };
-    const user = {
-      username: "tester-70",
-      selectedTier: "personal" as const,
-      provisioning: { openclaw: { status: "complete" as const } },
-    };
-
-    await syncByotForCustomer(user, deps);
-    expect(restartPending).toBe(true);
-    expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
-
-    operatorGateway = false;
-    await syncByotForCustomer(user, deps);
-    expect(requestGatewayRestartFn).toHaveBeenCalledTimes(2);
-    expect(restartPending).toBe(false);
-    expect(materializeBrokerFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("agentIdsForSlug includes every mounted project coach and excludes foreign agents", () => {
-    expect(agentIdsForSlug("tester-70", {
-      agents: {
-        list: [
-          { id: "octogee-tester-70-coach" },
-          { id: "octogee-tester-70-proj-web-coach" },
-          { id: "octogee-tester-70-proj-api-coach" },
-          { id: "octogee-other-coach" },
-          { name: "missing-id" },
-        ],
-      },
-    })).toEqual([
-      "octogee-tester-70-coach",
-      "octogee-tester-70-proj-web-coach",
-      "octogee-tester-70-proj-api-coach",
-    ]);
-  });
-
-  it("syncByotForCustomer: preserves an operator Codex danger-full-access sandbox through the full restore and coach patch cycle", async () => {
-    const currentConfig = {
-      agents: {
-        list: [
-          { id: "octogee-tester-70-coach", model: "anthropic/claude-haiku-4-5" },
-        ],
-      },
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: {
-                sandbox: "danger-full-access",
-                approvalPolicy: "never",
-              },
-            },
-          },
-        },
-      },
-    };
-    const patches: object[] = [];
-
-    await syncByotForCustomer(
-      {
-        byotActive: true,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "openai-codex" } },
-      },
-      {
-        isOperatorGateway: () => true,
-        applyByotState: vi.fn(() => true),
-        restoreOauthStoreForSlug: vi.fn(async () => ({
-          restored: true,
-          present: true,
-          providers: ["openai"] as const,
-        })),
-        applyOauthRuntimeModelAllowlist: (providers) =>
-          applyOauthRuntimeModelAllowlist(providers, {
-            applyConfigPatch: async (args) => {
-              patches.push(args.buildPatch(currentConfig));
-              return { mode: "rpc", attempts: 1 };
-            },
-          }),
-        applyCoachModelPatch: (input) =>
-          applyCoachModelPatch(input, {
-            applyConfigPatch: async (args) => {
-              patches.push(args.buildPatch(currentConfig));
-              return { mode: "rpc", attempts: 1 };
-            },
-          }),
-        triggerSecretsReload: vi.fn(async () => {}),
-      },
-    );
-
-    expect(patches).toEqual([
-      {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-            },
-          },
-        },
-        plugins: {
-          entries: {
-            codex: {
-              enabled: true,
-              config: {
-                appServer: {
-                  sandbox: "danger-full-access",
-                  approvalPolicy: "never",
-                },
-              },
-            },
-          },
-        },
-      },
-      {
-        agents: {
-          list: [
-            {
-              id: "octogee-tester-70-coach",
-              model: withFallback("openai/gpt-5.5"),
-            },
-          ],
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              ...HOUSE_DEFAULTS,
-            },
-          },
-        },
-      },
-    ]);
-  });
-
-  it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {
-    let restartPending = false;
-    const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const triggerSecretsReloadFn = vi.fn(async () => {});
-    const materializeBrokerFn = vi.fn(() => true);
-    const requestGatewayRestartFn = vi.fn(async () => true);
-
-    await syncByotForCustomer(
-      {
-        byotActive: true,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "anthropic" } },
-      },
-      {
-        isOperatorGateway: () => true,
-        usesLlmBrokerToken: () => true,
-        applyByotState: applyByotStateFn,
-        restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: vi.fn(async () => false),
-        materializeAnthropicBroker: materializeBrokerFn,
-        requestGatewayRestart: requestGatewayRestartFn,
-        triggerSecretsReload: triggerSecretsReloadFn,
-        hasPendingPlatformCatalogRestart: () => restartPending,
-        markPlatformCatalogRestartPending: () => {
-          restartPending = true;
-        },
-        clearPlatformCatalogRestartPending: () => {
-          restartPending = false;
-        },
-      },
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
-    expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
-    expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
-  });
-});
 
 describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker)", () => {
   const CURRENT = {
@@ -2992,7 +2739,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         systemConfig: { agentModels },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -3033,7 +2779,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: vi.fn(async () => ({ restored: true, present: true })),
@@ -3089,7 +2834,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -3141,7 +2885,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: applyCoachModelPatchFn,
@@ -3187,7 +2930,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -3210,40 +2952,8 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     );
   });
 
-  it("operator OAuth keeps subscription-runtime selections", async () => {
-    const applyAgentModelOverridesFn = vi.fn(async () => true);
-    const agentModels = {
-      "octogee-tester-70-coach": {
-        primary: "claude-cli/claude-opus-4-8",
-        fallbacks: [] as string[],
-      },
-    };
-
-    await syncByotForCustomer(
-      {
-        byotActive: true,
-        username: "tester-70",
-        selectedTier: "personal",
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "claude-cli" }, agentModels },
-      },
-      {
-        isOperatorGateway: () => true,
-        restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
-        applyCoachModelPatch: vi.fn(async () => false),
-        materializeAnthropicBroker: vi.fn(() => false),
-        triggerSecretsReload: vi.fn(async () => {}),
-        applyAgentModelOverrides: applyAgentModelOverridesFn,
-      },
-    );
-
-    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
-      houseOnly: false,
-    });
-  });
 
   const builderDefaultDeps = (applyAgentModelOverridesFn: ReturnType<typeof vi.fn>) => ({
-    isOperatorGateway: () => false,
     purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
     applyByotState: vi.fn(() => false),
     applyCoachModelPatch: vi.fn(async () => false),
@@ -3371,7 +3081,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       },
       {
         isSharedGateway: () => true,
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -3407,7 +3116,6 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         systemConfig: { agentModels },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
@@ -3436,7 +3144,6 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         selectedTier: "free",
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: applyCoachModelPatchFn,
@@ -3464,7 +3171,6 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         subscription: { tier: "personal", status: "active" },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: applyCoachModelPatchFn,
@@ -3490,7 +3196,6 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         systemConfig: { byot: { provider: "anthropic" } },
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         usesLlmBrokerToken: () => false,
         applyByotState: vi.fn(() => false),
@@ -3518,7 +3223,6 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         selectedTier: "personal",
       },
       {
-        isOperatorGateway: () => false,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),

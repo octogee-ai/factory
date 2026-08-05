@@ -9,14 +9,17 @@ const REQUIRED_PLUGINS = [
     "octogee-access-tools",
     "octogee-connector-tools",
     "octogee-ops-tools",
-    "octogee-preview-tools",
     "octogee-project-tools",
     "octogee-status-tools",
     "octogee-web-tools",
     "octogee-workspace-tools",
+];
+const RETIRED_PLUGINS = [
+    "octogee-mattermost-tools",
+    "octogee-router",
+    "octogee-preview-tools",
     "octogee-publish-tools",
 ];
-const RETIRED_PLUGINS = ["octogee-mattermost-tools", "octogee-router"];
 const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
 const FLEET_BROKER_URL_PLACEHOLDER = "${FLEET_BROKER_URL}";
 const OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
@@ -35,7 +38,6 @@ const PLATFORM_PLUGIN_CONFIGS = {
         brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
         tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     },
-    "octogee-preview-tools": {},
     "octogee-project-tools": {
         brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
         tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
@@ -51,7 +53,6 @@ const PLATFORM_PLUGIN_CONFIGS = {
         tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     },
     "octogee-workspace-tools": {},
-    "octogee-publish-tools": {},
 };
 const PLATFORM_PLUGIN_CONFIG_FIELDS = {
     "plugins.entries.octogee-connector-tools.config.brokerUrl": FLEET_BROKER_URL_PLACEHOLDER,
@@ -69,9 +70,9 @@ const CUSTOMER_CODE_DENIED_TOOLS = [
     "sessions_spawn",
     "terminal",
     "preview_start",
+    "preview_stop",
+    "preview_list",
     "octogee_publish",
-    "workspace_commit",
-    "octogee_project_commit",
     "bundle-mcp",
     "automations",
     "skill_workshop",
@@ -80,14 +81,24 @@ const CUSTOMER_CODE_DENIED_TOOLS = [
     "conversations_turn",
     "browser",
 ];
+const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+    "workspace_commit",
+    "octogee_project_commit",
+    "octogee_project_build",
+    "octogee_project_test",
+    "octogee_project_preview",
+    "octogee_project_run_status",
+    "octogee_project_publish",
+];
 const CUSTOMER_WORKFLOW_TOOLS = [
-    "preview_start",
-    "preview_stop",
-    "preview_list",
-    "octogee_publish",
     "octogee_project_create",
     "octogee_project_commit",
     "octogee_project_list",
+    "octogee_project_build",
+    "octogee_project_test",
+    "octogee_project_preview",
+    "octogee_project_run_status",
+    "octogee_project_publish",
     "delegated_access",
     "workspace_commit",
     "brave_search",
@@ -125,6 +136,11 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
     "brave_search",
     "tavily_search",
     "tavily_extract",
+    "octogee_project_commit",
+    "octogee_project_build",
+    "octogee_project_test",
+    "octogee_project_preview",
+    "octogee_project_run_status",
 ];
 const PROJECT_AGENT_DENIED_TOOLS = [
     ...PRODUCTIVITY_TOOL_NAMES,
@@ -134,10 +150,12 @@ const PROJECT_AGENT_DENIED_TOOLS = [
     "sessions_spawn",
     "terminal",
     "preview_start",
+    "preview_stop",
+    "preview_list",
     "octogee_publish",
     "workspace_commit",
-    "octogee_project_commit",
     "octogee_project_create",
+    "octogee_project_publish",
     "delegated_access",
     "octogee_status",
     "octogee_chat_search",
@@ -157,6 +175,11 @@ function customerToolInvariants() {
             kind: REQUIRED_ARRAY,
             path: "tools.deny",
             values: CUSTOMER_CODE_DENIED_TOOLS,
+        },
+        {
+            kind: "forbidden-array",
+            path: "tools.deny",
+            values: CUSTOMER_STRUCTURED_AVAILABLE_TOOLS,
         },
         { kind: "exact", path: "tools.profile", value: "coding" },
         { kind: "exact", path: "tools.allow", value: ABSENT },
@@ -209,42 +232,14 @@ function customerToolInvariants() {
         { kind: "customer-agent-tool-policy", path: "agents.entries.*.tools" },
     ];
 }
-function operatorToolInvariants() {
-    return [
-        {
-            kind: "forbidden-array",
-            path: "tools.deny",
-            values: CUSTOMER_CODE_DENIED_TOOLS,
-        },
-        { kind: "exact", path: "tools.exec", value: ABSENT },
-        {
-            kind: "forbidden-array",
-            path: "tools.subagents.tools.deny",
-            values: ["exec", "process"],
-        },
-        { kind: "exact", path: "gateway.terminal.enabled", value: true },
-        { kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["codex"] },
-        { kind: "exact", path: "plugins.entries.codex.enabled", value: true },
-        {
-            kind: "exact",
-            path: "plugins.entries.codex.config.appServer.sandbox",
-            value: "danger-full-access",
-        },
-        {
-            kind: "exact",
-            path: "plugins.entries.codex.config.appServer.approvalPolicy",
-            value: "never",
-        },
-    ];
-}
-function isolatedToolInvariants(gatewayClass) {
+function isolatedToolInvariants() {
     return [
         { kind: "exact", path: "tools.elevated.enabled", value: false },
-        ...(gatewayClass === "operator" ? operatorToolInvariants() : customerToolInvariants()),
+        ...customerToolInvariants(),
     ];
 }
 export function platformInvariantTable(context) {
-    const isolated = context.gatewayClass === "builder" || context.gatewayClass === "operator";
+    const isolated = context.gatewayClass === "builder";
     const gatewayId = context.gatewayId?.trim();
     const apiOrigin = context.apiOrigin?.trim().replace(/\/$/, "");
     if (isolated && (!gatewayId || !apiOrigin)) {
@@ -322,7 +317,7 @@ export function platformInvariantTable(context) {
             value,
         })),
     ];
-    return [...base, ...isolatedToolInvariants(context.gatewayClass)];
+    return [...base, ...isolatedToolInvariants()];
 }
 function asObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -438,7 +433,8 @@ function agentToolPolicySatisfied(config, agent, agentId) {
         && !Object.prototype.hasOwnProperty.call(tools, "allow")
         && (parsed.kind === "project"
             ? equal(deny, PROJECT_AGENT_DENIED_TOOLS)
-            : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool)))
+            : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
+                && CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
         && equal(tools.toolsBySender, expectedSenderPolicy);
 }
 function forceAgentToolPolicy(config, agent, agentId) {
@@ -452,7 +448,10 @@ function forceAgentToolPolicy(config, agent, agentId) {
         : [];
     tools.deny = parsed.kind === "project"
         ? structuredClone(PROJECT_AGENT_DENIED_TOOLS)
-        : [...deny, ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool))];
+        : [
+            ...deny.filter((tool) => !CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.includes(tool)),
+            ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
+        ];
     tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
     delete tools.allow;
 }

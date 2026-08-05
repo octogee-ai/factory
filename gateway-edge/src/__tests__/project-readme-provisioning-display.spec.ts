@@ -223,9 +223,27 @@ describe("project provisioning helpers", () => {
       recipe: "static-site",
     });
 
-    expect(h.giteaWriteFile.mock.calls.map((args) => args[2])).toEqual(["README.md"]);
-    const seededPaths = (h.giteaWriteFiles.mock.calls[0]?.[2] ?? []) as ReadonlyArray<{ path: string }>;
-    expect(seededPaths.map((seed) => seed.path)).not.toContain("project.json");
+    const call = h.giteaWriteFile.mock.calls.find((args) => args[2] === "project.json");
+    expect(call).toBeDefined();
+    expect(call?.[0]).toBe("mira");
+    expect(call?.[1]).toBe("orbit");
+    expect(call?.[4]).toBe("auto: seed project metadata");
+    expect(JSON.parse(call?.[3] as string)).toMatchObject({
+      version: 1,
+      name: "Orbit",
+      slug: "orbit",
+      ownerSlug: "mira",
+      status: "active",
+      visibility: "public",
+      hosting: {
+        enabled: true,
+      },
+      runtime: { recipe: "static-site" },
+      collaborators: [],
+    });
+    const projectJson = JSON.parse(call?.[3] as string);
+    expect(projectJson.hosting).not.toHaveProperty("siteId");
+    expect(projectJson.hosting).not.toHaveProperty("url");
   });
 
   it("seeds the playbook and welcome note as one commit, from the shared core seeds", async () => {

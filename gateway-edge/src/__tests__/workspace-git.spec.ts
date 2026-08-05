@@ -361,6 +361,44 @@ describe("platform-owned customer Git metadata", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects an unsafe clean filter in platform-owned project metadata before staging", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-project-filter-"));
+    const customersRoot = path.join(root, "customers");
+    const repo = path.join(customersRoot, "alice", "projects", "orbit");
+    const trustedGitDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
+    const marker = path.join(root, "project-filter-ran");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    try {
+      await fs.mkdir(repo, { recursive: true });
+      git(repo, ["init", "--initial-branch=main"]);
+      git(repo, ["config", "user.email", "test@example.com"]);
+      git(repo, ["config", "user.name", "test"]);
+      await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+      git(repo, ["add", "."]);
+      git(repo, ["commit", "-m", "initial"]);
+      git(repo, ["remote", "add", "origin", "git@gitea:alice/orbit.git"]);
+      git(repo, ["config", "filter.octogee-test.clean", `touch ${marker}; cat`]);
+      await fs.mkdir(path.dirname(trustedGitDir), { recursive: true });
+      await fs.rename(path.join(repo, ".git"), trustedGitDir);
+      await fs.writeFile(`${trustedGitDir}.octogee-trusted-v2`, "octogee-customer-git-v2\n");
+      await fs.writeFile(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
+      await fs.writeFile(path.join(repo, "payload.txt"), "payload\n");
+
+      const result = await gitCommit(repo, {
+        message: "must not execute project filter",
+        author: { name: "Owner", email: "owner@example.com" },
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("gitCommit (Phase 6.C.2)", () => {

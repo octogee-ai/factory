@@ -1,13 +1,13 @@
 import * as crypto from "crypto";
 import { readFileSync } from "node:fs";
-import { operatorGatewayServiceAccountName } from "@octogee/shared/types/glm";
+import { builderGatewayServiceAccountName } from "@octogee/shared/types/glm";
 import {
   createKubernetesTokenReviewer,
   TOKEN_REVIEW_AUDIENCE,
   type Reviewer,
 } from "./kubernetes-token-review.js";
 
-export type BuilderShellInternalAuthMode = "platform" | "operator-service-account";
+export type BuilderShellInternalAuthMode = "platform" | "builder-service-account";
 
 export const BUILDER_SHELL_K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
 export const BUILDER_SHELL_INTERNAL_KEY_HEADER = "x-internal-service-key";
@@ -49,7 +49,7 @@ function expectedNamespace(env: Record<string, string | undefined>): string {
   return nonBlank(env.K8S_NAMESPACE) ?? nonBlank(env.POD_NAMESPACE) ?? "octogee";
 }
 
-function allowedOperatorServiceAccounts(env: Record<string, string | undefined>): Set<string> {
+function allowedBuilderServiceAccounts(env: Record<string, string | undefined>): Set<string> {
   const allowed = new Set<string>(["octogee-api"]);
   const configured = nonBlank(env.BUILDER_SHELL_ALLOWED_K8S_SERVICE_ACCOUNTS);
   if (configured) {
@@ -63,7 +63,7 @@ function allowedOperatorServiceAccounts(env: Record<string, string | undefined>)
   if (own) allowed.add(own);
 
   const gatewayId = nonBlank(env.GATEWAY_ID);
-  if (gatewayId) allowed.add(operatorGatewayServiceAccountName(gatewayId));
+  if (gatewayId) allowed.add(builderGatewayServiceAccountName(gatewayId));
   return allowed;
 }
 
@@ -95,15 +95,13 @@ export function resolveBuilderShellInternalAuthSecret(
   }
 
   if (
-    env.GATEWAY_CLASS === "builder" ||
-    env.GATEWAY_CLASS === "operator" ||
-    (!env.GATEWAY_CLASS && env.GATEWAY_PROFILE === "operator")
+    env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder"
   ) {
     const serviceAccountToken = readProjectedServiceAccountToken(env);
     if (serviceAccountToken) {
       return {
         value: serviceAccountToken,
-        mode: "operator-service-account",
+        mode: "builder-service-account",
         headerName: BUILDER_SHELL_K8S_SA_TOKEN_HEADER,
       };
     }
@@ -129,5 +127,5 @@ export async function isValidBuilderShellInternalAuth(
   if (!review.authenticated) return false;
   if (!review.audiences.includes(TOKEN_REVIEW_AUDIENCE)) return false;
   if (review.namespace !== expectedNamespace(env)) return false;
-  return allowedOperatorServiceAccounts(env).has(review.saName);
+  return allowedBuilderServiceAccounts(env).has(review.saName);
 }

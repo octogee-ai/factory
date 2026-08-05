@@ -1,7 +1,7 @@
 type JsonObject = Record<string, unknown>;
 declare const ABSENT: unique symbol;
 declare const REQUIRED_ARRAY: "required-array";
-export type GatewayConfigClass = "shared" | "builder" | "operator";
+export type GatewayConfigClass = "shared" | "builder";
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
     gatewayId?: string;

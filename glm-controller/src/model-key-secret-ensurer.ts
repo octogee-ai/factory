@@ -52,7 +52,7 @@ export function gatewayModelKeySecretName(gatewayId: string): string {
 }
 
 function gatewayClassUsesBrokerToken(gatewayClass: GatewayClass): boolean {
-  return gatewayClass === "builder" || gatewayClass === "operator";
+  return gatewayClass === "builder";
 }
 
 export function gatewayModelKeySourceLabels(gatewayId: string): Record<string, string> {

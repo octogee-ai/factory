@@ -8,20 +8,16 @@ import {
   reconcilePlatformInvariants,
 } from "./system-config-invariants.js";
 
-const operator = {
-  gatewayClass: "operator" as const,
-  gatewayId: "bender",
-  apiOrigin: "https://api.octogee.com",
-};
-
 const builder = {
   gatewayClass: "builder" as const,
   gatewayId: "bender",
   apiOrigin: "https://api.octogee.com",
 };
 
+const barn = { gatewayClass: "shared" as const };
+
 describe("system config platform invariants", () => {
-  it("reconciles isolated route, auth, integration, plugin, and tool policy from one typed table", () => {
+  it("reconciles Barn auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },
       plugins: { allow: ["customer-plugin"] },
@@ -29,7 +25,18 @@ describe("system config platform invariants", () => {
         profile: "full",
         allow: ["browser", "nodes"],
         alsoAllow: ["browser", "customer-tool"],
-        deny: ["exec", "process", "customer-tool"],
+        deny: [
+          "exec",
+          "process",
+          "customer-tool",
+          "workspace_commit",
+          "octogee_project_commit",
+          "octogee_project_build",
+          "octogee_project_test",
+          "octogee_project_preview",
+          "octogee_project_run_status",
+          "octogee_project_publish",
+        ],
       },
       cron: { triggers: { enabled: true } },
       skills: {
@@ -53,6 +60,15 @@ describe("system config platform invariants", () => {
               profile: "full",
               allow: ["browser"],
               alsoAllow: ["nodes"],
+              deny: [
+                "workspace_commit",
+                "octogee_project_commit",
+                "octogee_project_build",
+                "octogee_project_test",
+                "octogee_project_preview",
+                "octogee_project_run_status",
+                "octogee_project_publish",
+              ],
               fs: { workspaceOnly: false },
               keep: "list",
             },
@@ -68,7 +84,19 @@ describe("system config platform invariants", () => {
         ],
         entries: {
           "octogee-alice-coach": {
-            tools: { fs: { workspaceOnly: false }, keep: "entry" },
+            tools: {
+              deny: [
+                "workspace_commit",
+                "octogee_project_commit",
+                "octogee_project_build",
+                "octogee_project_test",
+                "octogee_project_preview",
+                "octogee_project_run_status",
+                "octogee_project_publish",
+              ],
+              fs: { workspaceOnly: false },
+              keep: "entry",
+            },
           },
           "system-agent": { tools: { fs: { workspaceOnly: false } } },
         },
@@ -105,10 +133,10 @@ describe("system config platform invariants", () => {
       mcp: { servers: { attacker: { command: "sh" } } },
     };
 
-    const result = reconcilePlatformInvariants(config, builder);
+    const result = reconcilePlatformInvariants(config, barn);
 
-    expect(result.changedPaths).toContain("gateway.controlUi.basePath");
-    expect(platformInvariantViolations(config, builder)).toEqual([]);
+    expect(result.changedPaths).toContain("gateway.controlUi.allowedOrigins");
+    expect(platformInvariantViolations(config, barn)).toEqual([]);
     expect(config).toMatchObject({
       gateway: {
         port: 18789,
@@ -116,10 +144,7 @@ describe("system config platform invariants", () => {
         bind: "lan",
         auth: { mode: "token" },
         controlUi: {
-          basePath: "/g/bender/openclaw",
-          allowedOrigins: ["https://api.octogee.com"],
-          allowInsecureAuth: false,
-          dangerouslyDisableDeviceAuth: false,
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
           dangerouslyAllowHostHeaderOriginFallback: false,
         },
         terminal: { enabled: false },
@@ -145,9 +170,9 @@ describe("system config platform invariants", () => {
           "sessions_spawn",
           "terminal",
           "preview_start",
+          "preview_stop",
+          "preview_list",
           "octogee_publish",
-          "workspace_commit",
-          "octogee_project_commit",
           "bundle-mcp",
           "automations",
           "skill_workshop",
@@ -160,7 +185,6 @@ describe("system config platform invariants", () => {
         fs: { workspaceOnly: true },
         sessions: { visibility: "self" },
         subagents: { tools: { deny: ["exec", "process"] } },
-        elevated: { enabled: false },
       },
       cron: { triggers: { enabled: false } },
       skills: {
@@ -184,6 +208,9 @@ describe("system config platform invariants", () => {
         debug: false,
       },
     });
+    expect((config.tools as { deny: string[] }).deny).not.toEqual(
+      expect.arrayContaining(["workspace_commit", "octogee_project_commit"]),
+    );
     expect(config).toMatchObject({ mcp: {} });
     expect((config.mcp as Record<string, unknown>)).not.toHaveProperty("servers");
     const agents = config.agents as any;
@@ -192,16 +219,73 @@ describe("system config platform invariants", () => {
       fs: { workspaceOnly: true },
       keep: "list",
     });
-    expect(agents.list[0].tools.alsoAllow).toEqual(expect.arrayContaining(["octogee_project_create", "octogee_google_gmail_read"]));
+    expect(agents.list[0].tools.alsoAllow).toEqual(expect.arrayContaining([
+      "workspace_commit",
+      "octogee_project_commit",
+      "octogee_project_create",
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+      "octogee_project_publish",
+      "octogee_google_gmail_read",
+    ]));
     expect(agents.list[0].tools.toolsBySender).toEqual({});
+    expect(agents.list[0].tools.deny).not.toEqual(
+      expect.arrayContaining([
+        "workspace_commit",
+        "octogee_project_commit",
+        "octogee_project_build",
+        "octogee_project_test",
+        "octogee_project_preview",
+        "octogee_project_run_status",
+        "octogee_project_publish",
+      ]),
+    );
     expect((config.channels as any).mattermost.accounts["alice-coach"].allowFrom).toEqual(["f".repeat(26)]);
     expect((config.channels as any).mattermost.accounts["alice-proj-garden"].allowFrom).toEqual(["f".repeat(26)]);
     expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "automations"]));
+    expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining([
+      "preview_start",
+      "preview_stop",
+      "preview_list",
+      "octogee_publish",
+    ]));
+    expect(agents.list[0].tools.alsoAllow).not.toEqual(expect.arrayContaining([
+      "preview_start",
+      "preview_stop",
+      "preview_list",
+      "octogee_publish",
+    ]));
     expect(agents.list[1].tools).toMatchObject({
       profile: "minimal",
       fs: { workspaceOnly: true },
     });
     expect(agents.list[1].tools.alsoAllow).toContain("read");
+    expect(agents.list[1].tools.alsoAllow).toContain("octogee_project_commit");
+    expect(agents.list[1].tools.alsoAllow).toEqual(expect.arrayContaining([
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+    ]));
+    expect(agents.list[1].tools.alsoAllow).not.toContain("workspace_commit");
+    expect(agents.list[1].tools.deny).toEqual(expect.arrayContaining([
+      "exec",
+      "process",
+      "terminal",
+      "subagents",
+      "sessions_spawn",
+      "preview_start",
+      "octogee_publish",
+      "bundle-mcp",
+      "browser",
+      "automations",
+      "skill_workshop",
+      "workspace_commit",
+      "octogee_project_publish",
+    ]));
+    expect(agents.list[1].tools.deny).not.toContain("octogee_project_commit");
     expect(agents.list[1].tools.alsoAllow).not.toEqual(expect.arrayContaining([
       "octogee_chat_search",
       "octogee_chat_history",
@@ -212,11 +296,26 @@ describe("system config platform invariants", () => {
       alsoAllow: [],
       fs: { workspaceOnly: true },
     });
+    expect(agents.list[2].tools.deny).not.toEqual(expect.arrayContaining([
+      "exec",
+      "octogee_project_build",
+    ]));
     expect(agents.entries["octogee-alice-coach"].tools).toMatchObject({
       profile: "coding",
       fs: { workspaceOnly: true },
       keep: "entry",
     });
+    expect(agents.entries["octogee-alice-coach"].tools.deny).not.toEqual(
+      expect.arrayContaining([
+        "workspace_commit",
+        "octogee_project_commit",
+        "octogee_project_build",
+        "octogee_project_test",
+        "octogee_project_preview",
+        "octogee_project_run_status",
+        "octogee_project_publish",
+      ]),
+    );
     expect(agents.entries["system-agent"].tools).toMatchObject({
       profile: "minimal",
       alsoAllow: [],
@@ -282,7 +381,7 @@ describe("system config platform invariants", () => {
     });
   });
 
-  it("converges the operator exception without retaining customer execution denies", () => {
+  it("preserves Builder-managed execution while enforcing platform routing and identity", () => {
     const config: Record<string, unknown> = {
       gateway: { terminal: { enabled: false } },
       plugins: {
@@ -313,13 +412,14 @@ describe("system config platform invariants", () => {
       },
     };
 
-    reconcilePlatformInvariants(config, operator);
+    reconcilePlatformInvariants(config, builder);
 
-    expect(platformInvariantViolations(config, operator)).toEqual([]);
+    expect(platformInvariantViolations(config, builder)).toEqual([]);
     expect(config).toMatchObject({
       gateway: { terminal: { enabled: true } },
       tools: {
         deny: ["customer-tool"],
+        fs: { workspaceOnly: false },
         subagents: { tools: { deny: ["customer-subagent-deny"] } },
       },
       plugins: {
@@ -347,10 +447,10 @@ describe("system config platform invariants", () => {
         },
       },
     });
+    expect((config.tools as Record<string, unknown>)).not.toHaveProperty("exec");
     expect((((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)["operator-coach"])
       .not.toHaveProperty("baseUrl");
-    expect((config.tools as Record<string, unknown>)).not.toHaveProperty("exec");
     expect(config).toMatchObject({
       tools: { fs: { workspaceOnly: false } },
       agents: {
@@ -364,11 +464,11 @@ describe("system config platform invariants", () => {
 
   it("reports exact invariant paths through the shared typed policy error", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, operator);
+    reconcilePlatformInvariants(config, builder);
     (config.gateway as Record<string, unknown>).port = 9999;
     ((config.gateway as Record<string, unknown>).controlUi as Record<string, unknown>).basePath = "/wrong";
 
-    expect(() => assertPlatformInvariants(config, operator)).toThrowError(
+    expect(() => assertPlatformInvariants(config, builder)).toThrowError(
       expect.objectContaining<Partial<PlatformInvariantPolicyError>>({
         code: "platform-invariant-violation",
         paths: ["gateway.port", "gateway.controlUi.basePath"],
@@ -408,7 +508,7 @@ describe("system config platform invariants", () => {
   });
 
   it("exposes the same exact paths to RPC and filesystem consumers", () => {
-    expect(platformInvariantTable(operator).map((entry) => entry.path)).toEqual(
+    expect(platformInvariantTable(builder).map((entry) => entry.path)).toEqual(
       expect.arrayContaining([
         "gateway.controlUi.basePath",
         "gateway.controlUi.dangerouslyDisableDeviceAuth",
@@ -442,7 +542,7 @@ describe("system config platform invariants", () => {
 
   it("treats reordered invariant object keys as semantically equal", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, operator);
+    reconcilePlatformInvariants(config, builder);
     const plugins = config.plugins as Record<string, unknown>;
     const entries = plugins.entries as Record<string, Record<string, unknown>>;
     entries["octogee-chat-tools"].config = {
@@ -452,14 +552,14 @@ describe("system config platform invariants", () => {
       siteUrl: "${MM_SITE_URL}",
     };
 
-    expect(platformInvariantViolations(config, operator)).not.toContain(
+    expect(platformInvariantViolations(config, builder)).not.toContain(
       "plugins.entries.octogee-chat-tools.config",
     );
   });
 
   it("rejects changes to every projected-token plugin broker credential", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, operator);
+    reconcilePlatformInvariants(config, builder);
     const entries = ((config.plugins as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     entries["octogee-access-tools"].config = {
       brokerUrl: "https://attacker.example",
@@ -475,7 +575,7 @@ describe("system config platform invariants", () => {
       requireWriteApproval: false,
     };
 
-    expect(platformInvariantViolations(config, operator)).toEqual(expect.arrayContaining([
+    expect(platformInvariantViolations(config, builder)).toEqual(expect.arrayContaining([
       "plugins.entries.octogee-access-tools.config",
       "plugins.entries.octogee-connector-tools.config.brokerUrl",
       "plugins.entries.octogee-connector-tools.config.tokenPath",
@@ -486,21 +586,31 @@ describe("system config platform invariants", () => {
   it("removes retired platform plugin ids from durable config", () => {
     const config: Record<string, unknown> = {
       plugins: {
-        allow: ["customer-plugin", "octogee-mattermost-tools", "octogee-router"],
+        allow: [
+          "customer-plugin",
+          "octogee-mattermost-tools",
+          "octogee-router",
+          "octogee-preview-tools",
+          "octogee-publish-tools",
+        ],
         entries: {
           "customer-plugin": { enabled: true },
           "octogee-mattermost-tools": { enabled: true },
           "octogee-router": { enabled: true },
+          "octogee-preview-tools": { enabled: true },
+          "octogee-publish-tools": { enabled: true },
         },
       },
     };
 
-    const result = reconcilePlatformInvariants(config, operator);
+    const result = reconcilePlatformInvariants(config, builder);
 
     expect(result.changedPaths).toEqual(expect.arrayContaining([
       "plugins.allow",
       "plugins.entries.octogee-mattermost-tools",
       "plugins.entries.octogee-router",
+      "plugins.entries.octogee-preview-tools",
+      "plugins.entries.octogee-publish-tools",
     ]));
     expect(result.changedPaths.filter((path) => path === "plugins.allow")).toHaveLength(1);
     const plugins = config.plugins as Record<string, unknown>;
@@ -508,10 +618,14 @@ describe("system config platform invariants", () => {
     expect(plugins.allow).not.toEqual(expect.arrayContaining([
       "octogee-mattermost-tools",
       "octogee-router",
+      "octogee-preview-tools",
+      "octogee-publish-tools",
     ]));
     expect(plugins.entries).toMatchObject({ "customer-plugin": { enabled: true } });
     expect(plugins.entries).not.toHaveProperty("octogee-mattermost-tools");
+    expect(plugins.entries).not.toHaveProperty("octogee-preview-tools");
+    expect(plugins.entries).not.toHaveProperty("octogee-publish-tools");
     expect(plugins.entries).not.toHaveProperty("octogee-router");
-    expect(platformInvariantViolations(config, operator)).toEqual([]);
+    expect(platformInvariantViolations(config, builder)).toEqual([]);
   });
 });

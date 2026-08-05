@@ -40,7 +40,8 @@ type ProductivityActionKind =
   | "sheets-create"
   | "sheets-append"
   | "obsidian-write"
-  | "project-create";
+  | "project-create"
+  | "project-publish";
 
 const APPROVAL_STATES = new Set<ApprovalState>([
   "pending", "approved", "denied", "executing", "succeeded", "failed", "unknown",
@@ -60,6 +61,7 @@ const PRODUCTIVITY_ACTION_KINDS = new Set<ProductivityActionKind>([
   "sheets-append",
   "obsidian-write",
   "project-create",
+  "project-publish",
 ]);
 const ONE_LINE_ACTION_KINDS = new Set<ProductivityActionKind>([
   "gmail-triage",
@@ -151,6 +153,51 @@ function projectCreatePreview(preview: Record<string, unknown>): Record<string, 
   return { name, slug, tagline, projectType };
 }
 
+function validProjectPublishUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && /^ogp-[a-f0-9]{26}\.web\.app$/u.test(url.hostname)
+      && url.port === ""
+      && url.pathname === "/"
+      && value === url.origin
+      && url.username === ""
+      && url.password === ""
+      && url.search === ""
+      && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+function validProjectPublishSize(fileCount: unknown, totalBytes: unknown): boolean {
+  return Number.isSafeInteger(fileCount)
+    && Number(fileCount) >= 1
+    && Number(fileCount) <= 1_000
+    && Number.isSafeInteger(totalBytes)
+    && Number(totalBytes) >= 0
+    && Number(totalBytes) <= 24 * 1024 * 1024;
+}
+
+function projectPublishPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const projectName = requiredText(preview.projectName, 80);
+  const projectSlug = requiredText(preview.projectSlug, 16);
+  const publicUrl = requiredText(preview.publicUrl, 2_048);
+  const runId = requiredText(preview.runId, 36);
+  const sourceCommit = requiredText(preview.sourceCommit, 40);
+  const fileCount = preview.fileCount;
+  const totalBytes = preview.totalBytes;
+  if (
+    projectName.trim().length === 0
+    || !/^[a-z0-9]{1,16}$/u.test(projectSlug)
+    || !validProjectPublishUrl(publicUrl)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(runId)
+    || !/^[a-f0-9]{40}$/u.test(sourceCommit)
+    || !validProjectPublishSize(fileCount, totalBytes)
+  ) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  return { projectName, projectSlug, publicUrl, runId, sourceCommit, fileCount, totalBytes };
+}
+
 function projectGmailSendPreview(preview: Record<string, unknown>): Record<string, unknown> {
   const to = stringList(preview.to, 100, 320);
   if (to.length === 0) throw new Error(MALFORMED_APPROVAL_PREVIEW);
@@ -206,6 +253,7 @@ function projectActionPreview(kind: ProductivityActionKind, value: unknown): Rec
     return projectCalendarPreview(preview);
   }
   if (kind === "project-create") return projectCreatePreview(preview);
+  if (kind === "project-publish") return projectPublishPreview(preview);
   if (ONE_LINE_ACTION_KINDS.has(kind)) return projectOneLinePreview(preview);
   throw new Error("canonical productivity approval action is unsupported");
 }

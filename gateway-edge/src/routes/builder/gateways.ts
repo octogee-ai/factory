@@ -102,11 +102,11 @@ function builderViewOf({
     imageTag,
     shellsEnabled: access.shell && isGatewayClassShellAccessEnabled(
       gatewayClass,
-      config.operatorAccess ?? undefined,
+      config.builderAccess ?? undefined,
     ),
     controlUiEnabled: access.dashboard && isGatewayClassControlUiAccessEnabled(
       gatewayClass,
-      config.operatorAccess ?? undefined,
+      config.builderAccess ?? undefined,
     ),
     isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
@@ -355,7 +355,7 @@ function controlUiAccess(
   });
   return isGatewayClassControlUiAccessEnabled(
     gatewayClass,
-    authorization.config.operatorAccess ?? undefined,
+    authorization.config.builderAccess ?? undefined,
   ) ? "allowed" : CAPABILITY_DISABLED;
 }
 

@@ -1322,7 +1322,7 @@ let KUBE_NS = resolveFleetDeploymentTarget("test").namespace;
 type FirestoreTs = { toMillis(): number };
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
-  return profile === "operator" ? "operator" : "standard";
+  return profile === "builder" ? "builder" : "standard";
 }
 
 export interface GatewayHeartbeatView {

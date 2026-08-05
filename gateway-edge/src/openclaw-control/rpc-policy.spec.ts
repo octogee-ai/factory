@@ -15,7 +15,7 @@ import {
 } from "./rpc-policy.js";
 
 const invariantContext = {
-  gatewayClass: "operator" as const,
+  gatewayClass: "builder" as const,
   gatewayId: "bender",
   apiOrigin: "https://api.octogee.com",
 };
@@ -188,8 +188,9 @@ describe("OpenClaw Dashboard RPC policy", () => {
       },
     });
     const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+    const currentMain = ((current.agents as { list: Record<string, unknown>[] }).list[0]);
     const decision = evaluateOpenClawControlRpc(request("config.patch", {
-      raw: JSON.stringify({ agents: { list: [{ id: "main", name: "Updated" }] } }),
+      raw: JSON.stringify({ agents: { list: [{ ...currentMain, name: "Updated" }] } }),
       baseHash: "hash-1",
       replacePaths: ["agents.list"],
     }), context);
@@ -381,13 +382,13 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide([{ id: "main", name: "Primary", model: "openai/gpt-5.1" }]))
       .toMatchObject({ allowed: true });
     expect(decide([{ id: "helper", name: "Helper", model: "openai/gpt-5.1" }]))
-      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+      .toMatchObject({ allowed: false, reason: "platform-invariant" });
     expect(decide([{ id: "main", default: false }]))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([
       { id: "main" },
       { id: "helper", name: "Helper", model: "openai/gpt-5.1" },
-    ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    ])).toMatchObject({ allowed: false, reason: "platform-invariant" });
   });
 
   it("projects config schema to editable safe paths and rejects unsafe schema lookups", () => {

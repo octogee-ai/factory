@@ -89,7 +89,11 @@ function makeDeps(
 
 describe("GitHub CLI native auth hydration", () => {
   it("writes native gh hosts.yml and configures git on builder gateways", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" });
+    const h = makeDeps({
+      GATEWAY_CLASS: "builder",
+      GATEWAY_PROFILE: "builder",
+      HOME: "/home/node",
+    });
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toEqual({
       status: "hydrated",
@@ -122,13 +126,21 @@ describe("GitHub CLI native auth hydration", () => {
     ]);
   });
 
-  it("hydrates operator gateways into the same native gh/git path", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "operator", HOME: "/home/node" });
+  it("skips the retired operator gateway class", async () => {
+    const h = makeDeps({
+      GATEWAY_CLASS: "operator",
+      GATEWAY_PROFILE: "operator",
+      HOME: "/home/node",
+    });
 
-    await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
+    await expect(hydrateGithubCliAuth(h.deps)).resolves.toEqual({
+      status: "skipped",
+      reason: "shared_gateway",
+    });
 
-    expect(h.writes[0].path).toBe("/home/node/.config/gh/hosts.yml");
-    expect(h.execs[0].args).toEqual(["auth", "setup-git", "--hostname", "github.com"]);
+    expect(h.fetches).toHaveLength(0);
+    expect(h.writes).toHaveLength(0);
+    expect(h.execs).toHaveLength(0);
   });
 
   it("skips shared gateways without reading or writing credentials", async () => {
@@ -146,7 +158,7 @@ describe("GitHub CLI native auth hydration", () => {
 
   it("clears stale github.com auth when the connector is disconnected", async () => {
     const h = makeDeps(
-      { GATEWAY_CLASS: "builder", HOME: "/home/node" },
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
       {
         ok: false,
         status: 404,
@@ -171,15 +183,18 @@ describe("GitHub CLI native auth hydration", () => {
   });
 
   it("retries materialize until the gateway-edge sidecar is ready", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
-      new Error("connect ECONNREFUSED 127.0.0.1:3001"),
-      { ok: false, status: 503, body: { status: "starting" } },
-      {
-        ok: true,
-        status: 200,
-        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
-      },
-    ]);
+    const h = makeDeps(
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
+      [
+        new Error("connect ECONNREFUSED 127.0.0.1:3001"),
+        { ok: false, status: 503, body: { status: "starting" } },
+        {
+          ok: true,
+          status: 200,
+          body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+        },
+      ],
+    );
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toEqual({
       status: "hydrated",
@@ -195,14 +210,22 @@ describe("GitHub CLI native auth hydration", () => {
   });
 
   it("honors numeric Retry-After hints from a transient materialize response", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
-      { ok: false, status: 503, body: { status: "starting" }, headers: { "retry-after": "12" } },
-      {
-        ok: true,
-        status: 200,
-        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
-      },
-    ]);
+    const h = makeDeps(
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
+      [
+        {
+          ok: false,
+          status: 503,
+          body: { status: "starting" },
+          headers: { "retry-after": "12" },
+        },
+        {
+          ok: true,
+          status: 200,
+          body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+        },
+      ],
+    );
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
 
@@ -210,14 +233,17 @@ describe("GitHub CLI native auth hydration", () => {
   });
 
   it("honors Retry-After on rate limiting as well as server failures", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
-      { ok: false, status: 429, body: { status: "busy" }, headers: { "retry-after": "3" } },
-      {
-        ok: true,
-        status: 200,
-        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
-      },
-    ]);
+    const h = makeDeps(
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
+      [
+        { ok: false, status: 429, body: { status: "busy" }, headers: { "retry-after": "3" } },
+        {
+          ok: true,
+          status: 200,
+          body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+        },
+      ],
+    );
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
 
@@ -225,23 +251,27 @@ describe("GitHub CLI native auth hydration", () => {
   });
 
   it("honors HTTP-date Retry-After hints within the materialize deadline", async () => {
-    const h = makeDeps({
-      GATEWAY_CLASS: "builder",
-      HOME: "/home/node",
-      GITHUB_CLI_AUTH_RETRY_TIMEOUT_MS: "5000",
-    }, [
+    const h = makeDeps(
       {
-        ok: false,
-        status: 503,
-        body: { status: "starting" },
-        headers: { "retry-after": new Date(20_000).toUTCString() },
+        GATEWAY_CLASS: "builder",
+        GATEWAY_PROFILE: "builder",
+        HOME: "/home/node",
+        GITHUB_CLI_AUTH_RETRY_TIMEOUT_MS: "5000",
       },
-      {
-        ok: true,
-        status: 200,
-        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
-      },
-    ]);
+      [
+        {
+          ok: false,
+          status: 503,
+          body: { status: "starting" },
+          headers: { "retry-after": new Date(20_000).toUTCString() },
+        },
+        {
+          ok: true,
+          status: 200,
+          body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+        },
+      ],
+    );
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
 
@@ -249,14 +279,22 @@ describe("GitHub CLI native auth hydration", () => {
   });
 
   it("falls back to the local retry interval for an invalid Retry-After hint", async () => {
-    const h = makeDeps({ GATEWAY_CLASS: "builder", HOME: "/home/node" }, [
-      { ok: false, status: 503, body: { status: "starting" }, headers: { "retry-after": "tomorrow" } },
-      {
-        ok: true,
-        status: 200,
-        body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
-      },
-    ]);
+    const h = makeDeps(
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
+      [
+        {
+          ok: false,
+          status: 503,
+          body: { status: "starting" },
+          headers: { "retry-after": "tomorrow" },
+        },
+        {
+          ok: true,
+          status: 200,
+          body: { status: "connected", connectorId: "github", accessToken: "gho_late" },
+        },
+      ],
+    );
 
     await expect(hydrateGithubCliAuth(h.deps)).resolves.toMatchObject({ status: "hydrated" });
 
@@ -265,7 +303,7 @@ describe("GitHub CLI native auth hydration", () => {
 
   it("clears stale github.com auth when materialize is forbidden for the gateway", async () => {
     const h = makeDeps(
-      { GATEWAY_CLASS: "builder", HOME: "/home/node" },
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", HOME: "/home/node" },
       { ok: false, status: 403, body: { error: "forbidden" } },
     );
     h.files.set(

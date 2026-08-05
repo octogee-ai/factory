@@ -110,10 +110,15 @@ export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
     "octogee_google_sheets_write",
     "octogee_obsidian_read",
     "octogee_obsidian_write",
-    "preview_stop",
-    "preview_list",
     "octogee_project_create",
     "octogee_project_list",
+    "workspace_commit",
+    "octogee_project_commit",
+    "octogee_project_build",
+    "octogee_project_test",
+    "octogee_project_preview",
+    "octogee_project_run_status",
+    "octogee_project_publish",
     "octogee_project_set_recipe",
   ],
 };
@@ -128,9 +133,6 @@ export interface CoachModelPatch {
   };
 }
 
-// Shared gateways run the codex app-server sandboxed. Builder/operator runtime
-// gateways get their broader app-server policy from the gateway class boot
-// policy and this fallback must not downgrade an existing runtime policy.
 export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   sandbox: "workspace-write",
   approvalPolicy: "never",

@@ -67,8 +67,6 @@ async function platformAgentModelDefault(
   }
 }
 
-// Connection-status projection only. Selection authorization is independently
-// class-bound below; customer runtimes never accept subscription-runtime refs.
 function hasActiveByosub(sysData: Record<string, unknown>): boolean {
   const credential = sysData.modelCredential as
     | { active?: unknown; mode?: unknown }
@@ -76,8 +74,8 @@ function hasActiveByosub(sysData: Record<string, unknown>): boolean {
   return credential?.active === true && credential?.mode === "oauth";
 }
 
-function isOperatorRuntime(): boolean {
-  return process.env.GATEWAY_PROFILE === "operator" || process.env.GATEWAY_CLASS === "operator";
+function isBuilderRuntime(): boolean {
+  return process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_PROFILE === "builder";
 }
 
 function catalogPayload() {
@@ -155,7 +153,7 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       tier: plan.tier,
       builderTools: plan.builderTools,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
-      byosub: isOperatorRuntime() && hasActiveByosub(sysData),
+      byosub: isBuilderRuntime() && hasActiveByosub(sysData),
       catalog: catalogPayload(),
       selections: parseAgentModelSelections(sysData.agentModels),
       platformDefault,
@@ -192,7 +190,7 @@ async function gateSelectionRequest(
     return { ok: false, status: 400, error: "primary (and optional fallbacks) must be valid model refs" };
   }
   const sysData = await readSystemConfig(uid);
-  if (!(isOperatorRuntime() && hasActiveByosub(sysData))) {
+  if (!(isBuilderRuntime() && hasActiveByosub(sysData))) {
     const allowed = new Set(platformModelRefs());
     const strangers = [selection.primary, ...selection.fallbacks].filter((ref) => !allowed.has(ref));
     if (strangers.length > 0) {

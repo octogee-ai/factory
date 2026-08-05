@@ -14,7 +14,7 @@ import { updateSystemConfigStatus } from "../lib/system-config-status.js";
 
 const dirs: string[] = [];
 const env = {
-  GATEWAY_CLASS: "operator",
+  GATEWAY_CLASS: "builder",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api.octogee.com",
   GATEWAY_REVISION_ID: "bender-r12",

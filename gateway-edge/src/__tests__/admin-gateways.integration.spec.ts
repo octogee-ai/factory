@@ -30,7 +30,7 @@ vi.mock("../lib/db", () => {
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
-      operatorAccess: null,
+      builderAccess: null,
       ownerUid: null,
       builderSlug: null,
       openclawOverrides: null,

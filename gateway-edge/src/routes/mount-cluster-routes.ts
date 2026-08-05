@@ -52,7 +52,6 @@ import projectsRecipeRoutes from "./projects/recipe.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
-import internalProjectPublishRoutes from "./internal/project-publish.js";
 
 import { requireAuth } from "../middleware/auth.js";
 
@@ -133,7 +132,6 @@ const INTERNAL_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/internal/notifications", notificationRoutes],
   ["/internal/notifications", internalNotificationRoutes],
   ["/internal/workspace", internalWorkspaceCommitRoutes],
-  ["/internal/project", internalProjectPublishRoutes],
 ];
 
 export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = {}): void {

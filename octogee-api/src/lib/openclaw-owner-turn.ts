@@ -199,7 +199,8 @@ export function createOwnerWorkspaceTurnVerifier(
     ) return false;
 
     const workspace = await db.doc(`workspaces/${parsed.username}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid) return false;
+    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
+      || workspace.data()?.ownerActive !== true) return false;
 
     const channelName = await workspaceChannelName(
       db,
@@ -231,7 +232,8 @@ export function createProjectWorkspaceTurnVerifier(
     ) return false;
 
     const workspace = await db.doc(`workspaces/${parsed.username}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid) return false;
+    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
+      || workspace.data()?.ownerActive !== true) return false;
 
     return isCanonicalProjectChannel(
       db,

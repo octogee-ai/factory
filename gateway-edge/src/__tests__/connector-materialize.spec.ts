@@ -60,8 +60,8 @@ function app() {
 describe("internal connector materialize route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.GATEWAY_CLASS = "operator";
-    process.env.GATEWAY_PROFILE = "operator";
+    process.env.GATEWAY_CLASS = "builder";
+    process.env.GATEWAY_PROFILE = "builder";
   });
 
   it("materializes a connected owner-runtime token without direct Firestore access", async () => {
@@ -127,6 +127,22 @@ describe("internal connector materialize route", () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
+    expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects the retired customer operator class and profile", async () => {
+    delete process.env.GATEWAY_CLASS;
+    process.env.GATEWAY_PROFILE = "operator";
+
+    const legacyProfile = await request(app()).get("/internal/connectors/cloudflare/materialize");
+
+    expect(legacyProfile.status).toBe(403);
+    process.env.GATEWAY_CLASS = "operator";
+    delete process.env.GATEWAY_PROFILE;
+
+    const legacyClass = await request(app()).get("/internal/connectors/cloudflare/materialize");
+
+    expect(legacyClass.status).toBe(403);
     expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 

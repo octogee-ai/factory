@@ -37,7 +37,7 @@ import {
   AGENTS_DIR,
   GATEWAY_CLASS,
   OPENCLAW_DIR,
-  isOperatorGateway,
+  isBuilderGateway,
   isSharedGateway,
   log,
   readOpenClawConfig,
@@ -121,7 +121,6 @@ export async function applyCoachModelPatch(
   deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
-    isOperatorGateway?: () => boolean;
   },
 ): Promise<boolean> {
   const logFn = deps?.logFn ?? log;
@@ -423,7 +422,7 @@ export interface ByosubCred {
 }
 
 function claudeCliNativeHomeDirForGateway(): string | undefined {
-  return GATEWAY_CLASS === "builder" || isOperatorGateway() ? os.homedir() : undefined;
+  return isBuilderGateway() ? os.homedir() : undefined;
 }
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so they
@@ -530,7 +529,7 @@ export async function restoreOauthStoreForSlug(
 }
 
 export interface SyncByotForCustomerDeps {
-  isOperatorGateway?: () => boolean;
+  isBuilderGateway?: () => boolean;
   isSharedGateway?: () => boolean;
   usesLlmBrokerToken?: () => boolean;
   logFn?: (m: string) => void;
@@ -1665,7 +1664,7 @@ async function syncStandardByotState(
   }
 }
 
-async function syncOperatorByotState(
+async function syncBuilderByotState(
   slug: string,
   desired: DesiredByotState,
   actions: SyncByotActions,
@@ -1690,9 +1689,6 @@ async function syncOperatorByotState(
   }
 }
 
-// OAuth agent runtimes materialize only on the operator gateway. Customer
-// coaches use the platform broker profile so host code cannot forge verified
-// Mattermost turn authority.
 export function gateCustomerByosub(
   desired: DesiredByotState,
   userData: SyncByotUserData,
@@ -1764,12 +1760,12 @@ async function syncSharedBrokerByotState(
 }
 
 function customerByotGate(
-  operator: boolean,
+  builder: boolean,
   desired: DesiredByotState,
   userData: SyncByotUserData,
   logFn: (message: string) => void,
 ): { desired: DesiredByotState; suppressed: boolean } {
-  if (operator) return { desired, suppressed: false };
+  if (builder) return { desired, suppressed: false };
   return gateCustomerByosub(desired, userData, logFn);
 }
 
@@ -1780,13 +1776,13 @@ function safeCustomerModelRef(userData: SyncByotUserData, houseOnly: boolean): s
 }
 
 async function purgeCustomerOauthIfRequired(
-  operator: boolean,
+  builder: boolean,
   slug: string,
   safeModelRef: string,
   suppressed: boolean,
   actions: SyncByotActions,
 ): Promise<{ changed: boolean; resetCount: number }> {
-  if (operator) return { changed: false, resetCount: 0 };
+  if (builder) return { changed: false, resetCount: 0 };
   return actions.purgeCustomerOauthRuntime(slug, safeModelRef, { forceSafeAll: suppressed });
 }
 
@@ -1796,7 +1792,7 @@ async function applyCustomerAgentModelOverrides(
   desired: DesiredByotState,
   actions: SyncByotActions,
   opts: {
-    operator: boolean;
+    builder: boolean;
     suppressed: boolean;
     houseOnly: boolean;
     logFn: (message: string) => void;
@@ -1805,7 +1801,7 @@ async function applyCustomerAgentModelOverrides(
   await actions.applyAgentModelOverrides(
     slug,
     agentModelsWithBuilderDefault(slug, userData, desired, {
-      operator: opts.operator,
+      builder: opts.builder,
       forceSafeCoachModel: opts.suppressed,
       houseOnly: opts.houseOnly,
       logFn: opts.logFn,
@@ -1827,7 +1823,7 @@ export async function syncByotForCustomer(
   userData: SyncByotUserData,
   deps?: SyncByotForCustomerDeps,
 ): Promise<void> {
-  const isOp = deps?.isOperatorGateway ?? isOperatorGateway;
+  const isBuilder = deps?.isBuilderGateway ?? isBuilderGateway;
   const isShared = deps?.isSharedGateway ?? isSharedGateway;
   const usesBrokerToken = deps?.usesLlmBrokerToken ?? usesLlmBrokerToken;
   const actions = syncActions(deps);
@@ -1835,13 +1831,13 @@ export async function syncByotForCustomer(
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
-  const operator = isOp();
+  const builder = isBuilder();
   const logFn = deps?.logFn ?? log;
-  const customerGate = customerByotGate(operator, desired, userData, logFn);
+  const customerGate = customerByotGate(builder, desired, userData, logFn);
   const effectiveDesired = customerGate.desired;
   const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
   const oauthPurge = await purgeCustomerOauthIfRequired(
-    operator,
+    builder,
     slug,
     safeCustomerModelRef(userData, houseOnly),
     customerGate.suppressed,
@@ -1853,7 +1849,7 @@ export async function syncByotForCustomer(
     desired: effectiveDesired,
     actions,
     isShared,
-    operator,
+    builder,
     usesBrokerToken,
     purgeAuthProfileStore: customerGate.suppressed,
   });
@@ -1866,7 +1862,7 @@ export async function syncByotForCustomer(
     effectiveDesired,
     actions,
     {
-      operator,
+      builder,
       suppressed: customerGate.suppressed,
       houseOnly,
       logFn,
@@ -1886,7 +1882,7 @@ function agentModelsWithBuilderDefault(
   userData: SyncByotUserData,
   desired: DesiredByotState,
   opts: {
-    operator: boolean;
+    builder: boolean;
     forceSafeCoachModel: boolean;
     houseOnly: boolean;
     logFn: (message: string) => void;
@@ -1916,9 +1912,9 @@ function explicitAgentModelSelections(
   slug: string,
   userData: SyncByotUserData,
   platformDefault: AgentModelSelections[string],
-  opts: { operator: boolean; logFn: (message: string) => void },
+  opts: { builder: boolean; logFn: (message: string) => void },
 ): AgentModelSelections | undefined {
-  if (opts.operator) return userData.systemConfig?.agentModels;
+  if (opts.builder) return userData.systemConfig?.agentModels;
   return catalogOnlyAgentModels(
     slug,
     userData.systemConfig?.agentModels,
@@ -2033,7 +2029,7 @@ async function syncByotStateForClass(args: {
   desired: DesiredByotState;
   actions: SyncByotActions;
   isShared: () => boolean;
-  operator: boolean;
+  builder: boolean;
   usesBrokerToken: () => boolean;
   purgeAuthProfileStore: boolean;
 }): Promise<void> {
@@ -2050,10 +2046,11 @@ async function syncByotStateForClass(args: {
     return;
   }
 
-  if (args.operator) {
-    await syncOperatorByotState(slug, desired, actions);
+  if (args.builder) {
+    await syncBuilderByotState(slug, desired, actions);
     return;
   }
+
   await syncStandardByotState(slug, desired, actions, {
     purgeAuthProfileStore: args.purgeAuthProfileStore,
   });

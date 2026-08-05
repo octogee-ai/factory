@@ -61,8 +61,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: GATEWAY_ROUTER_PREVIEW_HOST
-              value: {{ $router.previewHost | default "" | quote }}
           startupProbe:
             httpGet:
               path: /health

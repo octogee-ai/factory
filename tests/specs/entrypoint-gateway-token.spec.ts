@@ -10,7 +10,7 @@ import * as path from "node:path";
 // Pre-PR #TBD: entrypoint sourced infra/gateway/resolve-gateway-token.sh,
 // which had three fallback layers (env > openclaw.json > fresh random per
 // boot). The fresh-random branch caused token drift across reboots on
-// operator gateways where openclaw.json was edited out-of-band, and the
+// isolated gateways where openclaw.json was edited out-of-band, and the
 // kubectl-set-env workaround that filled the gap on bender's gateway-edge
 // container led to field-manager collision that silently dropped
 // INTERNAL_SERVICE_KEY when the helm chart did its next dedup pass.
@@ -124,8 +124,8 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
     expect(result.stderr).toMatch(/skipping gateway auth token Secret Manager publish/);
   });
 
-  it("skips Secret Manager publish by default on operator gateways", () => {
-    const result = runPublishBlock({ profile: "operator", nodeExit: 2 });
+  it("skips Secret Manager publish by default on Builder gateways", () => {
+    const result = runPublishBlock({ profile: "builder", nodeExit: 2 });
     expect(result.status).toBe(0);
     expect(result.calledNode).toBe(false);
     expect(result.stderr).toMatch(/skipping gateway auth token Secret Manager publish/);
@@ -160,7 +160,7 @@ function runnerBlockSource(): string {
 
 function runRunnerBlock(
   profile: string,
-  opts: { operatorShellsEnabled?: string; gatewayClass?: string } = {},
+  opts: { builderShellsEnabled?: string; gatewayClass?: string } = {},
 ): {
   status: number | null;
   stderr: string;
@@ -169,13 +169,13 @@ function runRunnerBlock(
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "entrypoint-runners-"));
   try {
     const marker = path.join(tmp, "runners");
-    const gatewayClass = opts.gatewayClass ?? (profile === "operator" ? "operator" : "shared");
+    const gatewayClass = opts.gatewayClass ?? (profile === "builder" ? "builder" : "shared");
     const script = `
       set -e
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
       export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
-      export OPERATOR_SHELLS_ENABLED="${opts.operatorShellsEnabled ?? ""}"
+      export BUILDER_SHELLS_ENABLED="${opts.builderShellsEnabled ?? ""}"
       export RUNNER_MARKER="${marker}"
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
@@ -193,34 +193,35 @@ function runRunnerBlock(
   }
 }
 
-describe("infra/gateway/entrypoint.sh — locked operator platform provisioner boundary", () => {
-  it("starts only the db-less controller and neutral side runners on operator gateways", () => {
-    const result = runRunnerBlock("operator");
+describe("infra/gateway/entrypoint.sh — locked Builder platform provisioner boundary", () => {
+  it("starts only the db-less controller and neutral side runners on Builder gateways", () => {
+    const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
     expect(result.runners).toContain("fleet-controller");
-    expect(result.runners).toContain("preview-proxy");
+    expect(result.runners).not.toContain("preview-proxy");
     expect(result.runners).not.toContain("provisioner");
     expect(result.runners).not.toContain("site-build");
-    expect(result.runners).not.toContain("byosub-syncback");
+    expect(result.runners).toContain("byosub-syncback");
+    expect(result.runners).toContain("system-config-watch");
     expect(result.runners).not.toContain("builder-shell");
     expect(result.stderr).toMatch(/site-build-api disabled/);
     expect(result.stderr).toMatch(/Builder-shell disabled/);
   });
 
   it("starts the db-less fleet controller and cattle side runners on standard gateways, never builder-shell", () => {
-    const result = runRunnerBlock("standard", { operatorShellsEnabled: "true" });
+    const result = runRunnerBlock("standard", { builderShellsEnabled: "true" });
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
       "fleet-controller",
       "byosub-syncback",
     ]);
-    expect(result.stderr).toMatch(/Customer code runners disabled/);
+    expect(result.stderr).toMatch(/In-gateway project code runners disabled/);
   });
 
   it("starts builder-shell on explicitly unlocked builder gateways", () => {
-    const result = runRunnerBlock("standard", {
+    const result = runRunnerBlock("builder", {
       gatewayClass: "builder",
-      operatorShellsEnabled: "true",
+      builderShellsEnabled: "true",
     });
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
@@ -231,67 +232,7 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     ]);
   });
 
-  it("starts builder-shell on explicitly unlocked operator gateways", () => {
-    const result = runRunnerBlock("operator", { operatorShellsEnabled: "true" });
-    expect(result.status).toBe(0);
-    expect(result.runners).toContain("fleet-controller");
-    expect(result.runners).toContain("preview-proxy");
-    expect(result.runners).toContain("builder-shell");
-    expect(result.runners).not.toContain("site-build");
-    expect(result.runners).not.toContain("byosub-syncback");
-  });
 });
-
-// ── PVC operator-env seam ──────────────────────────────────────────────────
-// Per GATEWAY-PLATFORM-SPEC.md §Operator-class customization surface:
-// operator-class gateways (PVC home) get a single shell-sourceable env
-// file at ~/.openclaw/secrets/operator.env for additional credentials/
-// integrations the platform doesn't manage. Sourced by entrypoint.sh
-// AFTER the platform require block so the operator can override their
-// own gateway (but the intent is additive — personal Discord bots,
-// custom MCP credentials, personal API keys). Survives every reschedule
-// via PVC; helm-invisible. First proven on gw-bender 2026-05-24 when
-// the Discord bot token rehome needed a place to live that didn't
-// require a platform-wide K8s Secret edit.
-
-function runOperatorEnvBlock(opts: {
-  envFile?: string; // contents to write to operator.env (undefined = file absent)
-  envFilePerm?: number;
-}): {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-} {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "operator-env-"));
-  try {
-    fs.mkdirSync(path.join(tmp, "secrets"), { recursive: true });
-    if (opts.envFile !== undefined) {
-      const filePath = path.join(tmp, "secrets", "operator.env");
-      fs.writeFileSync(filePath, opts.envFile);
-      if (opts.envFilePerm !== undefined) fs.chmodSync(filePath, opts.envFilePerm);
-    }
-    // Provide OPENCLAW_GATEWAY_TOKEN (required by the preceding block) so
-    // the script doesn't fail-loud before reaching the operator-env block.
-    // `eval` rather than `sed | sh` so the sourced env propagates into the
-    // current shell where we can echo it back for assertion.
-    const script = `
-      set -e
-      log() { echo "$*" >&2; }
-      export OPENCLAW_GATEWAY_TOKEN=token-for-test
-      export OPENCLAW_DIR="${tmp}"
-      eval "$(sed -n '/^# ── Source operator-customization env/,/^# ── End operator-env/p' "${ENTRYPOINT}")"
-      echo "DISCORD_BENDER_TOKEN=\${DISCORD_BENDER_TOKEN:-_unset_}"
-      echo "PERSONAL_OPENAI_API_KEY=\${PERSONAL_OPENAI_API_KEY:-_unset_}"
-    `;
-    const r = spawnSync("sh", ["-c", script], {
-      encoding: "utf8",
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
-    });
-    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
 
 describe("infra/gateway/entrypoint.sh — shell var export contract (subprocess visibility)", () => {
   // OpenClaw and the config helpers run as subprocesses and read OPENCLAW_DIR
@@ -325,43 +266,9 @@ describe("infra/gateway/entrypoint.sh — gateway token stays outside durable co
   });
 });
 
-describe("infra/gateway/entrypoint.sh — PVC operator.env seam", () => {
-  it("sources operator.env from $OPENCLAW_DIR/secrets/operator.env and exports its vars (the bender Discord rehome path)", () => {
-    const result = runOperatorEnvBlock({
-      envFile: "DISCORD_BENDER_TOKEN=test-bender-token-value\n",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=test-bender-token-value");
-  });
-
-  it("supports multiple operator-defined vars in one file (additive secrets pattern, not just Discord)", () => {
-    const result = runOperatorEnvBlock({
-      envFile: [
-        "DISCORD_BENDER_TOKEN=token-1",
-        "PERSONAL_OPENAI_API_KEY=key-2",
-      ].join("\n"),
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=token-1");
-    expect(result.stdout).toContain("PERSONAL_OPENAI_API_KEY=key-2");
-  });
-
-  it("no-ops cleanly when operator.env is absent (cattle gateways without operator overrides)", () => {
-    const result = runOperatorEnvBlock({ envFile: undefined });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=_unset_");
-  });
-
-  it("ignores blank lines and # comments (standard shell env-file convention)", () => {
-    const result = runOperatorEnvBlock({
-      envFile: [
-        "# Operator's personal credentials",
-        "",
-        "DISCORD_BENDER_TOKEN=token-with-comments-around",
-        "# trailing comment",
-      ].join("\n"),
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("DISCORD_BENDER_TOKEN=token-with-comments-around");
+describe("infra/gateway/entrypoint.sh — no per-customer shell-sourced secret seam", () => {
+  it("does not source the retired operator.env file", () => {
+    const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
+    expect(entrypoint).not.toMatch(/operator\.env/);
   });
 });

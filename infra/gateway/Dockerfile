@@ -115,20 +115,10 @@ WORKDIR /octogee/extensions/octogee-chat-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-chat-tools/node_modules
 
-# octogee-preview-tools runtime deps
-WORKDIR /octogee/extensions/octogee-preview-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-preview-tools/node_modules
-
 # octogee-workspace-tools runtime deps
 WORKDIR /octogee/extensions/octogee-workspace-tools
 RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
     && chown -R node:node /octogee/extensions/octogee-workspace-tools/node_modules
-
-# octogee-publish-tools runtime deps
-WORKDIR /octogee/extensions/octogee-publish-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-publish-tools/node_modules
 
 # octogee-connector-tools runtime deps
 WORKDIR /octogee/extensions/octogee-connector-tools

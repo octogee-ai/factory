@@ -212,7 +212,7 @@ async function waitForReadySignal(
   ctx: OperationContext,
   deps: AddGatewayDeps,
 ): Promise<StepResult> {
-  if (plan.gatewayClass === "operator") {
+  if (plan.gatewayClass === "builder") {
     return publishPlatformReadyRecord(plan, ctx, deps);
   }
 

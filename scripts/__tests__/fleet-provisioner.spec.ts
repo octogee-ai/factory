@@ -673,7 +673,7 @@ describe("resolveFleetCapabilities — observability vs provisioning seam", () =
     ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
   });
 
-  it("brokered operator gateway: provisions local mounts while platformState stays false", () => {
+  it("brokered Builder gateway: provisions local mounts while platformState stays false", () => {
     expect(
       resolveFleetCapabilities({
         platformState: false,

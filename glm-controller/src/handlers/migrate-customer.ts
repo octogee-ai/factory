@@ -86,7 +86,7 @@ export interface MigrateCustomerDeps {
     automatic?: boolean;
   }) => Promise<void>;
 
-  // Durable (V2) migration for builder/operator classes; the legacy runner
+  // Durable (V2) migration for Builder gateways; the legacy runner
   // covers shared-class customers with no durable target footprint to fence.
   useDurableMigration: (
     fromGatewayId: string,

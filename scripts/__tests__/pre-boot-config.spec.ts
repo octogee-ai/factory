@@ -226,11 +226,11 @@ describe("pre-boot config persistence", () => {
 });
 
 describe("applyPreBootPatches — platform model catalog", () => {
-  it("allowlists every broker-backed platform model for an operator gateway", () => {
+  it("allowlists every broker-backed platform model for a Builder gateway", () => {
     const config: any = { agents: { defaults: { models: {} } } };
 
     const changed = applyPreBootPatches(config, {
-      GATEWAY_CLASS: "operator",
+      GATEWAY_CLASS: "builder",
       OPENROUTER_BASE_URL: "http://llm-broker/v1",
       PLATFORM_OPENAI_BASE_URL: "http://llm-broker/v1",
     });
@@ -706,15 +706,16 @@ describe("applyGatewayRootConfig", () => {
 });
 
 describe("shouldMaterializeAnthropicBrokerProfiles", () => {
-  it.each(["shared", "builder", "operator"])(
+  it.each(["shared", "builder"])(
     "materializes per-agent broker-token profiles for %s gateways",
     (gatewayClass) => {
       expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: gatewayClass })).toBe(true);
     },
   );
 
-  it("falls back to operator profile when GATEWAY_CLASS is absent", () => {
-    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_PROFILE: "operator" })).toBe(true);
+  it("rejects the retired operator class and profile", () => {
+    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: "operator" })).toBe(false);
+    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_PROFILE: "operator" })).toBe(false);
   });
 
   it("skips unknown classes", () => {

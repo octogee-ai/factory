@@ -60,6 +60,62 @@ describe("buildCustomerAgent", () => {
     );
   });
 
+  it("allows workspace and project-scoped commits for the workspace coach", () => {
+    const agent = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    });
+
+    expect((agent.tools as { alsoAllow: string[] }).alsoAllow).toEqual(
+      expect.arrayContaining(["workspace_commit", "octogee_project_commit"]),
+    );
+  });
+
+  it("exposes isolated build, test, and exact-run status only through customer project lanes", () => {
+    const coach = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    });
+    const runTools = ["octogee_project_build", "octogee_project_test", "octogee_project_preview", "octogee_project_run_status"];
+    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(runTools));
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(expect.arrayContaining(runTools));
+    expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(runTools));
+  });
+
+  it("exposes publish only to the Workspace Coach", () => {
+    const coach = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    });
+    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toContain("octogee_project_publish");
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).not.toContain("octogee_project_publish");
+    expect(PROJECT_AGENT_DENIED_TOOLS).toContain("octogee_project_publish");
+  });
+
+  it("retires every in-gateway preview and publish tool", () => {
+    const coach = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    });
+    const tools = coach.tools as { alsoAllow: string[]; deny: string[] };
+    const retired = ["preview_start", "preview_stop", "preview_list", "octogee_publish"];
+    expect(tools.alsoAllow).not.toEqual(expect.arrayContaining(retired));
+    expect(tools.deny).toEqual(expect.arrayContaining(retired));
+    expect(PROJECT_AGENT_DENIED_TOOLS).toEqual(expect.arrayContaining(retired));
+  });
+
   it("keeps tool visibility independent of the inbound sender projection", () => {
     for (const customerMmUserId of [undefined, "mm-chris", "A".repeat(26)]) {
       const agent = buildCustomerAgent({
@@ -130,8 +186,8 @@ describe("gatewayAgentRoster", () => {
     })).toBe("");
   });
 
-  it("preserves operator routing even when no Builder slug is configured", () => {
-    expect(gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" })).toBeNull();
+  it("fails a retired operator class closed to the shared routing sentinel", () => {
+    expect(gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" })).toBe("");
   });
 });
 
@@ -597,9 +653,28 @@ describe("buildProjectAgents", () => {
       },
     ]);
     expect(agents[0].tools).toMatchObject({
-      deny: expect.arrayContaining(["delegated_access", "octogee_status", "bundle-mcp"]),
+      alsoAllow: expect.arrayContaining(["octogee_project_commit"]),
+      deny: expect.arrayContaining([
+        "exec",
+        "process",
+        "terminal",
+        "subagents",
+        "sessions_spawn",
+        "preview_start",
+        "octogee_publish",
+        "bundle-mcp",
+        "browser",
+        "automations",
+        "skill_workshop",
+        "delegated_access",
+        "octogee_status",
+      ]),
     });
+    expect(agents[0].tools.alsoAllow).not.toContain("workspace_commit");
+    expect(agents[0].tools.deny).toContain("workspace_commit");
+    expect(agents[0].tools.deny).not.toContain("octogee_project_commit");
   });
+
 });
 
 describe("buildProjectAgentAccounts", () => {

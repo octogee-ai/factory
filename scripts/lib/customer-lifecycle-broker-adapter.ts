@@ -177,7 +177,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
   adminMmUserId?: string;
-  isOperatorGateway?: () => boolean;
+  isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
 
@@ -966,7 +966,7 @@ export function buildBrokeredLifecycleAdapter(
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
-    isOperatorGateway: opts.isOperatorGateway ?? (() => false),
+    isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     projectCheckoutScope: (slug) =>
       ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
       ?? ctx.projectCheckoutScope?.(slug)

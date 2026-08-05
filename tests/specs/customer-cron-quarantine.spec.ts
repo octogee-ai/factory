@@ -174,7 +174,7 @@ function fixture() {
   return { root, jobCount: rows.length };
 }
 
-function run(root: string, gatewayClass: "shared" | "builder" | "operator") {
+function run(root: string, gatewayClass: "shared" | "builder") {
   return spawnSync("node", [script], {
     encoding: "utf8",
     env: { ...process.env, OPENCLAW_DIR: root, GATEWAY_CLASS: gatewayClass },
@@ -231,12 +231,12 @@ describe("customer cron routing quarantine", () => {
     },
   );
 
-  it("preserves operator cron jobs and does not create a quarantine", () => {
-    const { root, jobCount } = fixture();
-    const result = run(root, "operator");
+  it("does not exempt the retired operator class from quarantine", () => {
+    const { root } = fixture();
+    const result = run(root, "operator" as never);
     expect(result.status, result.stderr).toBe(0);
     const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
-    expect(db.prepare("SELECT count(*) AS count FROM cron_jobs").get()).toEqual({ count: jobCount });
+    expect(db.prepare("SELECT count(*) AS count FROM cron_jobs").get()).toEqual({ count: 2 });
     db.close();
   });
 });

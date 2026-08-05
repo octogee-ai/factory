@@ -35,6 +35,7 @@ env:
   # (provisionMattermostUser reads MM_URL). TEST overrides in values.test.yaml.
   MM_URL: "http://mattermost.octogee.svc.cluster.local:8065"
   APP_URL: "https://app.octogee.com"
+  PREVIEW_PUBLIC_URL: "https://preview.octogee.com"
   SITE_URL: "https://octogee.com"
   # Single public host (POST-BENDER-CLEANUP-SPEC §2.7). API_PUBLIC_URL is
   # returned by the credential mint (mmUrl) + the openclaw/builder-shell

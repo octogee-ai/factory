@@ -122,7 +122,6 @@ describe("syncModelCredentialsForCustomer", () => {
         },
       },
       {
-        isOperatorGateway: () => false,
         isSharedGateway: () => false,
         usesLlmBrokerToken: () => false,
         applyModelCredentialState,

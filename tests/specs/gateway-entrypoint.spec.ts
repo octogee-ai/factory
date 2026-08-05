@@ -57,13 +57,13 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(openclawIdx).toBeGreaterThan(hydrateIdx);
   });
 
-  it("quarantines persisted customer cron host-execution rows before OpenClaw starts", () => {
+  it("quarantines persisted Barn customer cron host-execution rows before OpenClaw starts", () => {
     const quarantineIdx = entrypoint.indexOf("quarantine-customer-cron-jobs.mjs");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(quarantineIdx).toBeGreaterThan(-1);
     expect(quarantineIdx).toBeLessThan(openclawIdx);
-    const block = entrypoint.slice(entrypoint.lastIndexOf("if [", quarantineIdx), openclawIdx);
-    expect(block).toMatch(/GATEWAY_CLASS_EFFECTIVE.*!= "operator"/);
+    const block = entrypoint.slice(entrypoint.indexOf("if [", quarantineIdx), openclawIdx);
+    expect(block).toMatch(/GATEWAY_CLASS_EFFECTIVE[^\n]*= "shared"/);
     expect(block).toMatch(/node "\$CUSTOMER_CRON_QUARANTINE"/);
   });
 
@@ -97,7 +97,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
   });
 
-  it("starts the entitled repair shell before restore so the operator can intervene while boot waits", () => {
+  it("starts the entitled repair shell before restore so the Builder can intervene while boot waits", () => {
     const configPathIdx = entrypoint.indexOf(
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"',
     );
@@ -193,47 +193,33 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
   });
 });
 
-describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {
-  it("invokes the Claude first-run stamper for a tenant-bound operator when the script exists", () => {
-    expect(entrypoint).toMatch(/GATEWAY_PROFILE[^\n]*=[^\n]*"?operator"?/);
-
-    expect(entrypoint).toMatch(
-      /\/octogee\/infra\/gateway\/stamp-claude-first-run\.mjs/,
-    );
-
-    expect(entrypoint).toMatch(/node\s+[^\n]*stamp-claude-first-run/);
+describe("infra/gateway/entrypoint.sh — Builder-only customer runtime", () => {
+  it("rejects retired customer gateway classes and profiles", () => {
+    expect(entrypoint).toMatch(/shared\|builder/);
+    expect(entrypoint).toMatch(/GATEWAY_CLASS must be shared or builder/);
+    expect(entrypoint).toMatch(/GATEWAY_PROFILE must be standard or builder/);
+    expect(entrypoint).not.toMatch(/shared\|builder\|operator|standard\|builder\|operator/);
   });
 
-  it("the stamper is gated by BOTH the env guard AND the file-exists guard (defense in depth — single-guard removal must trip this)", () => {
-    const stamperRegion = entrypoint.match(
-      /[\s\S]{0,400}stamp-claude-first-run\.mjs[\s\S]{0,200}/,
+  it("loads native-agent and Codex bootstrap hooks only for Builder gateways", () => {
+    const codexRegion = entrypoint.match(
+      /[\s\S]{0,200}apply-builder-codex-sandbox\.mjs[\s\S]{0,250}/,
     )?.[0];
-    expect(stamperRegion).toBeDefined();
-    expect(stamperRegion).toMatch(/GATEWAY_PROFILE[\s\S]*operator/);
-
-    expect(stamperRegion).toMatch(/\[\s*-f\s+/);
+    const stamperRegion = entrypoint.match(
+      /[\s\S]{0,200}stamp-claude-first-run\.mjs[\s\S]{0,250}/,
+    )?.[0];
+    expect(codexRegion).toMatch(/GATEWAY_CLASS_EFFECTIVE[\s\S]*= "builder"[\s\S]*-f/);
+    expect(stamperRegion).toMatch(/GATEWAY_CLASS_EFFECTIVE[\s\S]*= "builder"[\s\S]*-f/);
+    expect(entrypoint).not.toMatch(/apply-operator-codex-sandbox\.mjs/);
+    expect(entrypoint).not.toMatch(/operator\.env/);
   });
 
-  it("defers optional operator hydration until OpenClaw is healthy", () => {
+  it("defers optional Builder hydration until OpenClaw is healthy", () => {
     const healthyIdx = entrypoint.indexOf("OpenClaw gateway healthy");
     const githubIdx = entrypoint.indexOf("Post-boot: hydrating native GitHub CLI auth");
-    const claudeIdx = entrypoint.indexOf("stamp-claude-first-run.mjs");
+    const stamperIdx = entrypoint.indexOf("stamp-claude-first-run.mjs");
     expect(githubIdx).toBeGreaterThan(healthyIdx);
-    expect(claudeIdx).toBeGreaterThan(healthyIdx);
-  });
-
-  it("applies the codex YOLO sandbox for a tenant-bound operator when the script exists", () => {
-    expect(entrypoint).toMatch(/\/octogee\/infra\/gateway\/apply-operator-codex-sandbox\.mjs/);
-    expect(entrypoint).toMatch(/node\s+[^\n]*apply-operator-codex-sandbox/);
-  });
-
-  it("the codex-sandbox applier is gated by BOTH the env guard AND the file-exists guard", () => {
-    const region = entrypoint.match(
-      /[\s\S]{0,400}apply-operator-codex-sandbox\.mjs[\s\S]{0,200}/,
-    )?.[0];
-    expect(region).toBeDefined();
-    expect(region).toMatch(/GATEWAY_PROFILE[\s\S]*operator/);
-    expect(region).toMatch(/\[\s*-f\s+/);
+    expect(stamperIdx).toBeGreaterThan(healthyIdx);
   });
 });
 
@@ -241,7 +227,6 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   it("routes only non-code auxiliary runners through supervise-runner on customer gateways", () => {
     const runners: Record<string, string> = {
       "fleet-controller": "5000",
-      "preview-proxy": "5000",
       "byosub-syncback": "30000",
     };
     for (const [runner, restartDelayMs] of Object.entries(runners)) {
@@ -261,11 +246,8 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).toContain("site-build-api disabled");
   });
 
-  it("starts preview-proxy only for the trusted operator runtime", () => {
-    const previewIdx = entrypoint.indexOf("supervise_runner preview-proxy");
-    const guardBlock = entrypoint.slice(entrypoint.lastIndexOf("if [", previewIdx), previewIdx);
-    expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
-    expect(guardBlock).toMatch(/= "operator"/);
+  it("never starts the retired in-gateway preview proxy", () => {
+    expect(entrypoint).not.toMatch(/supervise_runner\s+preview-proxy\b/);
   });
 
   it("gates builder-shell behind runtime class and explicit shell unlock", () => {
@@ -277,8 +259,8 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
       builderIdx,
     );
     expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
-    expect(guardBlock).toMatch(/!= "shared"/);
-    expect(guardBlock).toMatch(/OPERATOR_SHELLS_ENABLED/);
+    expect(guardBlock).toMatch(/= "builder"/);
+    expect(guardBlock).toMatch(/BUILDER_SHELLS_ENABLED/);
     expect(guardBlock).toMatch(/true/);
     expect(entrypoint).toMatch(/export BUILDER_SHELL_REQUIRE_KEY/);
     expect(entrypoint).toMatch(
@@ -286,7 +268,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     );
   });
 
-  it("does not run the Firestore-backed shell reconciler inside operator pods", () => {
+  it("does not run the Firestore-backed shell reconciler inside Builder pods", () => {
     expect(entrypoint).not.toMatch(/supervise_runner\s+shell-reconciler\b/);
     expect(entrypoint).not.toMatch(/reconcile-shells-runner\.ts/);
   });

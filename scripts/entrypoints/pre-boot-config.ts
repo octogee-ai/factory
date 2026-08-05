@@ -38,12 +38,9 @@ export function shouldMaterializeAnthropicBrokerProfiles(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const gatewayClass = env.GATEWAY_CLASS ?? "";
-  const profile = env.GATEWAY_PROFILE ?? "";
   return (
     gatewayClass === "shared" ||
-    gatewayClass === "builder" ||
-    gatewayClass === "operator" ||
-    (!gatewayClass && profile === "operator")
+    gatewayClass === "builder"
   );
 }
 

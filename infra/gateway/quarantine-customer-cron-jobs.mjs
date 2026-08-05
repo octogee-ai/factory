@@ -40,13 +40,6 @@ const REQUIRED_CRON_COLUMNS = [
   "job_json", "updated_at",
 ];
 
-function gatewayClass(env) {
-  if (env.GATEWAY_CLASS === "builder" || env.GATEWAY_CLASS === "operator") {
-    return env.GATEWAY_CLASS;
-  }
-  return env.GATEWAY_PROFILE === "operator" ? "operator" : "shared";
-}
-
 function objectValue(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -278,10 +271,6 @@ function removeQuarantinedRows(db, rows) {
 }
 
 export function quarantineCustomerCronJobs(env = process.env, log = console.log) {
-  if (gatewayClass(env) === "operator") {
-    log("customer cron quarantine skipped for operator gateway");
-    return { removed: 0, skipped: "operator" };
-  }
   const openclawDir = env.OPENCLAW_DIR ?? "/home/node/.openclaw";
   const stateRoot = env.OPENCLAW_STATE_DIR?.trim() || openclawDir;
   const databasePath = path.join(stateRoot, "state", "openclaw.sqlite");

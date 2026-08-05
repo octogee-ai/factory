@@ -6,7 +6,6 @@ import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
 export declare function applyCoachModelPatch(input: CoachModelInput | null, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
-    isOperatorGateway?: () => boolean;
 }): Promise<boolean>;
 export declare function applyCoachToolsConvergence(slug: string, houseOnly: boolean, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
@@ -52,7 +51,6 @@ export declare function restoreOauthStoreForSlug(slug: string, deps?: {
     logFn?: (m: string) => void;
 }): Promise<OauthStoreRestoreResult>;
 export interface SyncByotForCustomerDeps {
-    isOperatorGateway?: () => boolean;
     isSharedGateway?: () => boolean;
     usesLlmBrokerToken?: () => boolean;
     logFn?: (m: string) => void;

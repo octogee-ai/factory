@@ -238,7 +238,7 @@ async function ownerRuntimeAccessAuthorized(input: {
   if (
     input.uid !== input.ownerUid
     || input.builderSlug !== input.access.builderSlug
-    || (input.gatewayClass !== "builder" && input.gatewayClass !== "operator")
+    || input.gatewayClass !== "builder"
   ) {
     return false;
   }

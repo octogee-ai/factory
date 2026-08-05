@@ -2,11 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_RE, } from "@octogee/shared/types/identity";
 // Firestore-free local view of which customers this pod hosts with a wired coach.
-// An operator pod holds NO platform credentials, so it derives its own mounted set
+// A disposable builder pod holds no platform credentials, so it derives its own mounted set
 // from the PVC + the openclaw config rather than reading gateways/{id} from Firestore
 // (which 403s). Single-sourced here so the fleet pull-reporting (fleet-local-migration-
 // adapter, PR #1431) and the chat-proxy coach reconcile can't drift.
-// See docs/decisions/DECISIONS.md ("Operator-gateway site deploys" / zero-credential pod).
 // Mirrors customerCoachAgentId in fleet-http-migration.ts — the coach agent-id convention.
 // Inlined to keep this module node:fs-only (importable into gateway-edge + scripts alike).
 const customerCoachAgentId = (slug) => `octogee-${slug}-coach`;
@@ -163,8 +162,8 @@ export function writeMigratingInPin(customersDir, slug) {
 }
 /**
  * On-disk customer dirs with a fresh migrating-in pin. Reported via the gateway's /health so
- * Cowboy's operator-gateway poller skips them as eviction candidates while a migration is
- * importing-but-not-yet-cut-over (the operator path has no in-pod reconcile, so Cowboy drives
+ * Cowboy's Builder gateway poller skips them as eviction candidates while a migration is
+ * importing-but-not-yet-cut-over (the builder path has no in-pod reconcile, so Cowboy drives
  * eviction off /health — without this it would drain a fresh import pre-cutover).
  */
 export function listMigratingInSlugs(customersDir, ttlMs) {

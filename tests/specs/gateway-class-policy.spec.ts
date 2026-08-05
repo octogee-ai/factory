@@ -8,13 +8,14 @@ import { DatabaseSync } from "node:sqlite";
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
 const workflowTools = [
-  "preview_start",
-  "preview_stop",
-  "preview_list",
-  "octogee_publish",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -41,6 +42,15 @@ const workflowTools = [
   "octogee_obsidian_read",
   "octogee_obsidian_write",
 ];
+const customerStructuredTools = [
+  "workspace_commit",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
+];
 const approvedPlugins = [
   "mattermost",
   "anthropic",
@@ -48,13 +58,11 @@ const approvedPlugins = [
   "octogee-chat-tools",
   "octogee-connector-tools",
   "octogee-access-tools",
-  "octogee-preview-tools",
   "octogee-project-tools",
   "octogee-status-tools",
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
-  "octogee-publish-tools",
   "openai",
 ];
 const brokerPluginConfig = {
@@ -148,7 +156,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         list: [
           {
             id: "octogee-alice-coach",
-            tools: { profile: "full", allow: ["browser"], alsoAllow: ["nodes"], fs: { workspaceOnly: false }, keep: true },
+            tools: {
+              profile: "full",
+              allow: ["browser"],
+              alsoAllow: ["nodes"],
+              deny: [...customerStructuredTools],
+              fs: { workspaceOnly: false },
+              keep: true,
+            },
           },
           { id: "octogee-unmatched-route", tools: { profile: "full", allow: ["browser"], fs: { workspaceOnly: false } } },
         ],
@@ -163,7 +178,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         profile: "full",
         allow: ["browser", "nodes"],
         alsoAllow: ["browser", "nodes"],
-        deny: ["read"],
+        deny: ["read", ...customerStructuredTools],
         subagents: { tools: { deny: ["write"] } },
       },
       cron: { triggers: { enabled: true }, keep: true },
@@ -212,9 +227,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "sessions_spawn",
       "terminal",
       "preview_start",
+      "preview_stop",
+      "preview_list",
       "octogee_publish",
-      "workspace_commit",
-      "octogee_project_commit",
       "bundle-mcp",
       "automations",
       "skill_workshop",
@@ -224,6 +239,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "browser",
     ]);
     expect(out.tools.alsoAllow).toEqual(workflowTools);
+    expect(out.tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
     expect(out.tools.profile).toBe("coding");
     expect(out.tools.allow).toBeUndefined();
     expect(out.tools.exec).toEqual({ mode: "deny" });
@@ -233,8 +249,16 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.agents.defaults.subagents).toBeUndefined();
     expect(out.agents.list[0].tools).toMatchObject({ profile: "coding", fs: { workspaceOnly: true }, keep: true });
     expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
+    expect(out.agents.list[0].tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
     expect(out.agents.list[0].tools.toolsBySender).toEqual({});
     expect(out.agents.list[0].tools.alsoAllow).toContain("octogee_google_gmail_read");
+    expect(out.agents.list[0].tools.alsoAllow).toEqual(expect.arrayContaining([
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+      "octogee_project_publish",
+    ]));
     expect(out.agents.list[0].tools.allow).toBeUndefined();
     expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "automations", "conversations_send"]));
     expect(out.agents.list[1].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
@@ -244,8 +268,23 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       keep: true,
     });
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("read");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toEqual(
+      expect.arrayContaining([
+        "octogee_project_build",
+        "octogee_project_test",
+        "octogee_project_preview",
+        "octogee_project_run_status",
+        "octogee_project_commit",
+      ]),
+    );
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toEqual(
       expect.arrayContaining(["octogee_chat_search", "octogee_chat_history", "octogee_chat_set_identity"]),
+    );
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.deny).toContain("workspace_commit");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.deny).toContain("octogee_project_publish");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toContain("octogee_project_publish");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.deny).not.toContain(
+      "octogee_project_commit",
     );
     expect(out.agents.entries["system-agent"].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
     expect(out.plugins.allow).toEqual(approvedPlugins);
@@ -335,7 +374,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("builder class also denies OpenClaw arbitrary code while leaving the external Builder shell separate", () => {
+  it("builder class preserves owner-bound runtime capabilities while clamping Project Agents", () => {
     const out = runPolicy("builder", {
       auth: {
         profiles: {
@@ -350,7 +389,17 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
         },
         list: [
-          { id: "octogee-alice-coach", tools: { profile: "full", allow: ["browser"], alsoAllow: ["nodes"], fs: { workspaceOnly: false }, keep: true } },
+          {
+            id: "octogee-alice-coach",
+            tools: {
+              profile: "full",
+              allow: ["browser"],
+              alsoAllow: ["nodes"],
+              deny: [...customerStructuredTools],
+              fs: { workspaceOnly: false },
+              keep: true,
+            },
+          },
         ],
         entries: {
           "octogee-alice-proj-garden-coach": {
@@ -362,7 +411,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         profile: "full",
         allow: ["browser", "nodes"],
         alsoAllow: ["browser", "nodes"],
-        deny: ["exec", "process", "subagents", "sessions_spawn", "read"],
+        deny: [
+          "exec",
+          "process",
+          "subagents",
+          "sessions_spawn",
+          "read",
+          ...customerStructuredTools,
+        ],
         exec: { mode: "deny" },
         subagents: { tools: { deny: ["exec", "process", "write"] } },
       },
@@ -412,102 +468,93 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "subagents",
       "sessions_spawn",
       "read",
-      "terminal",
-      "preview_start",
-      "octogee_publish",
-      "workspace_commit",
-      "octogee_project_commit",
-      "bundle-mcp",
-      "automations",
-      "skill_workshop",
-      "conversations_list",
-      "conversations_send",
-      "conversations_turn",
-      "browser",
+      ...customerStructuredTools,
     ]);
-    expect(out.tools.alsoAllow).toEqual(workflowTools);
-    expect(out.tools.profile).toBe("coding");
-    expect(out.tools.allow).toBeUndefined();
+    expect(out.tools.alsoAllow).toEqual(["browser", "nodes"]);
+    expect(out.tools.profile).toBe("full");
+    expect(out.tools.allow).toEqual(["browser", "nodes"]);
     expect(out.tools.exec).toEqual({ mode: "deny" });
-    expect(out.tools.fs).toEqual({ workspaceOnly: true });
     expect(out.tools.subagents.tools.deny).toEqual(["exec", "process", "write"]);
-    expect(out.tools.sessions.visibility).toBe("self");
-    expect(out.agents.defaults.subagents).toBeUndefined();
-    expect(out.agents.list[0].tools).toMatchObject({ profile: "coding", fs: { workspaceOnly: true }, keep: true });
-    expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
-    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools).toMatchObject({
+    expect(out.agents.defaults.subagents).toEqual({
+      maxConcurrent: 8,
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(out.agents.list[0].tools).toEqual({
+      profile: "full",
+      allow: ["browser"],
+      alsoAllow: ["nodes"],
+      deny: customerStructuredTools,
+      fs: { workspaceOnly: false },
+      keep: true,
+    });
+    const projectTools = out.agents.entries["octogee-alice-proj-garden-coach"].tools;
+    expect(projectTools).toMatchObject({
       profile: "minimal",
       fs: { workspaceOnly: true },
       keep: true,
     });
-    expect(out.plugins.allow).toEqual(approvedPlugins);
-    expect(out.plugins.entries.codex).toBeUndefined();
-    expect(out.gateway.terminal).toEqual({ enabled: false });
+    expect(projectTools.allow).toBeUndefined();
+    expect(projectTools.alsoAllow).toEqual(expect.arrayContaining([
+      "octogee_project_commit",
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+    ]));
+    expect(projectTools.alsoAllow).not.toEqual(expect.arrayContaining([
+      "workspace_commit",
+      "octogee_project_create",
+      "octogee_project_publish",
+      "octogee_google_calendar_read",
+    ]));
+    expect(projectTools.deny).toEqual(expect.arrayContaining([
+      "workspace_commit",
+      "octogee_project_create",
+      "octogee_project_publish",
+      "octogee_google_calendar_read",
+    ]));
+    expect(projectTools.toolsBySender).toEqual({
+      "*": { deny: expect.arrayContaining(["octogee_google_calendar_read"]) },
+    });
+    expect(out.plugins.allow).toEqual(["codex", "octogee-connector-tools"]);
+    expect(out.plugins.entries.codex).toEqual({ enabled: true });
     expect(out.commands).toMatchObject({
-      bash: false,
-      config: false,
-      mcp: false,
-      plugins: false,
-      debug: false,
+      bash: true,
+      config: true,
+      mcp: true,
+      plugins: true,
+      debug: true,
     });
-    expect(out.mcp.servers).toBeUndefined();
-    expect(out.cron.triggers.enabled).toBe(false);
+    expect(out.mcp.servers).toEqual({ stale: { command: "sh" } });
+    expect(out.cron.triggers.enabled).toBe(true);
     expect(out.skills).toEqual({
-      load: {},
-      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", allowSymlinkTargetWrites: false },
+      load: { allowSymlinkTargets: ["/tmp"], extraDirs: ["/tmp"] },
+      workshop: { autonomous: { mode: "auto" }, approvalPolicy: "auto", allowSymlinkTargetWrites: true },
     });
-    expect(out.channels.mattermost.accounts).toEqual({
-      "alice-coach": {
-        botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-coach" },
-        allowFrom: ["ffffffffffffffffffffffffff"],
-      },
-      "alice-proj-garden": {
-        botToken: {
-          source: "file",
-          provider: "octogee-mattermost",
-          id: "/alice-proj-garden",
-        },
-        allowFrom: ["ffffffffffffffffffffffffff"],
-      },
-    });
-    expect(out.channels.mattermost.network).toEqual({ dangerouslyAllowPrivateNetwork: true });
-    expect(out.channels.mattermost.interactions).toEqual({
-      callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
-      allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
-    });
+    expect(out.channels.mattermost.baseUrl).toBe("https://attacker.example");
+    expect(out.channels.mattermost.accounts["mike-coach"].botToken).toBe("literal");
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
-      enabled: true,
+      enabled: false,
       config: {
-        brokerUrl: "${FLEET_BROKER_URL}",
-        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
-        requireWriteApproval: true,
+        timeoutMs: 1500,
+        baseUrl: "http://connector-tools",
+        requireWriteApproval: false,
       },
     });
-    expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
-    expect(out.plugins.entries["octogee-project-tools"]).toEqual({
-      enabled: true,
-      config: brokerPluginConfig,
+    expect(out.auth.profiles["openai-codex:default"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
     });
-    expect(out.plugins.entries["octogee-ops-tools"]).toEqual({
-      enabled: true,
-      config: brokerPluginConfig,
-    });
-    expect(out.plugins.entries["octogee-access-tools"]).toEqual({
-      enabled: true,
-      config: brokerPluginConfig,
-    });
-    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
-    expect(out.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
-    expect(out.agents.defaults.models["platform-openrouter/deepseek/deepseek-v4-pro"]).toEqual({
-      alias: "deepseek",
+    expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
+      agentRuntime: { id: "codex" },
     });
   });
 
-  it("customer classes purge native OAuth credentials, runtime pins, and affected sessions before startup", () => {
+  it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
     const coachId = "octogee-acme-coach";
     const projectId = "octogee-acme-proj-garden-coach";
     const result = runPolicyWithDir(
-      "builder",
+      "shared",
       {
         auth: {
           profiles: {
@@ -656,7 +703,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         ...process.env,
         OPENCLAW_DIR: result.dir,
         HOME: result.home,
-        GATEWAY_CLASS: "builder",
+        GATEWAY_CLASS: "shared",
         GATEWAY_PROFILE: "",
       },
     });
@@ -1053,9 +1100,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     ]) {
       expect(out.plugins.entries[pluginId].config).toEqual(brokerPluginConfig);
     }
-    expect(out.plugins.entries["octogee-preview-tools"].config).toEqual({});
     expect(out.plugins.entries["octogee-workspace-tools"].config).toEqual({});
-    expect(out.plugins.entries["octogee-publish-tools"].config).toEqual({});
+    expect(out.plugins.entries).not.toHaveProperty("octogee-preview-tools");
+    expect(out.plugins.entries).not.toHaveProperty("octogee-publish-tools");
     expect(out.plugins.entries["octogee-web-tools"].config).toEqual({
       ...brokerPluginConfig,
       gatewayId: "${GATEWAY_ID}",
@@ -1136,7 +1183,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("operator class leaves the config untouched for the operator-image patcher", () => {
+  it("treats the retired operator class as customer-safe instead of bypassing policy", () => {
     const config = {
       tools: { profile: "full", allow: ["browser"], alsoAllow: ["nodes"], deny: ["exec"], exec: { mode: "deny" } },
       cron: { triggers: { enabled: true } },
@@ -1158,17 +1205,19 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       models: { providers: { operator: { baseUrl: "http://operator" } } },
     };
     const out = runPolicy("operator", config);
-    expect(out).toEqual(config);
+    expect(out).not.toEqual(config);
+    expect(out.tools.deny).toContain("exec");
+    expect(out.tools.fs.workspaceOnly).toBe(true);
+    expect(out.plugins.allow).not.toContain("codex");
+    expect(out.commands).toMatchObject({ bash: false, config: false, mcp: false, plugins: false });
   });
 
-  it("operator class preserves native OAuth files", () => {
+  it("does not exempt the retired operator class from native OAuth scrubbing", () => {
     const result = runPolicyWithDir("operator", { agents: { list: [] } }, (_dir, home) => {
       const native = path.join(home, ".claude", ".credentials.json");
       mkdirSync(path.dirname(native), { recursive: true });
       writeFileSync(native, "operator-secret");
     });
-    expect(readFileSync(path.join(result.home, ".claude", ".credentials.json"), "utf8")).toBe(
-      "operator-secret",
-    );
+    expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
 });

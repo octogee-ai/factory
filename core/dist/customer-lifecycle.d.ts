@@ -60,7 +60,7 @@ export interface CustomerContext {
 export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
     log: (msg: string) => void;
-    isOperatorGateway?: () => boolean;
+    isBuilderGateway?: () => boolean;
     /**
      * Read-only probe of the on-disk openclaw.json: is this customer's
      * coach fully wired (agent registered + MM account configured + at
@@ -97,8 +97,8 @@ export interface CustomerLifecycleAdapter {
     customerMigratingIn?: (slug: string) => boolean;
     /** Stamp the migrating-in pin (import handler, before activation). */
     markCustomerMigratingIn?: (slug: string) => void;
-    /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's operator
-     *  poller skips them as eviction candidates pre-cutover (the operator path has no in-pod
+    /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's builder
+     *  poller skips them as eviction candidates pre-cutover (the builder path has no in-pod
      *  reconcile to honor the pin). */
     listMigratingInSlugs?: () => string[];
     loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;

@@ -5,7 +5,7 @@ type JsonObject = Record<string, unknown>;
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array" as const;
 
-export type GatewayConfigClass = "shared" | "builder" | "operator";
+export type GatewayConfigClass = "shared" | "builder";
 
 export interface SystemConfigInvariantContext {
   gatewayClass: GatewayConfigClass;
@@ -48,12 +48,18 @@ type CustomerAgentToolPolicyInvariant = {
   path: "agents.list[].tools" | "agents.entries.*.tools";
 };
 
+type ProjectAgentToolPolicyInvariant = {
+  kind: "project-agent-tool-policy";
+  path: "agents.list[].tools" | "agents.entries.*.tools";
+};
+
 export type PlatformInvariant =
   | ExactInvariant
   | RequiredArrayInvariant
   | ForbiddenArrayInvariant
   | CustomerAgentWorkspaceInvariant
   | CustomerAgentToolPolicyInvariant
+  | ProjectAgentToolPolicyInvariant
   | MattermostAccountProjectionInvariant;
 
 const REQUIRED_PLUGINS = [
@@ -64,15 +70,18 @@ const REQUIRED_PLUGINS = [
   "octogee-access-tools",
   "octogee-connector-tools",
   "octogee-ops-tools",
-  "octogee-preview-tools",
   "octogee-project-tools",
   "octogee-status-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
-  "octogee-publish-tools",
 ] as const;
 
-const RETIRED_PLUGINS = ["octogee-mattermost-tools", "octogee-router"] as const;
+const RETIRED_PLUGINS = [
+  "octogee-mattermost-tools",
+  "octogee-router",
+  "octogee-preview-tools",
+  "octogee-publish-tools",
+] as const;
 
 const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
 
@@ -94,7 +103,6 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
-  "octogee-preview-tools": {},
   "octogee-project-tools": {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
@@ -110,7 +118,6 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
   "octogee-workspace-tools": {},
-  "octogee-publish-tools": {},
 };
 
 const PLATFORM_PLUGIN_CONFIG_FIELDS: Readonly<Record<string, unknown>> = {
@@ -132,9 +139,9 @@ const CUSTOMER_CODE_DENIED_TOOLS = [
   "sessions_spawn",
   "terminal",
   "preview_start",
+  "preview_stop",
+  "preview_list",
   "octogee_publish",
-  "workspace_commit",
-  "octogee_project_commit",
   "bundle-mcp",
   "automations",
   "skill_workshop",
@@ -144,14 +151,25 @@ const CUSTOMER_CODE_DENIED_TOOLS = [
   "browser",
 ] as const;
 
+const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+  "workspace_commit",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
+] as const;
+
 const CUSTOMER_WORKFLOW_TOOLS = [
-  "preview_start",
-  "preview_stop",
-  "preview_list",
-  "octogee_publish",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -192,6 +210,11 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
   "brave_search",
   "tavily_search",
   "tavily_extract",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
 ] as const;
 
 const PROJECT_AGENT_DENIED_TOOLS = [
@@ -202,10 +225,12 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "sessions_spawn",
   "terminal",
   "preview_start",
+  "preview_stop",
+  "preview_list",
   "octogee_publish",
   "workspace_commit",
-  "octogee_project_commit",
   "octogee_project_create",
+  "octogee_project_publish",
   "delegated_access",
   "octogee_status",
   "octogee_chat_search",
@@ -226,6 +251,11 @@ function customerToolInvariants(): PlatformInvariant[] {
       kind: REQUIRED_ARRAY,
       path: "tools.deny",
       values: CUSTOMER_CODE_DENIED_TOOLS,
+    },
+    {
+      kind: "forbidden-array",
+      path: "tools.deny",
+      values: CUSTOMER_STRUCTURED_AVAILABLE_TOOLS,
     },
     { kind: "exact", path: "tools.profile", value: "coding" },
     { kind: "exact", path: "tools.allow", value: ABSENT },
@@ -279,8 +309,9 @@ function customerToolInvariants(): PlatformInvariant[] {
   ];
 }
 
-function operatorToolInvariants(): PlatformInvariant[] {
+function builderToolInvariants(): PlatformInvariant[] {
   return [
+    { kind: "exact", path: "tools.elevated.enabled", value: false },
     {
       kind: "forbidden-array",
       path: "tools.deny",
@@ -305,20 +336,15 @@ function operatorToolInvariants(): PlatformInvariant[] {
       path: "plugins.entries.codex.config.appServer.approvalPolicy",
       value: "never",
     },
-  ];
-}
-
-function isolatedToolInvariants(gatewayClass: GatewayConfigClass): PlatformInvariant[] {
-  return [
-    { kind: "exact", path: "tools.elevated.enabled", value: false },
-    ...(gatewayClass === "operator" ? operatorToolInvariants() : customerToolInvariants()),
+    { kind: "project-agent-tool-policy", path: "agents.list[].tools" },
+    { kind: "project-agent-tool-policy", path: "agents.entries.*.tools" },
   ];
 }
 
 export function platformInvariantTable(
   context: SystemConfigInvariantContext,
 ): readonly PlatformInvariant[] {
-  const isolated = context.gatewayClass === "builder" || context.gatewayClass === "operator";
+  const isolated = context.gatewayClass === "builder";
   const gatewayId = context.gatewayId?.trim();
   const apiOrigin = context.apiOrigin?.trim().replace(/\/$/, "");
   if (isolated && (!gatewayId || !apiOrigin)) {
@@ -396,7 +422,7 @@ export function platformInvariantTable(
       value,
     })),
   ];
-  return [...base, ...isolatedToolInvariants(context.gatewayClass)];
+  return [...base, ...(context.gatewayClass === "shared" ? customerToolInvariants() : builderToolInvariants())];
 }
 
 function asObject(value: unknown): JsonObject | null {
@@ -522,7 +548,8 @@ function agentToolPolicySatisfied(config: JsonObject, agent: JsonObject, agentId
     && !Object.prototype.hasOwnProperty.call(tools, "allow")
     && (parsed.kind === "project"
       ? equal(deny, PROJECT_AGENT_DENIED_TOOLS)
-      : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool)))
+      : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
+        && CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
     && equal(tools.toolsBySender, expectedSenderPolicy);
 }
 
@@ -537,7 +564,12 @@ function forceAgentToolPolicy(config: JsonObject, agent: JsonObject, agentId: st
     : [];
   tools.deny = parsed.kind === "project"
     ? structuredClone(PROJECT_AGENT_DENIED_TOOLS)
-    : [...deny, ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool))];
+    : [
+      ...deny.filter((tool) => !CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.includes(
+        tool as typeof CUSTOMER_STRUCTURED_AVAILABLE_TOOLS[number],
+      )),
+      ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
+    ];
   tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
   delete tools.allow;
 }
@@ -656,6 +688,11 @@ function invariantSatisfied(config: JsonObject, invariant: PlatformInvariant): b
     return customerAgentEntries(config, invariant.path).every(({ agent, agentId }) =>
       agentToolPolicySatisfied(config, agent, agentId));
   }
+  if (invariant.kind === "project-agent-tool-policy") {
+    return customerAgentEntries(config, invariant.path)
+      .filter(({ agentId }) => parseAgentId(agentId).kind === "project")
+      .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
+  }
   if (invariant.kind === "mattermost-account-projection") {
     return accountProjectionSatisfied(config);
   }
@@ -675,6 +712,12 @@ function applyInvariant(config: JsonObject, invariant: PlatformInvariant): void 
   if (invariant.kind === "customer-agent-tool-policy") {
     for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
       forceAgentToolPolicy(config, agent, agentId);
+    }
+    return;
+  }
+  if (invariant.kind === "project-agent-tool-policy") {
+    for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+      if (parseAgentId(agentId).kind === "project") forceAgentToolPolicy(config, agent, agentId);
     }
     return;
   }
