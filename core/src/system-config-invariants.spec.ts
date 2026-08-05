@@ -578,6 +578,7 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, builder)).toEqual(expect.arrayContaining([
       "plugins.entries.octogee-access-tools.config",
       "plugins.entries.octogee-connector-tools.config.brokerUrl",
+      "plugins.entries.octogee-connector-tools.config.requireWriteApproval",
       "plugins.entries.octogee-connector-tools.config.tokenPath",
       "plugins.entries.octogee-ops-tools.config",
     ]));

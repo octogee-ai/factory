@@ -32,10 +32,7 @@ import {
   createProjectPreviewDiscoveryRoutes,
   createProjectPreviewStaticRoutes,
 } from "./routes/project-previews.js";
-import {
-  createAgentProductivityRoutes,
-  createApprovedCalendarApprovalExecutor,
-} from "./routes/agent-productivity.js";
+import { createAgentProductivityRoutes } from "./routes/agent-productivity.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
@@ -312,7 +309,6 @@ function recordProductEvent(
 }
 
 function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
-  const executeApprovedCalendar = createApprovedCalendarApprovalExecutor({ db });
   return {
     mmRestProxyHandler,
     mattermostMintRoutes,
@@ -325,13 +321,7 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)
-      .use(createProductivityApprovalRoutes({
-        db,
-        executeApprovedCalendar: ({ approvalId, ownerUid }) => executeApprovedCalendar({
-          approvalId,
-          expectedOwnerUid: ownerUid,
-        }).then(() => undefined),
-      })),
+      .use(createProductivityApprovalRoutes({ db })),
   };
 }
 
