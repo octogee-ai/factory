@@ -52,27 +52,6 @@ export async function ensureProjectGiteaRepo(input: {
     });
     await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
 
-    const projectJson = {
-      version: 1,
-      name: input.name,
-      slug: input.slug,
-      ownerSlug: input.workspaceId,
-      status: "active",
-      visibility: input.visibility,
-      hosting: {
-        enabled: true,
-      },
-      runtime: { recipe: "static-site" },
-      collaborators: [],
-      createdAt: new Date().toISOString(),
-    };
-    await giteaWriteFile(
-      org,
-      repoName,
-      "project.json",
-      `${JSON.stringify(projectJson, null, 2)}\n`,
-      "auto: seed project metadata",
-    );
     const today = new Date().toISOString().slice(0, 10);
     const seeds = [
       ...projectPlaybookSeeds({

@@ -106,7 +106,7 @@ import {
 } from "./lib/platform-model-config.js";
 import { normalizeTenantPolicyPath } from "./lib/tenant-route-policy.js";
 import { createFirestoreProjectRunStore } from "./lib/project-runs/firestore-store.js";
-import { createGiteaProjectSnapshotSource } from "./lib/project-runs/source.js";
+import { createProjectSnapshotSource } from "./lib/project-runs/source.js";
 import {
   createProjectRunControlPlaneClient,
   type ProjectRunControlPlane,
@@ -395,7 +395,9 @@ export function createApp(opts: CreateAppOptions = {}) {
       onError: (error) => logger.error("[project-runs] retention sweep failed", { error }),
     });
   }
-  const projectRunSource = createGiteaProjectSnapshotSource();
+  const projectRunSource = createProjectSnapshotSource({
+    readGithubToken: (uid) => readConnectorAccessToken(uid, "github"),
+  });
   const namespace = process.env.K8S_NAMESPACE ?? "octogee";
   const customerHostingProjectId = opts.customerHostingProjectId
     ?? process.env.OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID

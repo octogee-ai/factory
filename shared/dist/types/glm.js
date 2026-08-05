@@ -88,10 +88,6 @@ export function isGatewayClassShellAccessEnabled(gatewayClass, builderAccess) {
 export function isGatewayClassControlUiAccessEnabled(gatewayClass, builderAccess) {
     return gatewayClass === "builder" && builderAccess?.controlUiEnabled !== false;
 }
-// The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
-// shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled
-// builder gateway they OWN; a guest migrated onto someone else's
-// gateway does not.
 export function resolveUserGatewayShellState(data, uid) {
     const gatewayClass = resolveGatewayClass({
         gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
