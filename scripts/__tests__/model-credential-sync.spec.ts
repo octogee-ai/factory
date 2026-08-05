@@ -108,6 +108,7 @@ describe("syncModelCredentialsForCustomer", () => {
     const applyCoachModelPatch = vi.fn(async () => true);
     const triggerSecretsReload = vi.fn(async () => {});
     const purgeCustomerOauthRuntime = vi.fn(async () => ({ changed: true, resetCount: 0 }));
+    const requestGatewayRestart = vi.fn(async () => true);
 
     await syncModelCredentialsForCustomer(
       {
@@ -129,6 +130,7 @@ describe("syncModelCredentialsForCustomer", () => {
         applyCoachModelPatch,
         triggerSecretsReload,
         purgeCustomerOauthRuntime,
+        requestGatewayRestart,
       },
     );
 
@@ -149,6 +151,8 @@ describe("syncModelCredentialsForCustomer", () => {
       source: "free-tier",
       model: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
+    expect(requestGatewayRestart).toHaveBeenCalledOnce();
+    expect(requestGatewayRestart).toHaveBeenCalledWith("customer-oauth-runtime-purge");
     expect(triggerSecretsReload).toHaveBeenCalledTimes(1);
   });
 });

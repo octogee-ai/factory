@@ -28,6 +28,17 @@ const SAFE_SCHEDULED_TOOLS = new Set([
 ]);
 const SAFE_SESSION_TARGETS = new Set(["main", "isolated", "current"]);
 const CUSTOMER_AGENT_ID = /^octogee-[a-z0-9-]+(?:-proj-[a-z0-9-]+)?-coach$/;
+const WEBHOOK_DESTINATION_REASON = "webhook-destination";
+const REQUIRED_CRON_COLUMNS = [
+  "store_key", "job_id", "owner_agent_id", "owner_session_key", "agent_id", "session_key",
+  "session_target", "schedule_kind", "payload_kind", "trigger_script", "payload_model",
+  "payload_fallbacks_json", "payload_allow_unsafe_external_content", "payload_tools_allow_json",
+  "delivery_mode", "delivery_channel", "delivery_to", "delivery_account_id",
+  "delivery_completion_mode", "delivery_completion_to", "failure_delivery_mode",
+  "failure_delivery_channel", "failure_delivery_to", "failure_delivery_account_id",
+  "failure_alert_channel", "failure_alert_to", "failure_alert_mode", "failure_alert_account_id",
+  "job_json", "updated_at",
+];
 
 function gatewayClass(env) {
   if (env.GATEWAY_CLASS === "builder" || env.GATEWAY_CLASS === "operator") {
@@ -103,54 +114,99 @@ function safeToolList(raw) {
     parsed.every((tool) => typeof tool === "string" && SAFE_SCHEDULED_TOOLS.has(tool));
 }
 
-function rowQuarantineReason(row, bindings) {
-  if (HOST_EXEC_SCHEDULES.has(row.schedule_kind)) return "host-exec-schedule";
-  if (HOST_EXEC_PAYLOADS.has(row.payload_kind)) return "host-exec-payload";
-  if (row.trigger_script != null) return "trigger-script";
-  if (row.payload_allow_unsafe_external_content === 1) return "unsafe-external-content";
-  if (row.payload_model != null && !SAFE_MODELS.has(row.payload_model)) return "unsafe-model";
-  if (!safeModelList(row.payload_fallbacks_json)) return "unsafe-fallbacks";
-  if (!safeToolList(row.payload_tools_allow_json)) return "unsafe-tools";
-  if (!SAFE_SESSION_TARGETS.has(row.session_target)) return "unsafe-session-target";
+function firstQuarantineReason(checks) {
+  return checks.find(([unsafe]) => unsafe)?.[1] ?? null;
+}
 
-  const job = objectValue(parseJson(row.job_json));
-  if (!job) return "invalid-job-json";
+function payloadQuarantineReason(row) {
+  return firstQuarantineReason([
+    [HOST_EXEC_SCHEDULES.has(row.schedule_kind), "host-exec-schedule"],
+    [HOST_EXEC_PAYLOADS.has(row.payload_kind), "host-exec-payload"],
+    [row.trigger_script != null, "trigger-script"],
+    [row.payload_allow_unsafe_external_content === 1, "unsafe-external-content"],
+    [row.payload_model != null && !SAFE_MODELS.has(row.payload_model), "unsafe-model"],
+    [!safeModelList(row.payload_fallbacks_json), "unsafe-fallbacks"],
+    [!safeToolList(row.payload_tools_allow_json), "unsafe-tools"],
+    [!SAFE_SESSION_TARGETS.has(row.session_target), "unsafe-session-target"],
+  ]);
+}
+
+function resolveRowAuthority(row, bindings) {
   const effectiveAgentId = row.agent_id;
   const accountId = bindings.get(effectiveAgentId);
-  if (!accountId) return "unconfigured-agent";
-  if (row.owner_agent_id !== effectiveAgentId) return "owner-agent-mismatch";
-  if (!sessionOwnedBy(row.owner_session_key, effectiveAgentId)) return "owner-session-mismatch";
-  if (row.session_key != null && !sessionOwnedBy(row.session_key, effectiveAgentId)) return "session-mismatch";
+  if (!accountId) return { reason: "unconfigured-agent" };
+  const ownershipReason = firstQuarantineReason([
+    [row.owner_agent_id !== effectiveAgentId, "owner-agent-mismatch"],
+    [!sessionOwnedBy(row.owner_session_key, effectiveAgentId), "owner-session-mismatch"],
+    [row.session_key != null && !sessionOwnedBy(row.session_key, effectiveAgentId), "session-mismatch"],
+  ]);
+  if (ownershipReason) return { reason: ownershipReason };
   const route = parseMattermostSession(row.owner_session_key);
-  if (!route || route.agentId !== effectiveAgentId) return "non-mattermost-owner-session";
-
-  const owner = objectValue(job.owner);
-  if (owner?.agentId !== effectiveAgentId || owner.sessionKey !== row.owner_session_key || owner.accountId !== accountId) {
-    return "job-owner-mismatch";
+  if (!route || route.agentId !== effectiveAgentId) {
+    return { reason: "non-mattermost-owner-session" };
   }
-  if (job.agentId !== effectiveAgentId || job.sessionKey !== row.session_key) return "job-routing-mismatch";
+  return { accountId, effectiveAgentId, route };
+}
+
+function jobAuthorityReason(row, job, authority) {
+  const { accountId, effectiveAgentId } = authority;
+  const owner = objectValue(job.owner);
+  const ownerMismatch = owner?.agentId !== effectiveAgentId ||
+    owner.sessionKey !== row.owner_session_key ||
+    owner.accountId !== accountId;
+  if (ownerMismatch) return "job-owner-mismatch";
+  if (job.agentId !== effectiveAgentId || job.sessionKey !== row.session_key) {
+    return "job-routing-mismatch";
+  }
   const scheduledPolicy = objectValue(job.scheduledToolPolicy);
-  if (row.payload_tools_allow_json != null &&
-      (scheduledPolicy?.mode !== "account" || scheduledPolicy.ownerSessionKey !== row.owner_session_key ||
-       scheduledPolicy.ownerAccountId !== accountId)) {
+  const scheduledAuthorityMismatch = row.payload_tools_allow_json != null && (
+    scheduledPolicy?.mode !== "account" ||
+    scheduledPolicy.ownerSessionKey !== row.owner_session_key ||
+    scheduledPolicy.ownerAccountId !== accountId
+  );
+  if (scheduledAuthorityMismatch) {
     return "scheduled-authority-mismatch";
   }
-
-  for (const field of ["delivery_account_id", "failure_delivery_account_id", "failure_alert_account_id"]) {
-    if (row[field] != null && row[field] !== accountId) return `${field.replaceAll("_", "-")}-mismatch`;
-  }
-  for (const field of ["delivery_channel", "failure_delivery_channel", "failure_alert_channel"]) {
-    if (row[field] != null && row[field] !== "mattermost") return `${field.replaceAll("_", "-")}-mismatch`;
-  }
-  if (!destinationMatchesSession(row.delivery_to, route)) return "delivery-destination-mismatch";
-  if (!destinationMatchesSession(row.failure_delivery_to, route)) return "failure-delivery-destination-mismatch";
-  if (!destinationMatchesSession(row.failure_alert_to, route)) return "failure-alert-destination-mismatch";
-  if (row.delivery_mode === "webhook" || row.failure_delivery_mode === "webhook" ||
-      row.failure_alert_mode === "webhook" || row.delivery_completion_mode != null ||
-      row.delivery_completion_to != null) {
-    return "webhook-destination";
-  }
   return null;
+}
+
+function firstFieldMismatch(row, fields, expected) {
+  const field = fields.find((key) => row[key] != null && row[key] !== expected);
+  return field ? `${field.replaceAll("_", "-")}-mismatch` : null;
+}
+
+function deliveryQuarantineReason(row, authority) {
+  const accountMismatch = firstFieldMismatch(
+    row,
+    ["delivery_account_id", "failure_delivery_account_id", "failure_alert_account_id"],
+    authority.accountId,
+  );
+  const channelMismatch = firstFieldMismatch(
+    row,
+    ["delivery_channel", "failure_delivery_channel", "failure_alert_channel"],
+    "mattermost",
+  );
+  return accountMismatch ?? channelMismatch ?? firstQuarantineReason([
+    [!destinationMatchesSession(row.delivery_to, authority.route), "delivery-destination-mismatch"],
+    [!destinationMatchesSession(row.failure_delivery_to, authority.route), "failure-delivery-destination-mismatch"],
+    [!destinationMatchesSession(row.failure_alert_to, authority.route), "failure-alert-destination-mismatch"],
+    [row.delivery_mode === "webhook", WEBHOOK_DESTINATION_REASON],
+    [row.failure_delivery_mode === "webhook", WEBHOOK_DESTINATION_REASON],
+    [row.failure_alert_mode === "webhook", WEBHOOK_DESTINATION_REASON],
+    [row.delivery_completion_mode != null, WEBHOOK_DESTINATION_REASON],
+    [row.delivery_completion_to != null, WEBHOOK_DESTINATION_REASON],
+  ]);
+}
+
+function rowQuarantineReason(row, bindings) {
+  const payloadReason = payloadQuarantineReason(row);
+  if (payloadReason) return payloadReason;
+  const job = objectValue(parseJson(row.job_json));
+  if (!job) return "invalid-job-json";
+  const authority = resolveRowAuthority(row, bindings);
+  if (authority.reason) return authority.reason;
+  const jobReason = jobAuthorityReason(row, job, authority);
+  return jobReason ?? deliveryQuarantineReason(row, authority);
 }
 
 function readQuarantine(file) {
@@ -186,6 +242,41 @@ function writeQuarantine(file, rows) {
   fs.chmodSync(file, 0o600);
 }
 
+function assertCronSafetyColumns(db) {
+  const columns = new Set(db.prepare("PRAGMA table_info(cron_jobs)").all().map((row) => row.name));
+  for (const column of REQUIRED_CRON_COLUMNS) {
+    if (!columns.has(column)) {
+      throw new Error(`cron_jobs is missing required safety column ${column}`);
+    }
+  }
+}
+
+function readUnsafeCronRows(db, bindings) {
+  const rows = db.prepare(`SELECT ${REQUIRED_CRON_COLUMNS.join(", ")} FROM cron_jobs`).all();
+  return rows.flatMap((row) => {
+    const reason = rowQuarantineReason(row, bindings);
+    return reason ? [{ ...row, quarantine_reason: reason }] : [];
+  });
+}
+
+function removeQuarantinedRows(db, rows) {
+  const removeJob = db.prepare("DELETE FROM cron_jobs WHERE store_key = ? AND job_id = ?");
+  const removeScratch = tableExists(db, "cron_job_scratch")
+    ? db.prepare("DELETE FROM cron_job_scratch WHERE store_key = ? AND job_id = ?")
+    : null;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of rows) {
+      removeScratch?.run(row.store_key, row.job_id);
+      removeJob.run(row.store_key, row.job_id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function quarantineCustomerCronJobs(env = process.env, log = console.log) {
   if (gatewayClass(env) === "operator") {
     log("customer cron quarantine skipped for operator gateway");
@@ -199,48 +290,16 @@ export function quarantineCustomerCronJobs(env = process.env, log = console.log)
   const db = new DatabaseSync(databasePath);
   try {
     if (!tableExists(db, "cron_jobs")) return { removed: 0, skipped: "missing-table" };
-    const required = [
-      "store_key", "job_id", "owner_agent_id", "owner_session_key", "agent_id", "session_key",
-      "session_target", "schedule_kind", "payload_kind", "trigger_script", "payload_model",
-      "payload_fallbacks_json", "payload_allow_unsafe_external_content", "payload_tools_allow_json",
-      "delivery_mode", "delivery_channel", "delivery_to", "delivery_account_id",
-      "delivery_completion_mode", "delivery_completion_to", "failure_delivery_mode",
-      "failure_delivery_channel", "failure_delivery_to", "failure_delivery_account_id",
-      "failure_alert_channel", "failure_alert_to", "failure_alert_mode", "failure_alert_account_id",
-      "job_json", "updated_at",
-    ];
-    const columns = new Set(db.prepare("PRAGMA table_info(cron_jobs)").all().map((row) => row.name));
-    for (const column of required) {
-      if (!columns.has(column)) throw new Error(`cron_jobs is missing required safety column ${column}`);
-    }
-
+    assertCronSafetyColumns(db);
     const configPath = env.OPENCLAW_CONFIG_PATH?.trim() || path.join(openclawDir, "openclaw.json");
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const bindings = configuredAgentAccounts(config);
-    const rows = db.prepare(`SELECT ${required.join(", ")} FROM cron_jobs`).all();
-    const quarantined = rows.flatMap((row) => {
-      const reason = rowQuarantineReason(row, bindings);
-      return reason ? [{ ...row, quarantine_reason: reason }] : [];
-    });
+    const quarantined = readUnsafeCronRows(db, bindings);
     if (quarantined.length === 0) return { removed: 0 };
 
     const quarantinePath = path.join(openclawDir, "cron", "octogee-customer-cron-quarantine.json");
     writeQuarantine(quarantinePath, quarantined);
-    const removeJob = db.prepare("DELETE FROM cron_jobs WHERE store_key = ? AND job_id = ?");
-    const removeScratch = tableExists(db, "cron_job_scratch")
-      ? db.prepare("DELETE FROM cron_job_scratch WHERE store_key = ? AND job_id = ?")
-      : null;
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of quarantined) {
-        removeScratch?.run(row.store_key, row.job_id);
-        removeJob.run(row.store_key, row.job_id);
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
+    removeQuarantinedRows(db, quarantined);
     log(`quarantined ${quarantined.length} unsafe customer cron job(s)`);
     return { removed: quarantined.length, quarantinePath };
   } finally {

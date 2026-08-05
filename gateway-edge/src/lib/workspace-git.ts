@@ -740,49 +740,100 @@ function expectedCustomerRemoteUrl(
   return null;
 }
 
+const ORIGIN_URL = "remote.origin.url";
+const ORIGIN_FETCH = "remote.origin.fetch";
+const MALFORMED_REPOSITORY = "<malformed>";
+
+async function validateTrustedMetadata(
+  gitDir: string,
+  metadataDir: string,
+): Promise<{ error: string | null; receiptContents: string }> {
+  const receipt = `${metadataDir}.octogee-trusted-v3`;
+  try {
+    const receiptStat = await fs.lstat(receipt);
+    if (!receiptStat.isFile() || receiptStat.isSymbolicLink()) {
+      return { error: "<untrusted-metadata>", receiptContents: "" };
+    }
+    const receiptContents = await fs.readFile(receipt, "utf8");
+    const forbiddenEntries = [
+      "commondir",
+      path.join("objects", "info", "alternates"),
+      path.join("info", "grafts"),
+      path.join("refs", "replace"),
+      "worktrees",
+      "modules",
+    ];
+    for (const entry of forbiddenEntries) {
+      try {
+        await fs.lstat(path.join(gitDir, entry));
+        return { error: `<unsafe-metadata:${entry}>`, receiptContents };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          return { error: MALFORMED_REPOSITORY, receiptContents };
+        }
+      }
+    }
+    const objects = await fs.lstat(path.join(gitDir, "objects"));
+    return {
+      error: objects.isDirectory() && !objects.isSymbolicLink()
+        ? null
+        : "<unsafe-metadata:objects>",
+      receiptContents,
+    };
+  } catch {
+    return { error: "<untrusted-metadata>", receiptContents: "" };
+  }
+}
+
+function configEntryParts(entry: string): { key: string; value: string } | null {
+  const separator = entry.indexOf("\n");
+  return separator < 1
+    ? null
+    : { key: entry.slice(0, separator), value: entry.slice(separator + 1) };
+}
+
+function validRemoteConfigEntry(key: string, value: string, expectedRemote: string): boolean {
+  if (key === ORIGIN_URL) return value === expectedRemote;
+  return key === ORIGIN_FETCH && value === "+refs/heads/*:refs/remotes/origin/*";
+}
+
+function unsafeConfigEntry(entries: readonly string[], expectedRemote: string | null): string | null {
+  let originUrlCount = 0;
+  let originFetchCount = 0;
+  for (const entry of entries) {
+    const parsed = configEntryParts(entry);
+    if (!parsed) return MALFORMED_REPOSITORY;
+    const { key, value } = parsed;
+    if (isUnsafeLocalConfigKey(key)) return key;
+    if (expectedRemote && key.startsWith("branch.")) return key;
+    if (!expectedRemote) continue;
+    if (!key.startsWith("remote.")) continue;
+    if (!validRemoteConfigEntry(key, value, expectedRemote)) return key;
+    if (key === ORIGIN_URL) originUrlCount++;
+    else originFetchCount++;
+  }
+  return expectedRemote && (originUrlCount !== 1 || originFetchCount !== 1)
+    ? "remote.origin"
+    : null;
+}
+
 async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | null> {
   const gitDir = trustedWorkspaceGitDir(cwd);
   const identity = customerGitIdentity(cwd);
   let receiptContents = "";
   if (identity) {
-    const receipt = `${identity.metadataDir}.octogee-trusted-v3`;
-    try {
-      const receiptStat = await fs.lstat(receipt);
-      receiptContents = await fs.readFile(receipt, "utf8");
-      if (
-        !receiptStat.isFile()
-        || receiptStat.isSymbolicLink()
-        || expectedCustomerRemoteUrl(cwd, receiptContents) === null
-      ) return "<untrusted-metadata>";
-      const forbiddenEntries = [
-        "commondir",
-        path.join("objects", "info", "alternates"),
-        path.join("info", "grafts"),
-        path.join("refs", "replace"),
-        "worktrees",
-        "modules",
-      ];
-      for (const entry of forbiddenEntries) {
-        try {
-          await fs.lstat(path.join(gitDir, entry));
-          return `<unsafe-metadata:${entry}>`;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "<malformed>";
-        }
-      }
-      const objects = await fs.lstat(path.join(gitDir, "objects"));
-      if (!objects.isDirectory() || objects.isSymbolicLink()) return "<unsafe-metadata:objects>";
-    } catch {
-      return "<untrusted-metadata>";
-    }
+    const validation = await validateTrustedMetadata(gitDir, identity.metadataDir);
+    if (validation.error) return validation.error;
+    receiptContents = validation.receiptContents;
+    if (expectedCustomerRemoteUrl(cwd, receiptContents) === null) return "<untrusted-metadata>";
   }
   const configPath = path.join(gitDir, "config");
   try {
     const stat = await fs.lstat(configPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return "<malformed>";
+    if (!stat.isFile() || stat.isSymbolicLink()) return MALFORMED_REPOSITORY;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" ? null : "<malformed>";
+    return code === "ENOENT" ? null : MALFORMED_REPOSITORY;
   }
 
   return new Promise((resolve) => {
@@ -799,52 +850,19 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
         },
       );
     } catch {
-      resolve("<malformed>");
+      resolve(MALFORMED_REPOSITORY);
       return;
     }
     child.stdout!.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.once("error", () => resolve("<malformed>"));
+    child.once("error", () => resolve(MALFORMED_REPOSITORY));
     child.once("close", (status) => {
       if (status !== 0) {
-        resolve("<malformed>");
+        resolve(MALFORMED_REPOSITORY);
         return;
       }
       const entries = Buffer.concat(chunks).toString("utf8").split(NUL).filter(Boolean);
       const expectedRemote = expectedCustomerRemoteUrl(cwd, receiptContents);
-      let originUrlCount = 0;
-      let originFetchCount = 0;
-      for (const entry of entries) {
-        const separator = entry.indexOf("\n");
-        if (separator < 1) {
-          resolve("<malformed>");
-          return;
-        }
-        const key = entry.slice(0, separator);
-        const value = entry.slice(separator + 1);
-        if (isUnsafeLocalConfigKey(key)) {
-          resolve(key);
-          return;
-        }
-        if (expectedRemote && key.startsWith("branch.")) {
-          resolve(key);
-          return;
-        }
-        if (!expectedRemote || !key.startsWith("remote.")) continue;
-        const valid =
-          (key === "remote.origin.url" && value === expectedRemote) ||
-          (key === "remote.origin.fetch" && value === "+refs/heads/*:refs/remotes/origin/*");
-        if (!valid) {
-          resolve(key);
-          return;
-        }
-        if (key === "remote.origin.url") originUrlCount += 1;
-        else originFetchCount += 1;
-      }
-      if (expectedRemote && (originUrlCount !== 1 || originFetchCount !== 1)) {
-        resolve("remote.origin");
-        return;
-      }
-      resolve(null);
+      resolve(unsafeConfigEntry(entries, expectedRemote));
     });
   });
 }

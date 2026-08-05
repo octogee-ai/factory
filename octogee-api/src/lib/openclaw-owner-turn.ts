@@ -37,6 +37,14 @@ interface OwnerWorkspaceRequestContext {
   routeId: string;
 }
 
+interface RequestContextRecord extends Record<string, unknown> {
+  channel: "mattermost";
+  accountId: string;
+  requesterSenderId: string;
+  nativeChannelId: string;
+  to: string;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -52,52 +60,61 @@ function readPath(value: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
-function requestContext(req: Request): OwnerWorkspaceRequestContext | null {
-  const body = record(req.body);
-  const queryValue = req.query?.requestContext;
-  if (
-    body
-    && Object.prototype.hasOwnProperty.call(body, "requestContext")
-    && queryValue !== undefined
-  ) return null;
-  let queryContext: unknown = queryValue;
-  if (typeof queryValue === "string" && queryValue.length <= 2048) {
-    try {
-      queryContext = JSON.parse(queryValue) as unknown;
-    } catch {
-      queryContext = null;
-    }
+function parseQueryContext(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  if (value.length > 2048) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
   }
-  const context = record(body?.requestContext ?? queryContext);
-  if (
-    !context
-    || Object.keys(context).length !== REQUEST_CONTEXT_FIELDS.size
-    || Object.keys(context).some((key) => !REQUEST_CONTEXT_FIELDS.has(key))
-    || context.channel !== "mattermost"
-    || typeof context.accountId !== "string"
-    || typeof context.requesterSenderId !== "string"
-    || !MATTERMOST_ID_RE.test(context.requesterSenderId)
-    || typeof context.nativeChannelId !== "string"
-    || !MATTERMOST_ID_RE.test(context.nativeChannelId)
-    || typeof context.to !== "string"
-  ) return null;
+}
 
-  const separator = context.to.indexOf(":");
+function isRequestContextRecord(
+  context: Record<string, unknown> | null,
+): context is RequestContextRecord {
+  return Boolean(
+    context
+    && Object.keys(context).length === REQUEST_CONTEXT_FIELDS.size
+    && Object.keys(context).every((key) => REQUEST_CONTEXT_FIELDS.has(key))
+    && context.channel === "mattermost"
+    && typeof context.accountId === "string"
+    && typeof context.requesterSenderId === "string"
+    && MATTERMOST_ID_RE.test(context.requesterSenderId)
+    && typeof context.nativeChannelId === "string"
+    && MATTERMOST_ID_RE.test(context.nativeChannelId)
+    && typeof context.to === "string",
+  );
+}
+
+function parseRoute(to: string): { routeKind: "user" | "channel"; routeId: string } | null {
+  const separator = to.indexOf(":");
   if (separator < 0) return null;
-  const routeKind = context.to.slice(0, separator);
-  const routeId = context.to.slice(separator + 1);
+  const routeKind = to.slice(0, separator);
+  const routeId = to.slice(separator + 1);
   if (
     (routeKind !== "user" && routeKind !== "channel")
     || !MATTERMOST_ID_RE.test(routeId)
   ) return null;
+  return { routeKind, routeId };
+}
+
+function requestContext(req: Request): OwnerWorkspaceRequestContext | null {
+  const body = record(req.body);
+  const queryValue = req.query?.requestContext;
+  const bodyHasContext = body && Object.hasOwn(body, "requestContext");
+  if (bodyHasContext && queryValue !== undefined) return null;
+  const context = record(body?.requestContext ?? parseQueryContext(queryValue));
+  if (!isRequestContextRecord(context)) return null;
+  const route = parseRoute(context.to);
+  if (!route) return null;
 
   return {
     channel: "mattermost",
     accountId: context.accountId,
     requesterSenderId: context.requesterSenderId,
     nativeChannelId: context.nativeChannelId,
-    routeKind,
-    routeId,
+    ...route,
   };
 }
 

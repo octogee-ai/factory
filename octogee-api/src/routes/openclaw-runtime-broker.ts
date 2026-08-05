@@ -8,6 +8,7 @@ import {
   isValidProjectId,
   isValidUsername,
   parseAgentId,
+  type ParsedAgentId,
 } from "@octogee/shared/types/identity";
 import {
   isValidShellId,
@@ -472,11 +473,7 @@ async function resolveSessionContext(
 ): Promise<SessionContextLookup> {
   if (!agentId || !channelId) return null;
   const parsed = parseAgentId(agentId);
-  const expectedAccountId = parsed.kind === "project"
-    ? `${parsed.username}-proj-${parsed.project}`
-    : parsed.kind === "coach"
-      ? `${parsed.username}-coach`
-      : null;
+  const expectedAccountId = mattermostAccountId(parsed);
   if (!expectedAccountId || accountId !== expectedAccountId) return "forbidden";
   const identity = await resolveAgentIdentity(db, gatewayId, agentId);
   if (identity === "forbidden") return identity;
@@ -495,6 +492,25 @@ type DispatchSessionRoute = {
   peerId: string;
 };
 
+type KnownAgentId = Exclude<ParsedAgentId, { kind: "unknown" }>;
+type DispatchContextLookup = { authorized: true } | null | "forbidden";
+
+interface DispatchContextInput {
+  db: Firestore;
+  gatewayId: string;
+  agentId: string;
+  accountId: string;
+  conversationId: string;
+  senderId: string;
+  sessionKey: string;
+}
+
+function mattermostAccountId(parsed: ParsedAgentId): string | null {
+  if (parsed.kind === "project") return `${parsed.username}-proj-${parsed.project}`;
+  if (parsed.kind === "coach") return `${parsed.username}-coach`;
+  return null;
+}
+
 function dispatchSessionRoute(
   sessionKey: string,
   agentId: string,
@@ -509,67 +525,90 @@ function dispatchSessionRoute(
   };
 }
 
-async function resolveDispatchContext(
-  db: Firestore,
-  gatewayId: string,
-  agentId: string,
-  accountId: string,
-  conversationId: string,
-  senderId: string,
-  sessionKey: string,
-): Promise<{ authorized: true } | null | "forbidden"> {
+function dispatchEnvelope(
+  input: DispatchContextInput,
+  parsed: KnownAgentId,
+): DispatchSessionRoute | null {
   if (
-    !MATTERMOST_ID_RE.test(conversationId)
-    || !MATTERMOST_ID_RE.test(senderId)
-  ) return "forbidden";
-  const parsed = parseAgentId(agentId);
-  if (parsed.kind === "unknown") return "forbidden";
-  const expectedAccountId = parsed.kind === "project"
-    ? `${parsed.username}-proj-${parsed.project}`
-    : `${parsed.username}-coach`;
-  const route = dispatchSessionRoute(sessionKey, agentId);
-  if (
-    accountId !== expectedAccountId
-    || !route
-    || route.peerId !== conversationId
-    || (route.kind === "direct" && senderId !== route.peerId)
-  ) return "forbidden";
+    !MATTERMOST_ID_RE.test(input.conversationId)
+    || !MATTERMOST_ID_RE.test(input.senderId)
+    || input.accountId !== mattermostAccountId(parsed)
+  ) return null;
+  const route = dispatchSessionRoute(input.sessionKey, input.agentId);
+  if (!route || route.peerId !== input.conversationId) return null;
+  if (route.kind === "direct" && input.senderId !== route.peerId) return null;
+  return route;
+}
 
-  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
+async function resolveDirectDispatchContext(
+  input: DispatchContextInput,
+  identity: AgentIdentity,
+  parsed: KnownAgentId,
+): Promise<DispatchContextLookup> {
+  if (parsed.kind !== "coach") return "forbidden";
+  const [workspace, owner] = await Promise.all([
+    input.db.doc(`workspaces/${parsed.username}`).get(),
+    input.db.doc(`users/${identity.uid}`).get(),
+  ]);
+  if (
+    workspace.exists
+    && workspace.data()?.ownerUid === identity.uid
+    && owner.exists
+    && readPath(owner.data() ?? {}, "mattermost.userId") === input.senderId
+    && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
+  ) return { authorized: true };
+  return "forbidden";
+}
+
+function isExactDispatchLane(
+  binding: BoundChannelPath,
+  parsed: KnownAgentId,
+): boolean {
+  if (parsed.kind === "project") {
+    return binding.lane === "project"
+      && binding.workspaceSlug === parsed.username
+      && binding.projectSlug === parsed.project;
+  }
+  return binding.lane === "workspace"
+    && binding.workspaceSlug === parsed.username
+    && binding.channelName !== "admin"
+    && binding.channelName !== "coach-dm";
+}
+
+async function resolveGroupDispatchContext(
+  input: DispatchContextInput,
+  parsed: KnownAgentId,
+): Promise<DispatchContextLookup> {
+  const channel = await resolveSessionChannel(input.db, input.conversationId);
+  if (channel === "forbidden") return channel;
+  if (!channel) return null;
+  if (!isExactDispatchLane(channel.binding, parsed)) return "forbidden";
+  if (!(await sessionOwnerIsActive(input.db, channel.binding))) return null;
+  return authorizedChannelContext(channel.data, channel.binding)
+    ? { authorized: true }
+    : null;
+}
+
+async function resolveDispatchContext(
+  input: DispatchContextInput,
+): Promise<DispatchContextLookup> {
+  if (
+    !MATTERMOST_ID_RE.test(input.conversationId)
+    || !MATTERMOST_ID_RE.test(input.senderId)
+  ) return "forbidden";
+  const parsed = parseAgentId(input.agentId);
+  if (parsed.kind === "unknown") return "forbidden";
+  const route = dispatchEnvelope(input, parsed);
+  if (!route) return "forbidden";
+
+  const identity = await resolveAgentIdentity(input.db, input.gatewayId, input.agentId);
   if (identity === "forbidden") return identity;
   if (!identity) return null;
 
   if (route.kind === "direct") {
-    if (parsed.kind !== "coach") return "forbidden";
-    const [workspace, owner] = await Promise.all([
-      db.doc(`workspaces/${parsed.username}`).get(),
-      db.doc(`users/${identity.uid}`).get(),
-    ]);
-    return workspace.exists
-      && workspace.data()?.ownerUid === identity.uid
-      && owner.exists
-      && readPath(owner.data() ?? {}, "mattermost.userId") === senderId
-      && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
-      ? { authorized: true }
-      : "forbidden";
+    return resolveDirectDispatchContext(input, identity, parsed);
   }
-
-  const channel = await resolveSessionChannel(db, conversationId);
-  if (channel === "forbidden") return channel;
-  if (!channel) return null;
-  const exactLane = parsed.kind === "coach"
-    ? channel.binding.lane === "workspace"
-      && channel.binding.workspaceSlug === parsed.username
-      && channel.binding.channelName !== "admin"
-      && channel.binding.channelName !== "coach-dm"
-    : channel.binding.lane === "project"
-      && channel.binding.workspaceSlug === parsed.username
-      && channel.binding.projectSlug === parsed.project;
-  if (!exactLane) return "forbidden";
-  if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
-  return authorizedChannelContext(channel.data, channel.binding)
-    ? { authorized: true }
-    : null;
+  return resolveGroupDispatchContext(input, parsed);
 }
 
 function runLivePathIdentity(path: string): {
@@ -1073,15 +1112,15 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
   router.post("/activity/dispatch-context", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
-    const context = await resolveDispatchContext(
+    const context = await resolveDispatchContext({
       db,
-      bound.gatewayId,
-      stringBody(req, "agentId"),
-      stringBody(req, "accountId"),
-      stringBody(req, "conversationId"),
-      stringBody(req, "senderId"),
-      stringBody(req, "sessionKey"),
-    );
+      gatewayId: bound.gatewayId,
+      agentId: stringBody(req, "agentId"),
+      accountId: stringBody(req, "accountId"),
+      conversationId: stringBody(req, "conversationId"),
+      senderId: stringBody(req, "senderId"),
+      sessionKey: stringBody(req, "sessionKey"),
+    });
     if (context === "forbidden") {
       forbidden(res);
       return;

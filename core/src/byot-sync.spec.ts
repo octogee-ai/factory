@@ -1768,6 +1768,11 @@ describe("customer OAuth runtime purge", () => {
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
       customersRoot: "${CUSTOMERS_DIR}",
     });
+    expect(patch.plugins.entries["octogee-chat-tools"].hooks.timeouts).toEqual({
+      before_dispatch: 3000,
+      before_prompt_build: 3000,
+      before_agent_run: 3000,
+    });
     expect(patch.plugins.entries["octogee-connector-tools"].config).toEqual({
       brokerUrl: "${FLEET_BROKER_URL}",
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",

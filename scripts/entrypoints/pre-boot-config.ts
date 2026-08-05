@@ -221,6 +221,29 @@ function applySharedDefaultAgent(config: OpenClawConfig): boolean {
   return true;
 }
 
+function managedMattermostRoutes(
+  accounts: Record<string, unknown>,
+  configuredAgentIds: ReadonlySet<string>,
+  logFn: (msg: string) => void,
+): { routes: Map<string, string>; quarantinedAccounts: Set<string> } {
+  const routes = new Map<string, string>();
+  const quarantinedAccounts = new Set<string>();
+  for (const accountId of Object.keys(accounts)) {
+    const agentId = managedAgentIdForMattermostAccount(accountId);
+    if (agentId && configuredAgentIds.has(agentId)) {
+      routes.set(accountId, agentId);
+      continue;
+    }
+    quarantinedAccounts.add(accountId);
+    logFn(
+      agentId
+        ? `refused account route without managed agent for ${accountId}`
+        : `refused unmanaged account route for ${accountId}`,
+    );
+  }
+  return { routes, quarantinedAccounts };
+}
+
 export function applySharedMattermostRoutingSafetyPatch(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -240,22 +263,12 @@ export function applySharedMattermostRoutingSafetyPatch(
   }
   const bindings = Array.isArray(config.bindings) ? config.bindings : [];
 
-  const routes = new Map<string, string>();
-  const quarantinedAccounts = new Set<string>();
   const configuredAgentIds = new Set(agentIdsFromConfig(config));
-  for (const accountId of Object.keys(accounts)) {
-    const agentId = managedAgentIdForMattermostAccount(accountId);
-    if (!agentId || !configuredAgentIds.has(agentId)) {
-      quarantinedAccounts.add(accountId);
-      logFn(
-        agentId
-          ? `refused account route without managed agent for ${accountId}`
-          : `refused unmanaged account route for ${accountId}`,
-      );
-      continue;
-    }
-    routes.set(accountId, agentId);
-  }
+  const { routes, quarantinedAccounts } = managedMattermostRoutes(
+    accounts,
+    configuredAgentIds,
+    logFn,
+  );
   if (routes.size === 0 && quarantinedAccounts.size === 0) return changed;
 
   const retained = bindings.filter((binding) => {

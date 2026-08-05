@@ -113,11 +113,17 @@ async function externalizeCustomerGitMetadata(
   await fs.mkdir(path.dirname(metadataDir), { recursive: true });
   await fs.rename(path.join(dir, ".git"), metadataDir);
   await fs.writeFile(path.join(dir, ".git"), `gitdir: ${metadataDir}\n`);
-  const match = /^git@gitea:[^/]+\/(.+)\.git$/u.exec(remoteUrl);
-  if (!match) throw new Error(`unexpected test remote: ${remoteUrl}`);
+  const giteaMatch = /^git@gitea:[^/]+\/(.+)\.git$/u.exec(remoteUrl);
+  const githubMatch = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\.git$/u.exec(remoteUrl);
+  const source = giteaMatch
+    ? `gitea:${giteaMatch[1]}`
+    : githubMatch
+      ? `github:${githubMatch[1]}/${githubMatch[2]}`
+      : null;
+  if (!source) throw new Error(`unexpected test remote: ${remoteUrl}`);
   await fs.writeFile(
     `${metadataDir}.octogee-trusted-v3`,
-    `octogee-customer-git-v3\ngitea:${match[1]}\n`,
+    `octogee-customer-git-v3\n${source}\n`,
   );
 }
 
@@ -423,6 +429,11 @@ describe("GitHub-backed project working tree", () => {
     gitInit(projectDir);
     await fs.writeFile(path.join(projectDir, "GH.md"), "from github\n");
     gitAddCommit(projectDir, "github initial");
+    await externalizeCustomerGitMetadata(
+      projectDir,
+      path.join(testRoot, "git-metadata", SLUG, "projects", `${GH_PROJECT}.git`),
+      "https://github.com/octogee-ai/demo.git",
+    );
   });
   beforeEach(() => {
     firestoreData[`workspaces/${SLUG}/projects/${GH_PROJECT}`] = {

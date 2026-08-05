@@ -1,8 +1,9 @@
-import { parseAgentId } from "@octogee/shared/types/identity";
+import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
 
 type JsonObject = Record<string, unknown>;
 
 const ABSENT = Symbol("absent");
+const REQUIRED_ARRAY = "required-array" as const;
 
 export type GatewayConfigClass = "shared" | "builder" | "operator";
 
@@ -19,7 +20,7 @@ type ExactInvariant = {
 };
 
 type RequiredArrayInvariant = {
-  kind: "required-array";
+  kind: typeof REQUIRED_ARRAY;
   path: string;
   values: readonly string[];
 };
@@ -222,7 +223,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
 function customerToolInvariants(): PlatformInvariant[] {
   return [
     {
-      kind: "required-array",
+      kind: REQUIRED_ARRAY,
       path: "tools.deny",
       values: CUSTOMER_CODE_DENIED_TOOLS,
     },
@@ -233,7 +234,7 @@ function customerToolInvariants(): PlatformInvariant[] {
     { kind: "exact", path: "tools.fs.workspaceOnly", value: true },
     { kind: "exact", path: "tools.sessions.visibility", value: "self" },
     {
-      kind: "required-array",
+      kind: REQUIRED_ARRAY,
       path: "tools.subagents.tools.deny",
       values: ["exec", "process"],
     },
@@ -292,7 +293,7 @@ function operatorToolInvariants(): PlatformInvariant[] {
       values: ["exec", "process"],
     },
     { kind: "exact", path: "gateway.terminal.enabled", value: true },
-    { kind: "required-array", path: "plugins.allow", values: ["codex"] },
+    { kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["codex"] },
     { kind: "exact", path: "plugins.entries.codex.enabled", value: true },
     {
       kind: "exact",
@@ -372,7 +373,7 @@ export function platformInvariantTable(
     { kind: "exact", path: "channels.mattermost.commands.native", value: false },
     { kind: "mattermost-account-projection", path: "channels.mattermost.accounts" },
     { kind: "exact", path: "plugins.enabled", value: true },
-    { kind: "required-array", path: "plugins.allow", values: REQUIRED_PLUGINS },
+    { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
     { kind: "forbidden-array", path: "plugins.allow", values: RETIRED_PLUGINS },
     ...RETIRED_PLUGINS.map<PlatformInvariant>((id) => ({
       kind: "exact",
@@ -465,7 +466,7 @@ function customerAgentRecords(
   }
   const entries = asObject(agents.entries);
   return entries
-    ? Object.entries(entries).flatMap(([agentId, entry]) => {
+    ? Object.values(entries).flatMap((entry) => {
       const record = asObject(entry);
       return record ? [record] : [];
     })
@@ -513,9 +514,7 @@ function agentToolPolicySatisfied(config: JsonObject, agent: JsonObject, agentId
   const parsed = parseAgentId(agentId);
   const tools = asObject(agent.tools);
   const deny = Array.isArray(tools?.deny) ? tools.deny : [];
-  const expectedAlsoAllow = parsed.kind === "coach"
-    ? CUSTOMER_WORKFLOW_TOOLS
-    : parsed.kind === "project" ? PROJECT_AGENT_ALLOWED_TOOLS : [];
+  const expectedAlsoAllow = allowedToolsForAgent(parsed.kind);
   const expectedSenderPolicy = customerToolsBySenderPolicy(config, agentId);
   return tools !== null
     && tools.profile === (parsed.kind === "coach" ? "coding" : "minimal")
@@ -532,9 +531,7 @@ function forceAgentToolPolicy(config: JsonObject, agent: JsonObject, agentId: st
   const tools = asObject(agent.tools) ?? {};
   agent.tools = tools;
   tools.profile = parsed.kind === "coach" ? "coding" : "minimal";
-  tools.alsoAllow = parsed.kind === "coach"
-    ? structuredClone(CUSTOMER_WORKFLOW_TOOLS)
-    : parsed.kind === "project" ? structuredClone(PROJECT_AGENT_ALLOWED_TOOLS) : [];
+  tools.alsoAllow = structuredClone(allowedToolsForAgent(parsed.kind));
   const deny = Array.isArray(tools.deny)
     ? tools.deny.filter((value): value is string => typeof value === "string")
     : [];
@@ -552,6 +549,12 @@ function accountIdForAgentId(agentId: string): string | null {
   return null;
 }
 
+function allowedToolsForAgent(kind: ParsedAgentId["kind"]): readonly string[] {
+  if (kind === "coach") return CUSTOMER_WORKFLOW_TOOLS;
+  if (kind === "project") return PROJECT_AGENT_ALLOWED_TOOLS;
+  return [];
+}
+
 function customerToolsBySenderPolicy(_config: JsonObject, agentId: string): JsonObject {
   return parseAgentId(agentId).kind === "project"
     ? { "*": { deny: structuredClone(PRODUCTIVITY_TOOL_NAMES) } }
@@ -561,10 +564,12 @@ function customerToolsBySenderPolicy(_config: JsonObject, agentId: string): Json
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
 function trustedOwnerAllowFrom(value: unknown): string[] | null {
-  return Array.isArray(value) && value.length === 1 &&
+  if (!Array.isArray(value)) return null;
+  if (value.length === 0) return [];
+  return value.length === 1 &&
       typeof value[0] === "string" && MATTERMOST_ID_RE.test(value[0])
     ? [value[0]]
-    : Array.isArray(value) && value.length === 0 ? [] : null;
+    : null;
 }
 
 function managedMattermostAccountIds(config: JsonObject): Set<string> {
@@ -656,7 +661,7 @@ function invariantSatisfied(config: JsonObject, invariant: PlatformInvariant): b
   }
   const actual = readPath(config, invariant.path);
   if (invariant.kind === "exact") return equal(actual, invariant.value);
-  if (invariant.kind === "required-array") {
+  if (invariant.kind === REQUIRED_ARRAY) {
     return Array.isArray(actual) && invariant.values.every((value) => actual.includes(value));
   }
   return !Array.isArray(actual) || invariant.values.every((value) => !actual.includes(value));
@@ -686,7 +691,7 @@ function applyInvariant(config: JsonObject, invariant: PlatformInvariant): void 
   const actual = Array.isArray(parent[leaf])
     ? parent[leaf].filter((value): value is string => typeof value === "string")
     : [];
-  parent[leaf] = invariant.kind === "required-array"
+  parent[leaf] = invariant.kind === REQUIRED_ARRAY
     ? [...actual, ...invariant.values.filter((value) => !actual.includes(value))]
     : actual.filter((value) => !invariant.values.includes(value));
 }

@@ -567,6 +567,71 @@ function createIdentityResolver(initialIdentity?: DeviceIdentity): () => DeviceI
   };
 }
 
+type GatewayCall = (
+  method: string,
+  params: unknown,
+  requestTimeoutMs?: number,
+) => Promise<unknown>;
+
+async function stopChannels(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["channelsStop"]>[0],
+): Promise<GatewayChannelStopResult> {
+  const payload = await call("channels.stop", params);
+  if (!payload || typeof payload !== "object" ||
+      (payload as { stopped?: unknown }).stopped !== true) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "channels.stop payload missing `stopped: true`",
+    );
+  }
+  return payload as GatewayChannelStopResult;
+}
+
+async function startChannels(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["channelsStart"]>[0],
+): Promise<GatewayChannelStartResult> {
+  const payload = await call("channels.start", params);
+  if (!payload || typeof payload !== "object" ||
+      (payload as { started?: unknown }).started !== true) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "channels.start payload missing `started: true`",
+    );
+  }
+  return payload as GatewayChannelStartResult;
+}
+
+async function requestGatewayRestart(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["gatewayRestartRequest"]>[0],
+): Promise<GatewayRestartRequestResult> {
+  const payload = await call("gateway.restart.request", params);
+  const result = payload as Partial<GatewayRestartRequestResult> | undefined;
+  const restart = result?.restart;
+  if (
+    !result ||
+    typeof result !== "object" ||
+    result.ok !== true ||
+    !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
+    !restart ||
+    typeof restart !== "object" ||
+    restart.ok !== true ||
+    !Number.isSafeInteger(restart.pid) ||
+    restart.pid <= 0 ||
+    restart.signal !== "SIGUSR1" ||
+    typeof restart.coalesced !== "boolean" ||
+    (result.status === "coalesced") !== restart.coalesced
+  ) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "gateway.restart.request returned malformed restart acknowledgement",
+    );
+  }
+  return result as GatewayRestartRequestResult;
+}
+
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
   const url =
     opts.url ??
@@ -659,61 +724,9 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     channelsStatus: statusConnection.call,
     channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
 
-    async channelsStop(params) {
-      const payload = await call("channels.stop", params);
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        (payload as { stopped?: unknown }).stopped !== true
-      ) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "channels.stop payload missing `stopped: true`",
-        );
-      }
-      return payload as GatewayChannelStopResult;
-    },
-
-    async channelsStart(params) {
-      const payload = await call("channels.start", params);
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        (payload as { started?: unknown }).started !== true
-      ) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "channels.start payload missing `started: true`",
-        );
-      }
-      return payload as GatewayChannelStartResult;
-    },
-
-    async gatewayRestartRequest(params) {
-      const payload = await call("gateway.restart.request", params);
-      const result = payload as Partial<GatewayRestartRequestResult> | undefined;
-      const restart = result?.restart;
-      if (
-        !result ||
-        typeof result !== "object" ||
-        result.ok !== true ||
-        !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
-        !restart ||
-        typeof restart !== "object" ||
-        restart.ok !== true ||
-        !Number.isSafeInteger(restart.pid) ||
-        restart.pid <= 0 ||
-        restart.signal !== "SIGUSR1" ||
-        typeof restart.coalesced !== "boolean" ||
-        (result.status === "coalesced") !== restart.coalesced
-      ) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "gateway.restart.request returned malformed restart acknowledgement",
-        );
-      }
-      return result as GatewayRestartRequestResult;
-    },
+    channelsStop: (params) => stopChannels(call, params),
+    channelsStart: (params) => startChannels(call, params),
+    gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
 
     async sessionsList(params) {
       const payload = await call("sessions.list", params);

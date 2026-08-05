@@ -104,6 +104,8 @@ const CUSTOMER_GIT_TRUST_RECEIPT_VERSION = "octogee-customer-git-v3";
 const SAFE_GIT_IDENTITY_RE = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const SAFE_GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const SAFE_GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/u;
+const GIT_BINARY = "/usr/bin/git";
+const DISABLED_EXECUTABLE = "/bin/false";
 
 interface CustomerGitIdentity {
   slug: string;
@@ -277,10 +279,10 @@ function customerGitEnvironmentForRefresh(
     GIT_CONFIG_SYSTEM: "/dev/null",
     ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
     GIT_TERMINAL_PROMPT: "0",
-    GIT_ASKPASS: "/bin/false",
-    SSH_ASKPASS: "/bin/false",
-    GIT_EDITOR: "/bin/false",
-    GIT_SEQUENCE_EDITOR: "/bin/false",
+    GIT_ASKPASS: DISABLED_EXECUTABLE,
+    SSH_ASKPASS: DISABLED_EXECUTABLE,
+    GIT_EDITOR: DISABLED_EXECUTABLE,
+    GIT_SEQUENCE_EDITOR: DISABLED_EXECUTABLE,
     GIT_PAGER: "cat",
     GIT_PROTOCOL_FROM_USER: "0",
     GIT_OPTIONAL_LOCKS: "0",
@@ -297,7 +299,7 @@ function runFreshCustomerGit(
   preserveBuilderGithubCredentialConfig = false,
 ): string {
   return execFileSync(
-    "/usr/bin/git",
+    GIT_BINARY,
     [
       ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
       ...githubCredentialArgs(githubToken),
@@ -333,7 +335,7 @@ function initializeFreshCustomerGit(
   fs.mkdirSync(path.dirname(identity.metadataDir), { recursive: true, mode: 0o700 });
   try {
     execFileSync(
-      "/usr/bin/git",
+      GIT_BINARY,
       ["init", "--bare", "--initial-branch=main", staging],
       {
         cwd: repoDir,
@@ -486,7 +488,7 @@ export function removePersistedRepoSshCommand(repoDir: string): void {
   if (!gitDir) return;
   try {
     execFileSync(
-      "/usr/bin/git",
+      GIT_BINARY,
       ["config", "--file", path.join(gitDir, "config"), "--unset-all", "core.sshCommand"],
       { cwd: repoDir, stdio: ["ignore", "ignore", "ignore"] },
     );
@@ -600,10 +602,10 @@ export function gitExec(
       GIT_CONFIG_SYSTEM: "/dev/null",
       ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
       GIT_TERMINAL_PROMPT: "0",
-      GIT_ASKPASS: "/bin/false",
-      SSH_ASKPASS: "/bin/false",
-      GIT_EDITOR: "/bin/false",
-      GIT_SEQUENCE_EDITOR: "/bin/false",
+      GIT_ASKPASS: DISABLED_EXECUTABLE,
+      SSH_ASKPASS: DISABLED_EXECUTABLE,
+      GIT_EDITOR: DISABLED_EXECUTABLE,
+      GIT_SEQUENCE_EDITOR: DISABLED_EXECUTABLE,
       GIT_PAGER: "cat",
       GIT_PROTOCOL_FROM_USER: "0",
       GIT_OPTIONAL_LOCKS: "0",
@@ -619,7 +621,7 @@ export function gitExec(
     const repositoryArgs = gitDir && !["config", "init", "clone"].includes(command ?? "")
       ? ["--git-dir", gitDir, "--work-tree", cwd]
       : [];
-    return execFileSync("/usr/bin/git", [
+    return execFileSync(GIT_BINARY, [
       ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
       ...githubCredentialArgs(githubToken),
       ...repositoryArgs,
@@ -648,7 +650,7 @@ const GIT_HARDENING_ARGS = [
   "-c", "credential.helper=",
   "-c", "commit.gpgSign=false",
   "-c", "tag.gpgSign=false",
-  "-c", "gpg.program=/bin/false",
+  "-c", `gpg.program=${DISABLED_EXECUTABLE}`,
   "-c", "protocol.allow=never",
   "-c", "protocol.ssh.allow=always",
   "-c", "protocol.https.allow=always",
@@ -706,7 +708,7 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
   if (!fs.existsSync(configPath)) return null;
   try {
     const output = execFileSync(
-      "/usr/bin/git",
+      GIT_BINARY,
       ["config", "--file", configPath, "--null", "--name-only", "--list"],
       {
         cwd,

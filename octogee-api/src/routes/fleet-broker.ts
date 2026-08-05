@@ -1257,6 +1257,12 @@ type ResolvedFleetBrokerRouteDeps = {
   now: () => number;
 };
 
+function ownerWorkspaceTurnVerifier(
+  opts: { db: Firestore } & FleetBrokerRouteDeps,
+): OwnerWorkspaceTurnVerifier {
+  return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db);
+}
+
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): ResolvedFleetBrokerRouteDeps {
@@ -1284,8 +1290,7 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
-    verifyOwnerWorkspaceTurn:
-      opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db),
+    verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
       opts.onSignupOfferBudgetInterruption,

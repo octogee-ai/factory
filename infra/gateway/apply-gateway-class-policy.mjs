@@ -112,6 +112,8 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-publish-tools",
   "openai",
 ];
+const FLEET_BROKER_URL_TEMPLATE = "${FLEET_BROKER_URL}";
+const API_SA_TOKEN_PATH_TEMPLATE = "${OCTOGEE_API_SA_TOKEN_PATH}";
 const CUSTOMER_PLUGIN_ENTRIES = {
   mattermost: { enabled: true },
   anthropic: { enabled: true },
@@ -124,55 +126,55 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     },
     config: {
       siteUrl: "${MM_SITE_URL}",
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
       customersRoot: "${CUSTOMERS_DIR}",
     },
   },
   "octogee-connector-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
       requireWriteApproval: true,
     },
   },
   "octogee-access-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
   "octogee-preview-tools": { enabled: true, config: {} },
   "octogee-project-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
   "octogee-status-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
       gatewayClass: "${GATEWAY_CLASS}",
     },
   },
   "octogee-ops-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
   "octogee-web-tools": {
     enabled: true,
     config: {
-      brokerUrl: "${FLEET_BROKER_URL}",
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
       gatewayId: "${GATEWAY_ID}",
-      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
   "octogee-workspace-tools": { enabled: true, config: {} },
@@ -409,50 +411,60 @@ function disableCustomerConfigMutation(config) {
   }
 }
 
+function customerAgentLane(agentId) {
+  if (typeof agentId !== "string" || !CUSTOMER_AGENT_ID.test(agentId)) return "unknown";
+  return agentId.includes("-proj-") ? "project" : "coach";
+}
+
+function customerAgentToolProjection(lane, currentDeny) {
+  if (lane === "coach") {
+    return {
+      profile: "coding",
+      alsoAllow: [...OCTOGEE_WORKFLOW_TOOLS],
+      deny: addTools(currentDeny, CUSTOMER_CODE_DENIED_TOOLS),
+    };
+  }
+  if (lane === "project") {
+    return {
+      profile: "minimal",
+      alsoAllow: [...PROJECT_AGENT_ALLOWED_TOOLS],
+      deny: [...PROJECT_AGENT_DENIED_TOOLS],
+    };
+  }
+  return {
+    profile: "minimal",
+    alsoAllow: [],
+    deny: addTools(currentDeny, CUSTOMER_CODE_DENIED_TOOLS),
+  };
+}
+
+function projectCustomerAgentTools(config, entry, agentId) {
+  entry.tools ??= {};
+  entry.tools.fs ??= {};
+  entry.tools.fs.workspaceOnly = true;
+  const projected = customerAgentToolProjection(customerAgentLane(agentId), entry.tools.deny);
+  entry.tools.profile = projected.profile;
+  entry.tools.alsoAllow = projected.alsoAllow;
+  entry.tools.deny = projected.deny;
+  entry.tools.toolsBySender = customerToolsBySender(config, agentId);
+  delete entry.tools.allow;
+}
+
 function forceCustomerWorkspaceOnly(config) {
   config.tools ??= {};
   config.tools.fs ??= {};
   config.tools.fs.workspaceOnly = true;
   if (Array.isArray(config.agents?.list)) {
-    for (const entry of config.agents.list) {
-      if (!objectValue(entry)) continue;
-      entry.tools ??= {};
-      entry.tools.fs ??= {};
-      entry.tools.fs.workspaceOnly = true;
-      const parsedLane = typeof entry.id === "string" && CUSTOMER_AGENT_ID.test(entry.id)
-        ? (entry.id.includes("-proj-") ? "project" : "coach")
-        : "unknown";
-      entry.tools.profile = parsedLane === "coach" ? "coding" : "minimal";
-      entry.tools.alsoAllow = parsedLane === "coach"
-        ? [...OCTOGEE_WORKFLOW_TOOLS]
-        : parsedLane === "project" ? [...PROJECT_AGENT_ALLOWED_TOOLS] : [];
-      entry.tools.deny = parsedLane === "project"
-        ? [...PROJECT_AGENT_DENIED_TOOLS]
-        : addTools(entry.tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
-      entry.tools.toolsBySender = customerToolsBySender(config, entry.id);
-      delete entry.tools.allow;
+    for (const rawEntry of config.agents.list) {
+      const entry = objectValue(rawEntry);
+      if (entry) projectCustomerAgentTools(config, entry, entry.id);
     }
   }
   const entries = objectValue(config.agents?.entries);
   if (!entries) return;
   for (const [agentId, rawEntry] of Object.entries(entries)) {
     const entry = objectValue(rawEntry);
-    if (!entry) continue;
-    entry.tools ??= {};
-    entry.tools.fs ??= {};
-    entry.tools.fs.workspaceOnly = true;
-    const parsedLane = CUSTOMER_AGENT_ID.test(agentId)
-      ? (agentId.includes("-proj-") ? "project" : "coach")
-      : "unknown";
-    entry.tools.profile = parsedLane === "coach" ? "coding" : "minimal";
-    entry.tools.alsoAllow = parsedLane === "coach"
-      ? [...OCTOGEE_WORKFLOW_TOOLS]
-      : parsedLane === "project" ? [...PROJECT_AGENT_ALLOWED_TOOLS] : [];
-    entry.tools.deny = parsedLane === "project"
-      ? [...PROJECT_AGENT_DENIED_TOOLS]
-      : addTools(entry.tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
-    entry.tools.toolsBySender = customerToolsBySender(config, agentId);
-    delete entry.tools.allow;
+    if (entry) projectCustomerAgentTools(config, entry, agentId);
   }
 }
 
@@ -608,32 +620,45 @@ function expectedCustomerSecretRef(config, segments) {
   return null;
 }
 
+function neutralizeSecretRefsInArray(value, config, segments) {
+  for (let index = value.length - 1; index >= 0; index--) {
+    const child = value[index];
+    const childSegments = [...segments, String(index)];
+    if (!isSecretRef(child)) {
+      neutralizeUnapprovedCustomerSecretRefs(child, config, childSegments);
+      continue;
+    }
+    const expected = expectedCustomerSecretRef(config, childSegments);
+    if (expected) value[index] = expected;
+    else value.splice(index, 1);
+  }
+}
+
+function isCustomerSecretProviderPath(segments, key) {
+  return segments.length === 1 && segments[0] === "secrets" && key === "providers";
+}
+
+function neutralizeSecretRefsInRecord(record, config, segments) {
+  for (const [key, child] of Object.entries(record)) {
+    if (isCustomerSecretProviderPath(segments, key)) continue;
+    const childSegments = [...segments, key];
+    if (!isSecretRef(child)) {
+      neutralizeUnapprovedCustomerSecretRefs(child, config, childSegments);
+      continue;
+    }
+    const expected = expectedCustomerSecretRef(config, childSegments);
+    if (expected) record[key] = expected;
+    else delete record[key];
+  }
+}
+
 function neutralizeUnapprovedCustomerSecretRefs(value, config, segments = []) {
   if (Array.isArray(value)) {
-    for (let index = value.length - 1; index >= 0; index--) {
-      const child = value[index];
-      if (isSecretRef(child)) {
-        const expected = expectedCustomerSecretRef(config, [...segments, String(index)]);
-        if (expected) value[index] = expected;
-        else value.splice(index, 1);
-        continue;
-      }
-      neutralizeUnapprovedCustomerSecretRefs(child, config, [...segments, String(index)]);
-    }
+    neutralizeSecretRefsInArray(value, config, segments);
     return;
   }
   const record = objectValue(value);
-  if (!record) return;
-  for (const [key, child] of Object.entries(record)) {
-    if (segments.length === 1 && segments[0] === "secrets" && key === "providers") continue;
-    if (isSecretRef(child)) {
-      const expected = expectedCustomerSecretRef(config, [...segments, key]);
-      if (expected) record[key] = expected;
-      else delete record[key];
-      continue;
-    }
-    neutralizeUnapprovedCustomerSecretRefs(child, config, [...segments, key]);
-  }
+  if (record) neutralizeSecretRefsInRecord(record, config, segments);
 }
 
 function projectCustomerSecretProviders(config, openclawDir) {
@@ -662,7 +687,7 @@ function projectCustomerSecretProviders(config, openclawDir) {
   };
 }
 
-function projectCustomerSpawnNamespaces(config) {
+function scrubCustomerHookNamespaces(config) {
   const hooks = objectValue(config.hooks);
   if (hooks) {
     delete hooks.transformsDir;
@@ -677,46 +702,57 @@ function projectCustomerSpawnNamespaces(config) {
     }
   }
   const internalHooks = objectValue(config.hooks?.internal);
-  if (internalHooks) {
-    delete internalHooks.handlers;
-    const load = objectValue(internalHooks.load);
-    if (load) {
-      delete load.extraDirs;
-      if (Object.keys(load).length === 0) delete internalHooks.load;
-    }
-  }
+  if (!internalHooks) return;
+  delete internalHooks.handlers;
+  const load = objectValue(internalHooks.load);
+  if (!load) return;
+  delete load.extraDirs;
+  if (Object.keys(load).length === 0) delete internalHooks.load;
+}
+
+function scrubCustomerProviderCommands(config) {
   const qmd = objectValue(config.memory?.qmd);
   if (qmd) delete qmd.command;
   const providers = objectValue(config.models?.providers);
-  if (providers) {
-    for (const provider of Object.values(providers)) {
-      const localService = objectValue(objectValue(provider)?.localService);
-      if (localService) delete localService.command;
-    }
+  if (!providers) return;
+  for (const provider of Object.values(providers)) {
+    const localService = objectValue(objectValue(provider)?.localService);
+    if (localService) delete localService.command;
   }
+}
+
+function commandlessModel(value, rejectCli) {
+  const entry = objectValue(value);
+  return Boolean(entry) && (!rejectCli || entry.type !== "cli") &&
+    !Object.prototype.hasOwnProperty.call(entry, "command");
+}
+
+function scrubCustomerMediaCommands(config) {
   const media = objectValue(config.tools?.media);
   if (media && Array.isArray(media.models)) {
-    media.models = media.models.filter((model) => {
-      const entry = objectValue(model);
-      return entry && entry.type !== "cli" &&
-        !Object.prototype.hasOwnProperty.call(entry, "command");
-    });
+    media.models = media.models.filter((model) => commandlessModel(model, true));
   }
   const links = objectValue(config.tools?.links);
   if (links && Array.isArray(links.models)) {
-    links.models = links.models.filter((model) => {
-      const entry = objectValue(model);
-      return entry && !Object.prototype.hasOwnProperty.call(entry, "command");
-    });
+    links.models = links.models.filter((model) => commandlessModel(model, false));
   }
+}
+
+function scrubCustomerInstallAndCronCommands(config) {
   const installPolicy = objectValue(config.security?.installPolicy);
   if (installPolicy) delete installPolicy.exec;
   const cron = objectValue(config.cron);
-  if (cron) {
-    for (const key of ["webhookToken", "webhookAuth", "failureAlert", "failureAlerts"]) {
-      delete cron[key];
-    }
+  if (!cron) return;
+  for (const key of ["webhookToken", "webhookAuth", "failureAlert", "failureAlerts"]) {
+    delete cron[key];
   }
+}
+
+function projectCustomerSpawnNamespaces(config) {
+  scrubCustomerHookNamespaces(config);
+  scrubCustomerProviderCommands(config);
+  scrubCustomerMediaCommands(config);
+  scrubCustomerInstallAndCronCommands(config);
 }
 
 function normalizedCatalogSelection(value) {
@@ -801,28 +837,25 @@ function configuredCustomerAgentIds(config) {
   return [...ids];
 }
 
-function scrubCustomerOauthConfig(config, env) {
-  const resetAgentIds = new Set();
-  config.agents ??= {};
-  config.agents.defaults ??= {};
-  const allAgentIds = configuredCustomerAgentIds(config);
-  const providers = objectValue(config.models?.providers);
+function customerModelProviders(env) {
   const anthropicBaseUrl = env.ANTHROPIC_BASE_URL?.trim();
-  const expectedProviders = anthropicBaseUrl
+  return anthropicBaseUrl
     ? { anthropic: { baseUrl: anthropicBaseUrl } }
     : {};
-  const unsafeProviders = JSON.stringify(providers ?? {}) !== JSON.stringify(expectedProviders);
-  config.models ??= {};
-  config.models.providers = expectedProviders;
+}
+
+function resetConfiguredAgents(resetAgentIds, agentIds) {
+  for (const agentId of agentIds) resetAgentIds.add(agentId);
+}
+
+function projectCustomerDefaultRuntime(config, unsafeProviders, allAgentIds, resetAgentIds) {
   config.agents.defaults.models ??= {};
   const defaultModels = projectCatalogModelMap(
     config.agents.defaults.models,
     SAFE_CUSTOMER_MODEL,
   );
-  const directRefs = defaultModels.removedRefs;
-  const allDirectRefs = new Set(directRefs);
   if (defaultModels.changed || unsafeProviders) {
-    allAgentIds.forEach((agentId) => resetAgentIds.add(agentId));
+    resetConfiguredAgents(resetAgentIds, allAgentIds);
   }
   const hasDefaultModel = Object.prototype.hasOwnProperty.call(config.agents.defaults, "model");
   const normalizedDefaultModel = hasDefaultModel
@@ -830,7 +863,7 @@ function scrubCustomerOauthConfig(config, env) {
     : null;
   if (unsafeProviders || (hasDefaultModel && normalizedDefaultModel === null)) {
     config.agents.defaults.model = { primary: SAFE_CUSTOMER_MODEL, fallbacks: [] };
-    allAgentIds.forEach((agentId) => resetAgentIds.add(agentId));
+    resetConfiguredAgents(resetAgentIds, allAgentIds);
   } else if (
     normalizedDefaultModel &&
     JSON.stringify(config.agents.defaults.model) !== JSON.stringify(normalizedDefaultModel)
@@ -840,46 +873,75 @@ function scrubCustomerOauthConfig(config, env) {
   const defaultAgentRuntime = objectValue(config.agents.defaults.agentRuntime);
   if (isDirectAgentRuntimeId(defaultAgentRuntime?.id)) {
     delete config.agents.defaults.agentRuntime;
-    allAgentIds.forEach((agentId) => resetAgentIds.add(agentId));
+    resetConfiguredAgents(resetAgentIds, allAgentIds);
   }
+  return new Set(defaultModels.removedRefs);
+}
+
+function unapprovedAgentModelRefs(entry) {
+  const models = objectValue(objectValue(entry)?.models);
+  if (!models) return [];
+  return Object.keys(models).filter((modelRef) => !CUSTOMER_MODEL_REFS.has(modelRef));
+}
+
+function projectCustomerAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs) {
+  if (!SAFE_AGENT_ID.test(agentId)) return;
+  for (const modelRef of unapprovedAgentModelRefs(entry)) directRefs.add(modelRef);
+  if (scrubOwnedAgentRuntime(entry, unsafeProviders)) resetAgentIds.add(agentId);
+}
+
+function projectConfiguredCustomerAgentRuntimes(config, unsafeProviders, resetAgentIds, directRefs) {
   if (Array.isArray(config.agents.list)) {
     for (const entry of config.agents.list) {
-      if (typeof entry?.id !== "string" || !SAFE_AGENT_ID.test(entry.id)) continue;
-      const localRefs = objectValue(entry.models)
-        ? Object.keys(entry.models).filter((modelRef) => !CUSTOMER_MODEL_REFS.has(modelRef))
-        : [];
-      localRefs.forEach((modelRef) => allDirectRefs.add(modelRef));
-      if (scrubOwnedAgentRuntime(entry, unsafeProviders)) resetAgentIds.add(entry.id);
+      if (typeof entry?.id === "string") {
+        projectCustomerAgentRuntime(entry, entry.id, unsafeProviders, resetAgentIds, directRefs);
+      }
     }
   }
   const entries = objectValue(config.agents.entries);
-  if (entries) {
-    for (const [agentId, entry] of Object.entries(entries)) {
-      if (!SAFE_AGENT_ID.test(agentId)) continue;
-      const localModels = objectValue(objectValue(entry)?.models);
-      if (localModels) {
-        Object.keys(localModels)
-          .filter((modelRef) => !CUSTOMER_MODEL_REFS.has(modelRef))
-          .forEach((modelRef) => allDirectRefs.add(modelRef));
-      }
-      if (scrubOwnedAgentRuntime(entry, unsafeProviders)) resetAgentIds.add(agentId);
-    }
+  if (!entries) return;
+  for (const [agentId, entry] of Object.entries(entries)) {
+    projectCustomerAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs);
   }
+}
+
+function removeUnapprovedCustomerAuthProfiles(config) {
   const profiles = objectValue(config.auth?.profiles);
-  if (profiles) {
-    for (const [profileId, profile] of Object.entries(profiles)) {
-      const provider = objectValue(profile)?.provider;
-      if (
-        profileId === CODEX_PROFILE ||
-        profileId === CLAUDE_CLI_PROFILE ||
-        provider === "openai-codex" ||
-        provider === "claude-cli"
-      ) {
-        delete profiles[profileId];
-      }
-    }
+  if (!profiles) return;
+  for (const [profileId, profile] of Object.entries(profiles)) {
+    const provider = objectValue(profile)?.provider;
+    const unapproved = profileId === CODEX_PROFILE ||
+      profileId === CLAUDE_CLI_PROFILE ||
+      provider === "openai-codex" ||
+      provider === "claude-cli";
+    if (unapproved) delete profiles[profileId];
   }
-  return { resetAgentIds, directRuntimeModelRefs: allDirectRefs };
+}
+
+function scrubCustomerOauthConfig(config, env) {
+  const resetAgentIds = new Set();
+  config.agents ??= {};
+  config.agents.defaults ??= {};
+  const allAgentIds = configuredCustomerAgentIds(config);
+  const providers = objectValue(config.models?.providers);
+  const expectedProviders = customerModelProviders(env);
+  const unsafeProviders = JSON.stringify(providers ?? {}) !== JSON.stringify(expectedProviders);
+  config.models ??= {};
+  config.models.providers = expectedProviders;
+  const directRuntimeModelRefs = projectCustomerDefaultRuntime(
+    config,
+    unsafeProviders,
+    allAgentIds,
+    resetAgentIds,
+  );
+  projectConfiguredCustomerAgentRuntimes(
+    config,
+    unsafeProviders,
+    resetAgentIds,
+    directRuntimeModelRefs,
+  );
+  removeUnapprovedCustomerAuthProfiles(config);
+  return { resetAgentIds, directRuntimeModelRefs };
 }
 
 function removeFile(targetPath) {
@@ -963,79 +1025,123 @@ function projectAgentModelsJson(agentDir, providers) {
   return true;
 }
 
-function resetAgentSessionStore(openclawDir, agentId) {
-  const sessionsPath = path.join(openclawDir, "agents", agentId, "sessions", "sessions.json");
-  let changed = false;
-  if (fs.existsSync(sessionsPath)) {
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
-    if (!objectValue(sessions)) {
-      throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
-    }
-    let sessionsChanged = false;
-    for (const entry of Object.values(sessions)) {
-      sessionsChanged = clearSessionRuntimeState(entry) || sessionsChanged;
-    }
-    if (sessionsChanged) {
-      const tmpPath = `${sessionsPath}.oauth-purge.tmp`;
-      fs.writeFileSync(tmpPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
-      fs.renameSync(tmpPath, sessionsPath);
-      changed = true;
-    }
+function readSessionMap(sessionsPath) {
+  const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
+  if (!objectValue(sessions)) {
+    throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
   }
-  const dbPath = path.join(openclawDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
-  if (fs.existsSync(dbPath)) {
-    const db = new DatabaseSync(dbPath);
-    try {
-      const table = db.prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
-      ).get();
-      if (table) {
-        const rows = db.prepare("SELECT session_key, entry_json FROM session_nodes").all();
-        const update = db.prepare(
-          "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
-        );
-        db.exec("BEGIN IMMEDIATE");
-        for (const row of rows) {
-          if (typeof row.entry_json !== "string") continue;
-          const entry = JSON.parse(row.entry_json);
-          if (!objectValue(entry)) {
-            throw new Error(
-              `apply-gateway-class-policy: ${dbPath} session ${String(row.session_key)} is invalid`,
-            );
-          }
-          if (!clearSessionRuntimeState(entry)) continue;
-          update.run(JSON.stringify(entry), row.session_key);
-          changed = true;
-        }
-        db.exec("COMMIT");
-      }
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {
-        // Preserve the original failure when no transaction was active.
-      }
-      throw error;
-    } finally {
-      db.close();
-    }
-  }
-  return changed;
+  return sessions;
 }
 
-function sessionEntryUsesUnsafeRuntime(rawEntry, directRuntimeModelRefs) {
-  const entry = objectValue(rawEntry);
-  if (!entry) return false;
+function resetLegacySessionStore(sessionsPath) {
+  if (!fs.existsSync(sessionsPath)) return false;
+  const sessions = readSessionMap(sessionsPath);
+  let changed = false;
+  for (const entry of Object.values(sessions)) {
+    changed = clearSessionRuntimeState(entry) || changed;
+  }
+  if (!changed) return false;
+  const tmpPath = `${sessionsPath}.oauth-purge.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
+  fs.renameSync(tmpPath, sessionsPath);
+  return true;
+}
+
+function rollbackSessionTransaction(db, error) {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    return error;
+  }
+  return error;
+}
+
+function parseSessionNode(row, dbPath) {
+  if (typeof row.entry_json !== "string") return null;
+  const entry = JSON.parse(row.entry_json);
+  if (!objectValue(entry)) {
+    throw new Error(
+      `apply-gateway-class-policy: ${dbPath} session ${String(row.session_key)} is invalid`,
+    );
+  }
+  return entry;
+}
+
+function mutateSqliteSessionStore(dbPath, mutateEntry) {
+  if (!fs.existsSync(dbPath)) return false;
+  const db = new DatabaseSync(dbPath);
+  try {
+    const table = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
+    ).get();
+    if (!table) return false;
+    const rows = db.prepare("SELECT session_key, entry_json FROM session_nodes").all();
+    const update = db.prepare(
+      "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
+    );
+    let changed = false;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const row of rows) {
+        const entry = parseSessionNode(row, dbPath);
+        if (!entry || !mutateEntry(entry)) continue;
+        update.run(JSON.stringify(entry), row.session_key);
+        changed = true;
+      }
+      db.exec("COMMIT");
+      return changed;
+    } catch (error) {
+      throw rollbackSessionTransaction(db, error);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function resetAgentSessionStore(openclawDir, agentId) {
+  const sessionsPath = path.join(openclawDir, "agents", agentId, "sessions", "sessions.json");
+  const legacyChanged = resetLegacySessionStore(sessionsPath);
+  const dbPath = path.join(openclawDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+  const sqliteChanged = mutateSqliteSessionStore(dbPath, clearSessionRuntimeState);
+  return legacyChanged || sqliteChanged;
+}
+
+function unsupportedCustomerModel(provider, model) {
+  if (typeof model !== "string" || CUSTOMER_MODEL_REFS.has(model)) return false;
+  return typeof provider !== "string" || !CUSTOMER_MODEL_REFS.has(`${provider}/${model}`);
+}
+
+function hasUnsafeSessionModelState(entry, directRuntimeModelRefs) {
   const providers = [entry.providerOverride, entry.modelProvider];
-  const unsupportedModel = (provider, model) => {
-    if (typeof model !== "string") return false;
-    if (CUSTOMER_MODEL_REFS.has(model)) return false;
-    return typeof provider !== "string" || !CUSTOMER_MODEL_REFS.has(`${provider}/${model}`);
-  };
-  const modelFallback = objectValue(entry.modelFallback) ?? {};
-  const cliSessionIds = Object.keys(objectValue(entry.cliSessionIds) ?? {});
-  const cliSessionBindings = Object.keys(objectValue(entry.cliSessionBindings) ?? {});
-  const hasExecutableSessionState = [
+  const unsupportedProvider = providers.some(
+    (provider) => typeof provider === "string" && !CUSTOMER_MODEL_PROVIDER_IDS.has(provider),
+  );
+  const bindings = [
+    [entry.providerOverride, entry.modelOverride],
+    [entry.modelProvider, entry.model],
+    [entry.providerOverride, entry.modelOverrideFallbackOriginModel],
+  ];
+  const unsupportedModel = bindings.some(([provider, model]) =>
+    unsupportedCustomerModel(provider, model));
+  const directModel = bindings.some(([, model]) =>
+    typeof model === "string" && directRuntimeModelRefs.has(model));
+  return unsupportedProvider || unsupportedModel || directModel;
+}
+
+function hasUnsafeFallbackState(modelFallback, directRuntimeModelRefs) {
+  const unsafeProvider = typeof modelFallback.prevProvider === "string" &&
+    !CUSTOMER_MODEL_PROVIDER_IDS.has(modelFallback.prevProvider);
+  const unsafeAuth = typeof modelFallback.prevAuthProfileOverride === "string" &&
+    !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(modelFallback.prevAuthProfileOverride);
+  const unsafeModel = typeof modelFallback.prevModel === "string" && (
+    unsupportedCustomerModel(modelFallback.prevProvider, modelFallback.prevModel) ||
+    directRuntimeModelRefs.has(modelFallback.prevModel)
+  );
+  return unsafeProvider || unsafeAuth || unsafeModel;
+}
+
+function hasExecutableSessionState(entry) {
+  return [
     entry.toolOverrides,
     entry.execHost,
     entry.execSecurity,
@@ -1047,34 +1153,27 @@ function sessionEntryUsesUnsafeRuntime(rawEntry, directRuntimeModelRefs) {
     entry.acp,
     entry.pluginExtensions,
   ].some((state) => state !== undefined);
-  return (
-    providers.some(
-      (provider) =>
-        typeof provider === "string" && !CUSTOMER_MODEL_PROVIDER_IDS.has(provider),
-    ) ||
-    unsupportedModel(entry.providerOverride, entry.modelOverride) ||
-    unsupportedModel(entry.modelProvider, entry.model) ||
-    unsupportedModel(entry.providerOverride, entry.modelOverrideFallbackOriginModel) ||
-    [entry.modelOverride, entry.model, entry.modelOverrideFallbackOriginModel].some(
-      (model) => typeof model === "string" && directRuntimeModelRefs.has(model),
-    ) ||
-    isDirectAgentRuntimeId(entry.agentRuntimeOverride) ||
-    isDirectAgentRuntimeId(entry.agentHarnessId) ||
-    entry.pluginOwnerId === "codex" ||
-    typeof entry.claudeCliSessionId === "string" ||
-    hasExecutableSessionState ||
-    cliSessionIds.some(isDirectAgentRuntimeId) ||
-    cliSessionBindings.some(isDirectAgentRuntimeId) ||
-    (typeof entry.authProfileOverride === "string" &&
-      !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(entry.authProfileOverride)) ||
-    (typeof modelFallback.prevProvider === "string" &&
-      !CUSTOMER_MODEL_PROVIDER_IDS.has(modelFallback.prevProvider)) ||
-    (typeof modelFallback.prevAuthProfileOverride === "string" &&
-      !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(modelFallback.prevAuthProfileOverride)) ||
-    (typeof modelFallback.prevModel === "string" &&
-      (unsupportedModel(modelFallback.prevProvider, modelFallback.prevModel) ||
-        directRuntimeModelRefs.has(modelFallback.prevModel)))
-  );
+}
+
+function sessionEntryUsesUnsafeRuntime(rawEntry, directRuntimeModelRefs) {
+  const entry = objectValue(rawEntry);
+  if (!entry) return false;
+  const modelFallback = objectValue(entry.modelFallback) ?? {};
+  const cliSessionIds = Object.keys(objectValue(entry.cliSessionIds) ?? {});
+  const cliSessionBindings = Object.keys(objectValue(entry.cliSessionBindings) ?? {});
+  const unsafeAuth = typeof entry.authProfileOverride === "string" &&
+    !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(entry.authProfileOverride);
+  return [
+    hasUnsafeSessionModelState(entry, directRuntimeModelRefs),
+    hasUnsafeFallbackState(modelFallback, directRuntimeModelRefs),
+    [entry.agentRuntimeOverride, entry.agentHarnessId].some(isDirectAgentRuntimeId),
+    entry.pluginOwnerId === "codex",
+    typeof entry.claudeCliSessionId === "string",
+    hasExecutableSessionState(entry),
+    cliSessionIds.some(isDirectAgentRuntimeId),
+    cliSessionBindings.some(isDirectAgentRuntimeId),
+    unsafeAuth,
+  ].some(Boolean);
 }
 
 function clearSessionRuntimeState(rawEntry) {
@@ -1089,61 +1188,26 @@ function clearSessionRuntimeState(rawEntry) {
   return changed;
 }
 
-function scrubUnsafePersistedSessions(openclawDir, agentId, directRuntimeModelRefs) {
+function scrubUnsafeLegacySessions(sessionsPath, directRuntimeModelRefs) {
+  if (!fs.existsSync(sessionsPath)) return false;
+  const sessions = readSessionMap(sessionsPath);
   let changed = false;
+  for (const entry of Object.values(sessions)) {
+    if (sessionEntryUsesUnsafeRuntime(entry, directRuntimeModelRefs)) {
+      changed = clearSessionRuntimeState(entry) || changed;
+    }
+  }
+  if (changed) fs.writeFileSync(sessionsPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
+  return changed;
+}
+
+function scrubUnsafePersistedSessions(openclawDir, agentId, directRuntimeModelRefs) {
   const sessionsPath = path.join(openclawDir, "agents", agentId, "sessions", "sessions.json");
-  if (fs.existsSync(sessionsPath)) {
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
-    if (!objectValue(sessions)) {
-      throw new Error(`apply-gateway-class-policy: ${sessionsPath} is not a session map`);
-    }
-    for (const entry of Object.values(sessions)) {
-      if (sessionEntryUsesUnsafeRuntime(entry, directRuntimeModelRefs)) {
-        changed = clearSessionRuntimeState(entry) || changed;
-      }
-    }
-    if (changed) fs.writeFileSync(sessionsPath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
-  }
+  const legacyChanged = scrubUnsafeLegacySessions(sessionsPath, directRuntimeModelRefs);
   const dbPath = path.join(openclawDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
-  if (!fs.existsSync(dbPath)) return changed;
-  const db = new DatabaseSync(dbPath);
-  try {
-    const table = db.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
-    ).get();
-    if (!table) return changed;
-    const rows = db.prepare("SELECT session_key, entry_json FROM session_nodes").all();
-    const update = db.prepare(
-      "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
-    );
-    db.exec("BEGIN IMMEDIATE");
-    for (const row of rows) {
-      if (typeof row.entry_json !== "string") continue;
-      const entry = JSON.parse(row.entry_json);
-      if (!objectValue(entry)) {
-        throw new Error(
-          `apply-gateway-class-policy: ${dbPath} session ${String(row.session_key)} is invalid`,
-        );
-      }
-      if (
-        !sessionEntryUsesUnsafeRuntime(entry, directRuntimeModelRefs) ||
-        !clearSessionRuntimeState(entry)
-      ) continue;
-      update.run(JSON.stringify(entry), row.session_key);
-      changed = true;
-    }
-    db.exec("COMMIT");
-    return changed;
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Preserve the original failure when no transaction was active.
-    }
-    throw error;
-  } finally {
-    db.close();
-  }
+  const sqliteChanged = mutateSqliteSessionStore(dbPath, (entry) =>
+    sessionEntryUsesUnsafeRuntime(entry, directRuntimeModelRefs) && clearSessionRuntimeState(entry));
+  return legacyChanged || sqliteChanged;
 }
 
 function scrubCustomerOauthDisk(configPath, config, env, resetAgentIds, directRuntimeModelRefs) {

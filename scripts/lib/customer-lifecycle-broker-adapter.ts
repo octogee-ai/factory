@@ -398,6 +398,17 @@ function platformModelDefaults(
   return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : null;
 }
 
+function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
+  return {
+    ...ctx.rpc,
+    configPatch: (
+      patch: object,
+      baseHash: string,
+      options?: { replacePaths?: readonly string[] },
+    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
+  };
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -499,14 +510,6 @@ async function applyAddCustomerConfigPatch(
   let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const startedAt = Date.now();
-  const convergedRpc = {
-    ...ctx.rpc,
-    configPatch: (
-      patch: object,
-      baseHash: string,
-      options?: { replacePaths?: readonly string[] },
-    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
-  };
   await applyConfigPatch(
     {
       buildPatch: (current) => {
@@ -581,7 +584,7 @@ async function applyAddCustomerConfigPatch(
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
-      rpc: convergedRpc,
+      rpc: convergedConfigRpc(ctx),
       cache: ctx.configCache,
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
       signal: callOpts?.signal,

@@ -36,37 +36,44 @@ function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
   return "grant";
 }
 
-function requestContextOf(ctx: ToolContext): AccessBrokerOptions["requestContext"] | null {
-  const directChannel = ctx.messageChannel;
-  const deliveryChannel = ctx.deliveryContext?.channel;
-  if (
-    typeof directChannel === "string"
-    && typeof deliveryChannel === "string"
-    && directChannel !== deliveryChannel
-  ) return null;
-  const channel = typeof directChannel === "string" ? directChannel : deliveryChannel;
-  const directAccountId = ctx.agentAccountId;
-  const deliveryAccountId = ctx.deliveryContext?.accountId;
-  if (
-    typeof directAccountId === "string"
-    && typeof deliveryAccountId === "string"
-    && directAccountId !== deliveryAccountId
-  ) return null;
-  const accountId = typeof directAccountId === "string" ? directAccountId : deliveryAccountId;
-  const requesterSenderId = ctx.requesterSenderId;
-  const nativeChannelId = ctx.nativeChannelId;
-  const to = ctx.deliveryContext?.to;
-  if (
-    channel !== "mattermost"
-    || typeof accountId !== "string"
-    || typeof requesterSenderId !== "string"
-    || !/^[a-z0-9]{26}$/u.test(requesterSenderId)
-    || typeof nativeChannelId !== "string"
-    || !/^[a-z0-9]{26}$/u.test(nativeChannelId)
-    || typeof to !== "string"
-    || !/^(?:channel|user):[a-z0-9]{26}$/u.test(to)
-  ) return null;
+function ambientString(
+  direct: unknown,
+  delivered: unknown,
+): { conflict: boolean; value: unknown } {
+  const directString = typeof direct === "string";
+  const deliveredString = typeof delivered === "string";
+  return {
+    conflict: directString && deliveredString && direct !== delivered,
+    value: directString ? direct : delivered,
+  };
+}
+
+function validMattermostRequestContext(
+  channel: unknown,
+  accountId: unknown,
+  requesterSenderId: unknown,
+  nativeChannelId: unknown,
+  to: unknown,
+): AccessBrokerOptions["requestContext"] | null {
+  if (channel !== "mattermost") return null;
+  if (typeof accountId !== "string") return null;
+  if (typeof requesterSenderId !== "string" || !/^[a-z0-9]{26}$/u.test(requesterSenderId)) return null;
+  if (typeof nativeChannelId !== "string" || !/^[a-z0-9]{26}$/u.test(nativeChannelId)) return null;
+  if (typeof to !== "string" || !/^(?:channel|user):[a-z0-9]{26}$/u.test(to)) return null;
   return { channel, accountId, requesterSenderId, nativeChannelId, to };
+}
+
+function requestContextOf(ctx: ToolContext): AccessBrokerOptions["requestContext"] | null {
+  const channel = ambientString(ctx.messageChannel, ctx.deliveryContext?.channel);
+  const accountId = ambientString(ctx.agentAccountId, ctx.deliveryContext?.accountId);
+  if (channel.conflict || accountId.conflict) return null;
+  return validMattermostRequestContext(
+    channel.value,
+    accountId.value,
+    ctx.requesterSenderId,
+    ctx.nativeChannelId,
+    ctx.deliveryContext?.to,
+  );
 }
 
 export default definePluginEntry({

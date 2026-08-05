@@ -231,6 +231,96 @@ function acceptedRestart(result: Awaited<ReturnType<GatewayRpcClient["gatewayRes
     result.restart.coalesced === (result.status === "coalesced");
 }
 
+interface RoutingActivationBaseline {
+  accounts: Map<string, number>;
+  connectionGeneration: number;
+}
+
+interface RoutingActivationRuntime {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  phaseTimeoutMs: number;
+  log: (message: string) => void;
+}
+
+async function observeRoutingBaseline(
+  rpc: GatewayRpcClient,
+  pending: PendingActivationBatch,
+  accountIds: readonly string[],
+  runtime: RoutingActivationRuntime,
+): Promise<RoutingActivationBaseline> {
+  const deadline = runtime.now() + runtime.phaseTimeoutMs;
+  let lastIssue = "";
+  while (runtime.now() < deadline) {
+    try {
+      const before = await mattermostAccountStatuses(rpc);
+      const missing = accountIds.filter((accountId) =>
+        typeof before.get(accountId)?.lastStartAt !== "number");
+      if (missing.length === 0) {
+        return {
+          accounts: new Map(
+            accountIds.map((accountId) => [accountId, before.get(accountId)!.lastStartAt!]),
+          ),
+          connectionGeneration: channelsStatusConnectionGeneration(rpc),
+        };
+      }
+      const issue = `accounts missing lastStartAt: ${missing.join(", ")}`;
+      if (issue !== lastIssue) {
+        runtime.log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
+        lastIssue = issue;
+      }
+    } catch (error) {
+      const issue = error instanceof Error ? error.message : String(error);
+      if (issue !== lastIssue) {
+        runtime.log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
+        lastIssue = issue;
+      }
+    }
+    await runtime.sleep(POLL_MS);
+  }
+  throw new Error(`${pending.reason}; Mattermost account start baseline was not observed`);
+}
+
+function accountsRestarted(
+  after: ReadonlyMap<string, MattermostAccountStatus>,
+  accountIds: readonly string[],
+  baseline: RoutingActivationBaseline,
+): boolean {
+  return accountIds.every((accountId) => {
+    const account = after.get(accountId);
+    if (account?.running !== true || account.connected !== true) return false;
+    if (typeof account.lastStartAt !== "number") return false;
+    return account.lastStartAt > (baseline.accounts.get(accountId) ?? 0);
+  });
+}
+
+async function confirmRoutingRestart(
+  rpc: GatewayRpcClient,
+  pending: PendingActivationBatch,
+  accountIds: readonly string[],
+  baseline: RoutingActivationBaseline,
+  runtime: RoutingActivationRuntime,
+): Promise<void> {
+  const deadline = runtime.now() + runtime.phaseTimeoutMs;
+  let lastPollError = "";
+  while (runtime.now() < deadline) {
+    await runtime.sleep(POLL_MS);
+    try {
+      const after = await mattermostAccountStatuses(rpc);
+      const connectionRestarted = channelsStatusConnectionGeneration(rpc) >
+        baseline.connectionGeneration;
+      if (connectionRestarted && accountsRestarted(after, accountIds, baseline)) return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== lastPollError) {
+        runtime.log(`${pending.reason}; waiting for restarted Mattermost accounts: ${message}`);
+        lastPollError = message;
+      }
+    }
+  }
+  throw new Error(`${pending.reason}; OpenClaw restart generation was not observed`);
+}
+
 export async function activatePendingMattermostRouting(
   rpc: GatewayRpcClient,
   openclawDir: string,
@@ -249,6 +339,12 @@ export async function activatePendingMattermostRouting(
   if (!Number.isFinite(accountAbsenceGraceMs) || accountAbsenceGraceMs < 0) {
     throw new Error("Mattermost routing activation account absence grace must be non-negative");
   }
+  const runtime = {
+    now,
+    sleep,
+    phaseTimeoutMs: options.timeoutMs ?? RESTART_TIMEOUT_MS,
+    log,
+  };
 
   while (true) {
     const pending = readPendingActivation(openclawDir);
@@ -264,77 +360,13 @@ export async function activatePendingMattermostRouting(
       if (clearPendingActivation(openclawDir, pending)) return;
       continue;
     }
-    const phaseTimeoutMs = options.timeoutMs ?? RESTART_TIMEOUT_MS;
-    const baselineDeadline = now() + phaseTimeoutMs;
-    let baseline: { accounts: Map<string, number>; connectionGeneration: number } | null = null;
-    let lastBaselineIssue = "";
-    while (now() < baselineDeadline) {
-      try {
-        const before = await mattermostAccountStatuses(rpc);
-        const missing = accountIds.filter((accountId) =>
-          typeof before.get(accountId)?.lastStartAt !== "number");
-        if (missing.length === 0) {
-          baseline = {
-            accounts: new Map(
-              accountIds.map((accountId) => [accountId, before.get(accountId)!.lastStartAt!]),
-            ),
-            connectionGeneration: channelsStatusConnectionGeneration(rpc),
-          };
-          break;
-        }
-        const issue = `accounts missing lastStartAt: ${missing.join(", ")}`;
-        if (issue !== lastBaselineIssue) {
-          log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
-          lastBaselineIssue = issue;
-        }
-      } catch (error) {
-        const issue = error instanceof Error ? error.message : String(error);
-        if (issue !== lastBaselineIssue) {
-          log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
-          lastBaselineIssue = issue;
-        }
-      }
-      await sleep(POLL_MS);
-    }
-    if (!baseline) {
-      throw new Error(`${pending.reason}; Mattermost account start baseline was not observed`);
-    }
+    const baseline = await observeRoutingBaseline(rpc, pending, accountIds, runtime);
     const restart = await rpc.gatewayRestartRequest({ reason: pending.reason, skipDeferral: true });
     if (!acceptedRestart(restart)) {
       throw new Error(`${pending.reason}; OpenClaw restart was not accepted`);
     }
     log(`${pending.reason}; OpenClaw restart accepted`);
-
-    const restartDeadline = now() + phaseTimeoutMs;
-    let confirmed = false;
-    let lastPollError = "";
-    while (now() < restartDeadline) {
-      await sleep(POLL_MS);
-      try {
-        const after = await mattermostAccountStatuses(rpc);
-        const connectionRestarted = channelsStatusConnectionGeneration(rpc) >
-          baseline.connectionGeneration;
-        if (connectionRestarted && accountIds.every((accountId) => {
-          const account = after.get(accountId);
-          return account?.running === true &&
-            account.connected === true &&
-            typeof account.lastStartAt === "number" &&
-            account.lastStartAt > (baseline.accounts.get(accountId) ?? 0);
-        })) {
-          confirmed = true;
-          break;
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message !== lastPollError) {
-          log(`${pending.reason}; waiting for restarted Mattermost accounts: ${message}`);
-          lastPollError = message;
-        }
-      }
-    }
-    if (!confirmed) {
-      throw new Error(`${pending.reason}; OpenClaw restart generation was not observed`);
-    }
+    await confirmRoutingRestart(rpc, pending, accountIds, baseline, runtime);
     if (clearPendingActivation(openclawDir, pending)) return;
   }
 }
