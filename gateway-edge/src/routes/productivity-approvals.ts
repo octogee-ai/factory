@@ -392,7 +392,10 @@ function projectTaskPreview(kind: ProductivityActionKind, preview: Record<string
 }
 
 function projectSheetsAppendPreview(preview: Record<string, unknown>): Record<string, unknown> {
-  exactKeys(preview, ["spreadsheetId", "spreadsheetTitle", "range", "rows"]);
+  exactKeys(preview, ["spreadsheetId", "spreadsheetTitle", "range", "rows", "appendSemantics"]);
+  if (preview.appendSemantics !== "latest-table-state") {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
   if (!Array.isArray(preview.rows) || preview.rows.length === 0 || preview.rows.length > 100) {
     throw new Error("canonical productivity approval preview is malformed");
   }
@@ -416,6 +419,7 @@ function projectSheetsAppendPreview(preview: Record<string, unknown>): Record<st
     spreadsheetTitle: requiredText(preview.spreadsheetTitle, 300),
     range: noNewlineText(preview.range, 200),
     rows,
+    appendSemantics: preview.appendSemantics,
   };
 }
 
