@@ -3,12 +3,14 @@ import type { Request, Response } from "express";
 import { withFileTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
   addComment,
+  assertIssueExists,
   createIssue,
   getIssueDetail,
   listIssues,
   listLabels,
   moveIssue,
   updateIssue,
+  IssueNotFoundError,
   NotAnIssueError,
 } from "../../lib/issues.js";
 import { isValidColumn, isValidLabelName } from "../../lib/issues-write.js";
@@ -19,7 +21,7 @@ import {
   MAX_ISSUE_ASSET_BYTES,
   storeIssueAsset,
 } from "../../lib/issue-assets.js";
-import { parseMultipart } from "./upload.js";
+import { parseMultipart, UploadTooLargeError } from "./upload.js";
 
 const router = Router();
 const MAX_TITLE = 250;
@@ -50,12 +52,25 @@ function parseLabels(value: unknown, res: Response): string[] | null | undefined
   return labels;
 }
 
+// PRs share the issue-number space and provider 404s mean the number never
+// existed — both are "not found" to the Board.
 function respondNotAnIssue(res: Response, e: unknown): boolean {
-  if (e instanceof NotAnIssueError) {
+  if (e instanceof NotAnIssueError || e instanceof IssueNotFoundError) {
     res.status(404).json({ error: "Issue not found" });
     return true;
   }
   return false;
+}
+
+// Reject non-string bodies outright — String() coercion would write garbage
+// like "[object Object]" into the provider.
+function parseString(value: unknown, res: Response, field: string): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    res.status(400).json({ error: `Invalid ${field}` });
+    return null;
+  }
+  return value;
 }
 
 // The Board is project-scoped — issues live in the project repo. Reject workspace-scope
@@ -83,9 +98,15 @@ router.post(
   "/issues",
   withFileTarget(async (req, res, _next, target) => {
     if (!requireProject(target, res)) return;
-    const title = String(req.body?.title ?? "").trim();
-    const body = String(req.body?.body ?? "");
-    const status = String(req.body?.status ?? "backlog");
+    const rawTitle = parseString(req.body?.title, res, "title");
+    if (rawTitle === null) return;
+    const rawBody = parseString(req.body?.body, res, "body");
+    if (rawBody === null) return;
+    const rawStatus = parseString(req.body?.status, res, "status");
+    if (rawStatus === null) return;
+    const title = (rawTitle ?? "").trim();
+    const body = rawBody ?? "";
+    const status = rawStatus ?? "backlog";
     if (!title) {
       res.status(400).json({ error: "Missing title" });
       return;
@@ -134,10 +155,12 @@ router.patch(
     if (!requireProject(target, res)) return;
     const num = parseIssueNumber(req, res);
     if (num === null) return;
-    const rawTitle = req.body?.title;
-    const rawBody = req.body?.body;
-    const title = rawTitle === undefined ? undefined : String(rawTitle).trim();
-    const body = rawBody === undefined ? undefined : String(rawBody);
+    const rawTitle = parseString(req.body?.title, res, "title");
+    if (rawTitle === null) return;
+    const rawBody = parseString(req.body?.body, res, "body");
+    if (rawBody === null) return;
+    const title = rawTitle === undefined ? undefined : rawTitle.trim();
+    const body = rawBody;
     if (title !== undefined && (title.length === 0 || title.length > MAX_TITLE)) {
       res.status(400).json({ error: title.length === 0 ? "Missing title" : "Title too long" });
       return;
@@ -168,7 +191,9 @@ router.post(
     if (!requireProject(target, res)) return;
     const num = parseIssueNumber(req, res);
     if (num === null) return;
-    const body = String(req.body?.body ?? "").trim();
+    const rawBody = parseString(req.body?.body, res, "comment body");
+    if (rawBody === null) return;
+    const body = (rawBody ?? "").trim();
     if (!body) {
       res.status(400).json({ error: "Missing comment body" });
       return;
@@ -197,10 +222,17 @@ router.post(
     try {
       upload = await parseMultipart(req, MAX_ISSUE_ASSET_BYTES, { requireSlugAndPath: false });
     } catch (e) {
+      if (e instanceof UploadTooLargeError) {
+        res.status(413).json({ error: "Attachment too large", maxBytes: MAX_ISSUE_ASSET_BYTES });
+        return;
+      }
       res.status(400).json({ error: e instanceof Error ? e.message : "Invalid upload" });
       return;
     }
     try {
+      // Assets must hang off a real issue — never a PR or a number that
+      // doesn't exist.
+      await assertIssueExists(target, num);
       const attachment = await storeIssueAsset(target, num, {
         name: upload.filename,
         content: upload.fileBuffer,
@@ -208,6 +240,7 @@ router.post(
       });
       res.status(201).json({ attachment });
     } catch (e) {
+      if (respondNotAnIssue(res, e)) return;
       if (e instanceof IssueAssetTooLargeError) {
         res.status(413).json({ error: "Attachment too large", maxBytes: MAX_ISSUE_ASSET_BYTES });
         return;
@@ -223,6 +256,12 @@ router.delete(
     if (!requireProject(target, res)) return;
     const num = parseIssueNumber(req, res);
     if (num === null) return;
+    try {
+      await assertIssueExists(target, num);
+    } catch (e) {
+      if (respondNotAnIssue(res, e)) return;
+      throw e;
+    }
     const removed = await deleteIssueAsset(target, num, String(req.params.assetId));
     if (!removed) {
       res.status(404).json({ error: "Attachment not found" });
@@ -237,11 +276,13 @@ router.patch(
   withFileTarget(async (req, res, _next, target) => {
     if (!requireProject(target, res)) return;
     const num = Number(req.params.number);
-    const status = String(req.body?.status ?? "");
     if (!Number.isInteger(num) || num <= 0) {
       res.status(400).json({ error: "Invalid issue number" });
       return;
     }
+    const rawStatus = parseString(req.body?.status, res, "status");
+    if (rawStatus === null) return;
+    const status = rawStatus ?? "";
     if (!isValidColumn(status)) {
       res.status(400).json({ error: "Invalid column" });
       return;

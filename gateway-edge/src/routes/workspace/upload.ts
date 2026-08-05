@@ -112,6 +112,13 @@ type AllowedField = typeof ALLOWED_FIELDS extends Set<infer T> ? T : never;
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
+export class UploadTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`File too large (max ${maxBytes} bytes)`);
+    this.name = "UploadTooLargeError";
+  }
+}
+
 export interface ParseMultipartOpts {
   // upload-blob addresses a repo path, so slug+path fields are mandatory there;
   // issue attachments resolve their target from the query string and name the
@@ -146,7 +153,7 @@ export function parseMultipart(
     });
     bb.on("finish", () => {
       if (truncated) {
-        reject(new Error(`File too large (max ${maxFileBytes} bytes)`));
+        reject(new UploadTooLargeError(maxFileBytes));
         return;
       }
       if (!fileBuffer || (requireSlugAndPath && (!fields.slug || !fields.path))) {

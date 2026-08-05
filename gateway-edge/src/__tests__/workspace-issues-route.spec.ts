@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   storeIssueAsset: vi.fn(),
   deleteIssueAsset: vi.fn(),
   parseMultipart: vi.fn(),
+  assertIssueExists: vi.fn(),
 }));
 
 vi.mock("../lib/fileTarget.js", () => ({
@@ -32,6 +33,12 @@ vi.mock("../lib/issues.js", () => {
       this.name = "NotAnIssueError";
     }
   }
+  class IssueNotFoundError extends Error {
+    constructor(num: number) {
+      super(`issue #${num} does not exist`);
+      this.name = "IssueNotFoundError";
+    }
+  }
 
   return {
     listIssues: (...args: unknown[]) => h.listIssues(...args),
@@ -41,7 +48,9 @@ vi.mock("../lib/issues.js", () => {
     getIssueDetail: (...args: unknown[]) => h.getIssueDetail(...args),
     updateIssue: (...args: unknown[]) => h.updateIssue(...args),
     addComment: (...args: unknown[]) => h.addComment(...args),
+    assertIssueExists: (...args: unknown[]) => h.assertIssueExists(...args),
     NotAnIssueError,
+    IssueNotFoundError,
   };
 });
 
@@ -61,9 +70,18 @@ vi.mock("../lib/issue-assets.js", () => {
   };
 });
 
-vi.mock("../routes/workspace/upload.js", () => ({
-  parseMultipart: (...args: unknown[]) => h.parseMultipart(...args),
-}));
+vi.mock("../routes/workspace/upload.js", () => {
+  class UploadTooLargeError extends Error {
+    constructor(readonly maxBytes: number) {
+      super(`File too large (max ${maxBytes} bytes)`);
+      this.name = "UploadTooLargeError";
+    }
+  }
+  return {
+    parseMultipart: (...args: unknown[]) => h.parseMultipart(...args),
+    UploadTooLargeError,
+  };
+});
 
 const { default: issuesRouter } = await import("../routes/workspace/issues.js");
 const { NotAnIssueError } = await import("../lib/issues.js");
@@ -111,6 +129,7 @@ beforeEach(() => {
     filename: "shot.png",
     mimeType: "image/png",
   });
+  h.assertIssueExists.mockReset().mockResolvedValue(undefined);
 });
 
 describe("workspace issues route", () => {
@@ -266,6 +285,46 @@ describe("workspace issues route", () => {
     await request(app()).delete("/api/workspace/issues/1/attachments/abc").expect(404, {
       error: "Attachment not found",
     });
+  });
+
+  it("guards attachment writes behind issue existence — PRs and missing numbers 404", async () => {
+    const { NotAnIssueError: NotAnIssue, IssueNotFoundError: NotFound } = await import("../lib/issues.js");
+
+    h.assertIssueExists.mockRejectedValueOnce(new NotAnIssue(5));
+    await request(app()).post("/api/workspace/issues/5/attachments").expect(404, { error: "Issue not found" });
+    expect(h.storeIssueAsset).not.toHaveBeenCalled();
+
+    h.assertIssueExists.mockRejectedValueOnce(new NotFound(9));
+    await request(app()).delete("/api/workspace/issues/9/attachments/a").expect(404, { error: "Issue not found" });
+    expect(h.deleteIssueAsset).not.toHaveBeenCalled();
+  });
+
+  it("maps oversized multipart bodies to 413 during parsing", async () => {
+    const { UploadTooLargeError: TooLarge } = await import("../routes/workspace/upload.js");
+    h.parseMultipart.mockRejectedValueOnce(new TooLarge(25 * 1024 * 1024));
+
+    await request(app()).post("/api/workspace/issues/1/attachments").expect(413);
+    expect(h.storeIssueAsset).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-string title/body/status/comment payloads instead of coercing", async () => {
+    await request(app()).post("/api/workspace/issues").send({ title: { evil: 1 } }).expect(400, { error: "Invalid title" });
+    await request(app()).post("/api/workspace/issues").send({ title: "x", body: [1] }).expect(400, { error: "Invalid body" });
+    await request(app()).patch("/api/workspace/issues/1").send({ title: 7 }).expect(400, { error: "Invalid title" });
+    await request(app()).post("/api/workspace/issues/1/comments").send({ body: {} }).expect(400, { error: "Invalid comment body" });
+    await request(app()).patch("/api/workspace/issues/1/move").send({ status: {} }).expect(400, { error: "Invalid status" });
+
+    expect(h.createIssue).not.toHaveBeenCalled();
+    expect(h.updateIssue).not.toHaveBeenCalled();
+    expect(h.addComment).not.toHaveBeenCalled();
+    expect(h.moveIssue).not.toHaveBeenCalled();
+  });
+
+  it("maps provider 404s to not found on detail reads", async () => {
+    const { IssueNotFoundError: NotFound } = await import("../lib/issues.js");
+    h.getIssueDetail.mockRejectedValueOnce(new NotFound(99));
+
+    await request(app()).get("/api/workspace/issues/99").expect(404, { error: "Issue not found" });
   });
 
   it("rejects workspace-scoped targets on every new endpoint", async () => {

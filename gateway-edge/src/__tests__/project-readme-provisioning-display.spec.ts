@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   dbDoc: vi.fn((path: string) => ({ path })),
   giteaApi: vi.fn(),
   createProjectGiteaRepo: vi.fn(),
+  seedBoardWelcomeIssue: vi.fn(),
   giteaDeleteVerifiedRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
   giteaWriteFiles: vi.fn(),
@@ -64,6 +65,10 @@ vi.mock("@octogee/core/templates/project-seeds", () => ({
   notesWelcomeSeed: (...args: unknown[]) => h.notesWelcomeSeed(...args),
 }));
 
+vi.mock("../lib/board-welcome.js", () => ({
+  seedBoardWelcomeIssue: (...args: unknown[]) => h.seedBoardWelcomeIssue(...args),
+}));
+
 const { default: readmeRoutes } = await import("../routes/projects/readme.js");
 const {
   ensureProjectGiteaRepo,
@@ -97,7 +102,8 @@ function displayNameApp(reqUser: Record<string, unknown> = { workspaceId: "mira"
 beforeEach(() => {
   h.dbDoc.mockClear();
   h.giteaApi.mockReset();
-  h.createProjectGiteaRepo.mockReset().mockResolvedValue(undefined);
+  h.createProjectGiteaRepo.mockReset().mockResolvedValue(true);
+  h.seedBoardWelcomeIssue.mockReset().mockResolvedValue(undefined);
   h.giteaDeleteVerifiedRepo.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFile.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFiles.mockReset().mockResolvedValue(undefined);
@@ -211,6 +217,26 @@ describe("project provisioning helpers", () => {
       "# Orbit\n",
       "auto: seed project README",
     );
+    expect(h.seedBoardWelcomeIssue).toHaveBeenCalledWith({ workspaceId: "mira", slug: "orbit", name: "Orbit" });
+  });
+
+  it("skips the Board welcome card on retries and for GitHub-backed projects", async () => {
+    const input = {
+      workspaceId: "mira",
+      slug: "orbit",
+      name: "Orbit",
+      tagline: "Ship it",
+      projectType: "web",
+      visibility: "public",
+      recipe: "static-site",
+    } as const;
+
+    h.createProjectGiteaRepo.mockResolvedValueOnce(false); // retry: repo already existed
+    await ensureProjectGiteaRepo(input);
+    expect(h.seedBoardWelcomeIssue).not.toHaveBeenCalled();
+
+    await ensureProjectGiteaRepo({ ...input, githubBacked: true }); // Board lives on GitHub
+    expect(h.seedBoardWelcomeIssue).not.toHaveBeenCalled();
   });
 
   it("writes no Octogee metadata file into the project repo", async () => {

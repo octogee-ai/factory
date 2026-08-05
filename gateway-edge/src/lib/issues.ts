@@ -24,6 +24,7 @@ import {
   labelForColumn,
   seedForLabel,
   STATUS_LABEL_SEED,
+  targetState,
   type ColumnKey,
 } from "./issues-write.js";
 import { logger } from "../middleware/logging.js";
@@ -82,15 +83,22 @@ async function loadRepoLabels(target: FileTarget): Promise<RepoLabel[]> {
   return (Array.isArray(raw) ? raw : []).map((l) => ({ id: rawId(l), name: String((l as { name?: unknown }).name ?? "") }));
 }
 
+// Provider label names are case-insensitive on lookup (GitHub treats `Bug`
+// and `bug` as the same label), so maps key on the lowercased name — creating
+// a "duplicate" that differs only in case 422s on GitHub.
+function labelKey(name: string): string {
+  return name.toLowerCase();
+}
+
 async function ensureStatusLabels(target: FileTarget): Promise<Map<string, number>> {
-  const byName = new Map((await loadRepoLabels(target)).map((l) => [l.name, l.id]));
+  const byName = new Map((await loadRepoLabels(target)).map((l) => [labelKey(l.name), l.id]));
   for (const seed of STATUS_LABEL_SEED) {
-    if (byName.has(seed.name)) continue;
+    if (byName.has(labelKey(seed.name))) continue;
     const created =
       target.provider === "github"
         ? await githubJson("POST", githubRepoUrl(target.org, target.repoName, "/labels"), target.githubToken, seed)
         : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/labels`, "POST", seed);
-    byName.set(seed.name, rawId(created));
+    byName.set(labelKey(seed.name), rawId(created));
   }
   return byName;
 }
@@ -105,13 +113,34 @@ export class NotAnIssueError extends Error {
   }
 }
 
+export class IssueNotFoundError extends Error {
+  constructor(num: number) {
+    super(`issue #${num} does not exist`);
+    this.name = "IssueNotFoundError";
+  }
+}
+
+const PROVIDER_404_RE = /\bAPI 404\b/;
+
 async function getIssue(target: FileTarget, num: number): Promise<WorkspaceIssue> {
-  const raw =
-    target.provider === "github"
-      ? await githubJson("GET", githubRepoUrl(target.org, target.repoName, `/issues/${num}`), target.githubToken)
-      : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}`);
+  let raw: unknown;
+  try {
+    raw =
+      target.provider === "github"
+        ? await githubJson("GET", githubRepoUrl(target.org, target.repoName, `/issues/${num}`), target.githubToken)
+        : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}`);
+  } catch (e) {
+    if (e instanceof Error && PROVIDER_404_RE.test(e.message)) throw new IssueNotFoundError(num);
+    throw e;
+  }
   if (isPullRequest(raw)) throw new NotAnIssueError(num);
   return normalizeIssue(raw);
+}
+
+// Every mutation path resolves the issue first (PR + existence guard); exposed
+// so attachment writes can enforce the same boundary without a full detail read.
+export async function assertIssueExists(target: FileTarget, num: number): Promise<void> {
+  await getIssue(target, num);
 }
 
 async function removeLabel(target: FileTarget, num: number, name: string, map: Map<string, number>): Promise<void> {
@@ -123,7 +152,7 @@ async function removeLabel(target: FileTarget, num: number, name: string, map: M
     );
     return;
   }
-  const id = map.get(name);
+  const id = map.get(labelKey(name));
   if (id == null) return;
   await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/labels/${id}`, "DELETE");
 }
@@ -135,7 +164,7 @@ async function addLabel(target: FileTarget, num: number, name: string, map: Map<
     });
     return;
   }
-  const id = map.get(name);
+  const id = map.get(labelKey(name));
   if (id == null) return;
   await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/labels`, "POST", { labels: [id] });
 }
@@ -160,21 +189,30 @@ export async function createIssue(target: FileTarget, input: CreateIssueInput): 
   const names = computeLabelReplacement(statusLabel ? [statusLabel] : [], input.labels ?? []);
   if (statusLabel) await ensureStatusLabels(target);
   const map = names.length > 0 ? await ensureRequestedLabels(target, names) : new Map<string, number>();
+  let issue: WorkspaceIssue;
   if (target.provider === "github") {
     const raw = await githubJson("POST", githubRepoUrl(target.org, target.repoName, "/issues"), target.githubToken, {
       title: input.title,
       body: input.body,
       ...(names.length > 0 ? { labels: names } : {}),
     });
-    return normalizeIssue(raw);
+    issue = normalizeIssue(raw);
+  } else {
+    const ids = names.map((name) => map.get(labelKey(name))).filter((id): id is number => id != null && id > 0);
+    const raw = await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues`, "POST", {
+      title: input.title,
+      body: input.body,
+      ...(ids.length > 0 ? { labels: ids } : {}),
+    });
+    issue = normalizeIssue(raw);
   }
-  const ids = names.map((name) => map.get(name)).filter((id): id is number => id != null && id > 0);
-  const raw = await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues`, "POST", {
-    title: input.title,
-    body: input.body,
-    ...(ids.length > 0 ? { labels: ids } : {}),
-  });
-  return normalizeIssue(raw);
+  // Providers only create OPEN issues; a card added straight to Done must
+  // close, or it lands in Backlog.
+  if (targetState(input.status) === "closed") {
+    await setIssueState(target, issue.number, "closed");
+    return getIssue(target, issue.number);
+  }
+  return issue;
 }
 
 export async function moveIssue(target: FileTarget, num: number, status: ColumnKey): Promise<WorkspaceIssue> {
@@ -205,7 +243,11 @@ async function listComments(target: FileTarget, num: number): Promise<WorkspaceC
           githubRepoUrl(target.org, target.repoName, `/issues/${num}/comments?per_page=${GITHUB_ISSUES_PER_PAGE}`),
           target.githubToken,
         )
-      : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/comments`);
+      : await giteaApiAsUser(
+          giteaSudo(target),
+          target.org,
+          `${target.repoName}/issues/${num}/comments?limit=${GITEA_ISSUES_LIMIT}`,
+        );
   return normalizeComments(raw);
 }
 
@@ -232,15 +274,15 @@ export interface UpdateIssueInput {
 }
 
 async function ensureRequestedLabels(target: FileTarget, names: string[]): Promise<Map<string, number>> {
-  const byName = new Map((await loadRepoLabels(target)).map((l) => [l.name, l.id]));
+  const byName = new Map((await loadRepoLabels(target)).map((l) => [labelKey(l.name), l.id]));
   for (const name of names) {
-    if (byName.has(name)) continue;
+    if (byName.has(labelKey(name))) continue;
     const seed = seedForLabel(name);
     const created =
       target.provider === "github"
         ? await githubJson("POST", githubRepoUrl(target.org, target.repoName, "/labels"), target.githubToken, seed)
         : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/labels`, "POST", seed);
-    byName.set(name, rawId(created));
+    byName.set(labelKey(name), rawId(created));
   }
   return byName;
 }
@@ -253,7 +295,7 @@ async function replaceLabels(target: FileTarget, num: number, names: string[]): 
     });
     return;
   }
-  const ids = names.map((name) => map.get(name)).filter((id): id is number => id != null && id > 0);
+  const ids = names.map((name) => map.get(labelKey(name))).filter((id): id is number => id != null && id > 0);
   await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/labels`, "PUT", {
     labels: ids,
   });

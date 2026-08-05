@@ -120,6 +120,12 @@ function app(opts: {
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
   a.post("/internal/agent-projects/set-recipe", enforcement, handler);
+  a.post("/internal/agent-board/list", enforcement, handler);
+  a.post("/internal/agent-board/card-read", enforcement, handler);
+  a.post("/internal/agent-board/card-create", enforcement, handler);
+  a.post("/internal/agent-board/card-update", enforcement, handler);
+  a.post("/internal/agent-board/card-move", enforcement, handler);
+  a.post("/internal/agent-board/card-comment", enforcement, handler);
   a.post("/internal/agent-productivity/google/calendar/events", enforcement, handler);
   a.get("/internal/agent-access/context", enforcement, handler);
   a.post("/internal/agent-access/prepare", enforcement, handler);
@@ -515,6 +521,20 @@ describe("tenant enforcement middleware", () => {
         .send({ agentId: "octogee-alice-coach" });
       const foreignGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/agent-projects/${route}`)
+        .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
+
+      expect(ownedGateway.status, route).toBe(200);
+      expect(foreignGateway.status, route).toBe(403);
+    }
+  });
+
+  it("delegates agent board routes only for the bound gateway tenant", async () => {
+    for (const route of ["list", "card-read", "card-create", "card-update", "card-move", "card-comment"]) {
+      const ownedGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/agent-board/${route}`)
+        .send({ agentId: "octogee-alice-coach" });
+      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/agent-board/${route}`)
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
       expect(ownedGateway.status, route).toBe(200);
