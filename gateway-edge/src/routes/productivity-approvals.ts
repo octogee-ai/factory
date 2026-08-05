@@ -25,8 +25,52 @@ interface Deps {
 
 type ApprovalState = "pending" | "approved" | "denied" | "executing" | "succeeded" | "failed" | "unknown";
 
+type ProductivityActionKind =
+  | "gmail-triage"
+  | "gmail-draft-create"
+  | "gmail-send"
+  | "calendar-create"
+  | "calendar-update"
+  | "calendar-delete"
+  | "docs-create"
+  | "docs-append"
+  | "tasks-create"
+  | "tasks-update"
+  | "sheets-create"
+  | "sheets-append"
+  | "obsidian-write"
+  | "project-create";
+
 const APPROVAL_STATES = new Set<ApprovalState>([
   "pending", "approved", "denied", "executing", "succeeded", "failed", "unknown",
+]);
+const PRODUCTIVITY_ACTION_KINDS = new Set<ProductivityActionKind>([
+  "gmail-triage",
+  "gmail-draft-create",
+  "gmail-send",
+  "calendar-create",
+  "calendar-update",
+  "calendar-delete",
+  "docs-create",
+  "docs-append",
+  "tasks-create",
+  "tasks-update",
+  "sheets-create",
+  "sheets-append",
+  "obsidian-write",
+  "project-create",
+]);
+const ONE_LINE_ACTION_KINDS = new Set<ProductivityActionKind>([
+  "gmail-triage",
+  "gmail-draft-create",
+  "docs-create",
+  "docs-append",
+  "tasks-create",
+  "tasks-update",
+  "sheets-create",
+  "sheets-append",
+  "obsidian-write",
+  "project-create",
 ]);
 
 function isApprovalState(value: unknown): value is ApprovalState {
@@ -52,10 +96,102 @@ function hashesEqual(left: unknown, right: string | null): boolean {
 interface ProductivityApprovalView {
   approvalId: string;
   state: ApprovalState | "expired";
-  action: { kind: string };
+  action: { kind: ProductivityActionKind };
   preview: Record<string, unknown>;
   reason: string | null;
   approvalExpiresAt: string;
+}
+
+function requiredText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  return value;
+}
+
+function optionalText(value: unknown, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length > maxLength) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  return value;
+}
+
+function stringList(value: unknown, maxItems: number, maxLength: number): string[] {
+  if (
+    !Array.isArray(value)
+    || value.length > maxItems
+    || value.some((entry) => typeof entry !== "string" || entry.length === 0 || entry.length > maxLength)
+  ) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  return value as string[];
+}
+
+function projectOneLinePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const summary = requiredText(preview.summary, 512);
+  if (/[\r\n]/u.test(summary) || summary.trim().length === 0) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  return { summary };
+}
+
+function projectGmailSendPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const to = stringList(preview.to, 100, 320);
+  if (to.length === 0) throw new Error("canonical productivity approval preview is malformed");
+  return {
+    to,
+    ...(preview.cc === undefined ? {} : { cc: stringList(preview.cc, 100, 320) }),
+    ...(preview.bcc === undefined ? {} : { bcc: stringList(preview.bcc, 100, 320) }),
+    subject: optionalText(preview.subject, 998) ?? "",
+    bodyPreview: optionalText(preview.bodyPreview, 4_000) ?? "",
+  };
+}
+
+function validCalendarTime(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/u.test(value)
+    || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u.test(value);
+}
+
+function validTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function projectCalendarPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const start = requiredText(preview.start, 128);
+  const end = requiredText(preview.end, 128);
+  if (!validCalendarTime(start) || !validCalendarTime(end)) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  const timeZone = optionalText(preview.timeZone, 128);
+  if (timeZone !== undefined && !validTimeZone(timeZone)) {
+    throw new Error("canonical productivity approval preview is malformed");
+  }
+  return {
+    ...(preview.summary === undefined ? {} : { summary: optionalText(preview.summary, 998) }),
+    ...(preview.description === undefined ? {} : { description: optionalText(preview.description, 4_000) }),
+    ...(preview.location === undefined ? {} : { location: optionalText(preview.location, 1_000) }),
+    start,
+    end,
+    ...(timeZone === undefined ? {} : { timeZone }),
+    ...(preview.attendees === undefined ? {} : { attendees: stringList(preview.attendees, 200, 320) }),
+  };
+}
+
+function projectActionPreview(kind: ProductivityActionKind, value: unknown): Record<string, unknown> {
+  const preview = record(value);
+  if (!preview) throw new Error("canonical productivity approval preview is malformed");
+  if (kind === "gmail-send") return projectGmailSendPreview(preview);
+  if (kind === "calendar-create" || kind === "calendar-update" || kind === "calendar-delete") {
+    return projectCalendarPreview(preview);
+  }
+  if (ONE_LINE_ACTION_KINDS.has(kind)) return projectOneLinePreview(preview);
+  throw new Error("canonical productivity approval action is unsupported");
 }
 
 function projectApproval(id: string, data: Record<string, unknown>, now: number): ProductivityApprovalView {
@@ -66,15 +202,17 @@ function projectApproval(id: string, data: Record<string, unknown>, now: number)
     || typeof approvalExpiresAt !== "number"
     || !action
     || typeof action.kind !== "string"
+    || !PRODUCTIVITY_ACTION_KINDS.has(action.kind as ProductivityActionKind)
   ) {
     throw new Error("canonical productivity approval is malformed");
   }
+  const kind = action.kind as ProductivityActionKind;
   const state = data.state === "pending" && approvalExpiresAt <= now ? "expired" : data.state;
   return {
     approvalId: id,
     state,
-    action: { kind: action.kind },
-    preview: record(data.preview) ?? {},
+    action: { kind },
+    preview: projectActionPreview(kind, data.preview),
     reason: typeof data.reason === "string" ? data.reason : null,
     approvalExpiresAt: new Date(approvalExpiresAt).toISOString(),
   };
