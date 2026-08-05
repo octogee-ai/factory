@@ -11,8 +11,13 @@
 # semantics. It never decides WHAT belongs in an image's input set.
 #
 # Usage:
-#   image-fingerprint-reuse.sh check  <image> <ar-repo> <short-sha> <ref>
+#   image-fingerprint-reuse.sh check  <image> <ar-repo> <short-sha> <ref> [base-tag]
 #   image-fingerprint-reuse.sh record <image> <ar-repo> <short-sha> <fingerprint>
+#
+# <base-tag> is required for images built over a pre-built base (the gateway
+# pod image and its operator variant): it salts the fingerprint so a base
+# refresh — including the operator base's weekly toolkit slot — is never
+# reused across.
 #
 # `check` is called only after the caller has already confirmed
 # <ar-repo>/<image>:<short-sha> does not exist (that fast path — including
@@ -57,11 +62,12 @@ case "$mode" in
     ar_repo="${3:?ar-repo required}"
     short_sha="${4:?short-sha required}"
     ref="${5:?ref required}"
+    base_tag="${6:-}"
 
     fingerprint=""
     fp_err="$(mktemp)"
     trap 'rm -f "$fp_err"' EXIT
-    if fingerprint="$(node "$FINGERPRINT_SCRIPT" fingerprint "$image" "$ref" 2>"$fp_err")"; then
+    if fingerprint="$(node "$FINGERPRINT_SCRIPT" fingerprint "$image" "$ref" "$base_tag" 2>"$fp_err")"; then
       :
     else
       echo "::warning::input fingerprint computation failed for ${image}: $(cat "$fp_err" 2>/dev/null); falling back to build" >&2
