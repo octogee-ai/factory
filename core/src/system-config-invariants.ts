@@ -40,6 +40,7 @@ const REQUIRED_PLUGINS = [
   "octogee-ops-tools",
   "octogee-preview-tools",
   "octogee-project-tools",
+  "octogee-board-tools",
   "octogee-status-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
@@ -70,6 +71,10 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
   },
   "octogee-preview-tools": {},
   "octogee-project-tools": {
+    brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+    tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
+  },
+  "octogee-board-tools": {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },

@@ -2,8 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   STATUS_PREFIX,
   STATUS_LABEL_SEED,
+  KNOWN_LABEL_SEED,
+  computeLabelReplacement,
   isValidColumn,
+  isValidLabelName,
   labelForColumn,
+  seedForLabel,
   statusLabelsOn,
   targetState,
   computeMove,
@@ -46,6 +50,47 @@ describe("STATUS_LABEL_SEED", () => {
   it("seeds exactly the labeled columns with hex colors (no leading #)", () => {
     expect(STATUS_LABEL_SEED.map((l) => l.name)).toEqual(["status:todo", "status:doing", "status:review"]);
     for (const l of STATUS_LABEL_SEED) expect(l.color).toMatch(/^[0-9a-f]{6}$/);
+  });
+});
+
+describe("isValidLabelName", () => {
+  it("rejects status labels, empty, comma'd, and oversize names", () => {
+    expect(isValidLabelName("bug")).toBe(true);
+    expect(isValidLabelName("good first issue")).toBe(true);
+    expect(isValidLabelName("status:todo")).toBe(false);
+    expect(isValidLabelName("")).toBe(false);
+    expect(isValidLabelName("a,b")).toBe(false);
+    expect(isValidLabelName(" leading")).toBe(false);
+    expect(isValidLabelName("x".repeat(51))).toBe(false);
+  });
+});
+
+describe("computeLabelReplacement", () => {
+  it("preserves the status label while replacing editable labels", () => {
+    expect(computeLabelReplacement(["status:doing", "bug", "ux"], ["enhancement"])).toEqual([
+      "status:doing",
+      "enhancement",
+    ]);
+  });
+  it("drops invalid and status-prefixed requests and dedupes", () => {
+    expect(computeLabelReplacement(["status:todo"], ["bug", "bug", "status:review", ""])).toEqual([
+      "status:todo",
+      "bug",
+    ]);
+  });
+  it("clears editable labels when requested is empty", () => {
+    expect(computeLabelReplacement(["status:review", "bug"], [])).toEqual(["status:review"]);
+  });
+});
+
+describe("seedForLabel", () => {
+  it("returns the known seed color for bug and a default for unknown labels", () => {
+    expect(seedForLabel("bug")).toEqual({ name: "bug", color: "d73a4a" });
+    expect(seedForLabel("mystery")).toEqual({ name: "mystery", color: "ededed" });
+  });
+  it("keeps known seeds as hex colors including Pulse's bug label", () => {
+    expect(KNOWN_LABEL_SEED.map((l) => l.name)).toContain("bug");
+    for (const l of KNOWN_LABEL_SEED) expect(l.color).toMatch(/^[0-9a-f]{6}$/);
   });
 });
 

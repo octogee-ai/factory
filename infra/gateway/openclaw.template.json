@@ -102,6 +102,12 @@
       "octogee_project_commit",
       "octogee_project_list",
       "octogee_project_set_recipe",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
       "workspace_commit",
       "brave_search",
       "tavily_search",
@@ -208,6 +214,7 @@
       "octogee-access-tools",
       "octogee-preview-tools",
       "octogee-project-tools",
+      "octogee-board-tools",
       "octogee-status-tools",
       "octogee-ops-tools",
       "octogee-web-tools",
@@ -260,6 +267,13 @@
         "config": {}
       },
       "octogee-project-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
+      },
+      "octogee-board-tools": {
         "enabled": true,
         "config": {
           "brokerUrl": "${FLEET_BROKER_URL}",

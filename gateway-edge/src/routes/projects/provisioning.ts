@@ -8,6 +8,7 @@ import { internalFetch } from "../../lib/internal-fetch.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
 import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
+import { seedBoardWelcomeIssue } from "../../lib/board-welcome.js";
 import type { ProjectRecipeId } from "@octogee/shared/types/project";
 
 export interface ProjectRepoProvisioningResult {
@@ -71,6 +72,7 @@ export async function ensureProjectGiteaRepo(input: {
   } catch (error) {
     throw new ProjectRepoProvisioningError(errorMessage(error), created);
   }
+  await seedBoardWelcomeIssue({ workspaceId: input.workspaceId, slug: input.slug, name: input.name });
   return { created };
 }
 

@@ -60,6 +60,12 @@ export const FREE_TIER_COACH_TOOLS = {
         "octogee_project_commit",
         "octogee_project_list",
         "octogee_project_set_recipe",
+        "octogee_board_list",
+        "octogee_board_card_read",
+        "octogee_board_card_create",
+        "octogee_board_card_update",
+        "octogee_board_card_move",
+        "octogee_board_card_comment",
     ],
 };
 // Shared gateways run the codex app-server sandboxed. Builder/operator runtime

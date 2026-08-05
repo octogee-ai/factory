@@ -34,6 +34,32 @@ export function targetState(key: ColumnKey): "open" | "closed" {
   return key === "done" ? "closed" : "open";
 }
 
+// Non-status labels a Builder can apply from the Board. `bug` matches Pulse's
+// bug-backlog counter; the rest mirror GitHub's default label vocabulary.
+export const KNOWN_LABEL_SEED: LabelSeed[] = [
+  { name: "bug", color: "d73a4a" },
+  { name: "enhancement", color: "a2eeef" },
+  { name: "chore", color: "cfd3d7" },
+];
+
+const DEFAULT_LABEL_COLOR = "ededed";
+const LABEL_NAME_RE = /^[^\s,][^,]{0,49}$/;
+
+export function seedForLabel(name: string): LabelSeed {
+  return KNOWN_LABEL_SEED.find((seed) => seed.name === name) ?? { name, color: DEFAULT_LABEL_COLOR };
+}
+
+export function isValidLabelName(name: string): boolean {
+  return LABEL_NAME_RE.test(name) && !name.startsWith(STATUS_PREFIX);
+}
+
+// A label edit replaces only the editable (non-status) labels — the status
+// column assignment always survives, deduped and order-preserving.
+export function computeLabelReplacement(currentLabels: string[], requested: string[]): string[] {
+  const editable = requested.filter(isValidLabelName);
+  return [...new Set([...statusLabelsOn(currentLabels), ...editable])];
+}
+
 export interface MovePlan {
   remove: string[];
   add: string | null;

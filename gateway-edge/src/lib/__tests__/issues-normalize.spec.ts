@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { isPullRequest, normalizeIssue, normalizeIssues, normalizeLabel } from "../issues-normalize.js";
+import {
+  isPullRequest,
+  normalizeComments,
+  normalizeIssue,
+  normalizeIssues,
+  normalizeLabel,
+} from "../issues-normalize.js";
 
 // GitHub and Gitea both mirror the v3 issue shape; one normalizer serves both.
 const githubIssue = {
@@ -87,5 +93,20 @@ describe("normalizeLabel", () => {
       name: "status:review",
       color: "ededed",
     });
+  });
+});
+
+describe("normalizeComments", () => {
+  it("normalizes provider comment shapes and drops malformed entries", () => {
+    const out = normalizeComments([
+      { id: 9, body: "Looks good", user: { login: "chris" }, created_at: "2026-08-01T00:00:00Z" },
+      { body: "no id" },
+      "junk",
+    ]);
+    expect(out).toEqual([{ id: 9, body: "Looks good", author: "chris", createdAt: "2026-08-01T00:00:00Z" }]);
+  });
+
+  it("returns empty for non-array payloads", () => {
+    expect(normalizeComments(null)).toEqual([]);
   });
 });

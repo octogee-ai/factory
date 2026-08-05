@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   mmApi: vi.fn(),
   logger: {
     error: vi.fn(),
+    warn: vi.fn(),
   },
 }));
 

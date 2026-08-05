@@ -14,6 +14,12 @@ const workflowTools = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -92,6 +98,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "codex",
       "octogee-connector-tools",
       "octogee-project-tools",
+      "octogee-board-tools",
       "octogee-ops-tools",
       "octogee-access-tools",
     ]);
@@ -102,7 +109,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: { requireWriteApproval: true },
     });
     expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(out.tools.alsoAllow).toContain("octogee_board_card_create");
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
+    expect(out.plugins.entries["octogee-board-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
   });
@@ -172,6 +181,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "codex",
       "octogee-connector-tools",
       "octogee-project-tools",
+      "octogee-board-tools",
       "octogee-ops-tools",
       "octogee-access-tools",
     ]);
@@ -193,6 +203,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: {},
     });
+    expect(out.plugins.entries["octogee-board-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.plugins.entries["octogee-access-tools"]).toEqual({ enabled: true, config: {} });
     expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();

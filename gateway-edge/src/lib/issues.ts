@@ -9,13 +9,23 @@ import {
 } from "./github.js";
 import {
   isPullRequest,
+  normalizeComment,
+  normalizeComments,
   normalizeIssue,
   normalizeIssues,
   normalizeLabels,
+  type WorkspaceComment,
   type WorkspaceIssue,
   type WorkspaceLabel,
 } from "./issues-normalize.js";
-import { computeMove, labelForColumn, STATUS_LABEL_SEED, type ColumnKey } from "./issues-write.js";
+import {
+  computeLabelReplacement,
+  computeMove,
+  labelForColumn,
+  seedForLabel,
+  STATUS_LABEL_SEED,
+  type ColumnKey,
+} from "./issues-write.js";
 import { logger } from "../middleware/logging.js";
 
 const GITEA_ISSUES_LIMIT = 100;
@@ -142,23 +152,27 @@ export interface CreateIssueInput {
   title: string;
   body: string;
   status: ColumnKey;
+  labels?: string[];
 }
 
 export async function createIssue(target: FileTarget, input: CreateIssueInput): Promise<WorkspaceIssue> {
-  const labelName = labelForColumn(input.status);
-  const id = labelName ? (await ensureStatusLabels(target)).get(labelName) : undefined;
+  const statusLabel = labelForColumn(input.status);
+  const names = computeLabelReplacement(statusLabel ? [statusLabel] : [], input.labels ?? []);
+  if (statusLabel) await ensureStatusLabels(target);
+  const map = names.length > 0 ? await ensureRequestedLabels(target, names) : new Map<string, number>();
   if (target.provider === "github") {
     const raw = await githubJson("POST", githubRepoUrl(target.org, target.repoName, "/issues"), target.githubToken, {
       title: input.title,
       body: input.body,
-      ...(labelName ? { labels: [labelName] } : {}),
+      ...(names.length > 0 ? { labels: names } : {}),
     });
     return normalizeIssue(raw);
   }
+  const ids = names.map((name) => map.get(name)).filter((id): id is number => id != null && id > 0);
   const raw = await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues`, "POST", {
     title: input.title,
     body: input.body,
-    ...(id ? { labels: [id] } : {}),
+    ...(ids.length > 0 ? { labels: ids } : {}),
   });
   return normalizeIssue(raw);
 }
@@ -170,5 +184,95 @@ export async function moveIssue(target: FileTarget, num: number, status: ColumnK
   await Promise.all(plan.remove.map((name) => removeLabel(target, num, name, map)));
   if (plan.add) await addLabel(target, num, plan.add, map);
   if (issue.state !== plan.state) await setIssueState(target, num, plan.state);
+  return getIssue(target, num);
+}
+
+export interface IssueDetail {
+  issue: WorkspaceIssue;
+  comments: WorkspaceComment[];
+}
+
+export async function getIssueDetail(target: FileTarget, num: number): Promise<IssueDetail> {
+  const [issue, comments] = await Promise.all([getIssue(target, num), listComments(target, num)]);
+  return { issue, comments };
+}
+
+async function listComments(target: FileTarget, num: number): Promise<WorkspaceComment[]> {
+  const raw =
+    target.provider === "github"
+      ? await githubJson(
+          "GET",
+          githubRepoUrl(target.org, target.repoName, `/issues/${num}/comments?per_page=${GITHUB_ISSUES_PER_PAGE}`),
+          target.githubToken,
+        )
+      : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/comments`);
+  return normalizeComments(raw);
+}
+
+export async function addComment(target: FileTarget, num: number, body: string): Promise<WorkspaceComment> {
+  await getIssue(target, num); // NotAnIssueError guard — a comment must never land on a PR
+  const raw =
+    target.provider === "github"
+      ? await githubJson(
+          "POST",
+          githubRepoUrl(target.org, target.repoName, `/issues/${num}/comments`),
+          target.githubToken,
+          { body },
+        )
+      : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/comments`, "POST", {
+          body,
+        });
+  return normalizeComment(raw);
+}
+
+export interface UpdateIssueInput {
+  title?: string;
+  body?: string;
+  labels?: string[];
+}
+
+async function ensureRequestedLabels(target: FileTarget, names: string[]): Promise<Map<string, number>> {
+  const byName = new Map((await loadRepoLabels(target)).map((l) => [l.name, l.id]));
+  for (const name of names) {
+    if (byName.has(name)) continue;
+    const seed = seedForLabel(name);
+    const created =
+      target.provider === "github"
+        ? await githubJson("POST", githubRepoUrl(target.org, target.repoName, "/labels"), target.githubToken, seed)
+        : await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/labels`, "POST", seed);
+    byName.set(name, rawId(created));
+  }
+  return byName;
+}
+
+async function replaceLabels(target: FileTarget, num: number, names: string[]): Promise<void> {
+  const map = await ensureRequestedLabels(target, names);
+  if (target.provider === "github") {
+    await githubJson("PUT", githubRepoUrl(target.org, target.repoName, `/issues/${num}/labels`), target.githubToken, {
+      labels: names,
+    });
+    return;
+  }
+  const ids = names.map((name) => map.get(name)).filter((id): id is number => id != null && id > 0);
+  await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}/labels`, "PUT", {
+    labels: ids,
+  });
+}
+
+export async function updateIssue(target: FileTarget, num: number, input: UpdateIssueInput): Promise<WorkspaceIssue> {
+  const issue = await getIssue(target, num);
+  const patch: Record<string, string> = {};
+  if (input.title !== undefined && input.title !== issue.title) patch.title = input.title;
+  if (input.body !== undefined && input.body !== issue.body) patch.body = input.body;
+  if (Object.keys(patch).length > 0) {
+    if (target.provider === "github") {
+      await githubJson("PATCH", githubRepoUrl(target.org, target.repoName, `/issues/${num}`), target.githubToken, patch);
+    } else {
+      await giteaApiAsUser(giteaSudo(target), target.org, `${target.repoName}/issues/${num}`, "PATCH", patch);
+    }
+  }
+  if (input.labels !== undefined) {
+    await replaceLabels(target, num, computeLabelReplacement(issue.labels, input.labels));
+  }
   return getIssue(target, num);
 }

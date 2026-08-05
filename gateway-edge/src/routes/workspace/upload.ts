@@ -112,10 +112,19 @@ type AllowedField = typeof ALLOWED_FIELDS extends Set<infer T> ? T : never;
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
+export interface ParseMultipartOpts {
+  // upload-blob addresses a repo path, so slug+path fields are mandatory there;
+  // issue attachments resolve their target from the query string and name the
+  // object from the uploaded file itself.
+  requireSlugAndPath?: boolean;
+}
+
 export function parseMultipart(
   req: Request,
   maxFileBytes = MAX_UPLOAD_BYTES,
+  opts: ParseMultipartOpts = {},
 ): Promise<ParsedUpload> {
+  const requireSlugAndPath = opts.requireSlugAndPath ?? true;
   return new Promise((resolve, reject) => {
     const bb = Busboy({ headers: req.headers, limits: { fileSize: maxFileBytes, files: 1 } });
     const fields: Record<string, string> = Object.create(null);
@@ -140,17 +149,18 @@ export function parseMultipart(
         reject(new Error(`File too large (max ${maxFileBytes} bytes)`));
         return;
       }
-      if (!fields.slug || !fields.path || !fileBuffer) {
-        reject(new Error("Missing required fields: slug, path, file"));
+      if (!fileBuffer || (requireSlugAndPath && (!fields.slug || !fields.path))) {
+        reject(new Error(requireSlugAndPath ? "Missing required fields: slug, path, file" : "Missing file"));
         return;
       }
+      const path = fields.path ?? "";
       resolve({
-        slug: fields.slug,
+        slug: fields.slug ?? "",
         projectSlug: fields.project || null,
-        path: fields.path,
+        path,
         fileBuffer,
-        filename: filename || fields.path.split("/").pop() || "file",
-        mimeType: mimeType || getMimeType(getExtension(fields.path)),
+        filename: filename || path.split("/").pop() || "file",
+        mimeType: mimeType || getMimeType(getExtension(path || filename)),
       });
     });
     bb.on("error", reject);

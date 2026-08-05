@@ -9,6 +9,13 @@ const h = vi.hoisted(() => ({
   listLabels: vi.fn(),
   createIssue: vi.fn(),
   moveIssue: vi.fn(),
+  getIssueDetail: vi.fn(),
+  updateIssue: vi.fn(),
+  addComment: vi.fn(),
+  listIssueAssets: vi.fn(),
+  storeIssueAsset: vi.fn(),
+  deleteIssueAsset: vi.fn(),
+  parseMultipart: vi.fn(),
 }));
 
 vi.mock("../lib/fileTarget.js", () => ({
@@ -31,9 +38,32 @@ vi.mock("../lib/issues.js", () => {
     listLabels: (...args: unknown[]) => h.listLabels(...args),
     createIssue: (...args: unknown[]) => h.createIssue(...args),
     moveIssue: (...args: unknown[]) => h.moveIssue(...args),
+    getIssueDetail: (...args: unknown[]) => h.getIssueDetail(...args),
+    updateIssue: (...args: unknown[]) => h.updateIssue(...args),
+    addComment: (...args: unknown[]) => h.addComment(...args),
     NotAnIssueError,
   };
 });
+
+vi.mock("../lib/issue-assets.js", () => {
+  class IssueAssetTooLargeError extends Error {
+    constructor(readonly size: number) {
+      super("attachment too large");
+      this.name = "IssueAssetTooLargeError";
+    }
+  }
+  return {
+    MAX_ISSUE_ASSET_BYTES: 25 * 1024 * 1024,
+    IssueAssetTooLargeError,
+    listIssueAssets: (...args: unknown[]) => h.listIssueAssets(...args),
+    storeIssueAsset: (...args: unknown[]) => h.storeIssueAsset(...args),
+    deleteIssueAsset: (...args: unknown[]) => h.deleteIssueAsset(...args),
+  };
+});
+
+vi.mock("../routes/workspace/upload.js", () => ({
+  parseMultipart: (...args: unknown[]) => h.parseMultipart(...args),
+}));
 
 const { default: issuesRouter } = await import("../routes/workspace/issues.js");
 const { NotAnIssueError } = await import("../lib/issues.js");
@@ -64,6 +94,23 @@ beforeEach(() => {
   h.listLabels.mockReset().mockResolvedValue([{ name: "status:todo", color: "c5def5" }]);
   h.createIssue.mockReset().mockResolvedValue({ number: 2, title: "New", labels: ["status:todo"], state: "open" });
   h.moveIssue.mockReset().mockResolvedValue({ number: 1, title: "Ship", labels: ["status:doing"], state: "open" });
+  h.getIssueDetail.mockReset().mockResolvedValue({
+    issue: { number: 1, title: "Ship", labels: [], state: "open" },
+    comments: [{ id: 9, body: "On it", author: "chris", createdAt: "2026-08-01T00:00:00Z" }],
+  });
+  h.updateIssue.mockReset().mockResolvedValue({ number: 1, title: "Renamed", labels: ["bug"], state: "open" });
+  h.addComment.mockReset().mockResolvedValue({ id: 10, body: "Done", author: "chris", createdAt: "2026-08-02T00:00:00Z" });
+  h.listIssueAssets.mockReset().mockResolvedValue([]);
+  h.storeIssueAsset.mockReset().mockResolvedValue({ id: "a", name: "shot.png", size: 3, contentType: "image/png", createdAt: "", url: "https://signed" });
+  h.deleteIssueAsset.mockReset().mockResolvedValue(true);
+  h.parseMultipart.mockReset().mockResolvedValue({
+    slug: "",
+    projectSlug: null,
+    path: "",
+    fileBuffer: Buffer.from("png"),
+    filename: "shot.png",
+    mimeType: "image/png",
+  });
 });
 
 describe("workspace issues route", () => {
@@ -132,5 +179,101 @@ describe("workspace issues route", () => {
     await request(app()).patch("/api/workspace/issues/2/move").send({ status: "done" }).expect(404, {
       error: "Issue not found",
     });
+  });
+
+  it("returns issue detail with comments and attachments", async () => {
+    h.listIssueAssets.mockResolvedValueOnce([
+      { id: "a", name: "shot.png", size: 3, contentType: "image/png", createdAt: "", url: "https://signed" },
+    ]);
+
+    const res = await request(app()).get("/api/workspace/issues/1").expect(200);
+
+    expect(h.getIssueDetail).toHaveBeenCalledWith(h.target, 1);
+    expect(h.listIssueAssets).toHaveBeenCalledWith(h.target, 1);
+    expect(res.body.issue.number).toBe(1);
+    expect(res.body.comments).toHaveLength(1);
+    expect(res.body.attachments).toEqual([
+      { id: "a", name: "shot.png", size: 3, contentType: "image/png", createdAt: "", url: "https://signed" },
+    ]);
+  });
+
+  it("maps pull-request numbers to not found on detail reads", async () => {
+    h.getIssueDetail.mockRejectedValueOnce(new NotAnIssueError(3));
+    await request(app()).get("/api/workspace/issues/3").expect(404, { error: "Issue not found" });
+  });
+
+  it("validates edit input before calling the provider", async () => {
+    await request(app()).patch("/api/workspace/issues/1").send({}).expect(400, { error: "Nothing to update" });
+    await request(app()).patch("/api/workspace/issues/1").send({ title: "  " }).expect(400, { error: "Missing title" });
+    await request(app()).patch("/api/workspace/issues/1").send({ labels: ["status:doing"] }).expect(400, {
+      error: "Invalid labels",
+    });
+    await request(app()).patch("/api/workspace/issues/1").send({ labels: "bug" }).expect(400, {
+      error: "Invalid labels",
+    });
+
+    expect(h.updateIssue).not.toHaveBeenCalled();
+  });
+
+  it("edits title, body, and labels", async () => {
+    const res = await request(app())
+      .patch("/api/workspace/issues/1")
+      .send({ title: " Renamed ", body: "New body", labels: [" bug ", ""] })
+      .expect(200);
+
+    expect(h.updateIssue).toHaveBeenCalledWith(h.target, 1, { title: "Renamed", body: "New body", labels: ["bug"] });
+    expect(res.body).toEqual({ issue: { number: 1, title: "Renamed", labels: ["bug"], state: "open" } });
+  });
+
+  it("creates issues with validated labels", async () => {
+    await request(app()).post("/api/workspace/issues").send({ title: "New", labels: ["bug"] }).expect(201);
+    expect(h.createIssue).toHaveBeenCalledWith(h.target, { title: "New", body: "", status: "backlog", labels: ["bug"] });
+
+    await request(app()).post("/api/workspace/issues").send({ title: "New", labels: ["status:x"] }).expect(400, {
+      error: "Invalid labels",
+    });
+  });
+
+  it("validates and adds comments", async () => {
+    await request(app()).post("/api/workspace/issues/1/comments").send({ body: "  " }).expect(400, {
+      error: "Missing comment body",
+    });
+
+    const res = await request(app()).post("/api/workspace/issues/1/comments").send({ body: "Done" }).expect(201);
+    expect(h.addComment).toHaveBeenCalledWith(h.target, 1, "Done");
+    expect(res.body.comment.id).toBe(10);
+  });
+
+  it("stores attachments and maps oversize uploads to 413", async () => {
+    const res = await request(app()).post("/api/workspace/issues/1/attachments").expect(201);
+    expect(h.storeIssueAsset).toHaveBeenCalledWith(h.target, 1, {
+      name: "shot.png",
+      content: Buffer.from("png"),
+      contentType: "image/png",
+    });
+    expect(res.body.attachment.url).toBe("https://signed");
+
+    const { IssueAssetTooLargeError } = await import("../lib/issue-assets.js");
+    h.storeIssueAsset.mockRejectedValueOnce(new IssueAssetTooLargeError(999));
+    await request(app()).post("/api/workspace/issues/1/attachments").expect(413);
+  });
+
+  it("deletes attachments and 404s when nothing was removed", async () => {
+    await request(app()).delete("/api/workspace/issues/1/attachments/abc").expect(200, { removed: true });
+    expect(h.deleteIssueAsset).toHaveBeenCalledWith(h.target, 1, "abc");
+
+    h.deleteIssueAsset.mockResolvedValueOnce(false);
+    await request(app()).delete("/api/workspace/issues/1/attachments/abc").expect(404, {
+      error: "Attachment not found",
+    });
+  });
+
+  it("rejects workspace-scoped targets on every new endpoint", async () => {
+    h.target = target({ projectSlug: null });
+    await request(app()).get("/api/workspace/issues/1").expect(403);
+    await request(app()).patch("/api/workspace/issues/1").send({ title: "x" }).expect(403);
+    await request(app()).post("/api/workspace/issues/1/comments").send({ body: "x" }).expect(403);
+    await request(app()).post("/api/workspace/issues/1/attachments").expect(403);
+    await request(app()).delete("/api/workspace/issues/1/attachments/a").expect(403);
   });
 });

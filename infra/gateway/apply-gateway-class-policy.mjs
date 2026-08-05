@@ -14,6 +14,12 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -42,6 +48,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
 ];
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
+const BOARD_TOOLS_PLUGIN = "octogee-board-tools";
 const OPS_TOOLS_PLUGIN = "octogee-ops-tools";
 const ACCESS_TOOLS_PLUGIN = "octogee-access-tools";
 const CODEX_PROFILE = "openai-codex:default";
@@ -135,6 +142,13 @@ function enableProjectTools(config) {
   config.plugins.entries[PROJECT_TOOLS_PLUGIN].config ??= {};
 }
 
+function enableBoardTools(config) {
+  allowPlugin(config, BOARD_TOOLS_PLUGIN);
+  config.plugins.entries[BOARD_TOOLS_PLUGIN] ??= {};
+  config.plugins.entries[BOARD_TOOLS_PLUGIN].enabled = true;
+  config.plugins.entries[BOARD_TOOLS_PLUGIN].config ??= {};
+}
+
 function enableOpsTools(config) {
   allowPlugin(config, OPS_TOOLS_PLUGIN);
   config.plugins.entries[OPS_TOOLS_PLUGIN] ??= {};
@@ -195,6 +209,7 @@ function applySharedPolicy(config) {
   removeSharedSubagentDefaults(config);
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
+  enableBoardTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
   requireConnectorWriteApproval(config);
@@ -210,6 +225,7 @@ function applyBuilderPolicy(config) {
   config.tools.subagents.tools.deny = removeDeniedTools(config.tools.subagents.tools.deny, EXEC_TOOLS);
   allowOctogeeWorkflowTools(config);
   enableProjectTools(config);
+  enableBoardTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
   enableRuntimePlugins(config);
