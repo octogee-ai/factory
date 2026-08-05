@@ -2,14 +2,28 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 const MARKER_FILE = ".mattermost-routing-restart-required.json";
 const RESTART_TIMEOUT_MS = 60_000;
 const POLL_MS = 250;
+const ACCOUNT_ABSENCE_GRACE_MS = CONFIG_PATCH_DEADLINE_MS + RESTART_TIMEOUT_MS;
 
 interface PendingActivation {
   token: string;
+  reason: string;
+  accountIds: string[];
+  createdAt: number;
+}
+
+interface PendingActivationClaim {
+  filePath: string;
+  activation: PendingActivation;
+}
+
+interface PendingActivationBatch {
+  claims: PendingActivationClaim[];
   reason: string;
   accountIds: string[];
 }
@@ -29,10 +43,17 @@ function readPendingActivationFile(filePath: string): PendingActivation | null {
     ) {
       throw new Error("Mattermost routing activation marker is malformed");
     }
+    if (
+      value.createdAt !== undefined &&
+      (typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt) || value.createdAt < 0)
+    ) {
+      throw new Error("Mattermost routing activation marker has invalid createdAt");
+    }
     return {
       token: value.token,
       reason: value.reason,
       accountIds: [...new Set(value.accountIds)],
+      createdAt: value.createdAt ?? fs.statSync(filePath).mtimeMs,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -40,8 +61,33 @@ function readPendingActivationFile(filePath: string): PendingActivation | null {
   }
 }
 
-function readPendingActivation(openclawDir: string): PendingActivation | null {
-  return readPendingActivationFile(markerPath(openclawDir));
+function pendingActivationFilePaths(openclawDir: string): string[] {
+  try {
+    return fs.readdirSync(openclawDir)
+      .filter((entry) =>
+        entry === MARKER_FILE ||
+        (entry.startsWith(`${MARKER_FILE}.`) &&
+          (entry.endsWith(".pending") || entry.endsWith(".confirmed")))
+      )
+      .sort()
+      .map((entry) => path.join(openclawDir, entry));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function readPendingActivation(openclawDir: string): PendingActivationBatch | null {
+  const claims = pendingActivationFilePaths(openclawDir).flatMap((filePath) => {
+    const activation = readPendingActivationFile(filePath);
+    return activation ? [{ filePath, activation }] : [];
+  });
+  if (claims.length === 0) return null;
+  return {
+    claims,
+    reason: claims[0]!.activation.reason,
+    accountIds: [...new Set(claims.flatMap((claim) => claim.activation.accountIds))].sort(),
+  };
 }
 
 export function mattermostRoutingActivationPending(openclawDir: string): boolean {
@@ -53,16 +99,18 @@ export function markMattermostRoutingActivationPending(
   reason: string,
   accountIds: readonly string[],
 ): string {
+  const token = randomUUID();
   const existing = readPendingActivation(openclawDir);
   const pending = {
-    token: randomUUID(),
+    token,
     reason: existing?.reason ?? reason,
-    accountIds: [...new Set([...(existing?.accountIds ?? []), ...accountIds])].sort(),
+    accountIds: [...new Set(accountIds)].sort(),
+    createdAt: Date.now(),
   };
   if (pending.accountIds.length === 0) {
     throw new Error("Mattermost routing activation requires at least one account");
   }
-  const target = markerPath(openclawDir);
+  const target = `${markerPath(openclawDir)}.${token}.pending`;
   const temporary = `${target}.${pending.token}.tmp`;
   fs.mkdirSync(openclawDir, { recursive: true });
   fs.writeFileSync(temporary, `${JSON.stringify(pending)}\n`, { encoding: "utf8", mode: 0o600 });
@@ -70,31 +118,17 @@ export function markMattermostRoutingActivationPending(
   return pending.token;
 }
 
-function clearPendingActivation(openclawDir: string, token: string): boolean {
-  const target = markerPath(openclawDir);
-  const claimed = `${target}.${randomUUID()}.confirmed`;
-  try {
-    fs.renameSync(target, claimed);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-  const activation = readPendingActivationFile(claimed);
-  if (activation?.token !== token) {
-    if (fs.existsSync(target)) {
-      markMattermostRoutingActivationPending(
-        openclawDir,
-        activation?.reason ?? "Mattermost routing activation",
-        activation?.accountIds ?? [],
-      );
-      fs.rmSync(claimed);
-    } else {
-      fs.renameSync(claimed, target);
+function clearPendingActivation(openclawDir: string, batch: PendingActivationBatch): boolean {
+  for (const claim of batch.claims) {
+    const current = readPendingActivationFile(claim.filePath);
+    if (current?.token !== claim.activation.token) continue;
+    try {
+      fs.rmSync(claim.filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    return false;
   }
-  fs.rmSync(claimed);
-  return !fs.existsSync(target);
+  return readPendingActivation(openclawDir) === null;
 }
 
 interface MattermostAccountStatus {
@@ -118,6 +152,85 @@ async function mattermostAccountStatuses(
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function configuredMattermostAccountIds(
+  rpc: GatewayRpcClient,
+): Promise<Set<string>> {
+  const snapshot = await rpc.configGet();
+  const config = snapshot.config;
+  if (!isRecord(config)) {
+    throw new Error("Mattermost routing activation requires an object config snapshot");
+  }
+  const channels = config.channels;
+  if (channels === undefined) return new Set();
+  if (!isRecord(channels)) {
+    throw new Error("Mattermost routing activation requires channels to be an object");
+  }
+  const mattermost = channels.mattermost;
+  if (mattermost === undefined) return new Set();
+  if (!isRecord(mattermost)) {
+    throw new Error("Mattermost routing activation requires channels.mattermost to be an object");
+  }
+  const accounts = mattermost.accounts;
+  if (accounts === undefined) return new Set();
+  if (!isRecord(accounts)) {
+    throw new Error("Mattermost routing activation requires Mattermost accounts to be an object");
+  }
+  return new Set(
+    Object.entries(accounts)
+      .filter(([, account]) => account !== null)
+      .map(([accountId]) => accountId),
+  );
+}
+
+function latestClaimCreatedAt(batch: PendingActivationBatch, accountId: string): number {
+  return Math.max(
+    ...batch.claims.flatMap((claim) =>
+      claim.activation.accountIds.includes(accountId) ? [claim.activation.createdAt] : []
+    ),
+  );
+}
+
+async function activePendingAccountIds(
+  rpc: GatewayRpcClient,
+  batch: PendingActivationBatch,
+  now: () => number,
+  accountAbsenceGraceMs: number,
+  log: (message: string) => void,
+): Promise<string[]> {
+  const configured = await configuredMattermostAccountIds(rpc);
+  const retired = batch.accountIds.filter((accountId) =>
+    !configured.has(accountId) &&
+    now() - latestClaimCreatedAt(batch, accountId) >= accountAbsenceGraceMs
+  );
+  if (retired.length > 0) {
+    log(`${batch.reason}; discarded retired Mattermost accounts: ${retired.join(", ")}`);
+  }
+  const retiredSet = new Set(retired);
+  return batch.accountIds.filter((accountId) => !retiredSet.has(accountId));
+}
+
+function channelsStatusConnectionGeneration(rpc: GatewayRpcClient): number {
+  const generation = rpc.channelsStatusConnectionGeneration();
+  if (!Number.isSafeInteger(generation) || generation <= 0) {
+    throw new Error("Mattermost routing activation could not observe channels.status connection generation");
+  }
+  return generation;
+}
+
+function acceptedRestart(result: Awaited<ReturnType<GatewayRpcClient["gatewayRestartRequest"]>>): boolean {
+  return result.ok === true &&
+    (result.status === "scheduled" || result.status === "coalesced") &&
+    result.restart?.ok === true &&
+    result.restart.signal === "SIGUSR1" &&
+    Number.isSafeInteger(result.restart.pid) &&
+    result.restart.pid > 0 &&
+    result.restart.coalesced === (result.status === "coalesced");
+}
+
 export async function activatePendingMattermostRouting(
   rpc: GatewayRpcClient,
   openclawDir: string,
@@ -126,28 +239,47 @@ export async function activatePendingMattermostRouting(
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
     timeoutMs?: number;
+    accountAbsenceGraceMs?: number;
   } = {},
 ): Promise<void> {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? ((ms: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const accountAbsenceGraceMs = options.accountAbsenceGraceMs ?? ACCOUNT_ABSENCE_GRACE_MS;
+  if (!Number.isFinite(accountAbsenceGraceMs) || accountAbsenceGraceMs < 0) {
+    throw new Error("Mattermost routing activation account absence grace must be non-negative");
+  }
 
   while (true) {
     const pending = readPendingActivation(openclawDir);
     if (!pending) return;
+    const accountIds = await activePendingAccountIds(
+      rpc,
+      pending,
+      now,
+      accountAbsenceGraceMs,
+      log,
+    );
+    if (accountIds.length === 0) {
+      if (clearPendingActivation(openclawDir, pending)) return;
+      continue;
+    }
     const phaseTimeoutMs = options.timeoutMs ?? RESTART_TIMEOUT_MS;
     const baselineDeadline = now() + phaseTimeoutMs;
-    let baseline: Map<string, number> | null = null;
+    let baseline: { accounts: Map<string, number>; connectionGeneration: number } | null = null;
     let lastBaselineIssue = "";
     while (now() < baselineDeadline) {
       try {
         const before = await mattermostAccountStatuses(rpc);
-        const missing = pending.accountIds.filter((accountId) =>
+        const missing = accountIds.filter((accountId) =>
           typeof before.get(accountId)?.lastStartAt !== "number");
         if (missing.length === 0) {
-          baseline = new Map(
-            pending.accountIds.map((accountId) => [accountId, before.get(accountId)!.lastStartAt!]),
-          );
+          baseline = {
+            accounts: new Map(
+              accountIds.map((accountId) => [accountId, before.get(accountId)!.lastStartAt!]),
+            ),
+            connectionGeneration: channelsStatusConnectionGeneration(rpc),
+          };
           break;
         }
         const issue = `accounts missing lastStartAt: ${missing.join(", ")}`;
@@ -167,7 +299,10 @@ export async function activatePendingMattermostRouting(
     if (!baseline) {
       throw new Error(`${pending.reason}; Mattermost account start baseline was not observed`);
     }
-    await rpc.gatewayRestartRequest({ reason: pending.reason, skipDeferral: true });
+    const restart = await rpc.gatewayRestartRequest({ reason: pending.reason, skipDeferral: true });
+    if (!acceptedRestart(restart)) {
+      throw new Error(`${pending.reason}; OpenClaw restart was not accepted`);
+    }
     log(`${pending.reason}; OpenClaw restart accepted`);
 
     const restartDeadline = now() + phaseTimeoutMs;
@@ -177,12 +312,14 @@ export async function activatePendingMattermostRouting(
       await sleep(POLL_MS);
       try {
         const after = await mattermostAccountStatuses(rpc);
-        if (pending.accountIds.every((accountId) => {
+        const connectionRestarted = channelsStatusConnectionGeneration(rpc) >
+          baseline.connectionGeneration;
+        if (connectionRestarted && accountIds.every((accountId) => {
           const account = after.get(accountId);
           return account?.running === true &&
             account.connected === true &&
             typeof account.lastStartAt === "number" &&
-            account.lastStartAt > (baseline.get(accountId) ?? 0);
+            account.lastStartAt > (baseline.accounts.get(accountId) ?? 0);
         })) {
           confirmed = true;
           break;
@@ -198,6 +335,6 @@ export async function activatePendingMattermostRouting(
     if (!confirmed) {
       throw new Error(`${pending.reason}; OpenClaw restart generation was not observed`);
     }
-    if (clearPendingActivation(openclawDir, pending.token)) return;
+    if (clearPendingActivation(openclawDir, pending)) return;
   }
 }

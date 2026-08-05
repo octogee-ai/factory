@@ -473,6 +473,10 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       },
       bindings: [
         { agentId: "octogee-ops-eggman" },
+        {
+          agentId: "octogee-ops-eggman",
+          match: { channel: "mattermost", accountId: "alice-coach" },
+        },
         { agentId: "octogee-alice-coach" },
       ],
       channels: {

@@ -68,6 +68,7 @@ const RECEIPT_MAX_LEASE_MS = 60_000;
 const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
 const SHELL_DELETION_BATCH_MAX = 25;
+const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
 function isDurableGatewayRoot(
   data: unknown,
@@ -392,7 +393,10 @@ async function resolveChannelPair(
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
 }
 
-type SessionContextLookup = { purpose: string } | null | "forbidden";
+type SessionContextLookup = {
+  authorized: true;
+  purpose?: string;
+} | null | "forbidden";
 
 type SessionChannelLookup =
   | {
@@ -444,27 +448,36 @@ async function sessionOwnerIsActive(
   );
 }
 
-function readableSessionPurpose(
+function authorizedChannelContext(
   data: Record<string, unknown>,
-): { purpose: string } | null {
-  if (
-    data.kind !== "session" ||
-    data.archivedAt ||
-    readPath(data, "mattermost.activityPair.desired") === "archived"
-  ) {
-    return null;
+  binding: BoundChannelPath,
+): Exclude<SessionContextLookup, null | "forbidden"> | null {
+  if (data.archivedAt) return null;
+  if (readPath(data, "mattermost.activityPair.desired") === "archived") return null;
+  const ordinaryKind = ordinaryChannelKind(binding);
+  if (ordinaryKind !== null) {
+    return data.kind === ordinaryKind ? { authorized: true } : null;
   }
+  if (data.kind !== "session") return null;
   const purpose = typeof data.purpose === "string" ? data.purpose : "";
-  return purpose.length > 0 ? { purpose } : null;
+  return purpose.length > 0 ? { authorized: true, purpose } : { authorized: true };
 }
 
 async function resolveSessionContext(
   db: Firestore,
   gatewayId: string,
   agentId: string,
+  accountId: string,
   channelId: string,
 ): Promise<SessionContextLookup> {
   if (!agentId || !channelId) return null;
+  const parsed = parseAgentId(agentId);
+  const expectedAccountId = parsed.kind === "project"
+    ? `${parsed.username}-proj-${parsed.project}`
+    : parsed.kind === "coach"
+      ? `${parsed.username}-coach`
+      : null;
+  if (!expectedAccountId || accountId !== expectedAccountId) return "forbidden";
   const identity = await resolveAgentIdentity(db, gatewayId, agentId);
   if (identity === "forbidden") return identity;
   if (!identity) return null;
@@ -474,7 +487,89 @@ async function resolveSessionContext(
   if (!channel) return null;
   if (!agentCanReadSession(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
   if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
-  return readableSessionPurpose(channel.data);
+  return authorizedChannelContext(channel.data, channel.binding);
+}
+
+type DispatchSessionRoute = {
+  kind: "direct" | "group" | "channel";
+  peerId: string;
+};
+
+function dispatchSessionRoute(
+  sessionKey: string,
+  agentId: string,
+): DispatchSessionRoute | null {
+  const match = /^agent:([^:]+):mattermost:(direct|group|channel):([a-z0-9]{26})(?::thread:[a-z0-9]{26})?$/u.exec(
+    sessionKey,
+  );
+  if (match?.[1] !== agentId) return null;
+  return {
+    kind: match[2] as DispatchSessionRoute["kind"],
+    peerId: match[3],
+  };
+}
+
+async function resolveDispatchContext(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  accountId: string,
+  conversationId: string,
+  senderId: string,
+  sessionKey: string,
+): Promise<{ authorized: true } | null | "forbidden"> {
+  if (
+    !MATTERMOST_ID_RE.test(conversationId)
+    || !MATTERMOST_ID_RE.test(senderId)
+  ) return "forbidden";
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown") return "forbidden";
+  const expectedAccountId = parsed.kind === "project"
+    ? `${parsed.username}-proj-${parsed.project}`
+    : `${parsed.username}-coach`;
+  const route = dispatchSessionRoute(sessionKey, agentId);
+  if (
+    accountId !== expectedAccountId
+    || !route
+    || route.peerId !== conversationId
+    || (route.kind === "direct" && senderId !== route.peerId)
+  ) return "forbidden";
+
+  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
+  if (identity === "forbidden") return identity;
+  if (!identity) return null;
+
+  if (route.kind === "direct") {
+    if (parsed.kind !== "coach") return "forbidden";
+    const [workspace, owner] = await Promise.all([
+      db.doc(`workspaces/${parsed.username}`).get(),
+      db.doc(`users/${identity.uid}`).get(),
+    ]);
+    return workspace.exists
+      && workspace.data()?.ownerUid === identity.uid
+      && owner.exists
+      && readPath(owner.data() ?? {}, "mattermost.userId") === senderId
+      && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
+      ? { authorized: true }
+      : "forbidden";
+  }
+
+  const channel = await resolveSessionChannel(db, conversationId);
+  if (channel === "forbidden") return channel;
+  if (!channel) return null;
+  const exactLane = parsed.kind === "coach"
+    ? channel.binding.lane === "workspace"
+      && channel.binding.workspaceSlug === parsed.username
+      && channel.binding.channelName !== "admin"
+      && channel.binding.channelName !== "coach-dm"
+    : channel.binding.lane === "project"
+      && channel.binding.workspaceSlug === parsed.username
+      && channel.binding.projectSlug === parsed.project;
+  if (!exactLane) return "forbidden";
+  if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
+  return authorizedChannelContext(channel.data, channel.binding)
+    ? { authorized: true }
+    : null;
 }
 
 function runLivePathIdentity(path: string): {
@@ -975,6 +1070,29 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
 }
 
 function mountSessionContextRoute(router: Router, db: Firestore): void {
+  router.post("/activity/dispatch-context", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const context = await resolveDispatchContext(
+      db,
+      bound.gatewayId,
+      stringBody(req, "agentId"),
+      stringBody(req, "accountId"),
+      stringBody(req, "conversationId"),
+      stringBody(req, "senderId"),
+      stringBody(req, "sessionKey"),
+    );
+    if (context === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!context) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json(context);
+  });
+
   router.post("/activity/session-context", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -982,6 +1100,7 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
       db,
       bound.gatewayId,
       stringBody(req, "agentId"),
+      stringBody(req, "accountId"),
       stringBody(req, "channelId"),
     );
     if (context === "forbidden") {

@@ -91,7 +91,27 @@
     "elevated": {
       "enabled": false
     },
-    "deny": ["exec", "process", "subagents", "sessions_spawn"],
+    "fs": {
+      "workspaceOnly": true
+    },
+    "deny": [
+      "exec",
+      "process",
+      "subagents",
+      "sessions_spawn",
+      "terminal",
+      "preview_start",
+      "octogee_publish",
+      "workspace_commit",
+      "octogee_project_commit",
+      "bundle-mcp",
+      "automations",
+      "skill_workshop",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "browser"
+    ],
     "alsoAllow": [
       "preview_start",
       "preview_stop",
@@ -136,12 +156,27 @@
       "mode": "deny"
     },
     "sessions": {
-      "visibility": "agent"
+      "visibility": "self"
     },
     "subagents": {
       "tools": {
         "deny": ["exec", "process"]
       }
+    }
+  },
+  "cron": {
+    "triggers": {
+      "enabled": false
+    }
+  },
+  "skills": {
+    "load": {},
+    "workshop": {
+      "autonomous": {
+        "mode": "off"
+      },
+      "approvalPolicy": "pending",
+      "allowSymlinkTargetWrites": false
     }
   },
   "bindings": [],
@@ -154,7 +189,12 @@
   "commands": {
     "native": "auto",
     "nativeSkills": "auto",
-    "restart": true
+    "restart": true,
+    "bash": false,
+    "config": false,
+    "mcp": false,
+    "plugins": false,
+    "debug": false
   },
   "session": {
     "dmScope": "per-channel-peer"
@@ -182,6 +222,9 @@
     "port": 18789,
     "mode": "local",
     "bind": "lan",
+    "terminal": {
+      "enabled": false
+    },
     "auth": {
       "mode": "token",
       "rateLimit": {
@@ -230,7 +273,9 @@
         "enabled": true,
         "hooks": {
           "allowPromptInjection": true,
+          "allowConversationAccess": true,
           "timeouts": {
+            "before_dispatch": 3000,
             "before_prompt_build": 3000,
             "before_agent_run": 3000
           }

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
@@ -14,6 +17,7 @@ import {
   preBootFirestoreEnabled,
   slugFromCoachAgentId,
   withTimeout,
+  writeConfigAtomically,
 } from "../entrypoints/pre-boot-config.js";
 
 function emptyConfig(): any {
@@ -32,7 +36,7 @@ describe("shared Mattermost routing safety", () => {
     ]);
   });
 
-  it("installs a quarantine default and stable account routes inferred from peer bindings", () => {
+  it("installs a quarantine default and deterministic stable account routes", () => {
     const config: any = {
       agents: {
         list: [
@@ -88,7 +92,7 @@ describe("shared Mattermost routing safety", () => {
     ]));
   });
 
-  it("quarantines an account whose peer bindings disagree about the owning agent", () => {
+  it("removes foreign peer routes without discarding the managed owner's routes", () => {
     const config: any = {
       agents: { list: [{ id: "octogee-mike-coach" }, { id: "octogee-jack-coach" }] },
       channels: { mattermost: { accounts: { "mike-coach": {} } } },
@@ -119,14 +123,24 @@ describe("shared Mattermost routing safety", () => {
 
     applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
 
-    expect(config.bindings).not.toContainEqual({
+    expect(config.bindings).toContainEqual({
       agentId: "octogee-mike-coach",
       match: { channel: "mattermost", accountId: "mike-coach" },
     });
-    expect(log).toHaveBeenCalledWith("refused ambiguous account route for mike-coach");
+    expect(config.bindings).not.toContainEqual({
+      agentId: "octogee-jack-coach",
+      match: {
+        channel: "mattermost",
+        accountId: "mike-coach",
+        peer: { kind: "group", id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" },
+      },
+    });
+    expect(log).toHaveBeenCalledWith(
+      "converged Mattermost account routes (stable=1, quarantined=0)",
+    );
   });
 
-  it("removes a stale account route when no peer binding verifies its owner", () => {
+  it("removes every account route when the deterministic managed agent is absent", () => {
     const config: any = {
       agents: { list: [{ id: "octogee-mike-coach", default: true }] },
       channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
@@ -142,7 +156,72 @@ describe("shared Mattermost routing safety", () => {
     applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
 
     expect(config.bindings).toEqual([]);
-    expect(log).toHaveBeenCalledWith("refused unverified account route for ceckert-coach");
+    expect(log).toHaveBeenCalledWith(
+      "refused account route without managed agent for ceckert-coach",
+    );
+  });
+
+  it("never promotes a foreign peer into the deterministic account route", () => {
+    const config: any = {
+      agents: {
+        list: [{ id: "octogee-mike-coach" }, { id: "octogee-ceckert-coach" }],
+      },
+      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
+      bindings: [{
+        agentId: "octogee-mike-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "ceckert-coach",
+          peer: { kind: "group", id: "cccccccccccccccccccccccccc" },
+        },
+      }],
+    };
+
+    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn());
+
+    expect(config.bindings).toEqual([{
+      agentId: "octogee-ceckert-coach",
+      match: { channel: "mattermost", accountId: "ceckert-coach" },
+    }]);
+  });
+
+  it("converges stable routes from the beta keyed agent roster", () => {
+    const config: any = {
+      agents: {
+        entries: {
+          "octogee-ceckert-coach": { model: "platform/one" },
+        },
+      },
+      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
+      bindings: [],
+    };
+
+    applySharedMattermostRoutingSafetyPatch(
+      config,
+      { GATEWAY_CLASS: "shared" },
+      vi.fn(),
+    );
+
+    expect(config.bindings).toEqual([{
+      agentId: "octogee-ceckert-coach",
+      match: { channel: "mattermost", accountId: "ceckert-coach" },
+    }]);
+  });
+});
+
+describe("pre-boot config persistence", () => {
+  it("atomically replaces the config without leaving a partial file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preboot-config-"));
+    const configPath = path.join(dir, "openclaw.json");
+    try {
+      fs.writeFileSync(configPath, "{\"old\":true}\n");
+      writeConfigAtomically(configPath, { safe: true });
+
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({ safe: true });
+      expect(fs.readdirSync(dir)).toEqual(["openclaw.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -6,6 +6,7 @@ import {
   resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { parseAgentId } from "@octogee/shared/types/identity";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
@@ -41,6 +42,11 @@ import {
   findAssignedOrInboundMigratingOrConfiguredUserByAgentId,
   findAssignedUserByAgentId,
 } from "./fleet-broker.js";
+import {
+  createOwnerWorkspaceTurnVerifier,
+  type OwnerWorkspaceTurnVerifier,
+} from "../lib/openclaw-owner-turn.js";
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
 type GatewayBinding = Extract<
   Express.Request["boundTenant"],
@@ -174,10 +180,11 @@ function stringOrNull(value: unknown): string | null {
 }
 
 export type AgentCredentialPath =
-  "platform_broker" | "byok_api_key" | "byosub" | "byosub_suppressed_shared";
+  "platform_broker" | "byok_api_key" | "byosub" | "byosub_suppressed_customer";
 
-// Mirrors the Phase D gate (core byot-sync gateSharedByosub): an OAuth model
-// credential is honored on builder/operator pods and suppressed on shared.
+// Mirrors the customer runtime gate (core byot-sync gateCustomerByosub): OAuth model
+// credentials are honored only on the operator runtime. Every customer class
+// stays on the budgeted platform broker rail.
 function credentialPathFor(
   userData: Record<string, unknown>,
   configData: Record<string, unknown>,
@@ -199,9 +206,9 @@ function credentialPathFor(
   // legacy byot records predate the mode field and were always API keys
   const isOauth = active !== legacyByot && active.mode === "oauth";
   if (!isOauth) return { path: "byok_api_key", provider };
-  return gatewayClass === "shared"
-    ? { path: "byosub_suppressed_shared", provider }
-    : { path: "byosub", provider };
+  return gatewayClass === "operator"
+    ? { path: "byosub", provider }
+    : { path: "byosub_suppressed_customer", provider };
 }
 
 function deriveSpendStatus(input: {
@@ -480,6 +487,7 @@ function registerAgentUsageStatusRoute(
   router: Router,
   db: Firestore,
   now: () => number,
+  verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier,
 ) {
   router.post("/agent-usage-status", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -487,6 +495,10 @@ function registerAgentUsageStatusRoute(
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
       res.status(400).json(VALID_AGENT_ID_REQUIRED);
+      return;
+    }
+    if (parseAgentId(agentId).kind !== "coach") {
+      res.status(403).json(FORBIDDEN);
       return;
     }
     const assigned =
@@ -497,6 +509,30 @@ function registerAgentUsageStatusRoute(
         agentId,
       );
     if (!assigned) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    try {
+      if (!(await verifyOwnerWorkspaceTurn({
+        req,
+        gatewayId: bound.gatewayId,
+        agentId,
+        ownerUid: assigned.uid,
+        assignedData: assigned.data as Record<string, unknown>,
+      }))) {
+        logger.warn("[byok-broker] rejected unverified owner status turn", {
+          gatewayId: bound.gatewayId,
+          agentId,
+        });
+        res.status(403).json(FORBIDDEN);
+        return;
+      }
+    } catch (error) {
+      logger.error("[byok-broker] owner status turn verification failed", {
+        gatewayId: bound.gatewayId,
+        agentId,
+        error,
+      });
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -628,6 +664,7 @@ export function createByokBrokerRoutes(opts: {
   db: Firestore;
   now?: () => number;
   readSecret?: (name: string, version?: string) => Promise<string>;
+  verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
 }): Router {
   const router = Router();
   const { db } = opts;
@@ -637,7 +674,12 @@ export function createByokBrokerRoutes(opts: {
   registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
   registerAgentModelTokenRoute(router, db);
 
-  registerAgentUsageStatusRoute(router, db, now);
+  registerAgentUsageStatusRoute(
+    router,
+    db,
+    now,
+    opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(db),
+  );
 
   // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to
   // this gateway. The sidecar /connect handler starts the in-pod auth flow

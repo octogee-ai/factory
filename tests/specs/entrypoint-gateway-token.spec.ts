@@ -203,7 +203,7 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).not.toContain("byosub-syncback");
     expect(result.runners).not.toContain("builder-shell");
-    expect(result.stderr).toMatch(/Operator site-build-api disabled/);
+    expect(result.stderr).toMatch(/site-build-api disabled/);
     expect(result.stderr).toMatch(/Builder-shell disabled/);
   });
 
@@ -212,10 +212,9 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
       "fleet-controller",
-      "site-build",
-      "preview-proxy",
       "byosub-syncback",
     ]);
+    expect(result.stderr).toMatch(/Customer code runners disabled/);
   });
 
   it("starts builder-shell on explicitly unlocked builder gateways", () => {
@@ -227,8 +226,6 @@ describe("infra/gateway/entrypoint.sh — locked operator platform provisioner b
     expect(result.runners).toEqual([
       "builder-shell",
       "fleet-controller",
-      "site-build",
-      "preview-proxy",
       "byosub-syncback",
       "system-config-watch",
     ]);

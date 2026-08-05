@@ -79,6 +79,10 @@ import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
+import {
+  createOwnerWorkspaceTurnVerifier,
+  type OwnerWorkspaceTurnVerifier,
+} from "../lib/openclaw-owner-turn.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -181,6 +185,7 @@ interface FleetBrokerRouteDeps {
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
+  verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   onSignupOfferBudgetInterruption?: (input: {
     uid: string;
@@ -912,6 +917,8 @@ async function requireAssignedAgentWorkspace(
   req: Request,
   res: Response,
 ): Promise<{
+  bound: GatewayBinding;
+  agentId: string;
   uid: string;
   slug: string;
   data: Record<string, unknown>;
@@ -939,7 +946,7 @@ async function requireAssignedAgentWorkspace(
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { uid, slug, data };
+  return { bound, agentId, uid, slug, data };
 }
 
 async function runBrokered(
@@ -1242,6 +1249,7 @@ type ResolvedFleetBrokerRouteDeps = {
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
+  verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier;
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   requestBuilderActivation: (
     input: BuilderRuntimeDemandRequest,
@@ -1276,6 +1284,8 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
+    verifyOwnerWorkspaceTurn:
+      opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
       opts.onSignupOfferBudgetInterruption,
@@ -1950,11 +1960,9 @@ function installGatewayOpsRoutes(
   });
 }
 
-// A chat-broker caller is validated in three layers, all lane-uniform:
+// A chat-broker caller is validated in three layers:
 // gateway binding (boundGateway) -> workspace assigned to that gateway ->
-// agent id parses AND belongs to that workspace with a minted PAT
-// (resolveChatIdentity — the secret's existence IS the capability, so a
-// disabled project agent gets a refusal, never a broader token).
+// exact workspace-owner turn proof -> Builder PAT resolution.
 function validChatBrokerSiteUrl(value: unknown): string | null {
   return typeof value === "string" && /^https?:\/\//.test(value) ? value : null;
 }
@@ -2003,6 +2011,21 @@ async function requireAssignedChatIdentity(
   }
   const uid = await findAssignedUidBySlug(deps.db, bound.gatewayId, slug);
   if (!uid) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  const data = await isAssignedToGateway(deps.db, bound.gatewayId, uid);
+  if (
+    !data ||
+    !agentBelongsToAssignedWorkspace(data, agentId) ||
+    !await deps.verifyOwnerWorkspaceTurn({
+      req,
+      gatewayId: bound.gatewayId,
+      agentId,
+      ownerUid: uid,
+      assignedData: data,
+    })
+  ) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
@@ -2317,6 +2340,16 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   router.post("/agent/set-coach-identity", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);
     if (!assigned) return;
+    if (!await deps.verifyOwnerWorkspaceTurn({
+      req,
+      gatewayId: assigned.bound.gatewayId,
+      agentId: assigned.agentId,
+      ownerUid: assigned.uid,
+      assignedData: assigned.data,
+    })) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
     const body = objectBody(req);
 
     const patch: { name?: string; persona?: string; avatarPng?: Buffer } = {};

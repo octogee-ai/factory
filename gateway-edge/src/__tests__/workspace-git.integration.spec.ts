@@ -104,21 +104,46 @@ function gitAddCommit(dir: string, msg: string): void {
   spawnSync("git", ["commit", "-m", msg], { cwd: dir });
 }
 
+async function externalizeCustomerGitMetadata(
+  dir: string,
+  metadataDir: string,
+  remoteUrl: string,
+): Promise<void> {
+  spawnSync("git", ["remote", "add", "origin", remoteUrl], { cwd: dir });
+  await fs.mkdir(path.dirname(metadataDir), { recursive: true });
+  await fs.rename(path.join(dir, ".git"), metadataDir);
+  await fs.writeFile(path.join(dir, ".git"), `gitdir: ${metadataDir}\n`);
+  const match = /^git@gitea:[^/]+\/(.+)\.git$/u.exec(remoteUrl);
+  if (!match) throw new Error(`unexpected test remote: ${remoteUrl}`);
+  await fs.writeFile(
+    `${metadataDir}.octogee-trusted-v3`,
+    `octogee-customer-git-v3\ngitea:${match[1]}\n`,
+  );
+}
+
+let testRoot: string;
 let customersRoot: string;
 const SLUG = "joe42";
 
 beforeAll(async () => {
-  customersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wsroot-int-"));
+  testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wsroot-int-"));
+  customersRoot = path.join(testRoot, "customers");
+  await fs.mkdir(customersRoot);
   process.env.CUSTOMERS_DIR = customersRoot;
   const slugDir = path.join(customersRoot, SLUG);
   await fs.mkdir(slugDir);
   gitInit(slugDir);
   await fs.writeFile(path.join(slugDir, "README.md"), "hello\n");
   gitAddCommit(slugDir, "initial");
+  await externalizeCustomerGitMetadata(
+    slugDir,
+    path.join(testRoot, "git-metadata", SLUG, "workspace.git"),
+    `git@gitea:${SLUG}/workspace.git`,
+  );
 });
 
 afterAll(async () => {
-  await fs.rm(customersRoot, { recursive: true, force: true });
+  await fs.rm(testRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -266,6 +291,11 @@ const PROJECT = "myproj";
     gitInit(projectDir);
     await fs.writeFile(path.join(projectDir, "PROJECT.md"), "project init\n");
     gitAddCommit(projectDir, "project initial");
+    await externalizeCustomerGitMetadata(
+      projectDir,
+      path.join(testRoot, "git-metadata", SLUG, "projects", `${PROJECT}.git`),
+      `git@gitea:${SLUG}/${PROJECT}.git`,
+    );
   });
   beforeEach(() => {
     firestoreData[`workspaces/${SLUG}/projects/${PROJECT}`] = {

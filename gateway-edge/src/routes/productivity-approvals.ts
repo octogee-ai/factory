@@ -15,6 +15,7 @@ import { requireAuth } from "../middleware/auth.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
+const MALFORMED_APPROVAL_PREVIEW = "canonical productivity approval preview is malformed";
 const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface Deps {
@@ -70,7 +71,6 @@ const ONE_LINE_ACTION_KINDS = new Set<ProductivityActionKind>([
   "sheets-create",
   "sheets-append",
   "obsidian-write",
-  "project-create",
 ]);
 
 function isApprovalState(value: unknown): value is ApprovalState {
@@ -104,7 +104,7 @@ interface ProductivityApprovalView {
 
 function requiredText(value: unknown, maxLength: number): string {
   if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   return value;
 }
@@ -112,7 +112,7 @@ function requiredText(value: unknown, maxLength: number): string {
 function optionalText(value: unknown, maxLength: number): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length > maxLength) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   return value;
 }
@@ -123,7 +123,7 @@ function stringList(value: unknown, maxItems: number, maxLength: number): string
     || value.length > maxItems
     || value.some((entry) => typeof entry !== "string" || entry.length === 0 || entry.length > maxLength)
   ) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   return value as string[];
 }
@@ -131,14 +131,29 @@ function stringList(value: unknown, maxItems: number, maxLength: number): string
 function projectOneLinePreview(preview: Record<string, unknown>): Record<string, unknown> {
   const summary = requiredText(preview.summary, 512);
   if (/[\r\n]/u.test(summary) || summary.trim().length === 0) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   return { summary };
 }
 
+function projectCreatePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const name = requiredText(preview.name, 80);
+  const slug = requiredText(preview.slug, 16);
+  const tagline = preview.tagline;
+  const projectType = preview.projectType;
+  if (
+    name.trim().length === 0
+    || !/^[a-z0-9]{1,16}$/u.test(slug)
+    || typeof tagline !== "string"
+    || tagline.length > 300
+    || (projectType !== null && !["game", "social", "planner", "trip", "other"].includes(String(projectType)))
+  ) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  return { name, slug, tagline, projectType };
+}
+
 function projectGmailSendPreview(preview: Record<string, unknown>): Record<string, unknown> {
   const to = stringList(preview.to, 100, 320);
-  if (to.length === 0) throw new Error("canonical productivity approval preview is malformed");
+  if (to.length === 0) throw new Error(MALFORMED_APPROVAL_PREVIEW);
   return {
     to,
     ...(preview.cc === undefined ? {} : { cc: stringList(preview.cc, 100, 320) }),
@@ -166,11 +181,11 @@ function projectCalendarPreview(preview: Record<string, unknown>): Record<string
   const start = requiredText(preview.start, 128);
   const end = requiredText(preview.end, 128);
   if (!validCalendarTime(start) || !validCalendarTime(end)) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   const timeZone = optionalText(preview.timeZone, 128);
   if (timeZone !== undefined && !validTimeZone(timeZone)) {
-    throw new Error("canonical productivity approval preview is malformed");
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
   }
   return {
     ...(preview.summary === undefined ? {} : { summary: optionalText(preview.summary, 998) }),
@@ -185,11 +200,12 @@ function projectCalendarPreview(preview: Record<string, unknown>): Record<string
 
 function projectActionPreview(kind: ProductivityActionKind, value: unknown): Record<string, unknown> {
   const preview = record(value);
-  if (!preview) throw new Error("canonical productivity approval preview is malformed");
+  if (!preview) throw new Error(MALFORMED_APPROVAL_PREVIEW);
   if (kind === "gmail-send") return projectGmailSendPreview(preview);
   if (kind === "calendar-create" || kind === "calendar-update" || kind === "calendar-delete") {
     return projectCalendarPreview(preview);
   }
+  if (kind === "project-create") return projectCreatePreview(preview);
   if (ONE_LINE_ACTION_KINDS.has(kind)) return projectOneLinePreview(preview);
   throw new Error("canonical productivity approval action is unsupported");
 }

@@ -127,10 +127,10 @@ Files you write there belong to that project's repo, not the workspace's.
 
 - **Create:** `octogee_project_create` — provisions the repo, the channel, the record,
   and the project's starting playbook. Never hand-create `projects/{slug}/`: a folder you
-  make yourself has no repo, no channel and no record, so it can preview but can never
-  publish.
+  make yourself has no repo, no channel and no record.
 - **List:** `octogee_project_list`. There is no `PROJECTS.md`.
-- **Save work into a project:** `octogee_project_commit`.
+- **Save:** workspace edits autosave. Ask the Builder to use their separate shell for an
+  explicit repo checkpoint.
 
 Every project starts with `runbook/`, `DECISIONS.md`, and `notes/welcome.md`. When
 someone says "record a decision", append it to that project's `DECISIONS.md`, newest
@@ -160,8 +160,7 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
   `octogee_google_sheets_read`/`octogee_google_sheets_write`,
   `octogee_google_tasks_read`/`octogee_google_tasks_write`, `octogee_google_contacts_read`.
 - Obsidian: `octogee_obsidian_read`, `octogee_obsidian_write`.
-- Dedicated runtime: `exec`, `process`, `sessions_spawn`, `sessions_yield`, `subagents`
-  only when exposed; use for commands or genuinely parallel work.
+- Customer runtimes cannot run host commands or code agents.
 
 Capability preflight: before claiming Octogee or OpenClaw cannot do something, or
 suggesting local/manual work, external hosting, OAuth code, or user-managed credentials,

@@ -1,6 +1,7 @@
 import { type SystemConfigSyncLease } from "./system-config-mutation-lease.js";
 export interface WorkspaceMutationLeaseOptions {
     workspaceDir: string;
+    gitDir?: string;
     heartbeatMs?: number;
     staleAfterMs?: number;
     now?: () => number;

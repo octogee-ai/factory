@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
@@ -10,9 +12,15 @@ import {
   gatewayAgentRoster,
   gatewayAgentRosterBuilderSlug,
   mattermostAccountBindingsNeedActivation,
+  mattermostAccountBindingsNeedingActivation,
+  PRODUCTIVITY_TOOL_NAMES,
+  PROJECT_AGENT_ALLOWED_TOOLS,
+  PROJECT_AGENT_DENIED_TOOLS,
   SAFE_DEFAULT_AGENT_ID,
   type CoachTokenDeps,
 } from "../lib/openclaw-config-builders.js";
+
+const CHRIS_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 describe("buildCustomerAgent", () => {
   it("marks the isolated gateway Builder coach as OpenClaw's explicit default", () => {
@@ -34,6 +42,51 @@ describe("buildCustomerAgent", () => {
       agentDir: "/agents/octogee-sam-coach/agent",
       coach: { name: "Coach", emoji: "🤖", model: "house" },
     })).not.toHaveProperty("default");
+  });
+
+  it("keeps productivity tools catalog-visible for the workspace coach", () => {
+    const agent = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      customerMmUserId: CHRIS_MM_ID,
+    });
+
+    expect(agent.tools).toMatchObject({ toolsBySender: {} });
+    expect((agent.tools as { alsoAllow: string[] }).alsoAllow).toEqual(
+      expect.arrayContaining(PRODUCTIVITY_TOOL_NAMES),
+    );
+  });
+
+  it("keeps tool visibility independent of the inbound sender projection", () => {
+    for (const customerMmUserId of [undefined, "mm-chris", "A".repeat(26)]) {
+      const agent = buildCustomerAgent({
+        uid: "uid-chris",
+        slug: "chris",
+        customerDir: "/customers/chris",
+        agentDir: "/agents/octogee-chris-coach/agent",
+        coach: { name: "Coach", emoji: "🤖", model: "house" },
+        customerMmUserId,
+      });
+      expect(agent.tools).toMatchObject({ toolsBySender: {} });
+      expect((agent.tools as { toolsBySender: Record<string, unknown> }).toolsBySender)
+        .toEqual({});
+    }
+  });
+
+  it("keeps the productivity policy synchronized with the connector manifest", () => {
+    const manifest = JSON.parse(readFileSync(
+      new URL(
+        "../../infra/gateway/extensions/octogee-connector-tools/openclaw.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    )) as { contracts: { tools: string[] } };
+
+    expect(PRODUCTIVITY_TOOL_NAMES).toHaveLength(15);
+    expect([...PRODUCTIVITY_TOOL_NAMES].sort()).toEqual(manifest.contracts.tools.slice().sort());
   });
 });
 
@@ -112,6 +165,65 @@ describe("mattermostAccountBindingsNeedActivation", () => {
     }]);
 
     expect(mattermostAccountBindingsNeedActivation(current, desired)).toBe(true);
+  });
+
+  it("requires activation when a foreign agent still owns a desired account route", () => {
+    const desired = buildCustomerBindings([{
+      slug: "ceckert",
+      channels: [{ channelId: "gardyn" }],
+    }]);
+    const current = [
+      ...desired,
+      {
+        agentId: "octogee-mike-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "ceckert-coach",
+          peer: { kind: "group", id: "gardyn" },
+        },
+      },
+    ];
+
+    expect(mattermostAccountBindingsNeedActivation(current, desired)).toBe(true);
+  });
+
+  it("marks a still-configured foreign account when its poisoned customer route is removed", () => {
+    const desired = buildCustomerBindings([{
+      slug: "ceckert",
+      channels: [{ channelId: "gardyn" }],
+    }]);
+    const current = [
+      ...desired,
+      {
+        agentId: "octogee-mike-coach",
+        match: { channel: "mattermost", accountId: "mike-coach" },
+      },
+      {
+        agentId: "octogee-ceckert-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "mike-coach",
+          peer: { kind: "group", id: "mike-general" },
+        },
+      },
+      {
+        agentId: "octogee-jack-coach",
+        match: { channel: "mattermost", accountId: "jack-coach" },
+      },
+      {
+        agentId: "octogee-ceckert-proj-retired-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "jack-coach",
+          peer: { kind: "group", id: "jack-general" },
+        },
+      },
+    ];
+
+    expect(mattermostAccountBindingsNeedingActivation(current, desired)).toEqual([
+      "jack-coach",
+      "mike-coach",
+    ]);
   });
 });
 
@@ -235,12 +347,14 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
+      allowFrom: [],
       groupPolicy: "open",
       groupAllowFrom: ["mm-chris", "mm-admin"],
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
+      allowFrom: [],
       groupPolicy: "open",
       groupAllowFrom: ["mm-sam", "mm-admin"],
       commands: { native: false },
@@ -283,6 +397,16 @@ describe("buildMattermostAccounts", () => {
     expect(accounts["pat-coach"].groupAllowFrom).toEqual(["mm-pat", "mm-admin"]);
   });
 
+  it("authorizes native actions only for the exact Builder id and never the admin", () => {
+    const accounts = buildMattermostAccounts(
+      [{ uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID }],
+      new Map([["uid-a", "tok-chris"]]),
+      "cccccccccccccccccccccccccc",
+    );
+
+    expect(accounts["chris-coach"].allowFrom).toEqual([CHRIS_MM_ID]);
+  });
+
   it("when customerMmUserId is absent, the advisory seed is {admin} but the gate stays open (membership-gated)", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
@@ -303,6 +427,7 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
+      allowFrom: [],
       groupPolicy: "open",
       commands: { native: false },
     });
@@ -450,6 +575,7 @@ describe("buildProjectAgents", () => {
       agentsDir: "/agents",
       coach: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
       projectAgents,
+      ownerMmUserId: CHRIS_MM_ID,
     });
 
     expect(agents).toEqual([
@@ -460,9 +586,19 @@ describe("buildProjectAgents", () => {
         agentDir: "/agents/octogee-chris-proj-orbit-coach/agent",
         model: "anthropic/claude-sonnet-4-6",
         identity: { name: "BenderEcho", emoji: "🤖" },
-        tools: { fs: { workspaceOnly: true } },
+        tools: {
+          profile: "minimal",
+          alsoAllow: PROJECT_AGENT_ALLOWED_TOOLS,
+          deny: PROJECT_AGENT_DENIED_TOOLS,
+          exec: { mode: "deny", host: "node" },
+          fs: { workspaceOnly: true },
+          toolsBySender: {},
+        },
       },
     ]);
+    expect(agents[0].tools).toMatchObject({
+      deny: expect.arrayContaining(["delegated_access", "octogee_status", "bundle-mcp"]),
+    });
   });
 });
 
@@ -472,11 +608,12 @@ describe("buildProjectAgentAccounts", () => {
       { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
       { projectId: "unminted", enabled: true, token: null, mmUserId: null },
       { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
-    ]);
+    ], CHRIS_MM_ID);
 
     expect(accounts).toEqual({
       "chris-proj-orbit": {
         botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-proj-orbit" },
+        allowFrom: [CHRIS_MM_ID],
         groupPolicy: "open",
         commands: { native: false },
       },

@@ -57,6 +57,16 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(openclawIdx).toBeGreaterThan(hydrateIdx);
   });
 
+  it("quarantines persisted customer cron host-execution rows before OpenClaw starts", () => {
+    const quarantineIdx = entrypoint.indexOf("quarantine-customer-cron-jobs.mjs");
+    const openclawIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(quarantineIdx).toBeGreaterThan(-1);
+    expect(quarantineIdx).toBeLessThan(openclawIdx);
+    const block = entrypoint.slice(entrypoint.lastIndexOf("if [", quarantineIdx), openclawIdx);
+    expect(block).toMatch(/GATEWAY_CLASS_EFFECTIVE.*!= "operator"/);
+    expect(block).toMatch(/node "\$CUSTOMER_CRON_QUARANTINE"/);
+  });
+
   it("gates system_config restore on non-shared class and explicit builder slug", () => {
     const restoreBlock = entrypoint.slice(
       entrypoint.indexOf("Owner-bound runtime system_config restore"),
@@ -228,10 +238,9 @@ describe("infra/gateway/entrypoint.sh — operator-profile boot hooks", () => {
 });
 
 describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {
-  it("routes the db-less fleet controller and cattle side runners through supervise-runner", () => {
+  it("routes only non-code auxiliary runners through supervise-runner on customer gateways", () => {
     const runners: Record<string, string> = {
       "fleet-controller": "5000",
-      "site-build": "5000",
       "preview-proxy": "5000",
       "byosub-syncback": "30000",
     };
@@ -247,15 +256,16 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).not.toMatch(/entrypoints\/local-provisioner\.ts/);
   });
 
-  it("skips site-build-api on operator-class gateways", () => {
-    const siteBuildIdx = entrypoint.indexOf("supervise_runner site-build");
-    expect(siteBuildIdx).toBeGreaterThan(0);
-    const guardBlock = entrypoint.slice(
-      entrypoint.lastIndexOf("if [", siteBuildIdx),
-      siteBuildIdx,
-    );
+  it("never starts site-build-api inside the credential-bearing gateway container", () => {
+    expect(entrypoint).not.toMatch(/supervise_runner\s+site-build\b/);
+    expect(entrypoint).toContain("site-build-api disabled");
+  });
+
+  it("starts preview-proxy only for the trusted operator runtime", () => {
+    const previewIdx = entrypoint.indexOf("supervise_runner preview-proxy");
+    const guardBlock = entrypoint.slice(entrypoint.lastIndexOf("if [", previewIdx), previewIdx);
     expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
-    expect(guardBlock).toMatch(/!= "operator"/);
+    expect(guardBlock).toMatch(/= "operator"/);
   });
 
   it("gates builder-shell behind runtime class and explicit shell unlock", () => {

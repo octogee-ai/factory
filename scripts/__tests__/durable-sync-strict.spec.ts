@@ -4,8 +4,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const paths = vi.hoisted(() => ({
-  customers: `/tmp/octogee-durable-sync-${process.pid}`,
-  keys: `/tmp/octogee-durable-sync-keys-${process.pid}`,
+  root: `/tmp/octogee-durable-sync-${process.pid}`,
+  customers: `/tmp/octogee-durable-sync-${process.pid}/customers`,
+  keys: `/tmp/octogee-durable-sync-${process.pid}/keys`,
 }));
 
 vi.mock("../lib/config.js", () => ({
@@ -13,6 +14,7 @@ vi.mock("../lib/config.js", () => ({
   dlog: vi.fn(),
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
+  OPENCLAW_DIR: paths.root,
   CUSTOMERS_DIR: paths.customers,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
@@ -20,22 +22,50 @@ vi.mock("../lib/config.js", () => ({
   BLOB_SYNC_MAX_SIZE: 100 * 1024 * 1024,
 }));
 
-const { syncAllWorkspaces, syncCustomerRepositoriesForSlug } = await import("../lib/git.js");
+const {
+  externalizeCustomerGitDir,
+  syncAllWorkspaces,
+  syncCustomerRepositoriesForSlug,
+} = await import("../lib/git.js");
 const { blobSyncAllWithOptions, blobSyncForSlug } = await import("../lib/blob-sync.js");
 
 beforeEach(() => {
-  fs.rmSync(paths.customers, { recursive: true, force: true });
-  fs.rmSync(paths.keys, { recursive: true, force: true });
+  fs.rmSync(paths.root, { recursive: true, force: true });
   fs.mkdirSync(paths.customers, { recursive: true });
   fs.mkdirSync(paths.keys, { recursive: true });
 });
 
 afterEach(() => {
-  fs.rmSync(paths.customers, { recursive: true, force: true });
-  fs.rmSync(paths.keys, { recursive: true, force: true });
+  fs.rmSync(paths.root, { recursive: true, force: true });
 });
 
 describe("strict durable sync", () => {
+  const testGitExec = (cwd: string, argv: string[]): string | null => {
+    try {
+      return execFileSync("git", argv, { cwd, encoding: "utf8" }).trim();
+    } catch {
+      return null;
+    }
+  };
+  const prepareTestRepository = (repoDir: string): void => {
+    const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+    const gitDir = externalizeCustomerGitDir(repoDir, {
+      fetchCanonical: (_worktree, freshGitDir) => {
+        if (!fs.existsSync(remote)) return;
+        execFileSync("git", [
+          "--git-dir", freshGitDir,
+          "fetch", remote,
+          "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+      },
+    });
+    if (!gitDir) throw new Error(`missing customer identity for ${repoDir}`);
+    execFileSync("git", ["config", "--file", path.join(gitDir, "config"), "remote.origin.url", remote]);
+  };
+
   function initPushableRepo(repo: string, remote: string): void {
     fs.mkdirSync(repo, { recursive: true });
     fs.mkdirSync(remote, { recursive: true });
@@ -58,7 +88,11 @@ describe("strict durable sync", () => {
     fs.writeFileSync(path.join(customer, "README.md"), "workspace checkpoint\n");
     fs.writeFileSync(path.join(project, "README.md"), "project checkpoint\n");
 
-    await syncCustomerRepositoriesForSlug("alice", { strict: true });
+    await syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
 
     expect(execFileSync("git", ["status", "--porcelain"], { cwd: customer, encoding: "utf8" })).toBe("");
     expect(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" })).toBe("");
@@ -77,7 +111,11 @@ describe("strict durable sync", () => {
     fs.writeFileSync(path.join(customer, "README.md"), "workspace checkpoint\n");
     fs.writeFileSync(path.join(project, "README.md"), "project checkpoint\n");
 
-    await expect(syncCustomerRepositoriesForSlug("alice", { strict: true }))
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    }))
       .rejects.toThrow(/alice.*push/u);
 
     expect(execFileSync("git", ["show", "main:README.md"], {
@@ -122,7 +160,11 @@ describe("strict durable sync", () => {
       cwd: workspace,
     });
 
-    await expect(syncAllWorkspaces({ strict: true })).rejects.toThrow(/alice.*push/i);
+    await expect(syncAllWorkspaces({
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice.*push/i);
   });
 
   it("rejects the final blob flush when a per-customer upload fails", async () => {

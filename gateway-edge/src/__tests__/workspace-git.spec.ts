@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -17,6 +17,7 @@ import {
   parseLog,
   parsePorcelain,
   resolveCustomerDir,
+  workspaceGitEnvironment,
 } from "../lib/workspace-git.js";
 
 const NUL = String.fromCharCode(0x00);
@@ -218,7 +219,7 @@ describe("gitStatus / gitDiff / gitLog (real git)", () => {
     }
   });
 
-  it("hardening: customer-controlled diff.external in .git/config is neutralized (P0-2)", async () => {
+  it("hardening: customer-controlled diff.external in .git/config fails closed", async () => {
 
 const canary = path.join(repo, ".pwned-canary");
     const driver = path.join(repo, "evil-driver.sh");
@@ -228,13 +229,137 @@ const canary = path.join(repo, ".pwned-canary");
 
     await fs.writeFile(path.join(repo, "README.md"), "trigger diff\n");
     const r = await gitDiff(repo, { path: "README.md" });
-    expect(r.ok).toBe(true);
+    expect(r).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
 
 await expect(fs.access(canary)).rejects.toThrow();
 
 git(repo, ["config", "--unset", "diff.external"]);
     await fs.rm(driver, { force: true });
     await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+  });
+
+  it("hardening: clean-filter config is rejected before staging can execute it", async () => {
+    const canary = path.join(repo, ".filter-canary");
+    git(repo, ["config", "filter.octogee-test.clean", `touch ${canary}; cat`]);
+    await fs.writeFile(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
+    await fs.writeFile(path.join(repo, "payload.txt"), "payload\n");
+
+    const r = await gitCommit(repo, {
+      message: "must not execute",
+      author: { name: "Owner", email: "owner@example.com" },
+    });
+    expect(r).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
+    await expect(fs.access(canary)).rejects.toThrow();
+
+    git(repo, ["config", "--unset", "filter.octogee-test.clean"]);
+    await fs.rm(path.join(repo, ".gitattributes"), { force: true });
+    await fs.rm(path.join(repo, "payload.txt"), { force: true });
+  });
+});
+
+describe("platform-owned customer Git metadata", () => {
+  it("pins workspace and project SSH to the owning customer's platform key", () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    process.env.CUSTOMERS_DIR = "/srv/openclaw/customers";
+    try {
+      const workspaceEnv = workspaceGitEnvironment({}, "/srv/openclaw/customers/mike");
+      const projectEnv = workspaceGitEnvironment(
+        {},
+        "/srv/openclaw/customers/mike/projects/garden",
+      );
+      expect(workspaceEnv.GIT_SSH_COMMAND).toContain(
+        '"/srv/openclaw/customer-keys/mike/id_ed25519"',
+      );
+      expect(projectEnv.GIT_SSH_COMMAND).toContain(
+        '"/srv/openclaw/customer-keys/mike/id_ed25519"',
+      );
+      expect(projectEnv.GIT_SSH_COMMAND).not.toContain("garden/id_ed25519");
+      expect(projectEnv.GIT_SSH_COMMAND).toContain("IdentitiesOnly=yes");
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+    }
+  });
+
+  it("passes the external metadata directory to the workspace mutation lease", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-lease-"));
+    const customersRoot = path.join(root, "customers");
+    const customerDir = path.join(customersRoot, "alice");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    const release = vi.fn();
+    const acquireMutationLease = vi.fn(() => ({ release }));
+    try {
+      const result = await commitAndPushWorkspace(
+        customerDir,
+        { message: "checkpoint", author: { name: "Owner", email: "owner@example.com" } },
+        {
+          acquireMutationLease,
+          gitCommit: vi.fn(async () => ({ ok: true as const, result: { sha: "", empty: true } })),
+          gitPreparePush: vi.fn(async () => ({
+            ok: true as const,
+            target: { branch: "main", setUpstream: false },
+          })),
+          gitPush: vi.fn(async () => ({ ok: true as const })),
+        },
+      );
+
+      expect(result).toMatchObject({ ok: true, result: { pushed: true } });
+      expect(acquireMutationLease).toHaveBeenCalledWith({
+        workspaceDir: customerDir,
+        gitDir: path.join(root, "git-metadata", "alice", "workspace.git"),
+      });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores an agent-controlled .git pointer while staging workspace files", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-external-"));
+    const customersRoot = path.join(root, "customers");
+    const repo = path.join(customersRoot, "alice");
+    const trustedGitDir = path.join(root, "git-metadata", "alice", "workspace.git");
+    const attacker = path.join(root, "attacker");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    try {
+      await fs.mkdir(repo, { recursive: true });
+      git(repo, ["init", "--initial-branch=main"]);
+      git(repo, ["config", "user.email", "test@example.com"]);
+      git(repo, ["config", "user.name", "test"]);
+      await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+      git(repo, ["add", "."]);
+      git(repo, ["commit", "-m", "initial"]);
+      git(repo, ["remote", "add", "origin", "git@gitea:alice/workspace.git"]);
+      await fs.mkdir(path.dirname(trustedGitDir), { recursive: true });
+      await fs.rename(path.join(repo, ".git"), trustedGitDir);
+      await fs.writeFile(
+        `${trustedGitDir}.octogee-trusted-v3`,
+        "octogee-customer-git-v3\ngitea:workspace\n",
+      );
+
+      await fs.mkdir(attacker);
+      git(attacker, ["init"]);
+      const marker = path.join(root, "filter-ran");
+      git(attacker, ["config", "filter.octogee-test.clean", `touch ${marker}; cat`]);
+      await fs.writeFile(path.join(repo, ".git"), `gitdir: ${path.join(attacker, ".git")}\n`);
+      await fs.writeFile(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
+      await fs.writeFile(path.join(repo, "payload.txt"), "payload\n");
+
+      const result = await gitCommit(repo, {
+        message: "platform metadata only",
+        author: { name: "Owner", email: "owner@example.com" },
+      });
+      expect(result).toMatchObject({ ok: true, result: { empty: false } });
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -483,8 +608,7 @@ describe("commitAndPushWorkspace remote convergence", () => {
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
         { cwd: agent, encoding: "utf8" },
       );
-      expect(upstream.status, upstream.stderr).toBe(0);
-      expect(upstream.stdout.trim()).toBe("origin/feature/agent-edit");
+      expect(upstream.status).not.toBe(0);
       const remoteBranchFile = spawnSync(
         "git",
         [
@@ -649,7 +773,7 @@ await expect(fs.access(canary)).rejects.toThrow();
     }
   });
 
-  it("customer-controlled core.hooksPath in .git/config is overridden by HARDENING_PINS", async () => {
+  it("customer-controlled core.hooksPath in .git/config fails closed", async () => {
 
 const canary = path.join(repo, ".pwned-via-hookspath-canary");
     const hooksDir = await fs.mkdtemp(path.join(os.tmpdir(), "evil-hooks-"));
@@ -663,7 +787,7 @@ const canary = path.join(repo, ".pwned-via-hookspath-canary");
         message: "trigger hookspath",
         author: { name: "Owner", email: "owner@example.com" },
       });
-      expect(r.ok).toBe(true);
+      expect(r).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
       await expect(fs.access(canary)).rejects.toThrow();
     } finally {
       try { git(repo, ["config", "--unset", "core.hooksPath"]); } catch { /* ok */ }

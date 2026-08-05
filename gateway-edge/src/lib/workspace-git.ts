@@ -220,7 +220,10 @@ export async function syncCleanWorkspaceToRemote(
   | { ok: true; result: { state: WorkspaceRemoteSyncState } }
   | { ok: false; error: WorkspaceGitError }
 > {
-  const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: customerDir });
+  const lease = acquireWorkspaceMutationLeaseSync({
+    workspaceDir: customerDir,
+    gitDir: trustedWorkspaceGitDir(customerDir),
+  });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
     const statusResult = await gitStatus(customerDir);
@@ -293,7 +296,10 @@ export async function commitAndPushWorkspace(
   options: { message: string; author: CommitAuthor; excludePathspecs?: string[] },
   deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
-  const lease = deps.acquireMutationLease({ workspaceDir: customerDir });
+  const lease = deps.acquireMutationLease({
+    workspaceDir: customerDir,
+    gitDir: trustedWorkspaceGitDir(customerDir),
+  });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
     const commitRes = await deps.gitCommit(customerDir, options);
@@ -508,7 +514,7 @@ async function prepareUntrackedBranchPush(
   }
   return {
     ok: true,
-    target: { branch: options.branch, setUpstream: true },
+    target: { branch: options.branch, setUpstream: false },
   };
 }
 
@@ -579,21 +585,269 @@ interface GitRunOk {
   stderr: string;
 }
 
-const HARDENING_PINS: ReadonlyArray<string> = [
+export const WORKSPACE_GIT_HARDENING_PINS: ReadonlyArray<string> = [
   "-c", "core.fsmonitor=",
   "-c", "core.pager=cat",
   "-c", "core.hooksPath=/dev/null",
+  "-c", "credential.helper=",
+  "-c", "commit.gpgSign=false",
+  "-c", "tag.gpgSign=false",
   "-c", "gpg.program=/bin/false",
+  "-c", "protocol.allow=never",
+  "-c", "protocol.ssh.allow=always",
+  "-c", "protocol.https.allow=always",
   "-c", "protocol.file.allow=never",
   "-c", "protocol.ext.allow=never",
 ];
 
-const HARDENING_ENV: Readonly<Record<string, string>> = {
+export const WORKSPACE_GIT_HARDENING_ENV: Readonly<Record<string, string>> = {
   GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_SYSTEM: "/dev/null",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_TERMINAL_PROMPT: "0",
+  GIT_ASKPASS: "/bin/false",
+  SSH_ASKPASS: "/bin/false",
+  GIT_EDITOR: "/bin/false",
+  GIT_SEQUENCE_EDITOR: "/bin/false",
+  GIT_PAGER: "cat",
+  GIT_PROTOCOL_FROM_USER: "0",
   GIT_OPTIONAL_LOCKS: "0",
 };
+
+const UNSAFE_LOCAL_CONFIG_PREFIXES = [
+  "alias.", "credential.", "diff.", "filter.", "http.", "https.",
+  "include.", "includeif.", "merge.", "protocol.", "url.",
+];
+const UNSAFE_LOCAL_CONFIG_KEYS = new Set([
+  "core.askpass", "core.editor", "core.fsmonitor", "core.gitproxy",
+  "core.hookspath", "core.pager", "core.sshcommand", "core.worktree",
+  "extensions.worktreeconfig", "gpg.program", "sequence.editor", "ssh.variant",
+]);
+
+function isUnsafeLocalConfigKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return UNSAFE_LOCAL_CONFIG_KEYS.has(normalized)
+    || UNSAFE_LOCAL_CONFIG_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+interface CustomerGitIdentity {
+  customersRoot: string;
+  slug: string;
+  repoName: string;
+  metadataDir: string;
+}
+
+function customerGitIdentity(cwd: string): CustomerGitIdentity | null {
+  const customersRoot = path.resolve(
+    process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers",
+  );
+  const relative = path.relative(customersRoot, path.resolve(cwd));
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  const parts = relative.split(path.sep);
+  const metadataRoot = path.join(path.dirname(customersRoot), "git-metadata");
+  const slug = parts[0] ?? "";
+  if (!isSafeSlug(slug)) return null;
+  if (parts.length === 1) {
+    return {
+      customersRoot,
+      slug,
+      repoName: "workspace",
+      metadataDir: path.join(metadataRoot, slug, "workspace.git"),
+    };
+  }
+  const projectSlug = parts[2] ?? "";
+  if (parts.length === 3 && parts[1] === "projects" && isSafeSlug(projectSlug)) {
+    return {
+      customersRoot,
+      slug,
+      repoName: projectSlug,
+      metadataDir: path.join(metadataRoot, slug, "projects", `${projectSlug}.git`),
+    };
+  }
+  return null;
+}
+
+export function customerGitMetadataDir(cwd: string): string | null {
+  return customerGitIdentity(cwd)?.metadataDir ?? null;
+}
+
+export function trustedWorkspaceGitDir(cwd: string): string {
+  return customerGitMetadataDir(cwd) ?? path.join(cwd, ".git");
+}
+
+export function workspaceGitCommandArgs(
+  cwd: string,
+  args: ReadonlyArray<string>,
+): string[] {
+  return [
+    ...WORKSPACE_GIT_HARDENING_PINS,
+    "--git-dir",
+    trustedWorkspaceGitDir(cwd),
+    "--work-tree",
+    cwd,
+    ...args,
+  ];
+}
+
+export function workspaceGitEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+): NodeJS.ProcessEnv {
+  const environment = { ...source, ...WORKSPACE_GIT_HARDENING_ENV };
+  const identity = cwd ? customerGitIdentity(cwd) : null;
+  if (identity) {
+    const keyPath = path.join(
+      path.dirname(identity.customersRoot),
+      "customer-keys",
+      identity.slug,
+      "id_ed25519",
+    );
+    environment.GIT_SSH_COMMAND = [
+      "/usr/bin/ssh",
+      "-i", JSON.stringify(keyPath),
+      "-F", "/home/node/.ssh/config",
+      "-o", "IdentitiesOnly=yes",
+      "-o", "StrictHostKeyChecking=no",
+      "-o", "UserKnownHostsFile=/dev/null",
+      "-o", "LogLevel=ERROR",
+    ].join(" ");
+  }
+  return environment;
+}
+
+function expectedCustomerRemoteUrl(
+  cwd: string,
+  receiptContents: string,
+): string | null {
+  const identity = customerGitIdentity(cwd);
+  if (!identity) return null;
+  const lines = receiptContents.split("\n");
+  if (lines.length !== 3 || lines[0] !== "octogee-customer-git-v3" || lines[2] !== "") {
+    return null;
+  }
+  const source = lines[1] ?? "";
+  if (source.startsWith("gitea:")) {
+    const repoName = source.slice("gitea:".length);
+    if (!isSafeSlug(repoName)) return null;
+    const host = process.env.GIT_SSH_HOST?.trim() || "gitea";
+    return `git@${host}:${identity.slug}/${repoName}.git`;
+  }
+  if (source.startsWith("github:")) {
+    const [owner, repo, extra] = source.slice("github:".length).split("/");
+    if (!owner || !repo || extra || !isSafeSlug(owner) || !isSafeSlug(repo)) return null;
+    return `https://github.com/${owner}/${repo}.git`;
+  }
+  return null;
+}
+
+async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | null> {
+  const gitDir = trustedWorkspaceGitDir(cwd);
+  const identity = customerGitIdentity(cwd);
+  let receiptContents = "";
+  if (identity) {
+    const receipt = `${identity.metadataDir}.octogee-trusted-v3`;
+    try {
+      const receiptStat = await fs.lstat(receipt);
+      receiptContents = await fs.readFile(receipt, "utf8");
+      if (
+        !receiptStat.isFile()
+        || receiptStat.isSymbolicLink()
+        || expectedCustomerRemoteUrl(cwd, receiptContents) === null
+      ) return "<untrusted-metadata>";
+      const forbiddenEntries = [
+        "commondir",
+        path.join("objects", "info", "alternates"),
+        path.join("info", "grafts"),
+        path.join("refs", "replace"),
+        "worktrees",
+        "modules",
+      ];
+      for (const entry of forbiddenEntries) {
+        try {
+          await fs.lstat(path.join(gitDir, entry));
+          return `<unsafe-metadata:${entry}>`;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "<malformed>";
+        }
+      }
+      const objects = await fs.lstat(path.join(gitDir, "objects"));
+      if (!objects.isDirectory() || objects.isSymbolicLink()) return "<unsafe-metadata:objects>";
+    } catch {
+      return "<untrusted-metadata>";
+    }
+  }
+  const configPath = path.join(gitDir, "config");
+  try {
+    const stat = await fs.lstat(configPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return "<malformed>";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? null : "<malformed>";
+  }
+
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        "/usr/bin/git",
+        ["config", "--file", configPath, "--null", "--list"],
+        {
+          cwd,
+          stdio: ["ignore", "pipe", "ignore"],
+          env: workspaceGitEnvironment(process.env, cwd),
+        },
+      );
+    } catch {
+      resolve("<malformed>");
+      return;
+    }
+    child.stdout!.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.once("error", () => resolve("<malformed>"));
+    child.once("close", (status) => {
+      if (status !== 0) {
+        resolve("<malformed>");
+        return;
+      }
+      const entries = Buffer.concat(chunks).toString("utf8").split(NUL).filter(Boolean);
+      const expectedRemote = expectedCustomerRemoteUrl(cwd, receiptContents);
+      let originUrlCount = 0;
+      let originFetchCount = 0;
+      for (const entry of entries) {
+        const separator = entry.indexOf("\n");
+        if (separator < 1) {
+          resolve("<malformed>");
+          return;
+        }
+        const key = entry.slice(0, separator);
+        const value = entry.slice(separator + 1);
+        if (isUnsafeLocalConfigKey(key)) {
+          resolve(key);
+          return;
+        }
+        if (expectedRemote && key.startsWith("branch.")) {
+          resolve(key);
+          return;
+        }
+        if (!expectedRemote || !key.startsWith("remote.")) continue;
+        const valid =
+          (key === "remote.origin.url" && value === expectedRemote) ||
+          (key === "remote.origin.fetch" && value === "+refs/heads/*:refs/remotes/origin/*");
+        if (!valid) {
+          resolve(key);
+          return;
+        }
+        if (key === "remote.origin.url") originUrlCount += 1;
+        else originFetchCount += 1;
+      }
+      if (expectedRemote && (originUrlCount !== 1 || originFetchCount !== 1)) {
+        resolve("remote.origin");
+        return;
+      }
+      resolve(null);
+    });
+  });
+}
 
 async function runGit(
   cwd: string,
@@ -601,15 +855,18 @@ async function runGit(
   options: { timeoutMs?: number } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const unsafeConfigKey = await unsafeLocalRepositoryConfigKey(cwd);
+  if (unsafeConfigKey) {
+    return {
+      ok: false,
+      error: {
+        code: "INTERNAL",
+        message: `repository local config contains an unsafe key: ${unsafeConfigKey}`,
+      },
+    };
+  }
 
-const fullArgs = [
-    ...HARDENING_PINS,
-    "--git-dir",
-    path.join(cwd, ".git"),
-    "--work-tree",
-    cwd,
-    ...args,
-  ];
+  const fullArgs = workspaceGitCommandArgs(cwd, args);
   return new Promise((resolve) => {
     const start = Date.now();
     let stdoutBytes = 0;
@@ -622,11 +879,10 @@ const fullArgs = [
     let proc: ReturnType<typeof spawn>;
     try {
       
-      // eslint-disable-next-line sonarjs/no-os-command-from-path
-      proc = spawn("git", fullArgs, {
+      proc = spawn("/usr/bin/git", fullArgs, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, ...HARDENING_ENV },
+        env: workspaceGitEnvironment(process.env, cwd),
       });
     } catch (err) {
       resolve({

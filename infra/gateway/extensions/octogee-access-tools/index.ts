@@ -4,13 +4,26 @@ import { Type } from "typebox";
 
 import {
   AccessToolError,
+  type AccessBrokerOptions,
   accessApprovalStatus,
   listAccess,
   prepareAccess,
   recommendAccess,
 } from "./access-client.js";
 
-interface ToolContext { agentId?: unknown; sessionId?: unknown }
+interface ToolContext {
+  agentId?: unknown;
+  sessionId?: unknown;
+  agentAccountId?: unknown;
+  messageChannel?: unknown;
+  nativeChannelId?: unknown;
+  requesterSenderId?: unknown;
+  deliveryContext?: {
+    accountId?: unknown;
+    channel?: unknown;
+    to?: unknown;
+  };
+}
 interface PluginApi {
   pluginConfig?: unknown;
   registerTool: (factory: (context: ToolContext) => unknown, meta: { name: string }) => void;
@@ -21,6 +34,39 @@ function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
   if (operation === "prepare_revoke") return "revoke";
   if (operation === "prepare_change") return "change";
   return "grant";
+}
+
+function requestContextOf(ctx: ToolContext): AccessBrokerOptions["requestContext"] | null {
+  const directChannel = ctx.messageChannel;
+  const deliveryChannel = ctx.deliveryContext?.channel;
+  if (
+    typeof directChannel === "string"
+    && typeof deliveryChannel === "string"
+    && directChannel !== deliveryChannel
+  ) return null;
+  const channel = typeof directChannel === "string" ? directChannel : deliveryChannel;
+  const directAccountId = ctx.agentAccountId;
+  const deliveryAccountId = ctx.deliveryContext?.accountId;
+  if (
+    typeof directAccountId === "string"
+    && typeof deliveryAccountId === "string"
+    && directAccountId !== deliveryAccountId
+  ) return null;
+  const accountId = typeof directAccountId === "string" ? directAccountId : deliveryAccountId;
+  const requesterSenderId = ctx.requesterSenderId;
+  const nativeChannelId = ctx.nativeChannelId;
+  const to = ctx.deliveryContext?.to;
+  if (
+    channel !== "mattermost"
+    || typeof accountId !== "string"
+    || typeof requesterSenderId !== "string"
+    || !/^[a-z0-9]{26}$/u.test(requesterSenderId)
+    || typeof nativeChannelId !== "string"
+    || !/^[a-z0-9]{26}$/u.test(nativeChannelId)
+    || typeof to !== "string"
+    || !/^(?:channel|user):[a-z0-9]{26}$/u.test(to)
+  ) return null;
+  return { channel, accountId, requesterSenderId, nativeChannelId, to };
 }
 
 export default definePluginEntry({
@@ -53,7 +99,14 @@ export default definePluginEntry({
       async execute(_toolCallId: string, input: Record<string, unknown>) {
         const agentId = typeof context.agentId === "string" ? context.agentId : null;
         if (!agentId) return jsonResult({ error: "delegated_access requires a coach agent" });
-        const options = { agentId, ...config };
+        const requestContext = requestContextOf(context);
+        if (!requestContext) {
+          return jsonResult({
+            error: "delegated_access requires verified Mattermost sender and route context",
+            code: "request-context-required",
+          });
+        }
+        const options = { agentId, requestContext, ...config };
         try {
           if (input.operation === "list") return jsonResult(await listAccess(options));
           if (input.operation === "recommend") {

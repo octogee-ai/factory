@@ -7,6 +7,7 @@ const paths = vi.hoisted(() => ({
   customers: `/tmp/octogee-gh-project-${process.pid}`,
   keys: `/tmp/octogee-gh-project-keys-${process.pid}`,
   scratch: `/tmp/octogee-gh-project-scratch-${process.pid}`,
+  openclaw: `/tmp/octogee-gh-project-openclaw-${process.pid}`,
 }));
 
 vi.mock("../lib/config.js", () => ({
@@ -14,6 +15,7 @@ vi.mock("../lib/config.js", () => ({
   dlog: vi.fn(),
   GIT_API_URL: "http://gitea-http.octogee.svc.cluster.local:3000/api/v1",
   GIT_SSH_HOST: "gitea",
+  OPENCLAW_DIR: paths.openclaw,
   CUSTOMERS_DIR: paths.customers,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
@@ -42,9 +44,34 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function localConfig(repo: string, key: string): string {
-  return git(repo, ["config", "--local", "--get", key]);
+function localGitExec(cwd: string, args: string[]): string | null {
+  try {
+    return git(cwd, args);
+  } catch {
+    return null;
+  }
 }
+
+function localConfig(repo: string, key: string): string {
+  const localGit = path.join(repo, ".git");
+  const stat = fs.lstatSync(localGit);
+  const config = stat.isDirectory()
+    ? path.join(localGit, "config")
+    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
+  return git(repo, ["config", "--file", config, "--get", key]);
+}
+
+function localConfigContents(repo: string): string {
+  const localGit = path.join(repo, ".git");
+  const stat = fs.lstatSync(localGit);
+  const config = stat.isDirectory()
+    ? path.join(localGit, "config")
+    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
+  return fs.readFileSync(config, "utf8");
+}
+
+const acquireWorkspaceMutationLease = () => ({ release: () => {} });
+const prepareRepository = () => {};
 
 function seedBareOrigin(): string {
   const origin = path.join(paths.scratch, "origin.git");
@@ -75,7 +102,7 @@ function initRepoWithOrigin(repo: string, remoteUrl: string): void {
 }
 
 beforeEach(() => {
-  for (const dir of [paths.customers, paths.keys, paths.scratch]) {
+  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -92,12 +119,13 @@ beforeEach(() => {
       "",
     ].join("\n"),
   );
-  for (const key of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_SSH_COMMAND"]) {
+  for (const key of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_SSH_COMMAND", "GATEWAY_CLASS"]) {
     savedEnv[key] = process.env[key];
   }
   process.env.GIT_CONFIG_GLOBAL = globalConfig;
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   process.env.GIT_SSH_COMMAND = "false";
+  process.env.GATEWAY_CLASS = "builder";
 });
 
 afterEach(() => {
@@ -105,7 +133,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const dir of [paths.customers, paths.keys, paths.scratch]) {
+  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -116,7 +144,11 @@ describe("workspace autosync remote migration", () => {
     const origin = `https://github.com/${SLUG}/site.git`;
     initRepoWithOrigin(project, origin);
 
-    await syncCustomerRepositoriesForSlug(SLUG);
+    await syncCustomerRepositoriesForSlug(SLUG, {
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+    });
 
     expect(localConfig(project, "remote.origin.url")).toBe(origin);
   });
@@ -126,7 +158,12 @@ describe("workspace autosync remote migration", () => {
     const origin = `https://github.com/${SLUG}/gh.git`;
     initRepoWithOrigin(project, origin);
 
-    await expect(syncCustomerRepositoriesForSlug(SLUG, { strict: true }))
+    await expect(syncCustomerRepositoriesForSlug(SLUG, {
+      strict: true,
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+    }))
       .rejects.toThrow(/push failed/);
 
     expect(localConfig(project, "remote.origin.url")).toBe(origin);
@@ -139,7 +176,11 @@ describe("workspace autosync remote migration", () => {
       `http://gitea-http.octogee.svc.cluster.local:3000/${SLUG}/legacy`,
     );
 
-    await syncCustomerRepositoriesForSlug(SLUG);
+    await syncCustomerRepositoriesForSlug(SLUG, {
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+    });
 
     expect(localConfig(project, "remote.origin.url")).toBe(`git@gitea:${SLUG}/legacy`);
   });
@@ -151,7 +192,8 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      githubToken: MATERIALIZED_TOKEN,
+      gitExec: localGitExec,
+      prepareRepository,
     });
 
     expect(ok).toBe(true);
@@ -166,11 +208,12 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
 
     await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      githubToken: MATERIALIZED_TOKEN,
+      gitExec: localGitExec,
+      prepareRepository,
     });
 
     expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
-    expect(fs.readFileSync(path.join(dest, ".git", "config"), "utf8")).not.toContain(
+    expect(localConfigContents(dest)).not.toContain(
       MATERIALIZED_TOKEN,
     );
   });
@@ -182,7 +225,8 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      githubToken: MATERIALIZED_TOKEN,
+      gitExec: localGitExec,
+      prepareRepository,
     });
 
     expect(ok).toBe(true);
@@ -214,7 +258,10 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     fs.writeFileSync(path.join(keyDir, "id_ed25519"), "not-a-real-key\n");
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
 
-    const ok = await cloneProjectRepo(SLUG, "demo", "demo");
+    const ok = await cloneProjectRepo(SLUG, "demo", "demo", {
+      gitExec: localGitExec,
+      prepareRepository,
+    });
 
     expect(ok).toBe(true);
     expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);

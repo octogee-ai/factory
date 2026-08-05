@@ -21,7 +21,19 @@ type ForbiddenArrayInvariant = {
     path: string;
     values: readonly string[];
 };
-export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant;
+type CustomerAgentWorkspaceInvariant = {
+    kind: "customer-agent-workspace";
+    path: "agents.list[].tools.fs.workspaceOnly" | "agents.entries.*.tools.fs.workspaceOnly";
+};
+type MattermostAccountProjectionInvariant = {
+    kind: "mattermost-account-projection";
+    path: "channels.mattermost.accounts";
+};
+type CustomerAgentToolPolicyInvariant = {
+    kind: "customer-agent-tool-policy";
+    path: "agents.list[].tools" | "agents.entries.*.tools";
+};
+export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant | CustomerAgentWorkspaceInvariant | CustomerAgentToolPolicyInvariant | MattermostAccountProjectionInvariant;
 export declare function platformInvariantTable(context: SystemConfigInvariantContext): readonly PlatformInvariant[];
 export declare class PlatformInvariantPolicyError extends Error {
     readonly paths: string[];

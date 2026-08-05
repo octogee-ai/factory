@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
 import { agentIdsFromConfig } from "../lib/byosub-restore.js";
 import {
   materializeBrokerProfilesForAgents,
@@ -23,6 +24,7 @@ import {
   OPENROUTER_PLATFORM_PROVIDER_ID,
   platformModelRefs,
 } from "@octogee/shared/types/agent-models";
+import { parseAgentId } from "@octogee/shared/types/identity";
 
 const OPENCLAW_DIR = openClawDir();
 const CONFIG_PATH = openClawConfigPath();
@@ -164,6 +166,25 @@ function mattermostBindingFacts(value: unknown): {
   };
 }
 
+function managedAgentIdForMattermostAccount(accountId: string): string | null {
+  if (accountId.includes("-proj-")) {
+    const agentId = `octogee-${accountId}-coach`;
+    const parsed = parseAgentId(agentId);
+    return parsed.kind === "project" &&
+        `${parsed.username}-proj-${parsed.project}` === accountId
+      ? agentId
+      : null;
+  }
+  if (accountId.endsWith("-coach")) {
+    const agentId = `octogee-${accountId}`;
+    const parsed = parseAgentId(agentId);
+    return parsed.kind === "coach" && `${parsed.username}-coach` === accountId
+      ? agentId
+      : null;
+  }
+  return null;
+}
+
 function applySharedDefaultAgent(config: OpenClawConfig): boolean {
   const agents = ensureNullishObjectProperty(config, "agents");
   if (!agents) throw new Error("shared routing safety requires an agents object");
@@ -219,35 +240,27 @@ export function applySharedMattermostRoutingSafetyPatch(
   }
   const bindings = Array.isArray(config.bindings) ? config.bindings : [];
 
-  const inferred = new Map<string, Set<string>>();
-  for (const binding of bindings) {
-    const facts = mattermostBindingFacts(binding);
-    if (!facts?.hasPeer || !Object.prototype.hasOwnProperty.call(accounts, facts.accountId)) continue;
-    const agents = inferred.get(facts.accountId) ?? new Set<string>();
-    agents.add(facts.agentId);
-    inferred.set(facts.accountId, agents);
-  }
-
   const routes = new Map<string, string>();
   const quarantinedAccounts = new Set<string>();
+  const configuredAgentIds = new Set(agentIdsFromConfig(config));
   for (const accountId of Object.keys(accounts)) {
-    const agentIds = inferred.get(accountId) ?? new Set<string>();
-    if (agentIds.size !== 1) {
+    const agentId = managedAgentIdForMattermostAccount(accountId);
+    if (!agentId || !configuredAgentIds.has(agentId)) {
       quarantinedAccounts.add(accountId);
       logFn(
-        agentIds.size === 0
-          ? `refused unverified account route for ${accountId}`
-          : `refused ambiguous account route for ${accountId}`,
+        agentId
+          ? `refused account route without managed agent for ${accountId}`
+          : `refused unmanaged account route for ${accountId}`,
       );
       continue;
     }
-    routes.set(accountId, [...agentIds][0]!);
+    routes.set(accountId, agentId);
   }
   if (routes.size === 0 && quarantinedAccounts.size === 0) return changed;
 
   const retained = bindings.filter((binding) => {
     const facts = mattermostBindingFacts(binding);
-    if (!facts || facts.hasPeer) return true;
+    if (!facts) return true;
     if (quarantinedAccounts.has(facts.accountId)) return false;
     const inferredAgentId = routes.get(facts.accountId);
     return inferredAgentId === undefined || inferredAgentId === facts.agentId;
@@ -704,6 +717,20 @@ async function applyGatewayRootConfigFromFirestore(
   }
 }
 
+export function writeConfigAtomically(configPath: string, config: unknown): void {
+  const temporary = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, configPath);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
 
 let configRaw: string;
@@ -729,7 +756,7 @@ let configRaw: string;
   const policyChanged = applyPreBootPatches(config, process.env, log);
 
   if (overridesChanged || policyChanged) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+    writeConfigAtomically(CONFIG_PATH, config);
     log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
   } else {
     log("no changes needed");

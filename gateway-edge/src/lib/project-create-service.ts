@@ -91,7 +91,7 @@ class ProjectProvisioningError extends Error {
   }
 }
 
-function validateProjectSlug(slug: string): string | null {
+export function validateProjectSlug(slug: string): string | null {
   if (!isValidProjectId(slug)) {
     return `Slug must be ${PROJECT_ID_MIN_LENGTH}-${PROJECT_ID_MAX_LENGTH} chars, lowercase letters and digits only (no hyphens).`;
   }

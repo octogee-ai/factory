@@ -210,6 +210,7 @@ function createChannelsStatusConnection(connection) {
     let ws = null;
     let connecting = null;
     let generation = 0;
+    let connectionGeneration = 0;
     function disconnect(activeWs) {
         if (ws === activeWs)
             ws = null;
@@ -238,6 +239,7 @@ function createChannelsStatusConnection(connection) {
                 throw new OpenclawWireError("connect-failed", "gateway RPC client closed while channels.status was connecting");
             }
             ws = activeWs;
+            connectionGeneration += 1;
             activeWs.once("close", () => {
                 if (ws === activeWs)
                     ws = null;
@@ -272,6 +274,7 @@ function createChannelsStatusConnection(connection) {
                 throw err;
             }
         },
+        connectionGeneration: () => connectionGeneration,
         async close() {
             generation++;
             const activeWs = ws;
@@ -370,6 +373,7 @@ export function createGatewayRpc(opts = {}) {
             }, patch, baseHash, opts?.replacePaths);
         },
         channelsStatus: statusConnection.call,
+        channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
         async channelsStop(params) {
             const payload = await call("channels.stop", params);
             if (!payload ||
@@ -390,10 +394,23 @@ export function createGatewayRpc(opts = {}) {
         },
         async gatewayRestartRequest(params) {
             const payload = await call("gateway.restart.request", params);
-            if (!payload || typeof payload !== "object") {
-                throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned non-object payload");
+            const result = payload;
+            const restart = result?.restart;
+            if (!result ||
+                typeof result !== "object" ||
+                result.ok !== true ||
+                !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
+                !restart ||
+                typeof restart !== "object" ||
+                restart.ok !== true ||
+                !Number.isSafeInteger(restart.pid) ||
+                restart.pid <= 0 ||
+                restart.signal !== "SIGUSR1" ||
+                typeof restart.coalesced !== "boolean" ||
+                (result.status === "coalesced") !== restart.coalesced) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned malformed restart acknowledgement");
             }
-            return payload;
+            return result;
         },
         async sessionsList(params) {
             const payload = await call("sessions.list", params);

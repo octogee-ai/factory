@@ -27,6 +27,7 @@ import {
 } from "./model-credential-materializer.js";
 import {
   codexAuthJsonPath,
+  purgeCustomerOauthRuntimeArtifacts,
   restoreByosubCredentials,
   type ByosubProvider,
   type ByosubRestorePlanItem,
@@ -44,14 +45,25 @@ import {
 } from "./config.js";
 import {
   openAiCatalogInputForBaseUrl,
+  OPENAI_BROKER_PROFILE_ID,
   openRouterCatalogInputForBaseUrl,
+  openRouterBrokerCatalogJson,
   upsertAnthropicBrokerProfile,
   upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
 } from "./agent-model-token-materializer.js";
-import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
+import {
+  agentIdBelongsToSlug,
+  catalogEntryForModelRef,
+  parseAgentModelSelections,
+  platformModelRefs,
+  type AgentModelSelections,
+} from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
-import { parseBuilderAgentModelDefault } from "@octogee/shared/types/platform-config";
+import {
+  DEFAULT_FREE_TIER_MODEL_REF,
+  parseBuilderAgentModelDefault,
+} from "@octogee/shared/types/platform-config";
 
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -531,6 +543,7 @@ export interface SyncByotForCustomerDeps {
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
   materializeAnthropicBroker?: (slug: string) => boolean;
+  purgeCustomerOauthRuntime?: typeof purgeCustomerOauthRuntime;
   applyAgentModelOverrides?: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart?: () => boolean;
@@ -550,6 +563,7 @@ interface SyncByotActions {
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
   materializeAnthropicBroker: (slug: string) => boolean;
+  purgeCustomerOauthRuntime: typeof purgeCustomerOauthRuntime;
   applyAgentModelOverrides: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart: () => boolean;
@@ -563,11 +577,740 @@ interface SyncByotActions {
 // at the broker, so pre-wiring every provider on every agent is safe.
 export function agentIdsForSlug(slug: string, config: unknown): string[] {
   const list = (config as { agents?: { list?: unknown } } | null)?.agents?.list;
-  if (!Array.isArray(list)) return [];
-  return Array.from(new Set(list.flatMap((entry) => {
+  const fromList = Array.isArray(list) ? list.flatMap((entry) => {
     const agentId = (entry as { id?: unknown } | null)?.id;
     return typeof agentId === "string" && agentIdBelongsToSlug(agentId, slug) ? [agentId] : [];
-  })));
+  }) : [];
+  const entries = (config as { agents?: { entries?: unknown } } | null)?.agents?.entries;
+  const fromEntries = entries && typeof entries === "object" && !Array.isArray(entries)
+    ? Object.keys(entries).filter((agentId) => agentIdBelongsToSlug(agentId, slug))
+    : [];
+  return Array.from(new Set([...fromList, ...fromEntries]));
+}
+
+const CUSTOMER_OAUTH_PROFILE_IDS = new Set([
+  "openai-codex:default",
+  "anthropic:claude-cli",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isDirectAgentRuntimeId(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0 && value !== "openclaw";
+}
+
+function normalizedCatalogSelection(value: unknown): { primary: string; fallbacks: string[] } | null {
+  if (typeof value === "string") {
+    return catalogEntryForModelRef(value) ? { primary: value, fallbacks: [] } : null;
+  }
+  if (!isRecord(value) || typeof value.primary !== "string" ||
+      !catalogEntryForModelRef(value.primary)) return null;
+  const fallbacks = value.fallbacks === undefined ? [] : value.fallbacks;
+  if (!Array.isArray(fallbacks) ||
+      fallbacks.some((ref) => typeof ref !== "string" || !catalogEntryForModelRef(ref))) {
+    return null;
+  }
+  return {
+    primary: value.primary,
+    fallbacks: Array.from(new Set(fallbacks as string[])).filter((ref) => ref !== value.primary),
+  };
+}
+
+function canonicalCustomerModelDefinition(modelRef: string): Record<string, unknown> {
+  if (modelRef === "platform-openrouter/deepseek/deepseek-v4-pro") {
+    return { alias: "deepseek" };
+  }
+  if (modelRef === "platform-openrouter/z-ai/glm-5.2") {
+    return { alias: "glm", params: { thinking: "xhigh" } };
+  }
+  if (modelRef === "anthropic/claude-sonnet-4-6") {
+    return { alias: "sonnet", params: { cacheRetention: "short" } };
+  }
+  if (modelRef === "anthropic/claude-haiku-4-5") {
+    return { alias: "haiku", params: { cacheRetention: "short" } };
+  }
+  return {};
+}
+
+function catalogModelMapPlan(value: unknown, ensureModelRef?: string): {
+  patch?: Record<string, unknown>;
+  removedRefs: string[];
+  changed: boolean;
+} {
+  const current = isRecord(value) ? value : {};
+  const expected = Object.fromEntries(
+    Object.keys(current)
+      .filter((modelRef) => catalogEntryForModelRef(modelRef) !== null)
+      .map((modelRef) => [modelRef, canonicalCustomerModelDefinition(modelRef)]),
+  );
+  if (ensureModelRef) expected[ensureModelRef] = canonicalCustomerModelDefinition(ensureModelRef);
+  const removedRefs = Object.keys(current).filter(
+    (modelRef) => catalogEntryForModelRef(modelRef) === null,
+  );
+  const changed = JSON.stringify(current) !== JSON.stringify(expected);
+  return {
+    ...(isRecord(value) || ensureModelRef
+      ? { patch: exactObjectPatch(current, expected) }
+      : {}),
+    removedRefs,
+    changed,
+  };
+}
+
+function customerModelProvidersPlan(current: unknown): {
+  patch: Record<string, unknown>;
+  unsafe: boolean;
+} {
+  const providers = isRecord(current) ? current : {};
+  const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+  const expected = anthropicBaseUrl
+    ? { anthropic: { baseUrl: anthropicBaseUrl } }
+    : {};
+  return {
+    patch: exactObjectPatch(providers, expected),
+    unsafe: JSON.stringify(providers) !== JSON.stringify(expected),
+  };
+}
+
+function authProfileRemovalPatch(value: unknown): Record<string, null> | undefined {
+  if (!isRecord(value)) return undefined;
+  const removals = Object.fromEntries(
+    Object.entries(value)
+      .filter(([profileId, profile]) => {
+        if (CUSTOMER_OAUTH_PROFILE_IDS.has(profileId)) return true;
+        if (!isRecord(profile)) return false;
+        return profile.provider === "openai-codex" || profile.provider === "claude-cli";
+      })
+      .map(([profileId]) => [profileId, null]),
+  );
+  return Object.keys(removals).length > 0 ? removals : undefined;
+}
+
+export const CUSTOMER_APPROVED_PLUGINS = [
+  "mattermost",
+  "anthropic",
+  "memory-core",
+  "octogee-chat-tools",
+  "octogee-connector-tools",
+  "octogee-access-tools",
+  "octogee-preview-tools",
+  "octogee-project-tools",
+  "octogee-status-tools",
+  "octogee-ops-tools",
+  "octogee-web-tools",
+  "octogee-workspace-tools",
+  "octogee-publish-tools",
+  "openai",
+] as const;
+
+const CUSTOMER_PLUGIN_ENTRIES = {
+  mattermost: { enabled: true },
+  anthropic: { enabled: true },
+  "octogee-chat-tools": {
+    enabled: true,
+    hooks: {
+      allowPromptInjection: true,
+      allowConversationAccess: true,
+      timeouts: { before_prompt_build: 3000, before_agent_run: 3000 },
+    },
+    config: {
+      siteUrl: "${MM_SITE_URL}",
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      customersRoot: "${CUSTOMERS_DIR}",
+    },
+  },
+  "octogee-connector-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      requireWriteApproval: true,
+    },
+  },
+  "octogee-access-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+  },
+  "octogee-preview-tools": { enabled: true, config: {} },
+  "octogee-project-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+  },
+  "octogee-status-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      gatewayClass: "${GATEWAY_CLASS}",
+    },
+  },
+  "octogee-ops-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+  },
+  "octogee-web-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: "${FLEET_BROKER_URL}",
+      gatewayId: "${GATEWAY_ID}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    },
+  },
+  "octogee-workspace-tools": { enabled: true, config: {} },
+  "octogee-publish-tools": { enabled: true, config: {} },
+} as const;
+
+const CUSTOMER_SECRET_PROVIDERS = {
+  "gcp-secret-manager": {
+    source: "exec",
+    command: "/octogee/scripts/secret-resolver.mjs",
+    passEnv: [
+      "FLEET_BROKER_URL",
+      "OCTOGEE_API_URL",
+      "OCTOGEE_API_SA_TOKEN_PATH",
+      "INTERNAL_SERVICE_KEY",
+      "OPENCLAW_AGENTS_DIR",
+      "HOME",
+    ],
+    jsonOnly: true,
+    timeoutMs: 5000,
+  },
+  "octogee-mattermost": {
+    source: "file",
+    path: path.join(OPENCLAW_DIR, "secrets", "mattermost-accounts.json"),
+    mode: "json",
+  },
+} as const;
+
+function mergeConfigPatches(...patches: Array<Record<string, unknown>>): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const patch of patches) {
+    for (const [key, value] of Object.entries(patch)) {
+      if (isRecord(value) && isRecord(merged[key])) {
+        merged[key] = mergeConfigPatches(merged[key] as Record<string, unknown>, value);
+      } else {
+        merged[key] = value;
+      }
+    }
+  }
+  return merged;
+}
+
+function exactObjectPatch(current: unknown, expected: Record<string, unknown>): Record<string, unknown> {
+  const existing = isRecord(current) ? current : {};
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(existing)) {
+    if (!Object.prototype.hasOwnProperty.call(expected, key)) patch[key] = null;
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    patch[key] = isRecord(value)
+      ? exactObjectPatch(existing[key], value)
+      : Array.isArray(value) ? [...value] : value;
+  }
+  return patch;
+}
+
+function isSecretRef(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && ["env", "file", "exec"].includes(String(value.source));
+}
+
+function escapedJsonPointerSegment(value: string): string {
+  return value.replace(/~/gu, "~0").replace(/\//gu, "~1");
+}
+
+function agentIdAtSecretRefPath(
+  config: Record<string, unknown>,
+  segments: readonly string[],
+): string | null {
+  if (segments[0] !== "agents") return null;
+  if (segments[1] === "entries" && typeof segments[2] === "string") return segments[2];
+  if (segments[1] !== "list" || !/^\d+$/u.test(segments[2] ?? "")) return null;
+  const agents = isRecord(config.agents) && Array.isArray(config.agents.list)
+    ? config.agents.list
+    : [];
+  const agent = agents[Number(segments[2])];
+  return isRecord(agent) && typeof agent.id === "string" ? agent.id : null;
+}
+
+function expectedCustomerSecretRef(
+  config: Record<string, unknown>,
+  segments: readonly string[],
+): Record<string, unknown> | null {
+  if (
+    segments.length === 5 &&
+    segments[0] === "channels" &&
+    segments[1] === "mattermost" &&
+    segments[2] === "accounts" &&
+    segments[4] === "botToken"
+  ) {
+    const accountId = segments[3];
+    return {
+      source: "file",
+      provider: "octogee-mattermost",
+      id: `/${escapedJsonPointerSegment(accountId)}`,
+    };
+  }
+  const agentId = agentIdAtSecretRefPath(config, segments);
+  const suffix = segments.slice(3).join(".");
+  if (
+    agentId &&
+    (suffix === "memorySearch.remote.apiKey" || suffix === "memory.search.remote.apiKey")
+  ) {
+    return {
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: `agent-embedding-token-openai-${agentId}`,
+    };
+  }
+  return null;
+}
+
+function sanitizeSecretValue(
+  value: unknown,
+  config: Record<string, unknown>,
+  segments: readonly string[],
+): { value?: unknown; changed: boolean; remove?: true } {
+  if (isSecretRef(value)) {
+    const expected = expectedCustomerSecretRef(config, segments);
+    if (!expected) return { changed: true, remove: true };
+    return {
+      value: expected,
+      changed: JSON.stringify(value) !== JSON.stringify(expected),
+    };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.flatMap((entry, index) => {
+      const sanitized = sanitizeSecretValue(entry, config, [...segments, String(index)]);
+      changed = changed || sanitized.changed;
+      return sanitized.remove ? [] : [sanitized.value ?? entry];
+    });
+    return { value: changed ? next : value, changed };
+  }
+  if (!isRecord(value)) return { value, changed: false };
+  let changed = false;
+  const next: Record<string, unknown> = { ...value };
+  for (const [key, child] of Object.entries(value)) {
+    if (segments.length === 1 && segments[0] === "secrets" && key === "providers") continue;
+    const sanitized = sanitizeSecretValue(child, config, [...segments, key]);
+    if (!sanitized.changed) continue;
+    changed = true;
+    if (sanitized.remove) delete next[key];
+    else next[key] = sanitized.value;
+  }
+  return { value: changed ? next : value, changed };
+}
+
+function secretRefRemovalPatch(
+  value: unknown,
+  config: Record<string, unknown>,
+  segments: readonly string[],
+): unknown {
+  if (!isRecord(value)) return undefined;
+  const patch: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (segments.length === 1 && segments[0] === "secrets" && key === "providers") continue;
+    const sanitized = sanitizeSecretValue(child, config, [...segments, key]);
+    if (!sanitized.changed) continue;
+    patch[key] = sanitized.remove
+      ? null
+      : isRecord(child) && isRecord(sanitized.value)
+        ? exactObjectPatch(child, sanitized.value)
+        : sanitized.value;
+  }
+  return patch;
+}
+
+function customerSecurityProjectionPatch(current: unknown): Record<string, unknown> {
+  const config = isRecord(current) ? current : {};
+  const plugins = isRecord(config.plugins) ? config.plugins : {};
+  const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
+  const pluginEntryPatch = exactObjectPatch(
+    pluginEntries,
+    CUSTOMER_PLUGIN_ENTRIES as unknown as Record<string, unknown>,
+  );
+  const providerEntries = isRecord(config.models) && isRecord(config.models.providers)
+    ? config.models.providers
+    : {};
+  const modelProviders = customerModelProvidersPlan(providerEntries);
+  const mediaModels = isRecord(config.tools) && isRecord(config.tools.media) &&
+    Array.isArray(config.tools.media.models)
+    ? config.tools.media.models
+    : null;
+  const safeMediaModels = mediaModels?.filter((model) =>
+    isRecord(model) && model.type !== "cli" &&
+      !Object.prototype.hasOwnProperty.call(model, "command")
+  );
+  const linkModels = isRecord(config.tools) && isRecord(config.tools.links) &&
+    Array.isArray(config.tools.links.models)
+    ? config.tools.links.models
+    : null;
+  const safeLinkModels = linkModels?.filter((model) =>
+    isRecord(model) && !Object.prototype.hasOwnProperty.call(model, "command")
+  );
+  const hookMappings = isRecord(config.hooks) && Array.isArray(config.hooks.mappings)
+    ? config.hooks.mappings
+    : null;
+  const safeHookMappings = hookMappings?.map((mapping) => {
+    if (!isRecord(mapping) || !Object.prototype.hasOwnProperty.call(mapping, "transform")) {
+      return mapping;
+    }
+    const next = { ...mapping };
+    delete next.transform;
+    return next;
+  });
+  const existingSecretProviders = isRecord(config.secrets) && isRecord(config.secrets.providers)
+    ? config.secrets.providers
+    : {};
+  const secretProviderPatch = {
+    ...Object.fromEntries(
+      Object.keys(existingSecretProviders)
+        .filter((providerId) => !Object.hasOwn(CUSTOMER_SECRET_PROVIDERS, providerId))
+        .map((providerId) => [providerId, null]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(CUSTOMER_SECRET_PROVIDERS).map(([providerId, expected]) => [
+        providerId,
+        exactObjectPatch(existingSecretProviders[providerId], expected as unknown as Record<string, unknown>),
+      ]),
+    ),
+  };
+  const secretRefs = Object.fromEntries(
+    Object.entries(config).flatMap(([key, value]) => {
+      const patch = secretRefRemovalPatch(value, config, [key]);
+      return isRecord(patch) && Object.keys(patch).length > 0 ? [[key, patch]] : [];
+    }),
+  );
+
+  return mergeConfigPatches(secretRefs, {
+    plugins: {
+      enabled: true,
+      allow: [...CUSTOMER_APPROVED_PLUGINS],
+      entries: pluginEntryPatch,
+      load: null,
+      installs: null,
+    },
+    secrets: { providers: secretProviderPatch },
+    hooks: {
+      transformsDir: null,
+      internal: { handlers: null, load: { extraDirs: null } },
+      ...(hookMappings && safeHookMappings ? { mappings: safeHookMappings } : {}),
+    },
+    memory: { qmd: { command: null } },
+    security: { installPolicy: { exec: null } },
+    cron: {
+      webhookToken: null,
+      webhookAuth: null,
+      failureAlert: null,
+      failureAlerts: null,
+    },
+    ...(Object.keys(providerEntries).length > 0 || Object.keys(modelProviders.patch).length > 0
+      ? { models: { providers: modelProviders.patch } }
+      : {}),
+    tools: {
+      ...(mediaModels && safeMediaModels && safeMediaModels.length !== mediaModels.length
+        ? { media: { models: safeMediaModels } }
+        : {}),
+      ...(linkModels && safeLinkModels && safeLinkModels.length !== linkModels.length
+        ? { links: { models: safeLinkModels } }
+        : {}),
+    },
+  });
+}
+
+function customerSecurityProjectionReplacePaths(current: unknown): string[] {
+  const config = isRecord(current) ? current : {};
+  const paths = new Set([
+    "plugins.allow",
+    "secrets.providers.gcp-secret-manager.passEnv",
+    ...arrayReplacePathsForPatch(config, customerSecurityProjectionPatch(config)),
+  ]);
+  if (isRecord(config.tools) && isRecord(config.tools.media) && Array.isArray(config.tools.media.models)) {
+    paths.add("tools.media.models");
+  }
+  if (isRecord(config.tools) && isRecord(config.tools.links) && Array.isArray(config.tools.links.models)) {
+    paths.add("tools.links.models");
+  }
+  if (isRecord(config.hooks) && Array.isArray(config.hooks.mappings)) {
+    paths.add("hooks.mappings");
+  }
+  paths.add("agents.defaults.model.fallbacks");
+  paths.add("agents.list[].model.fallbacks");
+  if (isRecord(config.agents) && isRecord(config.agents.entries)) {
+    for (const agentId of Object.keys(config.agents.entries)) {
+      paths.add(`agents.entries.${agentId}.model.fallbacks`);
+    }
+  }
+  return [...paths];
+}
+
+function arrayReplacePathsForPatch(
+  current: unknown,
+  patch: unknown,
+  prefix = "",
+): string[] {
+  if (Array.isArray(patch)) return prefix ? [prefix] : [];
+  if (patch === null) return arrayPathsUnder(current, prefix);
+  if (!isRecord(patch) || !isRecord(current)) return [];
+  return Object.entries(patch).flatMap(([key, childPatch]) =>
+    arrayReplacePathsForPatch(
+      current[key],
+      childPatch,
+      prefix ? `${prefix}.${key}` : key,
+    )
+  );
+}
+
+function arrayPathsUnder(value: unknown, prefix: string): string[] {
+  if (Array.isArray(value)) return prefix ? [prefix] : [];
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([key, child]) =>
+    arrayPathsUnder(child, prefix ? `${prefix}.${key}` : key)
+  );
+}
+
+function safeOwnedAgentPatch(
+  value: unknown,
+  safeModelRef: string,
+  directDefaultModelRefs: ReadonlySet<string>,
+  forceSafeModel: boolean,
+): { patch: Record<string, unknown>; affected: boolean; directRuntimeModelRefs: string[] } {
+  const models = catalogModelMapPlan(isRecord(value) ? value.models : undefined);
+  const agentRuntime = isRecord(value) && isRecord(value.agentRuntime)
+    ? value.agentRuntime
+    : undefined;
+  const directRuntime = isDirectAgentRuntimeId(agentRuntime?.id);
+  const record = isRecord(value) ? value : {};
+  const hasSelection = Object.prototype.hasOwnProperty.call(record, "model");
+  const normalizedSelection = hasSelection ? normalizedCatalogSelection(record.model) : null;
+  const unsafeSelection = hasSelection && normalizedSelection === null;
+  const affected = forceSafeModel || unsafeSelection || directRuntime || models.changed;
+  return { patch: {
+    ...(forceSafeModel || unsafeSelection
+      ? { model: { primary: safeModelRef, fallbacks: [] } }
+      : normalizedSelection && JSON.stringify(record.model) !== JSON.stringify(normalizedSelection)
+        ? { model: normalizedSelection }
+        : {}),
+    ...(models.patch ? { models: models.patch } : {}),
+    ...(directRuntime ? { agentRuntime: null } : {}),
+  }, affected, directRuntimeModelRefs: models.removedRefs };
+}
+
+function customerOauthRuntimeConfigPlan(
+  current: unknown,
+  slug: string,
+  safeModelRef: string,
+  forceSafeAll: boolean,
+): {
+  patch: Record<string, unknown>;
+  affectedAgentIds: string[];
+  directRuntimeModelRefs: string[];
+} {
+  const affectedAgentIds = new Set<string>();
+  const config = isRecord(current) ? current : {};
+  const agents = isRecord(config.agents) ? config.agents : {};
+  const ownedAgentIds = agentIdsForSlug(slug, current);
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  const providerEntries = isRecord(config.models) && isRecord(config.models.providers)
+    ? config.models.providers
+    : {};
+  const forceSafeOwnedAgents =
+    forceSafeAll || customerModelProvidersPlan(providerEntries).unsafe;
+  if (!catalogEntryForModelRef(safeModelRef)) {
+    throw new Error(`customer runtime purge: safe model is outside the platform catalog (${safeModelRef})`);
+  }
+  const defaultModels = catalogModelMapPlan(defaults.models, safeModelRef);
+  const directDefaultModelRefs = new Set(defaultModels.removedRefs);
+  const directRuntimeModelRefs = new Set(directDefaultModelRefs);
+  const hasDefaultModel = Object.prototype.hasOwnProperty.call(defaults, "model");
+  const normalizedDefaultModel = hasDefaultModel ? normalizedCatalogSelection(defaults.model) : null;
+  const unsafeDefaultModel = hasDefaultModel && normalizedDefaultModel === null;
+  const unsafeDefaultRuntime =
+    isRecord(defaults.agentRuntime) && isDirectAgentRuntimeId(defaults.agentRuntime.id);
+  if (
+    unsafeDefaultModel ||
+    unsafeDefaultRuntime ||
+    forceSafeOwnedAgents ||
+    defaultModels.changed
+  ) {
+    ownedAgentIds.forEach((agentId) => affectedAgentIds.add(agentId));
+  }
+  const defaultsPatch: Record<string, unknown> = {
+    models: defaultModels.patch,
+  };
+  if (unsafeDefaultModel || forceSafeOwnedAgents) {
+    defaultsPatch.model = { primary: safeModelRef, fallbacks: [] };
+  } else if (
+    normalizedDefaultModel &&
+    JSON.stringify(defaults.model) !== JSON.stringify(normalizedDefaultModel)
+  ) {
+    defaultsPatch.model = normalizedDefaultModel;
+  }
+  if (unsafeDefaultRuntime) defaultsPatch.agentRuntime = null;
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  const listPatch = list.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") return [];
+    if (!agentIdBelongsToSlug(entry.id, slug)) return [];
+    const planned = safeOwnedAgentPatch(
+      entry,
+      safeModelRef,
+      directDefaultModelRefs,
+      forceSafeOwnedAgents,
+    );
+    if (!planned.affected) return [];
+    planned.directRuntimeModelRefs.forEach((modelRef) => directRuntimeModelRefs.add(modelRef));
+    affectedAgentIds.add(entry.id);
+    return [{ id: entry.id, ...planned.patch }];
+  });
+  const entries = isRecord(agents.entries) ? agents.entries : {};
+  const entriesPatch = Object.fromEntries(
+    Object.entries(entries).flatMap(([agentId, entry]) => {
+      if (!agentIdBelongsToSlug(agentId, slug)) return [];
+      const planned = safeOwnedAgentPatch(
+        entry,
+        safeModelRef,
+        directDefaultModelRefs,
+        forceSafeOwnedAgents,
+      );
+      if (!planned.affected) return [];
+      planned.directRuntimeModelRefs.forEach((modelRef) => directRuntimeModelRefs.add(modelRef));
+      affectedAgentIds.add(agentId);
+      return [[agentId, planned.patch]];
+    }),
+  );
+  const authProfiles = authProfileRemovalPatch(
+    isRecord(config.auth) ? config.auth.profiles : undefined,
+  );
+  const modelProviders = isRecord(config.models) && isRecord(config.models.providers)
+    ? Object.fromEntries(
+        Object.keys(config.models.providers)
+          .filter((provider) => provider === "claude-cli" || provider === "openai-codex")
+          .map((provider) => [provider, null]),
+      )
+    : {};
+
+  const oauthPatch = {
+    agents: {
+      defaults: defaultsPatch,
+      ...(listPatch.length > 0 ? { list: listPatch } : {}),
+      ...(Object.keys(entriesPatch).length > 0 ? { entries: entriesPatch } : {}),
+    },
+    ...(authProfiles ? { auth: { profiles: authProfiles } } : {}),
+    ...(Object.keys(modelProviders).length > 0
+      ? { models: { providers: modelProviders } }
+      : {}),
+  };
+  return { patch: mergeConfigPatches(oauthPatch, customerSecurityProjectionPatch(current)),
+  affectedAgentIds: [...affectedAgentIds],
+  directRuntimeModelRefs: [...directRuntimeModelRefs],
+  };
+}
+
+export function customerOauthRuntimeConfigPatch(
+  current: unknown,
+  slug: string,
+  safeModelRef: string,
+  opts?: { forceSafeAll?: boolean },
+): Record<string, unknown> {
+  return customerOauthRuntimeConfigPlan(
+    current,
+    slug,
+    safeModelRef,
+    opts?.forceSafeAll === true,
+  ).patch;
+}
+
+export async function purgeCustomerOauthRuntime(
+  slug: string,
+  safeModelRef: string,
+  deps?: {
+    config?: unknown;
+    openclawDir?: string;
+    homeDir?: string;
+    applyConfigPatch?: typeof applyConfigPatch;
+    rpc?: SessionPolicyRpc;
+    logFn?: (message: string) => void;
+    forceSafeAll?: boolean;
+  },
+): Promise<{ changed: boolean; resetCount: number }> {
+  const config = deps?.config ?? readOpenClawConfig();
+  const agentIds = agentIdsForSlug(slug, config);
+  if (agentIds.length === 0) agentIds.push(`octogee-${slug}-coach`);
+  const initialConfigPlan = customerOauthRuntimeConfigPlan(
+    config,
+    slug,
+    safeModelRef,
+    deps?.forceSafeAll === true,
+  );
+  const artifacts = purgeCustomerOauthRuntimeArtifacts({
+    openclawDir: deps?.openclawDir ?? OPENCLAW_DIR,
+    homeDir: deps?.homeDir ?? os.homedir(),
+    agentIds,
+    resetSessionStores: false,
+    directRuntimeModelRefs: initialConfigPlan.directRuntimeModelRefs,
+    allowedModelRefs: platformModelRefs(),
+    allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai"],
+    modelProviders: customerBrokerModelProviders(),
+  });
+  const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
+  const configResult = await applyConfigPatchFn(
+    {
+      buildPatch: (current) =>
+        customerOauthRuntimeConfigPatch(current, slug, safeModelRef, {
+          forceSafeAll: deps?.forceSafeAll === true,
+        }),
+      buildReplacePaths: customerSecurityProjectionReplacePaths,
+      logPrefix: `[customer-oauth-purge:${slug}]`,
+      skipIfAlreadyApplied: true,
+    },
+    { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
+  );
+
+  const suppliedRpc = deps?.rpc;
+  const rpc = suppliedRpc ?? createGatewayRpc({
+    allowLegacyGatewayTokenFallback: true,
+    connectTimeoutMs: 10_000,
+    callTimeoutMs: 10_000,
+  });
+  let resetCount = 0;
+  const configAffectedAgentIds = initialConfigPlan.affectedAgentIds;
+  const affectedAgentIds = new Set([
+    ...artifacts.affectedAgentIds,
+    ...configAffectedAgentIds,
+  ]);
+  try {
+    for (const agentId of affectedAgentIds) {
+      const response = await rpc.sessionsList({ agentId });
+      for (const session of response.sessions.filter((candidate) => candidate.agentId === agentId)) {
+        await rpc.sessionsReset({ key: session.key, agentId, reason: "reset" });
+        resetCount++;
+      }
+    }
+  } finally {
+    if (!suppliedRpc) await rpc.close();
+  }
+  const artifactChanged =
+    artifacts.removedFiles > 0 ||
+    artifacts.removedDirectories > 0 ||
+    artifacts.scrubbedProfileStores > 0 ||
+    artifacts.resetSessions > 0;
+  deps?.logFn?.(
+    `[byot-sync] ${slug}: purged customer OAuth runtime artifacts for ${agentIds.length} agent(s); reset ${resetCount} session(s)`,
+  );
+  return { changed: artifactChanged || configResult.noop !== true || resetCount > 0, resetCount };
 }
 
 type SessionPolicyRpc = Pick<GatewayRpcClient, "sessionsList" | "sessionsReset" | "close">;
@@ -664,6 +1407,37 @@ function configuredPlatformOpenAiBaseUrl(): string | null {
   return raw || null;
 }
 
+function customerBrokerModelProviders(): Record<string, unknown> {
+  const providers: Record<string, unknown> = {};
+  const openRouterBaseUrl = configuredOpenRouterBaseUrl();
+  if (openRouterBaseUrl) {
+    Object.assign(
+      providers,
+      openRouterBrokerCatalogJson(
+        "customer",
+        openRouterCatalogInputForBaseUrl(openRouterBaseUrl),
+      ).providers,
+    );
+  }
+  const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
+  if (openAiBaseUrl) {
+    const input = openAiCatalogInputForBaseUrl(openAiBaseUrl);
+    providers["platform-openai"] = {
+      api: "openai-completions",
+      baseUrl: input.baseUrl,
+      apiKey: OPENAI_BROKER_PROFILE_ID,
+      models: input.models.map((model) => ({
+        id: model.model,
+        name: model.model,
+        ...(typeof model.contextTokens === "number"
+          ? { contextTokens: model.contextTokens, contextWindow: model.contextTokens }
+          : {}),
+      })),
+    };
+  }
+  return providers;
+}
+
 // eslint-disable-next-line complexity -- Dependency injection defaults are intentionally centralized for runtime and tests.
 function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
   const patchDeps = deps?.applyConfigPatch
@@ -683,6 +1457,14 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+    purgeCustomerOauthRuntime:
+      deps?.purgeCustomerOauthRuntime ??
+      ((slug, safeModelRef, purgeDeps) =>
+        purgeCustomerOauthRuntime(slug, safeModelRef, {
+          ...(deps?.applyConfigPatch ? { applyConfigPatch: deps.applyConfigPatch } : {}),
+          ...(deps?.logFn ? { logFn: deps.logFn } : {}),
+          ...(purgeDeps?.forceSafeAll ? { forceSafeAll: true } : {}),
+        })),
     applyAgentModelOverrides:
       deps?.applyAgentModelOverrides ??
       ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
@@ -777,8 +1559,11 @@ async function syncStandardByotState(
   slug: string,
   desired: DesiredByotState,
   actions: SyncByotActions,
+  opts?: { purgeAuthProfileStore?: boolean },
 ): Promise<void> {
-  const changed = actions.applyByotState(slug, desired.input);
+  const changed = opts?.purgeAuthProfileStore
+    ? actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
+    : actions.applyByotState(slug, desired.input);
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
   const patched = restore.present && desired.coachModelInput
@@ -825,20 +1610,10 @@ async function syncOperatorByotState(
   }
 }
 
-// Shared (multi-tenant) pods route EACH customer-agent's anthropic through the
-// broker with its own per-customer token. Unlike builder/operator (one env gateway
-// token), the per-agent anthropic:default broker-token profile is the load-bearing
-// credential — the primary for platform/anthropic-BYOK customers and the Haiku
-// fallback for BYOS / non-anthropic-BYOK ones — so it is always (re)asserted, the
-// auth-profile store is never torn down, and byosub OAuth + custom-provider
-// models.json coexist alongside it.
-// BYOSUB is single-trust-boundary-only: an OAuth model credential (claude-cli,
-// codex) never materializes on a multi-tenant pod. The owner runs the platform
-// broker profile with their OWN tier grant — same models and budgets as any
-// platform customer on shared — and the subscription resumes automatically
-// when the migrate plane moves them to a builder/operator gateway (class-gated
-// materialization at pod boot, no user action).
-export function gateSharedByosub(
+// OAuth agent runtimes materialize only on the operator gateway. Customer
+// coaches use the platform broker profile so host code cannot forge verified
+// Mattermost turn authority.
+export function gateCustomerByosub(
   desired: DesiredByotState,
   userData: SyncByotUserData,
   logFn: (m: string) => void,
@@ -849,8 +1624,8 @@ export function gateSharedByosub(
   }
   const slug = userData.username ?? "";
   logFn(
-    `[byot-sync] ${slug}: byosub (${provider}) suppressed on shared gateway — ` +
-      `OAuth model credentials are single-trust-boundary only; serving the platform ` +
+    `[byot-sync] ${slug}: byosub (${provider}) suppressed on customer gateway — ` +
+      `OAuth agent runtimes cannot preserve verified turn authority; serving the platform ` +
       `broker profile with the owner's tier grant`,
   );
   return {
@@ -920,22 +1695,55 @@ export async function syncByotForCustomer(
   const desired = deriveDesiredByotState(userData);
   const slug = userData.username;
   if (!slug) return;
+  const operator = isOp();
+  const customerGate = operator
+    ? { desired, suppressed: false }
+    : gateCustomerByosub(desired, userData, deps?.logFn ?? log);
+  const effectiveDesired = customerGate.desired;
+  const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
+  const safeCustomerModel = houseOnly
+    ? DEFAULT_FREE_TIER_MODEL_REF
+    : parseBuilderAgentModelDefault(userData.builderAgentDefault)?.primary ??
+      DEFAULT_FREE_TIER_MODEL_REF;
+  const oauthPurge = !operator
+    ? await actions.purgeCustomerOauthRuntime(slug, safeCustomerModel, {
+        forceSafeAll: customerGate.suppressed,
+      })
+    : { changed: false, resetCount: 0 };
 
-  await syncByotStateForClass({ slug, desired, userData, actions, isShared, isOp, usesBrokerToken, logFn: deps?.logFn });
+  await syncByotStateForClass({
+    slug,
+    desired: effectiveDesired,
+    actions,
+    isShared,
+    operator,
+    usesBrokerToken,
+    purgeAuthProfileStore: customerGate.suppressed,
+  });
 
-  await convergeCoachToolsIfNoModelPatch(slug, desired, userData, actions);
+  await convergeCoachToolsIfNoModelPatch(slug, effectiveDesired, userData, actions);
 
   // Explicit per-agent picks land last so they win over the class default the
   // sync just wrote; house-only plans stay pinned to the house model.
   await actions.applyAgentModelOverrides(
     slug,
-    agentModelsWithBuilderDefault(slug, userData, desired),
+    agentModelsWithBuilderDefault(slug, userData, effectiveDesired, {
+      operator,
+      forceSafeCoachModel: customerGate.suppressed,
+      houseOnly,
+      logFn: deps?.logFn ?? log,
+    }),
     {
-      houseOnly: resolveBillingProfile(userData).modelAccess === "house_only",
+      houseOnly: houseOnly && !customerGate.suppressed,
     },
   );
 
   await refreshProvisionedCoachRuntimeSessions(slug, userData, actions, deps?.logFn ?? log);
+
+  if (oauthPurge.changed) {
+    const restarted = await actions.requestGatewayRestart("customer-oauth-runtime-purge");
+    if (!restarted) await actions.triggerSecretsReload();
+  }
 }
 
 // The operator's Builder Agent default fills in for a coach with no explicit
@@ -946,15 +1754,75 @@ function agentModelsWithBuilderDefault(
   slug: string,
   userData: SyncByotUserData,
   desired: DesiredByotState,
+  opts: {
+    operator: boolean;
+    forceSafeCoachModel: boolean;
+    houseOnly: boolean;
+    logFn: (message: string) => void;
+  },
 ): AgentModelSelections | undefined {
-  const explicit = userData.systemConfig?.agentModels;
+  const platformDefault =
+    opts.houseOnly
+      ? { primary: DEFAULT_FREE_TIER_MODEL_REF, fallbacks: [] }
+      : parseBuilderAgentModelDefault(userData.builderAgentDefault) ?? {
+          primary: DEFAULT_FREE_TIER_MODEL_REF,
+          fallbacks: [],
+        };
+  const explicit = opts.operator
+    ? userData.systemConfig?.agentModels
+    : catalogOnlyAgentModels(slug, userData.systemConfig?.agentModels, platformDefault, opts.logFn);
+  const coachAgentId = `octogee-${slug}-coach`;
+  if (opts.forceSafeCoachModel) {
+    if (opts.houseOnly) {
+      if (!explicit) return undefined;
+      const { [coachAgentId]: _coach, ...projectAgentModels } = explicit;
+      return Object.keys(projectAgentModels).length > 0 ? projectAgentModels : undefined;
+    }
+    return {
+      ...(explicit ?? {}),
+      [coachAgentId]: explicit?.[coachAgentId] ?? platformDefault,
+    };
+  }
   if (desired.enabled || desired.coachModelInput !== null) return explicit;
   if (userData.provisioning?.openclaw?.status !== "complete") return explicit;
-  const platformDefault = parseBuilderAgentModelDefault(userData.builderAgentDefault);
-  if (!platformDefault) return explicit;
-  const coachAgentId = `octogee-${slug}-coach`;
+  const stampedPlatformDefault = parseBuilderAgentModelDefault(userData.builderAgentDefault);
+  if (!stampedPlatformDefault) return explicit;
   if (explicit?.[coachAgentId]) return explicit;
-  return { [coachAgentId]: platformDefault, ...(explicit ?? {}) };
+  return { [coachAgentId]: stampedPlatformDefault, ...(explicit ?? {}) };
+}
+
+function catalogOnlyAgentModels(
+  slug: string,
+  value: unknown,
+  safeDefault: AgentModelSelections[string],
+  logFn: (message: string) => void,
+): AgentModelSelections | undefined {
+  const parsed = parseAgentModelSelections(value);
+  const safe: AgentModelSelections = {};
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const agentId of Object.keys(value)) {
+      if (agentIdBelongsToSlug(agentId, slug) && !parsed[agentId]) {
+        safe[agentId] = safeDefault;
+        logFn(`[byot-sync] ${agentId}: malformed model selection reset on customer gateway`);
+      }
+    }
+  }
+  for (const [agentId, selection] of Object.entries(parsed)) {
+    const catalogRefs = [selection.primary, ...selection.fallbacks].filter((ref) =>
+      catalogEntryForModelRef(ref) !== null
+    );
+    if (catalogRefs.length === 0) {
+      safe[agentId] = safeDefault;
+      logFn(`[byot-sync] ${agentId}: non-catalog model selection reset on customer gateway`);
+      continue;
+    }
+    const [primary, ...fallbacks] = Array.from(new Set(catalogRefs));
+    if (primary !== selection.primary || fallbacks.length !== selection.fallbacks.length) {
+      logFn(`[byot-sync] ${agentId}: non-catalog model refs removed on customer gateway`);
+    }
+    safe[agentId] = { primary, fallbacks };
+  }
+  return Object.keys(safe).length > 0 ? safe : undefined;
 }
 
 async function refreshProvisionedCoachRuntimeSessions(
@@ -996,18 +1864,16 @@ async function convergeCoachToolsIfNoModelPatch(
 async function syncByotStateForClass(args: {
   slug: string;
   desired: DesiredByotState;
-  userData: SyncByotUserData;
   actions: SyncByotActions;
   isShared: () => boolean;
-  isOp: () => boolean;
+  operator: boolean;
   usesBrokerToken: () => boolean;
-  logFn?: (m: string) => void;
+  purgeAuthProfileStore: boolean;
 }): Promise<void> {
-  const { slug, desired, userData, actions } = args;
+  const { slug, desired, actions } = args;
   if (args.isShared()) {
-    const gate = gateSharedByosub(desired, userData, args.logFn ?? log);
-    await syncSharedBrokerByotState(slug, gate.desired, actions, {
-      purgeAuthProfileStore: gate.suppressed,
+    await syncSharedBrokerByotState(slug, desired, actions, {
+      purgeAuthProfileStore: args.purgeAuthProfileStore,
     });
     return;
   }
@@ -1017,9 +1883,11 @@ async function syncByotStateForClass(args: {
     return;
   }
 
-  if (args.isOp()) {
+  if (args.operator) {
     await syncOperatorByotState(slug, desired, actions);
     return;
   }
-  await syncStandardByotState(slug, desired, actions);
+  await syncStandardByotState(slug, desired, actions, {
+    purgeAuthProfileStore: args.purgeAuthProfileStore,
+  });
 }

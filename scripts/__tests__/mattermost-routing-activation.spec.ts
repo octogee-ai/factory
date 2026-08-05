@@ -19,6 +19,32 @@ async function temporaryOpenClawDir(): Promise<string> {
   return directory;
 }
 
+function configGetWithMattermostAccounts(accountIds: readonly string[]) {
+  return vi.fn(async () => ({
+    hash: "h1",
+    config: {
+      channels: {
+        mattermost: {
+          accounts: Object.fromEntries(accountIds.map((accountId) => [accountId, {}])),
+        },
+      },
+    },
+  }));
+}
+
+function scheduledRestartAcknowledgement() {
+  return {
+    ok: true as const,
+    status: "scheduled" as const,
+    restart: {
+      ok: true as const,
+      pid: 123,
+      signal: "SIGUSR1" as const,
+      coalesced: false,
+    },
+  };
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
@@ -35,7 +61,11 @@ describe("Mattermost routing activation", () => {
       "new account binding",
       ["ceckert-proj-gardyn"],
     );
-    const gatewayRestartRequest = vi.fn(async () => ({ status: "requested" }));
+    let connectionGeneration = 1;
+    const gatewayRestartRequest = vi.fn(async () => {
+      connectionGeneration = 2;
+      return scheduledRestartAcknowledgement();
+    });
     let statusCall = 0;
     const channelsStatus = vi.fn(async () => {
       statusCall += 1;
@@ -62,8 +92,13 @@ describe("Mattermost routing activation", () => {
         ] },
       };
     });
-    const rpc = { channelsStatus, gatewayRestartRequest } as unknown as GatewayRpcClient;
-    let now = 0;
+    const rpc = {
+      configGet: configGetWithMattermostAccounts(["ceckert-proj-gardyn"]),
+      channelsStatus,
+      channelsStatusConnectionGeneration: () => connectionGeneration,
+      gatewayRestartRequest,
+    } as unknown as GatewayRpcClient;
+    let now = Date.now();
 
     await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
       now: () => now,
@@ -110,9 +145,18 @@ describe("Mattermost routing activation", () => {
         ] },
       },
     ];
+    let connectionGeneration = 1;
     const rpc = {
+      configGet: configGetWithMattermostAccounts([
+        "ceckert-coach",
+        "ceckert-proj-gardyn",
+      ]),
       channelsStatus: vi.fn(async () => statusSnapshots.shift() ?? statusSnapshots.at(-1)),
-      gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+      channelsStatusConnectionGeneration: () => connectionGeneration,
+      gatewayRestartRequest: vi.fn(async () => {
+        connectionGeneration = 2;
+        return scheduledRestartAcknowledgement();
+      }),
     } as unknown as GatewayRpcClient;
 
     await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
@@ -135,12 +179,14 @@ describe("Mattermost routing activation", () => {
       ["ceckert-coach"],
     );
     const rpc = {
+      configGet: configGetWithMattermostAccounts(["ceckert-coach"]),
       channelsStatus: vi.fn(async () => ({
         channelAccounts: { mattermost: [
           { accountId: "ceckert-coach", running: true, connected: true, lastStartAt: 100 },
         ] },
       })),
-      gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+      channelsStatusConnectionGeneration: () => 1,
+      gatewayRestartRequest: vi.fn(async () => scheduledRestartAcknowledgement()),
     } as unknown as GatewayRpcClient;
     let now = 0;
 
@@ -216,8 +262,20 @@ describe("Mattermost routing activation", () => {
         ] },
       };
     });
-    const gatewayRestartRequest = vi.fn(async () => ({ status: "requested" }));
-    const rpc = { channelsStatus, gatewayRestartRequest } as unknown as GatewayRpcClient;
+    let connectionGeneration = 1;
+    const gatewayRestartRequest = vi.fn(async () => {
+      connectionGeneration += 1;
+      return scheduledRestartAcknowledgement();
+    });
+    const rpc = {
+      configGet: configGetWithMattermostAccounts([
+        "ceckert-coach",
+        "ceckert-proj-gardyn",
+      ]),
+      channelsStatus,
+      channelsStatusConnectionGeneration: () => connectionGeneration,
+      gatewayRestartRequest,
+    } as unknown as GatewayRpcClient;
 
     await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
       sleep: async () => undefined,
@@ -226,5 +284,176 @@ describe("Mattermost routing activation", () => {
     expect(gatewayRestartRequest).toHaveBeenCalledTimes(2);
     expect(channelsStatus).toHaveBeenCalledTimes(4);
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("drops retired account ids after persisted config confirms they are absent", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "retired project account",
+      ["ceckert-proj-retired"],
+    );
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "new project account",
+      ["ceckert-proj-new"],
+    );
+    let statusCall = 0;
+    let connectionGeneration = 1;
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          channels: {
+            mattermost: {
+              accounts: { "ceckert-proj-new": {} },
+            },
+          },
+        },
+      })),
+      channelsStatus: vi.fn(async () => {
+        statusCall += 1;
+        return {
+          channelAccounts: { mattermost: [
+            {
+              accountId: "ceckert-proj-new",
+              running: true,
+              connected: true,
+              lastStartAt: statusCall === 1 ? 100 : 101,
+            },
+          ] },
+        };
+      }),
+      channelsStatusConnectionGeneration: () => connectionGeneration,
+      gatewayRestartRequest: vi.fn(async () => {
+        connectionGeneration = 2;
+        return {
+          ok: true,
+          status: "scheduled",
+          restart: {
+            ok: true,
+            pid: 123,
+            signal: "SIGUSR1",
+            coalesced: false,
+          },
+        };
+      }),
+    } as unknown as GatewayRpcClient;
+    let now = Date.now();
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      now: () => now,
+      sleep: async () => {
+        now += 1;
+      },
+      timeoutMs: 20,
+      accountAbsenceGraceMs: 0,
+    });
+
+    expect(rpc.gatewayRestartRequest).toHaveBeenCalledOnce();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("recovers a marker stranded in a confirmed claim by a process crash", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "new account binding",
+      ["ceckert-coach"],
+    );
+    const marker = (await fs.readdir(openclawDir)).find((entry) =>
+      entry.startsWith(".mattermost-routing-restart-required.json") &&
+      !entry.endsWith(".tmp")
+    )!;
+    await fs.rename(
+      path.join(openclawDir, marker),
+      path.join(openclawDir, ".mattermost-routing-restart-required.json.crash.confirmed"),
+    );
+
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
+    let statusCall = 0;
+    let connectionGeneration = 1;
+    const rpc = {
+      configGet: configGetWithMattermostAccounts(["ceckert-coach"]),
+      channelsStatus: vi.fn(async () => {
+        statusCall += 1;
+        return {
+          channelAccounts: { mattermost: [
+            {
+              accountId: "ceckert-coach",
+              running: true,
+              connected: true,
+              lastStartAt: statusCall === 1 ? 100 : 101,
+            },
+          ] },
+        };
+      }),
+      channelsStatusConnectionGeneration: () => connectionGeneration,
+      gatewayRestartRequest: vi.fn(async () => {
+        connectionGeneration = 2;
+        return scheduledRestartAcknowledgement();
+      }),
+    } as unknown as GatewayRpcClient;
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      sleep: async () => undefined,
+    });
+
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("does not treat an account-only reconnect as causal restart evidence", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "account binding changed",
+      ["ceckert-coach"],
+    );
+    let statusCall = 0;
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
+        },
+      })),
+      channelsStatus: vi.fn(async () => {
+        statusCall += 1;
+        return {
+          channelAccounts: { mattermost: [
+            {
+              accountId: "ceckert-coach",
+              running: true,
+              connected: true,
+              lastStartAt: statusCall === 1 ? 100 : 101,
+            },
+          ] },
+        };
+      }),
+      channelsStatusConnectionGeneration: () => 1,
+      gatewayRestartRequest: vi.fn(async () => ({
+        ok: true,
+        status: "scheduled",
+        restart: {
+          ok: true,
+          pid: 123,
+          signal: "SIGUSR1",
+          coalesced: false,
+        },
+      })),
+    } as unknown as GatewayRpcClient;
+    let now = 0;
+
+    await expect(
+      activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+        now: () => now,
+        sleep: async () => {
+          now += 10;
+        },
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("restart generation was not observed");
+
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
   });
 });

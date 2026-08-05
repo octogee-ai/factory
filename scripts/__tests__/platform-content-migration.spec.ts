@@ -83,7 +83,7 @@ describe('platform content migration plan', () => {
   })
 
   it('reads the canonical OpenClaw version from the real repository layout', () => {
-    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.1')
+    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.2-beta.7')
   })
 
   it('rejects duplicate canonical OpenClaw version declarations', () => {

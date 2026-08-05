@@ -229,9 +229,8 @@ fi
 chmod 600 "$OPENCLAW_CONFIG_PATH"
 
 # Enforce the class-level OpenClaw policy before startup. The base template is
-# shared-safe (exec/process denied, Codex disabled). Builder-class keeps the
-# standard image but removes the exec/process denies for its one tenant. Operator
-# class is handled later by the operator-image-only codex sandbox patch.
+# customer-safe (host execution denied, Codex disabled). Operator class is
+# handled later by the operator-image-only codex sandbox patch.
 CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CLASS_POLICY" ]; then
   node "$CLASS_POLICY"
@@ -346,6 +345,9 @@ fi
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
   GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  if [ -f "$CLASS_POLICY" ]; then
+    node "$CLASS_POLICY"
+  fi
 fi
 
 # ── Apply Octogee-owned runtime config once ─────────────────────────────────
@@ -355,6 +357,12 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   if [ -f "$CLASS_POLICY" ]; then
     node "$CLASS_POLICY"
   fi
+fi
+
+CUSTOMER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ] && [ -f "$CUSTOMER_CRON_QUARANTINE" ]; then
+  log "Pre-boot: quarantining unsafe persisted customer cron jobs..."
+  node "$CUSTOMER_CRON_QUARANTINE"
 fi
 
 # ── Start OpenClaw before auxiliary runners compete for cold CPU ────────────
@@ -384,12 +392,12 @@ log "OpenClaw gateway healthy; starting auxiliary runners"
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
-  supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "operator" ]; then
+  supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
 else
-  log "Operator site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
+  log "Customer code runners disabled: previews and publishing require an isolated build service"
 fi
-supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
+log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
   supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
 fi

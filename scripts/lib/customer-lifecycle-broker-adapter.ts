@@ -228,12 +228,10 @@ function buildRemoveCustomerPatchLocal(
           ),
         }
       : { list: rebindPlatformEmbeddingRefs(nextAgents) },
-    bindings: currentBindings.filter((binding) => {
-      const agentId = binding && typeof binding === "object"
-        ? (binding as { agentId?: unknown }).agentId
-        : undefined;
-      return typeof agentId !== "string" || !slugs.some((slug) => agentIdBelongsToSlug(agentId, slug));
-    }),
+    bindings: slugs.reduce(
+      (retained, slug) => filterOutCustomerBindings(retained, slug),
+      currentBindings,
+    ),
     channels: { mattermost: { accounts } },
   };
 }
@@ -449,6 +447,7 @@ async function applyAddCustomerConfigPatch(
       emoji: identity.emoji,
       model: DEFAULT_COACH.model,
     },
+    customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
     default: process.env.GATEWAY_BUILDER_SLUG?.trim() === snapshot.slug,
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
@@ -461,6 +460,7 @@ async function applyAddCustomerConfigPatch(
     agentsDir: AGENTS_DIR,
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
+    ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
   });
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
@@ -484,7 +484,11 @@ async function applyAddCustomerConfigPatch(
     ],
     removePrefixes: evictionSlugs.map((slug) => `${slug}-proj-`),
   });
-  const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
+  const projectAccounts = buildProjectAgentAccounts(
+    snapshot.slug,
+    projectAgents,
+    brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
+  );
   const bindings = buildCustomerBindings([
     {
       slug: snapshot.slug,
