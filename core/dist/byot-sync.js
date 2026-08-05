@@ -62,9 +62,6 @@ export const FREE_TIER_COACH_TOOLS = {
         "octogee_project_set_recipe",
     ],
 };
-// Shared gateways run the codex app-server sandboxed. Builder runtime
-// gateways get their broader app-server policy from the gateway class boot
-// policy and this fallback must not downgrade an existing runtime policy.
 export const STANDARD_CODEX_APP_SERVER = {
     sandbox: "workspace-write",
     approvalPolicy: "never",

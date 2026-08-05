@@ -51,6 +51,7 @@ export declare function restoreOauthStoreForSlug(slug: string, deps?: {
     logFn?: (m: string) => void;
 }): Promise<OauthStoreRestoreResult>;
 export interface SyncByotForCustomerDeps {
+    isBuilderGateway?: () => boolean;
     isSharedGateway?: () => boolean;
     usesLlmBrokerToken?: () => boolean;
     logFn?: (m: string) => void;

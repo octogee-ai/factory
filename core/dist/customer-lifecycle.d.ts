@@ -97,9 +97,6 @@ export interface CustomerLifecycleAdapter {
     customerMigratingIn?: (slug: string) => boolean;
     /** Stamp the migrating-in pin (import handler, before activation). */
     markCustomerMigratingIn?: (slug: string) => void;
-    /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's builder
-     *  poller skips them as eviction candidates pre-cutover (the builder path has no in-pod
-     *  reconcile to honor the pin). */
     listMigratingInSlugs?: () => string[];
     loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
     seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;

@@ -17,9 +17,6 @@ export const GATEWAY_CLASS = process.env.GATEWAY_CLASS ?? "";
 export function isBuilderGateway() {
     return GATEWAY_CLASS === "builder";
 }
-// A shared (multi-tenant) pod routes EACH customer-agent's anthropic through the
-// broker with its OWN per-customer token (agent-model-token-<agentId>), unlike
-// builder gateways carry one per-gateway env broker token.
 export function isSharedGateway() {
     return GATEWAY_CLASS === "shared";
 }

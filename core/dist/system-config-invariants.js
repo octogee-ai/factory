@@ -232,10 +232,35 @@ function customerToolInvariants() {
         { kind: "customer-agent-tool-policy", path: "agents.entries.*.tools" },
     ];
 }
-function isolatedToolInvariants() {
+function builderToolInvariants() {
     return [
         { kind: "exact", path: "tools.elevated.enabled", value: false },
-        ...customerToolInvariants(),
+        {
+            kind: "forbidden-array",
+            path: "tools.deny",
+            values: CUSTOMER_CODE_DENIED_TOOLS,
+        },
+        { kind: "exact", path: "tools.exec", value: ABSENT },
+        {
+            kind: "forbidden-array",
+            path: "tools.subagents.tools.deny",
+            values: ["exec", "process"],
+        },
+        { kind: "exact", path: "gateway.terminal.enabled", value: true },
+        { kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["codex"] },
+        { kind: "exact", path: "plugins.entries.codex.enabled", value: true },
+        {
+            kind: "exact",
+            path: "plugins.entries.codex.config.appServer.sandbox",
+            value: "danger-full-access",
+        },
+        {
+            kind: "exact",
+            path: "plugins.entries.codex.config.appServer.approvalPolicy",
+            value: "never",
+        },
+        { kind: "project-agent-tool-policy", path: "agents.list[].tools" },
+        { kind: "project-agent-tool-policy", path: "agents.entries.*.tools" },
     ];
 }
 export function platformInvariantTable(context) {
@@ -317,7 +342,7 @@ export function platformInvariantTable(context) {
             value,
         })),
     ];
-    return [...base, ...isolatedToolInvariants()];
+    return [...base, ...(context.gatewayClass === "shared" ? customerToolInvariants() : builderToolInvariants())];
 }
 function asObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -570,6 +595,11 @@ function invariantSatisfied(config, invariant) {
     if (invariant.kind === "customer-agent-tool-policy") {
         return customerAgentEntries(config, invariant.path).every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
     }
+    if (invariant.kind === "project-agent-tool-policy") {
+        return customerAgentEntries(config, invariant.path)
+            .filter(({ agentId }) => parseAgentId(agentId).kind === "project")
+            .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
+    }
     if (invariant.kind === "mattermost-account-projection") {
         return accountProjectionSatisfied(config);
     }
@@ -589,6 +619,13 @@ function applyInvariant(config, invariant) {
     if (invariant.kind === "customer-agent-tool-policy") {
         for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
             forceAgentToolPolicy(config, agent, agentId);
+        }
+        return;
+    }
+    if (invariant.kind === "project-agent-tool-policy") {
+        for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+            if (parseAgentId(agentId).kind === "project")
+                forceAgentToolPolicy(config, agent, agentId);
         }
         return;
     }

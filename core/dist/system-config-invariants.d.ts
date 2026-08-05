@@ -34,7 +34,11 @@ type CustomerAgentToolPolicyInvariant = {
     kind: "customer-agent-tool-policy";
     path: "agents.list[].tools" | "agents.entries.*.tools";
 };
-export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant | CustomerAgentWorkspaceInvariant | CustomerAgentToolPolicyInvariant | MattermostAccountProjectionInvariant;
+type ProjectAgentToolPolicyInvariant = {
+    kind: "project-agent-tool-policy";
+    path: "agents.list[].tools" | "agents.entries.*.tools";
+};
+export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant | CustomerAgentWorkspaceInvariant | CustomerAgentToolPolicyInvariant | ProjectAgentToolPolicyInvariant | MattermostAccountProjectionInvariant;
 export declare function platformInvariantTable(context: SystemConfigInvariantContext): readonly PlatformInvariant[];
 export declare class PlatformInvariantPolicyError extends Error {
     readonly paths: string[];

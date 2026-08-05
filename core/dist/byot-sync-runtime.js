@@ -1211,8 +1211,19 @@ async function syncStandardByotState(slug, desired, actions, opts) {
         await actions.triggerSecretsReload();
     }
 }
-// Customer coaches use the platform broker profile so host code cannot forge
-// verified Mattermost turn authority.
+async function syncBuilderByotState(slug, desired, actions) {
+    const restore = await restoreOauthIfNeeded(slug, desired, actions);
+    const catalog = materializePlatformCatalog(slug, actions);
+    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+    const patched = restore.present && desired.coachModelInput
+        ? await actions.applyCoachModelPatch(desired.coachModelInput)
+        : false;
+    const restartRequested = await requestRestartIfRequired(runtimePatched, actions, undefined, catalog.restartPending);
+    if ((restore.restored || catalog.changed || catalog.restartPending || runtimePatched.patched || patched) &&
+        !restartRequested) {
+        await actions.triggerSecretsReload();
+    }
+}
 export function gateCustomerByosub(desired, userData, logFn) {
     const provider = desired.input?.provider;
     if (!provider || !isModelCredentialOauthProvider(provider)) {
@@ -1254,7 +1265,9 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
         await actions.triggerSecretsReload();
     }
 }
-function customerByotGate(desired, userData, logFn) {
+function customerByotGate(builder, desired, userData, logFn) {
+    if (builder)
+        return { desired, suppressed: false };
     return gateCustomerByosub(desired, userData, logFn);
 }
 function safeCustomerModelRef(userData, houseOnly) {
@@ -1263,11 +1276,14 @@ function safeCustomerModelRef(userData, houseOnly) {
     return parseBuilderAgentModelDefault(userData.builderAgentDefault)?.primary ??
         DEFAULT_FREE_TIER_MODEL_REF;
 }
-async function purgeCustomerOauthIfRequired(slug, safeModelRef, suppressed, actions) {
+async function purgeCustomerOauthIfRequired(builder, slug, safeModelRef, suppressed, actions) {
+    if (builder)
+        return { changed: false, resetCount: 0 };
     return actions.purgeCustomerOauthRuntime(slug, safeModelRef, { forceSafeAll: suppressed });
 }
 async function applyCustomerAgentModelOverrides(slug, userData, desired, actions, opts) {
     await actions.applyAgentModelOverrides(slug, agentModelsWithBuilderDefault(slug, userData, desired, {
+        builder: opts.builder,
         forceSafeCoachModel: opts.suppressed,
         houseOnly: opts.houseOnly,
         logFn: opts.logFn,
@@ -1281,6 +1297,7 @@ async function restartAfterCustomerOauthPurge(changed, actions) {
         await actions.triggerSecretsReload();
 }
 export async function syncByotForCustomer(userData, deps) {
+    const isBuilder = deps?.isBuilderGateway ?? isBuilderGateway;
     const isShared = deps?.isSharedGateway ?? isSharedGateway;
     const usesBrokerToken = deps?.usesLlmBrokerToken ?? usesLlmBrokerToken;
     const actions = syncActions(deps);
@@ -1288,21 +1305,24 @@ export async function syncByotForCustomer(userData, deps) {
     const slug = userData.username;
     if (!slug)
         return;
+    const builder = isBuilder();
     const logFn = deps?.logFn ?? log;
-    const customerGate = customerByotGate(desired, userData, logFn);
+    const customerGate = customerByotGate(builder, desired, userData, logFn);
     const effectiveDesired = customerGate.desired;
     const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
-    const oauthPurge = await purgeCustomerOauthIfRequired(slug, safeCustomerModelRef(userData, houseOnly), customerGate.suppressed, actions);
+    const oauthPurge = await purgeCustomerOauthIfRequired(builder, slug, safeCustomerModelRef(userData, houseOnly), customerGate.suppressed, actions);
     await syncByotStateForClass({
         slug,
         desired: effectiveDesired,
         actions,
         isShared,
+        builder,
         usesBrokerToken,
         purgeAuthProfileStore: customerGate.suppressed,
     });
     await convergeCoachToolsIfNoModelPatch(slug, effectiveDesired, userData, actions);
     await applyCustomerAgentModelOverrides(slug, userData, effectiveDesired, actions, {
+        builder,
         suppressed: customerGate.suppressed,
         houseOnly,
         logFn,
@@ -1332,6 +1352,8 @@ function platformDefaultSelection(userData, houseOnly) {
     };
 }
 function explicitAgentModelSelections(slug, userData, platformDefault, opts) {
+    if (opts.builder)
+        return userData.systemConfig?.agentModels;
     return catalogOnlyAgentModels(slug, userData.systemConfig?.agentModels, platformDefault, opts.logFn);
 }
 function forceSafeCoachSelection(coachAgentId, explicit, platformDefault, houseOnly) {
@@ -1418,6 +1440,10 @@ async function syncByotStateForClass(args) {
     }
     if (isBrokerResolvedAnthropic(desired, args.usesBrokerToken())) {
         await clearBrokerResolvedAnthropic(slug, actions);
+        return;
+    }
+    if (args.builder) {
+        await syncBuilderByotState(slug, desired, actions);
         return;
     }
     await syncStandardByotState(slug, desired, actions, {
