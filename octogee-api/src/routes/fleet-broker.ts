@@ -2009,6 +2009,24 @@ function respondChatIdentityError(res: Response, error: unknown): boolean {
   return true;
 }
 
+async function assignedChatOwnerTurnAllowed(input: {
+  deps: ResolvedFleetBrokerRouteDeps;
+  req: Request;
+  gatewayId: string;
+  uid: string;
+  data: Record<string, unknown> | null;
+  agentId: string;
+}): Promise<boolean> {
+  if (!input.data || !agentBelongsToAssignedWorkspace(input.data, input.agentId)) return false;
+  return verifyOwnerWorkspaceTurnFailClosed(input.deps.verifyOwnerWorkspaceTurn, {
+    req: input.req,
+    gatewayId: input.gatewayId,
+    agentId: input.agentId,
+    ownerUid: input.uid,
+    assignedData: input.data,
+  }, "agent-chat");
+}
+
 async function requireAssignedChatIdentity(
   deps: ResolvedFleetBrokerRouteDeps,
   req: Request,
@@ -2038,20 +2056,14 @@ async function requireAssignedChatIdentity(
     return null;
   }
   const data = await isAssignedToGateway(deps.db, bound.gatewayId, uid);
-  const ownerTurnAllowed = data && agentBelongsToAssignedWorkspace(data, agentId)
-    ? await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {
-        req,
-        gatewayId: bound.gatewayId,
-        agentId,
-        ownerUid: uid,
-        assignedData: data,
-      }, "agent-chat")
-    : false;
-  if (
-    !data ||
-    !agentBelongsToAssignedWorkspace(data, agentId) ||
-    !ownerTurnAllowed
-  ) {
+  if (!await assignedChatOwnerTurnAllowed({
+    deps,
+    req,
+    gatewayId: bound.gatewayId,
+    uid,
+    data,
+    agentId,
+  })) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
