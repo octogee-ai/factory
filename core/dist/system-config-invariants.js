@@ -1,5 +1,6 @@
 import { parseAgentId } from "@octogee/shared/types/identity";
 const ABSENT = Symbol("absent");
+const REQUIRED_ARRAY = "required-array";
 const REQUIRED_PLUGINS = [
     "mattermost",
     "anthropic",
@@ -153,7 +154,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
 function customerToolInvariants() {
     return [
         {
-            kind: "required-array",
+            kind: REQUIRED_ARRAY,
             path: "tools.deny",
             values: CUSTOMER_CODE_DENIED_TOOLS,
         },
@@ -164,7 +165,7 @@ function customerToolInvariants() {
         { kind: "exact", path: "tools.fs.workspaceOnly", value: true },
         { kind: "exact", path: "tools.sessions.visibility", value: "self" },
         {
-            kind: "required-array",
+            kind: REQUIRED_ARRAY,
             path: "tools.subagents.tools.deny",
             values: ["exec", "process"],
         },
@@ -222,7 +223,7 @@ function operatorToolInvariants() {
             values: ["exec", "process"],
         },
         { kind: "exact", path: "gateway.terminal.enabled", value: true },
-        { kind: "required-array", path: "plugins.allow", values: ["codex"] },
+        { kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["codex"] },
         { kind: "exact", path: "plugins.entries.codex.enabled", value: true },
         {
             kind: "exact",
@@ -298,7 +299,7 @@ export function platformInvariantTable(context) {
         { kind: "exact", path: "channels.mattermost.commands.native", value: false },
         { kind: "mattermost-account-projection", path: "channels.mattermost.accounts" },
         { kind: "exact", path: "plugins.enabled", value: true },
-        { kind: "required-array", path: "plugins.allow", values: REQUIRED_PLUGINS },
+        { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
         { kind: "forbidden-array", path: "plugins.allow", values: RETIRED_PLUGINS },
         ...RETIRED_PLUGINS.map((id) => ({
             kind: "exact",
@@ -387,7 +388,7 @@ function customerAgentRecords(config, path) {
     }
     const entries = asObject(agents.entries);
     return entries
-        ? Object.entries(entries).flatMap(([agentId, entry]) => {
+        ? Object.values(entries).flatMap((entry) => {
             const record = asObject(entry);
             return record ? [record] : [];
         })
@@ -429,9 +430,7 @@ function agentToolPolicySatisfied(config, agent, agentId) {
     const parsed = parseAgentId(agentId);
     const tools = asObject(agent.tools);
     const deny = Array.isArray(tools?.deny) ? tools.deny : [];
-    const expectedAlsoAllow = parsed.kind === "coach"
-        ? CUSTOMER_WORKFLOW_TOOLS
-        : parsed.kind === "project" ? PROJECT_AGENT_ALLOWED_TOOLS : [];
+    const expectedAlsoAllow = allowedToolsForAgent(parsed.kind);
     const expectedSenderPolicy = customerToolsBySenderPolicy(config, agentId);
     return tools !== null
         && tools.profile === (parsed.kind === "coach" ? "coding" : "minimal")
@@ -447,9 +446,7 @@ function forceAgentToolPolicy(config, agent, agentId) {
     const tools = asObject(agent.tools) ?? {};
     agent.tools = tools;
     tools.profile = parsed.kind === "coach" ? "coding" : "minimal";
-    tools.alsoAllow = parsed.kind === "coach"
-        ? structuredClone(CUSTOMER_WORKFLOW_TOOLS)
-        : parsed.kind === "project" ? structuredClone(PROJECT_AGENT_ALLOWED_TOOLS) : [];
+    tools.alsoAllow = structuredClone(allowedToolsForAgent(parsed.kind));
     const deny = Array.isArray(tools.deny)
         ? tools.deny.filter((value) => typeof value === "string")
         : [];
@@ -467,6 +464,13 @@ function accountIdForAgentId(agentId) {
         return `${parsed.username}-proj-${parsed.project}`;
     return null;
 }
+function allowedToolsForAgent(kind) {
+    if (kind === "coach")
+        return CUSTOMER_WORKFLOW_TOOLS;
+    if (kind === "project")
+        return PROJECT_AGENT_ALLOWED_TOOLS;
+    return [];
+}
 function customerToolsBySenderPolicy(_config, agentId) {
     return parseAgentId(agentId).kind === "project"
         ? { "*": { deny: structuredClone(PRODUCTIVITY_TOOL_NAMES) } }
@@ -474,10 +478,14 @@ function customerToolsBySenderPolicy(_config, agentId) {
 }
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 function trustedOwnerAllowFrom(value) {
-    return Array.isArray(value) && value.length === 1 &&
+    if (!Array.isArray(value))
+        return null;
+    if (value.length === 0)
+        return [];
+    return value.length === 1 &&
         typeof value[0] === "string" && MATTERMOST_ID_RE.test(value[0])
         ? [value[0]]
-        : Array.isArray(value) && value.length === 0 ? [] : null;
+        : null;
 }
 function managedMattermostAccountIds(config) {
     const result = new Set();
@@ -569,7 +577,7 @@ function invariantSatisfied(config, invariant) {
     const actual = readPath(config, invariant.path);
     if (invariant.kind === "exact")
         return equal(actual, invariant.value);
-    if (invariant.kind === "required-array") {
+    if (invariant.kind === REQUIRED_ARRAY) {
         return Array.isArray(actual) && invariant.values.every((value) => actual.includes(value));
     }
     return !Array.isArray(actual) || invariant.values.every((value) => !actual.includes(value));
@@ -600,7 +608,7 @@ function applyInvariant(config, invariant) {
     const actual = Array.isArray(parent[leaf])
         ? parent[leaf].filter((value) => typeof value === "string")
         : [];
-    parent[leaf] = invariant.kind === "required-array"
+    parent[leaf] = invariant.kind === REQUIRED_ARRAY
         ? [...actual, ...invariant.values.filter((value) => !actual.includes(value))]
         : actual.filter((value) => !invariant.values.includes(value));
 }

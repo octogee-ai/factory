@@ -162,38 +162,47 @@ function readPersistedSessions(openclawDir, agentId) {
     }
     return { sessionsPath, sessions: sessions };
 }
-function sessionUsesCustomerOauthRuntime(value, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-        return false;
-    const entry = value;
-    const providerRefs = [entry.providerOverride, entry.modelProvider];
-    const modelFallback = entry.modelFallback &&
-        typeof entry.modelFallback === "object" &&
-        !Array.isArray(entry.modelFallback)
-        ? entry.modelFallback
+function recordValue(value) {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value
         : {};
-    const cliSessionIds = entry.cliSessionIds &&
-        typeof entry.cliSessionIds === "object" &&
-        !Array.isArray(entry.cliSessionIds)
-        ? Object.keys(entry.cliSessionIds)
-        : [];
-    const cliSessionBindings = entry.cliSessionBindings &&
-        typeof entry.cliSessionBindings === "object" &&
-        !Array.isArray(entry.cliSessionBindings)
-        ? Object.keys(entry.cliSessionBindings)
-        : [];
-    const unsupportedProvider = (provider) => typeof provider === "string" &&
-        allowedProviderIds.size > 0 &&
-        !allowedProviderIds.has(provider);
-    const unsupportedModel = (provider, model) => {
-        if (typeof model !== "string" || allowedModelRefs.size === 0)
-            return false;
-        if (allowedModelRefs.has(model))
-            return false;
-        return typeof provider !== "string" || !allowedModelRefs.has(`${provider}/${model}`);
-    };
-    const directAgentRuntime = (runtimeId) => typeof runtimeId === "string" && runtimeId.trim().length > 0 && runtimeId !== "openclaw";
-    const hasExecutableSessionState = [
+}
+function unsupportedProvider(provider, allowedProviderIds) {
+    if (typeof provider !== "string" || allowedProviderIds.size === 0)
+        return false;
+    return !allowedProviderIds.has(provider);
+}
+function unsupportedModel(provider, model, allowedModelRefs) {
+    if (typeof model !== "string" || allowedModelRefs.size === 0)
+        return false;
+    if (allowedModelRefs.has(model))
+        return false;
+    return typeof provider !== "string" || !allowedModelRefs.has(`${provider}/${model}`);
+}
+function directAgentRuntime(runtimeId) {
+    if (typeof runtimeId !== "string")
+        return false;
+    return runtimeId.trim().length > 0 && runtimeId !== "openclaw";
+}
+function unsafeSessionModelSelection(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
+    const providers = [entry.providerOverride, entry.modelProvider];
+    if (providers.some((provider) => provider === "claude-cli" ||
+        provider === "openai-codex" ||
+        unsupportedProvider(provider, allowedProviderIds)))
+        return true;
+    const selections = [
+        [entry.providerOverride, entry.modelOverride],
+        [entry.modelProvider, entry.model],
+        [entry.providerOverride, entry.modelOverrideFallbackOriginModel],
+    ];
+    if (selections.some(([provider, model]) => unsupportedModel(provider, model, allowedModelRefs))) {
+        return true;
+    }
+    return selections.some(([, model]) => typeof model === "string" &&
+        (model.startsWith("claude-cli/") || directRuntimeModelRefs.has(model)));
+}
+function unsafeSessionExecutionState(entry) {
+    const executableFields = [
         entry.toolOverrides,
         entry.execHost,
         entry.execSecurity,
@@ -204,30 +213,47 @@ function sessionUsesCustomerOauthRuntime(value, directRuntimeModelRefs, allowedM
         entry.acpSessionBinding,
         entry.acp,
         entry.pluginExtensions,
-    ].some((state) => state !== undefined);
-    return (providerRefs.some((ref) => ref === "claude-cli" || ref === "openai-codex" || unsupportedProvider(ref)) ||
-        unsupportedModel(entry.providerOverride, entry.modelOverride) ||
-        unsupportedModel(entry.modelProvider, entry.model) ||
-        unsupportedModel(entry.providerOverride, entry.modelOverrideFallbackOriginModel) ||
-        [entry.modelOverride, entry.model, entry.modelOverrideFallbackOriginModel].some((ref) => typeof ref === "string" &&
-            (ref.startsWith("claude-cli/") || directRuntimeModelRefs.has(ref))) ||
-        directAgentRuntime(entry.agentRuntimeOverride) ||
+    ];
+    if (executableFields.some((state) => state !== undefined))
+        return true;
+    const sessionRuntimeIds = [
+        ...Object.keys(recordValue(entry.cliSessionIds)),
+        ...Object.keys(recordValue(entry.cliSessionBindings)),
+    ];
+    return directAgentRuntime(entry.agentRuntimeOverride) ||
         directAgentRuntime(entry.agentHarnessId) ||
+        sessionRuntimeIds.some(directAgentRuntime) ||
         entry.pluginOwnerId === "codex" ||
-        typeof entry.claudeCliSessionId === "string" ||
-        hasExecutableSessionState ||
-        cliSessionIds.some(directAgentRuntime) ||
-        cliSessionBindings.some(directAgentRuntime) ||
-        (typeof entry.authProfileOverride === "string" &&
-            !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(entry.authProfileOverride)) ||
-        modelFallback.prevProvider === "claude-cli" ||
-        modelFallback.prevProvider === "openai-codex" ||
-        (typeof modelFallback.prevAuthProfileOverride === "string" &&
-            !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(modelFallback.prevAuthProfileOverride)) ||
-        (typeof modelFallback.prevModel === "string" &&
-            (modelFallback.prevModel.startsWith("claude-cli/") ||
-                directRuntimeModelRefs.has(modelFallback.prevModel) ||
-                unsupportedModel(modelFallback.prevProvider, modelFallback.prevModel))));
+        typeof entry.claudeCliSessionId === "string";
+}
+function unsafeSessionAuthProfile(entry) {
+    const profile = entry.authProfileOverride;
+    return typeof profile === "string" && !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(profile);
+}
+function unsafeSessionFallback(entry, directRuntimeModelRefs, allowedModelRefs) {
+    const fallback = recordValue(entry.modelFallback);
+    if (fallback.prevProvider === "claude-cli" || fallback.prevProvider === "openai-codex")
+        return true;
+    const profile = fallback.prevAuthProfileOverride;
+    if (typeof profile === "string" && !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(profile))
+        return true;
+    const model = fallback.prevModel;
+    if (typeof model !== "string")
+        return false;
+    if (model.startsWith("claude-cli/") || directRuntimeModelRefs.has(model))
+        return true;
+    return unsupportedModel(fallback.prevProvider, model, allowedModelRefs);
+}
+function sessionUsesCustomerOauthRuntime(value, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const entry = value;
+    return [
+        unsafeSessionModelSelection(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds),
+        unsafeSessionExecutionState(entry),
+        unsafeSessionAuthProfile(entry),
+        unsafeSessionFallback(entry, directRuntimeModelRefs, allowedModelRefs),
+    ].some(Boolean);
 }
 function clearSessionRuntimeState(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
@@ -309,6 +335,48 @@ function scrubUnsafeSqliteSessions(openclawDir, agentId, directRuntimeModelRefs,
         db.close();
     }
 }
+function purgeNativeCredentialArtifacts(homeDir, agentIds, affectedAgentIds) {
+    const nativeCredential = claudeCliNativeCredentialsPath(homeDir);
+    let removedFiles = 0;
+    for (const candidate of [nativeCredential, `${nativeCredential}.tmp`]) {
+        if (removeIfPresent(candidate))
+            removedFiles++;
+    }
+    if (removedFiles > 0)
+        agentIds.forEach((agentId) => affectedAgentIds.add(agentId));
+    return removedFiles;
+}
+function purgeAgentOauthRuntime(opts, agentId, runtime) {
+    const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
+    const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) => sessionUsesCustomerOauthRuntime(session, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds));
+    if (unsafePersistedSession)
+        runtime.affectedAgentIds.add(agentId);
+    let resetSessions = scrubUnsafeSqliteSessions(opts.openclawDir, agentId, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds);
+    let removedFiles = 0;
+    const authJson = codexAuthJsonPath(opts.openclawDir, agentId);
+    for (const candidate of [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]) {
+        if (!removeIfPresent(candidate))
+            continue;
+        removedFiles++;
+        runtime.affectedAgentIds.add(agentId);
+    }
+    const removedDirectories = removeDirIfPresent(codexStagingHomeDir(opts.openclawDir, agentId))
+        ? 1
+        : 0;
+    if (removedDirectories > 0)
+        runtime.affectedAgentIds.add(agentId);
+    const agentDir = codexAgentDir(opts.openclawDir, agentId);
+    const scrubbedProfileStores = scrubOauthProfiles(agentDir, agentId) ? 1 : 0;
+    if (scrubbedProfileStores > 0)
+        runtime.affectedAgentIds.add(agentId);
+    if (projectAgentModelsJson(agentDir, opts.modelProviders ?? {})) {
+        runtime.affectedAgentIds.add(agentId);
+    }
+    if (opts.resetSessionStores !== false && runtime.affectedAgentIds.has(agentId)) {
+        resetSessions += resetPersistedSessions(persistedSessions);
+    }
+    return { removedFiles, removedDirectories, scrubbedProfileStores, resetSessions };
+}
 export function purgeCustomerOauthRuntimeArtifacts(opts) {
     const agentIds = Array.from(new Set(opts.agentIds));
     for (const agentId of agentIds) {
@@ -324,46 +392,18 @@ export function purgeCustomerOauthRuntimeArtifacts(opts) {
     const directRuntimeModelRefs = new Set(opts.directRuntimeModelRefs ?? []);
     const allowedModelRefs = new Set(opts.allowedModelRefs ?? []);
     const allowedProviderIds = new Set(opts.allowedProviderIds ?? []);
-    const nativeCredential = claudeCliNativeCredentialsPath(opts.homeDir);
-    let nativeCredentialRemoved = false;
-    for (const candidate of [nativeCredential, `${nativeCredential}.tmp`]) {
-        if (removeIfPresent(candidate)) {
-            removedFiles++;
-            nativeCredentialRemoved = true;
-        }
-    }
-    if (nativeCredentialRemoved)
-        agentIds.forEach((agentId) => affectedAgentIds.add(agentId));
+    removedFiles += purgeNativeCredentialArtifacts(opts.homeDir, agentIds, affectedAgentIds);
     for (const agentId of agentIds) {
-        const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
-        if (Object.values(persistedSessions?.sessions ?? {}).some((session) => sessionUsesCustomerOauthRuntime(session, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds))) {
-            affectedAgentIds.add(agentId);
-        }
-        resetSessions += scrubUnsafeSqliteSessions(opts.openclawDir, agentId, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds);
-        const authJson = codexAuthJsonPath(opts.openclawDir, agentId);
-        for (const candidate of [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]) {
-            if (removeIfPresent(candidate)) {
-                removedFiles++;
-                affectedAgentIds.add(agentId);
-            }
-        }
-        if (removeDirIfPresent(codexStagingHomeDir(opts.openclawDir, agentId))) {
-            removedDirectories++;
-            affectedAgentIds.add(agentId);
-        }
-        const agentDir = codexAgentDir(opts.openclawDir, agentId);
-        if (scrubOauthProfiles(agentDir, agentId)) {
-            scrubbedProfileStores++;
-            affectedAgentIds.add(agentId);
-        }
-        if (projectAgentModelsJson(agentDir, opts.modelProviders ?? {})) {
-            affectedAgentIds.add(agentId);
-        }
-        if (opts.resetSessionStores !== false) {
-            resetSessions += affectedAgentIds.has(agentId)
-                ? resetPersistedSessions(persistedSessions)
-                : 0;
-        }
+        const result = purgeAgentOauthRuntime(opts, agentId, {
+            directRuntimeModelRefs,
+            allowedModelRefs,
+            allowedProviderIds,
+            affectedAgentIds,
+        });
+        removedFiles += result.removedFiles;
+        removedDirectories += result.removedDirectories;
+        scrubbedProfileStores += result.scrubbedProfileStores;
+        resetSessions += result.resetSessions;
     }
     return {
         removedFiles,

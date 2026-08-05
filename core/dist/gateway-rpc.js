@@ -301,6 +301,42 @@ function createIdentityResolver(initialIdentity) {
         return identity;
     };
 }
+async function stopChannels(call, params) {
+    const payload = await call("channels.stop", params);
+    if (!payload || typeof payload !== "object" ||
+        payload.stopped !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
+    }
+    return payload;
+}
+async function startChannels(call, params) {
+    const payload = await call("channels.start", params);
+    if (!payload || typeof payload !== "object" ||
+        payload.started !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
+    }
+    return payload;
+}
+async function requestGatewayRestart(call, params) {
+    const payload = await call("gateway.restart.request", params);
+    const result = payload;
+    const restart = result?.restart;
+    if (!result ||
+        typeof result !== "object" ||
+        result.ok !== true ||
+        !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
+        !restart ||
+        typeof restart !== "object" ||
+        restart.ok !== true ||
+        !Number.isSafeInteger(restart.pid) ||
+        restart.pid <= 0 ||
+        restart.signal !== "SIGUSR1" ||
+        typeof restart.coalesced !== "boolean" ||
+        (result.status === "coalesced") !== restart.coalesced) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned malformed restart acknowledgement");
+    }
+    return result;
+}
 export function createGatewayRpc(opts = {}) {
     const url = opts.url ??
         `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
@@ -374,44 +410,9 @@ export function createGatewayRpc(opts = {}) {
         },
         channelsStatus: statusConnection.call,
         channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
-        async channelsStop(params) {
-            const payload = await call("channels.stop", params);
-            if (!payload ||
-                typeof payload !== "object" ||
-                payload.stopped !== true) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
-            }
-            return payload;
-        },
-        async channelsStart(params) {
-            const payload = await call("channels.start", params);
-            if (!payload ||
-                typeof payload !== "object" ||
-                payload.started !== true) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
-            }
-            return payload;
-        },
-        async gatewayRestartRequest(params) {
-            const payload = await call("gateway.restart.request", params);
-            const result = payload;
-            const restart = result?.restart;
-            if (!result ||
-                typeof result !== "object" ||
-                result.ok !== true ||
-                !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
-                !restart ||
-                typeof restart !== "object" ||
-                restart.ok !== true ||
-                !Number.isSafeInteger(restart.pid) ||
-                restart.pid <= 0 ||
-                restart.signal !== "SIGUSR1" ||
-                typeof restart.coalesced !== "boolean" ||
-                (result.status === "coalesced") !== restart.coalesced) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned malformed restart acknowledgement");
-            }
-            return result;
-        },
+        channelsStop: (params) => stopChannels(call, params),
+        channelsStart: (params) => startChannels(call, params),
+        gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
         async sessionsList(params) {
             const payload = await call("sessions.list", params);
             if (!payload || typeof payload !== "object") {

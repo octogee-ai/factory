@@ -79,7 +79,7 @@ export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthrop
 export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {
     forceSafeAll?: boolean;
 }): Record<string, unknown>;
-export declare function purgeCustomerOauthRuntime(slug: string, safeModelRef: string, deps?: {
+type PurgeCustomerOauthRuntimeDeps = {
     config?: unknown;
     openclawDir?: string;
     homeDir?: string;
@@ -87,7 +87,8 @@ export declare function purgeCustomerOauthRuntime(slug: string, safeModelRef: st
     rpc?: SessionPolicyRpc;
     logFn?: (message: string) => void;
     forceSafeAll?: boolean;
-}): Promise<{
+};
+export declare function purgeCustomerOauthRuntime(slug: string, safeModelRef: string, deps?: PurgeCustomerOauthRuntimeDeps): Promise<{
     changed: boolean;
     resetCount: number;
 }>;

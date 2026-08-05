@@ -22,7 +22,7 @@ export interface CustomerOauthRuntimePurgeResult {
     resetSessions: number;
     affectedAgentIds: string[];
 }
-export declare function purgeCustomerOauthRuntimeArtifacts(opts: {
+interface CustomerOauthRuntimePurgeOptions {
     openclawDir: string;
     homeDir: string;
     agentIds: readonly string[];
@@ -31,7 +31,8 @@ export declare function purgeCustomerOauthRuntimeArtifacts(opts: {
     allowedModelRefs?: readonly string[];
     allowedProviderIds?: readonly string[];
     modelProviders?: Record<string, unknown>;
-}): CustomerOauthRuntimePurgeResult;
+}
+export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRuntimePurgeOptions): CustomerOauthRuntimePurgeResult;
 /**
  * Reads the codex auth-state payload as text — preferring the SQLite
  * auth_profile_state row (openclaw v2026.6.5+) and falling back to the
@@ -60,3 +61,4 @@ export declare function restoreByosubCredentials(opts: {
     failed: number;
     skipped: number;
 }>;
+export {};

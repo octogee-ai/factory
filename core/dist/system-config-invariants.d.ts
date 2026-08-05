@@ -1,5 +1,6 @@
 type JsonObject = Record<string, unknown>;
 declare const ABSENT: unique symbol;
+declare const REQUIRED_ARRAY: "required-array";
 export type GatewayConfigClass = "shared" | "builder" | "operator";
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
@@ -12,7 +13,7 @@ type ExactInvariant = {
     value: unknown | typeof ABSENT;
 };
 type RequiredArrayInvariant = {
-    kind: "required-array";
+    kind: typeof REQUIRED_ARRAY;
     path: string;
     values: readonly string[];
 };
