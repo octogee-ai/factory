@@ -63,12 +63,16 @@ ARG OPENCLAW_VERSION=latest
 ARG OPENCLAW_MATTERMOST_FORK_SHA=""
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
+COPY infra/gateway/verify-openclaw-tool-policy.mjs /tmp/verify-openclaw-tool-policy.mjs
 RUN npm install -g /tmp/openclaw-fork.tgz \
     && openclaw --version \
     && OPENCLAW_ROOT="$(npm root -g)/openclaw" \
     && rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
     || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
-RUN rm /tmp/openclaw-fork.tgz
+RUN OPENCLAW_ROOT="$(npm root -g)/openclaw" \
+    && node /tmp/verify-openclaw-tool-policy.mjs "$OPENCLAW_ROOT" \
+    || { echo "FATAL: installed OpenClaw runtime violates Octogee tool policy"; exit 1; }
+RUN rm /tmp/openclaw-fork.tgz /tmp/verify-openclaw-tool-policy.mjs
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
 # Not in Debian repos — installed from GitHub's own apt source.

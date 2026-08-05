@@ -46,13 +46,14 @@ import { _setBuilderShellTokenReviewerForTests } from "../middleware/builder-she
 
 let projectedTokenDir: string | null = null;
 
-function configureOperatorServiceAccountAuth() {
+function configureBuilderServiceAccountAuth() {
   projectedTokenDir = mkdtempSync(join(tmpdir(), "octogee-sidecar-auth-"));
   const tokenPath = join(projectedTokenDir, "token");
   writeFileSync(tokenPath, "projected-reviewer-token\n");
 
   delete process.env.INTERNAL_SERVICE_KEY;
-  process.env.GATEWAY_PROFILE = "operator";
+  process.env.GATEWAY_CLASS = "builder";
+  process.env.GATEWAY_PROFILE = "builder";
   process.env.GATEWAY_ID = "bender";
   process.env.K8S_NAMESPACE = "octogee-test";
   process.env.K8S_SERVICE_ACCOUNT_NAME = "octogee-gw-bender";
@@ -82,6 +83,7 @@ describe("gateway-edge sidecar surface", () => {
     _setBuilderShellTokenReviewerForTests(null);
     delete process.env.INTERNAL_SERVICE_KEY;
     delete process.env.GATEWAY_PROFILE;
+    delete process.env.GATEWAY_CLASS;
     delete process.env.GATEWAY_ID;
     delete process.env.K8S_NAMESPACE;
     delete process.env.K8S_SERVICE_ACCOUNT_NAME;
@@ -130,7 +132,7 @@ describe("gateway-edge sidecar surface", () => {
     expect(
       (await request(app).post("/api/g/gw-bender/projects/acme/widget/publish").send({}))
         .status,
-    ).toBe(401);
+    ).toBe(404);
   });
 
   it("keeps builder-shell locality mounted on the sidecar", async () => {
@@ -146,7 +148,7 @@ describe("gateway-edge sidecar surface", () => {
     expect(res.body).toEqual({ error: "Missing ticket" });
   });
 
-  it("keeps agent-owned internal workspace and project actions mounted on the sidecar", async () => {
+  it("keeps workspace commits mounted but retires the in-pod project publisher", async () => {
     const app = createApp({ surface: "sidecar" });
 
     const commit = await request(app)
@@ -158,15 +160,11 @@ describe("gateway-edge sidecar surface", () => {
     const publish = await request(app)
       .post("/internal/project/publish")
       .send({ slug: "../alice", projectSlug: "demo" });
-    expect(publish.status).toBe(400);
-    expect(publish.body).toEqual({
-      error: "Invalid slug or projectSlug",
-      code: "BAD_INPUT",
-    });
+    expect(publish.status).toBe(404);
   });
 
-  it("requires valid operator KSA auth on sidecar connector materialization", async () => {
-    const reviewer = configureOperatorServiceAccountAuth();
+  it("requires valid Builder KSA auth on sidecar connector materialization", async () => {
+    const reviewer = configureBuilderServiceAccountAuth();
     const app = createApp({ surface: "sidecar" });
 
     const missing = await request(app).get("/internal/connectors/cloudflare/materialize");
@@ -183,7 +181,7 @@ describe("gateway-edge sidecar surface", () => {
   });
 
   it("does not mount connector materialization on the cluster surface", async () => {
-    const reviewer = configureOperatorServiceAccountAuth();
+    const reviewer = configureBuilderServiceAccountAuth();
     const app = createApp({ surface: "cluster" });
 
     const res = await request(app)

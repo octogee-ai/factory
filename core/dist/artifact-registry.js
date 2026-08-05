@@ -181,8 +181,8 @@ const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)
 const RELEASE_VERSION_PATTERN = new RegExp(`^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
     `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`);
 const RELEASE_MANIFEST_SURFACE_IMAGES = {
-    gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
-    platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"],
+    gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"],
+    platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"],
 };
 export class ReleaseDigestAliasError extends Error {
     aliasOutcomes;
@@ -227,8 +227,8 @@ function exactObjectKeys(value, expected, description) {
 function validateReleaseDigestManifest(input, manifestDigest, expectedRepository) {
     const manifest = plainRecord(input, "release digest manifest");
     exactObjectKeys(manifest, ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"], "release digest manifest");
-    if (manifest.schemaVersion !== 1)
-        throw new Error("release digest manifest schemaVersion must be 1");
+    if (manifest.schemaVersion !== 2)
+        throw new Error("release digest manifest schemaVersion must be 2");
     const sourceSha = typeof manifest.sourceSha === "string"
         ? assertSourceSha(manifest.sourceSha)
         : assertSourceSha("");
@@ -261,7 +261,7 @@ function validateReleaseDigestManifest(input, manifestDigest, expectedRepository
 }
 function validateResolvedReleaseDigestManifest(manifest, expectedRepository) {
     return validateReleaseDigestManifest({
-        schemaVersion: 1,
+        schemaVersion: 2,
         sourceSha: manifest.sourceSha,
         openclawVersion: manifest.openclawVersion,
         repository: manifest.repository,

@@ -4,13 +4,26 @@ import { Type } from "typebox";
 
 import {
   AccessToolError,
+  type AccessBrokerOptions,
   accessApprovalStatus,
   listAccess,
   prepareAccess,
   recommendAccess,
 } from "./access-client.js";
 
-interface ToolContext { agentId?: unknown; sessionId?: unknown }
+interface ToolContext {
+  agentId?: unknown;
+  sessionId?: unknown;
+  agentAccountId?: unknown;
+  messageChannel?: unknown;
+  nativeChannelId?: unknown;
+  requesterSenderId?: unknown;
+  deliveryContext?: {
+    accountId?: unknown;
+    channel?: unknown;
+    to?: unknown;
+  };
+}
 interface PluginApi {
   pluginConfig?: unknown;
   registerTool: (factory: (context: ToolContext) => unknown, meta: { name: string }) => void;
@@ -21,6 +34,46 @@ function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
   if (operation === "prepare_revoke") return "revoke";
   if (operation === "prepare_change") return "change";
   return "grant";
+}
+
+function ambientString(
+  direct: unknown,
+  delivered: unknown,
+): { conflict: boolean; value: unknown } {
+  const directString = typeof direct === "string";
+  const deliveredString = typeof delivered === "string";
+  return {
+    conflict: directString && deliveredString && direct !== delivered,
+    value: directString ? direct : delivered,
+  };
+}
+
+function validMattermostRequestContext(
+  channel: unknown,
+  accountId: unknown,
+  requesterSenderId: unknown,
+  nativeChannelId: unknown,
+  to: unknown,
+): AccessBrokerOptions["requestContext"] | null {
+  if (channel !== "mattermost") return null;
+  if (typeof accountId !== "string") return null;
+  if (typeof requesterSenderId !== "string" || !/^[a-z0-9]{26}$/u.test(requesterSenderId)) return null;
+  if (typeof nativeChannelId !== "string" || !/^[a-z0-9]{26}$/u.test(nativeChannelId)) return null;
+  if (typeof to !== "string" || !/^(?:channel|user):[a-z0-9]{26}$/u.test(to)) return null;
+  return { channel, accountId, requesterSenderId, nativeChannelId, to };
+}
+
+function requestContextOf(ctx: ToolContext): AccessBrokerOptions["requestContext"] | null {
+  const channel = ambientString(ctx.messageChannel, ctx.deliveryContext?.channel);
+  const accountId = ambientString(ctx.agentAccountId, ctx.deliveryContext?.accountId);
+  if (channel.conflict || accountId.conflict) return null;
+  return validMattermostRequestContext(
+    channel.value,
+    accountId.value,
+    ctx.requesterSenderId,
+    ctx.nativeChannelId,
+    ctx.deliveryContext?.to,
+  );
 }
 
 export default definePluginEntry({
@@ -53,7 +106,14 @@ export default definePluginEntry({
       async execute(_toolCallId: string, input: Record<string, unknown>) {
         const agentId = typeof context.agentId === "string" ? context.agentId : null;
         if (!agentId) return jsonResult({ error: "delegated_access requires a coach agent" });
-        const options = { agentId, ...config };
+        const requestContext = requestContextOf(context);
+        if (!requestContext) {
+          return jsonResult({
+            error: "delegated_access requires verified Mattermost sender and route context",
+            code: "request-context-required",
+          });
+        }
+        const options = { agentId, requestContext, ...config };
         try {
           if (input.operation === "list") return jsonResult(await listAccess(options));
           if (input.operation === "recommend") {

@@ -21,7 +21,6 @@ type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 
 export type TenantBindingResult =
   | "ok"
-  | "ok_legacy_operator"
   | "ok_platform"
   | "shared_gateway"
   | "ns_mismatch"
@@ -33,13 +32,13 @@ export type SaToTenantResult =
   | {
       attached: true;
       tenant: BoundTenant;
-      result: "ok" | "ok_legacy_operator" | "ok_platform";
+      result: "ok" | "ok_platform";
     }
   | {
       attached: false;
       result: Exclude<
         TenantBindingResult,
-        "ok" | "ok_legacy_operator" | "ok_platform"
+        "ok" | "ok_platform"
       >;
     };
 
@@ -49,7 +48,7 @@ export interface ServiceAccountIdentity {
 }
 
 const GATEWAY_SA_PREFIX = "octogee-gw-";
-const LEGACY_OPERATOR_GATEWAY_SA_PREFIX = "octogee-gateway-";
+const RETIRED_GATEWAY_SA_PREFIX = "octogee-gateway-";
 const SHARED_GATEWAY_SA_NAME = "octogee-gateway";
 type GatewayRootFirestore = Pick<Firestore, "doc" | "collection">;
 
@@ -82,7 +81,7 @@ function platformActorFromSa(saName: string): PlatformActor | null {
 function attachGateway(
   gatewayId: string,
   ownerUid: string | null,
-  result: "ok" | "ok_legacy_operator",
+  result: "ok",
 ): SaToTenantResult {
   return {
     attached: true,
@@ -99,7 +98,7 @@ async function bindGatewaySa(
   db: GatewayRootFirestore,
   saName: string,
   suffix: string,
-  result: "ok" | "ok_legacy_operator",
+  result: "ok",
 ): Promise<SaToTenantResult> {
   const gatewayId = gatewayIdFromSaSuffix(suffix);
   if (!gatewayId) return { attached: false, result: "malformed_sa" };
@@ -176,13 +175,8 @@ export async function mapSaToTenant(
     );
   }
 
-  if (identity.saName.startsWith(LEGACY_OPERATOR_GATEWAY_SA_PREFIX)) {
-    return bindGatewaySa(
-      db,
-      identity.saName,
-      identity.saName.slice(LEGACY_OPERATOR_GATEWAY_SA_PREFIX.length),
-      "ok_legacy_operator",
-    );
+  if (identity.saName.startsWith(RETIRED_GATEWAY_SA_PREFIX)) {
+    return { attached: false, result: "unknown_sa" };
   }
 
   if (!isDnsLabel(identity.saName)) return { attached: false, result: "unknown_sa" };

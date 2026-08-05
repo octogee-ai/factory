@@ -1107,12 +1107,28 @@ describe("filterOutCustomerBindings", () => {
     const bindings = [
       { agentId: "octogee-alice-coach" },
       { agentId: "octogee-alice-proj-old-coach" },
+      {
+        agentId: "octogee-bob-coach",
+        match: { channel: "mattermost", accountId: "alice-coach" },
+      },
+      {
+        agentId: "octogee-bob-coach",
+        match: { channel: "mattermost", accountId: "alice-proj-orbit" },
+      },
       { agentId: "octogee-bob-coach" },
+      {
+        agentId: "octogee-bob-coach",
+        match: { channel: "mattermost", accountId: "alice-b-proj-orbit" },
+      },
       { agentId: "octogee-mac-default" },
     ];
-    expect(filterOutCustomerBindings(bindings, "alice").map((b) => b.agentId)).toEqual([
-      "octogee-bob-coach",
-      "octogee-mac-default",
+    expect(filterOutCustomerBindings(bindings, "alice")).toEqual([
+      { agentId: "octogee-bob-coach" },
+      {
+        agentId: "octogee-bob-coach",
+        match: { channel: "mattermost", accountId: "alice-b-proj-orbit" },
+      },
+      { agentId: "octogee-mac-default" },
     ]);
   });
 });

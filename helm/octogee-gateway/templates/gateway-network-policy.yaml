@@ -19,8 +19,6 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.gatewayEdge.port }}
-        - protocol: TCP
-          port: 9080
     - from:
         - podSelector:
             matchLabels:

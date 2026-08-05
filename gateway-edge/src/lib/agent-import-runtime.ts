@@ -19,6 +19,10 @@ import {
 } from "./agent-import-git.js";
 import { cloneGithubAgentImportSource, extractLocalAgentImportArchive } from "./agent-import-source.js";
 import {
+  workspaceGitCommandArgs,
+  workspaceGitEnvironment,
+} from "./workspace-git.js";
+import {
   AgentImportService,
   type AgentImportDoctorResult,
 } from "./agent-import-service.js";
@@ -72,9 +76,10 @@ export function createAgentImportDoctorClient(options: DoctorClientOptions) {
 
 function git(targetDir: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/git", args, {
+    const child = spawn("/usr/bin/git", workspaceGitCommandArgs(targetDir, args), {
       cwd: targetDir,
       stdio: ["ignore", "pipe", "pipe"],
+      env: workspaceGitEnvironment(process.env, targetDir),
     });
     const output: Buffer[] = [];
     let size = 0;

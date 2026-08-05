@@ -27,7 +27,7 @@ export function redactRequestPath(path: string): string {
   return path.replace(
     /((?:\/api)?\/g\/[^/]+\/openclaw\/launch\/)[^/?#]+/gu,
     "$1<redacted>",
-  );
+  ).replace(/(\/p\/)[0-9a-f]{32}(?=\/|$)/gu, "$1<redacted>");
 }
 
 // Without this replacer, JSON.stringify on Error returns {} (name/message/stack

@@ -49,7 +49,6 @@ const ANONYMOUS_OPERATIONAL_PLAN_TIERS = [
 const ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES = [
     "shared",
     "builder",
-    "operator",
 ];
 function closedOperationalValue(value, allowed) {
     return typeof value === "string" && allowed.includes(value) ? value : null;

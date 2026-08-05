@@ -25,7 +25,7 @@ import {
 
 export const EVICT_AFTER_STREAK = 2;
 
-export interface OperatorGatewayHealth {
+export interface GatewayHealth {
   status: string;
   version?: string;
   openclawVersion?: string;
@@ -40,7 +40,7 @@ export interface OperatorGatewayHealth {
   configStatus?: GatewayConfigStatus;
 }
 
-export interface OperatorHeartbeatRecord {
+export interface GatewayHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   version?: string;
@@ -50,15 +50,15 @@ export interface OperatorHeartbeatRecord {
   configStatus?: GatewayConfigStatus;
 }
 
-export interface OperatorHeartbeatPollerDeps {
+export interface GatewayHeartbeatPollerDeps {
   /** Gateways Cowboy should report for (running/desired-live). */
   listGatewayIds: () => Promise<string[]>;
   /** GET the gateway's /health; null when unreachable (do not clobber the doc). */
-  fetchHealth: (gatewayId: string) => Promise<OperatorGatewayHealth | null>;
+  fetchHealth: (gatewayId: string) => Promise<GatewayHealth | null>;
   /** Slugs assigned to this gateway in Firestore (users gatewayId==id, complete). */
   readAssignedSlugs: (gatewayId: string) => Promise<string[]>;
   /** Persist live telemetry; the impl stamps lastHeartbeatAt. */
-  writeHeartbeat: (gatewayId: string, record: OperatorHeartbeatRecord) => Promise<void>;
+  writeHeartbeat: (gatewayId: string, record: GatewayHeartbeatRecord) => Promise<void>;
   ownsEviction?: (gatewayId: string) => Promise<boolean>;
   /** Tear down a departed customer's local footprint on the gateway (pod /unmount).
    *  Omit to disable Cowboy-driven eviction (e.g. no fleet secret configured). */
@@ -103,7 +103,7 @@ export function departedFromAssigned(present: string[], assigned: string[]): str
  * (non-object, missing/empty status, non-array customers) so the poller treats a
  * garbled /health like an unreachable gateway — it never writes fabricated state.
  */
-export function parseHealthResponse(json: unknown): OperatorGatewayHealth | null {
+export function parseHealthResponse(json: unknown): GatewayHealth | null {
   if (typeof json !== "object" || json === null) return null;
   const body = json as {
     status?: unknown;
@@ -140,14 +140,14 @@ function healthStringField<K extends "version" | "openclawVersion">(
   key: K,
   value: unknown,
   requireNonEmpty: boolean,
-): Partial<Pick<OperatorGatewayHealth, K>> {
+): Partial<Pick<GatewayHealth, K>> {
   if (typeof value !== "string" || (requireNonEmpty && value.length === 0)) return {};
-  return { [key]: value } as Partial<Pick<OperatorGatewayHealth, K>>;
+  return { [key]: value } as Partial<Pick<GatewayHealth, K>>;
 }
 
 function configStatusField(
   value: unknown,
-): Partial<Pick<OperatorGatewayHealth, "configStatus">> {
+): Partial<Pick<GatewayHealth, "configStatus">> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const status = value as GatewayConfigStatus;
   const validVersion = status.openclawVersion === undefined ||
@@ -186,7 +186,7 @@ function hasValidDashboardControlStatus(status: GatewayConfigStatus): boolean {
 }
 
 async function evictDepartedForGateway(
-  deps: OperatorHeartbeatPollerDeps,
+  deps: GatewayHeartbeatPollerDeps,
   gatewayId: string,
   observed: { footprint: string[]; assigned: string[]; migratingIn: string[] },
   state: EvictionState,
@@ -221,7 +221,7 @@ async function evictDepartedForGateway(
     const flightKey = `${gatewayId}\0${slug}`;
     if (state.inFlight.has(flightKey)) {
       deps.log(
-        `[operator-poll] ${gatewayId}/${slug} eviction already in flight — skipping duplicate`,
+        `[gateway-poll] ${gatewayId}/${slug} eviction already in flight — skipping duplicate`,
       );
       continue;
     }
@@ -230,7 +230,7 @@ async function evictDepartedForGateway(
       await deps.evictSlug(gatewayId, slug);
     } catch (err) {
       deps.log(
-        `[operator-poll] ⚠ evict ${gatewayId}/${slug}: ${errMsg(err)} — will retry next tick`,
+        `[gateway-poll] ⚠ evict ${gatewayId}/${slug}: ${errMsg(err)} — will retry next tick`,
       );
     } finally {
       state.inFlight.delete(flightKey);
@@ -238,8 +238,8 @@ async function evictDepartedForGateway(
   }
 }
 
-export async function pollOperatorHeartbeatsOnce(
-  deps: OperatorHeartbeatPollerDeps,
+export async function pollGatewayHeartbeatsOnce(
+  deps: GatewayHeartbeatPollerDeps,
   streaks: EvictionStreaks = new Map(),
   inFlight: EvictionInFlight = new Set(),
 ): Promise<void> {
@@ -247,7 +247,7 @@ export async function pollOperatorHeartbeatsOnce(
   try {
     gatewayIds = await deps.listGatewayIds();
   } catch (err) {
-    deps.log(`[operator-poll] ⚠ failed to list gateways: ${errMsg(err)}`);
+    deps.log(`[gateway-poll] ⚠ failed to list gateways: ${errMsg(err)}`);
     return;
   }
 
@@ -256,7 +256,7 @@ export async function pollOperatorHeartbeatsOnce(
       const health = await deps.fetchHealth(gatewayId);
       if (!health) continue;
       const assigned = await deps.readAssignedSlugs(gatewayId);
-      const record: OperatorHeartbeatRecord = {
+      const record: GatewayHeartbeatRecord = {
         status: health.status,
         mountedCustomers: intersectMounted(health.customers, assigned),
       };
@@ -278,19 +278,19 @@ export async function pollOperatorHeartbeatsOnce(
         { streaks, inFlight },
       );
     } catch (err) {
-      deps.log(`[operator-poll] ⚠ ${gatewayId}: ${errMsg(err)} — will retry next tick`);
+      deps.log(`[gateway-poll] ⚠ ${gatewayId}: ${errMsg(err)} — will retry next tick`);
     }
   }
 }
 
-export function startOperatorHeartbeatPoller(
-  deps: OperatorHeartbeatPollerDeps,
+export function startGatewayHeartbeatPoller(
+  deps: GatewayHeartbeatPollerDeps,
   intervalMs: number,
 ): () => void {
   const streaks: EvictionStreaks = new Map();
   const inFlight: EvictionInFlight = new Set();
   const timer = setInterval(
-    () => void pollOperatorHeartbeatsOnce(deps, streaks, inFlight),
+    () => void pollGatewayHeartbeatsOnce(deps, streaks, inFlight),
     intervalMs,
   );
   return () => clearInterval(timer);

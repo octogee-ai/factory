@@ -4,6 +4,7 @@ import {
   PlatformInvariantPolicyError,
   assertPlatformInvariants,
   reconcilePlatformInvariants,
+  systemConfigInvariantContextFromEnv,
 } from "../lib/system-config-invariants.js";
 
 function config(): Record<string, unknown> {
@@ -20,11 +21,13 @@ function config(): Record<string, unknown> {
     channels: { mattermost: { enabled: false, commands: { native: true } } },
     plugins: { enabled: false, allow: ["customer-plugin"], entries: {} },
     tools: { deny: ["exec", "customer-deny"], exec: { mode: "deny" } },
+    commands: { bash: true, config: true, mcp: true, plugins: true, debug: true },
+    mcp: { servers: { stale: { command: "sh" } } },
   };
 }
 
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "shared",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api-test.octogee.com",
 };
@@ -46,7 +49,6 @@ describe("system config platform invariants", () => {
       "plugins.enabled",
       "plugins.allow",
       "tools.deny",
-      "tools.exec",
     ]));
     expect(candidate).toMatchObject({
       gateway: {
@@ -55,10 +57,8 @@ describe("system config platform invariants", () => {
         bind: "lan",
         auth: { mode: "token" },
         controlUi: {
-          basePath: "/g/bender/openclaw",
-          allowedOrigins: ["https://api-test.octogee.com"],
-          allowInsecureAuth: false,
-          dangerouslyDisableDeviceAuth: false,
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+          dangerouslyAllowHostHeaderOriginFallback: false,
         },
       },
       secrets: {
@@ -71,9 +71,78 @@ describe("system config platform invariants", () => {
         },
       },
       channels: { mattermost: { enabled: true, commands: { native: false } } },
-      plugins: { enabled: true, allow: expect.arrayContaining(["customer-plugin", "mattermost"]) },
-      tools: { deny: ["customer-deny"] },
+      plugins: {
+        enabled: true,
+        allow: expect.arrayContaining(["customer-plugin", "mattermost"]),
+        entries: {
+          codex: { enabled: false },
+          "octogee-chat-tools": {
+            hooks: {
+              allowPromptInjection: true,
+              allowConversationAccess: true,
+              timeouts: { before_dispatch: 3000, before_prompt_build: 3000, before_agent_run: 3000 },
+            },
+          },
+        },
+      },
+      tools: {
+        deny: [
+          "exec",
+          "customer-deny",
+          "process",
+          "subagents",
+          "sessions_spawn",
+          "terminal",
+          "preview_start",
+          "preview_stop",
+          "preview_list",
+          "octogee_publish",
+          "bundle-mcp",
+          "automations",
+          "skill_workshop",
+          "conversations_list",
+          "conversations_send",
+          "conversations_turn",
+          "browser",
+        ],
+        exec: { mode: "deny" },
+        sessions: { visibility: "self" },
+      },
+      commands: {
+        bash: false,
+        config: false,
+        mcp: false,
+        plugins: false,
+        debug: false,
+      },
     });
+    expect((candidate.mcp as Record<string, unknown>)).not.toHaveProperty("servers");
+  });
+
+  it("fails a retired operator class value closed to the shared customer policy", () => {
+    const candidate = config();
+    const retiredClassEnv = {
+      ...env,
+      GATEWAY_CLASS: "operator",
+      API_PUBLIC_URL: "https://api.octogee.com",
+    };
+
+    expect(systemConfigInvariantContextFromEnv(retiredClassEnv).gatewayClass).toBe("shared");
+    reconcilePlatformInvariants(candidate, retiredClassEnv);
+
+    expect(candidate).toMatchObject({
+      gateway: { terminal: { enabled: false } },
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+      tools: {
+        deny: expect.arrayContaining(["exec", "process", "terminal", "customer-deny"]),
+        exec: { mode: "deny" },
+      },
+    });
+    expect((candidate.plugins as { allow?: string[] }).allow).not.toContain("codex");
   });
 
   it("reports every violated path in a typed policy error without mutating the candidate", () => {
@@ -83,7 +152,7 @@ describe("system config platform invariants", () => {
     expect(() => assertPlatformInvariants(candidate, env)).toThrowError(
       expect.objectContaining<Partial<PlatformInvariantPolicyError>>({
         code: "platform-invariant-violation",
-        paths: expect.arrayContaining(["gateway.port", "plugins.allow", "tools.exec"]),
+        paths: expect.arrayContaining(["gateway.port", "plugins.allow", "tools.deny"]),
       }),
     );
     expect(candidate).toEqual(before);

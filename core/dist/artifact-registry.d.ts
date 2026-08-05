@@ -28,8 +28,8 @@ export declare function ensureKeepTag(opts: PinOpts): Promise<void>;
  *  cleanup once no env still pins it). Idempotent — 404 is already-gone. */
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;
 declare const RELEASE_MANIFEST_SURFACE_IMAGES: {
-    readonly gateway: readonly ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"];
-    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"];
+    readonly gateway: readonly ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"];
+    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"];
 };
 export interface ReleaseDigestManifest {
     sourceSha: string;

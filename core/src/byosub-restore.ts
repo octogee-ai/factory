@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { DatabaseSync } from "node:sqlite";
 import {
   buildCodexAuthJsonFromStore,
   buildCodexAuthProfilesStore,
@@ -13,6 +14,11 @@ import {
   writeAuthProfileStore,
 } from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
+import {
+  agentModelTokenProfileEntry,
+  openAiBrokerProfileEntry,
+  openRouterBrokerProfileEntry,
+} from "./agent-model-token-materializer.js";
 
 export type ByosubProvider = "openai" | "anthropic";
 
@@ -27,14 +33,28 @@ export interface ByosubRestorePlanItem {
 }
 
 export function agentIdsFromConfig(config: unknown): string[] {
-  const list = (config as { agents?: { list?: unknown } } | null | undefined)
-    ?.agents?.list;
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((a) =>
-      a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-    )
-    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const agents = (config as {
+    agents?: { list?: unknown; entries?: unknown };
+  } | null | undefined)?.agents;
+  const ids = new Set<string>();
+  if (Array.isArray(agents?.list)) {
+    for (const agent of agents.list) {
+      const id = agent && typeof agent === "object"
+        ? (agent as { id?: unknown }).id
+        : undefined;
+      if (typeof id === "string" && id.length > 0) ids.add(id);
+    }
+  }
+  if (
+    agents?.entries &&
+    typeof agents.entries === "object" &&
+    !Array.isArray(agents.entries)
+  ) {
+    for (const id of Object.keys(agents.entries)) {
+      if (id.length > 0) ids.add(id);
+    }
+  }
+  return [...ids];
 }
 
 const SAFE_AGENT_ID = /^[a-z0-9-]{1,64}$/;
@@ -84,6 +104,459 @@ export function codexAuthStatePath(
   agentId: string,
 ): string {
   return path.join(codexAgentDir(openclawDir, agentId), "auth-state.json");
+}
+
+const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
+  "anthropic:default",
+  "platform-openrouter:default",
+  "platform-openai:default",
+]);
+
+const SESSION_RUNTIME_STATE_FIELDS = [
+  "providerOverride",
+  "modelOverride",
+  "modelOverrideSource",
+  "modelOverrideRouteResolution",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
+  "modelFallback",
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+  "liveModelSwitchPending",
+  "modelProvider",
+  "model",
+  "modelSelectionLocked",
+  "agentHarnessId",
+  "agentRuntimeOverride",
+  "fallbackNotice",
+  "contextTokens",
+  "systemPromptReport",
+  "cliSessionIds",
+  "cliSessionBindings",
+  "acpSessionBinding",
+  "acp",
+  "claudeCliSessionId",
+  "pluginOwnerId",
+  "pluginExtensions",
+  "initializationPending",
+  "spawnedCwd",
+  "execHost",
+  "execSecurity",
+  "execAsk",
+  "execNode",
+  "execCwd",
+  "elevatedLevel",
+  "toolOverrides",
+] as const;
+
+function removeIfPresent(targetPath: string): boolean {
+  if (!fs.existsSync(targetPath)) return false;
+  fs.rmSync(targetPath, { force: true });
+  return true;
+}
+
+function removeDirIfPresent(targetPath: string): boolean {
+  if (!fs.existsSync(targetPath)) return false;
+  fs.rmSync(targetPath, { recursive: true, force: true });
+  return true;
+}
+
+function scrubOauthProfiles(agentDir: string, agentId: string): boolean {
+  const store = readAuthProfileStore(agentDir);
+  const current = store && typeof store === "object" && !Array.isArray(store)
+    ? store as Record<string, unknown>
+    : {};
+  const profiles = {
+    "anthropic:default": agentModelTokenProfileEntry(agentId),
+    "platform-openrouter:default": openRouterBrokerProfileEntry(agentId),
+    "platform-openai:default": openAiBrokerProfileEntry(agentId),
+  };
+  if (JSON.stringify((current as { profiles?: unknown }).profiles) === JSON.stringify(profiles)) {
+    fs.chmodSync(agentDir, 0o700);
+    fs.chmodSync(path.join(agentDir, "openclaw-agent.sqlite"), 0o600);
+    return false;
+  }
+  writeAuthProfileStore(agentDir, {
+    ...current,
+    profiles,
+  });
+  return true;
+}
+
+function projectAgentModelsJson(agentDir: string, providers: Record<string, unknown>): boolean {
+  const modelsPath = path.join(agentDir, "models.json");
+  let current: unknown = {};
+  if (fs.existsSync(modelsPath)) {
+    current = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+  }
+  const desired = { providers };
+  if (JSON.stringify(current) === JSON.stringify(desired)) {
+    fs.chmodSync(agentDir, 0o700);
+    fs.chmodSync(modelsPath, 0o600);
+    return false;
+  }
+  fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(modelsPath, `${JSON.stringify(desired, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(agentDir, 0o700);
+  fs.chmodSync(modelsPath, 0o600);
+  return true;
+}
+
+function readPersistedSessions(openclawDir: string, agentId: string): {
+  sessionsPath: string;
+  sessions: Record<string, unknown>;
+} | null {
+  const sessionsPath = path.join(openclawDir, "agents", agentId, "sessions", "sessions.json");
+  if (!fs.existsSync(sessionsPath)) return null;
+  const raw = fs.readFileSync(sessionsPath, "utf8");
+  let sessions: unknown;
+  try {
+    sessions = JSON.parse(raw);
+  } catch {
+    throw new Error(`customer oauth purge: ${sessionsPath} is not valid JSON`);
+  }
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+    throw new Error(`customer oauth purge: ${sessionsPath} is not a session map`);
+  }
+  return { sessionsPath, sessions: sessions as Record<string, unknown> };
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function unsupportedProvider(provider: unknown, allowedProviderIds: ReadonlySet<string>): boolean {
+  if (typeof provider !== "string" || allowedProviderIds.size === 0) return false;
+  return !allowedProviderIds.has(provider);
+}
+
+function unsupportedModel(
+  provider: unknown,
+  model: unknown,
+  allowedModelRefs: ReadonlySet<string>,
+): boolean {
+  if (typeof model !== "string" || allowedModelRefs.size === 0) return false;
+  if (allowedModelRefs.has(model)) return false;
+  return typeof provider !== "string" || !allowedModelRefs.has(`${provider}/${model}`);
+}
+
+function directAgentRuntime(runtimeId: unknown): boolean {
+  if (typeof runtimeId !== "string") return false;
+  return runtimeId.trim().length > 0 && runtimeId !== "openclaw";
+}
+
+function unsafeSessionModelSelection(
+  entry: Record<string, unknown>,
+  directRuntimeModelRefs: ReadonlySet<string>,
+  allowedModelRefs: ReadonlySet<string>,
+  allowedProviderIds: ReadonlySet<string>,
+): boolean {
+  const providers = [entry.providerOverride, entry.modelProvider];
+  if (providers.some((provider) =>
+    provider === "claude-cli" ||
+    provider === "openai-codex" ||
+    unsupportedProvider(provider, allowedProviderIds)
+  )) return true;
+  const selections = [
+    [entry.providerOverride, entry.modelOverride],
+    [entry.modelProvider, entry.model],
+    [entry.providerOverride, entry.modelOverrideFallbackOriginModel],
+  ];
+  if (selections.some(([provider, model]) => unsupportedModel(provider, model, allowedModelRefs))) {
+    return true;
+  }
+  return selections.some(([, model]) =>
+    typeof model === "string" &&
+    (model.startsWith("claude-cli/") || directRuntimeModelRefs.has(model))
+  );
+}
+
+function unsafeSessionExecutionState(entry: Record<string, unknown>): boolean {
+  const executableFields = [
+    entry.toolOverrides,
+    entry.execHost,
+    entry.execSecurity,
+    entry.execAsk,
+    entry.execNode,
+    entry.execCwd,
+    entry.elevatedLevel,
+    entry.acpSessionBinding,
+    entry.acp,
+    entry.pluginExtensions,
+  ];
+  if (executableFields.some((state) => state !== undefined)) return true;
+  const sessionRuntimeIds = [
+    ...Object.keys(recordValue(entry.cliSessionIds)),
+    ...Object.keys(recordValue(entry.cliSessionBindings)),
+  ];
+  return directAgentRuntime(entry.agentRuntimeOverride) ||
+    directAgentRuntime(entry.agentHarnessId) ||
+    sessionRuntimeIds.some(directAgentRuntime) ||
+    entry.pluginOwnerId === "codex" ||
+    typeof entry.claudeCliSessionId === "string";
+}
+
+function unsafeSessionAuthProfile(entry: Record<string, unknown>): boolean {
+  const profile = entry.authProfileOverride;
+  return typeof profile === "string" && !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(profile);
+}
+
+function unsafeSessionFallback(
+  entry: Record<string, unknown>,
+  directRuntimeModelRefs: ReadonlySet<string>,
+  allowedModelRefs: ReadonlySet<string>,
+): boolean {
+  const fallback = recordValue(entry.modelFallback);
+  if (fallback.prevProvider === "claude-cli" || fallback.prevProvider === "openai-codex") return true;
+  const profile = fallback.prevAuthProfileOverride;
+  if (typeof profile === "string" && !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(profile)) return true;
+  const model = fallback.prevModel;
+  if (typeof model !== "string") return false;
+  if (model.startsWith("claude-cli/") || directRuntimeModelRefs.has(model)) return true;
+  return unsupportedModel(fallback.prevProvider, model, allowedModelRefs);
+}
+
+function sessionUsesCustomerOauthRuntime(
+  value: unknown,
+  directRuntimeModelRefs: ReadonlySet<string>,
+  allowedModelRefs: ReadonlySet<string>,
+  allowedProviderIds: ReadonlySet<string>,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return [
+    unsafeSessionModelSelection(
+      entry,
+      directRuntimeModelRefs,
+      allowedModelRefs,
+      allowedProviderIds,
+    ),
+    unsafeSessionExecutionState(entry),
+    unsafeSessionAuthProfile(entry),
+    unsafeSessionFallback(entry, directRuntimeModelRefs, allowedModelRefs),
+  ].some(Boolean);
+}
+
+function clearSessionRuntimeState(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  let changed = false;
+  for (const field of SESSION_RUNTIME_STATE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(entry, field)) {
+      delete entry[field];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function resetPersistedSessions(
+  persisted: { sessionsPath: string; sessions: Record<string, unknown> } | null,
+): number {
+  if (!persisted) return 0;
+  const { sessionsPath, sessions } = persisted;
+  const resetCount = Object.keys(sessions).length;
+  if (resetCount === 0) return 0;
+  const tmpPath = `${sessionsPath}.oauth-purge.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, "{}\n", { mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
+    fs.renameSync(tmpPath, sessionsPath);
+  } catch (error) {
+    removeTempFile(tmpPath);
+    throw error;
+  }
+  return resetCount;
+}
+
+function scrubUnsafeSqliteSessions(
+  openclawDir: string,
+  agentId: string,
+  directRuntimeModelRefs: ReadonlySet<string>,
+  allowedModelRefs: ReadonlySet<string>,
+  allowedProviderIds: ReadonlySet<string>,
+): number {
+  const dbPath = path.join(openclawDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) return 0;
+  const db = new DatabaseSync(dbPath);
+  try {
+    const table = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
+    ).get();
+    if (!table) return 0;
+    const rows = db.prepare("SELECT session_key, entry_json FROM session_nodes").all();
+    const update = db.prepare(
+      "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
+    );
+    let scrubbed = 0;
+    db.exec("BEGIN IMMEDIATE");
+    for (const row of rows) {
+      if (typeof row.entry_json !== "string") continue;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(row.entry_json);
+      } catch {
+        throw new Error(
+          `customer oauth purge: ${dbPath} session ${String(row.session_key)} is not valid JSON`,
+        );
+      }
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error(
+          `customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`,
+        );
+      }
+      if (
+        !sessionUsesCustomerOauthRuntime(
+          entry,
+          directRuntimeModelRefs,
+          allowedModelRefs,
+          allowedProviderIds,
+        ) ||
+        !clearSessionRuntimeState(entry)
+      ) continue;
+      update.run(JSON.stringify(entry), row.session_key);
+      scrubbed++;
+    }
+    db.exec("COMMIT");
+    return scrubbed;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // The original error is more useful when no transaction was active.
+    }
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+export interface CustomerOauthRuntimePurgeResult {
+  removedFiles: number;
+  removedDirectories: number;
+  scrubbedProfileStores: number;
+  resetSessions: number;
+  affectedAgentIds: string[];
+}
+
+interface CustomerOauthRuntimePurgeOptions {
+  openclawDir: string;
+  homeDir: string;
+  agentIds: readonly string[];
+  resetSessionStores?: boolean;
+  directRuntimeModelRefs?: readonly string[];
+  allowedModelRefs?: readonly string[];
+  allowedProviderIds?: readonly string[];
+  modelProviders?: Record<string, unknown>;
+}
+
+function purgeNativeCredentialArtifacts(
+  homeDir: string,
+  agentIds: readonly string[],
+  affectedAgentIds: Set<string>,
+): number {
+  const nativeCredential = claudeCliNativeCredentialsPath(homeDir);
+  let removedFiles = 0;
+  for (const candidate of [nativeCredential, `${nativeCredential}.tmp`]) {
+    if (removeIfPresent(candidate)) removedFiles++;
+  }
+  if (removedFiles > 0) agentIds.forEach((agentId) => affectedAgentIds.add(agentId));
+  return removedFiles;
+}
+
+function purgeAgentOauthRuntime(
+  opts: CustomerOauthRuntimePurgeOptions,
+  agentId: string,
+  runtime: {
+    directRuntimeModelRefs: ReadonlySet<string>;
+    allowedModelRefs: ReadonlySet<string>;
+    allowedProviderIds: ReadonlySet<string>;
+    affectedAgentIds: Set<string>;
+  },
+): Pick<CustomerOauthRuntimePurgeResult, "removedFiles" | "removedDirectories" | "scrubbedProfileStores" | "resetSessions"> {
+  const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
+  const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) =>
+    sessionUsesCustomerOauthRuntime(
+      session,
+      runtime.directRuntimeModelRefs,
+      runtime.allowedModelRefs,
+      runtime.allowedProviderIds,
+    )
+  );
+  if (unsafePersistedSession) runtime.affectedAgentIds.add(agentId);
+  let resetSessions = scrubUnsafeSqliteSessions(
+    opts.openclawDir,
+    agentId,
+    runtime.directRuntimeModelRefs,
+    runtime.allowedModelRefs,
+    runtime.allowedProviderIds,
+  );
+  let removedFiles = 0;
+  const authJson = codexAuthJsonPath(opts.openclawDir, agentId);
+  for (const candidate of [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]) {
+    if (!removeIfPresent(candidate)) continue;
+    removedFiles++;
+    runtime.affectedAgentIds.add(agentId);
+  }
+  const removedDirectories = removeDirIfPresent(codexStagingHomeDir(opts.openclawDir, agentId))
+    ? 1
+    : 0;
+  if (removedDirectories > 0) runtime.affectedAgentIds.add(agentId);
+  const agentDir = codexAgentDir(opts.openclawDir, agentId);
+  const scrubbedProfileStores = scrubOauthProfiles(agentDir, agentId) ? 1 : 0;
+  if (scrubbedProfileStores > 0) runtime.affectedAgentIds.add(agentId);
+  if (projectAgentModelsJson(agentDir, opts.modelProviders ?? {})) {
+    runtime.affectedAgentIds.add(agentId);
+  }
+  if (opts.resetSessionStores !== false && runtime.affectedAgentIds.has(agentId)) {
+    resetSessions += resetPersistedSessions(persistedSessions);
+  }
+  return { removedFiles, removedDirectories, scrubbedProfileStores, resetSessions };
+}
+
+export function purgeCustomerOauthRuntimeArtifacts(
+  opts: CustomerOauthRuntimePurgeOptions,
+): CustomerOauthRuntimePurgeResult {
+  const agentIds = Array.from(new Set(opts.agentIds));
+  for (const agentId of agentIds) {
+    if (!isSafeAgentId(agentId)) {
+      throw new Error(`customer oauth purge: unsafe agent id ${JSON.stringify(agentId)}`);
+    }
+  }
+
+  let removedFiles = 0;
+  let removedDirectories = 0;
+  let scrubbedProfileStores = 0;
+  let resetSessions = 0;
+  const affectedAgentIds = new Set<string>();
+  const directRuntimeModelRefs = new Set(opts.directRuntimeModelRefs ?? []);
+  const allowedModelRefs = new Set(opts.allowedModelRefs ?? []);
+  const allowedProviderIds = new Set(opts.allowedProviderIds ?? []);
+  removedFiles += purgeNativeCredentialArtifacts(opts.homeDir, agentIds, affectedAgentIds);
+
+  for (const agentId of agentIds) {
+    const result = purgeAgentOauthRuntime(opts, agentId, {
+      directRuntimeModelRefs,
+      allowedModelRefs,
+      allowedProviderIds,
+      affectedAgentIds,
+    });
+    removedFiles += result.removedFiles;
+    removedDirectories += result.removedDirectories;
+    scrubbedProfileStores += result.scrubbedProfileStores;
+    resetSessions += result.resetSessions;
+  }
+
+  return {
+    removedFiles,
+    removedDirectories,
+    scrubbedProfileStores,
+    resetSessions,
+    affectedAgentIds: [...affectedAgentIds],
+  };
 }
 
 // codexAuthProfilesPath retired in 2026.6 — auth-profiles is now a SQLite

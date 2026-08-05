@@ -5,10 +5,9 @@ import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   gatewayEdgeServiceName,
-  gatewayPodServiceName,
 } from "@octogee/shared/types/gateway-releases";
 
-export type GatewayRouterSurface = "api" | "preview";
+export type GatewayRouterSurface = "api";
 
 export interface GatewaySurfaceTarget {
   gatewayId: string;
@@ -46,14 +45,12 @@ function serviceIdFor(gatewayId: string, _revision: number | null): string {
 export interface GatewaySurfaceTargetOptions {
   url: string;
   host?: string | null;
-  previewHost?: string;
   namespace: string;
   targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
 }
 
 export interface CreateGatewayRouterOptions {
   namespace: string;
-  previewHost?: string;
   targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
   log: (message: string, meta?: Record<string, unknown>) => void;
 }
@@ -73,19 +70,8 @@ const STRIPPED_PUBLIC_HEADERS = new Set<string>([
   ...HOP_BY_HOP_HEADERS,
 ]);
 
-function defaultOrigin(surface: GatewayRouterSurface, serviceId: string, namespace: string): string {
-  if (surface === "preview") {
-    return `http://${gatewayPodServiceName(serviceId)}.${namespace}.svc.cluster.local:9080`;
-  }
+function defaultOrigin(serviceId: string, namespace: string): string {
   return `http://${gatewayEdgeServiceName(serviceId)}.${namespace}.svc.cluster.local:3001`;
-}
-
-function normalizedHost(host: string | null | undefined): string {
-  return (host ?? "").split(":")[0].toLowerCase();
-}
-
-function surfaceForHost(host: string | null | undefined, previewHost?: string): GatewayRouterSurface {
-  return previewHost && normalizedHost(host) === normalizedHost(previewHost) ? "preview" : "api";
 }
 
 // A revision segment is `r/<n>` where n is a positive integer with no leading
@@ -140,16 +126,12 @@ export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): Gateway
   const parsed = parseGatewayPath(opts.url);
   if (!parsed) return null;
   if ("invalidRevision" in parsed) return parsed;
-  const surface = surfaceForHost(opts.host, opts.previewHost);
+  const surface = "api";
   const serviceId = serviceIdFor(parsed.gatewayId, parsed.revision);
   const origin =
     opts.targetOriginForGateway?.(surface, serviceId) ??
-    defaultOrigin(surface, serviceId, opts.namespace);
-  // The /r/<n> is a ROUTING directive consumed to select the revision target
-  // (origin = the revision's Service); the revision pod is revision-agnostic in
-  // its own routing, so it receives the BARE /api/g/<gw>/… (or /g/<gw>/… preview)
-  // path its routes actually mount. Stripping /r/<n> here is P0.
-  const pathPrefix = surface === "api" ? `/api/g/${parsed.gatewayId}` : `/g/${parsed.gatewayId}`;
+    defaultOrigin(serviceId, opts.namespace);
+  const pathPrefix = `/api/g/${parsed.gatewayId}`;
   return {
     gatewayId: parsed.gatewayId,
     revision: parsed.revision,
@@ -162,15 +144,13 @@ export function gatewaySurfaceTarget(opts: GatewaySurfaceTargetOptions): Gateway
 function requestHeaders(
   req: http.IncomingMessage,
   origin: URL,
-  target: GatewaySurfaceTarget,
-  previewHost: string,
 ): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (STRIPPED_PUBLIC_HEADERS.has(name.toLowerCase())) continue;
     headers[name] = value;
   }
-  headers.host = target.surface === "preview" ? previewHost : origin.host;
+  headers.host = origin.host;
   return headers;
 }
 
@@ -180,7 +160,6 @@ function requestHeaders(
 
 interface GatewayProxyContext {
   target: GatewaySurfaceTarget;
-  previewHost: string;
   log: CreateGatewayRouterOptions["log"];
 }
 
@@ -189,7 +168,7 @@ function proxyHttp(
   res: http.ServerResponse,
   context: GatewayProxyContext,
 ): void {
-  const { target, previewHost, log } = context;
+  const { target, log } = context;
   const origin = new URL(target.origin);
   const proxyReq = (origin.protocol === "https:" ? https : http).request({
     protocol: origin.protocol,
@@ -197,7 +176,7 @@ function proxyHttp(
     port: origin.port,
     method: req.method,
     path: target.path,
-    headers: requestHeaders(req, origin, target, previewHost),
+    headers: requestHeaders(req, origin),
   }, (proxyRes) => {
     proxyRes.on("error", (err) => {
       log("[gateway-router] upstream response socket error", {
@@ -301,7 +280,7 @@ function proxyUpgrade(
   head: Buffer,
   context: GatewayProxyContext,
 ): void {
-  const { target, previewHost, log } = context;
+  const { target, log } = context;
   const origin = new URL(target.origin);
   const logSocketError = (side: "client" | "upstream") => (err: Error) => {
     log("[gateway-router] websocket proxy socket error", {
@@ -322,7 +301,7 @@ function proxyUpgrade(
     method: req.method,
     path: target.path,
     headers: {
-      ...requestHeaders(req, origin, target, previewHost),
+      ...requestHeaders(req, origin),
       connection: "upgrade",
       upgrade: req.headers.upgrade ?? "websocket",
     },
@@ -383,10 +362,6 @@ function proxyUpgrade(
 }
 
 export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Server {
-  if (!opts.previewHost) {
-    throw new Error("gateway-router preview host is required");
-  }
-  const previewHost = opts.previewHost;
   const server = http.createServer((req, res) => {
     if ((req.url ?? "").split("?")[0] === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -395,8 +370,6 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
     }
     const resolved = gatewaySurfaceTarget({
       url: req.url ?? "/",
-      host: req.headers.host,
-      previewHost: opts.previewHost,
       namespace: opts.namespace,
       targetOriginForGateway: opts.targetOriginForGateway,
     });
@@ -413,14 +386,12 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       writeRevisionGone(res, target, null);
       return;
     }
-    proxyHttp(req, res, { target, previewHost, log: opts.log });
+    proxyHttp(req, res, { target, log: opts.log });
   });
 
   server.on("upgrade", (req, socket, head) => {
     const resolved = gatewaySurfaceTarget({
       url: req.url ?? "/",
-      host: req.headers.host,
-      previewHost: opts.previewHost,
       namespace: opts.namespace,
       targetOriginForGateway: opts.targetOriginForGateway,
     });
@@ -446,7 +417,7 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
-    proxyUpgrade(req, socket, head, { target, previewHost, log: opts.log });
+    proxyUpgrade(req, socket, head, { target, log: opts.log });
   });
 
   return server;

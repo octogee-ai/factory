@@ -82,6 +82,8 @@ spec:
                 secretKeyRef:
                   name: mattermost-gateway
                   key: admin_token
+            - name: PROJECT_HOSTING_RETIREMENT_URL
+              value: {{ printf "http://octogee-api.%s.svc.cluster.local:3001/internal/project-hosting" .Release.Namespace | quote }}
             - name: STRIPE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -198,3 +200,15 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: project-hosting-retirement
+              mountPath: /var/run/secrets/project-hosting-retirement
+              readOnly: true
+      volumes:
+        - name: project-hosting-retirement
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-project-hosting-retirement
+                  expirationSeconds: 3600

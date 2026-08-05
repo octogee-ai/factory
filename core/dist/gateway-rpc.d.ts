@@ -40,6 +40,15 @@ export interface SecretsReloadResult {
     ok?: boolean;
 }
 export interface GatewayRestartRequestResult {
+    ok: true;
+    status: "scheduled" | "deferred" | "coalesced";
+    restart: {
+        ok: true;
+        pid: number;
+        signal: "SIGUSR1";
+        coalesced: boolean;
+        [extra: string]: unknown;
+    };
     [extra: string]: unknown;
 }
 export interface GatewayChannelOperationParams {
@@ -131,6 +140,7 @@ export interface GatewayRpcClient {
         replacePaths?: readonly string[];
     }): Promise<ConfigPatchResult>;
     channelsStatus(): Promise<unknown>;
+    channelsStatusConnectionGeneration(): number;
     channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
     channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;

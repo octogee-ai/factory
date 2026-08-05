@@ -91,17 +91,37 @@
     "elevated": {
       "enabled": false
     },
-    "deny": ["exec", "process", "subagents", "sessions_spawn"],
-    "alsoAllow": [
+    "fs": {
+      "workspaceOnly": true
+    },
+    "deny": [
+      "exec",
+      "process",
+      "subagents",
+      "sessions_spawn",
+      "terminal",
       "preview_start",
       "preview_stop",
       "preview_list",
       "octogee_publish",
-      "octogee_publish_draft",
+      "bundle-mcp",
+      "automations",
+      "skill_workshop",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "browser"
+    ],
+    "alsoAllow": [
       "octogee_project_create",
       "octogee_project_commit",
       "octogee_project_list",
       "octogee_project_set_recipe",
+      "octogee_project_build",
+      "octogee_project_test",
+      "octogee_project_preview",
+      "octogee_project_run_status",
+      "octogee_project_publish",
       "workspace_commit",
       "brave_search",
       "tavily_search",
@@ -136,12 +156,27 @@
       "mode": "deny"
     },
     "sessions": {
-      "visibility": "agent"
+      "visibility": "self"
     },
     "subagents": {
       "tools": {
         "deny": ["exec", "process"]
       }
+    }
+  },
+  "cron": {
+    "triggers": {
+      "enabled": false
+    }
+  },
+  "skills": {
+    "load": {},
+    "workshop": {
+      "autonomous": {
+        "mode": "off"
+      },
+      "approvalPolicy": "pending",
+      "allowSymlinkTargetWrites": false
     }
   },
   "bindings": [],
@@ -154,7 +189,12 @@
   "commands": {
     "native": "auto",
     "nativeSkills": "auto",
-    "restart": true
+    "restart": true,
+    "bash": false,
+    "config": false,
+    "mcp": false,
+    "plugins": false,
+    "debug": false
   },
   "session": {
     "dmScope": "per-channel-peer"
@@ -182,6 +222,9 @@
     "port": 18789,
     "mode": "local",
     "bind": "lan",
+    "terminal": {
+      "enabled": false
+    },
     "auth": {
       "mode": "token",
       "rateLimit": {
@@ -206,13 +249,11 @@
       "octogee-chat-tools",
       "octogee-connector-tools",
       "octogee-access-tools",
-      "octogee-preview-tools",
       "octogee-project-tools",
       "octogee-status-tools",
       "octogee-ops-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",
-      "octogee-publish-tools",
       "parallel",
       "openai"
     ],
@@ -230,8 +271,11 @@
         "enabled": true,
         "hooks": {
           "allowPromptInjection": true,
+          "allowConversationAccess": true,
           "timeouts": {
-            "before_prompt_build": 3000
+            "before_dispatch": 3000,
+            "before_prompt_build": 3000,
+            "before_agent_run": 3000
           }
         },
         "config": {
@@ -254,10 +298,6 @@
           "brokerUrl": "${FLEET_BROKER_URL}",
           "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
         }
-      },
-      "octogee-preview-tools": {
-        "enabled": true,
-        "config": {}
       },
       "octogee-project-tools": {
         "enabled": true,
@@ -290,10 +330,6 @@
         }
       },
       "octogee-workspace-tools": {
-        "enabled": true,
-        "config": {}
-      },
-      "octogee-publish-tools": {
         "enabled": true,
         "config": {}
       },

@@ -127,10 +127,9 @@ Files you write there belong to that project's repo, not the workspace's.
 
 - **Create:** `octogee_project_create` — provisions the repo, the channel, the record,
   and the project's starting playbook. Never hand-create `projects/{slug}/`: a folder you
-  make yourself has no repo, no channel and no record, so it can preview but can never
-  publish.
+  make yourself has no repo, no channel and no record.
 - **List:** `octogee_project_list`. There is no `PROJECTS.md`.
-- **Save work into a project:** `octogee_project_commit`.
+- **Save:** workspace edits autosave. Use `octogee_project_commit` for a project checkpoint.
 
 Every project starts with `runbook/`, `DECISIONS.md`, and `notes/welcome.md`. When
 someone says "record a decision", append it to that project's `DECISIONS.md`, newest
@@ -143,15 +142,15 @@ upgrade — never hand them the raw error.
 
 Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 
-- Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`.
+- Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
 - Coordinate when exposed: session, goal, plan, media, and skill tools. Use them only for
   their named purpose.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
-  `octogee_project_set_recipe`.
-- Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
-  `octogee_publish`, `octogee_publish_draft`.
+  `octogee_project_set_recipe`; isolated `octogee_project_build`, `octogee_project_test`,
+  `octogee_project_preview`, `octogee_project_run_status`.
+- Delivery: `workspace_commit`; publish successful builds with `octogee_project_publish` after Builder approval.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.
 - Google (bearer-blind): `octogee_google_calendar_list`,
   `octogee_google_calendar_read`/`octogee_google_calendar_write`,
@@ -160,8 +159,7 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
   `octogee_google_sheets_read`/`octogee_google_sheets_write`,
   `octogee_google_tasks_read`/`octogee_google_tasks_write`, `octogee_google_contacts_read`.
 - Obsidian: `octogee_obsidian_read`, `octogee_obsidian_write`.
-- Dedicated runtime: `exec`, `process`, `sessions_spawn`, `sessions_yield`, `subagents`
-  only when exposed; use for commands or genuinely parallel work.
+- Customer runtimes cannot run host commands or code agents.
 
 Capability preflight: before claiming Octogee or OpenClaw cannot do something, or
 suggesting local/manual work, external hosting, OAuth code, or user-managed credentials,

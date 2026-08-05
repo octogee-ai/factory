@@ -29,7 +29,7 @@ describe("serviceAccountManifest", () => {
     });
   });
 
-  it("renders the Workload Identity annotation for operator gateways", () => {
+  it("renders the Workload Identity annotation for Builder gateways", () => {
     const m = serviceAccountManifest({
       namespace: "octogee",
       serviceAccountName: "octogee-gw-bender",

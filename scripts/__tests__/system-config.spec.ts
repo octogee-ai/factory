@@ -107,7 +107,7 @@ describe("system_config restore", () => {
     const configPath = path.join(repoDir, "openclaw.json");
     fs.writeFileSync(configPath, "not-json\n");
     const env = {
-      GATEWAY_CLASS: "operator",
+      GATEWAY_CLASS: "builder",
       GATEWAY_ID: "bender",
       GATEWAY_BUILDER_SLUG: "ceckert",
     };

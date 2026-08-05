@@ -1,4 +1,4 @@
-import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayProfile, isValidGatewayId, operatorGatewayServiceAccountName, } from "./glm.js";
+import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayProfile, isValidGatewayId, builderGatewayServiceAccountName, } from "./glm.js";
 import { isSizingTier } from "./sizing.js";
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1;
 const KUBERNETES_SERVICE_ACCOUNT_NAME = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u;
@@ -42,7 +42,7 @@ function isOptionalString(value) {
 function isNullableSizingTier(value) {
     return value === null || isSizingTier(value);
 }
-function isNullableOperatorAccess(value) {
+function isNullableBuilderAccess(value) {
     if (value === null)
         return true;
     if (!isRecord(value))
@@ -118,6 +118,14 @@ function hasLegalOwnershipAndAllocation(value) {
     }
     return isOwnedGateway(value) && hasLegalOwnedAllocation(value);
 }
+function hasLegalClassProfiles(value) {
+    if (value.gatewayClass === "shared") {
+        return (value.profile === null || value.profile === "standard") &&
+            value.imageProfile === "standard";
+    }
+    return (value.profile === null || value.profile === "builder") &&
+        value.imageProfile === "builder";
+}
 export function isBareGatewayId(value) {
     return isValidGatewayId(value) && !REVISION_GATEWAY_ID_RE.test(value);
 }
@@ -136,13 +144,14 @@ export function isGatewayMutableConfig(value) {
         isNullableRecord(value.gatewayContainerSecurityContext) &&
         isNullableServiceAccountName(value.serviceAccountName) &&
         isNullableServiceAccount(value.serviceAccount) &&
-        isNullableOperatorAccess(value.operatorAccess) &&
+        isNullableBuilderAccess(value.builderAccess) &&
         isNullableString(value.ownerUid) &&
         isNullableString(value.builderSlug) &&
         isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         (value.preemption === undefined || value.preemption === null) &&
         isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
+        hasLegalClassProfiles(value) &&
         hasLegalOwnershipAndAllocation(value));
 }
 export function isGatewayMutableConfigForGateway(value, gatewayId) {
@@ -153,7 +162,7 @@ export function isGatewayMutableConfigForGateway(value, gatewayId) {
         return true;
     if (PLATFORM_SERVICE_ACCOUNT_NAMES.has(serviceAccountName))
         return false;
-    const generatedName = operatorGatewayServiceAccountName(gatewayId);
+    const generatedName = builderGatewayServiceAccountName(gatewayId);
     const legacyName = `${LEGACY_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
     if (serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX)) {
         return serviceAccountName === generatedName;
@@ -176,5 +185,5 @@ export function projectGatewayMutableConfigForGateway(value, gatewayId) {
     return isGatewayMutableConfigForGateway(projected, gatewayId) ? projected : null;
 }
 export function effectiveGatewayServiceAccountNameForGateway(config, gatewayId) {
-    return config.serviceAccountName || operatorGatewayServiceAccountName(gatewayId);
+    return config.serviceAccountName || builderGatewayServiceAccountName(gatewayId);
 }

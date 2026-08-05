@@ -826,8 +826,8 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 
 });
 
-describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
-  it("runs full content convergence for a mounted operator when its assigned snapshot changed", async () => {
+describe("addCustomerToGateway — builder gateway short-circuits when status=complete", () => {
+  it("runs full content convergence for a mounted builder when its assigned snapshot changed", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -850,7 +850,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       { projectSlug: "launchroom", giteaRepoName: "launchroom" },
     ];
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test", {
@@ -884,7 +884,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
 
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true; // openclaw.json has the agent
     state.giteaRegisteredPubKey = "ssh-pubkey";
 
@@ -897,7 +897,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(state.calls).not.toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    // The one thing operator-mode MUST keep — MM-side liveness verification
+    // The fast-attach path must keep MM-side liveness verification.
     expect(state.calls).toContain("waitForAccountHealthy");
     // Fleet heartbeat MUST register this customer as mounted, even on the
     // short-circuit path — Copilot review on PR #1182 caught a regression
@@ -925,7 +925,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     state.giteaRegisteredPubKey = "ssh-stale-from-old-pod";
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
@@ -938,12 +938,9 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
   });
 
   it("does not short-circuit for a brand-new customer (status='')", async () => {
-    // Even on an operator gateway, first-time onboarding must run the full
-    // flow — the short-circuit only applies to status=complete (the PVC
-    // already has the durable state we'd otherwise re-create).
     const state = makeState(snap({ status: "" }), emptyDisk());
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
     expect(result.newCustomer).toBe(true);
@@ -952,12 +949,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("config-patch");
   });
 
-  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet (customer-move TO operator)", async () => {
-    // Cowboy moves a customer from a cattle gateway to an operator. Their
-    // Firestore status="complete" (from the cattle mount) but the new
-    // operator's PVC has none of their state. Must run the full flow to
-    // generate SSH key, register with Gitea, clone workspace, register the
-    // agent in openclaw.json, provision MM, and verify.
+  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet on a builder gateway", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -969,7 +961,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       emptyDisk(), // fresh PVC — no SSH key, no workspace, nothing
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
 
     const result = await addCustomerToGateway(adapter, "uid-test");
@@ -1006,7 +998,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     state.giteaRegisteredPubKey = "ssh-pubkey";
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
@@ -1042,7 +1034,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       },
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     await addCustomerToGateway(adapter, "uid-test");
@@ -1075,7 +1067,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       },
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => false; // ← but config.patch never finished
     state.giteaRegisteredPubKey = "ssh-pubkey"; // matches what readLocalCustomerPubKey returns
 
