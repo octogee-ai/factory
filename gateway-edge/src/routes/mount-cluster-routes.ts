@@ -48,6 +48,7 @@ import projectsMembersRoutes from "./projects/members.js";
 import projectsDeleteRoutes from "./projects/delete.js";
 import projectsAgentRoutes from "./projects/agent.js";
 import projectsRepoSourceRoutes from "./projects/repo-source.js";
+import projectsRecipeRoutes from "./projects/recipe.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
@@ -94,6 +95,7 @@ function projectRoutes(opts: MountClusterRoutesOpts): readonly RouteHandler[] {
     projectsMembersRoutes,
     projectsAgentRoutes,
     opts.projectsRepoSourceRoutes ?? projectsRepoSourceRoutes,
+    projectsRecipeRoutes,
   ];
 }
 

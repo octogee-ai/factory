@@ -6,7 +6,17 @@ export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
 // How Preview and Publish run the project. The vocabulary is shared with
 // scripts/lib/project-recipes.ts, which owns each recipe's build contract.
 export type ProjectRecipeId = 'static-site' | 'vite-static' | 'astro-static';
+export const PROJECT_RECIPE_IDS: readonly ProjectRecipeId[] = [
+  'static-site',
+  'vite-static',
+  'astro-static',
+];
 export const DEFAULT_PROJECT_RECIPE: ProjectRecipeId = 'static-site';
+
+export function isProjectRecipeId(value: unknown): value is ProjectRecipeId {
+  return typeof value === 'string'
+    && (PROJECT_RECIPE_IDS as readonly string[]).includes(value);
+}
 
 export interface ProjectRepoSource {
   provider: 'github';

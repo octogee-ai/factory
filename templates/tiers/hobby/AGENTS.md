@@ -148,7 +148,8 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
 - Coordinate when exposed: session, goal, plan, media, and skill tools. Use them only for
   their named purpose.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
-- Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`.
+- Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
+  `octogee_project_set_recipe`.
 - Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
   `octogee_publish`.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.

@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { projectRepoSourceFromDoc } from './project.js';
+import {
+  DEFAULT_PROJECT_RECIPE,
+  PROJECT_RECIPE_IDS,
+  isProjectRecipeId,
+  projectRepoSourceFromDoc,
+} from './project.js';
+
+describe('project recipe catalog', () => {
+  it('bounds the catalog to the recipes Preview and Publish can actually run', () => {
+    expect(PROJECT_RECIPE_IDS).toEqual(['static-site', 'vite-static', 'astro-static']);
+  });
+
+  it('accepts every catalog id, including the create-time default', () => {
+    for (const id of PROJECT_RECIPE_IDS) expect(isProjectRecipeId(id)).toBe(true);
+    expect(isProjectRecipeId(DEFAULT_PROJECT_RECIPE)).toBe(true);
+  });
+
+  it('rejects unknown, empty, and non-string recipes', () => {
+    expect(isProjectRecipeId('node-service')).toBe(false);
+    expect(isProjectRecipeId('STATIC-SITE')).toBe(false);
+    expect(isProjectRecipeId('')).toBe(false);
+    expect(isProjectRecipeId(null)).toBe(false);
+    expect(isProjectRecipeId(undefined)).toBe(false);
+    expect(isProjectRecipeId(42)).toBe(false);
+    expect(isProjectRecipeId({ id: 'vite-static' })).toBe(false);
+  });
+});
 
 describe('projectRepoSourceFromDoc', () => {
   it('narrows a stored github repoSource', () => {

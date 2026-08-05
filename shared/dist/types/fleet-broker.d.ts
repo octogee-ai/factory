@@ -61,6 +61,7 @@ export interface FleetBrokerProjectCreateInput {
     status?: string;
     visibility?: string;
     repoSource?: unknown;
+    recipe?: unknown;
 }
 export interface FleetBrokerProjectCreateSuccess {
     success: true;

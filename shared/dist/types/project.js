@@ -1,4 +1,13 @@
+export const PROJECT_RECIPE_IDS = [
+    'static-site',
+    'vite-static',
+    'astro-static',
+];
 export const DEFAULT_PROJECT_RECIPE = 'static-site';
+export function isProjectRecipeId(value) {
+    return typeof value === 'string'
+        && PROJECT_RECIPE_IDS.includes(value);
+}
 export function projectRepoSourceFromDoc(value) {
     if (!value || typeof value !== 'object')
         return null;

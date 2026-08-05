@@ -119,6 +119,7 @@ function app(opts: {
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
+  a.post("/internal/agent-projects/set-recipe", enforcement, handler);
   a.post("/internal/agent-productivity/google/calendar/events", enforcement, handler);
   a.get("/internal/agent-access/context", enforcement, handler);
   a.post("/internal/agent-access/prepare", enforcement, handler);
@@ -508,7 +509,7 @@ describe("tenant enforcement middleware", () => {
   });
 
   it("delegates agent project routes only for the bound gateway tenant", async () => {
-    for (const route of ["create", "list"]) {
+    for (const route of ["create", "list", "set-recipe"]) {
       const ownedGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/agent-projects/${route}`)
         .send({ agentId: "octogee-alice-coach" });

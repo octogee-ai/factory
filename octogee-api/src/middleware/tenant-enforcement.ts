@@ -61,6 +61,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw/previews/authorize",
   "/internal/agent-projects/create",
   "/internal/agent-projects/list",
+  "/internal/agent-projects/set-recipe",
   "/internal/agent-productivity/google/calendar/events",
   "/internal/agent-productivity/google/gmail/search",
   "/internal/agent-productivity/google/gmail/read",

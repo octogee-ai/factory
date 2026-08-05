@@ -3,7 +3,9 @@ export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archi
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';
 export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
 export type ProjectRecipeId = 'static-site' | 'vite-static' | 'astro-static';
+export declare const PROJECT_RECIPE_IDS: readonly ProjectRecipeId[];
 export declare const DEFAULT_PROJECT_RECIPE: ProjectRecipeId;
+export declare function isProjectRecipeId(value: unknown): value is ProjectRecipeId;
 export interface ProjectRepoSource {
     provider: 'github';
     owner: string;

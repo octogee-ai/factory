@@ -12,7 +12,8 @@ import { projectRepoName } from "./gitea-naming.js";
 import { deleteProjectRepo, provisionProjectRepoResult } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
 import type { RepoSourceAccess } from "../routes/projects/repo-source.js";
-import { DEFAULT_PROJECT_RECIPE } from "@octogee/shared/types/project";
+import { DEFAULT_PROJECT_RECIPE, type ProjectRecipeId } from "@octogee/shared/types/project";
+import { requestedProjectRecipe } from "./project-recipe.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
@@ -52,6 +53,7 @@ interface ProjectCreatePlan {
   status: string;
   targetVisibility: string;
   ghRepoSource: { provider: "github"; owner: string; repo: string } | null;
+  recipe: ProjectRecipeId;
   giteaRepoName: string;
   source: "ui" | "agent";
 }
@@ -65,6 +67,7 @@ interface NormalizedProjectCreateRequest {
   status: string;
   visibility: string;
   repoSource: unknown;
+  recipe: unknown;
 }
 
 interface MattermostMemberAdd {
@@ -216,6 +219,11 @@ function buildProjectCreatePlan(
   const rs = resolveCreateRepoSource(request.repoSource, actor.repoSourceAccess ?? "disabled");
   if (!rs.ok) return { ok: false, result: bad(rs.status, rs.error) };
 
+  const recipe = request.recipe === undefined
+    ? { ok: true as const, value: DEFAULT_PROJECT_RECIPE }
+    : requestedProjectRecipe(request.recipe);
+  if (!recipe.ok) return { ok: false, result: bad(400, recipe.error) };
+
   if (!workspaceId) {
     return { ok: false, result: bad(422, "Workspace not provisioned") };
   }
@@ -234,6 +242,7 @@ function buildProjectCreatePlan(
       status: request.status,
       targetVisibility: request.visibility,
       ghRepoSource: rs.value,
+      recipe: recipe.value,
       giteaRepoName: projectRepoName(request.slug),
       source: actor.source ?? "ui",
     },
@@ -253,6 +262,7 @@ function normalizeProjectCreateRequest(
     status: nonEmptyStringOr(request.status, "building"),
     visibility: nonEmptyStringOr(request.visibility, "private"),
     repoSource: request.repoSource,
+    recipe: request.recipe,
   };
 }
 
@@ -300,7 +310,7 @@ async function writeProvisioningProject(
     pendingVisibility: plan.targetVisibility,
     provisioningState: "provisioning",
     canvasFile: "README.md",
-    recipe: DEFAULT_PROJECT_RECIPE,
+    recipe: plan.recipe,
     publishedUrl: null,
     giteaRepoName: plan.giteaRepoName,
     repoSource: plan.ghRepoSource,
