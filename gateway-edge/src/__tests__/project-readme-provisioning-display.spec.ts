@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   internalFetch: vi.fn(),
   readProject: vi.fn(),
   renderReadmeTemplate: vi.fn(),
+  projectPlaybookSeeds: vi.fn(),
+  notesWelcomeSeed: vi.fn(),
   readWorkspace: vi.fn(),
   mmApi: vi.fn(),
   logger: {
@@ -56,6 +58,11 @@ vi.mock("@octogee/core/templates/project-readmes", () => ({
   renderReadmeTemplate: (...args: unknown[]) => h.renderReadmeTemplate(...args),
 }));
 
+vi.mock("@octogee/core/templates/project-seeds", () => ({
+  projectPlaybookSeeds: (...args: unknown[]) => h.projectPlaybookSeeds(...args),
+  notesWelcomeSeed: (...args: unknown[]) => h.notesWelcomeSeed(...args),
+}));
+
 const { default: readmeRoutes } = await import("../routes/projects/readme.js");
 const {
   ensureProjectGiteaRepo,
@@ -98,6 +105,14 @@ beforeEach(() => {
   process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
   h.readProject.mockReset();
   h.renderReadmeTemplate.mockReset().mockReturnValue("# Orbit\n");
+  h.projectPlaybookSeeds.mockReset().mockReturnValue([
+    { relPath: "runbook/how-we-build.md", content: "# How we build Orbit\n" },
+    { relPath: "DECISIONS.md", content: "# Decisions — Orbit\n" },
+  ]);
+  h.notesWelcomeSeed.mockReset().mockReturnValue({
+    relPath: "notes/welcome.md",
+    content: "# Welcome to notes\n",
+  });
   h.readWorkspace.mockReset();
   h.mmApi.mockReset().mockResolvedValue({});
   h.logger.error.mockClear();
@@ -177,6 +192,7 @@ describe("project provisioning helpers", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "public",
+      recipe: "static-site",
     });
 
     expect(h.createProjectGiteaRepo).toHaveBeenCalledWith("mira", "orbit", "Ship it", false);
@@ -204,6 +220,7 @@ describe("project provisioning helpers", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "public",
+      recipe: "static-site",
     });
 
     expect(h.giteaWriteFile.mock.calls.map((args) => args[2])).toEqual(["README.md"]);
@@ -219,6 +236,7 @@ describe("project provisioning helpers", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "public",
+      recipe: "static-site",
     });
 
     expect(h.giteaWriteFiles).toHaveBeenCalledTimes(1);
@@ -231,16 +249,31 @@ describe("project provisioning helpers", () => {
     expect(org).toBe("mira");
     expect(repo).toBe("orbit");
     expect(message).toBe("auto: seed project playbook");
-    expect(files.map((f) => f.path).sort()).toEqual([
-      "DECISIONS.md",
-      "notes/welcome.md",
-      "runbook/how-we-build.md",
-      "runbook/shipping-on-gcp.md",
-      "runbook/what-done-means.md",
-      "runbook/working-with-your-agent.md",
+    expect(files).toEqual([
+      { path: "runbook/how-we-build.md", content: "# How we build Orbit\n" },
+      { path: "DECISIONS.md", content: "# Decisions — Orbit\n" },
+      { path: "notes/welcome.md", content: "# Welcome to notes\n" },
     ]);
-    expect(files.find((f) => f.path === "DECISIONS.md")?.content).toContain("Orbit");
-    expect(files.find((f) => f.path === "notes/welcome.md")?.content).toContain("Orbit");
+  });
+
+  it("seeds against the project's own type and resolved recipe, not a flat default", async () => {
+    await ensureProjectGiteaRepo({
+      workspaceId: "mira",
+      slug: "orbit",
+      name: "Orbit",
+      tagline: "Ship it",
+      projectType: "game",
+      visibility: "public",
+      recipe: "vite-static",
+    });
+
+    expect(h.projectPlaybookSeeds).toHaveBeenCalledWith({
+      projectName: "Orbit",
+      projectType: "game",
+      recipe: "vite-static",
+      today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    });
+    expect(h.notesWelcomeSeed).toHaveBeenCalledWith("Orbit");
   });
 
   it("fails provisioning when a seed write fails — the playbook is not best-effort", async () => {
@@ -254,6 +287,7 @@ describe("project provisioning helpers", () => {
         tagline: "",
         projectType: null,
         visibility: "private",
+        recipe: "static-site",
       }),
     ).rejects.toThrow("gitea 500");
   });
@@ -268,6 +302,7 @@ describe("project provisioning helpers", () => {
         tagline: "",
         projectType: null,
         visibility: "private",
+        recipe: "static-site",
       }),
     ).resolves.toBeNull();
     expect(h.internalFetch).toHaveBeenCalledWith(
@@ -285,6 +320,7 @@ describe("project provisioning helpers", () => {
         tagline: "",
         projectType: null,
         visibility: "private",
+        recipe: "static-site",
       }),
     ).resolves.toBe("repo exists (HTTP 502)");
   });
@@ -300,6 +336,7 @@ describe("project provisioning helpers", () => {
         tagline: "",
         projectType: null,
         visibility: "private",
+        recipe: "static-site",
       }),
     ).resolves.toBeNull();
 

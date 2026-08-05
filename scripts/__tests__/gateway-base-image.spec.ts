@@ -65,16 +65,17 @@ describe("gateway base image", () => {
     expect(dockerfile).toContain("COPY --from=gitleaks-builder /go/bin/gitleaks /usr/local/bin/gitleaks");
   });
 
-  it("keeps Chromium out of the shared gateway base image", () => {
+  it("ships Chromium and screenshot fonts in the shared gateway base image", () => {
     const installed = installedAptPackages("infra/gateway/Dockerfile.base");
     const advertised = advertisedGatewayBasePackages();
 
-    expect(advertised).not.toContain("chromium");
-    expect(installed.has("chromium")).toBe(false);
+    expect(installed.has("chromium")).toBe(true);
+    expect(installed.has("fonts-liberation")).toBe(true);
+    expect(installed.has("fonts-noto-color-emoji")).toBe(true);
     expect([...installed].sort()).toEqual(expect.arrayContaining(advertised));
   });
 
-  it("installs Chromium only in the operator gateway base image", () => {
+  it("keeps Chromium in the operator gateway base image", () => {
     const installed = installedAptPackages("infra/gateway/Dockerfile.operator-base");
 
     expect(installed.has("chromium")).toBe(true);

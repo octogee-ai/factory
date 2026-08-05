@@ -149,12 +149,87 @@ Put ideas, open questions, decisions here. The README is the living doc.
 _Canvas renders this file. Edit freely — every commit to this repo updates the Canvas in place._
 `;
 
+const RESEARCH = `# {{name}}
+
+{{tagline}}
+
+A research project by [@{{owner}}]({{workspaceSlug}}). Started {{date}}.
+
+## The question
+
+The one decision this project exists to make. Write it so it can be answered.
+
+## Who it affects
+
+- Deciding:
+- Affected:
+- Decision date:
+
+## Options on the table
+
+| Option | The case for | The case against |
+|--------|--------------|------------------|
+|        |              |                  |
+
+## Next steps
+
+- [ ] Write the question above in one sentence
+- [ ] Set the decision date
+- [ ] Add one note per source in notes/
+- [ ] Record the decision — and its why — in DECISIONS.md
+
+---
+
+_Canvas renders this file. Keep the question and the options current here and everyone can see where the decision stands._
+`;
+
+const EVENT = `# {{name}}
+
+{{tagline}}
+
+An event organized by [@{{owner}}]({{workspaceSlug}}). Started {{date}}.
+
+## What, when, where
+
+- **What:**
+- **When:**
+- **Where:**
+- **Why come:**
+
+## Run of show
+
+| Time | What happens | Who runs it |
+|------|--------------|-------------|
+|      |              |             |
+
+## Organizer checklist
+
+- [ ] Venue or platform confirmed
+- [ ] Invites sent
+- [ ] Reminder scheduled
+- [ ] Day-of roles assigned
+- [ ] Backup plan for whatever is most likely to go wrong
+
+## Next steps
+
+- [ ] Fill in what, when, and where above
+- [ ] **Publish** this page and share the link
+- [ ] Draft the invite, reminder, and thank-you in notes/
+- [ ] Write the recap after
+
+---
+
+_Canvas renders this file. Publish it early and update it often — the page is the answer to every question you'd otherwise repeat._
+`;
+
 const TEMPLATES: Record<string, string> = {
   default: DEFAULT,
   game: GAME,
   trip: TRIP,
   social: SOCIAL,
   planner: PLANNER,
+  research: RESEARCH,
+  event: EVENT,
 };
 
 export function renderReadmeTemplate(

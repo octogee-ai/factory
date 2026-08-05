@@ -8,6 +8,7 @@ import { internalFetch } from "../../lib/internal-fetch.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
 import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
+import type { ProjectRecipeId } from "@octogee/shared/types/project";
 
 export interface ProjectRepoProvisioningResult {
   created: boolean;
@@ -31,6 +32,7 @@ export async function ensureProjectGiteaRepo(input: {
   tagline: string;
   projectType: string | null;
   visibility: string;
+  recipe: ProjectRecipeId;
 }): Promise<{ created: boolean }> {
   const org = workspaceGiteaOrg(input.workspaceId);
   const repoName = projectRepoName(input.slug);
@@ -51,7 +53,15 @@ export async function ensureProjectGiteaRepo(input: {
     await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
 
     const today = new Date().toISOString().slice(0, 10);
-    const seeds = [...projectPlaybookSeeds(input.name, today), notesWelcomeSeed(input.name)];
+    const seeds = [
+      ...projectPlaybookSeeds({
+        projectName: input.name,
+        projectType: input.projectType,
+        recipe: input.recipe,
+        today,
+      }),
+      notesWelcomeSeed(input.name),
+    ];
     await giteaWriteFiles(
       org,
       repoName,

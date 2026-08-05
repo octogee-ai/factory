@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip zip file bc \
     # Media processing
     ffmpeg imagemagick \
+    # Publish screenshots (headless Chromium; fonts so rendered pages aren't tofu)
+    chromium fonts-liberation fonts-noto-color-emoji \
     # Document conversion
     pandoc \
     # Debugging & diagnostics

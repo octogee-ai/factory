@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_PROJECT_RECIPE,
   PROJECT_RECIPE_IDS,
+  defaultProjectRecipe,
   isProjectRecipeId,
   projectRepoSourceFromDoc,
+  type ProjectRecipeId,
+  type ProjectType,
 } from './project.js';
 
 describe('project recipe catalog', () => {
@@ -24,6 +27,37 @@ describe('project recipe catalog', () => {
     expect(isProjectRecipeId(undefined)).toBe(false);
     expect(isProjectRecipeId(42)).toBe(false);
     expect(isProjectRecipeId({ id: 'vite-static' })).toBe(false);
+  });
+});
+
+describe('defaultProjectRecipe', () => {
+  // Typed as a total Record so a new ProjectType cannot land without choosing
+  // the recipe its projects are born on.
+  const startingRecipe: Record<ProjectType, ProjectRecipeId> = {
+    game: 'vite-static',
+    social: 'vite-static',
+    planner: 'vite-static',
+    trip: 'astro-static',
+    research: 'astro-static',
+    event: 'astro-static',
+    other: 'static-site',
+  };
+
+  it.each(Object.entries(startingRecipe))('starts a %s project on %s', (projectType, recipe) => {
+    expect(defaultProjectRecipe(projectType)).toBe(recipe);
+  });
+
+  it('falls back to the flat default for absent and unknown types', () => {
+    expect(defaultProjectRecipe(null)).toBe(DEFAULT_PROJECT_RECIPE);
+    expect(defaultProjectRecipe('web')).toBe(DEFAULT_PROJECT_RECIPE);
+    expect(defaultProjectRecipe('Game')).toBe(DEFAULT_PROJECT_RECIPE);
+    expect(defaultProjectRecipe('')).toBe(DEFAULT_PROJECT_RECIPE);
+  });
+
+  it('only ever returns a recipe Preview and Publish can run', () => {
+    for (const projectType of [...Object.keys(startingRecipe), 'nonsense', null]) {
+      expect(isProjectRecipeId(defaultProjectRecipe(projectType))).toBe(true);
+    }
   });
 });
 

@@ -69,9 +69,35 @@ describe("renderReadmeTemplate", () => {
     const t = renderReadmeTemplate("trip", baseVars);
     const s = renderReadmeTemplate("social", baseVars);
     const p = renderReadmeTemplate("planner", baseVars);
+    const r = renderReadmeTemplate("research", baseVars);
+    const e = renderReadmeTemplate("event", baseVars);
     expect(g).toMatch(/engine/i);
     expect(t).toMatch(/itinerary/i);
     expect(s).toMatch(/audience/i);
     expect(p).toMatch(/milestone/i);
+    expect(r).toMatch(/decision date/i);
+    expect(e).toMatch(/run of show/i);
+  });
+
+  it("renders the research template with all variables substituted", () => {
+    const out = renderReadmeTemplate("research", baseVars);
+    expect(out).toContain("# My Game");
+    expect(out).toContain("A tiny rogue-like");
+    expect(out).toContain("[@dannyboy](dannyboy)");
+    expect(out).toContain("2026-04-19");
+    expect(out).toMatch(/the question/i);
+    expect(out).toMatch(/DECISIONS\.md/);
+    expect(out).not.toContain("What is this?");
+  });
+
+  it("renders the event template with all variables substituted", () => {
+    const out = renderReadmeTemplate("event", baseVars);
+    expect(out).toContain("# My Game");
+    expect(out).toContain("A tiny rogue-like");
+    expect(out).toContain("[@dannyboy](dannyboy)");
+    expect(out).toContain("2026-04-19");
+    expect(out).toMatch(/organizer checklist/i);
+    expect(out).toMatch(/Publish/);
+    expect(out).not.toContain("What is this?");
   });
 });

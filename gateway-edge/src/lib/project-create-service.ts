@@ -12,7 +12,7 @@ import { projectRepoName } from "./gitea-naming.js";
 import { deleteProjectRepo, provisionProjectRepoResult } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
 import type { RepoSourceAccess } from "../routes/projects/repo-source.js";
-import { DEFAULT_PROJECT_RECIPE, type ProjectRecipeId } from "@octogee/shared/types/project";
+import { defaultProjectRecipe, type ProjectRecipeId } from "@octogee/shared/types/project";
 import { requestedProjectRecipe } from "./project-recipe.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
@@ -220,7 +220,7 @@ function buildProjectCreatePlan(
   if (!rs.ok) return { ok: false, result: bad(rs.status, rs.error) };
 
   const recipe = request.recipe === undefined
-    ? { ok: true as const, value: DEFAULT_PROJECT_RECIPE }
+    ? { ok: true as const, value: defaultProjectRecipe(request.projectType) }
     : requestedProjectRecipe(request.recipe);
   if (!recipe.ok) return { ok: false, result: bad(400, recipe.error) };
 
@@ -471,6 +471,7 @@ async function provisionProjectCodeRepo(
     tagline: plan.trimmedTagline,
     projectType: plan.projectType,
     visibility: plan.targetVisibility,
+    recipe: plan.recipe,
   });
   artifacts.repoCreated = repoResult.created;
   if (!repoResult.error) return;

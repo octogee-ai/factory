@@ -1,7 +1,14 @@
 export type ProjectVisibility = 'private' | 'public' | 'unlisted';
 export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archived';
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';
-export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
+export type ProjectType =
+  | 'game'
+  | 'social'
+  | 'planner'
+  | 'trip'
+  | 'research'
+  | 'event'
+  | 'other';
 
 // How Preview and Publish run the project. The vocabulary is shared with
 // scripts/lib/project-recipes.ts, which owns each recipe's build contract.
@@ -16,6 +23,21 @@ export const DEFAULT_PROJECT_RECIPE: ProjectRecipeId = 'static-site';
 export function isProjectRecipeId(value: unknown): value is ProjectRecipeId {
   return typeof value === 'string'
     && (PROJECT_RECIPE_IDS as readonly string[]).includes(value);
+}
+
+export function defaultProjectRecipe(projectType: string | null): ProjectRecipeId {
+  switch (projectType) {
+    case 'game':
+    case 'social':
+    case 'planner':
+      return 'vite-static';
+    case 'trip':
+    case 'research':
+    case 'event':
+      return 'astro-static';
+    default:
+      return DEFAULT_PROJECT_RECIPE;
+  }
 }
 
 export interface ProjectRepoSource {

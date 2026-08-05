@@ -455,12 +455,45 @@ describe("internal gitea-admin route", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "private",
+      recipe: "vite-static",
     };
     const res = await authed(request(app()).post("/internal/gitea/provision-project-repo")).send(input);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ created: true });
     expect(projectProvisioning.ensureProjectGiteaRepo).toHaveBeenCalledWith(input);
+  });
+
+  it("provision-project-repo resolves the type default when a pre-recipe sender omits it", async () => {
+    const res = await authed(request(app()).post("/internal/gitea/provision-project-repo")).send({
+      workspaceId: "acme",
+      slug: "mygame",
+      name: "My game",
+      tagline: "Ship it",
+      projectType: "game",
+      visibility: "private",
+    });
+
+    expect(res.status).toBe(200);
+    expect(projectProvisioning.ensureProjectGiteaRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ projectType: "game", recipe: "vite-static" }),
+    );
+  });
+
+  it("provision-project-repo → 400 on a recipe outside the catalog, before touching Gitea", async () => {
+    const res = await authed(request(app()).post("/internal/gitea/provision-project-repo")).send({
+      workspaceId: "acme",
+      slug: "mygame",
+      name: "My game",
+      tagline: "Ship it",
+      projectType: "game",
+      visibility: "private",
+      recipe: "node-service",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/static-site, vite-static, astro-static/);
+    expect(projectProvisioning.ensureProjectGiteaRepo).not.toHaveBeenCalled();
   });
 
   it("delete-project-repo is scoped to the assigned workspace", async () => {

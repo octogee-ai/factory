@@ -20,6 +20,7 @@ import automationsRoutes from "./routes/automations.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
 import publishRoutes from "./routes/projects/publish.js";
+import releasesRoutes from "./routes/projects/releases.js";
 import { projectPreviewRoutes, workspacePreviewRoutes } from "./routes/previews.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
@@ -235,8 +236,11 @@ function mountSidecarLocalitySurface(app: Express, options: {
   const projectsLocality = Router();
   projectsLocality.use("/:wid/:pid/publish", requireAuth);
   projectsLocality.use("/:wid/:pid/preview", requireAuthenticatedUid);
+  projectsLocality.use("/:wid/:pid/releases", requireAuth);
+  projectsLocality.use("/:wid/:pid/preview-channel", requireAuth);
   projectsLocality.use(projectPreviewRoutes);
   projectsLocality.use(publishRoutes);
+  projectsLocality.use(releasesRoutes);
   mountApi(app, "/projects", projectsLocality);
 
   const workspacesLocality = Router();

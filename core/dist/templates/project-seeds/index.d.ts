@@ -1,6 +1,13 @@
+import type { ProjectRecipeId } from "@octogee/shared/types/project";
 export interface PlaybookSeed {
     relPath: string;
     content: string;
 }
+export interface ProjectPlaybookSeedInput {
+    projectName: string;
+    projectType: string | null;
+    recipe: ProjectRecipeId;
+    today: string;
+}
 export declare function notesWelcomeSeed(scopeName: string): PlaybookSeed;
-export declare function projectPlaybookSeeds(projectName: string, today: string): PlaybookSeed[];
+export declare function projectPlaybookSeeds(input: ProjectPlaybookSeedInput): PlaybookSeed[];

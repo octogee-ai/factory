@@ -201,6 +201,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "public",
+      recipe: "static-site",
     });
     expect(h.channelWrites).toEqual([
       {
@@ -262,6 +263,31 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
 
     expect(h.mmApi).toHaveBeenCalledWith("/channels/legacy-channel/privacy", "PUT", { privacy: "P" });
     expect(h.provisionProjectRepo).toHaveBeenCalled();
+  });
+
+  it("reseeds against the recipe the project already carries", async () => {
+    h.project.recipe = "astro-static";
+
+    await request(app())
+      .post("/api/projects/mira/orbit/retry-provisioning")
+      .expect(200);
+
+    expect(h.provisionProjectRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ recipe: "astro-static" }),
+    );
+  });
+
+  it("falls back to the type default when the project doc carries no usable recipe", async () => {
+    h.project.projectType = "game";
+    h.project.recipe = "node-service";
+
+    await request(app())
+      .post("/api/projects/mira/orbit/retry-provisioning")
+      .expect(200);
+
+    expect(h.provisionProjectRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ projectType: "game", recipe: "vite-static" }),
+    );
   });
 
   it("keeps the project failed when repository reconciliation reports an error", async () => {

@@ -151,7 +151,7 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`.
 - Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
-  `octogee_publish`.
+  `octogee_publish`, `octogee_publish_draft`.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.
 - Google (bearer-blind): `octogee_google_calendar_list`,
   `octogee_google_calendar_read`/`octogee_google_calendar_write`,

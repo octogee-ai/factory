@@ -4,6 +4,7 @@ import { db, FieldValue } from "../../lib/db.js";
 import { mmApi } from "../../lib/mattermost.js";
 import { logger } from "../../middleware/logging.js";
 import { projectGeneralChannelName } from "@octogee/shared/types/identity";
+import { defaultProjectRecipe, isProjectRecipeId } from "@octogee/shared/types/project";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
 import { provisionProjectRepo } from "./provisioning.js";
@@ -250,13 +251,17 @@ function restoredVisibility(ctx: ProjectCtx): string {
 }
 
 async function reconcileRetryRepoOrFail(ctx: ProjectCtx, res: Response, visibility: string): Promise<boolean> {
+  const projectType = typeof ctx.project.projectType === "string" ? ctx.project.projectType : null;
   const repoErr = await provisionProjectRepo({
     workspaceId: ctx.wid,
     slug: ctx.pid,
     name: ctx.project.name || ctx.pid,
     tagline: typeof ctx.project.tagline === "string" ? ctx.project.tagline : "",
-    projectType: typeof ctx.project.projectType === "string" ? ctx.project.projectType : null,
+    projectType,
     visibility,
+    recipe: isProjectRecipeId(ctx.project.recipe)
+      ? ctx.project.recipe
+      : defaultProjectRecipe(projectType),
   });
   if (!repoErr) return true;
   await markRetryFailed(ctx.projectRef, repoErr);

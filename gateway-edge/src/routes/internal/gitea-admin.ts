@@ -1,6 +1,12 @@
 import { Router, type Request, type Response } from "express";
 
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
+import {
+  defaultProjectRecipe,
+  isProjectRecipeId,
+  PROJECT_RECIPE_IDS,
+  type ProjectRecipeId,
+} from "@octogee/shared/types/project";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   hasRunningInboundMigrationForSlug,
@@ -76,6 +82,9 @@ function validRepoName(value: unknown): value is string {
   );
 }
 
+// recipe is optional on the wire because octogee-api and the pod sidecar ship
+// separately: a sender from before the field still provisions, on the same
+// type-derived recipe project create would have stamped.
 interface ProjectRepoProvisionRequest {
   workspaceId: string;
   slug: string;
@@ -83,6 +92,7 @@ interface ProjectRepoProvisionRequest {
   tagline: string;
   projectType: string | null;
   visibility: "private" | "public" | "unlisted";
+  recipe?: ProjectRecipeId;
 }
 
 function validProjectRepoName(value: unknown): value is string {
@@ -99,6 +109,10 @@ function validProjectRepoType(value: unknown): value is string | null {
 
 function validProjectRepoVisibility(value: unknown): value is ProjectRepoProvisionRequest["visibility"] {
   return value === "private" || value === "public" || value === "unlisted";
+}
+
+function validProjectRepoRecipe(value: unknown): value is ProjectRecipeId | undefined {
+  return value === undefined || isProjectRecipeId(value);
 }
 
 function validProjectRepoProvisionRequest(
@@ -129,6 +143,10 @@ function validProjectRepoProvisionRequest(
   }
   if (!validProjectRepoVisibility(input.visibility)) {
     res.status(400).json({ error: "visibility must be private, public, or unlisted" });
+    return false;
+  }
+  if (!validProjectRepoRecipe(input.recipe)) {
+    res.status(400).json({ error: `recipe must be one of ${PROJECT_RECIPE_IDS.join(", ")}` });
     return false;
   }
   return true;
@@ -294,7 +312,15 @@ router.post("/provision-project-repo", async (req: Request, res: Response) => {
   if (!validProjectRepoProvisionRequest(res, input)) return;
   if (!(await requireAssignedHere(req, res, input.workspaceId))) return;
   try {
-    const result = await ensureProjectGiteaRepo(input);
+    const result = await ensureProjectGiteaRepo({
+      workspaceId: input.workspaceId,
+      slug: input.slug,
+      name: input.name,
+      tagline: input.tagline,
+      projectType: input.projectType,
+      visibility: input.visibility,
+      recipe: input.recipe ?? defaultProjectRecipe(input.projectType),
+    });
     res.json(result);
   } catch (err) {
     logger.error("internal/gitea provision-project-repo failed", { err });
