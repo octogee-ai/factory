@@ -1,6 +1,7 @@
 type JsonObject = Record<string, unknown>;
 declare const ABSENT: unique symbol;
 declare const REQUIRED_ARRAY: "required-array";
+declare const FORBIDDEN_ARRAY: "forbidden-array";
 export type GatewayConfigClass = "shared" | "builder";
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
@@ -18,7 +19,7 @@ type RequiredArrayInvariant = {
     values: readonly string[];
 };
 type ForbiddenArrayInvariant = {
-    kind: "forbidden-array";
+    kind: typeof FORBIDDEN_ARRAY;
     path: string;
     values: readonly string[];
 };
