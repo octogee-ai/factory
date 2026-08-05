@@ -32,7 +32,9 @@ function fakeDb(input: {
     doc: (path: string) => ({
       get: async () => ({
         exists: path === "workspaces/eggman" && input.workspaceOwner !== undefined,
-        data: () => path === "workspaces/eggman" ? { ownerUid: input.workspaceOwner } : undefined,
+        data: () => path === "workspaces/eggman"
+          ? { ownerUid: input.workspaceOwner, ownerActive: true }
+          : undefined,
       }),
     }),
     collectionGroup,

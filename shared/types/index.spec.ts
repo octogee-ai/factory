@@ -20,7 +20,7 @@ import {
 describe("shared type barrel", () => {
   it("re-exports public runtime helpers from the root shared entrypoint", () => {
     expect(isLegalDocId("terms")).toBe(true);
-    expect(acceptanceDocId("terms", currentVersion("terms"))).toBe("terms@2026-07-23");
+    expect(acceptanceDocId("terms", currentVersion("terms"))).toBe("terms@2026-08-05");
     expect(GATEWAY_CLASSES).toEqual(["shared", "builder"]);
     expect(resolveGatewayClass({ gatewayClass: "builder" })).toBe("builder");
     expect(resolveSizingTier({ sizingTier: "m" }).tier).toBe("m");
