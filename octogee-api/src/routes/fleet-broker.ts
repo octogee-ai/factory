@@ -1683,7 +1683,7 @@ function installProvisioningRoutes(
     }
     const { gatewayId } = assigned.bound;
     const truncated = message.slice(0, 2000);
-    const report = `${assigned.slug} ${truncated}`;
+    const report = `${assigned.slug}\0${truncated}`;
     const at = now();
     const reported = reportedReconcileErrors.get(gatewayId);
     if (
