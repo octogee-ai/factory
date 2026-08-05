@@ -7,6 +7,7 @@ import {
   isConnectorTokenBrokerable,
 } from "../../../gateway-edge/src/lib/connectors/index.js";
 import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
+import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import type { GatewayPodOwnerIdentityReader } from "../lib/gateway-pod-owner-identity.js";
@@ -17,6 +18,7 @@ const FORBIDDEN = { error: "forbidden" } as const;
 const WORKSPACE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PROJECT_ID_RE = /^[a-z0-9]{1,16}$/;
 const OWNER_RUNTIME_ACCESS_KIND = "owner-runtime";
+const PUBLIC_CANVAS_ACCESS_KIND = "public-canvas";
 
 interface ProjectAccessContext {
   kind: "project";
@@ -30,7 +32,17 @@ interface OwnerRuntimeAccessContext {
   builderSlug: string;
 }
 
-type ConnectorAccessContext = ProjectAccessContext | OwnerRuntimeAccessContext;
+interface PublicCanvasAccessContext {
+  kind: typeof PUBLIC_CANVAS_ACCESS_KIND;
+  workspaceSlug: string;
+  projectSlug: string;
+  canvasPath: string;
+}
+
+type ConnectorAccessContext =
+  | ProjectAccessContext
+  | OwnerRuntimeAccessContext
+  | PublicCanvasAccessContext;
 type ParsedAccess =
   | { status: "absent" }
   | { status: "invalid" }
@@ -65,13 +77,20 @@ function requestAccess(req: Request): ParsedAccess {
   const access = body.access;
   if (!access || typeof access !== "object") return { status: "invalid" };
   const data = access as Record<string, unknown>;
-  if (data.kind === OWNER_RUNTIME_ACCESS_KIND) {
-    const builderSlug = typeof data.builderSlug === "string" ? data.builderSlug : "";
-    return WORKSPACE_SLUG_RE.test(builderSlug)
-      ? { status: "valid", value: { kind: OWNER_RUNTIME_ACCESS_KIND, builderSlug } }
-      : { status: "invalid" };
-  }
-  if (data.kind !== "project") return { status: "invalid" };
+  if (data.kind === OWNER_RUNTIME_ACCESS_KIND) return parseOwnerRuntimeAccess(data);
+  if (data.kind === PUBLIC_CANVAS_ACCESS_KIND) return parsePublicCanvasAccess(data);
+  if (data.kind === "project") return parseProjectAccess(data);
+  return { status: "invalid" };
+}
+
+function parseOwnerRuntimeAccess(data: Record<string, unknown>): ParsedAccess {
+  const builderSlug = typeof data.builderSlug === "string" ? data.builderSlug : "";
+  return WORKSPACE_SLUG_RE.test(builderSlug)
+    ? { status: "valid", value: { kind: OWNER_RUNTIME_ACCESS_KIND, builderSlug } }
+    : { status: "invalid" };
+}
+
+function parseProjectAccess(data: Record<string, unknown>): ParsedAccess {
   const requestingUid = typeof data.requestingUid === "string" ? data.requestingUid : "";
   const workspaceSlug = typeof data.workspaceSlug === "string" ? data.workspaceSlug : "";
   const projectSlug = typeof data.projectSlug === "string" ? data.projectSlug : "";
@@ -83,6 +102,23 @@ function requestAccess(req: Request): ParsedAccess {
     return { status: "invalid" };
   }
   return { status: "valid", value: { kind: "project", requestingUid, workspaceSlug, projectSlug } };
+}
+
+function parsePublicCanvasAccess(data: Record<string, unknown>): ParsedAccess {
+  const workspaceSlug = typeof data.workspaceSlug === "string" ? data.workspaceSlug : "";
+  const projectSlug = typeof data.projectSlug === "string" ? data.projectSlug : "";
+  const canvasPath = data.canvasPath;
+  if (
+    !WORKSPACE_SLUG_RE.test(workspaceSlug) ||
+    !PROJECT_ID_RE.test(projectSlug) ||
+    !isSafeCanvasPath(canvasPath)
+  ) {
+    return { status: "invalid" };
+  }
+  return {
+    status: "valid",
+    value: { kind: PUBLIC_CANVAS_ACCESS_KIND, workspaceSlug, projectSlug, canvasPath },
+  };
 }
 
 function safeDocId(value: string): boolean {
@@ -114,6 +150,51 @@ async function projectAccessAuthorized(
   return memberSnap.exists;
 }
 
+// The public project page has no caller identity, so this kind stands in for one. It
+// authorizes a single file — the canvas the owner published — on a listed project, and
+// the path is re-derived from the project doc rather than trusted from the request. A
+// private repo behind such a project stays private everywhere except that one file.
+async function publicCanvasAccessAuthorized(
+  db: Firestore,
+  uid: string,
+  connectorId: string,
+  access: PublicCanvasAccessContext,
+): Promise<boolean> {
+  const projectSnap = await db
+    .doc(`workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`)
+    .get();
+  if (!projectSnap.exists) return false;
+  const project = projectSnap.data() as Record<string, unknown> | undefined;
+  if (project?.ownerUid !== uid) return false;
+  if (projectRepoSourceProvider(project) !== connectorId) return false;
+  if (project?.visibility !== "public" && project?.visibility !== "unlisted") return false;
+  return access.canvasPath === resolveCanvasFile(project?.canvasFile);
+}
+
+async function verifiedGatewayAuthorization(
+  db: Firestore,
+  bound: GatewayBinding,
+  readPodOwnerIdentity: GatewayPodOwnerIdentityReader,
+): Promise<{ builderSlug: string; gatewayClass: string } | null> {
+  const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
+  if (!authorization || authorization.config.ownerUid !== bound.ownerUid) return null;
+  const podOwnerIdentity = await readPodOwnerIdentity({
+    podName: bound.podName!,
+    podUid: bound.podUid!,
+  });
+  if (
+    !podOwnerIdentity
+    || podOwnerIdentity.ownerUid !== authorization.config.ownerUid
+    || podOwnerIdentity.builderSlug !== authorization.config.builderSlug
+  ) {
+    return null;
+  }
+  return {
+    builderSlug: podOwnerIdentity.builderSlug,
+    gatewayClass: authorization.config.gatewayClass,
+  };
+}
+
 async function accessAuthorized(
   input: {
     db: Firestore;
@@ -126,27 +207,19 @@ async function accessAuthorized(
 ): Promise<boolean> {
   const { db, bound, uid, connectorId, access, readPodOwnerIdentity } = input;
   if (!safeDocId(uid) || !bound.ownerUid || !bound.podName || !bound.podUid) return false;
-  const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
-  if (!authorization || authorization.config.ownerUid !== bound.ownerUid) return false;
-  const podOwnerIdentity = await readPodOwnerIdentity({
-    podName: bound.podName,
-    podUid: bound.podUid,
-  });
-  if (
-    !podOwnerIdentity
-    || podOwnerIdentity.ownerUid !== authorization.config.ownerUid
-    || podOwnerIdentity.builderSlug !== authorization.config.builderSlug
-  ) {
-    return false;
-  }
+  const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
+  if (!authorization) return false;
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) return ownerRuntimeAccessAuthorized({
     db,
     access,
     uid,
     ownerUid: bound.ownerUid,
-    builderSlug: authorization.config.builderSlug,
-    gatewayClass: authorization.config.gatewayClass,
+    builderSlug: authorization.builderSlug,
+    gatewayClass: authorization.gatewayClass,
   });
+  if (access?.kind === PUBLIC_CANVAS_ACCESS_KIND) {
+    return publicCanvasAccessAuthorized(db, uid, connectorId, access);
+  }
   if (uid === bound.ownerUid) return true;
 
   if (!access) return false;

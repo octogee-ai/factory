@@ -56,9 +56,17 @@ export interface ConnectorTokenOwnerRuntimeAccessContext {
   builderSlug: string;
 }
 
+export interface ConnectorTokenPublicCanvasAccessContext {
+  kind: "public-canvas";
+  workspaceSlug: string;
+  projectSlug: string;
+  canvasPath: string;
+}
+
 export type ConnectorTokenAccessContext =
   | ConnectorTokenProjectAccessContext
-  | ConnectorTokenOwnerRuntimeAccessContext;
+  | ConnectorTokenOwnerRuntimeAccessContext
+  | ConnectorTokenPublicCanvasAccessContext;
 
 export class ConnectorTokenReadError extends Error {
   constructor(

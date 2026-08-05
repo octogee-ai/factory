@@ -1,11 +1,13 @@
 export type {
   Project,
+  ProjectRecipeId,
   ProjectRepoSource,
   ProjectVisibility,
   ProjectStatus,
   ProjectProvisioningState,
   ProjectType,
 } from './project.js';
+export { DEFAULT_PROJECT_RECIPE } from './project.js';
 
 export type {
   ProjectRetentionPlan,

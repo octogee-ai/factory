@@ -20,16 +20,8 @@ const LEGACY_ASTRO_RECIPE: StaticProjectRecipe = {
   outputDirectory: "dist",
 };
 
-function isRuntimeDeclaration(value: unknown): value is { recipe?: unknown } {
-  return typeof value === "object" && value !== null;
-}
-
-export function resolveStaticProjectRecipe(projectJson: unknown): StaticProjectRecipe | null {
-  if (typeof projectJson !== "object" || projectJson === null) return null;
-
-  const runtime = (projectJson as { runtime?: unknown }).runtime;
-  if (runtime === undefined) return LEGACY_ASTRO_RECIPE;
-  if (!isRuntimeDeclaration(runtime) || typeof runtime.recipe !== "string") return null;
-
-  return STATIC_PROJECT_RECIPES[runtime.recipe as StaticProjectRecipeId] ?? null;
+export function resolveStaticProjectRecipe(recipe: unknown): StaticProjectRecipe | null {
+  if (recipe === null || recipe === undefined) return LEGACY_ASTRO_RECIPE;
+  if (typeof recipe !== "string") return null;
+  return STATIC_PROJECT_RECIPES[recipe as StaticProjectRecipeId] ?? null;
 }

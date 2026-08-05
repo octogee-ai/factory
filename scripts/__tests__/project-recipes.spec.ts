@@ -8,19 +8,18 @@ describe("resolveStaticProjectRecipe", () => {
     ["vite-static", { id: "vite-static", buildCommand: "npm run build", outputDirectory: "dist" }],
     ["astro-static", { id: "astro-static", buildCommand: "npm run build", outputDirectory: "dist" }],
   ])("resolves %s to its bounded static build contract", (id, expected) => {
-    expect(resolveStaticProjectRecipe({ runtime: { recipe: id } })).toEqual(expected);
+    expect(resolveStaticProjectRecipe(id)).toEqual(expected);
   });
 
-  it("keeps undeclared legacy projects on the exact pre-recipe build command", () => {
-    expect(resolveStaticProjectRecipe({ name: "Existing site" })).toEqual({
-      id: "astro-static",
-      buildCommand: "npx astro build",
-      outputDirectory: "dist",
-    });
+  it("keeps projects with no recipe on the exact pre-recipe build command", () => {
+    const legacy = { id: "astro-static", buildCommand: "npx astro build", outputDirectory: "dist" };
+    expect(resolveStaticProjectRecipe(null)).toEqual(legacy);
+    expect(resolveStaticProjectRecipe(undefined)).toEqual(legacy);
   });
 
-  it("rejects unknown and non-static recipe declarations explicitly", () => {
-    expect(resolveStaticProjectRecipe({ runtime: { recipe: "node-service" } })).toBeNull();
-    expect(resolveStaticProjectRecipe({ runtime: { recipe: "shell-anything" } })).toBeNull();
+  it("rejects unknown, non-static, and malformed recipes explicitly", () => {
+    expect(resolveStaticProjectRecipe("node-service")).toBeNull();
+    expect(resolveStaticProjectRecipe("shell-anything")).toBeNull();
+    expect(resolveStaticProjectRecipe(42)).toBeNull();
   });
 });

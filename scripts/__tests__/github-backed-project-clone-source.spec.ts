@@ -1,0 +1,160 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "clone-source-openclaw-"));
+process.env.OPENCLAW_DIR = openclawDir;
+
+const gitMocks = vi.hoisted(() => ({
+  cloneProjectRepo: vi.fn(async () => true),
+}));
+
+vi.mock("../lib/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/git.js")>();
+  return { ...actual, cloneProjectRepo: gitMocks.cloneProjectRepo };
+});
+
+const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
+const { CUSTOMERS_DIR } = await import("../lib/config.js");
+import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import type { FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
+
+const GITHUB_REPO_SOURCE = { provider: "github", owner: "octogee-ai", repo: "demo" } as const;
+
+function snapshot(projects: FleetBrokerProjectRestore[]): FleetBrokerUserSnapshot {
+  return {
+    uid: "uid-alice",
+    slug: "alice",
+    tier: "trial",
+    gatewayId: "builder-alice",
+    status: "complete",
+    agentIds: [],
+    repoUrl: "",
+    mattermostUserId: null,
+    customerMmUserId: null,
+    greetingPosted: false,
+    channels: [],
+    projects,
+    ownerName: "Alice",
+    email: "",
+    displayName: "",
+    lastName: "",
+    photoURL: "",
+    onboardingVibe: null,
+    coachToken: null,
+    coachMmUserId: null,
+  };
+}
+
+function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
+  const client = {
+    uidForSlug: vi.fn(async () => "uid-alice"),
+    userSnapshot: vi.fn(async () => snapshot(projects)),
+  } as unknown as FleetBrokerClient;
+  return {
+    adapter: buildBrokeredLifecycleAdapter({ client, rpc: {} as GatewayRpcClient, log }),
+    log,
+  };
+}
+
+beforeEach(() => {
+  gitMocks.cloneProjectRepo.mockClear();
+  fs.rmSync(path.join(CUSTOMERS_DIR), { recursive: true, force: true });
+});
+
+afterAll(() => {
+  fs.rmSync(openclawDir, { recursive: true, force: true });
+});
+
+describe("brokered adapter — GitHub-backed project checkout source", () => {
+  it("carries a github repoSource into the needs-clone target", async () => {
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: null,
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "gh", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
+    ]);
+  });
+
+  it("leaves a Gitea-backed project's target free of a repoSource", async () => {
+    const { adapter } = mkAdapter([
+      { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "camp", giteaRepoName: "alice-camp" },
+    ]);
+  });
+
+  it("drops a project with neither a Gitea repo nor a github repoSource, and says so", async () => {
+    const { adapter, log } = mkAdapter([
+      { projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" },
+      { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "camp", giteaRepoName: "alice-camp" },
+    ]);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("alice/orphan"),
+    );
+    expect(log.mock.calls.flat().join("\n")).toMatch(
+      /no Gitea repo and no GitHub repoSource/,
+    );
+  });
+
+  it("ignores a repoSource whose provider is not github", async () => {
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "camp",
+        giteaRepoName: "alice-camp",
+        repoSource: { provider: "gitlab", owner: "o", repo: "r" } as never,
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "camp", giteaRepoName: "alice-camp" },
+    ]);
+  });
+
+  it("skips a project whose checkout is already on disk", async () => {
+    fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: null,
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
+  });
+
+  it("forwards the repoSource to the clone and passes no explicit GitHub token — the clone rides the pod's ambient gh credential helper", async () => {
+    const { adapter } = mkAdapter([]);
+
+    await adapter.cloneProjectRepo("alice", "gh", null, { repoSource: { ...GITHUB_REPO_SOURCE } });
+
+    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith("alice", "gh", "", {
+      repoSource: GITHUB_REPO_SOURCE,
+    });
+  });
+
+  it("clones a Gitea-backed project with its repo name and no clone options", async () => {
+    const { adapter } = mkAdapter([]);
+
+    await adapter.cloneProjectRepo("alice", "camp", "alice-camp");
+
+    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith("alice", "camp", "alice-camp", undefined);
+  });
+});

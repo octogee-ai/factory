@@ -208,6 +208,57 @@ describe("snapshotConfigFingerprint", () => {
     );
   });
 
+  it("changes when a project connects a GitHub repo — the pod must re-point its checkout", () => {
+    const gitea = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    const github = snap({
+      projects: [
+        {
+          projectSlug: "camp",
+          giteaRepoName: "alice-camp",
+          provisioningState: "active",
+          repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+        },
+      ],
+    });
+    expect(snapshotConfigFingerprint(github)).not.toBe(snapshotConfigFingerprint(gitea));
+  });
+
+  it("changes when the connected GitHub repo is swapped", () => {
+    const project = (repo: string) => snap({
+      projects: [
+        {
+          projectSlug: "camp",
+          giteaRepoName: null,
+          provisioningState: "active",
+          repoSource: { provider: "github", owner: "octogee-ai", repo },
+        },
+      ],
+    });
+    expect(snapshotConfigFingerprint(project("demo"))).not.toBe(
+      snapshotConfigFingerprint(project("other")),
+    );
+  });
+
+  it("counts a GitHub-backed project with no Gitea repo as clone drift", () => {
+    const base = snapshotConfigFingerprint(snap({ projects: [] }));
+    expect(
+      snapshotConfigFingerprint(
+        snap({
+          projects: [
+            {
+              projectSlug: "camp",
+              giteaRepoName: null,
+              provisioningState: "active",
+              repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+            },
+          ],
+        }),
+      ),
+    ).not.toBe(base);
+  });
+
   it("changes when a project's repo is first provisioned — no repo name means nothing to clone", () => {
     const noRepo = snap({
       projects: [{ projectSlug: "camp", giteaRepoName: null, provisioningState: "active" }],

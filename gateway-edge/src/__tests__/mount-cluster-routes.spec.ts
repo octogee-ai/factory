@@ -67,8 +67,20 @@ describe("mountClusterRoutes", () => {
     mountClusterRoutes(app);
 
     const projects = useCalls(app, "/api/projects");
-    expect(projects).toHaveLength(9);
+    expect(projects).toHaveLength(10);
     expect((projects[2].handlers[0] as { name?: string }).name).toBe("requireAuth");
+  });
+
+  it("prefers the injected project routers over the fail-closed defaults", () => {
+    const app = recordingApp();
+    const projectsCreateRoutes = Router();
+    const projectsRepoSourceRoutes = Router();
+
+    mountClusterRoutes(app, { projectsCreateRoutes, projectsRepoSourceRoutes });
+
+    const projects = useCalls(app, "/api/projects");
+    expect(projects[3].handlers).toEqual([projectsCreateRoutes]);
+    expect(projects[9].handlers).toEqual([projectsRepoSourceRoutes]);
   });
 
   it("mounts the optional Mattermost mint route at the browser credential path", () => {
@@ -113,6 +125,7 @@ describe("mountClusterRoutes", () => {
       "/api/workspace",
       "/api/channels",
       "/api/channels",
+      "/api/projects",
       "/api/projects",
       "/api/projects",
       "/api/projects",

@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 
 const h = vi.hoisted(() => ({
   uid: "owner-1",
@@ -10,6 +11,7 @@ const h = vi.hoisted(() => ({
   existingProject: false,
   createProjectForActor: vi.fn(),
   projectSlugAvailability: vi.fn(),
+  evaluate: vi.fn(),
   logger: {
     error: vi.fn(),
   },
@@ -32,6 +34,7 @@ vi.mock("../lib/db.js", () => ({
       },
     }),
   },
+  FieldValue: { serverTimestamp: () => "SERVER_TS" },
 }));
 
 vi.mock("../lib/project-create-service.js", () => ({
@@ -43,9 +46,14 @@ vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
 }));
 
-const { default: createRoutes } = await import("../routes/projects/create.js");
+const { default: createRoutes, createProjectCreateRoutes } =
+  await import("../routes/projects/create.js");
 
-function app() {
+const featurePolicy = {
+  evaluate: (...args: unknown[]) => h.evaluate(...args),
+} as unknown as FeaturePolicy;
+
+function app(routes: express.Router = createRoutes) {
   const a = express();
   a.use(express.json());
   a.use((req, _res, next) => {
@@ -55,8 +63,12 @@ function app() {
     req.isAdmin = h.isAdmin;
     next();
   });
-  a.use("/api/projects", createRoutes);
+  a.use("/api/projects", routes);
   return a;
+}
+
+function gatedApp() {
+  return app(createProjectCreateRoutes({ featurePolicy }));
 }
 
 beforeEach(() => {
@@ -70,6 +82,7 @@ beforeEach(() => {
     body: { success: true, slug: "orbit" },
   });
   h.projectSlugAvailability.mockReset().mockReturnValue({ ok: true });
+  h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
   h.logger.error.mockReset();
 });
 
@@ -118,10 +131,84 @@ describe("POST /api/projects", () => {
         uid: "owner-1",
         userData: { username: "mira" },
         workspaceId: "mira",
-        isAdmin: false,
         source: "ui",
       },
       body,
+    );
+    expect(h.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("evaluates the repo-source flag only when the body asks for a GitHub repo", async () => {
+    const body = {
+      name: "Orbit",
+      slug: "orbit",
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "seed" },
+    };
+
+    await request(gatedApp()).post("/api/projects").send(body).expect(200);
+
+    expect(h.evaluate).toHaveBeenCalledWith(
+      "release-project-repo-source",
+      expect.objectContaining({ uid: "owner-1", isAdmin: false, workspaceSlug: "mira" }),
+      expect.any(String),
+    );
+    expect(h.createProjectForActor).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSourceAccess: "enabled" }),
+      body,
+    );
+  });
+
+  it("hands a disabled decision to the service rather than deciding on its own", async () => {
+    h.evaluate.mockResolvedValue({ state: "disabled", value: false });
+
+    await request(gatedApp())
+      .post("/api/projects")
+      .send({
+        name: "Orbit",
+        slug: "orbit",
+        repoSource: { provider: "github", owner: "octogee-ai", repo: "seed" },
+      })
+      .expect(200);
+
+    expect(h.createProjectForActor).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSourceAccess: "disabled" }),
+      expect.anything(),
+    );
+  });
+
+  it("treats an admin as enabled without consulting the flag", async () => {
+    h.isAdmin = true;
+    h.evaluate.mockResolvedValue({ state: "disabled", value: false });
+
+    await request(gatedApp())
+      .post("/api/projects")
+      .send({
+        name: "Orbit",
+        slug: "orbit",
+        repoSource: { provider: "github", owner: "octogee-ai", repo: "seed" },
+      })
+      .expect(200);
+
+    expect(h.evaluate).not.toHaveBeenCalled();
+    expect(h.createProjectForActor).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSourceAccess: "enabled" }),
+      expect.anything(),
+    );
+  });
+
+  it("fails the repo-source gate closed when no feature policy is wired in", async () => {
+    await request(app())
+      .post("/api/projects")
+      .send({
+        name: "Orbit",
+        slug: "orbit",
+        repoSource: { provider: "github", owner: "octogee-ai", repo: "seed" },
+      })
+      .expect(200);
+
+    expect(h.createProjectForActor).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSourceAccess: "disabled" }),
+      expect.anything(),
     );
   });
 

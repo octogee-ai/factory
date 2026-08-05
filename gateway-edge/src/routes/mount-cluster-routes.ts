@@ -47,6 +47,7 @@ import projectsStarRoutes from "./projects/star.js";
 import projectsMembersRoutes from "./projects/members.js";
 import projectsDeleteRoutes from "./projects/delete.js";
 import projectsAgentRoutes from "./projects/agent.js";
+import projectsRepoSourceRoutes from "./projects/repo-source.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
@@ -60,6 +61,8 @@ export interface MountClusterRoutesOpts {
   billingRoutes?: Router;
   builderGatewaysRoutes?: Router;
   sharingRoutes?: Router;
+  projectsCreateRoutes?: Router;
+  projectsRepoSourceRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -79,17 +82,20 @@ const WORKSPACE_ROUTES: readonly RouteHandler[] = [
 
 const CHANNEL_ROUTES: readonly RouteHandler[] = [requireAuth, channelsRoutes];
 
-const PROJECT_ROUTES: readonly RouteHandler[] = [
-  projectsReadmeRoutes,
-  projectsDeleteRoutes,
-  requireAuth,
-  projectsCreateRoutes,
-  projectsRetryRoutes,
-  projectsJoinLeaveRoutes,
-  projectsStarRoutes,
-  projectsMembersRoutes,
-  projectsAgentRoutes,
-];
+function projectRoutes(opts: MountClusterRoutesOpts): readonly RouteHandler[] {
+  return [
+    projectsReadmeRoutes,
+    projectsDeleteRoutes,
+    requireAuth,
+    opts.projectsCreateRoutes ?? projectsCreateRoutes,
+    projectsRetryRoutes,
+    projectsJoinLeaveRoutes,
+    projectsStarRoutes,
+    projectsMembersRoutes,
+    projectsAgentRoutes,
+    opts.projectsRepoSourceRoutes ?? projectsRepoSourceRoutes,
+  ];
+}
 
 const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/auth/email", authEmailRoutes],
@@ -135,7 +141,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
 
   mountGroup(app, "/api/workspace", WORKSPACE_ROUTES);
   mountGroup(app, "/api/channels", CHANNEL_ROUTES);
-  mountGroup(app, "/api/projects", PROJECT_ROUTES);
+  mountGroup(app, "/api/projects", projectRoutes(opts));
 
   if (opts.mattermostMintRoutes) {
     app.use("/api/auth/mattermost", opts.mattermostMintRoutes);

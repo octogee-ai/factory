@@ -23,6 +23,8 @@ vi.mock("../lib/db.js", () => ({
   db: {
     doc: (path: string) => h.dbDoc(path),
   },
+  auth: { verifyIdToken: vi.fn() },
+  FieldValue: { serverTimestamp: vi.fn() },
 }));
 
 vi.mock("../lib/gitea.js", () => ({
@@ -194,7 +196,7 @@ describe("project provisioning helpers", () => {
     );
   });
 
-  it("seeds project.json with the default static recipe beside the README", async () => {
+  it("writes no Octogee metadata file into the project repo", async () => {
     await ensureProjectGiteaRepo({
       workspaceId: "mira",
       slug: "orbit",
@@ -204,26 +206,9 @@ describe("project provisioning helpers", () => {
       visibility: "public",
     });
 
-    const call = h.giteaWriteFile.mock.calls.find((args) => args[2] === "project.json");
-    expect(call).toBeDefined();
-    expect(call?.[0]).toBe("mira");
-    expect(call?.[1]).toBe("orbit");
-    expect(call?.[4]).toBe("auto: seed project metadata");
-    expect(JSON.parse(call?.[3] as string)).toMatchObject({
-      version: 1,
-      name: "Orbit",
-      slug: "orbit",
-      ownerSlug: "mira",
-      status: "active",
-      visibility: "public",
-      hosting: {
-        enabled: true,
-        siteId: "octogee-mira-orbit",
-        url: "https://octogee-mira-orbit.web.app",
-      },
-      runtime: { recipe: "static-site" },
-      collaborators: [],
-    });
+    expect(h.giteaWriteFile.mock.calls.map((args) => args[2])).toEqual(["README.md"]);
+    const seededPaths = (h.giteaWriteFiles.mock.calls[0]?.[2] ?? []) as ReadonlyArray<{ path: string }>;
+    expect(seededPaths.map((seed) => seed.path)).not.toContain("project.json");
   });
 
   it("seeds the playbook and welcome note as one commit, from the shared core seeds", async () => {

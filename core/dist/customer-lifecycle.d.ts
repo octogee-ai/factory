@@ -1,6 +1,7 @@
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
 export interface UserSnapshot {
     uid: string;
@@ -36,6 +37,14 @@ export interface UserSnapshot {
         };
         agentModels?: AgentModelSelections;
     };
+}
+export interface ProjectCloneTarget {
+    projectSlug: string;
+    giteaRepoName: string | null;
+    repoSource?: ProjectRepoSource | null;
+}
+export interface ProjectCloneOptions {
+    repoSource?: ProjectRepoSource | null;
 }
 export interface CustomerContext {
     uid: string;
@@ -127,11 +136,8 @@ export interface CustomerLifecycleAdapter {
     }>;
     reassertByotForCustomer: (userData: Record<string, unknown>) => Promise<void>;
     reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
-    listProjectsNeedingClone: (slug: string) => Promise<Array<{
-        projectSlug: string;
-        giteaRepoName: string;
-    }>>;
-    cloneProjectRepo: (customerSlug: string, projectSlug: string, giteaRepoName: string) => Promise<boolean>;
+    listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
+    cloneProjectRepo: (customerSlug: string, projectSlug: string, giteaRepoName: string | null, opts?: ProjectCloneOptions) => Promise<boolean>;
     provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
     /**
      * Idempotently ensure this Builder is a member of the shared Octogee Community

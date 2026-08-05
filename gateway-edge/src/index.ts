@@ -35,6 +35,8 @@ import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentImportRuntime } from "./lib/agent-import-runtime.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createSharingRoutes } from "./routes/sharing.js";
+import { createProjectCreateRoutes } from "./routes/projects/create.js";
+import { createProjectRepoSourceRoutes } from "./routes/projects/repo-source.js";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { createGatewayRouter } from "./public-router.js";
 import {
@@ -207,7 +209,11 @@ function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void 
   // (readme) and explicit-auth sequencing aren't shadowed by the locality
   // routers. Express tries handlers in mount order; locality routers are
   // gateway-edge-only and only match their specific paths.
-  mountClusterRoutes(app, featurePolicy ? { sharingRoutes: createSharingRoutes({ featurePolicy }) } : {});
+  mountClusterRoutes(app, featurePolicy ? {
+    sharingRoutes: createSharingRoutes({ featurePolicy }),
+    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
+    projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
+  } : {});
 }
 
 function mountSidecarLocalitySurface(app: Express, options: {

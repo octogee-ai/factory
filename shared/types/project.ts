@@ -3,10 +3,28 @@ export type ProjectStatus = 'idea' | 'building' | 'launched' | 'paused' | 'archi
 export type ProjectProvisioningState = 'provisioning' | 'active' | 'failed';
 export type ProjectType = 'game' | 'social' | 'planner' | 'trip' | 'other';
 
+// How Preview and Publish run the project. The vocabulary is shared with
+// scripts/lib/project-recipes.ts, which owns each recipe's build contract.
+export type ProjectRecipeId = 'static-site' | 'vite-static' | 'astro-static';
+export const DEFAULT_PROJECT_RECIPE: ProjectRecipeId = 'static-site';
+
 export interface ProjectRepoSource {
   provider: 'github';
   owner: string;
   repo: string;
+}
+
+export function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null {
+  if (!value || typeof value !== 'object') return null;
+  const { provider, owner, repo } = value as {
+    provider?: unknown;
+    owner?: unknown;
+    repo?: unknown;
+  };
+  if (provider !== 'github') return null;
+  if (typeof owner !== 'string' || owner.length === 0) return null;
+  if (typeof repo !== 'string' || repo.length === 0) return null;
+  return { provider: 'github', owner, repo };
 }
 
 export interface Project {
@@ -38,6 +56,7 @@ pendingVisibility?: ProjectVisibility | null;
   };
 
 canvasFile: string;
+  recipe?: ProjectRecipeId | null;
   publishedUrl: string | null;
   starCount: number;
   memberCount: number;

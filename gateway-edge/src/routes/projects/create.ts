@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { strictRateLimit } from "../../middleware/security.js";
 import { logger } from "../../middleware/logging.js";
 import { db } from "../../lib/db.js";
@@ -7,45 +8,66 @@ import {
   projectSlugAvailability,
   type ProjectCreateInput,
 } from "../../lib/project-create-service.js";
+import { projectRepoSourceAccess, type RepoSourceAccess } from "./repo-source.js";
 
-const router = Router();
+export function createProjectCreateRoutes(
+  { featurePolicy }: { featurePolicy?: FeaturePolicy } = {},
+): Router {
+  const router = Router();
 
-router.get("/slug-available", async (req: Request, res: Response) => {
-  const slug = String(req.query.slug ?? "").trim();
+  router.get("/slug-available", async (req: Request, res: Response) => {
+    const slug = String(req.query.slug ?? "").trim();
 
-  const availability = projectSlugAvailability(slug);
-  if (!availability.ok) {
-    res.json({ available: false, reason: availability.reason });
-    return;
-  }
+    const availability = projectSlugAvailability(slug);
+    if (!availability.ok) {
+      res.json({ available: false, reason: availability.reason });
+      return;
+    }
 
-  const workspaceId = req.workspaceSlug;
-  if (!workspaceId) {
-    res.status(422).json({ error: "Workspace not provisioned" });
-    return;
-  }
+    const workspaceId = req.workspaceSlug;
+    if (!workspaceId) {
+      res.status(422).json({ error: "Workspace not provisioned" });
+      return;
+    }
 
-  const existing = await db.doc(`workspaces/${workspaceId}/projects/${slug}`).get();
-  res.json({ available: !existing.exists });
-});
+    const existing = await db.doc(`workspaces/${workspaceId}/projects/${slug}`).get();
+    res.json({ available: !existing.exists });
+  });
 
-router.post("/", strictRateLimit, async (req: Request, res: Response) => {
-  try {
-    const result = await createProjectForActor(
-      {
-        uid: req.uid!,
-        userData: req.user,
-        workspaceId: req.workspaceSlug,
-        isAdmin: req.isAdmin,
-        source: "ui",
-      },
-      req.body as ProjectCreateInput,
-    );
-    res.status(result.status).json(result.body);
-  } catch (err) {
-    logger.error("[projects] Create failed:", { err });
-    res.status(500).json({ error: "Failed to create project" });
-  }
-});
+  router.post("/", strictRateLimit, async (req: Request, res: Response) => {
+    try {
+      const input = req.body as ProjectCreateInput;
+      const result = await createProjectForActor(
+        {
+          uid: req.uid!,
+          userData: req.user,
+          workspaceId: req.workspaceSlug,
+          ...(await requestedRepoSourceAccess(featurePolicy, req, input)),
+          source: "ui",
+        },
+        input,
+      );
+      res.status(result.status).json(result.body);
+    } catch (err) {
+      logger.error("[projects] Create failed:", { err });
+      res.status(500).json({ error: "Failed to create project" });
+    }
+  });
 
-export default router;
+  return router;
+}
+
+// The flag only decides whether a caller may point a new project at GitHub, so
+// a plain Gitea create must not pay a flag-provider round trip to be told so.
+async function requestedRepoSourceAccess(
+  featurePolicy: FeaturePolicy | undefined,
+  req: Request,
+  input: ProjectCreateInput | null | undefined,
+): Promise<{ repoSourceAccess?: RepoSourceAccess }> {
+  if (input?.repoSource === undefined || input.repoSource === null) return {};
+  return {
+    repoSourceAccess: await projectRepoSourceAccess(featurePolicy, req, "projects-create"),
+  };
+}
+
+export default createProjectCreateRoutes();

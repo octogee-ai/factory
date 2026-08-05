@@ -113,15 +113,31 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
     return { restored: true, steps };
 }
+function githubRepoSourceOf(target) {
+    return target.repoSource?.provider === "github" ? target.repoSource : null;
+}
+function projectCloneOptions(target) {
+    const repoSource = githubRepoSourceOf(target);
+    return repoSource ? { repoSource } : undefined;
+}
+function projectCloneSourceLabel(target) {
+    const repoSource = githubRepoSourceOf(target);
+    return repoSource ? `github:${repoSource.owner}/${repoSource.repo}` : "Gitea";
+}
+function hasProjectCloneSource(target) {
+    return githubRepoSourceOf(target) !== null || Boolean(target.giteaRepoName);
+}
 async function cloneProjectsFromSnapshot(adapter, snapshot) {
     const steps = [];
     for (const p of snapshot.projects ?? []) {
-        if (!p.giteaRepoName)
-            continue;
         if (p.provisioningState !== undefined && p.provisioningState !== "active")
             continue;
+        if (!hasProjectCloneSource(p)) {
+            adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
+            continue;
+        }
         try {
-            const ok = await adapter.cloneProjectRepo(snapshot.slug, p.projectSlug, p.giteaRepoName);
+            const ok = await adapter.cloneProjectRepo(snapshot.slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
             if (ok)
                 steps.push("project-clone");
         }
@@ -436,11 +452,15 @@ async function cloneMissingProjects(adapter, slug) {
     const toClone = await adapter.listProjectsNeedingClone(slug);
     const steps = [];
     for (const p of toClone) {
+        if (!hasProjectCloneSource(p)) {
+            adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
+            continue;
+        }
         try {
-            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName);
+            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
             if (ok) {
                 steps.push("project-clone");
-                adapter.log(`[add:${slug}/${p.projectSlug}] cloned from Gitea`);
+                adapter.log(`[add:${slug}/${p.projectSlug}] cloned from ${projectCloneSourceLabel(p)}`);
             }
         }
         catch (err) {

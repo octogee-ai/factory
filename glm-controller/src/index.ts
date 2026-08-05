@@ -231,6 +231,7 @@ import {
 } from "@octogee/core/firebase-auth-helpers";
 import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
+import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
@@ -2803,6 +2804,10 @@ function collectMigrationProjects(
     };
     if (typeof data.provisioningState === "string") {
       out.provisioningState = data.provisioningState;
+    }
+    const repoSource = projectRepoSourceFromDoc(data.repoSource);
+    if (repoSource) {
+      out.repoSource = repoSource;
     }
     return out;
   });

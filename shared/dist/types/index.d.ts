@@ -1,4 +1,5 @@
-export type { Project, ProjectRepoSource, ProjectVisibility, ProjectStatus, ProjectProvisioningState, ProjectType, } from './project.js';
+export type { Project, ProjectRecipeId, ProjectRepoSource, ProjectVisibility, ProjectStatus, ProjectProvisioningState, ProjectType, } from './project.js';
+export { DEFAULT_PROJECT_RECIPE } from './project.js';
 export type { ProjectRetentionPlan, ProjectRetentionState, ProjectRetentionStatus, } from './project-retention.js';
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
 export type { LegalDocId, LegalDoc, LegalAcceptanceContext, LegalAcceptanceMethod, LegalAcceptanceRecord, LegalAcceptanceClaim, } from './legal.js';

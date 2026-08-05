@@ -31,6 +31,7 @@ describe("GET /api/features", () => {
         "release-builder-gateway": false,
         "release-obsidian-connection": false,
         "release-workspace-sharing": false,
+        "release-project-repo-source": false,
       },
     });
   });

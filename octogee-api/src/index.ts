@@ -51,6 +51,8 @@ import { createProductObservability } from "./lib/product-observability.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
 import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
 import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing.js";
+import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
+import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
 import { createStripeSessionRoutes } from "../../gateway-edge/src/routes/billing/stripe-session.js";
 import {
@@ -236,6 +238,8 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
     }),
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
     sharingRoutes: createSharingRoutes({ featurePolicy }),
+    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
+    projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
   };
 }
 

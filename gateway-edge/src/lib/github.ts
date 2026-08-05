@@ -289,9 +289,39 @@ export async function githubListRepos(
   return { repos, truncated: page > GITHUB_REPOS_MAX_PAGES };
 }
 
-export function isValidGithubRepoSource(
-  rs: unknown,
-): rs is { provider: "github"; owner: string; repo: string } {
+export interface GithubRepoSource {
+  provider: "github";
+  owner: string;
+  repo: string;
+}
+
+const GITHUB_REPO_URL_HOSTS = new Set(["github.com", "www.github.com"]);
+
+export function parseGithubRepoUrl(value: unknown): GithubRepoSource | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  let url: URL;
+  try {
+    url = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  if (!GITHUB_REPO_URL_HOSTS.has(url.hostname.toLowerCase())) return null;
+
+  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+  if (segments.length !== 2) return null;
+
+  const candidate = {
+    provider: "github" as const,
+    owner: segments[0],
+    repo: segments[1].replace(/\.git$/i, ""),
+  };
+  return isValidGithubRepoSource(candidate) ? candidate : null;
+}
+
+export function isValidGithubRepoSource(rs: unknown): rs is GithubRepoSource {
   if (!rs || typeof rs !== "object") return false;
   const r = rs as { provider?: unknown; owner?: unknown; repo?: unknown };
   return (

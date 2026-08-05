@@ -27,6 +27,7 @@ import {
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import type { ProjectRepoSource } from "@octogee/shared/types/project";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -142,10 +143,20 @@ function sshRemoteUrl(org: string, repoName: string): string {
   return `git@${GIT_SSH_HOST}:${org}/${repoName}.git`;
 }
 
-export function gitExec(cwd: string, argv: string[], sshKeyPath?: string): string | null {
+function githubHttpsRemoteUrl(owner: string, repo: string): string {
+  return `https://github.com/${owner}/${repo}.git`;
+}
+
+export function gitExec(
+  cwd: string,
+  argv: string[],
+  sshKeyPath?: string,
+  extraEnv?: Record<string, string>,
+): string | null {
   try {
     const env: Record<string, string | undefined> = {
       ...process.env,
+      ...extraEnv,
       GIT_TERMINAL_PROMPT: "0",
     };
     if (sshKeyPath) {
@@ -215,16 +226,33 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
   return true;
 }
 
+export interface CloneProjectRepoOptions {
+  repoSource?: ProjectRepoSource | null;
+  githubToken?: string | null;
+}
+
 export async function cloneProjectRepo(
   slug: string,
   projectSlug: string,
   giteaRepoName: string,
+  opts: CloneProjectRepoOptions = {},
 ): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
-  const gitDir = path.join(dest, ".git");
 
-  if (fs.existsSync(gitDir)) return true;
+  if (fs.existsSync(path.join(dest, ".git"))) return true;
 
+  if (opts.repoSource?.provider === "github") {
+    return cloneGithubProjectRepo(slug, projectSlug, dest, opts.repoSource, opts.githubToken);
+  }
+  return cloneGiteaProjectRepo(slug, projectSlug, dest, giteaRepoName);
+}
+
+async function cloneGiteaProjectRepo(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  giteaRepoName: string,
+): Promise<boolean> {
   const org = workspaceGiteaOrg(slug);
   const sshKey = customerSshKeyPath(slug);
   if (!fs.existsSync(sshKey)) {
@@ -244,14 +272,93 @@ export async function cloneProjectRepo(
     return false;
   }
 
+  const cloned = checkoutProjectRepo({
+    dest,
+    projectSlug,
+    label: `${slug}/${projectSlug}`,
+    remoteUrl: sshRemoteUrl(org, giteaRepoName),
+    sshKey,
+  });
+  if (!cloned) return false;
+
+  setProjectCommitIdentity(dest, slug);
+  setRepoSshCommand(dest, slug);
+
+  log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
+  return true;
+}
+
+// GitHub push credentials are the connector token materialized at boot
+// (github-cli-auth-hydrate → `gh auth setup-git`); with no explicit token the clone
+// rides that same ambient credential helper.
+async function cloneGithubProjectRepo(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  repoSource: ProjectRepoSource,
+  githubToken: string | null | undefined,
+): Promise<boolean> {
+  const remoteUrl = githubHttpsRemoteUrl(repoSource.owner, repoSource.repo);
+  const cloned = checkoutProjectRepo({
+    dest,
+    projectSlug,
+    label: `${slug}/${projectSlug}`,
+    remoteUrl,
+    env: githubCloneCredentialEnv(githubToken),
+  });
+  if (!cloned) return false;
+
+  setProjectCommitIdentity(dest, slug);
+
+  log(
+    `[git] ✅ Cloned ${repoSource.owner}/${repoSource.repo} → customers/${slug}/projects/${projectSlug}/`,
+  );
+  return true;
+}
+
+const GITHUB_CLONE_TOKEN_ENV = "OCTOGEE_GITHUB_CLONE_TOKEN";
+
+export function githubCloneCredentialEnv(
+  token: string | null | undefined,
+): Record<string, string> | undefined {
+  if (!token) return undefined;
+  return {
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
+    GIT_CONFIG_VALUE_1:
+      `!f() { test "$1" = get && printf 'username=x-access-token\\npassword=%s\\n' ` +
+      `"$${GITHUB_CLONE_TOKEN_ENV}"; }; f`,
+    [GITHUB_CLONE_TOKEN_ENV]: token,
+  };
+}
+
+function setProjectCommitIdentity(dest: string, slug: string): void {
+  gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
+  gitExec(dest, ["config", "user.name", `Octo (${slug})`]);
+}
+
+interface ProjectCheckout {
+  dest: string;
+  projectSlug: string;
+  label: string;
+  remoteUrl: string;
+  sshKey?: string;
+  env?: Record<string, string>;
+}
+
+function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
+  const { dest, projectSlug, label, remoteUrl, sshKey, env } = checkout;
   const parent = path.dirname(dest);
   fs.mkdirSync(parent, { recursive: true });
   const cloneDir = fs.existsSync(dest)
     ? fs.mkdtempSync(path.join(parent, `.${projectSlug}-clone-`))
     : dest;
-  const result = gitExec(parent, ["clone", sshRemoteUrl(org, giteaRepoName), cloneDir], sshKey);
+
+  const result = gitExec(parent, ["clone", remoteUrl, cloneDir], sshKey, env);
   if (result === null) {
-    log(`⚠ [git] Clone failed for ${slug}/${projectSlug}`);
+    log(`⚠ [git] Clone failed for ${label}`);
     fs.rmSync(cloneDir, { recursive: true, force: true });
     return false;
   }
@@ -260,18 +367,11 @@ export async function cloneProjectRepo(
     try {
       adoptProjectClone(cloneDir, dest);
     } catch (err) {
-      log(`⚠ [git] Failed to adopt clone for ${slug}/${projectSlug}: ${errMessage(err)}`);
+      log(`⚠ [git] Failed to adopt clone for ${label}: ${errMessage(err)}`);
       fs.rmSync(cloneDir, { recursive: true, force: true });
       return false;
     }
   }
-
-  gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
-  gitExec(dest, ["config", "user.name", `Octo (${slug})`]);
-
-  setRepoSshCommand(dest, slug);
-
-  log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
 }
 
@@ -507,22 +607,32 @@ function getOriginRemoteSilent(coachDir: string): string | null {
   }
 }
 
-function migrateHttpRemoteToSsh(repoDir: string, slug: string, remoteUrl: string): boolean {
+type RemoteMigration = "migrated" | "not-gitea" | "failed";
+
+function migrateHttpRemoteToSsh(
+  repoDir: string,
+  slug: string,
+  remoteUrl: string,
+): RemoteMigration {
   let repoPath: string;
   try {
-    const segments = new URL(remoteUrl).pathname.split("/").filter(Boolean);
-    if (segments.length !== 2 || segments[0] !== workspaceGiteaOrg(slug)) return false;
+    const remote = new URL(remoteUrl);
+    if (remote.hostname !== GIT_SSH_HOST && remote.hostname !== new URL(GIT_API_URL).hostname) {
+      return "not-gitea";
+    }
+    const segments = remote.pathname.split("/").filter(Boolean);
+    if (segments.length !== 2 || segments[0] !== workspaceGiteaOrg(slug)) return "not-gitea";
     repoPath = segments.join("/");
   } catch {
-    return false;
+    return "not-gitea";
   }
   const result = gitExec(repoDir, [
     "remote", "set-url", "origin",
     `git@${GIT_SSH_HOST}:${repoPath}`,
   ]);
-  if (result === null) return false;
+  if (result === null) return "failed";
   log(`[git-sync] ${slug}/${repoPath}: migrated remote to SSH`);
-  return true;
+  return "migrated";
 }
 
 function commitLocalChanges(repoDir: string, label: string, strict: boolean): boolean {
@@ -625,8 +735,10 @@ function syncOneRepository(
     }
 
     if (remoteCheck.startsWith("http")) {
-      const migrated = migrateHttpRemoteToSsh(target.dir, slug, remoteCheck);
-      if (!migrated && strict) throw new Error(`${target.label}: SSH remote migration failed`);
+      const migration = migrateHttpRemoteToSsh(target.dir, slug, remoteCheck);
+      if (migration === "failed" && strict) {
+        throw new Error(`${target.label}: SSH remote migration failed`);
+      }
     }
 
     const committed = commitLocalChanges(target.dir, target.label, strict);

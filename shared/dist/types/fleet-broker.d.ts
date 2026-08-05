@@ -1,4 +1,5 @@
 import type { AssignmentState } from "./gateway-releases.js";
+import type { ProjectRepoSource } from "./project.js";
 export type FleetBrokerProvisioningStatus = "" | "provisioning" | "complete";
 export type FleetBrokerMattermostUpdate = Record<string, unknown>;
 export type FleetBrokerGreetingResult = {
@@ -17,7 +18,9 @@ export interface FleetBrokerChannelBinding {
 export interface FleetBrokerProjectRestore {
     projectSlug: string;
     giteaRepoName: string | null;
+    repoSource?: ProjectRepoSource | null;
     provisioningState?: string;
+    recipe?: string;
 }
 export type FleetBrokerProjectCheckoutScope = "workspace-only" | "workspace-and-projects";
 export interface FleetBrokerAssignmentRosterEntry {

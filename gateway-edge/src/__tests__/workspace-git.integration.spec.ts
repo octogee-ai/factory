@@ -385,6 +385,82 @@ const PROJECT = "myproj";
   });
 });
 
+describe("GitHub-backed project working tree", () => {
+  const GH_PROJECT = "ghproj";
+  beforeAll(async () => {
+    const projectDir = path.join(customersRoot, SLUG, "projects", GH_PROJECT);
+    await fs.mkdir(projectDir, { recursive: true });
+    gitInit(projectDir);
+    await fs.writeFile(path.join(projectDir, "GH.md"), "from github\n");
+    gitAddCommit(projectDir, "github initial");
+  });
+  beforeEach(() => {
+    firestoreData[`workspaces/${SLUG}/projects/${GH_PROJECT}`] = {
+      slug: GH_PROJECT,
+      ownerUid: "caller-uid",
+      giteaRepoName: null,
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    };
+  });
+
+  it("/git/status serves the local checkout instead of refusing the github provider", async () => {
+    await fs.writeFile(
+      path.join(customersRoot, SLUG, "projects", GH_PROJECT, "GH.md"),
+      "edited\n",
+    );
+    const app = createApp();
+    const res = await request(app)
+      .get(`/api/workspace/git/status?slug=${SLUG}&project=${GH_PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken");
+    expect(res.status, res.text).toBe(200);
+    expect(res.body.entries).toEqual([{ path: "GH.md", change: "modified" }]);
+  });
+
+  it("/git/commit writes a commit to the github-backed checkout", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "github-backed commit" });
+    expect(res.status, res.text).toBe(200);
+    expect(res.body.empty).toBe(false);
+    expect(res.body.sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("/git/branch/checkout switches branches on the github-backed checkout", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "feat/gh-work", create: true });
+    expect(res.status, res.text).toBe(200);
+    expect(res.body).toEqual({ ok: true, branch: "feat/gh-work" });
+    await request(app)
+      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ branch: "main" });
+  });
+
+  it("still 403s a caller who is neither project owner nor project member", async () => {
+    firestoreData[`users/caller-uid`] = {
+      uid: "caller-uid",
+      username: "ghost",
+      workspaceId: "ghost",
+    };
+    firestoreData[`workspaces/${SLUG}/projects/${GH_PROJECT}`] = {
+      slug: GH_PROJECT,
+      ownerUid: "different-uid",
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    };
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+      .set("Authorization", "Bearer caller-idtoken")
+      .send({ message: "not mine" });
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
   it("commits a real working-tree change with the requesting user as author", async () => {
     

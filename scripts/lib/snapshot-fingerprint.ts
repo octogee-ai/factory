@@ -1,4 +1,7 @@
-import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type {
+  FleetBrokerProjectRestore,
+  FleetBrokerUserSnapshot,
+} from "../../shared/types/fleet-broker.js";
 
 // A stable fingerprint of the fields of a customer snapshot that shape what an ensure
 // applies on disk — the generated OpenClaw config (agents.list,
@@ -78,6 +81,13 @@ function planSubscriptionSlice(subscription: unknown): Record<string, unknown> |
   };
 }
 
+function projectCloneKey(project: FleetBrokerProjectRestore): string {
+  const repoSource = project.repoSource;
+  return repoSource?.provider === "github"
+    ? `${project.projectSlug}@github:${repoSource.owner}/${repoSource.repo}`
+    : project.projectSlug;
+}
+
 export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): string {
   const configSlice = {
     // Order-independent: bindings/accounts are keyed, not positional.
@@ -90,10 +100,10 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     projectCloneSet: snapshot.projectCheckoutScope === "workspace-only" ? [] : [...(snapshot.projects ?? [])]
       .filter(
         (p) =>
-          !!p.giteaRepoName
+          (!!p.giteaRepoName || p.repoSource?.provider === "github")
           && (p.provisioningState === undefined || p.provisioningState === "active"),
       )
-      .map((p) => p.projectSlug)
+      .map(projectCloneKey)
       .sort(compareStrings),
     coachIdentity: snapshot.coachIdentity ?? null,
     coachToken: snapshot.coachToken,

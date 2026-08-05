@@ -18,6 +18,7 @@ import {
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
 import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
+import { projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
@@ -32,6 +33,8 @@ import {
   type CustomerLifecycleAdapter,
   type CustomerStateImportMode,
   type MmUpdate,
+  type ProjectCloneOptions,
+  type ProjectCloneTarget,
   type RemoveCustomerResult,
   type UserSnapshot,
 } from "./customer-lifecycle.js";
@@ -307,17 +310,36 @@ async function writeCustomerTemplateFiles(ctx: CustomerContext): Promise<void> {
 async function listProjectsNeedingClone(
   ctx: BrokerCtx,
   slug: string,
-): Promise<Array<{ projectSlug: string; giteaRepoName: string }>> {
+): Promise<ProjectCloneTarget[]> {
   const snapshot = await snapshotForSlug(ctx, slug);
   if (!snapshot) return [];
   return snapshot.projects.flatMap((p) => {
-    if (!p.giteaRepoName) return [];
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
     if (fs.existsSync(path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug, ".git"))) {
       return [];
     }
-    return [{ projectSlug: p.projectSlug, giteaRepoName: p.giteaRepoName }];
+    const repoSource = projectRepoSourceFromDoc(p.repoSource);
+    if (!repoSource && !p.giteaRepoName) {
+      ctx.log(
+        `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,
+      );
+      return [];
+    }
+    return [{
+      projectSlug: p.projectSlug,
+      giteaRepoName: p.giteaRepoName,
+      ...(repoSource ? { repoSource } : {}),
+    }];
   });
+}
+
+function cloneProjectRepoForTarget(
+  customerSlug: string,
+  projectSlug: string,
+  giteaRepoName: string | null,
+  opts?: ProjectCloneOptions,
+): Promise<boolean> {
+  return cloneProjectRepo(customerSlug, projectSlug, giteaRepoName ?? "", opts);
 }
 
 function coachToken(
@@ -980,7 +1002,7 @@ export function buildBrokeredLifecycleAdapter(
       );
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
-    cloneProjectRepo,
+    cloneProjectRepo: cloneProjectRepoForTarget,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),

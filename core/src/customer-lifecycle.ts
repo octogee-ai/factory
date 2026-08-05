@@ -6,6 +6,7 @@ import type {
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
+import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -46,6 +47,16 @@ export interface UserSnapshot {
     byot?: { provider?: string; baseUrl?: string; model?: string };
     agentModels?: AgentModelSelections;
   };
+}
+
+export interface ProjectCloneTarget {
+  projectSlug: string;
+  giteaRepoName: string | null;
+  repoSource?: ProjectRepoSource | null;
+}
+
+export interface ProjectCloneOptions {
+  repoSource?: ProjectRepoSource | null;
 }
 
 export interface CustomerContext {
@@ -168,13 +179,12 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   // WAS house_only and has since upgraded — that's how ownership returns to them.
   reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
 
-  listProjectsNeedingClone: (slug: string) => Promise<
-    Array<{ projectSlug: string; giteaRepoName: string }>
-  >;
+  listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
   cloneProjectRepo: (
     customerSlug: string,
     projectSlug: string,
-    giteaRepoName: string,
+    giteaRepoName: string | null,
+    opts?: ProjectCloneOptions,
   ) => Promise<boolean>;
 
   provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
@@ -480,19 +490,43 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   return { restored: true, steps };
 }
 
+function githubRepoSourceOf(target: ProjectCloneTarget): ProjectRepoSource | null {
+  return target.repoSource?.provider === "github" ? target.repoSource : null;
+}
+
+function projectCloneOptions(target: ProjectCloneTarget): ProjectCloneOptions | undefined {
+  const repoSource = githubRepoSourceOf(target);
+  return repoSource ? { repoSource } : undefined;
+}
+
+function projectCloneSourceLabel(target: ProjectCloneTarget): string {
+  const repoSource = githubRepoSourceOf(target);
+  return repoSource ? `github:${repoSource.owner}/${repoSource.repo}` : "Gitea";
+}
+
+function hasProjectCloneSource(target: ProjectCloneTarget): boolean {
+  return githubRepoSourceOf(target) !== null || Boolean(target.giteaRepoName);
+}
+
 async function cloneProjectsFromSnapshot(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
 ): Promise<AddCustomerStep[]> {
   const steps: AddCustomerStep[] = [];
   for (const p of snapshot.projects ?? []) {
-    if (!p.giteaRepoName) continue;
     if (p.provisioningState !== undefined && p.provisioningState !== "active") continue;
+    if (!hasProjectCloneSource(p)) {
+      adapter.log(
+        `[restore:${snapshot.slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`,
+      );
+      continue;
+    }
     try {
       const ok = await adapter.cloneProjectRepo(
         snapshot.slug,
         p.projectSlug,
         p.giteaRepoName,
+        projectCloneOptions(p),
       );
       if (ok) steps.push("project-clone");
     } catch (err) {
@@ -931,11 +965,22 @@ async function cloneMissingProjects(
   const toClone = await adapter.listProjectsNeedingClone(slug);
   const steps: AddCustomerStep[] = [];
   for (const p of toClone) {
+    if (!hasProjectCloneSource(p)) {
+      adapter.log(
+        `[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`,
+      );
+      continue;
+    }
     try {
-      const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName);
+      const ok = await adapter.cloneProjectRepo(
+        slug,
+        p.projectSlug,
+        p.giteaRepoName,
+        projectCloneOptions(p),
+      );
       if (ok) {
         steps.push("project-clone");
-        adapter.log(`[add:${slug}/${p.projectSlug}] cloned from Gitea`);
+        adapter.log(`[add:${slug}/${p.projectSlug}] cloned from ${projectCloneSourceLabel(p)}`);
       }
     } catch (err) {
       adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project clone failed: ${String(err)}`);

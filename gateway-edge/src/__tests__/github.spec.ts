@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { githubContentsUrl, githubHeaders, githubReposUrl, toRepoSummary, isValidGithubRepoSource } from '../lib/github.js';
+import {
+  githubContentsUrl,
+  githubHeaders,
+  githubReposUrl,
+  toRepoSummary,
+  isValidGithubRepoSource,
+  parseGithubRepoUrl,
+} from '../lib/github.js';
 
 describe('githubContentsUrl', () => {
   it('builds the contents URL for a file path', () => {
@@ -101,5 +108,58 @@ describe('isValidGithubRepoSource', () => {
   it('rejects null and non-objects', () => {
     expect(isValidGithubRepoSource(null)).toBe(false);
     expect(isValidGithubRepoSource('octogee-ai/octogee')).toBe(false);
+  });
+});
+
+describe('parseGithubRepoUrl', () => {
+  const expected = { provider: 'github', owner: 'octogee-ai', repo: 'octogee' };
+
+  it('parses a canonical https repo URL', () => {
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/octogee')).toEqual(expected);
+  });
+
+  it('parses without a protocol', () => {
+    expect(parseGithubRepoUrl('github.com/octogee-ai/octogee')).toEqual(expected);
+  });
+
+  it('parses http, www, trailing slash, and a .git suffix', () => {
+    expect(parseGithubRepoUrl('http://github.com/octogee-ai/octogee')).toEqual(expected);
+    expect(parseGithubRepoUrl('https://www.github.com/octogee-ai/octogee')).toEqual(expected);
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/octogee/')).toEqual(expected);
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/octogee.git')).toEqual(expected);
+    expect(parseGithubRepoUrl('  https://github.com/octogee-ai/octogee.git/  ')).toEqual(expected);
+  });
+
+  it('rejects hosts that are not github.com', () => {
+    expect(parseGithubRepoUrl('https://gitlab.com/octogee-ai/octogee')).toBeNull();
+    expect(parseGithubRepoUrl('https://github.com.evil.example/octogee-ai/octogee')).toBeNull();
+    expect(parseGithubRepoUrl('https://evilgithub.com/octogee-ai/octogee')).toBeNull();
+    expect(parseGithubRepoUrl('https://raw.githubusercontent.com/octogee-ai/octogee')).toBeNull();
+  });
+
+  it('rejects a URL without a repo segment', () => {
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai')).toBeNull();
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/')).toBeNull();
+    expect(parseGithubRepoUrl('https://github.com/')).toBeNull();
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/.git')).toBeNull();
+  });
+
+  it('rejects extra path segments', () => {
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/octogee/tree/main')).toBeNull();
+    expect(parseGithubRepoUrl('https://github.com/octogee-ai/octogee/blob/main/README.md')).toBeNull();
+  });
+
+  it('rejects owners and repos the repoSource shape would reject', () => {
+    expect(parseGithubRepoUrl('https://github.com/bad%20owner/octogee')).toBeNull();
+    expect(parseGithubRepoUrl(`https://github.com/${'a'.repeat(40)}/octogee`)).toBeNull();
+  });
+
+  it('rejects non-strings, blanks, and bare owner/repo pairs', () => {
+    expect(parseGithubRepoUrl(null)).toBeNull();
+    expect(parseGithubRepoUrl(42)).toBeNull();
+    expect(parseGithubRepoUrl({ provider: 'github', owner: 'octogee-ai', repo: 'octogee' })).toBeNull();
+    expect(parseGithubRepoUrl('   ')).toBeNull();
+    expect(parseGithubRepoUrl('octogee-ai/octogee')).toBeNull();
+    expect(parseGithubRepoUrl('not a url at all')).toBeNull();
   });
 });

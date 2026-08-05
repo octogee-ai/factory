@@ -11,6 +11,8 @@ import {
 import { projectRepoName } from "./gitea-naming.js";
 import { deleteProjectRepo, provisionProjectRepoResult } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
+import type { RepoSourceAccess } from "../routes/projects/repo-source.js";
+import { DEFAULT_PROJECT_RECIPE } from "@octogee/shared/types/project";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
@@ -27,7 +29,7 @@ export interface ProjectCreateActor {
   uid: string;
   userData: FirebaseFirestore.DocumentData | undefined;
   workspaceId: string | null | undefined;
-  isAdmin?: boolean;
+  repoSourceAccess?: RepoSourceAccess;
   source?: "ui" | "agent";
 }
 
@@ -98,9 +100,14 @@ type RepoSourceResult =
   | { ok: true; value: { provider: "github"; owner: string; repo: string } | null }
   | { ok: false; status: number; error: string };
 
-function resolveCreateRepoSource(repoSource: unknown, isAdmin: boolean): RepoSourceResult {
+function resolveCreateRepoSource(repoSource: unknown, access: RepoSourceAccess): RepoSourceResult {
   if (repoSource === undefined || repoSource === null) return { ok: true, value: null };
-  if (!isAdmin) return { ok: false, status: 403, error: "GitHub-backed projects are not enabled for this account" };
+  if (access === "unavailable") {
+    return { ok: false, status: 503, error: "feature_evaluation_unavailable" };
+  }
+  if (access !== "enabled") {
+    return { ok: false, status: 403, error: "GitHub-backed projects are not enabled for this account" };
+  }
   if (!isValidGithubRepoSource(repoSource)) {
     return { ok: false, status: 400, error: "Invalid repoSource (expected { provider: 'github', owner, repo })" };
   }
@@ -206,7 +213,7 @@ function buildProjectCreatePlan(
   const validation = validateProjectCreateRequest(request);
   if (!validation.ok) return validation;
 
-  const rs = resolveCreateRepoSource(request.repoSource, actor.isAdmin === true);
+  const rs = resolveCreateRepoSource(request.repoSource, actor.repoSourceAccess ?? "disabled");
   if (!rs.ok) return { ok: false, result: bad(rs.status, rs.error) };
 
   if (!workspaceId) {
@@ -293,6 +300,7 @@ async function writeProvisioningProject(
     pendingVisibility: plan.targetVisibility,
     provisioningState: "provisioning",
     canvasFile: "README.md",
+    recipe: DEFAULT_PROJECT_RECIPE,
     publishedUrl: null,
     giteaRepoName: plan.giteaRepoName,
     repoSource: plan.ghRepoSource,

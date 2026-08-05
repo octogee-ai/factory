@@ -9,6 +9,7 @@ import {
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
   createCachedFreeTierModelResolver,
@@ -990,6 +991,13 @@ async function collectProjects(
     };
     if (typeof data.provisioningState === "string") {
       out.provisioningState = data.provisioningState;
+    }
+    if (typeof data.recipe === "string") {
+      out.recipe = data.recipe;
+    }
+    const repoSource = projectRepoSourceFromDoc(data.repoSource);
+    if (repoSource) {
+      out.repoSource = repoSource;
     }
     return out;
   });

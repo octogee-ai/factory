@@ -1,5 +1,8 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   getIdTokenForUid,
@@ -14,6 +17,9 @@ setupEmulatorTest();
 const UID = "ro-uid";
 const WS = "rowsowner";
 const PID = "ghproj";
+
+let customersRoot = "";
+let originalCustomersDir: string | undefined;
 
 async function seedGithubProject(): Promise<void> {
   await db.collection("workspaces").doc(WS).set({ id: WS, slug: WS, ownerUid: UID });
@@ -39,26 +45,34 @@ async function seedGithubProject(): Promise<void> {
   });
 }
 
-// A GitHub-backed project shares withFileTarget routing, so every non-read
-// route must refuse it — otherwise /upload + /delete-blob would write to Gitea
-// under the GitHub owner/repo names, and /git/* would touch a non-existent
-// local checkout. PR1 is read-only.
-describe("GitHub-backed projects are read-only", () => {
+beforeAll(async () => {
+  customersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gh-provider-gate-"));
+  originalCustomersDir = process.env.CUSTOMERS_DIR;
+  process.env.CUSTOMERS_DIR = customersRoot;
+});
+
+afterAll(async () => {
+  if (originalCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+  else process.env.CUSTOMERS_DIR = originalCustomersDir;
+  await fs.rm(customersRoot, { recursive: true, force: true });
+});
+
+describe("GitHub-backed project provider gate", () => {
   let token = "";
   beforeEach(async () => {
     await seedGithubProject();
     token = await getIdTokenForUid(UID);
   });
 
-  it("/git/status refuses a github target (409)", async () => {
+  it("/git/status resolves a github target against the local checkout", async () => {
     const r = await request(createApp())
       .get(`/api/g/test/workspace/git/status?slug=${WS}&project=${PID}`)
       .set("Authorization", `Bearer ${token}`);
-    expect(r.status, r.text).toBe(409);
-    expect(r.body.code).toBe("GITHUB_READ_ONLY");
+    expect(r.status, r.text).toBe(503);
+    expect(r.body.code).toBe("CUSTOMER_DIR_MISSING");
   });
 
-  it("/upload refuses a github target (409)", async () => {
+  it("/upload refuses a github target (409) — blob writes stay Gitea-only", async () => {
     const r = await request(createApp())
       .post(`/api/workspace/upload?slug=${WS}&project=${PID}`)
       .set("Authorization", `Bearer ${token}`)

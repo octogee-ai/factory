@@ -8,6 +8,8 @@ import {
   removeCustomerFromGateway,
   restoreCustomerRuntimeFromSnapshot,
   type CustomerLifecycleAdapter,
+  type ProjectCloneOptions,
+  type ProjectCloneTarget,
   type UserSnapshot,
   type MmUpdate,
 } from "./customer-lifecycle.js";
@@ -52,7 +54,13 @@ giteaReadShouldThrow: boolean;
   lastConfigPatchByosActive?: boolean;
   configPatchFingerprint?: string;
   healthy: boolean;
-  pendingProjects: Array<{ projectSlug: string; giteaRepoName: string }>;
+  pendingProjects: ProjectCloneTarget[];
+  cloneProjectCalls: Array<{
+    projectSlug: string;
+    giteaRepoName: string | null;
+    opts: ProjectCloneOptions | undefined;
+  }>;
+  logs: string[];
   cloneProjectThrows?: boolean;
   cloneProjectLands?: boolean;
 
@@ -68,7 +76,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     state.writes.push({ field, value });
   };
   return {
-    log: () => {},
+    log: (msg) => state.logs.push(msg),
 
     loadUserSnapshot: async () => state.user,
 
@@ -181,8 +189,9 @@ return "ssh-pubkey";
       record("listProjectsNeedingClone");
       return [...state.pendingProjects];
     },
-    cloneProjectRepo: async (_slug: string, projectSlug: string) => {
+    cloneProjectRepo: async (_slug, projectSlug, giteaRepoName, opts) => {
       record("cloneProjectRepo");
+      state.cloneProjectCalls.push({ projectSlug, giteaRepoName, opts });
       if (state.cloneProjectThrows) throw new Error("gitea unreachable");
       if (state.cloneProjectLands === false) return false;
       // A landed clone leaves a .git behind, so the project no longer needs cloning —
@@ -286,9 +295,37 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     blobSyncShouldFail: false,
     healthy: true,
     pendingProjects: [],
+    cloneProjectCalls: [],
+    logs: [],
     lastGreetingCronParams: undefined,
     greetingCronShouldFail: false,
   };
+}
+
+const GITHUB_REPO_SOURCE = {
+  provider: "github",
+  owner: "octogee-ai",
+  repo: "demo",
+} as const;
+
+function mountedDisk(): DiskState {
+  return {
+    ...emptyDisk(),
+    customerDir: true,
+    workspaceGitDir: true,
+    gitRemote: true,
+    sshKey: true,
+  };
+}
+
+function mountedSnapshot(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
+  return snap({
+    status: "complete",
+    repoUrl: "http://gitea/octogee/test-workspace",
+    mattermostUserId: "mm-user",
+    greetingPosted: true,
+    ...overrides,
+  });
 }
 
 describe("addCustomerToGateway — first-time provisioning", () => {
@@ -1307,6 +1344,66 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
+  it("clones a GitHub-backed project from its repoSource, not the Gitea mirror", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    state.pendingProjects = [
+      { projectSlug: "gh", giteaRepoName: "test-gh", repoSource: GITHUB_REPO_SOURCE },
+    ];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.cloneProjectCalls).toEqual([
+      {
+        projectSlug: "gh",
+        giteaRepoName: "test-gh",
+        opts: { repoSource: GITHUB_REPO_SOURCE },
+      },
+    ]);
+    expect(result.steps).toContain("project-clone");
+    expect(result.pendingProjectClones).toEqual([]);
+  });
+
+  it("clones a GitHub-backed project that never got a Gitea repo", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    state.pendingProjects = [
+      { projectSlug: "gh", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
+    ];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.cloneProjectCalls).toEqual([
+      { projectSlug: "gh", giteaRepoName: null, opts: { repoSource: GITHUB_REPO_SOURCE } },
+    ]);
+    expect(result.steps).toContain("project-clone");
+  });
+
+  it("leaves a Gitea-backed project's clone free of repoSource options", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.cloneProjectCalls).toEqual([
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
+    ]);
+  });
+
+  it("skips a project with no Gitea repo and no GitHub repoSource, and says so", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    state.pendingProjects = [
+      { projectSlug: "orphan", giteaRepoName: null },
+      { projectSlug: "camp", giteaRepoName: "test-camp" },
+    ];
+
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.cloneProjectCalls.map((c) => c.projectSlug)).toEqual(["camp"]);
+    expect(state.logs).toContainEqual(expect.stringContaining("test/orphan"));
+    expect(state.logs.find((l) => l.includes("test/orphan"))).toMatch(
+      /no Gitea repo and no GitHub repoSource/,
+    );
+  });
+
   it("never probes or clones project checkouts for a workspace-only mount", async () => {
     const state = makeState(
       snap({
@@ -1683,6 +1780,49 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     );
     expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
       state.calls.indexOf("cloneProjectRepo"),
+    );
+  });
+
+  it("restores a GitHub-backed project from its repoSource even with no Gitea repo", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        projects: [
+          {
+            projectSlug: "gh",
+            giteaRepoName: null,
+            repoSource: GITHUB_REPO_SOURCE,
+            provisioningState: "active",
+          },
+          { projectSlug: "camp", giteaRepoName: "test-camp", provisioningState: "active" },
+        ],
+      }),
+      emptyDisk(),
+    );
+
+    const result = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(state.cloneProjectCalls).toEqual([
+      { projectSlug: "gh", giteaRepoName: null, opts: { repoSource: GITHUB_REPO_SOURCE } },
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
+    ]);
+    expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
+  });
+
+  it("skips a restored project with neither checkout source, and says so", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        projects: [{ projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" }],
+      }),
+      emptyDisk(),
+    );
+
+    await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(state.cloneProjectCalls).toEqual([]);
+    expect(state.logs.find((l) => l.includes("test/orphan"))).toMatch(
+      /no Gitea repo and no GitHub repoSource/,
     );
   });
 
