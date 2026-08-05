@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { lstatSync, mkdirSync, promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
@@ -222,7 +222,7 @@ export async function syncCleanWorkspaceToRemote(
 > {
   const lease = acquireWorkspaceMutationLeaseSync({
     workspaceDir: customerDir,
-    gitDir: trustedWorkspaceGitDir(customerDir),
+    gitDir: workspaceMutationLeaseGitDir(customerDir),
   });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
@@ -298,7 +298,7 @@ export async function commitAndPushWorkspace(
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
   const lease = deps.acquireMutationLease({
     workspaceDir: customerDir,
-    gitDir: trustedWorkspaceGitDir(customerDir),
+    gitDir: workspaceMutationLeaseGitDir(customerDir),
   });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
@@ -675,12 +675,46 @@ export function trustedWorkspaceGitDir(cwd: string): string {
   return customerGitMetadataDir(cwd) ?? path.join(cwd, ".git");
 }
 
+export function workspaceMutationLeaseGitDir(cwd: string): string {
+  const identity = customerGitIdentity(cwd);
+  if (!identity || identity.repoName === "workspace") return trustedWorkspaceGitDir(cwd);
+  const lockDir = path.join(
+    path.dirname(identity.customersRoot),
+    "git-source-switch-locks",
+    identity.slug,
+    `${identity.repoName}.git`,
+  );
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  return lockDir;
+}
+
+export async function runWorkspaceGitMutation<T>(
+  cwd: string,
+  work: () => Promise<T>,
+): Promise<{ ok: true; result: T } | { ok: false; error: WorkspaceGitError }> {
+  const lease = acquireWorkspaceMutationLeaseSync({
+    workspaceDir: cwd,
+    gitDir: workspaceMutationLeaseGitDir(cwd),
+  });
+  if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd } };
+  try {
+    return { ok: true, result: await work() };
+  } finally {
+    lease.release();
+  }
+}
+
 export function workspaceGitCommandArgs(
   cwd: string,
   args: ReadonlyArray<string>,
 ): string[] {
+  const hardeningPins = usesBuilderGithubCredential(cwd)
+    ? WORKSPACE_GIT_HARDENING_PINS.filter((value, index, pins) =>
+        value !== "credential.helper="
+        && !(value === "-c" && pins[index + 1] === "credential.helper="))
+    : WORKSPACE_GIT_HARDENING_PINS;
   return [
-    ...WORKSPACE_GIT_HARDENING_PINS,
+    ...hardeningPins,
     "--git-dir",
     trustedWorkspaceGitDir(cwd),
     "--work-tree",
@@ -694,6 +728,10 @@ export function workspaceGitEnvironment(
   cwd?: string,
 ): NodeJS.ProcessEnv {
   const environment = { ...source, ...WORKSPACE_GIT_HARDENING_ENV };
+  if (cwd && usesBuilderGithubCredential(cwd, source)) {
+    if (source.GIT_CONFIG_GLOBAL === undefined) delete environment.GIT_CONFIG_GLOBAL;
+    else environment.GIT_CONFIG_GLOBAL = source.GIT_CONFIG_GLOBAL;
+  }
   const identity = cwd ? customerGitIdentity(cwd) : null;
   if (identity) {
     const keyPath = path.join(
@@ -713,6 +751,30 @@ export function workspaceGitEnvironment(
     ].join(" ");
   }
   return environment;
+}
+
+export function usesBuilderGithubCredential(
+  cwd: string,
+  source: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (source.GATEWAY_CLASS !== "builder") return false;
+  const identity = customerGitIdentity(cwd);
+  if (!identity) return false;
+  const receipt = `${identity.metadataDir}.octogee-trusted-v3`;
+  try {
+    const metadataStat = lstatSync(identity.metadataDir);
+    const receiptStat = lstatSync(receipt);
+    if (
+      !metadataStat.isDirectory()
+      || metadataStat.isSymbolicLink()
+      || !receiptStat.isFile()
+      || receiptStat.isSymbolicLink()
+    ) return false;
+    return expectedCustomerRemoteUrl(cwd, readFileSync(receipt, "utf8"))
+      ?.startsWith("https://github.com/") === true;
+  } catch {
+    return false;
+  }
 }
 
 function expectedCustomerRemoteUrl(

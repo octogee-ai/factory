@@ -12,7 +12,7 @@ import {
 import { getExtension, getMimeType, isTextFile } from "../routes/workspace/helpers.js";
 import {
   WORKSPACE_GIT_HARDENING_PINS,
-  trustedWorkspaceGitDir,
+  workspaceMutationLeaseGitDir,
   workspaceGitCommandArgs,
   workspaceGitEnvironment,
 } from "./workspace-git.js";
@@ -1165,7 +1165,7 @@ async function resumeAgentImportRepository(
       options.targetDir,
       options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
         workspaceDir,
-        gitDir: trustedWorkspaceGitDir(workspaceDir),
+        gitDir: workspaceMutationLeaseGitDir(workspaceDir),
       })),
       async () => {
         if (await currentMainHead(options.targetDir) !== refs.currentHead) {
@@ -1241,7 +1241,7 @@ export async function applyAgentImportRepository(
       options.targetDir,
       options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
         workspaceDir,
-        gitDir: trustedWorkspaceGitDir(workspaceDir),
+        gitDir: workspaceMutationLeaseGitDir(workspaceDir),
       })),
       async () => {
         await ensureCleanDestination(options.targetDir);
@@ -1311,7 +1311,7 @@ export async function rollbackAgentImportRepository(options: {
           options.targetDir,
           options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
             workspaceDir,
-            gitDir: trustedWorkspaceGitDir(workspaceDir),
+            gitDir: workspaceMutationLeaseGitDir(workspaceDir),
           })),
           async () => {
             if (await currentMainHead(options.targetDir) !== current) {
@@ -1340,7 +1340,7 @@ export async function rollbackAgentImportRepository(options: {
     options.targetDir,
     options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
       workspaceDir,
-      gitDir: trustedWorkspaceGitDir(workspaceDir),
+      gitDir: workspaceMutationLeaseGitDir(workspaceDir),
     })),
     async () => {
       await ensureCleanDestination(options.targetDir);

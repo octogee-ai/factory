@@ -483,6 +483,22 @@ function repositoryMetadataExists(repoDir: string): boolean {
   return false;
 }
 
+export function projectCheckoutMatchesSource(
+  slug: string,
+  projectSlug: string,
+  giteaRepoName: string,
+  repoSource?: ProjectRepoSource | null,
+): boolean {
+  const repoDir = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
+  if (!repositoryMetadataExists(repoDir)) return false;
+  const identity = customerGitIdentity(repoDir);
+  if (!identity) return false;
+  const current = trustedCustomerGitSource(identity);
+  if (!current) return false;
+  const expected = canonicalCustomerGitSource(identity, { giteaRepoName, repoSource });
+  return sourceReceiptValue(current) === sourceReceiptValue(expected);
+}
+
 export function removePersistedRepoSshCommand(repoDir: string): void {
   const gitDir = trustedGitDir(repoDir);
   if (!gitDir) return;
@@ -783,6 +799,7 @@ export interface CloneProjectRepoOptions {
   githubToken?: string | null;
   gitExec?: GitRunner;
   prepareRepository?: typeof setRepoSshCommand;
+  acquireMutationLease?: typeof acquireWorkspaceMutationLeaseSync;
 }
 
 export async function cloneProjectRepo(
@@ -794,6 +811,9 @@ export async function cloneProjectRepo(
   const dest = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
 
   if (repositoryMetadataExists(dest)) {
+    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+      return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
+    }
     setRepoSshCommand(dest, slug, {
       repoSource: opts.repoSource,
       giteaRepoName,
@@ -821,6 +841,176 @@ export async function cloneProjectRepo(
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
   );
+}
+
+async function replaceProjectRepoCheckout(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  giteaRepoName: string,
+  opts: CloneProjectRepoOptions,
+): Promise<boolean> {
+  const runGit = opts.gitExec ?? gitExec;
+  const source = opts.repoSource?.provider === "github"
+    ? githubSource(opts.repoSource)
+    : giteaSource(slug, giteaRepoName);
+  const sshKey = source.kind === "gitea" ? customerSshKeyPath(slug) : undefined;
+  if (source.kind === "gitea") {
+    if (!fs.existsSync(sshKey!)) {
+      log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — per-customer SSH key missing`);
+      return false;
+    }
+    if (!(await giteaBroker.repoExists(workspaceGiteaOrg(slug), giteaRepoName))) return false;
+  }
+
+  const parent = path.dirname(dest);
+  const staging = fs.mkdtempSync(path.join(parent, `.${projectSlug}-source-`));
+  const clone = runGit(
+    parent,
+    ["clone", source.remoteUrl, staging],
+    sshKey,
+    opts.githubToken,
+  );
+  if (clone === null) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return false;
+  }
+
+  const gitDir = existingProjectGitDir(dest);
+  if (!gitDir) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — git metadata is missing`);
+    return false;
+  }
+  let lease: ReturnType<typeof acquireWorkspaceMutationLeaseSync>;
+  try {
+    lease = acquireProjectSourceSwitchLease(
+      opts.acquireMutationLease ?? acquireWorkspaceMutationLeaseSync,
+      dest,
+      slug,
+      projectSlug,
+    );
+  } catch (error) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    log(`⚠ [git] Cannot lease ${slug}/${projectSlug}: ${errMessage(error)}`);
+    return false;
+  }
+  if (!lease) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return false;
+  }
+  const quarantineRoot = path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug);
+  const quarantine = path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`);
+  const metadataBackupRoot = path.join(
+    OPENCLAW_DIR,
+    "git-metadata-source-switch-backups",
+    slug,
+    `${projectSlug}-${randomUUID()}`,
+  );
+  const identity = customerGitIdentity(dest);
+  const metadataBackups: Array<{ original: string; backup: string }> = [];
+  let previousMoved = false;
+  let replacementInstalled = false;
+  try {
+    fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(metadataBackupRoot, { recursive: true, mode: 0o700 });
+    if (identity) {
+      for (const original of [
+        identity.metadataDir,
+        customerGitTrustReceipt(identity.metadataDir),
+        customerGitRefreshMarker(identity.metadataDir),
+      ]) {
+        if (!fs.existsSync(original)) continue;
+        const backup = path.join(metadataBackupRoot, path.basename(original));
+        fs.renameSync(original, backup);
+        metadataBackups.push({ original, backup });
+      }
+    }
+    fs.renameSync(dest, quarantine);
+    previousMoved = true;
+    fs.renameSync(staging, dest);
+    replacementInstalled = true;
+    (opts.prepareRepository ?? setRepoSshCommand)(dest, slug, {
+      repoSource: opts.repoSource,
+      giteaRepoName,
+      githubToken: opts.githubToken,
+    });
+    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+      throw new Error("replacement repository source was not prepared canonically");
+    }
+    log(`[git] ✅ Switched ${slug}/${projectSlug} to ${sourceReceiptValue(source)}`);
+    return true;
+  } catch (error) {
+    if (replacementInstalled && fs.existsSync(dest)) {
+      try {
+        fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-failed-${randomUUID()}`));
+      } catch (rollbackError) {
+        log(`⚠ [git] Failed to quarantine replacement for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+      }
+    }
+    if (identity) {
+      for (const current of [
+        identity.metadataDir,
+        customerGitTrustReceipt(identity.metadataDir),
+        customerGitRefreshMarker(identity.metadataDir),
+      ]) {
+        try {
+          quarantineCustomerGitEntry(current, identity);
+        } catch (rollbackError) {
+          log(`⚠ [git] Failed to quarantine replacement metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+        }
+      }
+      for (const { original, backup } of metadataBackups) {
+        try {
+          if (fs.existsSync(backup)) fs.renameSync(backup, original);
+        } catch (rollbackError) {
+          log(`⚠ [git] Failed to restore prior metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+        }
+      }
+    }
+    if (previousMoved && !fs.existsSync(dest) && fs.existsSync(quarantine)) {
+      try {
+        fs.renameSync(quarantine, dest);
+      } catch (rollbackError) {
+        log(`⚠ [git] Failed to restore prior checkout for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+      }
+    }
+    log(`⚠ [git] Failed to switch ${slug}/${projectSlug}: ${errMessage(error)}`);
+    return false;
+  } finally {
+    lease.release();
+  }
+}
+
+function acquireProjectSourceSwitchLease(
+  acquire: typeof acquireWorkspaceMutationLeaseSync,
+  dest: string,
+  slug: string,
+  projectSlug: string,
+): ReturnType<typeof acquireWorkspaceMutationLeaseSync> {
+  const stableGitDir = path.join(
+    OPENCLAW_DIR,
+    "git-source-switch-locks",
+    slug,
+    `${projectSlug}.git`,
+  );
+  fs.mkdirSync(stableGitDir, { recursive: true, mode: 0o700 });
+  return acquire({ workspaceDir: dest, gitDir: stableGitDir });
+}
+
+function existingProjectGitDir(repoDir: string): string | null {
+  const external = customerGitMetadataDir(repoDir);
+  const candidates = [external, path.join(repoDir, ".git")]
+    .filter((candidate): candidate is string => candidate !== null);
+  for (const candidate of candidates) {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 async function cloneGiteaProjectRepo(
@@ -887,6 +1077,8 @@ async function cloneGithubProjectRepo(
     remoteUrl,
     githubToken,
     runGit,
+    replaceExisting: true,
+    quarantineRoot: path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug),
   });
   if (!cloned) return false;
 
@@ -938,10 +1130,22 @@ interface ProjectCheckout {
   sshKey?: string;
   githubToken?: string | null;
   runGit: GitRunner;
+  replaceExisting?: boolean;
+  quarantineRoot?: string;
 }
 
 function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
-  const { dest, projectSlug, label, remoteUrl, sshKey, githubToken, runGit } = checkout;
+  const {
+    dest,
+    projectSlug,
+    label,
+    remoteUrl,
+    sshKey,
+    githubToken,
+    runGit,
+    replaceExisting,
+    quarantineRoot,
+  } = checkout;
   const parent = path.dirname(dest);
   fs.mkdirSync(parent, { recursive: true });
   const cloneDir = fs.existsSync(dest)
@@ -957,7 +1161,24 @@ function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
 
   if (cloneDir !== dest) {
     try {
-      adoptProjectClone(cloneDir, dest);
+      if (replaceExisting) {
+        if (!quarantineRoot) throw new Error("missing project checkout quarantine root");
+        const lease = repositoryMetadataExists(dest)
+          ? acquireWorkspaceMutationLeaseSync({ workspaceDir: dest })
+          : null;
+        if (repositoryMetadataExists(dest) && !lease) {
+          throw new Error("workspace mutation lease unavailable");
+        }
+        try {
+          fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+          fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`));
+          fs.renameSync(cloneDir, dest);
+        } finally {
+          lease?.release();
+        }
+      } else {
+        adoptProjectClone(cloneDir, dest);
+      }
     } catch (err) {
       log(`⚠ [git] Failed to adopt clone for ${label}: ${errMessage(err)}`);
       fs.rmSync(cloneDir, { recursive: true, force: true });
@@ -1293,7 +1514,7 @@ export function runWorkspaceSyncMutation(
   opts: WorkspaceSyncMutationOptions = {},
 ): boolean {
   const acquire = opts.acquire ?? ((workspaceDir) => {
-    const gitDir = trustedGitDir(workspaceDir);
+    const gitDir = projectWorkspaceMutationLeaseGitDir(workspaceDir) ?? trustedGitDir(workspaceDir);
     return acquireWorkspaceMutationLeaseSync({
       workspaceDir,
       ...(gitDir ? { gitDir } : {}),
@@ -1314,6 +1535,18 @@ export function runWorkspaceSyncMutation(
   }
 }
 
+function projectWorkspaceMutationLeaseGitDir(workspaceDir: string): string | null {
+  const relative = path.relative(path.resolve(CUSTOMERS_DIR), path.resolve(workspaceDir));
+  const parts = relative.split(path.sep);
+  if (parts.length !== 3 || parts[1] !== "projects") return null;
+  const [slug, , projectSlug] = parts;
+  if (!slug || !projectSlug || !SAFE_GIT_IDENTITY_RE.test(slug)
+    || !SAFE_GIT_IDENTITY_RE.test(projectSlug)) return null;
+  const lockDir = path.join(OPENCLAW_DIR, "git-source-switch-locks", slug, `${projectSlug}.git`);
+  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  return lockDir;
+}
+
 interface RepositorySyncTarget {
   dir: string;
   label: string;
@@ -1331,8 +1564,8 @@ function syncOneRepository(
     if (strict) throw new Error(`${target.label}: git metadata is missing`);
     return;
   }
-  prepareRepository(target.dir, slug);
   runWorkspaceSyncMutation(target.dir, target.label, () => {
+    prepareRepository(target.dir, slug);
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 

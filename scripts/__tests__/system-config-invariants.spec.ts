@@ -27,7 +27,7 @@ function config(): Record<string, unknown> {
 }
 
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "shared",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api-test.octogee.com",
 };
@@ -57,10 +57,8 @@ describe("system config platform invariants", () => {
         bind: "lan",
         auth: { mode: "token" },
         controlUi: {
-          basePath: "/g/bender/openclaw",
-          allowedOrigins: ["https://api-test.octogee.com"],
-          allowInsecureAuth: false,
-          dangerouslyDisableDeviceAuth: false,
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+          dangerouslyAllowHostHeaderOriginFallback: false,
         },
       },
       secrets: {

@@ -62,6 +62,7 @@ import {
   generateCustomerSshKey,
   gitExec,
   initWorkspaceRepo,
+  projectCheckoutMatchesSource,
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
 } from "./git.js";
@@ -320,10 +321,15 @@ async function listProjectsNeedingClone(
   if (!snapshot) return [];
   return snapshot.projects.flatMap((p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
-    if (fs.existsSync(path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug, ".git"))) {
+    const repoSource = projectRepoSourceFromDoc(p.repoSource);
+    if (projectCheckoutMatchesSource(
+      slug,
+      p.projectSlug,
+      p.giteaRepoName ?? "",
+      repoSource,
+    )) {
       return [];
     }
-    const repoSource = projectRepoSourceFromDoc(p.repoSource);
     if (!repoSource && !p.giteaRepoName) {
       ctx.log(
         `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,

@@ -9,7 +9,6 @@ import { db as defaultDb } from "../lib/db.js";
 import {
   executeApprovedCalendarViaBroker,
   type ApprovedCalendarExecution,
-  type CalendarApprovalKind,
 } from "../lib/calendar-approval-executor.js";
 import { requireAuth } from "../middleware/auth.js";
 
@@ -360,21 +359,19 @@ async function resolveApproval(
   });
 }
 
-function calendarExecution(approvalId: string, data: Record<string, unknown>): ApprovedCalendarExecution | null {
+function calendarExecution(
+  approvalId: string,
+  ownerUid: string,
+  data: Record<string, unknown>,
+): ApprovedCalendarExecution | null {
   const action = record(data.action);
-  const request = record(data.request);
   const kind = action?.kind;
   if (
-    !request
-    || typeof data.agentId !== "string"
-    || (kind !== "calendar-create" && kind !== "calendar-update" && kind !== "calendar-delete")
+    kind !== "calendar-create"
+    && kind !== "calendar-update"
+    && kind !== "calendar-delete"
   ) return null;
-  return {
-    approvalId,
-    agentId: data.agentId,
-    kind: kind as CalendarApprovalKind,
-    request,
-  };
+  return { approvalId, ownerUid };
 }
 
 async function respondToApproval(
@@ -406,7 +403,7 @@ async function respondToApproval(
     }
     let data = result.data;
     const execution = targetState === "approved" && data.state === "approved"
-      ? calendarExecution(approvalId, data)
+      ? calendarExecution(approvalId, req.uid!, data)
       : null;
     if (execution) {
       try {

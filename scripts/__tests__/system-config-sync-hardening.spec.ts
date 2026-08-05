@@ -14,7 +14,7 @@ import {
 
 const dirs: string[] = [];
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "shared",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api-test.octogee.com",
   GATEWAY_REVISION_ID: "bender-r8",

@@ -214,11 +214,13 @@ describe("infra/gateway/entrypoint.sh — Builder-only customer runtime", () => 
     expect(entrypoint).not.toMatch(/operator\.env/);
   });
 
-  it("defers optional Builder hydration until OpenClaw is healthy", () => {
+  it("hydrates Builder GitHub auth before repository reconciliation and defers native runtime stamping", () => {
     const healthyIdx = entrypoint.indexOf("OpenClaw gateway healthy");
-    const githubIdx = entrypoint.indexOf("Post-boot: hydrating native GitHub CLI auth");
+    const githubIdx = entrypoint.indexOf("Hydrating Builder GitHub CLI auth before repository reconciliation");
+    const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const stamperIdx = entrypoint.indexOf("stamp-claude-first-run.mjs");
     expect(githubIdx).toBeGreaterThan(healthyIdx);
+    expect(githubIdx).toBeLessThan(fleetIdx);
     expect(stamperIdx).toBeGreaterThan(healthyIdx);
   });
 });

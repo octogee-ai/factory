@@ -15,7 +15,7 @@ import { checkpointBootSystemConfigForSlug } from "../lib/system-config.js";
 
 const dirs: string[] = [];
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "shared",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api-test.octogee.com",
   GATEWAY_REVISION_ID: "bender-r9",
@@ -108,7 +108,9 @@ describe("system config accepted-head recovery", () => {
       sourceFinal: true,
       gateway: {
         port: 18789,
-        controlUi: { basePath: "/g/bender/openclaw" },
+        controlUi: {
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
       },
     });
     expect(fs.readFileSync(secretsPath, "utf8"))
@@ -352,7 +354,9 @@ describe("system config accepted-head recovery", () => {
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
       gateway: {
         port: 18789,
-        controlUi: { basePath: "/g/bender/openclaw" },
+        controlUi: {
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
       },
     });
     expect(commands.some((command) => command.includes("Octogee-Config-Source: recovery"))).toBe(true);

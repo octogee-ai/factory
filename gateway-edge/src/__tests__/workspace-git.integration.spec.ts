@@ -68,6 +68,8 @@ vi.mock("../lib/stripe", () => ({
 }));
 
 import { createApp } from "../index.js";
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { workspaceMutationLeaseGitDir } from "../lib/workspace-git.js";
 import workspaceGitRoutes from "../routes/workspace/git.js";
 
 type RouteLayer = {
@@ -466,6 +468,25 @@ describe("GitHub-backed project working tree", () => {
     expect(res.status, res.text).toBe(200);
     expect(res.body.empty).toBe(false);
     expect(res.body.sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("rejects a project commit while source reconciliation holds the shared mutation fence", async () => {
+    const projectDir = path.join(customersRoot, SLUG, "projects", GH_PROJECT);
+    const lease = acquireWorkspaceMutationLeaseSync({
+      workspaceDir: projectDir,
+      gitDir: workspaceMutationLeaseGitDir(projectDir),
+    });
+    expect(lease).not.toBeNull();
+    try {
+      const res = await request(createApp())
+        .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+        .set("Authorization", "Bearer caller-idtoken")
+        .send({ message: "must wait" });
+      expect(res.status, res.text).toBe(409);
+      expect(res.body.code).toBe("WORKSPACE_BUSY");
+    } finally {
+      lease?.release();
+    }
   });
 
   it("/git/branch/checkout switches branches on the github-backed checkout", async () => {

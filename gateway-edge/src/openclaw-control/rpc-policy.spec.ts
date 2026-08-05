@@ -382,13 +382,13 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide([{ id: "main", name: "Primary", model: "openai/gpt-5.1" }]))
       .toMatchObject({ allowed: true });
     expect(decide([{ id: "helper", name: "Helper", model: "openai/gpt-5.1" }]))
-      .toMatchObject({ allowed: false, reason: "platform-invariant" });
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([{ id: "main", default: false }]))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([
       { id: "main" },
       { id: "helper", name: "Helper", model: "openai/gpt-5.1" },
-    ])).toMatchObject({ allowed: false, reason: "platform-invariant" });
+    ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
   });
 
   it("projects config schema to editable safe paths and rejects unsafe schema lookups", () => {

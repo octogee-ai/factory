@@ -32,7 +32,10 @@ import {
   createProjectPreviewDiscoveryRoutes,
   createProjectPreviewStaticRoutes,
 } from "./routes/project-previews.js";
-import { createAgentProductivityRoutes } from "./routes/agent-productivity.js";
+import {
+  createAgentProductivityRoutes,
+  createApprovedCalendarApprovalExecutor,
+} from "./routes/agent-productivity.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
@@ -61,6 +64,7 @@ import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builde
 import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
+import { createProductivityApprovalRoutes } from "../../gateway-edge/src/routes/productivity-approvals.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
 import { createStripeSessionRoutes } from "../../gateway-edge/src/routes/billing/stripe-session.js";
 import {
@@ -76,7 +80,11 @@ import {
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { db, storage } from "../../gateway-edge/src/lib/db.js";
-import { readConnectorAccessToken } from "../../gateway-edge/src/lib/connector-tokens.js";
+import {
+  ConnectorTokenReadError,
+  getFreshAccessTokenFromDb,
+} from "../../gateway-edge/src/lib/connector-tokens.js";
+import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
 import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
@@ -253,6 +261,15 @@ export function shouldEnforceTenantBinding(req: Request): boolean {
   return Boolean(req.boundTenant || req.get("x-k8s-sa-token"));
 }
 
+async function readFreshGithubToken(uid: string): Promise<string | null> {
+  const connector = getConnector("github");
+  if (!connector) throw new Error("GitHub connector is unavailable");
+  const token = await getFreshAccessTokenFromDb(db, uid, connector);
+  if (token.ok) return token.accessToken;
+  if (token.reason === "not_connected") return null;
+  throw new ConnectorTokenReadError(409, token.reason);
+}
+
 function productRuntime(opts: CreateAppOptions, metricsRegistry: Registry) {
   const observability = createProductObservability(metricsRegistry);
   const postHog = opts.postHogServices ?? createPostHogServices(process.env, {
@@ -295,6 +312,7 @@ function recordProductEvent(
 }
 
 function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
+  const executeApprovedCalendar = createApprovedCalendarApprovalExecutor({ db });
   return {
     mmRestProxyHandler,
     mattermostMintRoutes,
@@ -305,6 +323,15 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
     sharingRoutes: createSharingRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
+    productivityApprovalRoutes: express.Router()
+      .use(requireAuth)
+      .use(createProductivityApprovalRoutes({
+        db,
+        executeApprovedCalendar: ({ approvalId, ownerUid }) => executeApprovedCalendar({
+          approvalId,
+          expectedOwnerUid: ownerUid,
+        }).then(() => undefined),
+      })),
   };
 }
 
@@ -396,7 +423,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     });
   }
   const projectRunSource = createProjectSnapshotSource({
-    readGithubToken: (uid) => readConnectorAccessToken(uid, "github"),
+    readGithubToken: readFreshGithubToken,
   });
   const namespace = process.env.K8S_NAMESPACE ?? "octogee";
   const customerHostingProjectId = opts.customerHostingProjectId
@@ -621,7 +648,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     createAgentImportBrokerRoutes({
       db,
       bucket: importBucket,
-      readGithubToken: (uid) => readConnectorAccessToken(uid, "github"),
+      readGithubToken: readFreshGithubToken,
       listGithubRepos: githubListRepos,
       readGithubRepoSize: async (owner, repo, token) => {
         const value = await githubRepoApi(owner, repo, token);

@@ -63,6 +63,7 @@ export interface MountClusterRoutesOpts {
   sharingRoutes?: Router;
   projectsCreateRoutes?: Router;
   projectsRepoSourceRoutes?: Router;
+  productivityApprovalRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -155,6 +156,9 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
     if (path === "/api/billing") return [path, opts.billingRoutes ?? route] as const;
     if (path === "/api/builder") return [path, opts.builderGatewaysRoutes ?? route] as const;
     if (path === "/api/sharing") return [path, opts.sharingRoutes ?? route] as const;
+    if (path === "/api/productivity-approvals") {
+      return [path, opts.productivityApprovalRoutes ?? route] as const;
+    }
     return [path, route] as const;
   }));
   mountRouteTable(app, INTERNAL_ROUTES);

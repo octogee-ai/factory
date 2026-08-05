@@ -17,6 +17,7 @@ import {
   parseLog,
   parsePorcelain,
   resolveCustomerDir,
+  workspaceGitCommandArgs,
   workspaceGitEnvironment,
 } from "../lib/workspace-git.js";
 
@@ -258,6 +259,46 @@ git(repo, ["config", "--unset", "diff.external"]);
 });
 
 describe("platform-owned customer Git metadata", () => {
+  it("uses the Builder's GitHub credential only for a trusted GitHub project checkout", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousGatewayClass = process.env.GATEWAY_CLASS;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-builder-github-"));
+    const customersRoot = path.join(root, "customers");
+    const projectDir = path.join(customersRoot, "alice", "projects", "orbit");
+    const metadataDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.GATEWAY_CLASS = "builder";
+    try {
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.mkdir(metadataDir, { recursive: true });
+      await fs.writeFile(
+        `${metadataDir}.octogee-trusted-v3`,
+        "octogee-customer-git-v3\ngithub:octogee-ai/orbit\n",
+      );
+
+      const args = workspaceGitCommandArgs(projectDir, ["push"]);
+      const env = workspaceGitEnvironment(
+        { GATEWAY_CLASS: "builder", GIT_CONFIG_GLOBAL: "/home/node/.gitconfig" },
+        projectDir,
+      );
+
+      expect(args).not.toContain("credential.helper=");
+      expect(env.GIT_CONFIG_GLOBAL).toBe("/home/node/.gitconfig");
+      expect(env.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+
+      process.env.GATEWAY_CLASS = "shared";
+      expect(workspaceGitCommandArgs(projectDir, ["push"])).toContain("credential.helper=");
+      expect(workspaceGitEnvironment({ GATEWAY_CLASS: "shared" }, projectDir).GIT_CONFIG_GLOBAL)
+        .toBe("/dev/null");
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousGatewayClass === undefined) delete process.env.GATEWAY_CLASS;
+      else process.env.GATEWAY_CLASS = previousGatewayClass;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("pins workspace and project SSH to the owning customer's platform key", () => {
     const previousCustomersDir = process.env.CUSTOMERS_DIR;
     process.env.CUSTOMERS_DIR = "/srv/openclaw/customers";

@@ -358,6 +358,11 @@ log "OpenClaw gateway healthy; starting auxiliary runners"
 # The local fleet controller is db-less for every class. Cowboy owns liveness
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  log "Hydrating Builder GitHub CLI auth before repository reconciliation..."
+  timeout -k 5s 130s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: initial hydration failed; convergence will retry"
+  supervise_runner github-cli-auth-convergence 60000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
+fi
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
@@ -377,11 +382,6 @@ fi
     sleep 5
   done
 ) &
-
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Post-boot: hydrating native GitHub CLI auth from connector state..."
-  timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
-fi
 
 STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ -f "$STAMPER" ]; then
