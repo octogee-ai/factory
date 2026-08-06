@@ -36,6 +36,29 @@ describe("shared Mattermost routing safety", () => {
     ]);
   });
 
+  it.each([
+    ["unset", {}],
+    ["empty", { GATEWAY_CLASS: "" }],
+    ["a misspelling of shared", { GATEWAY_CLASS: "shraed" }],
+    ["a retired operator class", { GATEWAY_CLASS: "operator" }],
+  ])("quarantines unmatched routes when GATEWAY_CLASS is %s", (_label, env) => {
+    const config: any = {};
+
+    expect(applySharedMattermostRoutingSafetyPatch(config, env, vi.fn())).toBe(true);
+    expect(config.agents.list).toEqual([
+      expect.objectContaining({ id: "octogee-unmatched-route", default: true }),
+    ]);
+  });
+
+  it("leaves a Builder gateway pinned to its own coach", () => {
+    const config: any = { agents: { list: [{ id: "octogee-ceckert-coach", default: true }] } };
+
+    expect(
+      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "builder" }, vi.fn()),
+    ).toBe(false);
+    expect(config.agents.list).toEqual([{ id: "octogee-ceckert-coach", default: true }]);
+  });
+
   it("installs a quarantine default and deterministic stable account routes", () => {
     const config: any = {
       agents: {
@@ -311,6 +334,7 @@ describe("applyPreBootPatches — tools.profile (new)", () => {
 
   it("is idempotent: a config already at coding reports no change", () => {
     const config: any = { tools: { profile: "coding" } };
+    applyPreBootPatches(config, {});
     const changed = applyPreBootPatches(config, {});
     expect(changed).toBe(false);
     expect(config.tools.profile).toBe("coding");
@@ -568,10 +592,12 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       agents: { list: [{ id: "octogee-tester20-coach", name: "Gene" }] },
     };
 
-    const changed = applyPreBootPatches(config, {});
+    applyPreBootPatches(config, {});
 
-    expect(changed).toBe(false);
-    expect(config.agents.list[0].memorySearch).toBeUndefined();
+    const coach = config.agents.list.find(
+      (agent: any) => agent.id === "octogee-tester20-coach",
+    );
+    expect(coach.memorySearch).toBeUndefined();
   });
 
   it("configures coach agents with a platform OpenAI-compatible embedding SecretRef", () => {
@@ -589,7 +615,10 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       },
     };
 
-    const changed = applyPreBootPatches(config, { OPENAI_EMBEDDINGS_ENABLED: "true" });
+    const changed = applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
+      OPENAI_EMBEDDINGS_ENABLED: "true",
+    });
 
     expect(changed).toBe(true);
     expect(config.agents.list[0].memorySearch).toEqual({
@@ -615,6 +644,7 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     };
 
     applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
       OPENAI_EMBEDDINGS_ENABLED: "true",
       PLATFORM_OPENAI_BASE_URL: "https://llm-broker.internal.example/v1/",
       OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
@@ -766,6 +796,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       plugins: { entries: {} },
     };
     const changed = applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
       MM_URL: "https://mm.example",
     });
     expect(changed).toBe(false);

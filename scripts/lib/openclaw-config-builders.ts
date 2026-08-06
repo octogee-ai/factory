@@ -526,7 +526,7 @@ function withoutDefault(agent: unknown): unknown {
 
 export function gatewayAgentRoster(
   agents: readonly unknown[],
-  builderSlug: string | null = gatewayAgentRosterBuilderSlug(),
+  builderSlug: string = gatewayAgentRosterBuilderSlug(),
 ): unknown[] {
   const retained = agents
     .filter((agent) => !(
@@ -535,7 +535,6 @@ export function gatewayAgentRoster(
       !Array.isArray(agent) &&
       (agent as { id?: unknown }).id === SAFE_DEFAULT_AGENT_ID
     ));
-  if (builderSlug === null) return retained;
   const withoutExistingDefault = retained.map(withoutDefault);
   if (!builderSlug) return [buildSafeDefaultAgent(), ...withoutExistingDefault];
   const dedicatedAgentId = `octogee-${builderSlug}-coach`;
@@ -554,7 +553,7 @@ export function gatewayAgentRoster(
 
 export function gatewayAgentRosterBuilderSlug(
   env: NodeJS.ProcessEnv = process.env,
-): string | null {
+): string {
   const gatewayClass = env.GATEWAY_CLASS?.trim();
   if (gatewayClass === "shared") return "";
   if (gatewayClass === "builder") return env.GATEWAY_BUILDER_SLUG?.trim() || "";

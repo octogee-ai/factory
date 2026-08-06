@@ -170,12 +170,16 @@ describe("gatewayAgentRoster", () => {
     ]);
   });
 
-  it("preserves an operator default when there is no Builder lane", () => {
-    expect(gatewayAgentRoster([
-      { id: "octogee-ops", default: true },
-      { id: SAFE_DEFAULT_AGENT_ID, default: true },
-    ], null)).toEqual([
-      { id: "octogee-ops", default: true },
+  it("strips a retired operator default end to end rather than preserving it", () => {
+    expect(gatewayAgentRoster(
+      [
+        { id: "octogee-ops", default: true },
+        { id: SAFE_DEFAULT_AGENT_ID, default: true },
+      ],
+      gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" }),
+    )).toEqual([
+      expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID, default: true }),
+      { id: "octogee-ops" },
     ]);
   });
 

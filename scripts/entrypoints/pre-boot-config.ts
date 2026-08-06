@@ -246,7 +246,7 @@ export function applySharedMattermostRoutingSafetyPatch(
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void,
 ): boolean {
-  if (env.GATEWAY_CLASS !== "shared") return false;
+  if (env.GATEWAY_CLASS?.trim() === "builder") return false;
   let changed = applySharedDefaultAgent(config);
   if (changed) {
     logFn("installed the non-tenant default agent for unmatched routes");
