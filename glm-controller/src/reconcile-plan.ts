@@ -1,8 +1,8 @@
 import {
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  resolveBuilderGatewayAccess,
-  BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-  builderGatewayServiceAccountName,
+  resolveOperatorGatewayAccess,
+  OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  operatorGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   type GatewayDesiredState,
@@ -65,50 +65,54 @@ export function buildHelmTargetMap(
 
 function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   HelmInstanceValue,
-  "serviceAccountName" | "serviceAccount" | "builderAccess"
+  "serviceAccountName" | "serviceAccount" | "operatorAccess"
 > {
   const gatewayClass = resolveGatewayClass(d);
   let serviceAccountName = d.serviceAccountName;
   let serviceAccount = d.serviceAccount;
-  const generatedGatewayServiceAccountName = builderGatewayServiceAccountName(d.gatewayId);
+  const generatedGatewayServiceAccountName = operatorGatewayServiceAccountName(d.gatewayId);
   if (
     (!serviceAccountName || serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME)
   ) {
     serviceAccountName = generatedGatewayServiceAccountName;
   }
   if (
-    gatewayClass === "builder" &&
+    gatewayClass === "operator" &&
     serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
-    serviceAccount = BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+    serviceAccount = OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT;
   }
   if (
-    gatewayClass !== "builder" &&
+    gatewayClass !== "operator" &&
     serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
     serviceAccount = { create: true };
   }
-  const builderAccess =
-    gatewayClass === "builder"
-      ? resolveBuilderGatewayAccess(d.ownerUid, d.builderAccess)
-      : d.builderAccess;
+  const operatorAccess =
+    gatewayClass === "builder" || gatewayClass === "operator"
+      ? resolveOperatorGatewayAccess(d.ownerUid, d.operatorAccess)
+      : d.operatorAccess;
   return {
     serviceAccountName,
     serviceAccount,
-    builderAccess,
+    operatorAccess,
   };
 }
 
+// Cowboy injects the live apiserver egress CIDRs (resolved per reconcile) for
+// operator gateways with shells on, so the egress NetworkPolicy tracks the real
+// control-plane endpoint without an operator ever setting it. Skipped when none
+// resolved, so a transient read failure can't strip a working gateway's egress.
 function injectApiServerEgress(
-  builderAccess: HelmInstanceValue["builderAccess"],
+  operatorAccess: HelmInstanceValue["operatorAccess"],
   apiServerEgressCidrs: readonly string[],
-): HelmInstanceValue["builderAccess"] {
-  if (!builderAccess?.shellsEnabled || apiServerEgressCidrs.length === 0) {
-    return builderAccess;
+): HelmInstanceValue["operatorAccess"] {
+  if (!operatorAccess?.shellsEnabled || apiServerEgressCidrs.length === 0) {
+    return operatorAccess;
   }
-  return { ...builderAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
+  return { ...operatorAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
 }
 
 function generatedServiceAccountHasDedicatedWorkloadIdentity(
@@ -117,7 +121,7 @@ function generatedServiceAccountHasDedicatedWorkloadIdentity(
   serviceAccount: HelmInstanceValue["serviceAccount"],
 ): boolean {
   return (
-    serviceAccountName === builderGatewayServiceAccountName(d.gatewayId) &&
+    serviceAccountName === operatorGatewayServiceAccountName(d.gatewayId) &&
     serviceAccount?.create === true &&
     typeof serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION] === "string" &&
     isDedicatedGatewayServiceAccount(
@@ -128,13 +132,13 @@ function generatedServiceAccountHasDedicatedWorkloadIdentity(
 }
 
 function injectPlatformMetadataEgress(
-  builderAccess: HelmInstanceValue["builderAccess"],
+  operatorAccess: HelmInstanceValue["operatorAccess"],
   enabled: boolean,
-): HelmInstanceValue["builderAccess"] {
-  if (!enabled || !builderAccess || builderAccess.platformMetadataEgress !== undefined) {
-    return builderAccess;
+): HelmInstanceValue["operatorAccess"] {
+  if (!enabled || !operatorAccess || operatorAccess.platformMetadataEgress !== undefined) {
+    return operatorAccess;
   }
-  return { ...builderAccess, platformMetadataEgress: true };
+  return { ...operatorAccess, platformMetadataEgress: true };
 }
 
 interface OptionalHelmFields {
@@ -142,7 +146,7 @@ interface OptionalHelmFields {
   chartFingerprint?: string;
   serviceAccountName?: string;
   serviceAccount?: HelmInstanceValue["serviceAccount"];
-  builderAccess?: HelmInstanceValue["builderAccess"];
+  operatorAccess?: HelmInstanceValue["operatorAccess"];
   gatewayClass: ReturnType<typeof resolveGatewayClass>;
   imageProfile: ReturnType<typeof resolveGatewayImageProfile>;
 }
@@ -163,7 +167,7 @@ function withOptionalHelmFields(
   if (fields.d.gatewayContainerSecurityContext) {
     out.gatewayContainerSecurityContext = fields.d.gatewayContainerSecurityContext;
   }
-  if (fields.builderAccess) out.builderAccess = fields.builderAccess;
+  if (fields.operatorAccess) out.operatorAccess = fields.operatorAccess;
   if (fields.gatewayClass !== "shared") out.gatewayClass = fields.gatewayClass;
   if (fields.imageProfile !== "standard") {
     out.imageProfile = fields.imageProfile;
@@ -183,21 +187,21 @@ function buildHelmInstanceValue(
   const {
     serviceAccountName,
     serviceAccount: resolvedServiceAccount,
-    builderAccess: baseAccess,
+    operatorAccess: baseAccess,
   } = resolveGatewayHelmKnobs(d);
   const dedicatedWorkloadIdentity =
-    gatewayClass === "builder" &&
+    gatewayClass === "operator" &&
     generatedServiceAccountHasDedicatedWorkloadIdentity(
       d,
       serviceAccountName,
       resolvedServiceAccount,
     );
-  if (gatewayClass === "builder" && baseAccess?.platformMetadataEgress === true && !dedicatedWorkloadIdentity) {
+  if (gatewayClass === "operator" && baseAccess?.platformMetadataEgress === true && !dedicatedWorkloadIdentity) {
     throw new Error(
-      `builder metadata egress requires a dedicated Workload Identity GSA matching ${serviceAccountName}`,
+      `operator metadata egress requires a dedicated Workload Identity GSA matching ${serviceAccountName}`,
     );
   }
-  const builderAccess = injectPlatformMetadataEgress(
+  const operatorAccess = injectPlatformMetadataEgress(
     injectApiServerEgress(baseAccess, apiServerEgressCidrs),
     dedicatedWorkloadIdentity,
   );
@@ -213,7 +217,7 @@ function buildHelmInstanceValue(
       chartFingerprint,
       serviceAccountName,
       serviceAccount: resolvedServiceAccount,
-      builderAccess,
+      operatorAccess,
       gatewayClass,
       imageProfile,
     },
@@ -273,7 +277,7 @@ function instanceEqual(
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [a.gatewayContainerSecurityContext, b.gatewayContainerSecurityContext],
     [effectiveServiceAccount(a), effectiveServiceAccount(b)],
-    [a.builderAccess, b.builderAccess],
+    [a.operatorAccess, b.operatorAccess],
   ];
   for (const [x, y] of objects) {
     if (!stableEqual(x, y)) return false;
@@ -312,7 +316,7 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
   const objects: ReadonlyArray<[unknown, unknown]> = [
     [c.from.gatewayContainerSecurityContext, c.to.gatewayContainerSecurityContext],
     [effectiveServiceAccount(c.from), effectiveServiceAccount(c.to)],
-    [c.from.builderAccess, c.to.builderAccess],
+    [c.from.operatorAccess, c.to.operatorAccess],
   ];
   for (const [x, y] of objects) {
     if (!stableEqual(x, y)) return false;
@@ -324,7 +328,7 @@ function effectiveServiceAccountName(v: HelmInstanceValue): string | undefined {
   if (!v.gatewayId) return v.serviceAccountName;
   const requested = v.serviceAccountName ?? "";
   if (requested === "" || requested === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME) {
-    return builderGatewayServiceAccountName(v.gatewayId);
+    return operatorGatewayServiceAccountName(v.gatewayId);
   }
   return requested;
 }
@@ -332,9 +336,9 @@ function effectiveServiceAccountName(v: HelmInstanceValue): string | undefined {
 function effectiveServiceAccount(v: HelmInstanceValue): HelmInstanceValue["serviceAccount"] {
   if (v.serviceAccount) return v.serviceAccount;
   if (
-    resolveGatewayClass(v) === "shared" &&
+    resolveGatewayClass(v) !== "operator" &&
     v.gatewayId &&
-    effectiveServiceAccountName(v) === builderGatewayServiceAccountName(v.gatewayId)
+    effectiveServiceAccountName(v) === operatorGatewayServiceAccountName(v.gatewayId)
   ) {
     return { create: true };
   }

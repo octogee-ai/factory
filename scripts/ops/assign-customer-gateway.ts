@@ -43,7 +43,7 @@ type AssignResult =
   | { kind: "not-ready"; uid: string; slug: string; reason: string };
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
-  return profile === "builder" ? "builder" : "standard";
+  return profile === "operator" ? "operator" : "standard";
 }
 
 function millis(value: unknown): number | null {

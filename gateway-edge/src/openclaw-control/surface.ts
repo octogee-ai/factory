@@ -176,10 +176,9 @@ function appOrigin(env: NodeJS.ProcessEnv): string {
   return origin.origin;
 }
 
-function gatewayClass(env: NodeJS.ProcessEnv): "shared" | "builder" {
-  return env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder"
-    ? "builder"
-    : "shared";
+function gatewayClass(env: NodeJS.ProcessEnv): "shared" | "builder" | "operator" {
+  const value = env.GATEWAY_CLASS ?? env.GATEWAY_PROFILE;
+  return value === "builder" || value === "operator" ? value : "shared";
 }
 
 function metricIdentity(env: NodeJS.ProcessEnv): OpenClawControlMetricIdentity {

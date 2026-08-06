@@ -109,10 +109,6 @@
       "types": "./dist/customer-lifecycle.d.ts",
       "default": "./dist/customer-lifecycle.js"
     },
-    "./customer-hosting": {
-      "types": "./dist/customer-hosting.d.ts",
-      "default": "./dist/customer-hosting.js"
-    },
     "./customer-deletion-plan": {
       "types": "./dist/customer-deletion-plan.d.ts",
       "default": "./dist/customer-deletion-plan.js"
@@ -440,9 +436,6 @@
       ],
       "customer-lifecycle": [
         "dist/customer-lifecycle.d.ts"
-      ],
-      "customer-hosting": [
-        "dist/customer-hosting.d.ts"
       ],
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"

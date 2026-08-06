@@ -185,7 +185,7 @@ function parsePositiveNumber(raw: string | undefined): number | undefined {
 }
 
 function gatewayClassUsesBrokerToken(gatewayClass: GatewayClass): boolean {
-  return gatewayClass === "builder";
+  return gatewayClass === "builder" || gatewayClass === "operator";
 }
 
 export function createConfiguredGatewayModelKeyIssuerBackend(

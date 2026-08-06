@@ -57,7 +57,7 @@ function durableGateway(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -72,8 +72,8 @@ describe("mapSaToTenant", () => {
     const result = await mapSaToTenant(
       fakeDb({
         "gateways/bender": durableGateway("bender", {
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           ownerUid: "uid-bender",
           builderSlug: "bender",
         }),
@@ -94,8 +94,8 @@ describe("mapSaToTenant", () => {
       mapSaToTenant(
         fakeDb({
           "gateways/bender": durableGateway("bender", {
-            gatewayClass: "builder",
-            imageProfile: "builder",
+            gatewayClass: "operator",
+            imageProfile: "operator",
             ownerUid: "uid-bender",
             builderSlug: "bender",
             coOwnerUids: [],
@@ -114,8 +114,8 @@ describe("mapSaToTenant", () => {
       mapSaToTenant(
         fakeDb({
           "gateways/bender": durableGateway("bender", {
-            gatewayClass: "builder",
-            imageProfile: "builder",
+            gatewayClass: "operator",
+            imageProfile: "operator",
             ownerUid: "uid-bender",
             builderSlug: "bender",
             coOwnerUids: ["uid-former-helper"],
@@ -140,12 +140,12 @@ describe("mapSaToTenant", () => {
     });
   });
 
-  it("rejects retired operator KSA names even when stale root config names one", async () => {
+  it("maps grandfathered operator KSA names through the same durable root", async () => {
     const result = await mapSaToTenant(
       fakeDb({
         "gateways/bender": durableGateway("bender", {
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           ownerUid: "uid-bender",
           builderSlug: "bender",
           serviceAccountName: "octogee-gateway-bender",
@@ -155,15 +155,19 @@ describe("mapSaToTenant", () => {
       "octogee",
     );
 
-    expect(result).toEqual({ attached: false, result: "unknown_sa" });
+    expect(result).toEqual({
+      attached: true,
+      result: "ok_legacy_operator",
+      tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "uid-bender" },
+    });
   });
 
   it("maps a custom KSA through exactly one active durable root", async () => {
     const result = await mapSaToTenant(
       fakeDb({
         "gateways/bender": durableGateway("bender", {
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           ownerUid: "uid-bender",
           builderSlug: "bender",
           serviceAccountName: "custom-operator-ksa",
@@ -291,8 +295,8 @@ describe("mapSaToTenant", () => {
     const result = await mapSaToTenant(
       fakeDb({
         "gateways/bender": durableGateway("bender", {
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           ownerUid: "uid-current",
           builderSlug: "bender",
         }),

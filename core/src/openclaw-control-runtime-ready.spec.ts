@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   OPENCLAW_CONTROL_RUNTIME_FRESH_MS,
-  OPENCLAW_CONTROL_OPENCLAW_FORK_SHA,
-  OPENCLAW_CONTROL_OPENCLAW_VERSION,
   isOpenClawControlRevisionRuntimeReady,
 } from "./openclaw-control-runtime-ready.js";
 
@@ -41,8 +39,8 @@ function revision(now: number): RevisionFixture {
         runtimeHealth: "healthy",
         runtimeHealthCheckedAt: new Date(now - 500).toISOString(),
         observedAt: { toMillis: () => now - 250 },
-        openclawVersion: OPENCLAW_CONTROL_OPENCLAW_VERSION,
-        openclawForkSha: OPENCLAW_CONTROL_OPENCLAW_FORK_SHA,
+        openclawVersion: "2026.7.1",
+        openclawForkSha: "e9acc131",
         dashboardControlState: "ready",
         dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
         dashboardControlObservedAt: new Date(now - 100).toISOString(),

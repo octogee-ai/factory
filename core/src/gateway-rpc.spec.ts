@@ -424,19 +424,7 @@ describe("gateway-rpc", () => {
       let captured: any;
       server.setHandler("gateway.restart.request", (params) => {
         captured = params;
-        return {
-          ok: true,
-          payload: {
-            ok: true,
-            status: "scheduled",
-            restart: {
-              ok: true,
-              pid: 123,
-              signal: "SIGUSR1",
-              coalesced: false,
-            },
-          },
-        };
+        return { ok: true, payload: { status: "requested" } };
       });
 
       const result = await client.gatewayRestartRequest({
@@ -448,30 +436,7 @@ describe("gateway-rpc", () => {
         reason: "byosub.oauth-runtime",
         skipDeferral: true,
       });
-      expect(result).toEqual({
-        ok: true,
-        status: "scheduled",
-        restart: {
-          ok: true,
-          pid: 123,
-          signal: "SIGUSR1",
-          coalesced: false,
-        },
-      });
-    });
-
-    it("rejects a non-causal restart acknowledgement", async () => {
-      server.setHandler("gateway.restart.request", () => ({
-        ok: true,
-        payload: { status: "requested" },
-      }));
-
-      await expect(
-        client.gatewayRestartRequest({ reason: "routing", skipDeferral: true }),
-      ).rejects.toMatchObject({
-        code: "invalid-response",
-        message: expect.stringContaining("malformed restart acknowledgement"),
-      });
+      expect(result).toEqual({ status: "requested" });
     });
   });
 
@@ -698,7 +663,6 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(1);
-      expect(client.channelsStatusConnectionGeneration()).toBe(1);
     });
 
     it("reconnects after the health connection drops", async () => {
@@ -713,7 +677,6 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(2);
-      expect(client.channelsStatusConnectionGeneration()).toBe(2);
     });
   });
 

@@ -70,7 +70,7 @@ function durableGatewayState(overrides: Record<string, unknown> = {}): Record<st
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,

@@ -65,7 +65,8 @@ function nonBlank(value: string | undefined): string | null {
 
 function isRuntimeGateway(env: Record<string, string | undefined>): boolean {
   const gatewayClass = nonBlank(env.GATEWAY_CLASS);
-  return gatewayClass === "builder" && nonBlank(env.GATEWAY_PROFILE) === "builder";
+  if (gatewayClass) return gatewayClass === "builder" || gatewayClass === "operator";
+  return nonBlank(env.GATEWAY_PROFILE) === "operator";
 }
 
 function ghConfigDir(env: Record<string, string | undefined>): string {

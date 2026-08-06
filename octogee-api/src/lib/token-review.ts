@@ -64,7 +64,6 @@ export interface KubernetesTokenReviewerOptions {
   apiPort?: string;
   reviewerTokenPath?: string;
   caPath?: string;
-  audience?: string;
 }
 
 const DEFAULT_CACHE_TTL_MS = 30_000;
@@ -98,7 +97,7 @@ function tokenReviewExtraString(extra: unknown, key: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function parseTokenReview(body: unknown, audience: string): ReviewResult {
+function parseTokenReview(body: unknown): ReviewResult {
   const status = body && typeof body === "object"
     ? (body as { status?: Record<string, unknown> }).status
     : undefined;
@@ -107,7 +106,7 @@ function parseTokenReview(body: unknown, audience: string): ReviewResult {
   }
 
   const audiences = parseAudiences(status.audiences);
-  if (!audiences.includes(audience)) {
+  if (!audiences.includes(TENANT_BINDING_AUDIENCE)) {
     return { authenticated: false };
   }
 
@@ -189,7 +188,6 @@ export function createKubernetesTokenReviewer(
   const cacheTtlMs = opts.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const cacheMaxEntries = opts.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
   const cache = new Map<string, CacheEntry>();
-  const audience = opts.audience ?? TENANT_BINDING_AUDIENCE;
 
   return async (jwt: string): Promise<ReviewResult> => {
     const tokenHash = sha256(jwt);
@@ -213,14 +211,14 @@ export function createKubernetesTokenReviewer(
       body: {
         apiVersion: "authentication.k8s.io/v1",
         kind: "TokenReview",
-        spec: { token: jwt, audiences: [audience] },
+        spec: { token: jwt, audiences: [TENANT_BINDING_AUDIENCE] },
       },
     });
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`TokenReview HTTP ${response.status}`);
     }
 
-    const result = parseTokenReview(response.body, audience);
+    const result = parseTokenReview(response.body);
     if (result.authenticated) {
       if (cache.size >= cacheMaxEntries && !cache.has(tokenHash)) {
         evictOldest(cache);

@@ -97,7 +97,7 @@ describe("createGatewayModelKeySecretEnsurer", () => {
     ]);
   });
 
-  it("applies a broker token secret for Builder gateways", async () => {
+  it("applies a broker token secret for operator gateways too", async () => {
     const { runKubectl, calls } = mockKubectl([
       {
         stderr:
@@ -122,7 +122,7 @@ describe("createGatewayModelKeySecretEnsurer", () => {
     const result = await ensurer.syncGatewayModelKeySecret({
       namespace: "octogee-test",
       gatewayId: "bender",
-      gatewayClass: "builder",
+      gatewayClass: "operator",
     });
 
     expect(result).toMatchObject({ action: "upserted", changed: true });

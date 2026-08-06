@@ -76,7 +76,7 @@ export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
   log: (msg: string) => void;
 
-  isBuilderGateway?: () => boolean;
+  isOperatorGateway?: () => boolean;
 
   /**
    * Read-only probe of the on-disk openclaw.json: is this customer's
@@ -122,6 +122,9 @@ export interface CustomerLifecycleAdapter {
   /** Stamp the migrating-in pin (import handler, before activation). */
   markCustomerMigratingIn?: (slug: string) => void;
 
+  /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's operator
+   *  poller skips them as eviction candidates pre-cutover (the operator path has no in-pod
+   *  reconcile to honor the pin). */
   listMigratingInSlugs?: () => string[];
 
   loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
@@ -550,7 +553,7 @@ function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
   throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
 
-function builderGatewayIsReadyForFastAttach(
+function operatorGatewayIsReadyForFastAttach(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
   convergeContent: boolean | undefined,
@@ -558,7 +561,7 @@ function builderGatewayIsReadyForFastAttach(
   const { slug } = snapshot;
   return snapshot.status === "complete"
     && !convergeContent
-    && Boolean(adapter.isBuilderGateway?.())
+    && Boolean(adapter.isOperatorGateway?.())
     && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
     && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
     && adapter.hasWorkspaceGitDir(slug)
@@ -589,11 +592,11 @@ async function addCustomerToGatewayInner(
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
 
-  if (builderGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
+  if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
     adapter.log(
-      `[add:${slug}] builder gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
+      `[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
     );
     throwIfAborted(signal, uid);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);

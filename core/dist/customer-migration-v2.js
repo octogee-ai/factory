@@ -28,7 +28,7 @@ function mutableConfigHash(config) {
         gatewayContainerSecurityContext: config.gatewayContainerSecurityContext,
         serviceAccountName: config.serviceAccountName,
         serviceAccount: config.serviceAccount,
-        builderAccess: config.builderAccess,
+        operatorAccess: config.operatorAccess,
         ownerUid: config.ownerUid,
         builderSlug: config.builderSlug,
         openclawOverrides: config.openclawOverrides,
@@ -47,7 +47,7 @@ export function customerMigrationV2GatewayRootFence(value, gatewayId) {
         typeof root.liveRelease === "number",
         root.desiredRelease === root.liveRelease,
         typeof root.updatedAt === "number" && Number.isFinite(root.updatedAt),
-        root.gatewayClass === "builder",
+        root.gatewayClass === "builder" || root.gatewayClass === "operator",
         typeof root.ownerUid === "string" && root.ownerUid.length > 0,
         typeof root.builderSlug === "string" && root.builderSlug.length > 0,
     ].every(Boolean);

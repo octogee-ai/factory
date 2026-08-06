@@ -131,15 +131,10 @@ describe("validateRolloutBody", () => {
     if ("ok" in r) expect(r.ok.profile).toBeUndefined();
   });
 
-  it("accepts profile='builder'", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234", profile: "builder" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok.profile).toBe("builder");
-  });
-
-  it("rejects the retired operator profile", () => {
+  it("accepts profile='operator'", () => {
     const r = validateRolloutBody({ imageTag: "abc1234", profile: "operator" });
-    expect("error" in r).toBe(true);
+    expect("ok" in r).toBe(true);
+    if ("ok" in r) expect(r.ok.profile).toBe("operator");
   });
 
   it("accepts profile='standard' (explicit revert to cattle image)", () => {

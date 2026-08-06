@@ -43,21 +43,6 @@ RUN mkdir -p /obsidian-connect-dist \
 
 RUN npm run build
 
-# Project code runs only in this deliberately narrow image. It contains the
-# fixed runner wrapper, archive validator, npm, and JSZip—no API routes, core
-# runtime, cloud SDKs, platform credentials, or production dependency tree.
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS project-runner
-WORKDIR /runner
-ARG NPM_VERSION=12.0.1
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
-COPY octogee-api/runner/package.json octogee-api/runner/package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY --from=builder /octogee-api/dist/octogee-api/src/project-runner.js ./dist/octogee-api/src/project-runner.js
-COPY --from=builder /octogee-api/dist/octogee-api/src/lib/project-runs/archive.js ./dist/octogee-api/src/lib/project-runs/archive.js
-COPY --from=builder /octogee-api/dist/octogee-api/src/lib/project-runs/contracts.js ./dist/octogee-api/src/lib/project-runs/contracts.js
-USER node
-ENTRYPOINT ["node", "dist/octogee-api/src/project-runner.js"]
-
 # ── Runtime stage ────────────────────────────────────────────────────
 FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 WORKDIR /octogee-api

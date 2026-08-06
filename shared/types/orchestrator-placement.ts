@@ -63,7 +63,7 @@ export function resolveContinuousBuilderPlacement(
   const gateway = input.ownedGateway;
   const ownedGatewayIsUsable = gateway !== null &&
     gateway.gatewayId === ownedGatewayId &&
-    gateway.gatewayClass === "builder" &&
+    gateway.gatewayClass !== "shared" &&
     gateway.ownerUid === input.uid &&
     gateway.disposable === true &&
     gateway.desiredStatus === "running" &&

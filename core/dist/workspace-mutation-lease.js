@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { acquireSystemConfigSyncLeaseSync, } from "./system-config-mutation-lease.js";
 const WORKSPACE_MUTATION_LOCK_NAME = "octogee.workspace-mutation.lock";
-function gitMetadataDir(workspaceDir, explicitGitDir) {
-    const gitDir = explicitGitDir ?? path.join(workspaceDir, ".git");
+function gitMetadataDir(workspaceDir) {
+    const gitDir = path.join(workspaceDir, ".git");
     let stat;
     try {
         stat = fs.statSync(gitDir);
@@ -22,7 +22,7 @@ export function workspaceMutationLockPath(workspaceDir) {
     return path.join(gitMetadataDir(workspaceDir), WORKSPACE_MUTATION_LOCK_NAME);
 }
 export function acquireWorkspaceMutationLeaseSync(options) {
-    const gitDir = gitMetadataDir(options.workspaceDir, options.gitDir);
+    const gitDir = gitMetadataDir(options.workspaceDir);
     return acquireSystemConfigSyncLeaseSync({
         openclawDir: gitDir,
         lockName: WORKSPACE_MUTATION_LOCK_NAME,

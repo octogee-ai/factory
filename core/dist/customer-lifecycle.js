@@ -159,11 +159,11 @@ function throwIfAborted(signal, uid) {
         throw reason;
     throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
-function builderGatewayIsReadyForFastAttach(adapter, snapshot, convergeContent) {
+function operatorGatewayIsReadyForFastAttach(adapter, snapshot, convergeContent) {
     const { slug } = snapshot;
     return snapshot.status === "complete"
         && !convergeContent
-        && Boolean(adapter.isBuilderGateway?.())
+        && Boolean(adapter.isOperatorGateway?.())
         && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
         && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
         && adapter.hasWorkspaceGitDir(slug)
@@ -180,10 +180,10 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     let snapshot = prepared.snapshot;
     const { ctx, newCustomer } = prepared;
     const { slug } = snapshot;
-    if (builderGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
+    if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
         steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
         throwIfAborted(signal, uid);
-        adapter.log(`[add:${slug}] builder gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
+        adapter.log(`[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
         throwIfAborted(signal, uid);
         await verifyChannelReady(adapter, slug, verifyTimeoutMs);
         // Fleet heartbeat must include this customer as mounted — same as

@@ -3,11 +3,11 @@ import {
   departedFromAssigned,
   intersectMounted,
   parseHealthResponse,
-  pollGatewayHeartbeatsOnce,
+  pollOperatorHeartbeatsOnce,
   type EvictionInFlight,
   type EvictionStreaks,
-  type GatewayHeartbeatPollerDeps,
-} from "../gateway-heartbeat-poller.js";
+  type OperatorHeartbeatPollerDeps,
+} from "../operator-heartbeat-poller.js";
 
 describe("parseHealthResponse", () => {
   it("parses a well-formed /health body", () => {
@@ -114,8 +114,8 @@ describe("intersectMounted", () => {
 });
 
 function makeDeps(
-  over: Partial<GatewayHeartbeatPollerDeps> = {},
-): GatewayHeartbeatPollerDeps {
+  over: Partial<OperatorHeartbeatPollerDeps> = {},
+): OperatorHeartbeatPollerDeps {
   return {
     listGatewayIds: vi.fn(async () => ["bender"]),
     fetchHealth: vi.fn(async () => ({
@@ -129,10 +129,10 @@ function makeDeps(
   };
 }
 
-describe("pollGatewayHeartbeatsOnce", () => {
+describe("pollOperatorHeartbeatsOnce", () => {
   it("writes assigned∩present as mountedCustomers, carrying the health status", async () => {
     const deps = makeDeps();
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: ["ceckert"],
@@ -147,7 +147,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
         startedAt: 1700000,
       })),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: ["ceckert"],
@@ -163,7 +163,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
         version: "93073bd",
       })),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: ["ceckert"],
@@ -179,7 +179,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
         openclawVersion: "2026.7.1",
       })),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: ["ceckert"],
@@ -207,7 +207,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
         configStatus,
       })),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: ["ceckert"],
@@ -231,7 +231,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
 
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {
     const deps = makeDeps({ fetchHealth: vi.fn(async () => null) });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
   });
 
@@ -244,7 +244,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       }),
       readAssignedSlugs: vi.fn(async () => ["x"]),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledTimes(1);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith(
       "good",
@@ -259,7 +259,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
         throw new Error("firestore unavailable");
       }),
     });
-    await pollGatewayHeartbeatsOnce(deps);
+    await pollOperatorHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("gateways"));
   });
@@ -275,8 +275,8 @@ describe("departedFromAssigned", () => {
   });
 });
 
-describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
-  function evictDeps(over: Partial<GatewayHeartbeatPollerDeps> = {}) {
+describe("pollOperatorHeartbeatsOnce — Cowboy-driven local eviction", () => {
+  function evictDeps(over: Partial<OperatorHeartbeatPollerDeps> = {}) {
     // makeDeps reports ghost present but not assigned → ghost is the departed one.
     return makeDeps({ evictSlug: vi.fn(async () => {}), evictAfterStreak: 2, ...over });
   }
@@ -284,9 +284,9 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
   it("evicts a departed local customer only after the streak threshold", async () => {
     const deps = evictDeps();
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
     expect(deps.evictSlug).not.toHaveBeenCalled();
-    await pollGatewayHeartbeatsOnce(deps, streaks); // streak 2 → evict
+    await pollOperatorHeartbeatsOnce(deps, streaks); // streak 2 → evict
     expect(deps.evictSlug).toHaveBeenCalledTimes(1);
     expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
   });
@@ -294,9 +294,9 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
   it("never evicts a customer that is still assigned, no matter how many ticks", async () => {
     const deps = evictDeps({ readAssignedSlugs: vi.fn(async () => ["ceckert", "ghost"]) });
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
     expect(deps.evictSlug).not.toHaveBeenCalled();
   });
 
@@ -304,11 +304,11 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     let assigned = ["ceckert"];
     const deps = evictDeps({ readAssignedSlugs: vi.fn(async () => assigned) });
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost departed, streak 1
     assigned = ["ceckert", "ghost"]; // re-assigned
-    await pollGatewayHeartbeatsOnce(deps, streaks); // ghost assigned → streak reset
+    await pollOperatorHeartbeatsOnce(deps, streaks); // ghost assigned → streak reset
     assigned = ["ceckert"]; // departs again
-    await pollGatewayHeartbeatsOnce(deps, streaks); // streak back to 1, not 2 → no evict
+    await pollOperatorHeartbeatsOnce(deps, streaks); // streak back to 1, not 2 → no evict
     expect(deps.evictSlug).not.toHaveBeenCalled();
   });
 
@@ -324,9 +324,9 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
       })),
     });
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
     expect(deps.evictSlug).not.toHaveBeenCalled();
     // ...and it's still correctly absent from mountedCustomers (unassigned pre-cutover).
     expect(deps.writeHeartbeat).toHaveBeenLastCalledWith(
@@ -338,8 +338,8 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
   it("does nothing (but still reports) when no evictSlug is configured", async () => {
     const deps = makeDeps({ evictAfterStreak: 1 }); // no evictSlug
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
     expect(deps.writeHeartbeat).toHaveBeenCalled();
   });
 
@@ -350,8 +350,8 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     });
     const streaks: EvictionStreaks = new Map();
 
-    await pollGatewayHeartbeatsOnce(deps, streaks);
-    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
 
     expect(deps.evictSlug).not.toHaveBeenCalled();
     expect(deps.writeHeartbeat).toHaveBeenCalledTimes(2);
@@ -366,7 +366,7 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
       }),
     });
     const streaks: EvictionStreaks = new Map();
-    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollOperatorHeartbeatsOnce(deps, streaks);
     expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("evict"));
     expect(deps.writeHeartbeat).toHaveBeenCalled();
@@ -391,9 +391,9 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     const streaks: EvictionStreaks = new Map();
     const inFlight: EvictionInFlight = new Set();
 
-    const firstPoll = pollGatewayHeartbeatsOnce(deps, streaks, inFlight);
+    const firstPoll = pollOperatorHeartbeatsOnce(deps, streaks, inFlight);
     await evictionStarted;
-    await pollGatewayHeartbeatsOnce(deps, streaks, inFlight);
+    await pollOperatorHeartbeatsOnce(deps, streaks, inFlight);
 
     expect(deps.evictSlug).toHaveBeenCalledTimes(1);
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("already in flight"));

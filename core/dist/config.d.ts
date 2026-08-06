@@ -5,7 +5,7 @@ export declare const AGENT_PREFIX: string;
 export declare const GATEWAY_ID: string;
 export declare const GATEWAY_PROFILE: string;
 export declare const GATEWAY_CLASS: string;
-export declare function isBuilderGateway(): boolean;
+export declare function isOperatorGateway(): boolean;
 export declare function isSharedGateway(): boolean;
 export declare function usesLlmBrokerToken(): boolean;
 export declare const CUSTOMERS_DIR: string;

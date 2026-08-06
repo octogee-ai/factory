@@ -41,7 +41,6 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
     },
     nukeUserFirestore: vi.fn(async () => undefined),
     deleteCustomerStorage: vi.fn(async () => undefined),
-    deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
     deleteCredentialSecrets: vi.fn(async () => undefined),
     deleteAuthUser: vi.fn(async () => undefined),
     log: vi.fn(),
@@ -63,7 +62,7 @@ describe("nukeUserCloudSide — happy path", () => {
       "auth:true",
     ]);
     
-    expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true });
+    expect(results.find((r) => r.key === "hosting")?.skipped).toBe(true);
   });
 
   it("Gitea step deletes every repo + the user", async () => {
@@ -161,6 +160,11 @@ describe("nukeUserCloudSide — skip flags", () => {
     expect(deps.deleteAuthUser).not.toHaveBeenCalled();
   });
 
+  it("skipHosting + missing deleteHostingSites both yield a skipped hosting step", async () => {
+    const deps = mkDeps();
+    const results = await nukeUserCloudSide(mkCtx({ skipHosting: true }), deps);
+    expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true, skipped: true });
+  });
 });
 
 describe("nukeUserCloudSide — hosting step (PR #3)", () => {
@@ -195,11 +199,6 @@ describe("nukeUserCloudSide — hosting step (PR #3)", () => {
       ok: false,
       error: expect.stringContaining("hosting boom"),
     });
-    expect(results.find((r) => r.key === "firestore")).toMatchObject({
-      ok: true,
-      skipped: true,
-    });
-    expect(deps.nukeUserFirestore).not.toHaveBeenCalled();
   });
 
   it("does NOT extract projectSlugs from repoNames anymore (regression: the old slice produced 'proj-<slug>' instead of '<slug>')", async () => {

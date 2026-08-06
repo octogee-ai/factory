@@ -73,6 +73,7 @@ const ANONYMOUS_OPERATIONAL_PLAN_TIERS = [
 const ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES = [
   "shared",
   "builder",
+  "operator",
 ] as const;
 
 function closedOperationalValue(

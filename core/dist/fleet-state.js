@@ -296,7 +296,7 @@ function recoveryAlreadyCommitted(input) {
     const openclaw = recordOrEmpty(recordOrEmpty(input.user?.provisioning).openclaw);
     const targetRoot = projectGatewayDesiredRootForGateway(input.targetRootData, input.params.toGatewayId);
     const shellState = resolveUserGatewayShellState(targetRoot
-        ? { ...targetRoot, builderAccess: targetRoot.builderAccess ?? undefined }
+        ? { ...targetRoot, operatorAccess: targetRoot.operatorAccess ?? undefined }
         : undefined, input.params.uid);
     const targetAssignmentExact = [
         input.targetAssignment?.uid === input.params.uid,

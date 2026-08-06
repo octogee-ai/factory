@@ -35,7 +35,7 @@ export async function ensureOwnedGatewaysRetired(
   const owned = snapshot.docs
     .filter((doc) => {
       const root = doc.data() as Record<string, unknown>;
-      return root.gatewayClass === "builder";
+      return root.gatewayClass === "builder" || root.gatewayClass === "operator";
     })
     .sort((a, b) => a.id.localeCompare(b.id));
   if (owned.length === 0) return "not-owned";
@@ -53,7 +53,7 @@ async function reconcileOwnedGatewayRetirement(
   claimRetirement: typeof claimGatewayRetirementAtomic,
 ): Promise<boolean> {
   const root = doc.data() as Record<string, unknown>;
-  if (root.gatewayClass !== "builder") {
+  if (root.gatewayClass !== "builder" && root.gatewayClass !== "operator") {
     throw new Error(`owned gateway ${doc.id} has invalid class: ${String(root.gatewayClass)}`);
   }
   const operationId = retirementOperationId(input.deletionId, doc.id);

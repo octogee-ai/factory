@@ -515,7 +515,7 @@ function recoveryAlreadyCommitted(input: {
   );
   const shellState = resolveUserGatewayShellState(
     targetRoot
-      ? { ...targetRoot, builderAccess: targetRoot.builderAccess ?? undefined }
+      ? { ...targetRoot, operatorAccess: targetRoot.operatorAccess ?? undefined }
       : undefined,
     input.params.uid,
   );

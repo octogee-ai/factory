@@ -3,7 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
 import { verifyFleetRequest } from "@octogee/core/fleet-signature";
 import {
-  buildGatewayHeartbeatPollerDeps,
+  buildOperatorHeartbeatPollerDeps,
   callUnmountRpc,
   heartbeatPollInstanceIds,
   heartbeatRosterTarget,
@@ -35,7 +35,7 @@ describe("callUnmountRpc", () => {
     vi.restoreAllMocks();
   });
 
-  it("aborts a stuck unmount RPC instead of hanging the Builder gateway poller", async () => {
+  it("aborts a stuck unmount RPC instead of hanging the operator poller", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -69,7 +69,7 @@ describe("callUnmountRpc", () => {
   });
 });
 
-describe("buildGatewayHeartbeatPollerDeps", () => {
+describe("buildOperatorHeartbeatPollerDeps", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -94,7 +94,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       }),
     } as unknown as Firestore;
 
-    const deps = buildGatewayHeartbeatPollerDeps(batchDb, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const deps = buildOperatorHeartbeatPollerDeps(batchDb, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
     await deps.writeHeartbeat("bender", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
 
     expect(committed).toBe(true);
@@ -114,7 +114,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       capturedInit = init;
       return Promise.resolve(new Response("{}", { status: 200 }));
     });
-    const deps = buildGatewayHeartbeatPollerDeps(
+    const deps = buildOperatorHeartbeatPollerDeps(
       fakeDb(),
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
@@ -144,13 +144,13 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       configSchemaVersion: 1,
       profile: null,
       gatewayClass,
-      imageProfile: gatewayClass === "builder" ? "builder" : "standard",
+      imageProfile: "standard",
       sizingTier: null,
       gcpProject: null,
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
-      builderAccess: null,
+      operatorAccess: null,
       ownerUid: gatewayClass === "shared" ? null : "uid-bender",
       builderSlug: gatewayClass === "shared" ? null : "bender",
       openclawOverrides: null,
@@ -165,7 +165,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
         }),
       }),
     } as unknown as Firestore;
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
 
     await expect(deps.ownsEviction?.("bender")).resolves.toBe(false);
     gateway = durableGateway("builder");
@@ -173,7 +173,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
   });
 });
 
-describe("gateway heartbeat poll — a converged gateway writes nothing", () => {
+describe("operator heartbeat poll — a converged gateway writes nothing", () => {
   function pollerDb(store: Map<string, Record<string, unknown>>) {
     const writes: Array<{ doc: string; data: Record<string, unknown> }> = [];
     const db = {
@@ -213,7 +213,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
   it("writes the first poll and skips an identical second poll", async () => {
     const store = runtimeStore();
     const { db, writes } = pollerDb(store);
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
     const health = { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 };
 
     expect(await deps.listGatewayIds()).toEqual(["bender"]);
@@ -230,7 +230,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
   it("writes exactly once more when the poll reports a new mounted set", async () => {
     const store = runtimeStore();
     const { db, writes } = pollerDb(store);
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const deps = buildOperatorHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
 
     await deps.listGatewayIds();
     await deps.writeHeartbeat("bender", {
@@ -301,7 +301,7 @@ describe("runtime heartbeat polling", () => {
   });
 });
 
-describe("gateway heartbeat poll — a converged poll reads nothing", () => {
+describe("operator heartbeat poll — a converged poll reads nothing", () => {
   const runtime = {
     docKind: "runtime",
     gatewayId: "bender",
@@ -316,13 +316,13 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     configSchemaVersion: 1,
     profile: null,
     gatewayClass: "builder",
-    imageProfile: "builder",
+    imageProfile: "standard",
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: "uid-bender",
     builderSlug: "bender",
     openclawOverrides: null,
@@ -371,7 +371,7 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
 
   it("lists gateways, resolves the roster and owns eviction with zero Firestore reads", async () => {
     const { db, reads } = countingDb();
-    const deps = buildGatewayHeartbeatPollerDeps(
+    const deps = buildOperatorHeartbeatPollerDeps(
       db,
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
@@ -387,7 +387,7 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
 
   it("falls back to direct reads while the mirrors are stale", async () => {
     const { db, reads } = countingDb();
-    const deps = buildGatewayHeartbeatPollerDeps(
+    const deps = buildOperatorHeartbeatPollerDeps(
       db,
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
@@ -409,7 +409,7 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
   it("re-reads the runtime document directly before an eviction RPC", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     const { db, reads } = countingDb();
-    const deps = buildGatewayHeartbeatPollerDeps(
+    const deps = buildOperatorHeartbeatPollerDeps(
       db,
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,

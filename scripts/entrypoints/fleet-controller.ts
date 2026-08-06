@@ -6,7 +6,7 @@ import {
   GATEWAY_ID,
   GATEWAY_PROFILE,
   GIT_SYNC_INTERVAL_MS,
-  isBuilderGateway,
+  isOperatorGateway,
   log,
   OPENCLAW_DIR,
 } from "../lib/config.js";
@@ -179,14 +179,14 @@ async function main(): Promise<void> {
   if (!entrypointConfig.publicKey) {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
-  const builder = isBuilderGateway();
+  const operator = isOperatorGateway();
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
   const adapter = buildBrokeredLifecycleAdapter({
     client: brokerClient,
     rpc,
     log,
     adminMmUserId: process.env.MM_ADMIN_USER_ID,
-    isBuilderGateway,
+    isOperatorGateway,
     projectCheckoutScope: () => projectCheckoutScopeForRuntime(),
   });
   const fleetHandle = await startFleetController({
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
     version: entrypointConfig.version,
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
-    platformState: !builder,
+    platformState: !operator,
     localReconcile: true,
     readDesiredFingerprints: createAssignedFingerprintReader(
       brokerClient,
@@ -214,13 +214,13 @@ async function main(): Promise<void> {
         gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
         syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, { strict: true }),
-        syncBlobs: builder
+        syncBlobs: operator
           ? undefined
           : () => blobSyncForSlug(slug, {
               strict: true,
               store: createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: builder
+        syncSystemConfig: operator
           ? createFleetSystemConfigFlush(
               slug,
               log,
@@ -258,9 +258,9 @@ async function main(): Promise<void> {
   const autosaveTimer = startWorkspaceAutosaveLoop(
     {
       envValue: process.env.WORKSPACE_AUTOSAVE_ENABLED,
-      isBuilderGateway,
+      isOperatorGateway,
       syncWorkspaces: syncAllWorkspaces,
-      syncBlobs: builder
+      syncBlobs: operator
         ? undefined
         : () => blobSyncAllWithOptions({
             storeForSlug: () => createBrokeredBlobStore(brokerClient!),
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
     },
     GIT_SYNC_INTERVAL_MS,
   );
-  const usageTimer = builder
+  const usageTimer = operator
     ? null
     : startUsageEventTailer({
         agentPrefix: AGENT_PREFIX,

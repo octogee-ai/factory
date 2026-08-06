@@ -1,3 +1,10 @@
+# Cowboy resolves the live Kubernetes apiserver endpoint (the `kubernetes`
+# Endpoints + Service in the `default` namespace) every reconcile to populate
+# operator gateways' apiserver-egress NetworkPolicy CIDRs — the carve-out that
+# lets builder-shell TokenReview reach the control plane. Read-only, scoped to
+# those two named objects in `default`. Name-suffixed by release namespace so the
+# prod (octogee) and test (octogee-test) umbrellas don't collide on one shared
+# `default`-namespace object.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
