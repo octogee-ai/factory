@@ -141,7 +141,7 @@ upgrade — never hand them the raw error.
 
 ## Platform Tools
 
-Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask_ops` when unsure.
+Use live tools only. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 
 - Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
