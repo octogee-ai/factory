@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildProvisioningContext,
   buildRemoveCustomerConfig,
-  buildRemoveCustomerPatch,
   buildUserOperationalFields,
 } from "./provisionSteps.js";
 
@@ -28,7 +27,7 @@ describe("buildUserOperationalFields", () => {
   });
 });
 
-describe("buildRemoveCustomerPatch", () => {
+describe("buildRemoveCustomerConfig", () => {
   const current = {
     agents: {
       list: [
@@ -53,17 +52,6 @@ describe("buildRemoveCustomerPatch", () => {
       },
     },
   };
-
-  it("builds a merge patch that removes bindings and accounts without replacing the redacted agent list", () => {
-    const patch = buildRemoveCustomerPatch(current, "alice", "octogee-alice-coach");
-
-    expect(patch).not.toHaveProperty("agents");
-    expect(patch.bindings.map((b) => b.agentId)).toEqual(["octogee-bob-coach"]);
-    expect(patch.channels.mattermost.accounts).toEqual({
-      "alice-coach": null,
-      "alice-proj-orbit": null,
-    });
-  });
 
   it("removes the customer's complete footprint from an unredacted full config without shifting sibling secrets", () => {
     const raw = {
@@ -102,8 +90,8 @@ describe("buildRemoveCustomerPatch", () => {
     expect(raw.channels.mattermost.accounts).toHaveProperty("alice-coach");
   });
 
-  it("does not null a hyphenated sibling's project accounts", () => {
-    const patch = buildRemoveCustomerPatch(
+  it("does not remove a hyphenated sibling's project accounts", () => {
+    const config = buildRemoveCustomerConfig(
       {
         bindings: [],
         channels: {
@@ -115,9 +103,8 @@ describe("buildRemoveCustomerPatch", () => {
       "alice",
       "octogee-alice-coach",
     );
-    expect(patch.channels.mattermost.accounts).toEqual({
-      "alice-coach": null,
-      "alice-proj-y": null,
+    expect(config.channels?.mattermost?.accounts).toEqual({
+      "alice-b-proj-x": { botToken: "s" },
     });
   });
 });

@@ -125,25 +125,6 @@ export function buildCoachAccountFragment(slug, mmUpdate) {
         defaultAccount: mm.defaultAccount ?? "default",
     };
 }
-export function buildRemoveCustomerPatch(current, slug, agentId) {
-    const existing = current?.bindings;
-    const currentBindings = Array.isArray(existing)
-        ? existing
-        : [];
-    // Vegas: the customer's project agents ({slug}-proj-{pid} accounts and
-    // octogee-{slug}-proj-{pid}-coach bindings) leave with the customer.
-    const currentAccounts = current
-        ?.channels?.mattermost?.accounts ?? {};
-    const accounts = { [`${slug}-coach`]: null };
-    for (const key of Object.keys(currentAccounts)) {
-        if (key.startsWith(`${slug}-proj-`))
-            accounts[key] = null;
-    }
-    return {
-        bindings: filterOutCustomerBindings(currentBindings.filter((b) => b?.agentId !== agentId), slug),
-        channels: { mattermost: { accounts } },
-    };
-}
 export function buildRemoveCustomerConfig(current, slug, agentId) {
     const config = structuredClone(current);
     const projectAgentPrefix = `octogee-${slug}-proj-`;

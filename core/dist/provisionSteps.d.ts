@@ -73,14 +73,6 @@ export declare function buildCoachAccountFragment(slug: string, mmUpdate: MmUpda
     accounts: Record<string, MattermostAccount>;
     defaultAccount: string;
 };
-export declare function buildRemoveCustomerPatch(current: unknown, slug: string, agentId: string): {
-    bindings: AgentBinding[];
-    channels: {
-        mattermost: {
-            accounts: Record<string, null>;
-        };
-    };
-};
 export declare function buildRemoveCustomerConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
 export declare function provisionMattermost(ctx: ProvisioningContext): Promise<MmUpdate>;
 export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBinding[], binding: AgentBinding & {

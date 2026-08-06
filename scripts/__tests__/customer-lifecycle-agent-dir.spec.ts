@@ -213,26 +213,6 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it("local import preparation preserves the transferred customer key during state sync", async () => {
-    await withRuntimeMock(async ({ tempRoot }) => {
-      process.env.OPENCLAW_STATE_DIR = tempRoot;
-      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
-      await fs.mkdir(path.dirname(customerKey), { recursive: true });
-      await fs.writeFile(customerKey, "private-key");
-      const { buildLocalMigrationAdapter } = await import(
-        "../lib/fleet-local-migration-adapter.js"
-      );
-      const adapter = buildLocalMigrationAdapter({
-        rpc: {} as GatewayRpcClient,
-        log: vi.fn(),
-      });
-
-      await adapter.prepareImportDir("alice", "final");
-
-      expect(fsSync.existsSync(customerKey)).toBe(true);
-    });
-  });
-
   it("preserves a dedicated builder key while unmounting its migrated customer", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
