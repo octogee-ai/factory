@@ -9,26 +9,26 @@ export interface NukeCloudCtx {
   slug: string;
   email: string | null;
   giteaOrg: string;
-  
+
   repoNames: string[];
 
 projectSlugs: string[];
-  
+
   workspaceTeamId: string | null;
-  
+
   mmUserId: string | null;
-  
+
   mmCoachUserId: string | null;
-  
+
   adminChannelId: string | null;
   credentialSecretNames: string[];
   projectAgentMmUserIds: string[];
   projectAgentCredentialDocPaths: string[];
   chatArtifactIds: string[];
   agentImportIds: string[];
-  
+
   skipHosting?: boolean;
-  
+
   skipAuth?: boolean;
 }
 

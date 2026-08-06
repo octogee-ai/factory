@@ -662,8 +662,8 @@ const tryByField = async (
 const isEntrypoint = process.argv[1] && process.argv[1].endsWith("pre-boot-config.ts") || process.argv[1]?.endsWith("pre-boot-config.js");
 if (isEntrypoint) {
   main().catch((err) => {
-    
+
     console.error(`[pre-boot] Warning: ${err.message}`);
-    process.exit(0); 
+    process.exit(0);
   });
 }

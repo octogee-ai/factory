@@ -88,7 +88,7 @@ describe("SSH key generation", () => {
     generateCustomerSshKey(keysDir, "acme");
     const keyPath = path.join(keysDir, "acme", "id_ed25519");
     const stat = fs.statSync(keyPath);
-    
+
     expect(stat.mode & 0o077).toBe(0);
   });
 
@@ -119,12 +119,12 @@ describe("Gitea username", () => {
 
 describe("workspace .gitignore excludes .ssh/", () => {
   it("initWorkspaceRepo gitignore template contains .ssh/ but keeps context files customer-owned", () => {
-    
+
     const gitTs = fs.readFileSync(
       path.resolve(__dirname, "..", "lib", "git.ts"),
       "utf-8",
     );
-    
+
     expect(gitTs).toContain('".ssh/",');
     expect(gitTs).not.toContain('"AGENTS.md",');
     expect(gitTs).not.toContain('"TOOLS.md",');
@@ -171,7 +171,7 @@ if (fs.existsSync(keyPath)) {
     const keyPath = customerSshKeyPath(keysDir, "acme");
     const cmd = `git config core.sshCommand "${expectedSshCommand(keyPath)}"`;
     execSync(cmd, { cwd: repoDir });
-    execSync(cmd, { cwd: repoDir }); 
+    execSync(cmd, { cwd: repoDir });
 
     const got = execSync("git config --get-all core.sshCommand", {
       cwd: repoDir,

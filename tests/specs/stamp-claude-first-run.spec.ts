@@ -122,10 +122,10 @@ const fs = require("node:fs") as typeof import("node:fs");
     const configPath = path.join(home, ".claude.json");
     writeFileSync(configPath, "{not json at all");
     stampFirstRun({ home, claudeVersion: "2.1.145" });
-    
+
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     expect(config.hasCompletedOnboarding).toBe(true);
-    
+
     const fsLib = require("node:fs") as typeof import("node:fs");
     const broken = fsLib
       .readdirSync(home)
@@ -137,17 +137,17 @@ const fs = require("node:fs") as typeof import("node:fs");
   });
 
   it("honors CLAUDE_CONFIG_DIR for the credentials lookup (operator-relocated .credentials.json still triggers the stamp)", () => {
-    
+
     const relocated = mkdtempSync(path.join(tmpdir(), "claude-config-dir-"));
     writeFileSync(path.join(relocated, ".credentials.json"), JSON.stringify({ oauth: { access_token: "fake" } }));
-    
+
     const result = stampFirstRun({
       home,
       claudeVersion: "2.1.145",
       claudeConfigDir: relocated,
     });
     expect(result.stamped).toBe(true);
-    
+
     const config = JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8"));
     expect(config.hasCompletedOnboarding).toBe(true);
   });
@@ -168,7 +168,7 @@ writeCreds(home);
     stampFirstRun({ home, claudeVersion: "2.1.145" });
     const configPath = path.join(home, ".claude.json");
     const mtimeBefore = statSync(configPath).mtimeMs;
-    
+
     const result = stampFirstRun({ home, claudeVersion: "2.1.145" });
     expect(result).toEqual({ stamped: false, reason: "already-stamped" });
     const mtimeAfter = statSync(configPath).mtimeMs;
@@ -205,7 +205,7 @@ const fakeBin = path.join(makeHome(), "fake-claude");
   });
 
   it("returns null when the binary is not executable / missing (cattle image with no `claude` on PATH)", () => {
-    
+
     expect(readClaudeVersion({ claudeBin: "/bin/false" })).toBeNull();
   });
 
@@ -221,7 +221,7 @@ const fakeBin = path.join(makeHome(), "fake-claude-real");
     const prior = process.env.CLAUDE_BIN;
     process.env.CLAUDE_BIN = fakeBin;
     try {
-      
+
       expect(readClaudeVersion()).toBe("2.1.999");
     } finally {
       if (prior === undefined) delete process.env.CLAUDE_BIN;
