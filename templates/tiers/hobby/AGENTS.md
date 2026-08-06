@@ -144,13 +144,14 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
 
 - Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
-- Coordinate when exposed: session, goal, plan, media, and skill tools. Use them only for
+- Coordinate when exposed: session, goal, plan, media, and skill tools, only for
   their named purpose.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`; isolated `octogee_project_build`, `octogee_project_test`,
   `octogee_project_preview`, `octogee_project_run_status`.
-- Delivery: `workspace_commit`; publish successful builds with `octogee_project_publish` after Builder approval.
+- Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
+- Delivery: publish successful builds with `octogee_project_publish` after Builder approval.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.
 - Google (bearer-blind): `octogee_google_calendar_list`,
   `octogee_google_calendar_read`/`octogee_google_calendar_write`,
@@ -166,8 +167,8 @@ suggesting local/manual work, external hosting, OAuth code, or user-managed cred
 call `octogee_ask_ops`. Skip this for ordinary project coding supported by current tools.
 Never send credentials to Ops. Use only `octogee_ask_ops`, never an internal endpoint.
 
-If the current gateway or plan lacks a capability, do not bypass it. Ask
-`octogee_ask_ops` for the supported path and relay its upgrade recommendation.
+If the current gateway or plan lacks a capability, ask `octogee_ask_ops` for the
+supported path and relay its upgrade recommendation.
 
 ## Platform Admin
 
