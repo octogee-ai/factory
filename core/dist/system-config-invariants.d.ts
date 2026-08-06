@@ -1,8 +1,6 @@
 type JsonObject = Record<string, unknown>;
 declare const ABSENT: unique symbol;
-declare const REQUIRED_ARRAY: "required-array";
-declare const FORBIDDEN_ARRAY: "forbidden-array";
-export type GatewayConfigClass = "shared" | "builder";
+export type GatewayConfigClass = "shared" | "builder" | "operator";
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
     gatewayId?: string;
@@ -14,32 +12,16 @@ type ExactInvariant = {
     value: unknown | typeof ABSENT;
 };
 type RequiredArrayInvariant = {
-    kind: typeof REQUIRED_ARRAY;
+    kind: "required-array";
     path: string;
     values: readonly string[];
 };
 type ForbiddenArrayInvariant = {
-    kind: typeof FORBIDDEN_ARRAY;
+    kind: "forbidden-array";
     path: string;
     values: readonly string[];
 };
-type CustomerAgentWorkspaceInvariant = {
-    kind: "customer-agent-workspace";
-    path: "agents.list[].tools.fs.workspaceOnly" | "agents.entries.*.tools.fs.workspaceOnly";
-};
-type MattermostAccountProjectionInvariant = {
-    kind: "mattermost-account-projection";
-    path: "channels.mattermost.accounts";
-};
-type CustomerAgentToolPolicyInvariant = {
-    kind: "customer-agent-tool-policy";
-    path: "agents.list[].tools" | "agents.entries.*.tools";
-};
-type ProjectAgentToolPolicyInvariant = {
-    kind: "project-agent-tool-policy";
-    path: "agents.list[].tools" | "agents.entries.*.tools";
-};
-export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant | CustomerAgentWorkspaceInvariant | CustomerAgentToolPolicyInvariant | ProjectAgentToolPolicyInvariant | MattermostAccountProjectionInvariant;
+export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant;
 export declare function platformInvariantTable(context: SystemConfigInvariantContext): readonly PlatformInvariant[];
 export declare class PlatformInvariantPolicyError extends Error {
     readonly paths: string[];

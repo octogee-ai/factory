@@ -42,20 +42,20 @@ describe("helm-runner helpers", () => {
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      builderAccess: { enabled: true, audiences: ["octogee-api"] },
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
+      operatorAccess: { enabled: true, audiences: ["octogee-api"] },
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       sizingTier: "l",
       replicas: 0,
     })).toEqual({
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      builderAccess: { enabled: true, audiences: ["octogee-api"] },
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
+      operatorAccess: { enabled: true, audiences: ["octogee-api"] },
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       sizingTier: "l",
       replicas: 0,
     });
@@ -91,15 +91,15 @@ describe("helm-runner helpers", () => {
       chartFingerprint: "f".repeat(64),
       deploymentIntentFingerprint: "d".repeat(64),
       rollStrategy: "surge",
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       sizingTier: "l",
       replicas: 0,
       serviceAccountName: "octogee-gateway-bender",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
-      builderAccess: { enabled: true },
+      operatorAccess: { enabled: true },
       gcpProject: "builder-bender",
       kmsKeyName: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
       deploymentTargetId: "prod-central",
@@ -137,7 +137,7 @@ describe("helm-runner helpers", () => {
     expect(args).toContain(
       'serviceAccount={"annotations":{"iam.gke.io/gcp-service-account":"gw@example.iam.gserviceaccount.com"}}',
     );
-    expect(args).toContain('builderAccess={"enabled":true}');
+    expect(args).toContain('operatorAccess={"enabled":true}');
     expect(args).toContain("-f");
     expect(args).toContain("/charts/octogee-gateway/values.prod.yaml");
     expect(args).toContain("--take-ownership");
@@ -174,7 +174,7 @@ describe("helm-runner helpers", () => {
       imageTag: "abc1234",
       imageRepository: REPO,
       upgradeTimeout: "10m",
-      gatewayClass: "builder",
+      gatewayClass: "operator",
     });
 
     const stringPair = (key: string): string | undefined => {
@@ -691,7 +691,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     );
   });
 
-  it("passes --set profile=<profile> when the Builder profile is provided", async () => {
+  it("passes --set profile=<profile> when profile is provided (operator/non-default)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
@@ -701,10 +701,10 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      profile: "builder",
+      profile: "operator",
     });
 
-    expect(calls[0]).toContain("profile=builder");
+    expect(calls[0]).toContain("profile=operator");
   });
 
   // eslint-disable-next-line sonarjs/parameterized-tests -- The adjacent profile, string-typing, and sizing cases assert different Helm flag invariants with incompatible setup and assertions.
@@ -735,7 +735,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
       chartPath: "/charts/octogee-gateway",
-      profile: "builder",
+      profile: "operator",
       sizingTier: "l",
       replicas: 1,
     });
@@ -750,7 +750,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(stringPair("gatewayId")).toBe("gatewayId=bender");
     expect(stringPair("builderSlug")).toBe("builderSlug=ceckert");
     expect(stringPair("ownerUid")).toBe("ownerUid=uid-ceckert");
-    expect(stringPair("profile")).toBe("profile=builder");
+    expect(stringPair("profile")).toBe("profile=operator");
     expect(stringPair("sizingTier")).toBe("sizingTier=l");
     // replicas stays on --set because it's number-typed.
     const replicasIdx = args.findIndex((a, i) => a === "--set" && args[i + 1] === "replicas=1");

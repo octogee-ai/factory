@@ -10,7 +10,6 @@ vi.mock("../lib/config.js", () => ({
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
-  OPENCLAW_DIR: "/tmp/octogee-test",
   CUSTOMERS_DIR: "/tmp/octogee-test/customers-doesnt-exist",
   CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
   AGENTS_DIR: "/tmp/octogee-test/agents",

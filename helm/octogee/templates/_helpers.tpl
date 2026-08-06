@@ -95,11 +95,18 @@ gateway-router Service to the selected gateway's internal services.
 - host: {{ $hosts.preview }}
   http:
     paths:
-      - path: /p/*
+      - path: /g/*
         pathType: ImplementationSpecific
         backend:
           service:
-            name: {{ $apiSvc }}
+            name: {{ $routerSvc }}
+            port:
+              name: http
+      - path: /health
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: {{ $routerSvc }}
             port:
               name: http
 {{- end -}}

@@ -54,6 +54,7 @@ describe("gatewaySurfaceTarget", () => {
   it("maps public api gateway paths to the selected gateway-edge sidecar route", () => {
     expect(gatewaySurfaceTarget({
       host: "api.octogee.com",
+      previewHost: "preview.octogee.com",
       url: "/g/bender-green/byosub/health?probe=1",
       namespace: "octogee",
     })).toEqual({
@@ -74,6 +75,7 @@ describe("gatewaySurfaceTarget", () => {
       ]) {
         expect(gatewaySurfaceTarget({
           host,
+          previewHost: "preview.octogee.com",
           url: `/g/bender/${suffix}`,
           namespace: host.startsWith("api-test") ? "octogee-test" : "octogee",
         })).toMatchObject({
@@ -85,17 +87,18 @@ describe("gatewaySurfaceTarget", () => {
     }
   });
 
-  it("never selects a gateway-local preview origin, even for the preview host", () => {
+  it("maps public preview gateway paths to the selected gateway preview port", () => {
     expect(gatewaySurfaceTarget({
       host: "preview.octogee.com",
+      previewHost: "preview.octogee.com",
       url: "/g/bender-green/a1b2c3d4e5f6/",
       namespace: "octogee-test",
     })).toEqual({
       gatewayId: "bender-green",
       revision: null,
-      surface: "api",
-      origin: "http://gateway-edge-bender-green.octogee-test.svc.cluster.local:3001",
-      path: "/api/g/bender-green/a1b2c3d4e5f6/",
+      surface: "preview",
+      origin: "http://octogee-gateway-bender-green.octogee-test.svc.cluster.local:9080",
+      path: "/g/bender-green/a1b2c3d4e5f6/",
     });
   });
 
@@ -117,6 +120,7 @@ describe("gatewaySurfaceTarget", () => {
     })?.surface).toBe("api");
     expect(gatewaySurfaceTarget({
       host: "localhost:3001",
+      previewHost: "preview.octogee.com",
       url: "/g/bender/byosub/health",
       namespace: "octogee",
     })?.surface).toBe("api");
@@ -127,6 +131,7 @@ describe("gatewaySurfaceTarget — revision-pinned address form", () => {
   it("parses /g/<gw>/r/<n>/… as a pinned target addressed at the STABLE service (pinned addressing is retired)", () => {
     expect(gatewaySurfaceTarget({
       host: "api.octogee.com",
+      previewHost: "preview.octogee.com",
       url: "/g/default/r/7/byosub/health?probe=1",
       namespace: "octogee",
     })).toEqual({
@@ -141,6 +146,7 @@ describe("gatewaySurfaceTarget — revision-pinned address form", () => {
   it("keeps the service form revision-free (byte-identical to legacy DNS routing)", () => {
     expect(gatewaySurfaceTarget({
       host: "api.octogee.com",
+      previewHost: "preview.octogee.com",
       url: "/g/default/byosub/health",
       namespace: "octogee",
     })).toEqual({
@@ -189,6 +195,7 @@ describe("createGatewayRouter — pinned addressing is retired (GATEWAY-SIMPLE-R
   it("answers every pinned /r/{n} request with the typed revision_gone 404, never dialing upstream", async () => {
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => "http://127.0.0.1:1", // must never be dialed
       log: () => undefined,
     });
@@ -215,6 +222,7 @@ describe("createGatewayRouter — pinned addressing is retired (GATEWAY-SIMPLE-R
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });
@@ -233,6 +241,7 @@ describe("createGatewayRouter", () => {
   it("rejects a malformed pinned /g/<gw>/r… with 400 (never falls through to the live selector)", async () => {
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => "http://127.0.0.1:1", // must never be dialed
       log: () => undefined,
     });
@@ -267,6 +276,7 @@ describe("createGatewayRouter", () => {
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });
@@ -288,7 +298,7 @@ describe("createGatewayRouter", () => {
     });
   });
 
-  it("never proxies preview-host requests to a gateway-local execution port", async () => {
+  it("proxies preview HTTP requests to the selected gateway preview port without rewriting the preview path", async () => {
     const upstreamSeen = vi.fn();
     const upstream = http.createServer((req, res) => {
       upstreamSeen({ method: req.method, url: req.url, host: req.headers.host });
@@ -298,6 +308,7 @@ describe("createGatewayRouter", () => {
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });
@@ -311,8 +322,8 @@ describe("createGatewayRouter", () => {
     expect(res.body).toBe("preview");
     expect(upstreamSeen).toHaveBeenCalledWith({
       method: "GET",
-      url: "/api/g/bender-blue/ticket123/",
-      host: `127.0.0.1:${upstreamPort}`,
+      url: "/g/bender-blue/ticket123/",
+      host: "preview.octogee.com",
     });
   });
 
@@ -326,6 +337,7 @@ describe("createGatewayRouter", () => {
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });
@@ -358,6 +370,7 @@ describe("createGatewayRouter", () => {
   it("returns 404 for malformed gateway ids without throwing on HTTP or WS requests", async () => {
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       log: () => undefined,
     });
     const routerPort = await listen(router);
@@ -383,11 +396,14 @@ describe("createGatewayRouter", () => {
     });
   });
 
-  it("boots without a preview host because the router has no preview surface", () => {
-    expect(() => createGatewayRouter({
-      namespace: "octogee",
-      log: () => undefined,
-    })).not.toThrow();
+  it("refuses to boot without an explicit preview host", () => {
+    expect(() =>
+      createGatewayRouter({
+        namespace: "octogee",
+        previewHost: "",
+        log: () => undefined,
+      }),
+    ).toThrow(/preview host/i);
   });
 });
 
@@ -406,6 +422,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
     const logged: Harness["logged"] = [];
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: (message, meta) => logged.push({ message, meta }),
     });
@@ -536,6 +553,7 @@ describe("createGatewayRouter — retired internal routing headers get no specia
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });
@@ -586,6 +604,7 @@ describe("createGatewayRouter — a non-101 upstream upgrade response is forward
     const upstreamPort = await listen(upstream);
     const router = createGatewayRouter({
       namespace: "octogee",
+      previewHost: "preview.octogee.com",
       targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
       log: () => undefined,
     });

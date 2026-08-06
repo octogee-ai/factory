@@ -15,7 +15,7 @@ import {
 } from "./rpc-policy.js";
 
 const invariantContext = {
-  gatewayClass: "builder" as const,
+  gatewayClass: "operator" as const,
   gatewayId: "bender",
   apiOrigin: "https://api.octogee.com",
 };
@@ -188,9 +188,8 @@ describe("OpenClaw Dashboard RPC policy", () => {
       },
     });
     const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
-    const currentMain = ((current.agents as { list: Record<string, unknown>[] }).list[0]);
     const decision = evaluateOpenClawControlRpc(request("config.patch", {
-      raw: JSON.stringify({ agents: { list: [{ ...currentMain, name: "Updated" }] } }),
+      raw: JSON.stringify({ agents: { list: [{ id: "main", name: "Updated" }] } }),
       baseHash: "hash-1",
       replacePaths: ["agents.list"],
     }), context);

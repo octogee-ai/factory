@@ -45,7 +45,7 @@ upsertInstance(opts: {
     serviceAccountName?: string;
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    builderAccess?: HelmInstancesMap[string]["builderAccess"];
+    operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
     chartPath: string;
     valuesFile?: string;
 
@@ -198,7 +198,7 @@ interface PerReleaseValues {
   serviceAccountName?: unknown;
   serviceAccount?: unknown;
   gatewayContainerSecurityContext?: unknown;
-  builderAccess?: unknown;
+  operatorAccess?: unknown;
   profile?: unknown;
   gatewayClass?: unknown;
   imageProfile?: unknown;
@@ -280,9 +280,9 @@ async function readInstanceValue(
   };
 }
 
-const PROFILE_VALUES = new Set<GatewayProfile>(["standard", "builder"]);
-const GATEWAY_CLASS_VALUES = new Set<GatewayClass>(["shared", "builder"]);
-const IMAGE_PROFILE_VALUES = new Set<GatewayImageProfile>(["standard", "builder"]);
+const PROFILE_VALUES = new Set<GatewayProfile>(["standard", "operator"]);
+const GATEWAY_CLASS_VALUES = new Set<GatewayClass>(["shared", "builder", "operator"]);
+const IMAGE_PROFILE_VALUES = new Set<GatewayImageProfile>(["standard", "operator"]);
 const SIZING_TIER_VALUES = new Set<SizingTier>(SIZING_TIERS);
 
 function nonEmptyString(v: unknown): string | undefined {
@@ -314,7 +314,7 @@ const PERSONAL_KNOB_READERS: PersonalKnobReader[] = [
   (v) => knob("gatewayContainerSecurityContext", plainObjectKnob<Record<string, unknown>>(
     v.gatewayContainerSecurityContext,
   )),
-  (v) => knob("builderAccess", plainObjectKnob<HelmInstancesMap[string]["builderAccess"]>(v.builderAccess)),
+  (v) => knob("operatorAccess", plainObjectKnob<HelmInstancesMap[string]["operatorAccess"]>(v.operatorAccess)),
   (v) => knob("profile", enumString(v.profile, PROFILE_VALUES)),
   (v) => knob("gatewayClass", enumString(v.gatewayClass, GATEWAY_CLASS_VALUES)),
   (v) => knob("imageProfile", enumString(v.imageProfile, IMAGE_PROFILE_VALUES)),
@@ -365,7 +365,7 @@ export interface BuildUpgradeArgsOpts {
   serviceAccountName?: string;
   serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  builderAccess?: HelmInstancesMap[string]["builderAccess"];
+  operatorAccess?: HelmInstancesMap[string]["operatorAccess"];
   gcpProject?: string;
   kmsKeyName?: string;
   deploymentTargetId?: string;
@@ -404,7 +404,7 @@ type UpgradeJsonOption = {
     BuildUpgradeArgsOpts,
     | "serviceAccount"
     | "gatewayContainerSecurityContext"
-    | "builderAccess"
+    | "operatorAccess"
   >;
   key: string;
 };
@@ -435,7 +435,7 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
 const UPGRADE_JSON_OPTIONS: UpgradeJsonOption[] = [
   { option: "serviceAccount", key: "serviceAccount" },
   { option: "gatewayContainerSecurityContext", key: "gatewayContainerSecurityContext" },
-  { option: "builderAccess", key: "builderAccess" },
+  { option: "operatorAccess", key: "operatorAccess" },
 ];
 
 function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
@@ -492,6 +492,11 @@ function appendOptionalFileArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
 
 function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   args.push("--server-side=true", "--force-conflicts");
+  // Cowboy is the sole owner of every gateway release's resources (uniquely
+  // named per gateway+colour), so a same-named resource missing Helm ownership
+  // metadata is always a leftover — e.g. a hand-created operator WI
+  // ServiceAccount. Adopt it rather than wedge the blue/green roll forever on
+  // "exists and cannot be imported into the current release".
   args.push("--take-ownership");
   if (opts.waitForReady !== false) args.push("--wait");
   args.push(`--timeout=${opts.upgradeTimeout}`);

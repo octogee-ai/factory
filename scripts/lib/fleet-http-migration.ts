@@ -672,7 +672,7 @@ export function createActivationManifestExportHandler(
       );
       res.status(200).json(response);
     } catch (err) {
-      if (deps.adapter.isBuilderGateway?.() === true) {
+      if (deps.adapter.isOperatorGateway?.() === true) {
         const response: ActivationManifestExportResponse = {
           migrationId: body.migrationId,
           slug: body.slug,
@@ -680,7 +680,7 @@ export function createActivationManifestExportHandler(
         };
         const message = err instanceof Error ? err.message : String(err);
         log(
-          `[migration-http] activation-manifest migrationId=${body.migrationId} slug=${body.slug} unavailable on Builder source: ${message}`,
+          `[migration-http] activation-manifest migrationId=${body.migrationId} slug=${body.slug} unavailable on operator source: ${message}`,
         );
         res.status(200).json(response);
         return;

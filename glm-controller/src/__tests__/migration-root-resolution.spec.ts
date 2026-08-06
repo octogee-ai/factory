@@ -59,7 +59,7 @@ function durableGateway(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,

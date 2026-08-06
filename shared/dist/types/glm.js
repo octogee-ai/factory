@@ -6,34 +6,34 @@ export function resolveManagedBy(value) {
 export function isOperatorManaged(value) {
     return resolveManagedBy(value) === "operator";
 }
-export const GATEWAY_PROFILES = ["standard", "builder"];
-export const GATEWAY_CLASSES = ["shared", "builder"];
-export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];
-export const BUILDER_GATEWAY_LOCKED_ACCESS = {
+export const GATEWAY_PROFILES = ["standard", "operator"];
+export const GATEWAY_CLASSES = ["shared", "builder", "operator"];
+export const GATEWAY_IMAGE_PROFILES = ["standard", "operator"];
+export const OPERATOR_GATEWAY_LOCKED_ACCESS = {
     shellsEnabled: false,
     controlUiEnabled: false,
     reason: "runtime-trust-boundary-not-provisioned",
 };
-export function defaultBuilderGatewayAccess(ownerUid, shellsEnabled = true) {
+export function defaultOperatorGatewayAccess(ownerUid, shellsEnabled = true) {
     return ownerUid
         ? {
             shellsEnabled,
             controlUiEnabled: true,
             reason: "owned-runtime-gateway",
         }
-        : BUILDER_GATEWAY_LOCKED_ACCESS;
+        : OPERATOR_GATEWAY_LOCKED_ACCESS;
 }
-export function resolveBuilderGatewayAccess(ownerUid, builderAccess) {
+export function resolveOperatorGatewayAccess(ownerUid, operatorAccess) {
     return {
-        ...defaultBuilderGatewayAccess(ownerUid),
-        ...(builderAccess ?? {}),
+        ...defaultOperatorGatewayAccess(ownerUid),
+        ...(operatorAccess ?? {}),
     };
 }
-export const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
+export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export const GATEWAY_ID_MAX_LENGTH = 32;
 export const GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
-export const BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT = {
+export const OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT = {
     create: true,
 };
 export function isValidGatewayId(id) {
@@ -79,15 +79,24 @@ export function deriveGatewayIdentity(gatewayId, explicitGateway) {
     }
     return gatewayId;
 }
-export function builderGatewayServiceAccountName(gatewayId) {
-    return `${BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
+export function operatorGatewayServiceAccountName(gatewayId) {
+    return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
-export function isGatewayClassShellAccessEnabled(gatewayClass, builderAccess) {
-    return gatewayClass === "builder" && builderAccess?.shellsEnabled === true;
+export function isOperatorGatewayShellAccessEnabled(profile, operatorAccess) {
+    return profile === "operator" && operatorAccess?.shellsEnabled === true;
 }
-export function isGatewayClassControlUiAccessEnabled(gatewayClass, builderAccess) {
-    return gatewayClass === "builder" && builderAccess?.controlUiEnabled !== false;
+export function isGatewayClassShellAccessEnabled(gatewayClass, operatorAccess) {
+    return ((gatewayClass === "builder" || gatewayClass === "operator") &&
+        operatorAccess?.shellsEnabled === true);
 }
+export function isGatewayClassControlUiAccessEnabled(gatewayClass, operatorAccess) {
+    return ((gatewayClass === "builder" || gatewayClass === "operator") &&
+        operatorAccess?.controlUiEnabled !== false);
+}
+// The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
+// shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled
+// builder/operator gateway they OWN; a guest migrated onto someone else's
+// gateway does not.
 export function resolveUserGatewayShellState(data, uid) {
     const gatewayClass = resolveGatewayClass({
         gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
@@ -96,8 +105,8 @@ export function resolveUserGatewayShellState(data, uid) {
     });
     const userOwns = data?.ownerUid === uid;
     return {
-        gatewayProfile: gatewayClass === "builder" ? "builder" : "standard",
-        shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.builderAccess),
+        gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
+        shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),
     };
 }
 export const OPERATION_ORIGINS = ["automatic", "operator"];
@@ -253,14 +262,16 @@ export function isGatewayProfile(value) {
         GATEWAY_PROFILES.includes(value));
 }
 export function resolveGatewayClass(input) {
-    return input.gatewayClass === "builder" ? "builder" : "shared";
+    if (input.gatewayClass)
+        return input.gatewayClass;
+    return input.profile === "operator" || input.imageProfile === "operator"
+        ? "operator"
+        : "shared";
 }
 export function resolveGatewayImageProfile(input) {
-    if (input.imageProfile === "builder")
-        return "builder";
-    if (input.imageProfile === "standard")
-        return "standard";
-    if (!input.gatewayClass && input.profile === "builder")
-        return "builder";
-    return resolveGatewayClass(input) === "builder" ? "builder" : "standard";
+    if (input.imageProfile)
+        return input.imageProfile;
+    if (!input.gatewayClass && input.profile)
+        return input.profile;
+    return resolveGatewayClass(input) === "operator" ? "operator" : "standard";
 }

@@ -13,8 +13,8 @@
 {{- if and (ne $gatewayClass "shared") (empty .Values.ownerUid) -}}
 {{- fail "octogee-gateway: ownerUid and builderSlug are required for owner-bound disposable gateways" -}}
 {{- end -}}
-{{- $builderShellsEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.shellsEnabled | default false) -}}
-{{- $builderControlUiEnabled := eq $gatewayClass "builder" -}}
+{{- $operatorShellsEnabled := and (ne $gatewayClass "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
+{{- $operatorControlUiEnabled := ne $gatewayClass "shared" -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
 {{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
 {{- end -}}
@@ -64,6 +64,9 @@ spec:
         {{- if .Values.builderSlug }}
         octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
         {{- end }}
+        # Profile label lets the umbrella gateway-edge alias Service
+        # safely exclude operator pods in a follow-up rollout after every
+        # gateway pod has this label.
         gateway-profile: {{ $imageProfile | quote }}
         # Per-pod sizing tier — stamped on the pod so
         # GCP Billing Export can roll up cost by tier for the chargeback
@@ -168,11 +171,13 @@ spec:
             - containerPort: 18789
             - containerPort: 9092
               name: runner-metrics
+            - containerPort: 9080
+              name: preview
             - containerPort: {{ .Values.env.fleetControllerPort | default "3003" }}
               name: fleet-http
             - containerPort: {{ .Values.env.migrationRsyncPort | default "30873" }}
               name: migration-rsync
-            {{- if $builderShellsEnabled }}
+            {{- if $operatorShellsEnabled }}
             - containerPort: {{ .Values.env.builderShellPort | default "3005" }}
               name: builder-shell
             {{- end }}
@@ -193,7 +198,7 @@ spec:
           env:
             - name: HOME
               value: "/home/node"
-            {{- if $builderControlUiEnabled }}
+            {{- if $operatorControlUiEnabled }}
             - name: OPENCLAW_DASHBOARD_BRIDGE_REQUIRED
               value: "true"
             {{- end }}
@@ -231,17 +236,24 @@ spec:
               value: {{ .Values.builderSlug | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
+            # Image profile (standard vs operator) — read by
+            # entrypoint.sh to gate operator-image boot steps such as the
+            # Claude Code first-run stamper.
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
             {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
             {{- if ne $autosave "" }}
+            # Override; unset → gateway code defaults from profile
+            # (operator off, cattle on). toString handles --set bool
+            # coercion so "false" still renders. See
+            # scripts/lib/workspace-autosave.ts.
             - name: WORKSPACE_AUTOSAVE_ENABLED
               value: {{ $autosave | quote }}
             {{- end }}
-            - name: BUILDER_SHELLS_ENABLED
-              value: {{ ternary "true" "false" $builderShellsEnabled | quote }}
+            - name: OPERATOR_SHELLS_ENABLED
+              value: {{ ternary "true" "false" $operatorShellsEnabled | quote }}
             {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
             # Every class routes anthropic through the LLM broker — no provider key
             # is served from a pod to api.anthropic.com directly. The base URL is
@@ -267,7 +279,12 @@ spec:
             # secret-resolver → POST /internal/byok/agent-model-token. The broker
             # resolves platform-or-BYOK per owner and meters per ownerUid.
             {{- end }}
-            {{- if $builderShellsEnabled }}
+            {{- if $operatorShellsEnabled }}
+            # Builder/operator gateway shells run inside the tenant shell container,
+            # which intentionally does not inherit the platform-wide
+            # INTERNAL_SERVICE_KEY. The builder-shell port is exposed only
+            # for explicitly unlocked runtime gateways and is still scoped
+            # by the per-gateway NetworkPolicy + shell ticket flow.
             - name: BUILDER_SHELL_REQUIRE_KEY
               value: "false"
             {{- end }}
@@ -316,6 +333,19 @@ spec:
                 secretKeyRef:
                   name: octogee-fleet-controller
                   key: public-key
+            - name: SITE_BUILD_API_PORT
+              value: {{ .Values.env.siteBuildApiPort | default "3004" | quote }}
+            {{- if .Values.preview.host }}
+            # Public-facing host the gateway's preview-proxy returns in
+            # URLs to the app. Must match the umbrella's
+            # gatewayFleet.previewIngress.host for this env. Empty
+            # value falls back to scripts/entrypoints/preview-proxy.ts's hardcoded
+            # `preview.octogee.com` — fine for prod, wrong for test.
+            - name: PREVIEW_HOST
+              value: {{ .Values.preview.host | quote }}
+            {{- end }}
+            - name: PREVIEW_REQUIRE_GATEWAY_ID
+              value: "true"
             # Where legacy in-pod callers reach gateway-edge. The platform
             # INTERNAL_SERVICE_KEY is intentionally not present in this
             # shell-bearing container; callers that still require it fail closed
@@ -426,7 +456,7 @@ spec:
               value: "/var/run/octogee/openclaw-device-auth/token"
             - name: OPENCLAW_CONFIG
               value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
-            {{- if $builderControlUiEnabled }}
+            {{- if $operatorControlUiEnabled }}
             - name: OPENCLAW_DIR
               value: "/home/node/.openclaw"
             - name: OPENCLAW_CONFIG_PATH
@@ -522,7 +552,7 @@ spec:
                 that still need platform authority fail closed or are served by
                 octogee-api/Cowboy, while builder-shell uses the per-gateway
                 token and TokenReview paths. */}}
-            {{- if eq $gatewayClass "builder" }}
+            {{- if eq $gatewayClass "operator" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"
             {{- end }}

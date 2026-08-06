@@ -8,7 +8,7 @@ import {
 } from "@octogee/shared/types/identity";
 
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
-const REQUEST_CONTEXT_FIELDS = new Set([
+const REQUEST_CONTEXT_KEYS = new Set([
   "channel",
   "accountId",
   "requesterSenderId",
@@ -37,14 +37,6 @@ interface OwnerWorkspaceRequestContext {
   routeId: string;
 }
 
-interface RequestContextRecord extends Record<string, unknown> {
-  channel: "mattermost";
-  accountId: string;
-  requesterSenderId: string;
-  nativeChannelId: string;
-  to: string;
-}
-
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -60,61 +52,37 @@ function readPath(value: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
-function parseQueryContext(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  if (value.length > 2048) return null;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-}
+function requestContext(req: Request): OwnerWorkspaceRequestContext | null {
+  const body = record(req.body);
+  const context = record(body?.requestContext);
+  if (
+    !context
+    || Object.keys(context).some((key) => !REQUEST_CONTEXT_KEYS.has(key))
+    || context.channel !== "mattermost"
+    || typeof context.accountId !== "string"
+    || typeof context.requesterSenderId !== "string"
+    || !MATTERMOST_ID_RE.test(context.requesterSenderId)
+    || typeof context.nativeChannelId !== "string"
+    || !MATTERMOST_ID_RE.test(context.nativeChannelId)
+    || typeof context.to !== "string"
+  ) return null;
 
-function isRequestContextRecord(
-  context: Record<string, unknown> | null,
-): context is RequestContextRecord {
-  return Boolean(
-    context
-    && Object.keys(context).length === REQUEST_CONTEXT_FIELDS.size
-    && Object.keys(context).every((key) => REQUEST_CONTEXT_FIELDS.has(key))
-    && context.channel === "mattermost"
-    && typeof context.accountId === "string"
-    && typeof context.requesterSenderId === "string"
-    && MATTERMOST_ID_RE.test(context.requesterSenderId)
-    && typeof context.nativeChannelId === "string"
-    && MATTERMOST_ID_RE.test(context.nativeChannelId)
-    && typeof context.to === "string",
-  );
-}
-
-function parseRoute(to: string): { routeKind: "user" | "channel"; routeId: string } | null {
-  const separator = to.indexOf(":");
+  const separator = context.to.indexOf(":");
   if (separator < 0) return null;
-  const routeKind = to.slice(0, separator);
-  const routeId = to.slice(separator + 1);
+  const routeKind = context.to.slice(0, separator);
+  const routeId = context.to.slice(separator + 1);
   if (
     (routeKind !== "user" && routeKind !== "channel")
     || !MATTERMOST_ID_RE.test(routeId)
   ) return null;
-  return { routeKind, routeId };
-}
-
-function requestContext(req: Request): OwnerWorkspaceRequestContext | null {
-  const body = record(req.body);
-  const queryValue = req.query?.requestContext;
-  const bodyHasContext = body && Object.hasOwn(body, "requestContext");
-  if (bodyHasContext && queryValue !== undefined) return null;
-  const context = record(body?.requestContext ?? parseQueryContext(queryValue));
-  if (!isRequestContextRecord(context)) return null;
-  const route = parseRoute(context.to);
-  if (!route) return null;
 
   return {
     channel: "mattermost",
     accountId: context.accountId,
     requesterSenderId: context.requesterSenderId,
     nativeChannelId: context.nativeChannelId,
-    ...route,
+    routeKind,
+    routeId,
   };
 }
 
@@ -168,22 +136,6 @@ async function workspaceChannelName(
   return channelName;
 }
 
-async function isCanonicalProjectChannel(
-  db: Firestore,
-  channelId: string,
-  slug: string,
-  project: string,
-): Promise<boolean> {
-  const snap = await db
-    .collectionGroup("channels")
-    .where("mattermost.channelId", "==", channelId)
-    .limit(2)
-    .get();
-  if (snap.docs.length !== 1) return false;
-  const channel = snap.docs[0];
-  return channel.ref.path === `workspaces/${slug}/projects/${project}/channels/general`
-    && channelIsActive(channel.data() ?? {});
-}
 export function createOwnerWorkspaceTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {
@@ -199,8 +151,7 @@ export function createOwnerWorkspaceTurnVerifier(
     ) return false;
 
     const workspace = await db.doc(`workspaces/${parsed.username}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
-      || workspace.data()?.ownerActive !== true) return false;
+    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid) return false;
 
     const channelName = await workspaceChannelName(
       db,
@@ -212,34 +163,5 @@ export function createOwnerWorkspaceTurnVerifier(
       return context.routeId === context.requesterSenderId && channelName === "coach-dm";
     }
     return context.routeId === context.nativeChannelId;
-  };
-}
-
-export function createProjectWorkspaceTurnVerifier(
-  db: Firestore,
-): OwnerWorkspaceTurnVerifier {
-  return async ({ req, agentId, ownerUid, assignedData }) => {
-    const parsed = parseAgentId(agentId);
-    const context = requestContext(req);
-    if (
-      parsed.kind !== "project"
-      || !context
-      || context.accountId !== `${parsed.username}-proj-${parsed.project}`
-      || assignedData.workspaceId !== parsed.username
-      || assignedMattermostUserId(assignedData) !== context.requesterSenderId
-      || context.routeKind !== "channel"
-      || context.routeId !== context.nativeChannelId
-    ) return false;
-
-    const workspace = await db.doc(`workspaces/${parsed.username}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
-      || workspace.data()?.ownerActive !== true) return false;
-
-    return isCanonicalProjectChannel(
-      db,
-      context.nativeChannelId,
-      parsed.username,
-      parsed.project,
-    );
   };
 }

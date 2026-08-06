@@ -7,7 +7,7 @@ describe("runGatewayPreStopFlush", () => {
     const calls: string[] = [];
     const result = await runGatewayPreStopFlush({
       gatewayId: "eggman-devdays",
-      gatewayClass: "builder",
+      gatewayClass: "operator",
       quiesceSessions: vi.fn(async () => { calls.push("quiesce"); }),
       syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
@@ -25,7 +25,7 @@ describe("runGatewayPreStopFlush", () => {
     const releaseGiteaKey = vi.fn(async () => {});
     const result = await runGatewayPreStopFlush({
       gatewayId: "eggman-devdays",
-      gatewayClass: "builder",
+      gatewayClass: "operator",
       syncWorkspaces: vi.fn(async () => {}),
       syncSystemConfig: vi.fn(async () => { throw new Error("push failed"); }),
       releaseGiteaKey,

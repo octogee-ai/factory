@@ -23,9 +23,7 @@ vi.mock("../../../gateway-edge/src/lib/db", () => {
   return {
     auth: { verifyIdToken: vi.fn().mockResolvedValue({ uid: "hermetic-uid" }) },
     db: inertDb,
-    storage: {
-      bucket: vi.fn(() => { throw new Error("offline storage bucket accessed"); }),
-    },
+    storage: {},
     messaging: {},
     FieldValue: {
       serverTimestamp: () => ({ __op: "serverTimestamp" }),

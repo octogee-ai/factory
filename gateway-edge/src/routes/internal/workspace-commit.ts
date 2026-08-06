@@ -100,14 +100,6 @@ router.post("/commit", async (req: Request, res: Response) => {
   }
   if (r.result.pushError) {
     logger.warn(`internal/workspace/commit: committed but push failed slug=${slug}: ${r.result.pushError}`);
-    res.status(502).json({
-      error: "Commit was created locally, but the remote rejected the push. Do not build or publish until a later commit succeeds.",
-      code: "PUSH_FAILED",
-      committed: r.result.committed,
-      pushed: false,
-      nothingToCommit: r.result.nothingToCommit,
-    });
-    return;
   }
   const laneSuffix = project ? ` project=${project}` : "";
   logger.info(

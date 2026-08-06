@@ -182,7 +182,7 @@ function controlUiAuthorization(
     profile: config.profile ?? undefined,
     imageProfile: config.imageProfile,
   });
-  return isGatewayClassControlUiAccessEnabled(gatewayClass, config.builderAccess ?? undefined)
+  return isGatewayClassControlUiAccessEnabled(gatewayClass, config.operatorAccess ?? undefined)
     ? authorization
     : null;
 }

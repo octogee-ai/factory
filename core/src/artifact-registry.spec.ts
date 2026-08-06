@@ -291,12 +291,12 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
   const sourceSha = "a".repeat(40);
   const manifestDigest = `sha256:${"b".repeat(64)}`;
   const gatewayDigest = `sha256:${"c".repeat(64)}`;
-  const builderDigest = `sha256:${"d".repeat(64)}`;
+  const operatorDigest = `sha256:${"d".repeat(64)}`;
   const edgeDigest = `sha256:${"e".repeat(64)}`;
   const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceSha,
     openclawVersion: "2026.7.1",
     repository,
@@ -304,7 +304,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       gateway: {
         "gateway-edge": edgeDigest,
         "octogee-gateway": gatewayDigest,
-        "octogee-gateway-builder": builderDigest,
+        "octogee-gateway-operator": operatorDigest,
       },
       platform: {
         "artifact-worker": `sha256:${"1".repeat(64)}`,
@@ -395,7 +395,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       .mockResolvedValueOnce(new Response(archive));
 
     await expect(authority.resolveManifest(sourceSha)).rejects.toThrow(
-      "release digest manifest schemaVersion must be 2",
+      "release digest manifest schemaVersion must be 3",
     );
   });
 
