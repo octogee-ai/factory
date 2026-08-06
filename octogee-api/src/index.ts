@@ -34,7 +34,6 @@ import {
 } from "./routes/project-previews.js";
 import {
   createAgentProductivityRoutes,
-  createApprovedCalendarApprovalExecutor,
 } from "./routes/agent-productivity.js";
 import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";

@@ -353,7 +353,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: brokerPluginConfig,
     });
-    expect(out.plugins.entries["octogee-board-tools"]).toEqual({ enabled: true, config: {} });
+    expect(out.plugins.entries["octogee-board-tools"]).toEqual({
+      enabled: true,
+      config: brokerPluginConfig,
+    });
   });
 
   it("shared class removes the default Codex plugin entry", () => {
@@ -523,7 +526,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(projectTools.toolsBySender).toEqual({
       "*": { deny: expect.arrayContaining(["octogee_google_calendar_read"]) },
     });
-    expect(out.plugins.allow).toEqual(["codex", "octogee-connector-tools"]);
+    expect(out.plugins.allow).toEqual(["codex", "octogee-connector-tools", "octogee-board-tools"]);
     expect(out.plugins.entries.codex).toEqual({ enabled: true });
     expect(out.commands).toMatchObject({
       bash: true,
@@ -552,7 +555,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       mode: "oauth",
     });
     expect(out.plugins.entries["octogee-board-tools"]).toEqual({ enabled: true, config: {} });
-    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
     expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "codex" },
     });

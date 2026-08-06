@@ -273,7 +273,7 @@ const RELEASE_VERSION_PATTERN = new RegExp(
 );
 
 const RELEASE_MANIFEST_SURFACE_IMAGES = {
-  gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
+  gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"],
   platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"],
 } as const;
 

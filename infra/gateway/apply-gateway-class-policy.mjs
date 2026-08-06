@@ -1339,6 +1339,7 @@ function applySharedPolicy(config) {
 function applyBuilderPolicy(config) {
   removeConnectorNativeApproval(config);
   forceProjectAgentPolicy(config);
+  enableBoardTools(config);
 }
 
 function resolveGatewayClass(env) {
