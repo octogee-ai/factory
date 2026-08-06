@@ -116,7 +116,7 @@ describe("agent-model-token materializer", () => {
         baseUrl,
         model: "z-ai/glm-5.2",
       }),
-    ).toBe(true);
+    ).toMatchObject({ wrote: true });
     expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual(
       openRouterBrokerModelsJson("octogee-alice-coach", {
         baseUrl,
@@ -186,7 +186,7 @@ describe("model-readiness: openrouter catalog upsert", () => {
   };
 
   it("writes ALL catalog models under the platform-openrouter provider with the agent's broker token", () => {
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
     expect(provider).toMatchObject({
@@ -223,8 +223,8 @@ describe("model-readiness: openrouter catalog upsert", () => {
       path.join(agentDir, "models.json"),
       JSON.stringify({ providers: { grok: { api: "openai-completions", baseUrl: "x", models: [] } } }),
     );
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(true);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(false);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     expect(models.providers.grok).toBeTruthy();
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models).toHaveLength(2);
@@ -247,7 +247,7 @@ describe("model-readiness: openai catalog upsert", () => {
   };
 
   it("writes catalog models under platform-openai with the agent's openai broker token", () => {
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENAI_BROKER_PROVIDER_ID];
     expect(provider.api).toBe("openai-completions");
@@ -267,8 +267,8 @@ describe("model-readiness: openai catalog upsert", () => {
       baseUrl: CATALOG.baseUrl,
       models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
     });
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(true);
+    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG).wrote).toBe(false);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID]).toBeTruthy();
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID]).toBeTruthy();
@@ -306,7 +306,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
         models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
       },
     });
-    expect(written).toBe(1);
+    expect(written.materialized).toBe(1);
     const agentHome = path.join(agentsDir, "octogee-a-coach", "agent");
     const store = readAuthProfileStore(agentHome) as {
       profiles: Record<string, { keyRef: { id: string } }>;
@@ -319,10 +319,67 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
 
   it("falls back to anthropic-only when no openrouter config is supplied", () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    expect(materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir })).toBe(1);
+    expect(materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir }).materialized).toBe(
+      1,
+    );
     expect(
       fs.existsSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json")),
     ).toBe(false);
+  });
+});
+
+// The pre-boot sweep runs BEFORE openclaw exists, so no agent store does either.
+// The catalog is pure JSON and must land anyway — gating it on the sqlite profile
+// write leaves models.providers["platform-openrouter"] absent and every agent turn
+// fails "Unknown model: platform-openrouter/...".
+describe("model-readiness before openclaw has created the agent store", () => {
+  const openRouter = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+  };
+  let agentsDir: string;
+  beforeEach(() => {
+    agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-nodb-"));
+  });
+  afterEach(() => {
+    fs.rmSync(agentsDir, { recursive: true, force: true });
+  });
+
+  const modelsJson = (): { providers: Record<string, { models: { id: string }[] }> } =>
+    JSON.parse(
+      fs.readFileSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json"), "utf8"),
+    );
+
+  it("writes the platform-openrouter catalog even though the profile write defers", () => {
+    materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, openRouter });
+    expect(modelsJson().providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
+  });
+
+  it("reports the agent as deferred instead of silently dropping it", () => {
+    const result = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+      agentsDir,
+      openRouter,
+    });
+    expect(result.deferred).toEqual(["octogee-a-coach"]);
+    // the catalog DID land — only the store-backed profile deferred
+    expect(result.materialized).toBe(1);
+  });
+
+  it("materializes the profile on a retry once openclaw has created the store", () => {
+    materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, openRouter });
+    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
+
+    const retry = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+      agentsDir,
+      openRouter,
+    });
+
+    expect(retry.deferred).toEqual([]);
+    expect(retry.materialized).toBe(1);
+    const store = readAuthProfileStore(path.join(agentsDir, "octogee-a-coach", "agent")) as {
+      profiles: Record<string, { keyRef: { id: string } }>;
+    };
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-a-coach");
   });
 });
 

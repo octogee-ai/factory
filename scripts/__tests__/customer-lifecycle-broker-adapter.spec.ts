@@ -35,7 +35,7 @@ const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
 }));
 const brokerCatalogMocks = vi.hoisted(() => ({
-  materializeBrokerProfilesForAgents: vi.fn(() => 1),
+  materializeBrokerProfilesForAgents: vi.fn(() => ({ materialized: 1, deferred: [] })),
 }));
 const contextFileConvergenceMocks = vi.hoisted(() => ({
   reassertConvergedContextFilesForSlug: vi.fn(() => []),
@@ -1085,7 +1085,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
-      return 1;
+      return { materialized: 1, deferred: [] };
     });
     patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");

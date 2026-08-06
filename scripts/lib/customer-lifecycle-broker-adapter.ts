@@ -369,8 +369,14 @@ function materializeCustomerBrokerProfiles(
       ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
       : {}),
   });
-  if (materialized > 0) {
+  if (materialized.materialized > 0) {
     logFn(`[add:${slug}] broker model profiles materialized before config hot-reload`);
+  }
+  if (materialized.deferred.length > 0) {
+    logFn(
+      `[add:${slug}] broker profile deferred for ${materialized.deferred.join(", ")}` +
+        ` — openclaw has not created the store yet; the post-boot sweep retries it`,
+    );
   }
 }
 
@@ -931,6 +937,8 @@ export function buildBrokeredLifecycleAdapter(
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
     isOperatorGateway: opts.isOperatorGateway ?? (() => false),
+    materializeBrokerProfiles: (slug) =>
+      materializeCustomerBrokerProfiles([`octogee-${slug}-coach`], slug, opts.log),
     projectCheckoutScope: (slug) =>
       ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
       ?? ctx.projectCheckoutScope?.(slug)

@@ -2,6 +2,13 @@ import express from "express";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
+import { agentIdsFromConfig } from "./byosub-restore.js";
+import { readOpenClawConfig } from "./config.js";
+import {
+  materializeBrokerProfilesForAgents,
+  openAiCatalogInputForBaseUrl,
+  openRouterCatalogInputForBaseUrl,
+} from "./agent-model-token-materializer.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
@@ -462,6 +469,37 @@ export function buildFleetHealthResponse(input: {
 interface FleetRuntime {
   mountedCustomers: string[];
   status: "booting" | "ready";
+}
+
+/** Write the broker profiles pre-boot could only defer: openclaw has created
+ *  every rostered agent's store by the time healthz passes. Idempotent — a
+ *  profile already present is a no-op. */
+export function materializeDeferredBrokerProfiles(log: (msg: string) => void): void {
+  const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
+  const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  let agentIds: string[];
+  try {
+    agentIds = agentIdsFromConfig(readOpenClawConfig());
+  } catch (error) {
+    log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
+    return;
+  }
+  const sweep = materializeBrokerProfilesForAgents(agentIds, {
+    logFn: log,
+    ...(openRouterBaseUrl
+      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+      : {}),
+    ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
+  });
+  if (sweep.materialized > 0) {
+    log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
+  }
+  if (sweep.deferred.length > 0) {
+    log(
+      `⚠ [agent-model-token] post-boot sweep still deferred for ${sweep.deferred.join(", ")}` +
+        ` — those agents have no store even though openclaw is up`,
+    );
+  }
 }
 
 export async function waitForOpenClawHealthz(input: {
@@ -1107,6 +1145,10 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     opts.log(
       `[fleet] OpenClaw healthz ready; transitioning gateways/${opts.gatewayId} to status=ready`,
     );
+    // Pre-boot could only write the catalogs — the auth-profile stores did not
+    // exist yet. openclaw has now created them for every rostered agent, so the
+    // deferred profiles land here, before any agent turn needs its broker token.
+    materializeDeferredBrokerProfiles(opts.log);
     await emitHeartbeat("ready");
   };
 

@@ -62,6 +62,13 @@ export interface CustomerLifecycleAdapter {
     log: (msg: string) => void;
     isOperatorGateway?: () => boolean;
     /**
+     * Re-run the platform broker-profile materialization for this customer's
+     * agents. Only openclaw creates an agent's auth-profile store, so the mount's
+     * first attempt runs too early and defers; this is called once the coach is
+     * confirmed running+connected, when the store is guaranteed to exist.
+     */
+    materializeBrokerProfiles?: (slug: string) => void;
+    /**
      * Read-only probe of the on-disk openclaw.json: is this customer's
      * coach fully wired (agent registered + MM account configured + at
      * least one binding linking the agent to the MM account)?
