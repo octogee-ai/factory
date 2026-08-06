@@ -296,7 +296,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
   const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceSha,
     openclawVersion: "2026.7.1",
     repository,
@@ -395,7 +395,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       .mockResolvedValueOnce(new Response(archive));
 
     await expect(authority.resolveManifest(sourceSha)).rejects.toThrow(
-      "release digest manifest schemaVersion must be 2",
+      "release digest manifest schemaVersion must be 3",
     );
   });
 

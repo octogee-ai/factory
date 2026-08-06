@@ -227,8 +227,8 @@ function exactObjectKeys(value, expected, description) {
 function validateReleaseDigestManifest(input, manifestDigest, expectedRepository) {
     const manifest = plainRecord(input, "release digest manifest");
     exactObjectKeys(manifest, ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"], "release digest manifest");
-    if (manifest.schemaVersion !== 2)
-        throw new Error("release digest manifest schemaVersion must be 2");
+    if (manifest.schemaVersion !== 3)
+        throw new Error("release digest manifest schemaVersion must be 3");
     const sourceSha = typeof manifest.sourceSha === "string"
         ? assertSourceSha(manifest.sourceSha)
         : assertSourceSha("");
@@ -261,7 +261,7 @@ function validateReleaseDigestManifest(input, manifestDigest, expectedRepository
 }
 function validateResolvedReleaseDigestManifest(manifest, expectedRepository) {
     return validateReleaseDigestManifest({
-        schemaVersion: 2,
+        schemaVersion: 3,
         sourceSha: manifest.sourceSha,
         openclawVersion: manifest.openclawVersion,
         repository: manifest.repository,
