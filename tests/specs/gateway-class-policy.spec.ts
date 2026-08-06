@@ -111,6 +111,25 @@ function seedCanonicalAgentRuntimeDisk(
   db.close();
 }
 
+function policyEnv(
+  dir: string,
+  home: string,
+  gatewayClass: string,
+  envOverrides: Record<string, string> = {},
+) {
+  return {
+    ...process.env,
+    ANTHROPIC_BASE_URL: "",
+    OPENROUTER_BASE_URL: "",
+    PLATFORM_OPENAI_BASE_URL: "",
+    OPENCLAW_DIR: dir,
+    HOME: home,
+    GATEWAY_CLASS: gatewayClass,
+    GATEWAY_PROFILE: "",
+    ...envOverrides,
+  };
+}
+
 function runPolicyWithDir(
   gatewayClass: string,
   config: Record<string, unknown>,
@@ -125,14 +144,7 @@ function runPolicyWithDir(
   setup?.(dir, home);
   const result = spawnSync("node", [script], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_DIR: dir,
-      HOME: home,
-      GATEWAY_CLASS: gatewayClass,
-      GATEWAY_PROFILE: "",
-      ...envOverrides,
-    },
+    env: policyEnv(dir, home, gatewayClass, envOverrides),
   });
   if (result.status !== 0) {
     throw new Error(
@@ -696,13 +708,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
     const rerun = spawnSync("node", [script], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_DIR: result.dir,
-        HOME: result.home,
-        GATEWAY_CLASS: "shared",
-        GATEWAY_PROFILE: "",
-      },
+      env: policyEnv(result.dir, result.home, "shared"),
     });
     expect(rerun.status).toBe(0);
     expect(rerun.stdout).toContain("skipped: already-set");

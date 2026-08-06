@@ -1472,6 +1472,9 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
 });
 
 describe("customer OAuth runtime purge", () => {
+  beforeEach(() => vi.stubEnv("ANTHROPIC_BASE_URL", undefined));
+  afterEach(() => vi.unstubAllEnvs());
+
   it("builds a fail-closed patch for direct runtime definitions, defaults, and every owned agent shape", () => {
     const safeModel = "platform-openrouter/deepseek/deepseek-v4-pro";
     const patch = customerOauthRuntimeConfigPatch(
@@ -1837,32 +1840,28 @@ describe("customer OAuth runtime purge", () => {
   it("retains the exact env-owned Anthropic broker provider without forcing safe agent resets", () => {
     const brokerUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010";
     vi.stubEnv("ANTHROPIC_BASE_URL", brokerUrl);
-    try {
-      const patch = customerOauthRuntimeConfigPatch(
-        {
-          models: { providers: { anthropic: { baseUrl: brokerUrl } } },
-          agents: {
-            defaults: {
-              models: {
-                "anthropic/claude-sonnet-4-6": {
-                  alias: "sonnet",
-                  params: { cacheRetention: "short" },
-                },
-                "platform-openrouter/deepseek/deepseek-v4-pro": { alias: "deepseek" },
+    const patch = customerOauthRuntimeConfigPatch(
+      {
+        models: { providers: { anthropic: { baseUrl: brokerUrl } } },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                alias: "sonnet",
+                params: { cacheRetention: "short" },
               },
+              "platform-openrouter/deepseek/deepseek-v4-pro": { alias: "deepseek" },
             },
-            list: [{ id: "octogee-tester-70-coach", model: "anthropic/claude-sonnet-4-6" }],
           },
+          list: [{ id: "octogee-tester-70-coach", model: "anthropic/claude-sonnet-4-6" }],
         },
-        "tester-70",
-        "platform-openrouter/deepseek/deepseek-v4-pro",
-      ) as any;
+      },
+      "tester-70",
+      "platform-openrouter/deepseek/deepseek-v4-pro",
+    ) as any;
 
-      expect(patch.models.providers).toEqual({ anthropic: { baseUrl: brokerUrl } });
-      expect(patch.agents.list).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(patch.models.providers).toEqual({ anthropic: { baseUrl: brokerUrl } });
+    expect(patch.agents.list).toBeUndefined();
   });
 });
 
