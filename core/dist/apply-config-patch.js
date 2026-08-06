@@ -421,8 +421,30 @@ export function customerConfigFullAgentListReplacePaths(current, slug) {
         ...customerConfigReplacePaths(current, slug),
     ];
 }
+/**
+ * Array paths under the keyed agent entries a customer removal nulls out.
+ *
+ * `customerAgentRosterPatch` removes a customer by setting
+ * `agents.entries.<id>` to null, which destroys every array beneath it. The
+ * gateway's destructive-array guard walks base-vs-merged and reports each one
+ * by name (collectBaseArrayPaths, on its `isPlainObject(base) &&
+ * !isPlainObject(patch)` branch), so each has to be confirmed or the whole
+ * removal is refused — `model.fallbacks` on any coach with a house fallback is
+ * enough to block it. Same shape as customerMattermostAccountArrayPaths.
+ */
+function customerKeyedAgentEntryArrayPaths(current, slug) {
+    const entries = keyedAgentEntries(current);
+    if (!entries)
+        return [];
+    return Object.entries(entries).flatMap(([agentId, entry]) => isCustomerAgentId(agentId, slug)
+        ? collectArrayPathsUnder(entry, `agents.entries.${agentId}`)
+        : []);
+}
 export function customerConfigAgentRosterReplacePaths(current, slug) {
     return keyedAgentEntries(current)
-        ? customerConfigReplacePaths(current, slug)
+        ? [
+            ...customerKeyedAgentEntryArrayPaths(current, slug),
+            ...customerConfigReplacePaths(current, slug),
+        ]
         : customerConfigFullAgentListReplacePaths(current, slug);
 }
