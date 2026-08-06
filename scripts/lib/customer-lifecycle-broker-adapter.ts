@@ -110,6 +110,7 @@ import {
   removeActivationManifest,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest.js";
+import { discardUnusableAgentStores } from "./unusable-agent-store.js";
 import {
   exportActivationManifestWithSecret,
   materializeActivationManifestSecret,
@@ -814,6 +815,16 @@ async function activateImportedCustomer(
       ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
     ctx.log,
   );
+  // The rsync brings whatever store the source pod had. One openclaw cannot
+  // open takes down the whole target gateway the moment activation registers
+  // the agent, which then blocks the very account health-check below — so
+  // clear it here, while the import still owns the state.
+  for (const discarded of discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: ctx.log })
+    .discarded) {
+    ctx.log(
+      `[import:${slug}] discarded imported ${discarded.agentId} store (schema ${discarded.schemaVersion})`,
+    );
+  }
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
