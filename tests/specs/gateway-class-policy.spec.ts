@@ -47,18 +47,25 @@ const workflowTools = [
   "octogee_obsidian_write",
 ];
 
+function policyEnv(dir: string, gatewayClass: string) {
+  return {
+    ...process.env,
+    ANTHROPIC_BASE_URL: "",
+    OPENROUTER_BASE_URL: "",
+    PLATFORM_OPENAI_BASE_URL: "",
+    OPENCLAW_DIR: dir,
+    GATEWAY_CLASS: gatewayClass,
+    GATEWAY_PROFILE: "",
+  };
+}
+
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   const dir = mkdtempSync(path.join(tmpdir(), "octogee-gateway-class-"));
   const file = path.join(dir, "openclaw.json");
   writeFileSync(file, JSON.stringify(config, null, 2));
   const result = spawnSync("node", [script], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_DIR: dir,
-      GATEWAY_CLASS: gatewayClass,
-      GATEWAY_PROFILE: "",
-    },
+    env: policyEnv(dir, gatewayClass),
   });
   if (result.status !== 0) {
     throw new Error(
