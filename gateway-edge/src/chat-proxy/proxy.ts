@@ -48,6 +48,9 @@ import {
 } from "@octogee/core/local-coach-wired";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
+// The operator pod holds no platform credentials, so the bridge's coach reconcile
+// derives the mounted set locally (PVC + openclaw config) instead of reading
+// gateways/{id} from Firestore. Pod paths, env-overridable (mirrors workspace/git.ts).
 const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
@@ -1047,6 +1050,12 @@ export async function attachBuilderShellRoute(
   const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
   const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
   const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
+  // Re-resolve the credential on every redeem instead of capturing
+  // internalAuth.value once here. The operator SA token is a short-lived
+  // projected token (≈1h TTL) the kubelet rotates on disk; a value baked in at
+  // attach goes stale and every redeem then fails with "invalid
+  // operator-service-account credential" until the next gateway-edge restart.
+  // resolveBuilderShellInternalAuthSecret() re-reads the token file each call.
   const redeemAuth =
     internalAuth.headerName === "x-k8s-sa-token"
       ? {

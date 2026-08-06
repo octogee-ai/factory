@@ -9,23 +9,12 @@ vi.mock("../lib/config.js", () => ({
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
-  OPENCLAW_DIR: "/tmp/octogee-test",
   CUSTOMERS_DIR: "/tmp/octogee-test/customers-doesnt-exist",
   CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
   AGENTS_DIR: "/tmp/octogee-test/agents",
 }));
 
-const { externalizeCustomerGitDir, gitExec, setRepoSshCommand } = await import("../lib/git.js");
-
-function fetchCanonicalFrom(remote: string) {
-  return (_repoDir: string, gitDir: string) => {
-    execFileSync(
-      "/usr/bin/git",
-      ["--git-dir", gitDir, "fetch", remote, "+refs/heads/*:refs/remotes/origin/*"],
-      { env: process.env },
-    );
-  };
-}
+const { gitExec } = await import("../lib/git.js");
 
 describe("gitExec argv semantics (no shell)", () => {
   const originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
@@ -104,113 +93,5 @@ describe("gitExec argv semantics (no shell)", () => {
     expect(result).toBe("true");
     expect(fs.existsSync(marker)).toBe(false);
     fs.rmSync(fakeBin, { recursive: true, force: true });
-  });
-
-  it("refuses clean-filter config before git add can execute repository-controlled code", () => {
-    const marker = path.join(repo, "filter-ran");
-    execFileSync("git", ["config", "filter.octogee-test.clean", `touch ${marker}; cat`], {
-      cwd: repo,
-      env: process.env,
-    });
-    fs.writeFileSync(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
-    fs.writeFileSync(path.join(repo, "payload.txt"), "payload\n");
-
-    expect(gitExec(repo, ["add", "-A"])).toBeNull();
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it("fails closed when the repository-local config is malformed", () => {
-    fs.appendFileSync(path.join(repo, ".git", "config"), "\n[broken\n");
-
-    expect(gitExec(repo, ["status", "--porcelain"])).toBeNull();
-  });
-
-  it("ignores agent-writable Git pointers and uses platform-owned customer metadata", () => {
-    const customerRepo = "/tmp/octogee-test/customers-doesnt-exist/alice";
-    const metadataRoot = "/tmp/octogee-test/git-metadata/alice";
-    fs.rmSync(customerRepo, { recursive: true, force: true });
-    fs.rmSync(metadataRoot, { recursive: true, force: true });
-    fs.mkdirSync(customerRepo, { recursive: true });
-    try {
-      execFileSync("git", ["init", "-b", "main", "."], { cwd: customerRepo, env: process.env });
-      execFileSync("git", ["config", "user.email", "test@octogee.test"], {
-        cwd: customerRepo,
-        env: process.env,
-      });
-      execFileSync("git", ["config", "user.name", "tester"], { cwd: customerRepo, env: process.env });
-      execFileSync("git", ["remote", "add", "origin", "ssh://attacker.invalid/loot.git"], {
-        cwd: customerRepo,
-        env: process.env,
-      });
-      execFileSync("git", ["config", "remote.origin.pushurl", "ssh://attacker.invalid/push.git"], {
-        cwd: customerRepo,
-        env: process.env,
-      });
-      const canonical = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-canonical-"));
-      fs.rmSync(canonical, { recursive: true, force: true });
-      execFileSync("git", ["clone", "--bare", customerRepo, canonical], { env: process.env });
-      setRepoSshCommand(customerRepo, "alice", { fetchCanonical: fetchCanonicalFrom(canonical) });
-      const trustedGitDir = "/tmp/octogee-test/git-metadata/alice/workspace.git";
-      expect(execFileSync("git", ["config", "--file", path.join(trustedGitDir, "config"), "remote.origin.url"], {
-        encoding: "utf8",
-        env: process.env,
-      }).trim()).toBe("git@gitea.test:alice/workspace.git");
-      expect(() => execFileSync(
-        "git",
-        ["config", "--file", path.join(trustedGitDir, "config"), "remote.origin.pushurl"],
-        { encoding: "utf8", env: process.env },
-      )).toThrow();
-
-      const attacker = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-attacker-"));
-      const marker = path.join(customerRepo, "filter-ran");
-      execFileSync("git", ["init", "-q", attacker], { env: process.env });
-      execFileSync("git", ["config", "filter.octogee-test.clean", `touch ${marker}; cat`], {
-        cwd: attacker,
-        env: process.env,
-      });
-      fs.chmodSync(path.join(customerRepo, ".git"), 0o644);
-      fs.writeFileSync(path.join(customerRepo, ".git"), `gitdir: ${path.join(attacker, ".git")}\n`);
-      fs.writeFileSync(path.join(customerRepo, ".gitattributes"), "payload.txt filter=octogee-test\n");
-      fs.writeFileSync(path.join(customerRepo, "payload.txt"), "payload\n");
-
-      expect(gitExec(customerRepo, ["add", "-A"])).not.toBeNull();
-      expect(fs.existsSync(marker)).toBe(false);
-      fs.rmSync(attacker, { recursive: true, force: true });
-      fs.rmSync(canonical, { recursive: true, force: true });
-    } finally {
-      fs.rmSync(customerRepo, { recursive: true, force: true });
-      fs.rmSync(metadataRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("quarantines symlinked customer Git metadata without dereferencing it", () => {
-    const customerRepo = "/tmp/octogee-test/customers-doesnt-exist/symlinked";
-    const metadataRoot = "/tmp/octogee-test/git-metadata/symlinked";
-    const quarantine = "/tmp/octogee-test/git-metadata/quarantine/symlinked";
-    const attacker = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-symlink-attacker-"));
-    fs.rmSync(customerRepo, { recursive: true, force: true });
-    fs.rmSync(metadataRoot, { recursive: true, force: true });
-    fs.rmSync(quarantine, { recursive: true, force: true });
-    fs.mkdirSync(customerRepo, { recursive: true });
-    execFileSync("git", ["init", "-q", attacker], { env: process.env });
-    fs.symlinkSync(path.join(attacker, ".git"), path.join(customerRepo, ".git"));
-    const canonical = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-empty-canonical-"));
-    fs.rmSync(canonical, { recursive: true, force: true });
-    execFileSync("git", ["init", "--bare", "--initial-branch=main", canonical], { env: process.env });
-    try {
-      expect(externalizeCustomerGitDir(customerRepo, {
-        fetchCanonical: fetchCanonicalFrom(canonical),
-      })).toBe(path.join(metadataRoot, "workspace.git"));
-      expect(fs.lstatSync(path.join(metadataRoot, "workspace.git")).isDirectory()).toBe(true);
-      expect(fs.existsSync(path.join(attacker, ".git"))).toBe(true);
-      expect(fs.readdirSync(quarantine)).toHaveLength(1);
-      expect(fs.lstatSync(path.join(quarantine, fs.readdirSync(quarantine)[0]!)).isSymbolicLink()).toBe(true);
-    } finally {
-      fs.rmSync(customerRepo, { recursive: true, force: true });
-      fs.rmSync(metadataRoot, { recursive: true, force: true });
-      fs.rmSync(quarantine, { recursive: true, force: true });
-      fs.rmSync(attacker, { recursive: true, force: true });
-      fs.rmSync(canonical, { recursive: true, force: true });
-    }
   });
 });

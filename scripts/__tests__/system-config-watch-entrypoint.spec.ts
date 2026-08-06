@@ -34,7 +34,7 @@ describe("system-config-watch entrypoint planning", () => {
       reason: "shared-gateway",
     });
     expect(() => resolveSystemConfigWatchPlan({
-      GATEWAY_CLASS: "builder",
+      GATEWAY_CLASS: "operator",
       GATEWAY_BUILDER_SLUG: "alice",
       HOME: "/home/node",
     })).toThrow(/OPENCLAW_CONFIG_PATH/);

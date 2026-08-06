@@ -57,7 +57,6 @@ function deploymentTargetOutput(settings) {
         cluster_project_id: settings.clusterProjectId,
         firebase_project_id: settings.firebaseProjectId,
         hosting_project_id: settings.hostingProjectId,
-        customer_hosting_project_id: settings.customerHostingProjectId,
         region: settings.region,
         cluster_name: settings.clusterName,
         kube_context: settings.kubeContext,

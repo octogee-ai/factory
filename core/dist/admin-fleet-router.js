@@ -83,7 +83,7 @@ function resolveSizingForResponse(glmDoc, reservation) {
     };
 }
 function normalizeGatewayProfile(profile) {
-    return profile === "builder" ? "builder" : "standard";
+    return profile === "operator" ? "operator" : "standard";
 }
 function normalizeGatewayClass(doc) {
     return resolveGatewayClass({
@@ -1481,7 +1481,7 @@ function validateSharedGatewayCreate(body, gatewayClass) {
         return {
             status: 400,
             body: {
-                error: "Builder gateways are created by the disposable lifecycle",
+                error: "owner-only gateways are created by the disposable lifecycle",
             },
         };
     }
@@ -2065,9 +2065,9 @@ function centralGatewayReleasePayload(manifest) {
         imageRepository: `${manifest.repository}/octogee-gateway`,
         imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
         profileImages: {
-            builder: {
-                imageRepository: `${manifest.repository}/octogee-gateway-builder`,
-                imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
+            operator: {
+                imageRepository: `${manifest.repository}/octogee-gateway-operator`,
+                imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-operator"]}`,
             },
         },
         gatewayEdgeImage: {
@@ -2528,7 +2528,7 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
     "gatewayContainerSecurityContext",
     "serviceAccountName",
     "serviceAccount",
-    "builderAccess",
+    "operatorAccess",
     "ownerUid",
     "builderSlug",
     "openclawOverrides",
@@ -2627,7 +2627,7 @@ function buildCreateGatewayConfig(args) {
         gatewayContainerSecurityContext: null,
         serviceAccountName: null,
         serviceAccount: null,
-        builderAccess: null,
+        operatorAccess: null,
         ownerUid: null,
         builderSlug: null,
         openclawOverrides: null,
@@ -4007,7 +4007,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (target.root.gatewayClass !== "shared") {
                 res.status(400).json({
-                    error: "Builder gateway placement is managed by the disposable lifecycle",
+                    error: "owner-only gateway placement is managed by the disposable lifecycle",
                     gatewayId: targetGatewayId,
                 });
                 return;
@@ -4035,7 +4035,7 @@ export function addAdminFleetRoutes(router, deps) {
                 profile: target.root.profile ?? undefined,
                 imageProfile: target.root.imageProfile,
                 ownerUid: target.root.ownerUid ?? undefined,
-                builderAccess: target.root.builderAccess ?? undefined,
+                operatorAccess: target.root.operatorAccess ?? undefined,
             }, uid);
             const gatewayProfile = shellState.gatewayProfile;
             // Mirror AND the revision assignment doc commit together
@@ -5607,7 +5607,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (target.root.gatewayClass !== "shared") {
                 res.status(400).json({
-                    error: "Builder gateway placement is managed by the disposable lifecycle",
+                    error: "owner-only gateway placement is managed by the disposable lifecycle",
                     gatewayId: command.ok.gatewayId,
                 });
                 return;
@@ -5747,7 +5747,7 @@ export function addAdminFleetRoutes(router, deps) {
                                 profile: targetRoot.profile ?? undefined,
                                 imageProfile: targetRoot.imageProfile,
                                 ownerUid: targetRoot.ownerUid ?? undefined,
-                                builderAccess: targetRoot.builderAccess ?? undefined,
+                                operatorAccess: targetRoot.operatorAccess ?? undefined,
                             }, uid);
                             txn.update(userRef, {
                                 "provisioning.openclaw.gatewayId": targetGatewayId,

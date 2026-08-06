@@ -117,7 +117,7 @@ describe("internal workspace commit route", () => {
     delete process.env.CUSTOMERS_DIR;
   });
 
-  it("returns git command failures and makes push-only failures explicit", async () => {
+  it("returns git command failures and logs push-only failures", async () => {
     h.commitAndPushWorkspace.mockResolvedValueOnce({ ok: false, error: { code: "COMMIT_FAILED" } });
 
     await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(500, {
@@ -130,9 +130,7 @@ describe("internal workspace commit route", () => {
       ok: true,
       result: { committed: true, pushed: false, nothingToCommit: false, pushError: "rejected" },
     });
-    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(502, {
-      error: "Commit was created locally, but the remote rejected the push. Do not build or publish until a later commit succeeds.",
-      code: "PUSH_FAILED",
+    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(200, {
       committed: true,
       pushed: false,
       nothingToCommit: false,

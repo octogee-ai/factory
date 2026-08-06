@@ -115,7 +115,6 @@ function app(opts: {
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/audit", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
-  a.post("/internal/openclaw/activity/dispatch-context", enforcement, handler);
   a.post("/internal/agent-support/ask", enforcement, handler);
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
@@ -188,15 +187,15 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
       flippedAt: null,
     },
     configSchemaVersion: 1,
-    profile: "builder",
-    gatewayClass: "builder",
-    imageProfile: "builder",
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: "octogee-gw-bender",
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: "owner-bender",
     builderSlug: "victim",
     openclawOverrides: null,
@@ -473,22 +472,6 @@ describe("tenant enforcement middleware", () => {
         agentId: "octogee-alice-coach",
         channelId: "mattermost-task-channel",
       });
-
-    expect(ownedGateway.status).toBe(200);
-    expect(foreignGateway.status).toBe(403);
-    expect(platform.status).toBe(403);
-  });
-
-  it("passes dispatch context only to the bound gateway tenant", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/openclaw/activity/dispatch-context")
-      .send({ agentId: "octogee-alice-coach" });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/openclaw/activity/dispatch-context")
-      .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
-    const platform = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/openclaw/activity/dispatch-context")
-      .send({ agentId: "octogee-alice-coach" });
 
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);

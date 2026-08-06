@@ -196,18 +196,6 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     });
   });
 
-  it("redacts static preview capabilities from request logs", () => {
-    const capability = "0123456789abcdef0123456789abcdef";
-    const { req, res, fire } = fakeReqRes("GET", `/p/${capability}/assets/app.js`, 200);
-    requestLogger(req, res, vi.fn());
-    fire("finish");
-    const logged = logSpy.mock.calls[0][0] as string;
-    expect(logged).not.toContain(capability);
-    expect(JSON.parse(logged)).toMatchObject({
-      path: "/p/<redacted>/assets/app.js",
-    });
-  });
-
   it("/health 500 logs at ERROR regardless of LOG_LEVEL (failure signal preserved)", () => {
     delete process.env.LOG_LEVEL;
     const { req, res, fire } = fakeReqRes("GET", "/health", 500);

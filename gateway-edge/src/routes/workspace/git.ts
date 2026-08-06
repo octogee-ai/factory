@@ -16,7 +16,6 @@ import {
   gitStatus,
   resolveCustomerDir,
   resolveProjectDir,
-  runWorkspaceGitMutation,
   type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
 import { resolveCommitAuthor } from "./helpers.js";
@@ -240,9 +239,6 @@ function respondGitError(res: import("express").Response, err: WorkspaceGitError
     case "OUTPUT_TOO_LARGE":
       res.status(413).json({ error: "git output exceeded cap", code: err.code, cap: err.cap });
       return;
-    case "WORKSPACE_BUSY":
-      res.status(409).json({ error: "workspace is busy", code: err.code });
-      return;
     case "GIT_FAILED":
       logger.warn("workspace-git: git command failed", { status: err.status, stderr: err.stderr });
       res.status(500).json({ error: "git command failed", code: err.code, status: err.status });
@@ -296,15 +292,7 @@ router.post(
         return;
       }
       const author = resolveCommitAuthor(req.user, target.slug);
-      const mutation = await runWorkspaceGitMutation(
-        dir,
-        () => gitCommit(dir, { message, author }),
-      );
-      if (!mutation.ok) {
-        respondGitError(res, mutation.error);
-        return;
-      }
-      const r = mutation.result;
+      const r = await gitCommit(dir, { message, author });
       if (!r.ok) {
         respondGitError(res, r.error);
         return;
@@ -331,12 +319,7 @@ router.post(
         respondCustomerDirMissing(res, target.slug);
         return;
       }
-      const mutation = await runWorkspaceGitMutation(dir, () => gitPush(dir, { branch }));
-      if (!mutation.ok) {
-        respondGitError(res, mutation.error);
-        return;
-      }
-      const r = mutation.result;
+      const r = await gitPush(dir, { branch });
       if (!r.ok) {
         respondGitError(res, r.error);
         return;
@@ -364,15 +347,7 @@ router.post(
         respondCustomerDirMissing(res, target.slug);
         return;
       }
-      const mutation = await runWorkspaceGitMutation(
-        dir,
-        () => gitCheckout(dir, { branch, create }),
-      );
-      if (!mutation.ok) {
-        respondGitError(res, mutation.error);
-        return;
-      }
-      const r = mutation.result;
+      const r = await gitCheckout(dir, { branch, create });
       if (!r.ok) {
         respondGitError(res, r.error);
         return;

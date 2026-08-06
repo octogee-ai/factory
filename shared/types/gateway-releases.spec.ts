@@ -99,13 +99,13 @@ describe("isReleasePayload", () => {
     })).toBe(false);
   });
 
-  it("accepts a Builder profile image only from its paired package and release tag", () => {
+  it("accepts an operator profile image only from its paired package and release tag", () => {
     const payload = samplePayload({
       imageTag: `abc1234@sha256:${"a".repeat(64)}`,
       profileImages: {
-        builder: {
+        operator: {
           imageRepository:
-            "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+            "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
           imageTag: `abc1234@sha256:${"c".repeat(64)}`,
         },
       },
@@ -115,8 +115,8 @@ describe("isReleasePayload", () => {
     expect(isReleasePayload({
       ...payload,
       profileImages: {
-        builder: {
-          ...payload.profileImages!.builder,
+        operator: {
+          ...payload.profileImages!.operator,
           imageRepository:
             "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
         },
@@ -125,8 +125,8 @@ describe("isReleasePayload", () => {
     expect(isReleasePayload({
       ...payload,
       profileImages: {
-        builder: {
-          ...payload.profileImages!.builder,
+        operator: {
+          ...payload.profileImages!.operator,
           imageTag: `def5678@sha256:${"c".repeat(64)}`,
         },
       },
@@ -322,7 +322,7 @@ describe("classifyGatewayField", () => {
   });
 
   it("classifies all former release policy fields as gateway-mutable", () => {
-    expect(classifyGatewayField("builderAccess")).toBe("gateway-mutable");
+    expect(classifyGatewayField("operatorAccess")).toBe("gateway-mutable");
     expect(classifyGatewayField("openclawOverrides")).toBe("gateway-mutable");
     expect(classifyGatewayField("allocation")).toBe("gateway-mutable");
   });
@@ -417,7 +417,7 @@ describe("commitPlacementAtomic", () => {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,

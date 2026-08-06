@@ -31,9 +31,6 @@ export interface ProjectCreateActor {
   userData: FirebaseFirestore.DocumentData | undefined;
   workspaceId: string | null | undefined;
   repoSourceAccess?: RepoSourceAccess;
-  proveRepoSource?: (
-    repoSource: { provider: "github"; owner: string; repo: string },
-  ) => Promise<ProjectCreateResult | null>;
   source?: "ui" | "agent";
 }
 
@@ -94,7 +91,7 @@ class ProjectProvisioningError extends Error {
   }
 }
 
-export function validateProjectSlug(slug: string): string | null {
+function validateProjectSlug(slug: string): string | null {
   if (!isValidProjectId(slug)) {
     return `Slug must be ${PROJECT_ID_MIN_LENGTH}-${PROJECT_ID_MAX_LENGTH} chars, lowercase letters and digits only (no hyphens).`;
   }
@@ -142,14 +139,6 @@ export async function createProjectForActor(
 
   const limitFailure = await enforceProjectLimit(plan);
   if (limitFailure) return limitFailure;
-
-  if (plan.ghRepoSource) {
-    if (!actor.proveRepoSource) {
-      return bad(503, "GitHub repository authorization could not be verified");
-    }
-    const proofFailure = await actor.proveRepoSource(plan.ghRepoSource);
-    if (proofFailure) return proofFailure;
-  }
 
   await writeProvisioningProject(projectRef, plan);
   const artifacts: ProjectProvisioningArtifacts = {

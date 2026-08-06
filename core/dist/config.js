@@ -14,14 +14,17 @@ export const AGENT_PREFIX = process.env.AGENT_PREFIX ?? "octogee-";
 export const GATEWAY_ID = process.env.GATEWAY_ID ?? "local";
 export const GATEWAY_PROFILE = process.env.GATEWAY_PROFILE ?? "default";
 export const GATEWAY_CLASS = process.env.GATEWAY_CLASS ?? "";
-export function isBuilderGateway() {
-    return GATEWAY_CLASS === "builder";
+export function isOperatorGateway() {
+    return GATEWAY_PROFILE === "operator";
 }
+// A shared (multi-tenant) pod routes EACH customer-agent's anthropic through the
+// broker with its OWN per-customer token (agent-model-token-<agentId>), unlike
+// builder/operator which carry one per-gateway env broker token.
 export function isSharedGateway() {
     return GATEWAY_CLASS === "shared";
 }
 export function usesLlmBrokerToken() {
-    return GATEWAY_CLASS === "builder";
+    return GATEWAY_CLASS === "builder" || GATEWAY_CLASS === "operator";
 }
 export const CUSTOMERS_DIR = path.join(OPENCLAW_DIR, "customers");
 export const CUSTOMER_KEYS_DIR = path.join(OPENCLAW_DIR, "customer-keys");

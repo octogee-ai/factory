@@ -45,8 +45,8 @@ describe("validateRequiredEnv", () => {
     );
   });
 
-  it("applies the same non-secret runtime requirements to Barn and Builder profiles", () => {
-    expect(validateRequiredEnv({}, { isProd: true, profile: "builder" }).missing).toEqual(["GCP_PROJECT_ID"]);
+  it("applies the same non-secret runtime requirements to standard and operator profiles", () => {
+    expect(validateRequiredEnv({}, { isProd: true, profile: "operator" }).missing).toEqual(["GCP_PROJECT_ID"]);
     expect(validateRequiredEnv({}, { isProd: true, profile: "standard" }).missing).toEqual(["GCP_PROJECT_ID"]);
   });
 

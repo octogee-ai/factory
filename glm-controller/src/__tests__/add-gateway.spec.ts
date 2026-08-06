@@ -243,7 +243,7 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(deps.kubeOps.readAvailableReplicas).toHaveBeenCalled();
   });
 
-  it("publishes the platform-owned ready record instead of waiting for self-heartbeat on Builder gateways", async () => {
+  it("publishes the platform-owned ready record instead of waiting for self-heartbeat on operator gateways", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
@@ -255,13 +255,13 @@ describe("createAddGatewayHandler — happy path", () => {
         gatewayId: "canary",
         revisionId: "canary",
         imageTag: "abc1234",
-        gatewayClass: "builder" as const,
+        gatewayClass: "operator" as const,
       })),
     });
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", gatewayClass: "builder" } }),
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", profile: "operator" } }),
       ctx,
     );
 
@@ -280,7 +280,7 @@ describe("createAddGatewayHandler — happy path", () => {
     ]);
   });
 
-  it("waits for self-heartbeat on shared Barn gateways", async () => {
+  it("waits for self-heartbeat on builder-class gateways", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
@@ -292,13 +292,13 @@ describe("createAddGatewayHandler — happy path", () => {
         gatewayId: "canary",
         revisionId: "canary",
         imageTag: "abc1234",
-        gatewayClass: "shared" as const,
+        gatewayClass: "builder" as const,
       })),
     });
     const ctx = makeCtx();
 
     const result = await createAddGatewayHandler(deps)(
-      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", gatewayClass: "shared" } }),
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", gatewayClass: "builder" } }),
       ctx,
     );
 

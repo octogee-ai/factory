@@ -53,8 +53,8 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('profiles use the matching class defaults', () => {
-    expect(PROFILE_DEFAULT_TIER.builder).toBe('xs');
+  it('both profiles default to l', () => {
+    expect(PROFILE_DEFAULT_TIER.operator).toBe('l');
     expect(PROFILE_DEFAULT_TIER.standard).toBe('l');
   });
 
@@ -65,9 +65,10 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('builder class defaults to xs and the Barn defaults to l', () => {
+  it('builder class defaults to xs; shared and operator default to l', () => {
     expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('xs');
     expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('l');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.operator).toBe('l');
   });
 
   it('s is the one-builder headroom tier between xs and m', () => {
@@ -80,14 +81,14 @@ describe('sizing-tier SSOT', () => {
 
 describe('resolveSizingTier', () => {
   it('returns the explicit tier when set, regardless of profile', () => {
-    const result = resolveSizingTier({ sizingTier: 'm', profile: 'builder' });
+    const result = resolveSizingTier({ sizingTier: 'm', profile: 'operator' });
     expect(result.tier).toBe('m');
     expect(result.resolvedFrom).toBe('explicit');
   });
 
   it('falls back to the profile default (small) when sizingTier is missing', () => {
-    const result = resolveSizingTier({ sizingTier: undefined, profile: 'builder' });
-    expect(result.tier).toBe('xs');
+    const result = resolveSizingTier({ sizingTier: undefined, profile: 'operator' });
+    expect(result.tier).toBe('l');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 

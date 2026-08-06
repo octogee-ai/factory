@@ -159,15 +159,15 @@ function mutableConfig(
 ): GatewayMutableConfig {
   return {
     configSchemaVersion: 1,
-    profile: "builder",
-    gatewayClass: "builder",
-    imageProfile: "builder",
+    profile: "operator",
+    gatewayClass: "operator",
+    imageProfile: "operator",
     sizingTier: "l",
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: { shellsEnabled: true },
+    operatorAccess: { shellsEnabled: true },
     ownerUid: "uid-ceckert",
     builderSlug: "ceckert",
     openclawOverrides: null,
@@ -207,7 +207,7 @@ describe("initialGatewayReleaseDocuments", () => {
       gatewayClass: "shared",
       imageProfile: "standard",
       sizingTier: null,
-      builderAccess: null,
+      operatorAccess: null,
       ownerUid: null,
       builderSlug: null,
     });
@@ -300,7 +300,7 @@ describe("gateway durable configuration authorization", () => {
         payload: {
           gatewayClass: "shared",
           ownerUid: "uid-someone-else",
-          builderAccess: { shellsEnabled: false },
+          operatorAccess: { shellsEnabled: false },
         },
       },
       "glmGateways/bender": servingRuntime(),
@@ -309,14 +309,14 @@ describe("gateway durable configuration authorization", () => {
     await expect(readGatewayAuthorization(database(docs) as never, "bender")).resolves.toMatchObject({
       kind: "durable",
       config: {
-        gatewayClass: "builder",
+        gatewayClass: "operator",
         ownerUid: "uid-ceckert",
-        builderAccess: { shellsEnabled: true },
+        operatorAccess: { shellsEnabled: true },
       },
     });
     await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toMatchObject({
       kind: "durable",
-      config: { gatewayClass: "builder" },
+      config: { gatewayClass: "operator" },
     });
   });
 
@@ -339,7 +339,7 @@ describe("gateway durable configuration authorization", () => {
       "glmGateways/bender": {
         gatewayId: "bender",
         ownerUid: "uid-ceckert",
-        gatewayClass: "builder",
+        gatewayClass: "operator",
       },
     };
 
@@ -351,8 +351,8 @@ describe("gateway durable configuration authorization", () => {
       "glmGateways/bender": {
         gatewayId: "bender",
         ownerUid: "uid-ceckert",
-        gatewayClass: "builder",
-        builderAccess: { shellsEnabled: true },
+        gatewayClass: "operator",
+        operatorAccess: { shellsEnabled: true },
       },
     };
 
@@ -363,7 +363,7 @@ describe("gateway durable configuration authorization", () => {
     const docs: Docs = {
       "glmGateways/bender": servingRuntime({
         ownerUid: "uid-ceckert",
-        gatewayClass: "builder",
+        gatewayClass: "operator",
       }),
     };
 
@@ -376,8 +376,8 @@ describe("gateway durable configuration authorization", () => {
       "glmGateways/bender": {
         gatewayId: "bender",
         ownerUid: "uid-ceckert",
-        gatewayClass: "builder",
-        builderAccess: { shellsEnabled: true },
+        gatewayClass: "operator",
+        operatorAccess: { shellsEnabled: true },
       },
     };
 
@@ -409,7 +409,7 @@ describe("gateway durable configuration authorization", () => {
 
     expect(rendered).toMatchObject({
       imageTag: "deadbee",
-      gatewayClass: "builder",
+      gatewayClass: "operator",
       ownerUid: "uid-ceckert",
     });
     expect(rendered).not.toHaveProperty("configSchemaVersion");
@@ -471,7 +471,7 @@ describe("gateway durable configuration authorization", () => {
     ).toBe(false);
     expect(
       isGatewayMutableConfig(
-        mutableConfig({ builderAccess: { kubeApiServerEgressCidrs: ["10.0.0.0/8", 1] } as never }),
+        mutableConfig({ operatorAccess: { kubeApiServerEgressCidrs: ["10.0.0.0/8", 1] } as never }),
       ),
     ).toBe(false);
   });
@@ -494,11 +494,11 @@ describe("gateway durable configuration authorization", () => {
     });
   });
 
-  it("preserves the builder package receipt when projecting a release artifact", async () => {
+  it("preserves the operator package receipt when projecting a release artifact", async () => {
     const profileImages = {
-      builder: {
+      operator: {
         imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
         imageTag: `deadbee@sha256:${"b".repeat(64)}`,
       },
     };

@@ -1,7 +1,7 @@
 {{- /*
-Builder gateway API-server egress carve-out.
+Operator gateway API-server egress carve-out.
 
-BuilderShell auth validates gateway-local service-account tokens with
+Operator BuilderShell auth validates gateway-local service-account tokens with
 Kubernetes TokenReview. That call goes to the in-cluster Kubernetes API server
 on :443. The fleet-wide gateway-egress policy intentionally blocks RFC1918
 egress, and on GKE Dataplane V2 NetworkPolicy commonly has to allow the real
@@ -9,12 +9,12 @@ control-plane endpoint IP(s), not only the `kubernetes.default` service
 ClusterIP, because policy is evaluated after service DNAT.
 
 This policy is deliberately:
-  - Builder class only;
+  - operator-profile only;
   - per-gateway, via gateway-instance;
   - explicit-CIDR only, supplied from live `kubernetes` EndpointSlice data;
   - independent from the metadata-server carve-out.
 
-Populate `builderAccess.kubeApiServerEgressCidrs` with `/32` endpoint CIDRs
+Populate `operatorAccess.kubeApiServerEgressCidrs` with `/32` endpoint CIDRs
 from:
 
   kubectl get endpointslices -n default \
@@ -23,8 +23,8 @@ from:
 
 Default OFF. The chart only accepts `/32` endpoint CIDRs here.
 */}}
-{{- $apiCidrs := .Values.builderAccess.kubeApiServerEgressCidrs | default (list) -}}
-{{- $apiEgress := and (eq (include "octogee-gateway.gatewayClass" .) "builder") (gt (len $apiCidrs) 0) -}}
+{{- $apiCidrs := .Values.operatorAccess.kubeApiServerEgressCidrs | default (list) -}}
+{{- $apiEgress := and (eq (include "octogee-gateway.gatewayClass" .) "operator") (gt (len $apiCidrs) 0) -}}
 {{- /* `ne … false`, not `| default true`: a bool `false` is the Go zero value,
        so `.Values.networkPolicy.enabled | default true` would override an
        explicit disable back to true. */}}
@@ -43,10 +43,11 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # Kubernetes TokenReview API (:443) for operator gateway identity checks.
     - to:
         {{- range $cidr := $apiCidrs }}
         {{- if not (hasSuffix "/32" $cidr) }}
-        {{- fail (printf "builderAccess.kubeApiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}
+        {{- fail (printf "operatorAccess.kubeApiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}
         {{- end }}
         - ipBlock:
             cidr: {{ $cidr | quote }}

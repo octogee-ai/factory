@@ -43,7 +43,7 @@ function durableRoot(gatewayId: string, overrides: Record<string, unknown> = {})
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,

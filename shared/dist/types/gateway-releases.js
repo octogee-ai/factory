@@ -67,17 +67,17 @@ export function isReleasePayload(value) {
 function isGatewayProfileImages(value, gatewayImageRepository, gatewayImageTag) {
     if (!isPlainRecord(value) || Object.keys(value).length !== 1)
         return false;
-    const builder = value.builder;
-    if (!isPlainRecord(builder) || Object.keys(builder).length !== 2)
+    const operator = value.operator;
+    if (!isPlainRecord(operator) || Object.keys(operator).length !== 2)
         return false;
     const gatewayPackageSuffix = "/octogee-gateway";
     const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
-        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-builder`
+        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-operator`
         : "";
-    return (builder.imageRepository === expectedRepository &&
-        typeof builder.imageTag === "string" &&
-        DIGEST_BOUND_IMAGE_TAG_PATTERN.test(builder.imageTag) &&
-        builder.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]);
+    return (operator.imageRepository === expectedRepository &&
+        typeof operator.imageTag === "string" &&
+        DIGEST_BOUND_IMAGE_TAG_PATTERN.test(operator.imageTag) &&
+        operator.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]);
 }
 export function isGatewayEdgeImage(value, gatewayImageRepository) {
     const gatewayPackageSuffix = "/octogee-gateway";
@@ -249,7 +249,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "gatewayContainerSecurityContext",
     "serviceAccountName",
     "serviceAccount",
-    "builderAccess",
+    "operatorAccess",
     "ownerUid",
     "builderSlug",
     "openclawOverrides",

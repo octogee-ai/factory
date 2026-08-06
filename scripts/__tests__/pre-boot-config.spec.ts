@@ -1,7 +1,4 @@
 import { describe, it, expect, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import {
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
@@ -10,227 +7,24 @@ import {
   applyGatewayOverrides,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
-  applySharedMattermostRoutingSafetyPatch,
   buildGitconfigContent,
   hydrateGitIdentity,
   pickSoleTenantSlug,
   preBootFirestoreEnabled,
   slugFromCoachAgentId,
   withTimeout,
-  writeConfigAtomically,
 } from "../entrypoints/pre-boot-config.js";
 
 function emptyConfig(): any {
   return {};
 }
 
-describe("shared Mattermost routing safety", () => {
-  it("creates the quarantine roster when a shared config has no explicit agents", () => {
-    const config: any = {};
-
-    expect(
-      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
-    ).toBe(true);
-    expect(config.agents.list).toEqual([
-      expect.objectContaining({ id: "octogee-unmatched-route", default: true }),
-    ]);
-  });
-
-  it("installs a quarantine default and deterministic stable account routes", () => {
-    const config: any = {
-      agents: {
-        list: [
-          { id: "octogee-mike-coach", default: true },
-          { id: "octogee-ceckert-coach" },
-        ],
-      },
-      channels: {
-        mattermost: {
-          accounts: {
-            "mike-coach": {},
-            "ceckert-coach": {},
-          },
-        },
-      },
-      bindings: [
-        {
-          agentId: "octogee-mike-coach",
-          match: {
-            channel: "mattermost",
-            accountId: "mike-coach",
-            peer: { kind: "group", id: "mmmmmmmmmmmmmmmmmmmmmmmmmm" },
-          },
-        },
-        {
-          agentId: "octogee-ceckert-coach",
-          match: {
-            channel: "mattermost",
-            accountId: "ceckert-coach",
-            peer: { kind: "group", id: "cccccccccccccccccccccccccc" },
-          },
-        },
-      ],
-    };
-
-    expect(
-      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
-    ).toBe(true);
-    expect(config.agents.list[0]).toMatchObject({
-      id: "octogee-unmatched-route",
-      default: true,
-    });
-    expect(config.agents.list[1]).not.toHaveProperty("default");
-    expect(config.bindings).toEqual(expect.arrayContaining([
-      {
-        agentId: "octogee-mike-coach",
-        match: { channel: "mattermost", accountId: "mike-coach" },
-      },
-      {
-        agentId: "octogee-ceckert-coach",
-        match: { channel: "mattermost", accountId: "ceckert-coach" },
-      },
-    ]));
-  });
-
-  it("removes foreign peer routes without discarding the managed owner's routes", () => {
-    const config: any = {
-      agents: { list: [{ id: "octogee-mike-coach" }, { id: "octogee-jack-coach" }] },
-      channels: { mattermost: { accounts: { "mike-coach": {} } } },
-      bindings: [
-        {
-          agentId: "octogee-mike-coach",
-          match: {
-            channel: "mattermost",
-            accountId: "mike-coach",
-            peer: { kind: "group", id: "aaaaaaaaaaaaaaaaaaaaaaaaaa" },
-          },
-        },
-        {
-          agentId: "octogee-jack-coach",
-          match: {
-            channel: "mattermost",
-            accountId: "mike-coach",
-            peer: { kind: "group", id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" },
-          },
-        },
-        {
-          agentId: "octogee-mike-coach",
-          match: { channel: "mattermost", accountId: "mike-coach" },
-        },
-      ],
-    };
-    const log = vi.fn();
-
-    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
-
-    expect(config.bindings).toContainEqual({
-      agentId: "octogee-mike-coach",
-      match: { channel: "mattermost", accountId: "mike-coach" },
-    });
-    expect(config.bindings).not.toContainEqual({
-      agentId: "octogee-jack-coach",
-      match: {
-        channel: "mattermost",
-        accountId: "mike-coach",
-        peer: { kind: "group", id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" },
-      },
-    });
-    expect(log).toHaveBeenCalledWith(
-      "converged Mattermost account routes (stable=1, quarantined=0)",
-    );
-  });
-
-  it("removes every account route when the deterministic managed agent is absent", () => {
-    const config: any = {
-      agents: { list: [{ id: "octogee-mike-coach", default: true }] },
-      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
-      bindings: [
-        {
-          agentId: "octogee-mike-coach",
-          match: { channel: "mattermost", accountId: "ceckert-coach" },
-        },
-      ],
-    };
-    const log = vi.fn();
-
-    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, log);
-
-    expect(config.bindings).toEqual([]);
-    expect(log).toHaveBeenCalledWith(
-      "refused account route without managed agent for ceckert-coach",
-    );
-  });
-
-  it("never promotes a foreign peer into the deterministic account route", () => {
-    const config: any = {
-      agents: {
-        list: [{ id: "octogee-mike-coach" }, { id: "octogee-ceckert-coach" }],
-      },
-      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
-      bindings: [{
-        agentId: "octogee-mike-coach",
-        match: {
-          channel: "mattermost",
-          accountId: "ceckert-coach",
-          peer: { kind: "group", id: "cccccccccccccccccccccccccc" },
-        },
-      }],
-    };
-
-    applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn());
-
-    expect(config.bindings).toEqual([{
-      agentId: "octogee-ceckert-coach",
-      match: { channel: "mattermost", accountId: "ceckert-coach" },
-    }]);
-  });
-
-  it("converges stable routes from the beta keyed agent roster", () => {
-    const config: any = {
-      agents: {
-        entries: {
-          "octogee-ceckert-coach": { model: "platform/one" },
-        },
-      },
-      channels: { mattermost: { accounts: { "ceckert-coach": {} } } },
-      bindings: [],
-    };
-
-    applySharedMattermostRoutingSafetyPatch(
-      config,
-      { GATEWAY_CLASS: "shared" },
-      vi.fn(),
-    );
-
-    expect(config.bindings).toEqual([{
-      agentId: "octogee-ceckert-coach",
-      match: { channel: "mattermost", accountId: "ceckert-coach" },
-    }]);
-  });
-});
-
-describe("pre-boot config persistence", () => {
-  it("atomically replaces the config without leaving a partial file", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preboot-config-"));
-    const configPath = path.join(dir, "openclaw.json");
-    try {
-      fs.writeFileSync(configPath, "{\"old\":true}\n");
-      writeConfigAtomically(configPath, { safe: true });
-
-      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({ safe: true });
-      expect(fs.readdirSync(dir)).toEqual(["openclaw.json"]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("applyPreBootPatches — platform model catalog", () => {
-  it("allowlists every broker-backed platform model for a Builder gateway", () => {
+  it("allowlists every broker-backed platform model for an operator gateway", () => {
     const config: any = { agents: { defaults: { models: {} } } };
 
     const changed = applyPreBootPatches(config, {
-      GATEWAY_CLASS: "builder",
+      GATEWAY_CLASS: "operator",
       OPENROUTER_BASE_URL: "http://llm-broker/v1",
       PLATFORM_OPENAI_BASE_URL: "http://llm-broker/v1",
     });
@@ -706,16 +500,15 @@ describe("applyGatewayRootConfig", () => {
 });
 
 describe("shouldMaterializeAnthropicBrokerProfiles", () => {
-  it.each(["shared", "builder"])(
+  it.each(["shared", "builder", "operator"])(
     "materializes per-agent broker-token profiles for %s gateways",
     (gatewayClass) => {
       expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: gatewayClass })).toBe(true);
     },
   );
 
-  it("rejects the retired operator class and profile", () => {
-    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: "operator" })).toBe(false);
-    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_PROFILE: "operator" })).toBe(false);
+  it("falls back to operator profile when GATEWAY_CLASS is absent", () => {
+    expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_PROFILE: "operator" })).toBe(true);
   });
 
   it("skips unknown classes", () => {

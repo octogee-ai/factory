@@ -53,7 +53,7 @@ spec:
             (
               kube_pod_info{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"octogee-gateway-.*"}
               * on(namespace,pod) group_left()
-              kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",label_gateway_class="builder"}
+              kube_pod_labels{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",label_gateway_class=~"builder|operator"}
             )
             * on(node) group_left()
             kube_node_labels{job="gmp-kube-state-metrics",label_cloud_google_com_gke_spot!="true"}

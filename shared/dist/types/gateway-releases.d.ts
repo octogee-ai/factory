@@ -42,7 +42,7 @@ export interface GatewayEdgeImage {
     imageTag: string;
 }
 export interface GatewayProfileImages {
-    builder: {
+    operator: {
         imageRepository: string;
         imageTag: string;
     };
@@ -163,7 +163,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "managedBy", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "operatorAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "managedBy", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;

@@ -17,7 +17,8 @@ function nonBlank(value: string | undefined): string | null {
 
 function isOwnerRuntimeGateway(): boolean {
   const gatewayClass = nonBlank(process.env.GATEWAY_CLASS);
-  return gatewayClass === "builder";
+  if (gatewayClass) return gatewayClass === "builder" || gatewayClass === "operator";
+  return nonBlank(process.env.GATEWAY_PROFILE) === "operator";
 }
 
 function paramString(value: unknown): string | null {

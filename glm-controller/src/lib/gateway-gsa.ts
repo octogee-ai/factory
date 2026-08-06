@@ -1,4 +1,4 @@
-import { builderGatewayServiceAccountName } from "@octogee/shared/types/glm";
+import { operatorGatewayServiceAccountName } from "@octogee/shared/types/glm";
 
 // A minimal authed-requester seam over the IAM v1 REST API. Production wires
 // this to a google-auth-library client (ADC via the pod's Workload Identity);
@@ -9,8 +9,10 @@ export interface IamRequest {
   (opts: { url: string; method: string }): Promise<{ status: number }>;
 }
 
-export function builderGatewayServiceAccountEmail(gatewayId: string, projectId: string): string {
-  return `${builderGatewayServiceAccountName(gatewayId)}@${projectId}.iam.gserviceaccount.com`;
+// The per-gateway GSA shares the operator KSA's name (octogee-gw-<gatewayId>),
+// so a single convention drives both Workload-Identity sides.
+export function operatorGatewayServiceAccountEmail(gatewayId: string, projectId: string): string {
+  return `${operatorGatewayServiceAccountName(gatewayId)}@${projectId}.iam.gserviceaccount.com`;
 }
 
 function statusOf(err: unknown): number | undefined {
@@ -24,7 +26,7 @@ function statusOf(err: unknown): number | undefined {
 // (no GSA for this gateway: a cattle gateway, or one never granted a GSA) is a
 // clean no-op. Project-level role bindings granted TO the GSA are NOT stripped
 // here — that would require project setIamPolicy, too broad a grant for the
-// control plane; future Builder GSAs should use resource-scoped roles so
+// control plane; future operator GSAs should use resource-scoped roles so
 // nothing is left behind. Terraform-managed GSAs (gw-bender) are decommissioned
 // via terraform, not this path.
 export function createGatewayServiceAccountTeardown(deps: {
@@ -33,7 +35,7 @@ export function createGatewayServiceAccountTeardown(deps: {
   log: (msg: string) => void;
 }): (gatewayId: string) => Promise<void> {
   return async (gatewayId: string): Promise<void> => {
-    const email = builderGatewayServiceAccountEmail(gatewayId, deps.projectId);
+    const email = operatorGatewayServiceAccountEmail(gatewayId, deps.projectId);
     const url = `https://iam.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email)}`;
     try {
       await deps.request({ url, method: "DELETE" });

@@ -29,7 +29,7 @@ function durableRoot(overrides: Record<string, unknown> = {}): Record<string, un
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -691,20 +691,20 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     ]);
   });
 
-  it("pins the effective Builder gateway image instead of the standard release repository", async () => {
+  it("pins the effective operator gateway image instead of the standard release repository", async () => {
     const gatewayId = "builder-alice";
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
     const log = vi.fn();
-    const builderRoot = durableRoot({
+    const operatorRoot = durableRoot({
       gatewayId,
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
+      profile: "operator",
+      gatewayClass: "operator",
+      imageProfile: "operator",
       sizingTier: "xs",
       serviceAccountName: "octogee-gw-builder-alice",
       serviceAccount: { create: false },
-      builderAccess: {
+      operatorAccess: {
         shellsEnabled: false,
         controlUiEnabled: false,
       },
@@ -721,7 +721,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     const stop = startReconciler({
       db: makeDb({
         roots: {
-          [gatewayId]: { ...builderRoot, liveRelease: 2 },
+          [gatewayId]: { ...operatorRoot, liveRelease: 2 },
         },
         runtimes: {
           [gatewayId]: servingRuntime({ gatewayId }),
@@ -749,7 +749,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(artifacts).toEqual(expect.arrayContaining([
       {
         imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
         imageTag: "abc1234",
       },
     ]));
@@ -822,9 +822,8 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       db: makeDb({
         roots: {
           default: durableRoot({
-            profile: "builder",
             gatewayClass: "builder",
-            imageProfile: "builder",
+            imageProfile: "standard",
             ownerUid: "uid-b",
             builderSlug: "b",
           }),

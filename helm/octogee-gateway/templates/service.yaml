@@ -1,4 +1,4 @@
-{{- $builderShellsEnabled := and (eq (include "octogee-gateway.gatewayClass" .) "builder") (.Values.builderAccess.shellsEnabled | default false) -}}
+{{- $operatorShellsEnabled := and (ne (include "octogee-gateway.gatewayClass" .) "shared") (.Values.operatorAccess.shellsEnabled | default false) -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,10 +16,13 @@ spec:
     - name: runner-metrics
       port: 9092
       targetPort: 9092
+    - name: preview
+      port: 9080
+      targetPort: 9080
     - name: fleet-http
       port: {{ .Values.env.fleetControllerPort | default "3003" }}
       targetPort: {{ .Values.env.fleetControllerPort | default "3003" }}
-    {{- if $builderShellsEnabled }}
+    {{- if $operatorShellsEnabled }}
     - name: builder-shell
       port: {{ .Values.env.builderShellPort | default "3005" }}
       targetPort: {{ .Values.env.builderShellPort | default "3005" }}

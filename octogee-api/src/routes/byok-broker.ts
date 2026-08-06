@@ -6,7 +6,6 @@ import {
   resolveUserByosubCredentialRefs,
 } from "@octogee/shared/types/model-credentials";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { parseAgentId } from "@octogee/shared/types/identity";
 
 import { readSecret } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
@@ -42,11 +41,6 @@ import {
   findAssignedOrInboundMigratingOrConfiguredUserByAgentId,
   findAssignedUserByAgentId,
 } from "./fleet-broker.js";
-import {
-  createOwnerWorkspaceTurnVerifier,
-  type OwnerWorkspaceTurnVerifier,
-} from "../lib/openclaw-owner-turn.js";
-import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
 type GatewayBinding = Extract<
   Express.Request["boundTenant"],
@@ -126,7 +120,6 @@ function warnSkippedUserByosubProviders(input: {
   console.warn("[byok-broker] skipped malformed user byosub provider", input);
 }
 
-
 function assignedOwnerSlug(data: Record<string, unknown>): string | null {
   const provisioning =
     data.provisioning &&
@@ -181,8 +174,10 @@ function stringOrNull(value: unknown): string | null {
 }
 
 export type AgentCredentialPath =
-  "platform_broker" | "byok_api_key" | "byosub" | "byosub_suppressed_customer";
+  "platform_broker" | "byok_api_key" | "byosub" | "byosub_suppressed_shared";
 
+// Mirrors the Phase D gate (core byot-sync gateSharedByosub): an OAuth model
+// credential is honored on builder/operator pods and suppressed on shared.
 function credentialPathFor(
   userData: Record<string, unknown>,
   configData: Record<string, unknown>,
@@ -204,9 +199,9 @@ function credentialPathFor(
   // legacy byot records predate the mode field and were always API keys
   const isOauth = active !== legacyByot && active.mode === "oauth";
   if (!isOauth) return { path: "byok_api_key", provider };
-  return gatewayClass === "builder"
-    ? { path: "byosub", provider }
-    : { path: "byosub_suppressed_customer", provider };
+  return gatewayClass === "shared"
+    ? { path: "byosub_suppressed_shared", provider }
+    : { path: "byosub", provider };
 }
 
 function deriveSpendStatus(input: {
@@ -224,7 +219,7 @@ function deriveSpendStatus(input: {
     input.weekData?.chargeUsd ?? input.weekData?.costUsd,
   );
   const onOwnerCredential =
-    input.credentialPath === "byok_api_key" || input.credentialPath === "byosub";
+    input.credentialPath === "byosub" || input.credentialPath === "byok_api_key";
   const creditBalanceUsd = financeNumber(input.creditData?.balanceUsd);
   const throttle = spendDegradeState({
     modelAccess: plan.modelAccess,
@@ -286,10 +281,11 @@ async function agentUsageStatusPayload(
       `durable root config unavailable for gateways/${gatewayId}`,
     );
   }
+  const gatewayClass = authorization.config.gatewayClass;
   const credential = credentialPathFor(
     userData,
     (configSnap.data() ?? {}) as Record<string, unknown>,
-    authorization.config.gatewayClass,
+    gatewayClass,
   );
   const spend = deriveSpendStatus({
     plan,
@@ -300,7 +296,7 @@ async function agentUsageStatusPayload(
   });
 
   return {
-    gatewayClass: authorization.config.gatewayClass,
+    gatewayClass,
     tier: plan.tier,
     effectiveTier: plan.effectiveTier,
     trialDaysRemaining: plan.trialDaysRemaining,
@@ -347,6 +343,70 @@ function agentModelTokenSecretName(input: {
   return `${prefix}-${input.gatewayId}-${input.ownerUid}`;
 }
 
+async function handleByosubCred(input: {
+  db: Firestore;
+  readCredentialSecret: (name: string, version?: string) => Promise<string>;
+  gatewayId: string;
+  podName: string | undefined;
+  agentId: string;
+  res: Response;
+}): Promise<void> {
+  const { db, readCredentialSecret, gatewayId, podName, agentId, res } = input;
+  const assigned =
+    await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
+      db,
+      gatewayId,
+      podName,
+      agentId,
+    );
+  if (!assigned) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+
+  const snap = await db
+    .collection("users")
+    .doc(assigned.uid)
+    .collection("integrations")
+    .doc("byosub")
+    .get();
+  const parsed = resolveUserByosubCredentialRefs(assigned.uid, snap.data());
+  if (parsed.refs.length === 0) {
+    warnSkippedUserByosubProviders({
+      gatewayId,
+      agentId,
+      uid: assigned.uid,
+      skipped: parsed.skipped,
+    });
+    if (parsed.skipped.length > 0) {
+      res.status(500).json({ error: "malformed user byosub integration" });
+      return;
+    }
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const credentials = [];
+  for (const { provider, secretName } of parsed.refs) {
+    credentials.push({
+      provider,
+      secretName,
+      credential: await readCredentialSecret(secretName),
+    });
+  }
+  warnSkippedUserByosubProviders({
+    gatewayId,
+    agentId,
+    uid: assigned.uid,
+    skipped: parsed.skipped,
+  });
+
+  res.json({
+    credentials,
+    ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}),
+  });
+}
+
 async function handleApiKeyCredential(
   db: Firestore,
   readCredentialSecret: (name: string, version?: string) => Promise<string>,
@@ -388,48 +448,6 @@ async function handleApiKeyCredential(
   res.json({ value });
 }
 
-async function handleByosubCred(input: {
-  db: Firestore;
-  readCredentialSecret: (name: string, version?: string) => Promise<string>;
-  gatewayId: string;
-  podName: string | undefined;
-  agentId: string;
-  res: Response;
-}): Promise<void> {
-  const { db, readCredentialSecret, gatewayId, podName, agentId, res } = input;
-  const authorization = await readGatewayAuthorization(db, gatewayId);
-  if (authorization?.config.gatewayClass !== "builder") {
-    res.status(403).json(FORBIDDEN);
-    return;
-  }
-  const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
-    db,
-    gatewayId,
-    podName,
-    agentId,
-  );
-  if (!assigned) {
-    res.status(403).json(FORBIDDEN);
-    return;
-  }
-  const snap = await db.collection("users").doc(assigned.uid)
-    .collection("integrations").doc("byosub").get();
-  const parsed = resolveUserByosubCredentialRefs(assigned.uid, snap.data());
-  if (parsed.refs.length === 0) {
-    warnSkippedUserByosubProviders({ gatewayId, agentId, uid: assigned.uid, skipped: parsed.skipped });
-    res.status(parsed.skipped.length > 0 ? 500 : 404).json({
-      error: parsed.skipped.length > 0 ? "malformed user byosub integration" : "not_found",
-    });
-    return;
-  }
-  const credentials = [];
-  for (const { provider, secretName } of parsed.refs) {
-    credentials.push({ provider, secretName, credential: await readCredentialSecret(secretName) });
-  }
-  warnSkippedUserByosubProviders({ gatewayId, agentId, uid: assigned.uid, skipped: parsed.skipped });
-  res.json({ credentials, ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}) });
-}
-
 function registerCredentialMaterializationRoutes(
   router: Router,
   db: Firestore,
@@ -452,6 +470,7 @@ function registerCredentialMaterializationRoutes(
       res,
     });
   });
+
   router.post("/api-key", async (req, res) => {
     await handleApiKeyCredential(db, readCredentialSecret, req, res);
   });
@@ -461,7 +480,6 @@ function registerAgentUsageStatusRoute(
   router: Router,
   db: Firestore,
   now: () => number,
-  verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier,
 ) {
   router.post("/agent-usage-status", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -469,10 +487,6 @@ function registerAgentUsageStatusRoute(
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
     if (typeof agentId !== "string" || !isSafeAgentId(agentId)) {
       res.status(400).json(VALID_AGENT_ID_REQUIRED);
-      return;
-    }
-    if (parseAgentId(agentId).kind !== "coach") {
-      res.status(403).json(FORBIDDEN);
       return;
     }
     const assigned =
@@ -483,30 +497,6 @@ function registerAgentUsageStatusRoute(
         agentId,
       );
     if (!assigned) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-    try {
-      if (!(await verifyOwnerWorkspaceTurn({
-        req,
-        gatewayId: bound.gatewayId,
-        agentId,
-        ownerUid: assigned.uid,
-        assignedData: assigned.data as Record<string, unknown>,
-      }))) {
-        logger.warn("[byok-broker] rejected unverified owner status turn", {
-          gatewayId: bound.gatewayId,
-          agentId,
-        });
-        res.status(403).json(FORBIDDEN);
-        return;
-      }
-    } catch (error) {
-      logger.error("[byok-broker] owner status turn verification failed", {
-        gatewayId: bound.gatewayId,
-        agentId,
-        error,
-      });
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -638,7 +628,6 @@ export function createByokBrokerRoutes(opts: {
   db: Firestore;
   now?: () => number;
   readSecret?: (name: string, version?: string) => Promise<string>;
-  verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
 }): Router {
   const router = Router();
   const { db } = opts;
@@ -648,12 +637,7 @@ export function createByokBrokerRoutes(opts: {
   registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
   registerAgentModelTokenRoute(router, db);
 
-  registerAgentUsageStatusRoute(
-    router,
-    db,
-    now,
-    opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(db),
-  );
+  registerAgentUsageStatusRoute(router, db, now);
 
   // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to
   // this gateway. The sidecar /connect handler starts the in-pod auth flow

@@ -8,16 +8,11 @@ process.env.OPENCLAW_DIR = openclawDir;
 
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(async () => true),
-  projectCheckoutMatchesSource: vi.fn(() => false),
 }));
 
 vi.mock("../lib/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/git.js")>();
-  return {
-    ...actual,
-    cloneProjectRepo: gitMocks.cloneProjectRepo,
-    projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
-  };
+  return { ...actual, cloneProjectRepo: gitMocks.cloneProjectRepo };
 });
 
 const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
@@ -66,7 +61,6 @@ function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
 
 beforeEach(() => {
   gitMocks.cloneProjectRepo.mockClear();
-  gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(false);
   fs.rmSync(path.join(CUSTOMERS_DIR), { recursive: true, force: true });
 });
 
@@ -134,7 +128,6 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
 
   it("skips a project whose checkout is already on disk", async () => {
     fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
-    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
     const { adapter } = mkAdapter([
       {
         projectSlug: "gh",
@@ -145,26 +138,6 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     ]);
 
     await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
-  });
-
-  it("reconciles a checkout whose trusted source does not match the project source", async () => {
-    fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
-    const { adapter } = mkAdapter([
-      {
-        projectSlug: "gh",
-        giteaRepoName: "alice-gh",
-        repoSource: { ...GITHUB_REPO_SOURCE },
-        provisioningState: "active",
-      },
-    ]);
-
-    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
-      {
-        projectSlug: "gh",
-        giteaRepoName: "alice-gh",
-        repoSource: GITHUB_REPO_SOURCE,
-      },
-    ]);
   });
 
   it("forwards the repoSource to the clone and passes no explicit GitHub token — the clone rides the pod's ambient gh credential helper", async () => {

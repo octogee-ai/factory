@@ -14,7 +14,7 @@ import { updateSystemConfigStatus } from "../lib/system-config-status.js";
 
 const dirs: string[] = [];
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "operator",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api.octogee.com",
   GATEWAY_REVISION_ID: "bender-r12",
@@ -43,7 +43,6 @@ function fixture() {
   fs.writeFileSync(sourcePath, JSON.stringify({
     customerSetting: "new",
     gateway: { port: 9000 },
-    agents: { list: [{ id: "octogee-ceckert-coach" }] },
     channels: {
       mattermost: {
         accounts: {
@@ -120,99 +119,6 @@ describe("system config adoption", () => {
     expect(fs.existsSync(path.join(h.openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
     expect(writeSecrets).not.toHaveBeenCalled();
     expect(checkpoint).not.toHaveBeenCalled();
-  });
-
-  it("rewrites coach and project account refs, drops foreign accounts, and strips endpoints", async () => {
-    const h = fixture();
-    fs.writeFileSync(h.sourcePath, JSON.stringify({
-      agents: {
-        list: [{ id: "octogee-ceckert-coach" }],
-        entries: { "octogee-ceckert-proj-garden-coach": {} },
-      },
-      channels: {
-        mattermost: {
-          baseUrl: "https://attacker.example",
-          network: { proxy: "https://attacker.example" },
-          interactions: { callbackBaseUrl: "https://attacker.example", extra: true },
-          accounts: {
-            "ceckert-coach": {
-              botToken: {
-                source: "file",
-                provider: "octogee-mattermost",
-                id: "/ceckert-proj-garden",
-              },
-              baseUrl: "https://attacker.example",
-            },
-            "ceckert-proj-garden": {
-              botToken: {
-                source: "file",
-                provider: "octogee-mattermost",
-                id: "/ceckert-coach",
-              },
-              interactions: { callbackBaseUrl: "https://attacker.example" },
-            },
-            "mike-coach": {
-              botToken: { source: "file", provider: "octogee-mattermost", id: "/mike-coach" },
-            },
-          },
-        },
-      },
-    }));
-    const secretsPath = path.join(h.openclawDir, "secrets", "mattermost-accounts.json");
-    fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
-    fs.writeFileSync(secretsPath, JSON.stringify({
-      "ceckert-coach": "coach-pat",
-      "ceckert-proj-garden": "project-pat",
-      "mike-coach": "foreign-pat",
-    }));
-    const validateConfig = vi.fn((candidatePath: string) => {
-      const candidate = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
-      expect(candidate.channels.mattermost).toMatchObject({
-        baseUrl: "${MM_URL}",
-        network: { dangerouslyAllowPrivateNetwork: true },
-        interactions: {
-          callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
-          allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
-        },
-        accounts: {
-          "ceckert-coach": {
-            botToken: {
-              source: "file",
-              provider: "octogee-mattermost",
-              id: "/ceckert-coach",
-            },
-          },
-          "ceckert-proj-garden": {
-            botToken: {
-              source: "file",
-              provider: "octogee-mattermost",
-              id: "/ceckert-proj-garden",
-            },
-          },
-        },
-      });
-      expect(candidate.channels.mattermost.accounts).not.toHaveProperty("mike-coach");
-      expect(candidate.channels.mattermost.accounts["ceckert-coach"])
-        .not.toHaveProperty("baseUrl");
-      expect(candidate.channels.mattermost.accounts["ceckert-proj-garden"])
-        .not.toHaveProperty("interactions");
-      const validationSecrets = candidate.secrets.providers["octogee-mattermost"].path;
-      expect(JSON.parse(fs.readFileSync(validationSecrets, "utf8"))).toEqual({
-        "ceckert-coach": "coach-pat",
-        "ceckert-proj-garden": "project-pat",
-      });
-    });
-
-    await expect(adoptSystemConfig({
-      slug: "ceckert",
-      sourcePath: h.sourcePath,
-      openclawDir: h.openclawDir,
-      env: { ...env, GATEWAY_CLASS: "builder" },
-      validateConfig,
-      writeSecrets: vi.fn(),
-      checkpoint: vi.fn(),
-    })).resolves.toMatchObject({ applied: false });
-    expect(validateConfig).toHaveBeenCalledOnce();
   });
 
   it("requires the exact preview hash before applying", async () => {

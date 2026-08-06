@@ -17,6 +17,11 @@ import {
   type ModelBrokerTokenPolicy,
 } from "./model-broker-tokens.js";
 
+// Resolves the spend cap + plan policy stamped on a broker token from the owner's
+// tier. Single source for both mint paths: the per-gateway issuer (builder/operator
+// single-tenant pods) and the per-agent mint (shared multi-tenant pods). The broker
+// enforces whatever lands here, so a null spendWindowUsd means "unmetered" — only
+// the env default or an explicit admin override should produce that.
 export interface OwnerModelBrokerGrant {
   limits: ModelBrokerTokenLimits;
   policy: ModelBrokerTokenPolicy;

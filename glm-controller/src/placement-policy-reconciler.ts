@@ -853,7 +853,7 @@ function disposableTargetIdentityMatchesLease(
   lease: BuilderActivationLease,
 ): boolean {
   const allocation = gateway.allocation;
-  return gateway.gatewayClass === "builder" &&
+  return gateway.gatewayClass === "operator" &&
     gateway.ownerUid === user.uid &&
     gateway.disposable === true &&
     allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
