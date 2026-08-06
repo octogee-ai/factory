@@ -151,6 +151,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     config: {
       brokerUrl: FLEET_BROKER_URL_TEMPLATE,
       tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
+      requireWriteApproval: true,
     },
   },
   "octogee-access-tools": {
@@ -368,11 +369,11 @@ function enableConnectorTools(config) {
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = true;
   config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config ??= {};
-  delete config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval;
 }
 
-function removeConnectorNativeApproval(config) {
-  delete config.plugins?.entries?.[CONNECTOR_TOOLS_PLUGIN]?.config?.requireWriteApproval;
+function requireConnectorWriteApproval(config) {
+  enableConnectorTools(config);
+  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval = true;
 }
 
 // Preserved/restored configs predate the plugin; converge it at boot so both
@@ -1308,13 +1309,12 @@ function applySharedPolicy(config) {
   enableProjectTools(config);
   enableOpsTools(config);
   enableAccessTools(config);
-  enableConnectorTools(config);
+  requireConnectorWriteApproval(config);
   removePolicyCodexAuthPlaceholder(config);
   disableCodex(config);
 }
 
 function applyBuilderPolicy(config) {
-  removeConnectorNativeApproval(config);
   forceProjectAgentPolicy(config);
 }
 

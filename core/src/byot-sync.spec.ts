@@ -1584,6 +1584,7 @@ describe("customer OAuth runtime purge", () => {
     expect(patch.plugins.entries["octogee-connector-tools"].config).toEqual({
       brokerUrl: "${FLEET_BROKER_URL}",
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      requireWriteApproval: true,
     });
   });
 
@@ -1775,6 +1776,7 @@ describe("customer OAuth runtime purge", () => {
     expect(patch.plugins.entries["octogee-connector-tools"].config).toEqual({
       brokerUrl: "${FLEET_BROKER_URL}",
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+      requireWriteApproval: true,
     });
     expect(patch.secrets.providers.evil).toBeNull();
     expect(patch.secrets.providers["gcp-secret-manager"]).toEqual({

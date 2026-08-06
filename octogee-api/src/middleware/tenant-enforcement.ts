@@ -81,6 +81,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-productivity/google/calendar/events/create",
   "/internal/agent-productivity/google/calendar/events/update",
   "/internal/agent-productivity/google/calendar/events/delete",
+  "/internal/agent-productivity/approved/calendar/execute",
   "/internal/agent-productivity/google/tasks/list",
   "/internal/agent-productivity/google/tasks/create",
   "/internal/agent-productivity/google/tasks/update",

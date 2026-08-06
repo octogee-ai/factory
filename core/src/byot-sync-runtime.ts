@@ -728,6 +728,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     config: {
       brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
       tokenPath: BROKER_TOKEN_PATH_PLACEHOLDER,
+      requireWriteApproval: true,
     },
   },
   "octogee-access-tools": {
