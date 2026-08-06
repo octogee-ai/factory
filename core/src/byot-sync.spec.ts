@@ -351,6 +351,13 @@ describe("requestGatewayRestartForRuntimeChange — in-process RPC, no subproces
   });
 });
 
+import { seedOpenClawAgentDbForId } from "./fixtures/openclaw-agent-db.js";
+
+// openclaw owns creating an agent database; these restore paths only update
+// one. Fixtures stand up the store the gateway would already have made.
+const seedAgent = (openclawDir: string, agentId: string) =>
+  seedOpenClawAgentDbForId(path.join(openclawDir, "agents"), agentId);
+
 describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materialization", () => {
   const tmps: string[] = [];
   const mk = () => {
@@ -364,6 +371,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
 
   it("materializes the per-agent codex-home for a mounted oauth customer (restored + present)", async () => {
     const oc = mk();
+    seedAgent(oc, "octogee-tester-70-coach");
     const r = await restoreOauthStoreForSlug("tester-70", {
       fetchByosubCreds: async () => [
         {
@@ -399,6 +407,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
 
   it("materializes Claude and Codex from one hosted-agent broker response", async () => {
     const oc = mk();
+    seedAgent(oc, "octogee-tester-70-coach");
     const home = mk();
     const r = await restoreOauthStoreForSlug("tester-70", {
       fetchByosubCreds: async () => [
@@ -480,6 +489,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
 
   it("re-mount over a healthy on-disk cred → conservative skip → NOT restored but present", async () => {
     const oc = mk();
+    seedAgent(oc, "octogee-tester-70-coach");
     const opts = {
       fetchByosubCreds: async () => [
         {
@@ -1948,6 +1958,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
 describe("operator gateway — runtime sync stays narrow", () => {
   it("restoreOauthStoreForSlug: materializes owner BYOS credentials on operator gateways", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-byos-"));
+    seedAgent(openclawDir, "octogee-tester-70-coach");
     const fetchByosubCreds = vi.fn(async () => [
       {
         provider: "anthropic" as const,

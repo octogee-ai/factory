@@ -9,7 +9,9 @@ import {
   writeAuthProfileStore,
   deleteAuthProfileStore,
   readAuthProfileState,
+  AgentDatabaseNotInitializedError,
 } from "./auth-profile-sqlite.js";
+import { seedOpenClawAgentDb } from "./fixtures/openclaw-agent-db.js";
 
 const tmps: string[] = [];
 function mk(): string {
@@ -17,6 +19,14 @@ function mk(): string {
   tmps.push(d);
   return d;
 }
+
+/** A temp agent dir that already holds an openclaw-created agent database. */
+function mkdb(): string {
+  const agentDir = mk();
+  seedOpenClawAgentDb(agentDir);
+  return agentDir;
+}
+
 afterEach(() => {
   for (const d of tmps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
@@ -48,9 +58,31 @@ describe("readAuthProfileStore — missing DB / missing row", () => {
   });
 });
 
-describe("writeAuthProfileStore — bootstrap + round-trip", () => {
-  it("creates the database + tables on first write and round-trips the JSON-blob payload", () => {
+describe("writeAuthProfileStore — openclaw owns creation; we only update", () => {
+  it("throws instead of creating the database when openclaw has not made one yet", () => {
     const agentDir = mk();
+    expect(() => writeAuthProfileStore(agentDir, { v: 1 })).toThrow(
+      AgentDatabaseNotInitializedError,
+    );
+  });
+
+  it("leaves no file behind when it refuses — a stub at user_version 0 wedges gateway startup", () => {
+    const agentDir = mk();
+    expect(() => writeAuthProfileStore(agentDir, { v: 1 })).toThrow();
+    expect(fs.existsSync(resolveAuthDbPath(agentDir))).toBe(false);
+  });
+
+  it("does not create the agent dir for an agent openclaw has never registered", () => {
+    const parent = mk();
+    const agentDir = path.join(parent, "agents", "octogee-ghost-coach", "agent");
+    expect(() => writeAuthProfileStore(agentDir, { v: 1 })).toThrow(
+      AgentDatabaseNotInitializedError,
+    );
+    expect(fs.existsSync(agentDir)).toBe(false);
+  });
+
+  it("round-trips the JSON-blob payload into an openclaw-created database", () => {
+    const agentDir = mkdb();
     const payload = {
       version: 1,
       profiles: {
@@ -65,12 +97,21 @@ describe("writeAuthProfileStore — bootstrap + round-trip", () => {
       },
     };
     writeAuthProfileStore(agentDir, payload);
-    expect(fs.existsSync(resolveAuthDbPath(agentDir))).toBe(true);
     expect(readAuthProfileStore(agentDir)).toEqual(payload);
   });
 
+  it("leaves the database at the schema version openclaw stamped — we never re-version it", () => {
+    const agentDir = mkdb();
+    writeAuthProfileStore(agentDir, { v: 1 });
+    const db = new DatabaseSync(resolveAuthDbPath(agentDir), { readOnly: true });
+    const userVersion = (db.prepare(`PRAGMA user_version`).get() as { user_version: number })
+      .user_version;
+    db.close();
+    expect(userVersion).toBe(16);
+  });
+
   it("upserts on the singleton key — last writer wins, never appends a second row", () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
     writeAuthProfileStore(agentDir, { v: 1 });
     writeAuthProfileStore(agentDir, { v: 2 });
     writeAuthProfileStore(agentDir, { v: 3 });
@@ -107,7 +148,7 @@ describe("writeAuthProfileStore — bootstrap + round-trip", () => {
   });
 
   it("stamps updated_at — monotonically increasing across writes", () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
     writeAuthProfileStore(agentDir, { v: 1 });
     const dbPath = resolveAuthDbPath(agentDir);
     const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -125,7 +166,7 @@ describe("deleteAuthProfileStore — clears the singleton row on disable", () =>
   });
 
   it("removes a previously-written store row and leaves state untouched", () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
     writeAuthProfileStore(agentDir, { secret: "live" });
     const dbPath = resolveAuthDbPath(agentDir);
     const db = new DatabaseSync(dbPath);
@@ -163,23 +204,26 @@ describe("readAuthProfileState — symmetric to store", () => {
 });
 
 describe("filesystem-mode hardening — mirror upstream openclaw-agent-db (0700 dir + 0600 db/wal/shm)", () => {
-  it("writeAuthProfileStore creates the agent dir with mode 0700 (private to the process owner)", () => {
+  it("writeAuthProfileStore tightens the agent dir to mode 0700 (private to the process owner)", () => {
     const parent = mk();
     const agentDir = path.join(parent, "agents", "octogee-a-coach", "agent");
+    seedOpenClawAgentDb(agentDir);
+    fs.chmodSync(agentDir, 0o755);
     writeAuthProfileStore(agentDir, { v: 1 });
     const mode = fs.statSync(agentDir).mode & 0o777;
     expect(mode).toBe(0o700);
   });
 
   it("writeAuthProfileStore leaves the DB file at mode 0600 (no group/other read)", () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
+    fs.chmodSync(resolveAuthDbPath(agentDir), 0o644);
     writeAuthProfileStore(agentDir, { v: 1 });
     const mode = fs.statSync(resolveAuthDbPath(agentDir)).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 
   it("writeAuthProfileStore chmods -wal and -shm sidecars to 0600 when present", () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
     writeAuthProfileStore(agentDir, { v: 1 });
     // WAL mode is opt-in via pragma; touch the sidecars if upstream/openclaw left
     // them at default modes, then trigger another write so we re-harden.
@@ -200,7 +244,7 @@ describe("busy_timeout — match upstream's 30s contention budget (PRAGMA busy_t
     // path issues. The hardened opener runs PRAGMA busy_timeout on each
     // fresh connection; this verifies the contract end-to-end without
     // needing a multi-process harness.
-    const agentDir = mk();
+    const agentDir = mkdb();
     const execSpy = vi.spyOn(DatabaseSync.prototype, "exec");
     try {
       writeAuthProfileStore(agentDir, { v: 1 });
@@ -217,7 +261,7 @@ describe("delete retries SQLITE_BUSY — symmetric with write", () => {
     // Inject a transient BUSY via a one-shot mock of BEGIN IMMEDIATE.
     // The first attempt throws SQLITE_BUSY, the retry succeeds — proving
     // delete shares the write path's retry-on-busy semantics (the P2 gap).
-    const agentDir = mk();
+    const agentDir = mkdb();
     writeAuthProfileStore(agentDir, { v: 1 });
 
     const originalExec = DatabaseSync.prototype.exec;
@@ -288,7 +332,7 @@ describe("tolerant reads — corrupt DB / corrupt JSON returns null rather than 
 
 describe("concurrent writers — last-writer-wins, no rows lost", () => {
   it("two writes to the same DB both complete and the final state matches the last write", async () => {
-    const agentDir = mk();
+    const agentDir = mkdb();
     await Promise.all([
       Promise.resolve().then(() => writeAuthProfileStore(agentDir, { who: "A" })),
       Promise.resolve().then(() => writeAuthProfileStore(agentDir, { who: "B" })),

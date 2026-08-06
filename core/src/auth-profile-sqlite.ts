@@ -11,6 +11,13 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
  * the store row directly; our codex-sync-back cron reads it. The runtime
  * stays outside the gateway pod, so we use node:sqlite (same driver upstream
  * uses) rather than depending on openclaw's exported TypeScript API.
+ *
+ * OpenClaw solely owns creating that database. It is a versioned, ownership-
+ * stamped 41-table agent store (PRAGMA user_version + a schema_meta row), and
+ * only openclaw can produce one — the DDL is generated and moves every release.
+ * These helpers therefore only ever UPDATE a database openclaw already made:
+ * writing to an absent path throws AgentDatabaseNotInitializedError so the
+ * caller retries on its next sweep, once the gateway has created the store.
  */
 
 const AUTH_DB_FILE = "openclaw-agent.sqlite";
@@ -29,18 +36,26 @@ const DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 // fails to open (e.g. another process holding -shm during teardown).
 const BUSY_TIMEOUT_MS = 30_000;
 
-const SCHEMA_DDL = `
-  CREATE TABLE IF NOT EXISTS auth_profile_store (
-    store_key TEXT NOT NULL PRIMARY KEY,
-    store_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS auth_profile_state (
-    state_key TEXT NOT NULL PRIMARY KEY,
-    state_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-`;
+/**
+ * Thrown when a write targets an agent dir openclaw has not initialized yet.
+ *
+ * Creating the file ourselves is what wedges the gateway: a bare
+ * `CREATE TABLE IF NOT EXISTS auth_profile_*` leaves user_version 0 with
+ * application tables present, which openclaw 2026.7.2+ classifies as a legacy
+ * store awaiting the v16 media migration and refuses to boot behind.
+ */
+export class AgentDatabaseNotInitializedError extends Error {
+  readonly agentDir: string;
+
+  constructor(agentDir: string) {
+    super(
+      `auth-profile-sqlite: ${resolveAuthDbPath(agentDir)} does not exist yet — ` +
+        `openclaw creates the agent database at gateway startup; retry after it is up`,
+    );
+    this.name = "AgentDatabaseNotInitializedError";
+    this.agentDir = agentDir;
+  }
+}
 
 const BUSY_RETRY_ATTEMPTS = 3;
 const BUSY_RETRY_BACKOFF_MS = 50;
@@ -150,7 +165,6 @@ function withWriteRetry(dbPath: string, op: WriteOp, label: string): void {
   for (let attempt = 0; attempt < BUSY_RETRY_ATTEMPTS; attempt++) {
     const db = openHardenedDatabase(dbPath);
     try {
-      db.exec(SCHEMA_DDL);
       db.exec("BEGIN IMMEDIATE");
       try {
         op(db);
@@ -180,12 +194,16 @@ function withWriteRetry(dbPath: string, op: WriteOp, label: string): void {
 }
 
 /**
- * Writes the auth-profile secrets-store row, bootstrapping the DB + schema
- * on first call. Last-writer-wins on the singleton "primary" key.
+ * Writes the auth-profile secrets-store row into the agent database openclaw
+ * owns. Last-writer-wins on the singleton "primary" key. Throws
+ * AgentDatabaseNotInitializedError when openclaw has not created the store yet.
  */
 export function writeAuthProfileStore(agentDir: string, payload: unknown): void {
-  ensureAuthDbPermissions(agentDir);
   const dbPath = resolveAuthDbPath(agentDir);
+  if (!fs.existsSync(dbPath)) {
+    throw new AgentDatabaseNotInitializedError(agentDir);
+  }
+  ensureAuthDbPermissions(agentDir);
   const json = JSON.stringify(payload);
   withWriteRetry(
     dbPath,
