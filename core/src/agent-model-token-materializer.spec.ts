@@ -327,6 +327,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
 
   it("materializes bound broker profiles and catalogs for a canonical project agent", () => {
     const agentId = "octogee-alice-proj-garden-coach";
+    seedOpenClawAgentDbForId(agentsDir, agentId);
     expect(
       materializeBrokerProfilesForAgents([agentId], {
         agentsDir,
@@ -358,8 +359,8 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
   });
 
   it("materializes anthropic:default for each agent under agentsDir/<id>/agent", () => {
-    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    seedOpenClawAgentDbForId(agentsDir, "octogee-b-coach");
+    seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
+    seedOpenClawAgentDbForId(agentsDir, "octogee-bob-coach");
     expect(
       materializeAnthropicBrokerForAgents(["octogee-alice-coach", "octogee-bob-coach"], { agentsDir }),
     ).toBe(2);

@@ -145,6 +145,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
     const agentDir = codexAgentDir(oc, agentId);
     const liveAuth = codexAuthJsonPath(oc, agentId);
     const staging = codexStagingHomeDir(oc, agentId);
@@ -216,6 +217,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
     const options = { openclawDir: oc, homeDir: home, agentIds: [agentId] };
     expect(purgeCustomerOauthRuntimeArtifacts(options)).toEqual({
       removedFiles: 0,
@@ -244,6 +246,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
     const sessionsDir = path.join(oc, "agents", agentId, "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
     fs.writeFileSync(
@@ -279,6 +282,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
     const sessionsDir = path.join(oc, "agents", agentId, "sessions");
     const sessionsPath = path.join(sessionsDir, "sessions.json");
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -337,6 +341,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-alice-coach";
+    seedAgent(oc, agentId);
     const agentDir = codexAgentDir(oc, agentId);
     writeAuthProfileStore(agentDir, { profiles: canonicalAuthProfiles(agentId) });
     fs.writeFileSync(
@@ -413,6 +418,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-alice-coach";
+    seedAgent(oc, agentId);
     const agentDir = codexAgentDir(oc, agentId);
     writeAuthProfileStore(agentDir, {
       version: 7,

@@ -2515,6 +2515,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       },
       {
         isOperatorGateway: () => true,
+        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
@@ -2552,6 +2553,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       },
       {
         isOperatorGateway: () => true,
+        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         materializeAnthropicBroker: materializeBrokerFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -2582,6 +2584,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const deps = {
       isOperatorGateway: () => operatorGateway,
+      purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
       applyByotState: vi.fn(() => false),
       applyCoachModelPatch: vi.fn(async () => false),
       applyCoachToolsConvergence: vi.fn(async () => false),
@@ -2663,6 +2666,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       },
       {
         isOperatorGateway: () => true,
+        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => true),
         restoreOauthStoreForSlug: vi.fn(async () => ({
           restored: true,
@@ -2747,6 +2751,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       },
       {
         isOperatorGateway: () => true,
+        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         usesLlmBrokerToken: () => true,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
