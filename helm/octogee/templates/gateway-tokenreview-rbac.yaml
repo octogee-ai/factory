@@ -22,6 +22,10 @@ roleRef:
   kind: ClusterRole
   name: octogee-gateway-tokenreviewer-{{ .Release.Namespace }}
 subjects:
+  # Dynamic operator gateways use generated KSAs such as octogee-gw-eggman.
+  # Kubernetes RBAC cannot prefix-match subjects, so the platform-owned
+  # umbrella grants the narrow TokenReview create verb to service accounts in
+  # this namespace instead of letting Cowboy manage cluster-scoped bindings.
   - kind: Group
     name: system:serviceaccounts:{{ .Release.Namespace }}
     apiGroup: rbac.authorization.k8s.io

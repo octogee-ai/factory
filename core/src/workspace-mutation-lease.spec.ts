@@ -49,25 +49,6 @@ describe("workspace mutation lease", () => {
     second?.release();
   });
 
-  it("locks explicit platform metadata without following the workspace Git pointer", () => {
-    const root = workspace("workspace-external-metadata");
-    const platformGitDir = path.join(root, "platform.git");
-    const attackerGitDir = path.join(root, "attacker.git");
-    fs.renameSync(path.join(root, ".git"), platformGitDir);
-    fs.mkdirSync(attackerGitDir);
-    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${attackerGitDir}\n`);
-
-    const lease = acquireWorkspaceMutationLeaseSync({
-      workspaceDir: root,
-      gitDir: platformGitDir,
-    });
-
-    expect(lease).not.toBeNull();
-    expect(fs.existsSync(path.join(platformGitDir, "octogee.workspace-mutation.lock"))).toBe(true);
-    expect(fs.existsSync(path.join(attackerGitDir, "octogee.workspace-mutation.lock"))).toBe(false);
-    lease?.release();
-  });
-
   it("rejects a path without repository metadata", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-not-git-"));
     roots.push(root);

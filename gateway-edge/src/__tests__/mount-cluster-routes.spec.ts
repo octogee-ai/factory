@@ -97,12 +97,13 @@ describe("mountClusterRoutes", () => {
 
     mountClusterRoutes(app);
 
-    const tail = app.calls.slice(-4).map((c) => c.path);
+    const tail = app.calls.slice(-5).map((c) => c.path);
     expect(tail).toEqual([
       "/internal/agents",
       "/internal/notifications",
       "/internal/notifications",
       "/internal/workspace",
+      "/internal/project",
     ]);
   });
 
@@ -165,6 +166,7 @@ describe("mountClusterRoutes", () => {
       "/internal/notifications",
       "/internal/notifications",
       "/internal/workspace",
+      "/internal/project",
     ]);
   });
 });

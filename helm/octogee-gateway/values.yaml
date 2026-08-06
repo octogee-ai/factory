@@ -23,8 +23,8 @@ revisionId: ""
 
 ownerUid: ""
 
-# Owner-bound disposable Builder slug. Shared gateways leave this empty.
-# When present on Builder gateways, the gateway restores durable
+# Owner-bound disposable builder/operator slug. Shared gateways leave this empty.
+# When present on builder/operator classes, the gateway restores durable
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw
 # starts.
 builderSlug: ""
@@ -44,24 +44,24 @@ serviceAccountName: ""
 serviceAccount:
   create: false
   annotations: {}
-builderAccess:
+operatorAccess:
   # Locked by default. Cowboy may enable this only after a customer has a
-  # tenant-owned disposable Builder runtime (activation lifecycle + scoped
+  # tenant-owned disposable operator runtime (activation lifecycle + scoped
   # platform credentials) and the app/user mirror has been updated.
   shellsEnabled: false
   controlUiEnabled: false
-  # Builder gateway only.
+  # Platform-builder ONLY (OPERATOR-GATEWAY-IDENTITY-AND-BROKERING-SPEC D7).
   # Opens egress to the GKE metadata server (169.254.169.254) so this gateway's
   # read-only Workload-Identity GSA can mint tokens. The fleet-wide
   # gateway-egress policy blocks metadata for everyone; this carves an exception
   # for THIS pod only. Enable ONLY when the bound GSA is least-privilege +
   # read-only (so a token grab is read-only blast radius). Default off.
   platformMetadataEgress: false
-  # Builder gateway TokenReview path. BuilderShell and broker identity checks
+  # Operator gateway TokenReview path. BuilderShell and broker identity checks
   # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
   # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)
   # from the default/kubernetes EndpointSlice, not the Service ClusterIP.
-  # Default off; set per Builder gateway only.
+  # Default off; set per operator gateway only.
   kubeApiServerEgressCidrs: []
 
 # Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused and
@@ -83,12 +83,14 @@ preStopFlush:
   terminationGracePeriodSeconds: 30
   timeoutSeconds: 25
 
-# Product/security class. Empty means the shared Barn. Builder is the
-# owner-bound disposable gateway class.
+# Product/security class. Empty keeps legacy behavior: profile=operator derives
+# operator; otherwise shared. Builder is one-builder, standard image, exec-on,
+# shell-feature gated. Operator is the same runtime trust boundary plus the
+# operator image/BYO GCP tooling, with no shared platform model key.
 gatewayClass: ""
 
-# Installed image/tooling profile. Empty derives from gatewayClass:
-# shared => standard, builder => builder.
+# Installed image/tooling profile. Empty derives from gatewayClass/legacy
+# profile: shared+builder => standard, operator => operator.
 imageProfile: ""
 
 # Legacy overloaded capability/image profile. Keep for existing desired-state
@@ -96,7 +98,9 @@ imageProfile: ""
 profile: ""
 
 # Workspace auto-commit toggle. Unset (default) lets the gateway code
-# decide based on profile. Set to "true" or "false" to override.
+# decide based on profile — operator → off, standard/cattle → on. Set
+# to "true" or "false" to override (e.g. an operator who wants the
+# auto-save net, or a cattle gateway under debugging).
 workspaceAutosaveEnabled: ""
 
 # Gateway container security defaults stay locked down. Personal build
@@ -152,8 +156,16 @@ env:
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
 
+# Preview host the gateway's preview-proxy advertises in URLs it returns
+# to the app. Must match the umbrella's gatewayFleet.previewIngress.host
+# for the env so users land on the right cert. Empty disables the env
+# var and lets preview-proxy.ts fall back to its hardcoded default
+# (preview.octogee.com) — fine for prod, wrong for test.
+preview:
+  host: "preview.octogee.com"
+
 # Gateway storage is emptyDir for every class. Shared Barn gateways use stable
-# identities and on-demand capacity; disposable Builder gateways are Spot-first with
+# identities and on-demand capacity; owner-bound cattle are Spot-first with
 # on-demand fallback. Durable product state rehydrates from the substrate.
 
 # Per-pod sizing tier. Operator-facing enum that maps to the matching
@@ -167,12 +179,13 @@ sizingTier: ""
 classDefaults:
   shared: "l"
   builder: "xs"
+  operator: "l"
 
 # Legacy image-profile → default tier mapping. Used when classDefaults is
 # absent on old releases.
 profileDefaults:
   standard: "l"
-  builder: "xs"
+  operator: "l"
 
 # Tier presets — the canonical sizing matrix, capped at 4 vCPU so every tier
 # fits Autopilot's general-purpose envelope (30 vCPU / 110 GiB / 10 GiB
@@ -320,7 +333,7 @@ gatewayEdge:
       cpu: 500m
       memory: 512Mi
 
-# NetworkPolicy locking down Builder gateway :3005 (builder
+# NetworkPolicy locking down operator-profile gateway :3005 (builder
 # shell) to same-pod / same-instance ingress only. See
 # templates/builder-shell-network-policy.yaml. Disable per gateway if
 # a cluster doesn't support NetworkPolicy enforcement.

@@ -325,6 +325,9 @@ export interface FleetCapabilities {
   needsStateDeps: boolean;
 }
 
+// Operator gateways report local state but do not receive platform mutation authority:
+// operator gateways can run brokered local reconcile without platformState.
+// Firestore-backed reporting still gates on hasDb; brokered local reconcile does not.
 export function resolveFleetCapabilities(opts: {
   platformState: boolean;
   reportState: boolean;
@@ -1126,6 +1129,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
       customers: getMountObservedSlugs(adapter),
+      // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
+      // candidates until cutover moves their assignment (the operator path has no in-pod
+      // reconcile to honor the pin).
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
     }));
   });

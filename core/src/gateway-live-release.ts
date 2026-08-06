@@ -276,7 +276,7 @@ export function mergeGatewayConfigWithArtifact(
     gatewayContainerSecurityContext: config.gatewayContainerSecurityContext,
     serviceAccountName: config.serviceAccountName,
     serviceAccount: config.serviceAccount,
-    builderAccess: config.builderAccess,
+    operatorAccess: config.operatorAccess,
     ownerUid: config.ownerUid,
     builderSlug: config.builderSlug,
     openclawOverrides: config.openclawOverrides,

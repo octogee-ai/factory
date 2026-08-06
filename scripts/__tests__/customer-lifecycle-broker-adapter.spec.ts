@@ -44,14 +44,6 @@ const secretMocks = vi.hoisted(() => ({
   updateMattermostAccountSecrets: vi.fn(async () => undefined),
   materializeActivationManifestSecret: vi.fn(async (_dir: string, manifest: unknown) => manifest),
 }));
-const routingActivationMocks = vi.hoisted(() => ({
-  pending: false,
-  activate: vi.fn(async () => undefined),
-  mark: vi.fn(() => {
-    routingActivationMocks.pending = true;
-    return "activation-token";
-  }),
-}));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
@@ -102,11 +94,6 @@ vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
     materializeActivationManifestSecret: secretMocks.materializeActivationManifestSecret,
   };
 });
-vi.mock("../lib/mattermost-routing-activation.js", () => ({
-  activatePendingMattermostRouting: routingActivationMocks.activate,
-  markMattermostRoutingActivationPending: routingActivationMocks.mark,
-  mattermostRoutingActivationPending: () => routingActivationMocks.pending,
-}));
 
 function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
   return {
@@ -143,8 +130,6 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
 
 function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {
-    gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
-    isGatewayUp: vi.fn(async () => true),
     channelsStop: vi.fn(async ({ channel, accountId }) => ({
       channel,
       accountId,
@@ -170,19 +155,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
     secretMocks.materializeActivationManifestSecret.mockClear();
-    routingActivationMocks.pending = false;
-    routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
-    routingActivationMocks.mark.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     tempStateDir = null;
     mocks.readActivationManifest.mockResolvedValue({
       slug: "tester10",
       appliedFingerprint: "fp-tester10",
     });
-    mocks.applyOpenClawActivationManifest.mockResolvedValue({
-      elapsedMs: 42,
-      routingActivationRequired: true,
-    });
+    mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
   });
 
@@ -198,7 +177,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const client = mkClient();
     const rpc = {
       gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
-      isGatewayUp: vi.fn(async () => true),
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
@@ -232,11 +210,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect.stringContaining(".openclaw"),
       "tester10",
     );
-    expect(routingActivationMocks.activate).toHaveBeenCalledWith(
-      rpc,
-      expect.stringContaining(".openclaw"),
-      expect.any(Function),
-    );
+    expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
@@ -473,10 +447,6 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       },
       bindings: [
         { agentId: "octogee-ops-eggman" },
-        {
-          agentId: "octogee-ops-eggman",
-          match: { channel: "mattermost", accountId: "alice-coach" },
-        },
         { agentId: "octogee-alice-coach" },
       ],
       channels: {
@@ -716,9 +686,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
-    routingActivationMocks.pending = false;
-    routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
-    routingActivationMocks.mark.mockClear();
     vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
     vi.stubEnv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small");
   });
@@ -727,18 +694,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("restarts the gateway after changing non-hot-reloadable routing bindings", async () => {
+  it("leaves Mattermost monitor reload to OpenClaw after applying changed channel bindings", async () => {
     const events: string[] = [];
-    routingActivationMocks.activate.mockImplementationOnce(async () => {
-      events.push("routing-activation");
-    });
-    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");
-      args.buildPatch({
-        agents: { list: [] },
-        bindings: [],
-        channels: { mattermost: { accounts: {} } },
-      });
       return { mode: "rpc" as const, attempts: 1 };
     });
     const rpc = {
@@ -750,11 +709,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("channels-start");
         return { channel: "mattermost", accountId: "alice-coach", started: true };
       }),
-      gatewayRestartRequest: vi.fn(async () => {
-        events.push("gateway-restart");
-        return { status: "requested" };
-      }),
-      isGatewayUp: vi.fn(async () => true),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -785,15 +739,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     expect(rpc.channelsStop).not.toHaveBeenCalled();
     expect(rpc.channelsStart).not.toHaveBeenCalled();
-    expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
-    expect(events).toEqual(["config-patch", "routing-activation"]);
+    expect(events).toEqual(["config-patch"]);
   });
 
-  it("waits for config persistence before requesting routing activation", async () => {
+  it("waits for the lifecycle config.changed hash without explicitly restarting Mattermost", async () => {
     const events: string[] = [];
-    routingActivationMocks.activate.mockImplementationOnce(async () => {
-      events.push("routing-activation");
-    });
     let publishConfigChanged: (() => void) | undefined;
     const configChanged = new Promise<void>((resolve) => {
       publishConfigChanged = resolve;
@@ -809,18 +759,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("config-changed");
         return { ok: true as const, hash: "persisted-hash" };
       }),
-      gatewayRestartRequest: vi.fn(async () => {
-        events.push("gateway-restart");
-        return { status: "requested" };
-      }),
-      isGatewayUp: vi.fn(async () => true),
     } as unknown as GatewayRpcClient;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
-      _args.buildPatch({
-        agents: { list: [] },
-        bindings: [],
-        channels: { mattermost: { accounts: {} } },
-      });
       await options.rpc.configPatch({}, "base-hash");
       return { mode: "rpc" as const, attempts: 1 };
     });
@@ -858,7 +798,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual(["config-persisted", "config-changed", "routing-activation"]);
+    expect(events).toEqual(["config-persisted", "config-changed"]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
   });
@@ -910,7 +850,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     const patch = args.buildPatch(current);
     expect(patch.agents.list.map((agent) => agent.id)).toEqual([
-      "octogee-unmatched-route",
       "octogee-mac-default",
       "octogee-alice-coach",
       "octogee-bob-coach",
@@ -1059,7 +998,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
 
     expect(patch.agents.list.map((agent) => agent.id)).toEqual([
-      "octogee-unmatched-route",
       "octogee-readmitted-coach",
       "octogee-keeper-coach",
       "octogee-fresh-coach",
@@ -1067,10 +1005,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(patch.bindings).toEqual([
       { agentId: "octogee-readmitted-coach" },
       { agentId: "octogee-keeper-coach" },
-      {
-        agentId: "octogee-fresh-coach",
-        match: { channel: "mattermost", accountId: "fresh-coach" },
-      },
     ]);
     expect(patch.channels.mattermost.accounts).toMatchObject({
       "fresh-coach": expect.any(Object),
@@ -1639,16 +1573,13 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     });
 
     expect(patch.agents.list.map((a) => a.id)).toEqual([
-      "octogee-unmatched-route",
       "octogee-alice-coach",
       "octogee-alice-proj-orbit-coach",
       "octogee-bob-coach",
     ]);
     expect(
       Object.fromEntries(
-        patch.bindings
-          .filter((b) => "peer" in b.match)
-          .map((b) => [b.match.peer.id, `${b.agentId}|${b.match.accountId}`]),
+        patch.bindings.map((b) => [b.match.peer.id, `${b.agentId}|${b.match.accountId}`]),
       ),
     ).toEqual({
       "ws-1": "octogee-alice-coach|alice-coach",

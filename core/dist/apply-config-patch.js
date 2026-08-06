@@ -331,21 +331,8 @@ export function customerAgentRosterPatch(current, slug, agentEntries) {
     }
     return { entries };
 }
-function isCustomerMattermostAccountBinding(binding, slug) {
-    if (!isPlainObject(binding))
-        return false;
-    const match = binding.match;
-    if (!isPlainObject(match) || match.channel !== "mattermost")
-        return false;
-    const accountId = match.accountId;
-    return typeof accountId === "string" && (accountId === `${slug}-coach` || accountId.startsWith(`${slug}-proj-`));
-}
 export function filterOutCustomerBindings(bindings, slug) {
-    return bindings.filter((binding) => {
-        const agentId = isPlainObject(binding) ? binding.agentId : undefined;
-        return !isCustomerAgentId(agentId, slug) &&
-            !isCustomerMattermostAccountBinding(binding, slug);
-    });
+    return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
 }
 // config.patch merges: omitting a retired project-agent account keeps it
 // alive on a revoked token. Every account rebuild must null the customer's

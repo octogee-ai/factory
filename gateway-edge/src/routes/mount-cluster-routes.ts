@@ -52,6 +52,7 @@ import projectsRecipeRoutes from "./projects/recipe.js";
 
 import internalNotificationRoutes from "./internal/notifications.js";
 import internalWorkspaceCommitRoutes from "./internal/workspace-commit.js";
+import internalProjectPublishRoutes from "./internal/project-publish.js";
 
 import { requireAuth } from "../middleware/auth.js";
 
@@ -63,7 +64,6 @@ export interface MountClusterRoutesOpts {
   sharingRoutes?: Router;
   projectsCreateRoutes?: Router;
   projectsRepoSourceRoutes?: Router;
-  productivityApprovalRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -133,6 +133,7 @@ const INTERNAL_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/internal/notifications", notificationRoutes],
   ["/internal/notifications", internalNotificationRoutes],
   ["/internal/workspace", internalWorkspaceCommitRoutes],
+  ["/internal/project", internalProjectPublishRoutes],
 ];
 
 export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = {}): void {
@@ -156,9 +157,6 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
     if (path === "/api/billing") return [path, opts.billingRoutes ?? route] as const;
     if (path === "/api/builder") return [path, opts.builderGatewaysRoutes ?? route] as const;
     if (path === "/api/sharing") return [path, opts.sharingRoutes ?? route] as const;
-    if (path === "/api/productivity-approvals") {
-      return [path, opts.productivityApprovalRoutes ?? route] as const;
-    }
     return [path, route] as const;
   }));
   mountRouteTable(app, INTERNAL_ROUTES);

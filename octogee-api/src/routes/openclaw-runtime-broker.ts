@@ -8,7 +8,6 @@ import {
   isValidProjectId,
   isValidUsername,
   parseAgentId,
-  type ParsedAgentId,
 } from "@octogee/shared/types/identity";
 import {
   isValidShellId,
@@ -69,7 +68,6 @@ const RECEIPT_MAX_LEASE_MS = 60_000;
 const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
 const SHELL_DELETION_BATCH_MAX = 25;
-const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
 function isDurableGatewayRoot(
   data: unknown,
@@ -394,10 +392,7 @@ async function resolveChannelPair(
   return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
 }
 
-type SessionContextLookup = {
-  authorized: true;
-  purpose?: string;
-} | null | "forbidden";
+type SessionContextLookup = { purpose: string } | null | "forbidden";
 
 type SessionChannelLookup =
   | {
@@ -449,32 +444,27 @@ async function sessionOwnerIsActive(
   );
 }
 
-function authorizedChannelContext(
+function readableSessionPurpose(
   data: Record<string, unknown>,
-  binding: BoundChannelPath,
-): Exclude<SessionContextLookup, null | "forbidden"> | null {
-  if (data.archivedAt) return null;
-  if (readPath(data, "mattermost.activityPair.desired") === "archived") return null;
-  const ordinaryKind = ordinaryChannelKind(binding);
-  if (ordinaryKind !== null) {
-    return data.kind === ordinaryKind ? { authorized: true } : null;
+): { purpose: string } | null {
+  if (
+    data.kind !== "session" ||
+    data.archivedAt ||
+    readPath(data, "mattermost.activityPair.desired") === "archived"
+  ) {
+    return null;
   }
-  if (data.kind !== "session") return null;
   const purpose = typeof data.purpose === "string" ? data.purpose : "";
-  return purpose.length > 0 ? { authorized: true, purpose } : { authorized: true };
+  return purpose.length > 0 ? { purpose } : null;
 }
 
 async function resolveSessionContext(
   db: Firestore,
   gatewayId: string,
   agentId: string,
-  accountId: string,
   channelId: string,
 ): Promise<SessionContextLookup> {
   if (!agentId || !channelId) return null;
-  const parsed = parseAgentId(agentId);
-  const expectedAccountId = mattermostAccountId(parsed);
-  if (!expectedAccountId || accountId !== expectedAccountId) return "forbidden";
   const identity = await resolveAgentIdentity(db, gatewayId, agentId);
   if (identity === "forbidden") return identity;
   if (!identity) return null;
@@ -484,131 +474,7 @@ async function resolveSessionContext(
   if (!channel) return null;
   if (!agentCanReadSession(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
   if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
-  return authorizedChannelContext(channel.data, channel.binding);
-}
-
-type DispatchSessionRoute = {
-  kind: "direct" | "group" | "channel";
-  peerId: string;
-};
-
-type KnownAgentId = Exclude<ParsedAgentId, { kind: "unknown" }>;
-type DispatchContextLookup = { authorized: true } | null | "forbidden";
-
-interface DispatchContextInput {
-  db: Firestore;
-  gatewayId: string;
-  agentId: string;
-  accountId: string;
-  conversationId: string;
-  senderId: string;
-  sessionKey: string;
-}
-
-function mattermostAccountId(parsed: ParsedAgentId): string | null {
-  if (parsed.kind === "project") return `${parsed.username}-proj-${parsed.project}`;
-  if (parsed.kind === "coach") return `${parsed.username}-coach`;
-  return null;
-}
-
-function dispatchSessionRoute(
-  sessionKey: string,
-  agentId: string,
-): DispatchSessionRoute | null {
-  const match = /^agent:([^:]+):mattermost:(direct|group|channel):([a-z0-9]{26})(?::thread:[a-z0-9]{26})?$/u.exec(
-    sessionKey,
-  );
-  if (match?.[1] !== agentId) return null;
-  return {
-    kind: match[2] as DispatchSessionRoute["kind"],
-    peerId: match[3],
-  };
-}
-
-function dispatchEnvelope(
-  input: DispatchContextInput,
-  parsed: KnownAgentId,
-): DispatchSessionRoute | null {
-  if (
-    !MATTERMOST_ID_RE.test(input.conversationId)
-    || !MATTERMOST_ID_RE.test(input.senderId)
-    || input.accountId !== mattermostAccountId(parsed)
-  ) return null;
-  const route = dispatchSessionRoute(input.sessionKey, input.agentId);
-  if (!route || route.peerId !== input.conversationId) return null;
-  if (route.kind === "direct" && input.senderId !== route.peerId) return null;
-  return route;
-}
-
-async function resolveDirectDispatchContext(
-  input: DispatchContextInput,
-  identity: AgentIdentity,
-  parsed: KnownAgentId,
-): Promise<DispatchContextLookup> {
-  if (parsed.kind !== "coach") return "forbidden";
-  const [workspace, owner] = await Promise.all([
-    input.db.doc(`workspaces/${parsed.username}`).get(),
-    input.db.doc(`users/${identity.uid}`).get(),
-  ]);
-  if (
-    workspace.exists
-    && workspace.data()?.ownerUid === identity.uid
-    && owner.exists
-    && readPath(owner.data() ?? {}, "mattermost.userId") === input.senderId
-    && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
-  ) return { authorized: true };
-  return "forbidden";
-}
-
-function isExactDispatchLane(
-  binding: BoundChannelPath,
-  parsed: KnownAgentId,
-): boolean {
-  if (parsed.kind === "project") {
-    return binding.lane === "project"
-      && binding.workspaceSlug === parsed.username
-      && binding.projectSlug === parsed.project;
-  }
-  return binding.lane === "workspace"
-    && binding.workspaceSlug === parsed.username
-    && binding.channelName !== "admin"
-    && binding.channelName !== "coach-dm";
-}
-
-async function resolveGroupDispatchContext(
-  input: DispatchContextInput,
-  parsed: KnownAgentId,
-): Promise<DispatchContextLookup> {
-  const channel = await resolveSessionChannel(input.db, input.conversationId);
-  if (channel === "forbidden") return channel;
-  if (!channel) return null;
-  if (!isExactDispatchLane(channel.binding, parsed)) return "forbidden";
-  if (!(await sessionOwnerIsActive(input.db, channel.binding))) return null;
-  return authorizedChannelContext(channel.data, channel.binding)
-    ? { authorized: true }
-    : null;
-}
-
-async function resolveDispatchContext(
-  input: DispatchContextInput,
-): Promise<DispatchContextLookup> {
-  if (
-    !MATTERMOST_ID_RE.test(input.conversationId)
-    || !MATTERMOST_ID_RE.test(input.senderId)
-  ) return "forbidden";
-  const parsed = parseAgentId(input.agentId);
-  if (parsed.kind === "unknown") return "forbidden";
-  const route = dispatchEnvelope(input, parsed);
-  if (!route) return "forbidden";
-
-  const identity = await resolveAgentIdentity(input.db, input.gatewayId, input.agentId);
-  if (identity === "forbidden") return identity;
-  if (!identity) return null;
-
-  if (route.kind === "direct") {
-    return resolveDirectDispatchContext(input, identity, parsed);
-  }
-  return resolveGroupDispatchContext(input, parsed);
+  return readableSessionPurpose(channel.data);
 }
 
 function runLivePathIdentity(path: string): {
@@ -1109,29 +975,6 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
 }
 
 function mountSessionContextRoute(router: Router, db: Firestore): void {
-  router.post("/activity/dispatch-context", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const context = await resolveDispatchContext({
-      db,
-      gatewayId: bound.gatewayId,
-      agentId: stringBody(req, "agentId"),
-      accountId: stringBody(req, "accountId"),
-      conversationId: stringBody(req, "conversationId"),
-      senderId: stringBody(req, "senderId"),
-      sessionKey: stringBody(req, "sessionKey"),
-    });
-    if (context === "forbidden") {
-      forbidden(res);
-      return;
-    }
-    if (!context) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json(context);
-  });
-
   router.post("/activity/session-context", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1139,7 +982,6 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
       db,
       bound.gatewayId,
       stringBody(req, "agentId"),
-      stringBody(req, "accountId"),
       stringBody(req, "channelId"),
     );
     if (context === "forbidden") {

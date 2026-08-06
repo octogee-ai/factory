@@ -13,7 +13,6 @@ import {
   codexAuthStatePath,
   shouldRestoreCodexCredential,
   isSafeAgentId,
-  purgeCustomerOauthRuntimeArtifacts,
   readCodexAuthStateText,
 } from "./byosub-restore.js";
 import * as authProfileSqlite from "./auth-profile-sqlite.js";
@@ -24,11 +23,6 @@ const {
 } = authProfileSqlite;
 import { DatabaseSync } from "node:sqlite";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./model-credential-materializer.js";
-import {
-  agentModelTokenProfileEntry,
-  openAiBrokerProfileEntry,
-  openRouterBrokerProfileEntry,
-} from "./agent-model-token-materializer.js";
 
 const tmpDirs: string[] = [];
 function mkTmp(): string {
@@ -62,11 +56,6 @@ const codexBlob = () =>
   });
 const apReadFor = (oc: string, agentId: string): unknown =>
   readAuthProfileStore(codexAgentDir(oc, agentId));
-const canonicalAuthProfiles = (agentId: string) => ({
-  "anthropic:default": agentModelTokenProfileEntry(agentId),
-  "platform-openrouter:default": openRouterBrokerProfileEntry(agentId),
-  "platform-openai:default": openAiBrokerProfileEntry(agentId),
-});
 
 describe("isSafeAgentId (shared path-safety boundary)", () => {
   it("accepts real coach agent ids", () => {
@@ -132,324 +121,6 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
     );
   });
 
-});
-
-describe("purgeCustomerOauthRuntimeArtifacts", () => {
-  it("removes every customer native OAuth artifact and resets owned sessions while preserving unrelated state", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-a-coach";
-    const agentDir = codexAgentDir(oc, agentId);
-    const liveAuth = codexAuthJsonPath(oc, agentId);
-    const staging = codexStagingHomeDir(oc, agentId);
-    const nativeCredential = path.join(home, ".claude", ".credentials.json");
-    const sessionsDir = path.join(oc, "agents", agentId, "sessions");
-    fs.mkdirSync(path.dirname(liveAuth), { recursive: true });
-    fs.mkdirSync(staging, { recursive: true });
-    fs.mkdirSync(path.dirname(nativeCredential), { recursive: true });
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    for (const target of [liveAuth, `${liveAuth}.tmp`, `${liveAuth}.promote.tmp`]) {
-      fs.writeFileSync(target, "secret");
-    }
-    fs.writeFileSync(path.join(staging, "auth.json"), "staged-secret");
-    fs.writeFileSync(nativeCredential, "claude-secret");
-    fs.writeFileSync(`${nativeCredential}.tmp`, "claude-temp-secret");
-    fs.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:octogee-a-coach:mattermost:group:one": {
-          providerOverride: "claude-cli",
-          modelOverride: "claude-opus-4-8",
-          agentRuntimeOverride: "codex",
-        },
-        "agent:octogee-a-coach:mattermost:group:two": { model: "safe" },
-      }),
-    );
-    fs.writeFileSync(path.join(sessionsDir, "history.jsonl"), "conversation\n");
-    writeAuthProfileStore(agentDir, {
-      version: 1,
-      profiles: {
-        "openai-codex:default": { type: "oauth", provider: "openai-codex", access: "x" },
-        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli", access: "y" },
-        "platform-anthropic:default": { type: "token", provider: "anthropic", token: "kept" },
-      },
-    });
-
-    expect(
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: [agentId],
-      }),
-    ).toEqual({
-      removedFiles: 5,
-      removedDirectories: 1,
-      scrubbedProfileStores: 1,
-      resetSessions: 2,
-      affectedAgentIds: [agentId],
-    });
-
-    expect(fs.existsSync(liveAuth)).toBe(false);
-    expect(fs.existsSync(`${liveAuth}.tmp`)).toBe(false);
-    expect(fs.existsSync(`${liveAuth}.promote.tmp`)).toBe(false);
-    expect(fs.existsSync(staging)).toBe(false);
-    expect(fs.existsSync(nativeCredential)).toBe(false);
-    expect(fs.existsSync(`${nativeCredential}.tmp`)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(path.join(sessionsDir, "sessions.json"), "utf8"))).toEqual({});
-    expect(fs.readFileSync(path.join(sessionsDir, "history.jsonl"), "utf8")).toBe("conversation\n");
-    expect(readAuthProfileStore(agentDir)).toEqual({
-      version: 1,
-      profiles: canonicalAuthProfiles(agentId),
-    });
-    expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual({
-      providers: {},
-    });
-  });
-
-  it("is idempotent and rejects unsafe agent paths before touching disk", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-a-coach";
-    const options = { openclawDir: oc, homeDir: home, agentIds: [agentId] };
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toEqual({
-      removedFiles: 0,
-      removedDirectories: 0,
-      scrubbedProfileStores: 1,
-      resetSessions: 0,
-      affectedAgentIds: [agentId],
-    });
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toEqual({
-      removedFiles: 0,
-      removedDirectories: 0,
-      scrubbedProfileStores: 0,
-      resetSessions: 0,
-      affectedAgentIds: [],
-    });
-    expect(() =>
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: ["../../victim"],
-      }),
-    ).toThrow("unsafe agent id");
-  });
-
-  it("resets a session override that references an arbitrary Codex/Claude runtime model id", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-a-coach";
-    const sessionsDir = path.join(oc, "agents", agentId, "sessions");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        [`agent:${agentId}:mattermost:group:one`]: {
-          modelOverride: "anthropic/arbitrary-direct-runtime",
-        },
-        [`agent:${agentId}:mattermost:group:two`]: {
-          model: "anthropic/claude-sonnet-4-6",
-          agentHarnessId: "codex",
-        },
-      }),
-    );
-
-    expect(
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: [agentId],
-        directRuntimeModelRefs: ["anthropic/arbitrary-direct-runtime"],
-      }),
-    ).toEqual({
-      removedFiles: 0,
-      removedDirectories: 0,
-      scrubbedProfileStores: 1,
-      resetSessions: 2,
-      affectedAgentIds: [agentId],
-    });
-  });
-
-  it("preserves catalog sessions and resets a stale non-catalog provider/model session", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-a-coach";
-    const sessionsDir = path.join(oc, "agents", agentId, "sessions");
-    const sessionsPath = path.join(sessionsDir, "sessions.json");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    writeAuthProfileStore(codexAgentDir(oc, agentId), {
-      profiles: canonicalAuthProfiles(agentId),
-    });
-    fs.writeFileSync(
-      path.join(codexAgentDir(oc, agentId), "models.json"),
-      JSON.stringify({ providers: {} }),
-    );
-    const options = {
-      openclawDir: oc,
-      homeDir: home,
-      agentIds: [agentId],
-      allowedModelRefs: [
-        "anthropic/claude-sonnet-4-6",
-        "platform-openrouter/deepseek/deepseek-v4-pro",
-      ],
-      allowedProviderIds: ["anthropic", "platform-openrouter"],
-    };
-    fs.writeFileSync(
-      sessionsPath,
-      JSON.stringify({
-        [`agent:${agentId}:mattermost:group:one`]: {
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-        },
-        [`agent:${agentId}:mattermost:group:two`]: {
-          modelProvider: "platform-openrouter",
-          model: "deepseek/deepseek-v4-pro",
-        },
-      }),
-    );
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toMatchObject({
-      resetSessions: 0,
-      affectedAgentIds: [],
-    });
-
-    fs.writeFileSync(
-      sessionsPath,
-      JSON.stringify({
-        [`agent:${agentId}:mattermost:group:one`]: {
-          providerOverride: "evil-provider",
-          modelOverride: "evil-provider/secret-exfil-model",
-        },
-      }),
-    );
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toMatchObject({
-      resetSessions: 1,
-      affectedAgentIds: [agentId],
-    });
-    expect(JSON.parse(fs.readFileSync(sessionsPath, "utf8"))).toEqual({});
-  });
-
-  it("scrubs unsafe SQLite session routing in place without deleting history or safe sessions", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-alice-coach";
-    const agentDir = codexAgentDir(oc, agentId);
-    writeAuthProfileStore(agentDir, { profiles: canonicalAuthProfiles(agentId) });
-    fs.writeFileSync(
-      path.join(agentDir, "models.json"),
-      JSON.stringify({ providers: {} }),
-    );
-    const dbPath = resolveAuthDbPath(agentDir);
-    const db = new DatabaseSync(dbPath);
-    db.exec(`
-      CREATE TABLE session_nodes (
-        session_key TEXT PRIMARY KEY,
-        entry_json TEXT NOT NULL
-      );
-      CREATE TABLE transcript_events (
-        event_id TEXT PRIMARY KEY,
-        body TEXT NOT NULL
-      );
-    `);
-    const insertSession = db.prepare(
-      "INSERT INTO session_nodes (session_key, entry_json) VALUES (?, ?)",
-    );
-    const safeEntry = {
-      sessionId: "safe-session",
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      totalTokens: 42,
-    };
-    insertSession.run("safe", JSON.stringify(safeEntry));
-    insertSession.run("unsafe", JSON.stringify({
-      sessionId: "unsafe-session",
-      providerOverride: "evil-provider",
-      modelOverride: "secret-exfil-model",
-      modelOverrideSource: "user",
-      authProfileOverride: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      agentHarnessId: "codex",
-      cliSessionBindings: { codex: { sessionId: "native-session" } },
-      modelSelectionLocked: true,
-      toolOverrides: { allow: ["exec"] },
-      totalTokens: 99,
-      label: "kept-history",
-    }));
-    db.prepare("INSERT INTO transcript_events (event_id, body) VALUES (?, ?)")
-      .run("event-1", "conversation remains");
-    db.close();
-
-    expect(
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: [agentId],
-        resetSessionStores: false,
-        allowedModelRefs: ["anthropic/claude-sonnet-4-6"],
-        allowedProviderIds: ["anthropic"],
-      }),
-    ).toMatchObject({ resetSessions: 1, affectedAgentIds: [] });
-
-    const verified = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = verified.prepare(
-      "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key",
-    ).all() as Array<{ session_key: string; entry_json: string }>;
-    expect(rows).toHaveLength(2);
-    expect(JSON.parse(rows[0].entry_json)).toEqual(safeEntry);
-    expect(JSON.parse(rows[1].entry_json)).toEqual({
-      sessionId: "unsafe-session",
-      totalTokens: 99,
-      label: "kept-history",
-    });
-    expect(verified.prepare("SELECT body FROM transcript_events WHERE event_id = ?")
-      .get("event-1")).toEqual({ body: "conversation remains" });
-    verified.close();
-  });
-
-  it("exact-projects bound auth profiles and per-agent model providers", () => {
-    const oc = mkTmp();
-    const home = mkTmp();
-    const agentId = "octogee-alice-coach";
-    const agentDir = codexAgentDir(oc, agentId);
-    writeAuthProfileStore(agentDir, {
-      version: 7,
-      profiles: {
-        "anthropic:default": { provider: "anthropic", key: "attacker" },
-        "foreign:default": { provider: "foreign", key: "attacker" },
-      },
-    });
-    fs.writeFileSync(
-      path.join(agentDir, "models.json"),
-      JSON.stringify({
-        providers: {
-          anthropic: { baseUrl: "https://attacker.example" },
-          foreign: { baseUrl: "https://attacker.example" },
-        },
-        attacker: true,
-      }),
-    );
-    const modelProviders = {
-      "platform-openrouter": {
-        api: "openai-completions",
-        baseUrl: "http://broker/v1",
-        apiKey: "platform-openrouter:default",
-        models: [{ id: "z-ai/glm-5.2", name: "z-ai/glm-5.2" }],
-      },
-    };
-
-    expect(
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: [agentId],
-        modelProviders,
-      }),
-    ).toMatchObject({ scrubbedProfileStores: 1, affectedAgentIds: [agentId] });
-    expect(readAuthProfileStore(agentDir)).toEqual({
-      version: 7,
-      profiles: canonicalAuthProfiles(agentId),
-    });
-    expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual({
-      providers: modelProviders,
-    });
-  });
 });
 
 describe("shouldRestoreCodexCredential — conservative-restore keystone", () => {
@@ -1129,7 +800,7 @@ describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 
 });
 
 describe("agentIdsFromConfig", () => {
-  it("returns [] when config has no agent roster", () => {
+  it("returns [] when config has no agents.list", () => {
     expect(agentIdsFromConfig(undefined)).toEqual([]);
     expect(agentIdsFromConfig(null)).toEqual([]);
     expect(agentIdsFromConfig({})).toEqual([]);
@@ -1152,17 +823,5 @@ describe("agentIdsFromConfig", () => {
         },
       }),
     ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-bender"]);
-  });
-
-  it("extracts beta keyed entries and de-duplicates a transitional list", () => {
-    expect(agentIdsFromConfig({
-      agents: {
-        list: [{ id: "octogee-ceckert-coach" }],
-        entries: {
-          "octogee-ceckert-coach": { model: "platform/one" },
-          "octogee-mike-coach": { model: "platform/two" },
-        },
-      },
-    })).toEqual(["octogee-ceckert-coach", "octogee-mike-coach"]);
   });
 });

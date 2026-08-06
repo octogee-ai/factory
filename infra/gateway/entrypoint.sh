@@ -4,22 +4,20 @@ set -e
 # OPENCLAW_DIR must be `export`ed: subprocesses (python in the openclaw.json
 # re-sync block below, publish-gateway-token.mjs, and openclaw itself) read it
 # from their environment. Caught by independent audit on PR #1166 — the
-# unexported assignment would crash-loop gateway boot
+# unexported assignment would have crash-looped every operator gateway boot
 # (KeyError in the re-sync block → `set -e` exit). Same pattern as
 # OPENCLAW_GATEWAY_TOKEN (L57) and GATEWAY_ID (L92).
 export OPENCLAW_DIR=/home/node/.openclaw
 TEMPLATES_DIR="${OCTOGEE_TEMPLATES_DIR:-/octogee/templates}"
 TSX=/octogee/scripts/node_modules/.bin/tsx
 GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS:-}"
-GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS_EFFECTIVE:-shared}"
-case "$GATEWAY_CLASS_EFFECTIVE" in
-  shared|builder) ;;
-  *) echo "FATAL: GATEWAY_CLASS must be shared or builder" >&2; exit 1 ;;
-esac
-case "${GATEWAY_PROFILE:-standard}" in
-  standard|builder) ;;
-  *) echo "FATAL: GATEWAY_PROFILE must be standard or builder" >&2; exit 1 ;;
-esac
+if [ -z "$GATEWAY_CLASS_EFFECTIVE" ]; then
+  if [ "${GATEWAY_PROFILE:-}" = "operator" ]; then
+    GATEWAY_CLASS_EFFECTIVE="operator"
+  else
+    GATEWAY_CLASS_EFFECTIVE="shared"
+  fi
+fi
 
 # Consistent ISO timestamp logging (matches OpenClaw gateway format)
 log() {
@@ -110,7 +108,7 @@ export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:
 # nobody can authenticate against.
 #
 # (Bender 2026-05-24 post-mortem: the previous three-tier resolver — env >
-# openclaw.json > fresh random per boot — drifted on owner-bound gateways
+# openclaw.json > fresh random per boot — drifted on operator gateways
 # where openclaw.json was edited out-of-band, and the kubectl-set-env
 # workaround filling the gateway-edge gap caused field-manager collision
 # that silently dropped INTERNAL_SERVICE_KEY when #1159's dedup landed.)
@@ -128,6 +126,32 @@ fi
 export OPENCLAW_GATEWAY_TOKEN
 # ── End require ────────────────────────────────────────────────────────────
 
+# ── Source operator-customization env (local, additive) ────────────────────
+# Per docs/architecture/GATEWAY-PLATFORM-SPEC.md §Operator-class customization
+# surface: operator-class gateways may source a shell-readable env file at
+# ~/.openclaw/secrets/operator.env for local-only credentials / integrations
+# the platform doesn't manage. This file is convenience state on emptyDir,
+# not a durability contract; durable operator-owned credentials belong in the
+# builder/operator credential store or an explicit per-gateway Secret.
+#
+# Sourced after the platform require block and before OpenClaw starts, so
+# operator-defined values are available to config environment substitutions.
+# Position is also after kubelet's K8s
+# env injection — operators can override their own gateway if they really
+# want, though the design intent is additive-only.
+#
+# See infra/gateway/operator-env.example for format + the kubectl debug-pod
+# recipe for editing the file on a running gateway's PVC.
+OPERATOR_ENV="${OPENCLAW_DIR}/secrets/operator.env"
+if [ -f "$OPERATOR_ENV" ]; then
+  log "Sourcing operator env: $OPERATOR_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$OPERATOR_ENV"
+  set +a
+fi
+# ── End operator-env ───────────────────────────────────────────────────────
+
 # GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
@@ -142,9 +166,9 @@ else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
 fi
 
-# BuilderShell comes up before the durable restore so the Builder can shell
+# BuilderShell comes up before the durable restore so the operator can shell
 # in and repair while boot is still waiting on the data plane.
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ "${BUILDER_SHELLS_ENABLED:-}" = "true" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ "${OPERATOR_SHELLS_ENABLED:-}" = "true" ]; then
   export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
   supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
 elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
@@ -152,7 +176,7 @@ elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
 fi
 
 # ── Owner-bound runtime system_config restore ───────────────────────────────
-# Builder gateways run the tracked Gitea checkout as OpenClaw's active
+# Builder/operator gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
@@ -205,9 +229,11 @@ fi
 chmod 600 "$OPENCLAW_CONFIG_PATH"
 
 # Enforce the class-level OpenClaw policy before startup. The base template is
-# customer-safe (host execution denied, Codex disabled).
+# shared-safe (exec/process denied, Codex disabled). Builder-class keeps the
+# standard image but removes the exec/process denies for its one tenant. Operator
+# class is handled later by the operator-image-only codex sandbox patch.
 CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
-if [ -f "$CLASS_POLICY" ]; then
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CLASS_POLICY" ]; then
   node "$CLASS_POLICY"
 fi
 
@@ -264,9 +290,17 @@ else
 fi
 # ── End gateway auth token publish ──────────────────────────────────────────
 
-BUILDER_CODEX=/octogee/infra/gateway/apply-builder-codex-sandbox.mjs
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ -f "$BUILDER_CODEX" ]; then
-  node "$BUILDER_CODEX" || log "apply-builder-codex-sandbox: non-fatal failure"
+# ── Operator-profile: codex YOLO sandbox ────────────────────────────────────
+# Operator-class is single-team — the gateway boundary IS the trust boundary,
+# so codex's app-server runs danger-full-access + approvalPolicy=never (the
+# agent acts without per-action approval prompts). Cattle gateways currently get
+# the same Codex app-server posture from the template as a temporary unblock;
+# this script ships ONLY in Dockerfile.operator-base and is gated to tenant-bound operators.
+# Idempotent + non-fatal.
+# See tests/specs/apply-operator-codex-sandbox.spec.ts.
+CODEX_YOLO=/octogee/infra/gateway/apply-operator-codex-sandbox.mjs
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$CODEX_YOLO" ]; then
+  node "$CODEX_YOLO" || log "apply-operator-codex-sandbox: non-fatal failure"
 fi
 
 # ── Harden file permissions ─────────────────────────────────────────────────
@@ -305,31 +339,22 @@ else
 fi
 
 # ── Pre-boot: sync env/runtime config into openclaw.json ─────────────────
-# Must run on db-less Builder gateways too: system_config restore can
+# Must run on db-less builder/operator gateways too: system_config restore can
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
 # what keeps capped broker tokens from being sent directly to Anthropic.
 # pre-boot-config.ts gates its optional Firestore-backed overrides internally.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
-  if [ -f "$CLASS_POLICY" ]; then
-    node "$CLASS_POLICY"
-  fi
+  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts || log "Pre-boot: non-fatal, continuing..."
 fi
 
 # ── Apply Octogee-owned runtime config once ─────────────────────────────────
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
   if [ -f "$CLASS_POLICY" ]; then
     node "$CLASS_POLICY"
   fi
-fi
-
-CUSTOMER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CUSTOMER_CRON_QUARANTINE" ]; then
-  log "Pre-boot: quarantining unsafe persisted customer cron jobs..."
-  node "$CUSTOMER_CRON_QUARANTINE"
 fi
 
 # ── Start OpenClaw before auxiliary runners compete for cold CPU ────────────
@@ -358,15 +383,16 @@ log "OpenClaw gateway healthy; starting auxiliary runners"
 # The local fleet controller is db-less for every class. Cowboy owns liveness
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  log "Hydrating Builder GitHub CLI auth before repository reconciliation..."
-  timeout -k 5s 130s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: initial hydration failed; convergence will retry"
-  supervise_runner github-cli-auth-convergence 60000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
-fi
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
-log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
-log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
-supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
+  supervise_runner site-build 5000 "$TSX" /octogee/scripts/entrypoints/site-build-api.ts
+else
+  log "Operator site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
+fi
+supervise_runner preview-proxy 5000 "$TSX" /octogee/scripts/entrypoints/preview-proxy.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "operator" ]; then
+  supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
+fi
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
@@ -383,8 +409,13 @@ fi
   done
 ) &
 
+if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+  log "Post-boot: hydrating native GitHub CLI auth from connector state..."
+  timeout -k 5s 20s "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts || log "github-cli-auth-hydrate: non-fatal failure"
+fi
+
 STAMPER=/octogee/infra/gateway/stamp-claude-first-run.mjs
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ -f "$STAMPER" ]; then
+if [ "${GATEWAY_PROFILE:-}" = "operator" ] && [ -f "$STAMPER" ]; then
   node "$STAMPER" || log "stamp-claude-first-run: non-fatal failure"
 fi
 

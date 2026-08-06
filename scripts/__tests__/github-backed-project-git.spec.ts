@@ -7,7 +7,6 @@ const paths = vi.hoisted(() => ({
   customers: `/tmp/octogee-gh-project-${process.pid}`,
   keys: `/tmp/octogee-gh-project-keys-${process.pid}`,
   scratch: `/tmp/octogee-gh-project-scratch-${process.pid}`,
-  openclaw: `/tmp/octogee-gh-project-openclaw-${process.pid}`,
 }));
 
 vi.mock("../lib/config.js", () => ({
@@ -15,7 +14,6 @@ vi.mock("../lib/config.js", () => ({
   dlog: vi.fn(),
   GIT_API_URL: "http://gitea-http.octogee.svc.cluster.local:3000/api/v1",
   GIT_SSH_HOST: "gitea",
-  OPENCLAW_DIR: paths.openclaw,
   CUSTOMERS_DIR: paths.customers,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
@@ -35,7 +33,6 @@ const { cloneProjectRepo, githubCloneCredentialEnv, syncCustomerRepositoriesForS
 
 const SLUG = "alice";
 const GITHUB_REMOTE = "https://github.com/octogee-ai/demo.git";
-const GITHUB_REMOTE_B = "https://github.com/octogee-ai/demo2.git";
 const GITEA_SSH_REMOTE = `git@gitea:${SLUG}/demo.git`;
 const MATERIALIZED_TOKEN = "ghs_materialized_token_must_not_touch_disk";
 
@@ -45,58 +42,8 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function localGitExec(cwd: string, args: string[]): string | null {
-  try {
-    return git(cwd, args);
-  } catch {
-    return null;
-  }
-}
-
 function localConfig(repo: string, key: string): string {
-  const localGit = path.join(repo, ".git");
-  const stat = fs.lstatSync(localGit);
-  const config = stat.isDirectory()
-    ? path.join(localGit, "config")
-    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
-  return git(repo, ["config", "--file", config, "--get", key]);
-}
-
-function localConfigContents(repo: string): string {
-  const localGit = path.join(repo, ".git");
-  const stat = fs.lstatSync(localGit);
-  const config = stat.isDirectory()
-    ? path.join(localGit, "config")
-    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
-  return fs.readFileSync(config, "utf8");
-}
-
-const acquireWorkspaceMutationLease = () => ({ release: () => {} });
-const prepareRepository = () => {};
-
-function prepareTrustedGithubRepository(
-  repoDir: string,
-  _slug: string,
-  deps: { repoSource?: { provider: string; owner: string; repo: string } | null },
-): void {
-  const source = deps.repoSource;
-  if (source?.provider !== "github") throw new Error("expected GitHub source");
-  const projectSlug = path.basename(repoDir);
-  const metadata = path.join(
-    paths.openclaw,
-    "git-metadata",
-    SLUG,
-    "projects",
-    `${projectSlug}.git`,
-  );
-  fs.mkdirSync(path.dirname(metadata), { recursive: true });
-  fs.renameSync(path.join(repoDir, ".git"), metadata);
-  fs.writeFileSync(`${metadata}.octogee-trusted-v3`, [
-    "octogee-customer-git-v3",
-    `github:${source.owner}/${source.repo}`,
-    "",
-  ].join("\n"));
-  fs.writeFileSync(path.join(repoDir, ".git"), `gitdir: ${metadata}\n`);
+  return git(repo, ["config", "--local", "--get", key]);
 }
 
 function seedBareOrigin(): string {
@@ -128,7 +75,7 @@ function initRepoWithOrigin(repo: string, remoteUrl: string): void {
 }
 
 beforeEach(() => {
-  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
+  for (const dir of [paths.customers, paths.keys, paths.scratch]) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -141,18 +88,16 @@ beforeEach(() => {
       "\tproxy = http://127.0.0.1:1",
       `[url "${origin}"]`,
       `\tinsteadOf = ${GITHUB_REMOTE}`,
-      `\tinsteadOf = ${GITHUB_REMOTE_B}`,
       `\tinsteadOf = ${GITEA_SSH_REMOTE}`,
       "",
     ].join("\n"),
   );
-  for (const key of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_SSH_COMMAND", "GATEWAY_CLASS"]) {
+  for (const key of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_SSH_COMMAND"]) {
     savedEnv[key] = process.env[key];
   }
   process.env.GIT_CONFIG_GLOBAL = globalConfig;
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   process.env.GIT_SSH_COMMAND = "false";
-  process.env.GATEWAY_CLASS = "builder";
 });
 
 afterEach(() => {
@@ -160,7 +105,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
+  for (const dir of [paths.customers, paths.keys, paths.scratch]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -171,11 +116,7 @@ describe("workspace autosync remote migration", () => {
     const origin = `https://github.com/${SLUG}/site.git`;
     initRepoWithOrigin(project, origin);
 
-    await syncCustomerRepositoriesForSlug(SLUG, {
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    });
+    await syncCustomerRepositoriesForSlug(SLUG);
 
     expect(localConfig(project, "remote.origin.url")).toBe(origin);
   });
@@ -185,12 +126,7 @@ describe("workspace autosync remote migration", () => {
     const origin = `https://github.com/${SLUG}/gh.git`;
     initRepoWithOrigin(project, origin);
 
-    await expect(syncCustomerRepositoriesForSlug(SLUG, {
-      strict: true,
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    }))
+    await expect(syncCustomerRepositoriesForSlug(SLUG, { strict: true }))
       .rejects.toThrow(/push failed/);
 
     expect(localConfig(project, "remote.origin.url")).toBe(origin);
@@ -203,11 +139,7 @@ describe("workspace autosync remote migration", () => {
       `http://gitea-http.octogee.svc.cluster.local:3000/${SLUG}/legacy`,
     );
 
-    await syncCustomerRepositoriesForSlug(SLUG, {
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    });
+    await syncCustomerRepositoriesForSlug(SLUG);
 
     expect(localConfig(project, "remote.origin.url")).toBe(`git@gitea:${SLUG}/legacy`);
   });
@@ -219,8 +151,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      prepareRepository,
+      githubToken: MATERIALIZED_TOKEN,
     });
 
     expect(ok).toBe(true);
@@ -235,131 +166,28 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
 
     await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      prepareRepository,
+      githubToken: MATERIALIZED_TOKEN,
     });
 
     expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
-    expect(localConfigContents(dest)).not.toContain(
+    expect(fs.readFileSync(path.join(dest, ".git", "config"), "utf8")).not.toContain(
       MATERIALIZED_TOKEN,
     );
   });
 
-  it("installs an exact GitHub checkout and quarantines a pre-existing local directory", async () => {
+  it("adopts an existing local project directory instead of discarding it", async () => {
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
     fs.mkdirSync(dest, { recursive: true });
     fs.writeFileSync(path.join(dest, "local-only.md"), "local work\n");
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      prepareRepository,
+      githubToken: MATERIALIZED_TOKEN,
     });
 
     expect(ok).toBe(true);
-    expect(fs.existsSync(path.join(dest, "local-only.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(dest, "local-only.md"), "utf8")).toBe("local work\n");
     expect(fs.readFileSync(path.join(dest, "README.md"), "utf8")).toBe("from github\n");
-    const quarantineRoot = path.join(paths.openclaw, "git-worktree-quarantine", SLUG);
-    const quarantined = fs.readdirSync(quarantineRoot);
-    expect(quarantined).toHaveLength(1);
-    expect(
-      fs.readFileSync(path.join(quarantineRoot, quarantined[0]!, "local-only.md"), "utf8"),
-    ).toBe("local work\n");
-  });
-
-  it("switches one trusted GitHub source to another and quarantines old-only files", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(dest, GITHUB_REMOTE);
-    const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
-    fs.mkdirSync(path.dirname(metadata), { recursive: true });
-    fs.renameSync(path.join(dest, ".git"), metadata);
-    fs.writeFileSync(`${metadata}.octogee-trusted-v3`, [
-      "octogee-customer-git-v3",
-      "github:octogee-ai/demo",
-      "",
-    ].join("\n"));
-    fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
-    fs.writeFileSync(path.join(dest, "source-a-only.md"), "old source\n");
-
-    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo2" },
-      gitExec: localGitExec,
-      prepareRepository: prepareTrustedGithubRepository,
-    })).toBe(true);
-
-    expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE_B);
-    expect(fs.existsSync(path.join(dest, "source-a-only.md"))).toBe(false);
-    const quarantineRoot = path.join(paths.openclaw, "git-worktree-quarantine", SLUG);
-    expect(
-      fs.readdirSync(quarantineRoot).some((entry) =>
-        fs.existsSync(path.join(quarantineRoot, entry, "source-a-only.md"))),
-    ).toBe(true);
-  });
-
-  it("switches a legacy local-git checkout instead of assuming external metadata exists", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
-    fs.writeFileSync(path.join(dest, "legacy-only.md"), "legacy\n");
-
-    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      prepareRepository: prepareTrustedGithubRepository,
-    })).toBe(true);
-
-    expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
-    expect(fs.existsSync(path.join(dest, "legacy-only.md"))).toBe(false);
-  });
-
-  it("leaves the prior checkout intact when the source-swap lease is unavailable", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
-    fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
-
-    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      acquireMutationLease: () => null,
-    })).toBe(false);
-
-    expect(fs.readFileSync(path.join(dest, "keep.md"), "utf8")).toBe("keep\n");
-    expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
-  });
-
-  it("restores the prior checkout when replacement preparation fails", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
-    fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
-
-    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-      gitExec: localGitExec,
-      prepareRepository: () => { throw new Error("prepare failed"); },
-    })).toBe(false);
-
-    expect(fs.readFileSync(path.join(dest, "keep.md"), "utf8")).toBe("keep\n");
-    expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
-  });
-
-  it("restores prior trusted metadata when replacement preparation fails after writing new metadata", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(dest, GITHUB_REMOTE);
-    prepareTrustedGithubRepository(dest, SLUG, {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-    });
-    fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
-
-    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo2" },
-      gitExec: localGitExec,
-      prepareRepository: (repoDir, slug, deps) => {
-        prepareTrustedGithubRepository(repoDir, slug, deps);
-        throw new Error("prepare failed after metadata write");
-      },
-    })).toBe(false);
-
-    expect(fs.readFileSync(path.join(dest, "keep.md"), "utf8")).toBe("keep\n");
-    expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
   });
 
   it("hands the materialized token to git as the password, overriding any ambient helper", () => {
@@ -386,10 +214,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     fs.writeFileSync(path.join(keyDir, "id_ed25519"), "not-a-real-key\n");
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
 
-    const ok = await cloneProjectRepo(SLUG, "demo", "demo", {
-      gitExec: localGitExec,
-      prepareRepository,
-    });
+    const ok = await cloneProjectRepo(SLUG, "demo", "demo");
 
     expect(ok).toBe(true);
     expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);

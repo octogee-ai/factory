@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
-import { parseAgentId } from "@octogee/shared/types/identity";
 
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
 // Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
@@ -20,9 +19,12 @@ export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
 const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
 
-function isBrokerResolvableAgentId(agentId: string): boolean {
-  return parseAgentId(agentId).kind !== "unknown";
-}
+// Only octogee-<slug>-coach agents have a broker-token resolver grammar
+// (AGENT_MODEL_TOKEN_ID_RE in secret-resolver.mjs). The boot sweep must skip any
+// other agent id rather than write a profile whose keyRef the resolver will refuse
+// — fail closed (the agent surfaces a missing-key error) instead of stranding it
+// with an unresolvable credential.
+const COACH_AGENT_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
 
 export interface AnthropicBrokerProfileEntry {
   type: "api_key";
@@ -370,9 +372,9 @@ export function materializeAnthropicBrokerForAgents(
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   let count = 0;
   for (const agentId of agentIds) {
-    if (!isBrokerResolvableAgentId(agentId)) {
+    if (!COACH_AGENT_RE.test(agentId)) {
       opts.logFn?.(
-        `[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`,
+        `[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`,
       );
       continue;
     }
@@ -417,9 +419,9 @@ export function materializeBrokerProfilesForAgents(
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   let count = 0;
   for (const agentId of agentIds) {
-    if (!isBrokerResolvableAgentId(agentId)) {
+    if (!COACH_AGENT_RE.test(agentId)) {
       opts.logFn?.(
-        `[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`,
+        `[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`,
       );
       continue;
     }

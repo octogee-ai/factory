@@ -10,14 +10,13 @@ const WORKSPACE_MUTATION_LOCK_NAME = "octogee.workspace-mutation.lock";
 
 export interface WorkspaceMutationLeaseOptions {
   workspaceDir: string;
-  gitDir?: string;
   heartbeatMs?: number;
   staleAfterMs?: number;
   now?: () => number;
 }
 
-function gitMetadataDir(workspaceDir: string, explicitGitDir?: string): string {
-  const gitDir = explicitGitDir ?? path.join(workspaceDir, ".git");
+function gitMetadataDir(workspaceDir: string): string {
+  const gitDir = path.join(workspaceDir, ".git");
   let stat: fs.Stats;
   try {
     stat = fs.statSync(gitDir);
@@ -38,7 +37,7 @@ export function workspaceMutationLockPath(workspaceDir: string): string {
 export function acquireWorkspaceMutationLeaseSync(
   options: WorkspaceMutationLeaseOptions,
 ): SystemConfigSyncLease | null {
-  const gitDir = gitMetadataDir(options.workspaceDir, options.gitDir);
+  const gitDir = gitMetadataDir(options.workspaceDir);
   return acquireSystemConfigSyncLeaseSync({
     openclawDir: gitDir,
     lockName: WORKSPACE_MUTATION_LOCK_NAME,

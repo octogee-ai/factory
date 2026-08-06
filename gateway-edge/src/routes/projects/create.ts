@@ -8,11 +8,7 @@ import {
   projectSlugAvailability,
   type ProjectCreateInput,
 } from "../../lib/project-create-service.js";
-import {
-  projectRepoSourceAccess,
-  proveRepoReachable,
-  type RepoSourceAccess,
-} from "./repo-source.js";
+import { projectRepoSourceAccess, type RepoSourceAccess } from "./repo-source.js";
 
 export function createProjectCreateRoutes(
   { featurePolicy }: { featurePolicy?: FeaturePolicy } = {},
@@ -47,19 +43,6 @@ export function createProjectCreateRoutes(
           userData: req.user,
           workspaceId: req.workspaceSlug,
           ...(await requestedRepoSourceAccess(featurePolicy, req, input)),
-          proveRepoSource: async (repoSource) => {
-            const reachable = await proveRepoReachable(
-              req.uid!,
-              req.workspaceSlug!,
-              repoSource,
-            );
-            return reachable.ok
-              ? null
-              : {
-                  status: reachable.status,
-                  body: { error: reachable.error, reason: reachable.reason },
-                };
-          },
           source: "ui",
         },
         input,

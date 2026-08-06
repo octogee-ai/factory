@@ -51,18 +51,9 @@ describe("migration activation Mattermost secrets", () => {
         "bob-coach": { botToken: { source: "file", provider: "octogee-mattermost", id: "/bob-coach" } },
       } } },
       bindings: [
-        {
-          agentId: "octogee-alice-coach",
-          match: { channel: "mattermost", accountId: "alice-coach" },
-        },
-        {
-          agentId: "octogee-alice-proj-orbit-coach",
-          match: { channel: "mattermost", accountId: "alice-proj-orbit" },
-        },
-        {
-          agentId: "octogee-bob-coach",
-          match: { channel: "mattermost", accountId: "bob-coach" },
-        },
+        { agentId: "octogee-alice-coach" },
+        { agentId: "octogee-alice-proj-orbit-coach" },
+        { agentId: "octogee-bob-coach" },
       ],
     }));
     await updateMattermostAccountSecrets(openclawDir, {

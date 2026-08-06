@@ -43,11 +43,9 @@ interface DeploymentTargetDocument {
     clusterProjectId: string;
     firebaseProjectId: string;
     hostingProjectId: string;
-    customerHostingProjectId: string;
     region: string;
     clusterName: string;
     namespace: string;
-    projectRunnerControlPlaneCidr: string;
     artifactRegistry: ArtifactRegistryDocument;
     cloudSql: CloudSqlDocument;
     kms: KmsDocument;
@@ -77,12 +75,10 @@ export interface DeploymentEnvironmentSettings {
     clusterProjectId: string;
     firebaseProjectId: string;
     hostingProjectId: string;
-    customerHostingProjectId: string;
     region: string;
     clusterName: string;
     kubeContext: string;
     namespace: string;
-    projectRunnerControlPlaneCidr: string;
     artifactRegistryProjectId: string;
     artifactRegistryLocation: string;
     artifactRegistryName: string;

@@ -28,7 +28,7 @@ describe("projectGatewayReservation", () => {
       priceMultiplier: 1,
       source: "class-default",
     });
-    expect(projectGatewayReservation({ gatewayClass: "builder" })).toEqual({
+    expect(projectGatewayReservation({ gatewayClass: "operator" })).toEqual({
       type: "spot",
       priceMultiplier: SPOT_PRICE_MULTIPLIER,
       source: "class-default",
@@ -41,7 +41,7 @@ describe("projectGatewayReservation", () => {
       priceMultiplier: SPOT_PRICE_MULTIPLIER,
       source: "kubernetes",
     });
-    expect(projectGatewayReservation({ gatewayClass: "builder" }, "on-demand")).toEqual({
+    expect(projectGatewayReservation({ gatewayClass: "operator" }, "on-demand")).toEqual({
       type: "on-demand",
       priceMultiplier: 1,
       source: "kubernetes",
@@ -171,12 +171,12 @@ describe("projectGatewaySummary — gateway identity projection", () => {
     expect(summary.gateway).toBe("jack");
   });
 
-  it("marks an allocated builder gateway as one disposable Builder generation", () => {
+  it("marks an allocated Operator gateway as one disposable Builder generation", () => {
     const summary = projectGatewaySummary(
       { id: "run-alice-12345678", data: () => ({ gatewayId: "run-alice-12345678" }) },
       {
         gatewayId: "run-alice-12345678",
-        gatewayClass: "builder",
+        gatewayClass: "operator",
         ownerUid: "uid-alice",
         allocation: {
           kind: "disposable-builder",
@@ -494,7 +494,7 @@ describe("projectDisposableFleetCapacity", () => {
         { id: "run-alice", data: () => ({ gatewayId: "run-alice" }) },
         {
           gatewayId: "run-alice",
-          gatewayClass: "builder",
+          gatewayClass: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           allocation: {
@@ -792,7 +792,7 @@ function durableGatewayRoot(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -834,9 +834,9 @@ describe("fleet gateway projection", () => {
         "shared-blue": durableGatewayRoot("shared-blue"),
         [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -938,9 +938,9 @@ describe("fleet gateway projection", () => {
         "shared-blue": durableGatewayRoot("shared-blue"),
         [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -1022,9 +1022,9 @@ describe("fleet gateway projection", () => {
         "shared-blue": durableGatewayRoot("shared-blue"),
         [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -1106,9 +1106,9 @@ describe("fleet gateway projection", () => {
         "shared-blue": durableGatewayRoot("shared-blue"),
         [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -1176,9 +1176,9 @@ describe("fleet gateway projection", () => {
       gateways: {
         [oldGatewayId]: durableGatewayRoot(oldGatewayId, {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -1258,9 +1258,9 @@ describe("fleet gateway projection", () => {
       gateways: {
         "fail-xs-deadbeef": durableGatewayRoot("fail-xs-deadbeef", {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "failed",
           builderSlug: "failed",
@@ -1429,9 +1429,9 @@ describe("fleet gateway projection", () => {
         default: durableGatewayRoot("default", { liveRelease: 1 }),
         "alice-xs-deadbeef": durableGatewayRoot("alice-xs-deadbeef", {
           desiredStatus: "retired",
-          profile: "builder",
-          gatewayClass: "builder",
-          imageProfile: "builder",
+          profile: "operator",
+          gatewayClass: "operator",
+          imageProfile: "operator",
           sizingTier: "xs",
           ownerUid: "uid-alice",
           builderSlug: "alice",
@@ -2149,7 +2149,7 @@ describe("onboarding placement (post-cohorts)", () => {
           },
         }),
         "run-active": durableGatewayRoot("run-active", {
-          gatewayClass: "builder",
+          gatewayClass: "operator",
           ownerUid: "uid-active",
           builderSlug: "active-builder",
           allocation: {
@@ -2232,7 +2232,7 @@ describe("onboarding placement (post-cohorts)", () => {
         "gw-old": durableGatewayRoot("gw-old"),
         "gw-new": durableGatewayRoot("gw-new"),
         "legacy-owner": durableGatewayRoot("legacy-owner", {
-          gatewayClass: "builder",
+          gatewayClass: "operator",
           ownerUid: "uid-legacy",
           builderSlug: "legacy-builder",
         }),
@@ -2326,7 +2326,7 @@ describe("onboarding placement (post-cohorts)", () => {
     await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(404);
   });
 
-  it("does not report pointer drift for an active disposable builder runtime outside onboarding placement", async () => {
+  it("does not report pointer drift for an active disposable operator runtime outside onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default-blue" },
       users: {
@@ -2354,7 +2354,7 @@ describe("onboarding placement (post-cohorts)", () => {
         "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
         "bender-blue": {
           gatewayId: "bender-blue",
-          gatewayClass: "builder",
+          gatewayClass: "operator",
           desiredStatus: "running",
           ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
@@ -2433,14 +2433,14 @@ describe("onboarding placement (post-cohorts)", () => {
       users: {
         "uid-stale": {
           username: "stale",
-          provisioning: { openclaw: { slug: "stale", gatewayId: "stale-builder" } },
+          provisioning: { openclaw: { slug: "stale", gatewayId: "stale-operator" } },
         },
       },
       glmGateways: {
         "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
-        "stale-builder": {
-          gatewayId: "stale-builder",
-          gatewayClass: "builder",
+        "stale-operator": {
+          gatewayId: "stale-operator",
+          gatewayClass: "operator",
           desiredStatus: "running",
           ownerUid: "uid-stale",
           builderSlug: "stale",
@@ -2461,7 +2461,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.customers[0]).toMatchObject({
       uid: "uid-stale",
       policyTargetGatewayId: "default-blue",
-      assignedGatewayId: "stale-builder",
+      assignedGatewayId: "stale-operator",
       driftState: "pointer-drift",
     });
   });

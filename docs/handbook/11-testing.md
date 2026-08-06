@@ -103,7 +103,7 @@ point itself.
 `octogee-test` Firestore) on a cron. Any live spec that provisions real
 resources (reservations, customers, gateways) must tear them down on **every**
 depth/branch it can run, not only its deepest "activate" path — a provisioning
-live spec that cleaned up only on `activate` minted a ghost disposable Builder gateway
+live spec that cleaned up only on `activate` minted a ghost operator gateway
 in TEST every night because the cron's *default* depth was the shallower
 `request` (reserve-only). Before adding or reviewing a provisioning
 `*.live.spec.ts`, verify cleanup runs on the cron's default path specifically,

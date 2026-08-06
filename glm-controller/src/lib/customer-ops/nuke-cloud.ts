@@ -27,6 +27,8 @@ projectSlugs: string[];
   chatArtifactIds: string[];
   agentImportIds: string[];
   
+  skipHosting?: boolean;
+  
   skipAuth?: boolean;
 }
 
@@ -68,7 +70,7 @@ export interface NukeCloudDeps {
 
 deleteAuthUser: (uid: string) => Promise<void>;
 
-deleteHostingSites: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
+deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
   log?: (msg: string) => void;
 }
 
@@ -131,12 +133,12 @@ results.push(
     }),
   );
 
-if (!ctx.slug) {
+if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
     results.push({ key: "hosting", ok: true, skipped: true });
   } else {
     results.push(
       await runStep("hosting", log, async () => {
-        await deps.deleteHostingSites(ctx.slug, ctx.projectSlugs);
+        await deps.deleteHostingSites!(ctx.slug, ctx.projectSlugs);
       }),
     );
   }
@@ -147,16 +149,11 @@ if (!ctx.slug) {
     }),
   );
 
-  const hostingFailed = results.some((result) => result.key === "hosting" && !result.ok);
-  if (hostingFailed) {
-    results.push({ key: "firestore", ok: true, skipped: true });
-  } else {
-    results.push(
-      await runStep("firestore", log, async () => {
-        await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
-      }),
-    );
-  }
+  results.push(
+    await runStep("firestore", log, async () => {
+      await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
+    }),
+  );
 
 const earlierFailure = results.some((result) => !result.ok && !result.skipped);
 if (ctx.skipAuth || earlierFailure) {

@@ -15,8 +15,8 @@ import {
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const BUILDER_REPO =
-  "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
+const OPERATOR_REPO =
+  "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
 const EDGE_REPO = "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
 
 function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
@@ -39,7 +39,7 @@ function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: null,
+    operatorAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -54,8 +54,8 @@ function artifact(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
     imageRepository: REPO,
     imageTag: "def5678",
     profileImages: {
-      builder: {
-        imageRepository: BUILDER_REPO,
+      operator: {
+        imageRepository: OPERATOR_REPO,
         imageTag: "def5678",
       },
     },
@@ -242,31 +242,31 @@ describe("surge customer migration boundary", () => {
 });
 
 describe("orderGatewaysForConvergence", () => {
-  it("orders Barn and Builder gateways by stable id", () => {
+  it("rolls operator canaries first, then the remaining gateways by stable id", () => {
     expect(orderGatewaysForConvergence([
       gateway({ gatewayId: "zeta", gatewayClass: "shared" }),
-      gateway({ gatewayId: "beta", gatewayClass: "builder" }),
+      gateway({ gatewayId: "operator", gatewayClass: "operator" }),
       gateway({ gatewayId: "alpha", gatewayClass: "builder" }),
-    ]).map((item) => item.gatewayId)).toEqual(["alpha", "beta", "zeta"]);
+    ]).map((item) => item.gatewayId)).toEqual(["operator", "alpha", "zeta"]);
   });
 });
 
 describe("gatewayUpsertOptsFromRelease", () => {
-  it("never sends the standard gateway digest to the Builder repository", () => {
+  it("never sends the standard gateway digest to the operator repository", () => {
     const standardDigest = `sha256:${"a".repeat(64)}`;
-    const builderDigest = `sha256:${"b".repeat(64)}`;
+    const operatorDigest = `sha256:${"b".repeat(64)}`;
     const opts = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
       }),
       artifact: artifact({
         imageTag: `def5678@${standardDigest}`,
         profileImages: {
-          builder: {
-            imageRepository: BUILDER_REPO,
-            imageTag: `def5678@${builderDigest}`,
+          operator: {
+            imageRepository: OPERATOR_REPO,
+            imageTag: `def5678@${operatorDigest}`,
           },
         },
       }),
@@ -274,24 +274,24 @@ describe("gatewayUpsertOptsFromRelease", () => {
       chartPath: "/charts/octogee-gateway",
     });
 
-    expect(opts.imageRepository).toBe(BUILDER_REPO);
-    expect(opts.imageTag).toBe(`def5678@${builderDigest}`);
+    expect(opts.imageRepository).toBe(OPERATOR_REPO);
+    expect(opts.imageTag).toBe(`def5678@${operatorDigest}`);
     expect(opts.imageTag).not.toContain(standardDigest);
     expect(opts.gatewayEdgeImageRepository).toBe(EDGE_REPO);
     expect(opts.gatewayEdgeImageTag).toBe("def5678");
   });
 
-  it("fails before Helm convergence when a Builder release lacks its profile receipt", () => {
+  it("fails before Helm convergence when an operator release lacks its profile receipt", () => {
     expect(() => gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
       }),
       artifact: artifact({ profileImages: undefined }),
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
-    })).toThrow(/missing its immutable Builder gateway image reference/);
+    })).toThrow(/missing its immutable operator gateway image reference/);
   });
 
   it("keys every name off the bare gatewayId and always requests surge rolls", () => {
@@ -352,7 +352,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     expect(gatewayDeploymentIntentFingerprint({
       ...base,
       deploymentIntentFingerprint: undefined,
-      builderAccess: { shellsEnabled: true },
+      operatorAccess: { shellsEnabled: true },
     })).not.toBe(base.deploymentIntentFingerprint);
     expect(gatewayDeploymentIntentFingerprint({
       ...base,
@@ -366,8 +366,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     const previous = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
         ownerUid: "uid-previous",
         builderSlug: "previous",
       }),
@@ -378,8 +378,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     const successor = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
         ownerUid: "uid-successor",
         builderSlug: "successor",
       }),
@@ -391,8 +391,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     expect(successor).toMatchObject({ ownerUid: "uid-successor", builderSlug: "successor" });
     expect(planGatewayConvergence({
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
         ownerUid: "uid-successor",
         builderSlug: "successor",
         liveRelease: 2,
@@ -471,8 +471,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     const observed = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
         ownerUid: "uid-previous",
         builderSlug: "previous",
       }),
@@ -484,8 +484,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     const desired = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
         ownerUid: "uid-successor",
         builderSlug: "successor",
       }),
@@ -521,13 +521,13 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toBe(desired.deploymentIntentFingerprint);
   });
 
-  it("resolves Builder access from the owner", () => {
+  it("resolves operator access for builder/operator classes from the owner", () => {
     const opts = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
-        gatewayClass: "builder",
-        imageProfile: "builder",
-        profile: "builder",
+        gatewayClass: "operator",
+        imageProfile: "operator",
+        profile: "operator",
         ownerUid: "uid-ceckert",
         builderSlug: "ceckert",
       }),
@@ -535,8 +535,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
     });
-    expect(opts.gatewayClass).toBe("builder");
-    expect(opts.builderAccess).toBeDefined();
+    expect(opts.gatewayClass).toBe("operator");
+    expect(opts.operatorAccess).toBeDefined();
     expect(opts.builderSlug).toBe("ceckert");
   });
 

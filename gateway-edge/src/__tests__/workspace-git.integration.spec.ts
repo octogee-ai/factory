@@ -68,8 +68,6 @@ vi.mock("../lib/stripe", () => ({
 }));
 
 import { createApp } from "../index.js";
-import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
-import { workspaceMutationLeaseGitDir } from "../lib/workspace-git.js";
 import workspaceGitRoutes from "../routes/workspace/git.js";
 
 type RouteLayer = {
@@ -106,52 +104,21 @@ function gitAddCommit(dir: string, msg: string): void {
   spawnSync("git", ["commit", "-m", msg], { cwd: dir });
 }
 
-async function externalizeCustomerGitMetadata(
-  dir: string,
-  metadataDir: string,
-  remoteUrl: string,
-): Promise<void> {
-  spawnSync("git", ["remote", "add", "origin", remoteUrl], { cwd: dir });
-  await fs.mkdir(path.dirname(metadataDir), { recursive: true });
-  await fs.rename(path.join(dir, ".git"), metadataDir);
-  await fs.writeFile(path.join(dir, ".git"), `gitdir: ${metadataDir}\n`);
-  const giteaMatch = /^git@gitea:[^/]+\/(.+)\.git$/u.exec(remoteUrl);
-  const githubMatch = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\.git$/u.exec(remoteUrl);
-  const source = giteaMatch
-    ? `gitea:${giteaMatch[1]}`
-    : githubMatch
-      ? `github:${githubMatch[1]}/${githubMatch[2]}`
-      : null;
-  if (!source) throw new Error(`unexpected test remote: ${remoteUrl}`);
-  await fs.writeFile(
-    `${metadataDir}.octogee-trusted-v3`,
-    `octogee-customer-git-v3\n${source}\n`,
-  );
-}
-
-let testRoot: string;
 let customersRoot: string;
 const SLUG = "joe42";
 
 beforeAll(async () => {
-  testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wsroot-int-"));
-  customersRoot = path.join(testRoot, "customers");
-  await fs.mkdir(customersRoot);
+  customersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wsroot-int-"));
   process.env.CUSTOMERS_DIR = customersRoot;
   const slugDir = path.join(customersRoot, SLUG);
   await fs.mkdir(slugDir);
   gitInit(slugDir);
   await fs.writeFile(path.join(slugDir, "README.md"), "hello\n");
   gitAddCommit(slugDir, "initial");
-  await externalizeCustomerGitMetadata(
-    slugDir,
-    path.join(testRoot, "git-metadata", SLUG, "workspace.git"),
-    `git@gitea:${SLUG}/workspace.git`,
-  );
 });
 
 afterAll(async () => {
-  await fs.rm(testRoot, { recursive: true, force: true });
+  await fs.rm(customersRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -299,11 +266,6 @@ const PROJECT = "myproj";
     gitInit(projectDir);
     await fs.writeFile(path.join(projectDir, "PROJECT.md"), "project init\n");
     gitAddCommit(projectDir, "project initial");
-    await externalizeCustomerGitMetadata(
-      projectDir,
-      path.join(testRoot, "git-metadata", SLUG, "projects", `${PROJECT}.git`),
-      `git@gitea:${SLUG}/${PROJECT}.git`,
-    );
   });
   beforeEach(() => {
     firestoreData[`workspaces/${SLUG}/projects/${PROJECT}`] = {
@@ -431,11 +393,6 @@ describe("GitHub-backed project working tree", () => {
     gitInit(projectDir);
     await fs.writeFile(path.join(projectDir, "GH.md"), "from github\n");
     gitAddCommit(projectDir, "github initial");
-    await externalizeCustomerGitMetadata(
-      projectDir,
-      path.join(testRoot, "git-metadata", SLUG, "projects", `${GH_PROJECT}.git`),
-      "https://github.com/octogee-ai/demo.git",
-    );
   });
   beforeEach(() => {
     firestoreData[`workspaces/${SLUG}/projects/${GH_PROJECT}`] = {
@@ -468,25 +425,6 @@ describe("GitHub-backed project working tree", () => {
     expect(res.status, res.text).toBe(200);
     expect(res.body.empty).toBe(false);
     expect(res.body.sha).toMatch(/^[0-9a-f]{40}$/);
-  });
-
-  it("rejects a project commit while source reconciliation holds the shared mutation fence", async () => {
-    const projectDir = path.join(customersRoot, SLUG, "projects", GH_PROJECT);
-    const lease = acquireWorkspaceMutationLeaseSync({
-      workspaceDir: projectDir,
-      gitDir: workspaceMutationLeaseGitDir(projectDir),
-    });
-    expect(lease).not.toBeNull();
-    try {
-      const res = await request(createApp())
-        .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
-        .set("Authorization", "Bearer caller-idtoken")
-        .send({ message: "must wait" });
-      expect(res.status, res.text).toBe(409);
-      expect(res.body.code).toBe("WORKSPACE_BUSY");
-    } finally {
-      lease?.release();
-    }
   });
 
   it("/git/branch/checkout switches branches on the github-backed checkout", async () => {

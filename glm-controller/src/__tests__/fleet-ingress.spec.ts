@@ -45,7 +45,6 @@ const BASE_RULES: IngressRule[] = [
     host: PREVIEW_HOST,
     http: {
       paths: [
-        { path: "/p/*", pathType: "ImplementationSpecific", backend: { service: { name: "octogee-api", port: { name: "http" } } } },
         { path: "/g/*", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
         { path: "/health", pathType: "ImplementationSpecific", backend: { service: { name: "gateway-router", port: { name: "http" } } } },
       ],
@@ -163,7 +162,6 @@ describe("mergeFleetRules", () => {
       previewPort: PREVIEW_PORT,
     });
     expect(merged.find((r) => r.host === PREVIEW_HOST)!.http.paths.map((p) => p.path)).toEqual([
-      "/p/*",
       "/g/*",
       "/health",
     ]);
@@ -250,7 +248,6 @@ describe("syncEdgeIngress", () => {
     const apiPaths = apiRule.http.paths.map((p) => p.path);
     expectPathBefore(apiPaths, "/g/*", "/api/*");
     const previewRule = manifest.spec.rules.find((r) => r.host === PREVIEW_HOST)!;
-    expect(previewRule.http.paths.find((p) => p.path === "/p/*")?.backend.service.name).toBe("octogee-api");
     expect(previewRule.http.paths.map((p) => p.path)).toContain("/g/*");
     expect(result.changed).toBe(true);
   });

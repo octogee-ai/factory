@@ -30,9 +30,7 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
     "--namespace=octogee-test",
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
-  if (setValues.profile === "builder") {
-    merged.gatewayClass = "builder";
-    merged.imageProfile = "builder";
+  if (setValues.profile === "operator") {
     merged.ownerUid = "test-owner";
     merged.builderSlug = "test-builder";
   }
@@ -140,7 +138,7 @@ describe("helm/octogee-gateway/ — revision-aware render (revisionId != gateway
   });
 
   it("names an isolated gateway PodDisruptionBudget by revisionId", () => {
-    const pdb = byKind(helmTemplate({ ...REVISION, profile: "builder" }), "PodDisruptionBudget")[0];
+    const pdb = byKind(helmTemplate({ ...REVISION, profile: "operator" }), "PodDisruptionBudget")[0];
     expect(pdb?.metadata?.name).toBe("octogee-gateway-default-r7");
   });
 });
@@ -149,7 +147,7 @@ describe("helm/octogee-gateway/ — KSA is out of the chart (Cowboy owns it)", (
   it("never renders a ServiceAccount object (gateway-scoped KSA created by Cowboy)", () => {
     expect(byKind(helmTemplate(), "ServiceAccount")).toHaveLength(0);
     expect(byKind(helmTemplate({ gatewayId: "default", revisionId: "default-r2" }), "ServiceAccount")).toHaveLength(0);
-    expect(byKind(helmTemplate({ profile: "builder" }), "ServiceAccount")).toHaveLength(0);
+    expect(byKind(helmTemplate({ profile: "operator" }), "ServiceAccount")).toHaveLength(0);
   });
 });
 

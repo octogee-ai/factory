@@ -48,7 +48,7 @@ export function resolvePlatformContentMigrationOperatorImage(
     throw new Error("operator image resolution requires a canonical OpenClaw version");
   }
   const tag = `${input.releaseCommit.slice(0, 7)}-oc${input.canonicalOpenclawVersion}`;
-  const image = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-builder:${tag}`;
+  const image = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-operator:${tag}`;
   let digest: unknown;
   try {
     const metadata = record(JSON.parse(input.run("gcloud", [
@@ -67,7 +67,7 @@ export function resolvePlatformContentMigrationOperatorImage(
   if (typeof digest !== "string" || !DIGEST.test(digest)) {
     throw new Error(`operator image ${image} did not resolve to an immutable digest`);
   }
-  const sourceImage = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-builder:${input.releaseCommit.slice(0, 7)}`;
+  const sourceImage = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-operator:${input.releaseCommit.slice(0, 7)}`;
   let builds: Array<Record<string, unknown>>;
   try {
     builds = records(JSON.parse(input.run("gcloud", [
