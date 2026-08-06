@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
 import { agentIdsFromConfig } from "../lib/byosub-restore.js";
 import {
   materializeBrokerProfilesForAgents,
@@ -7,6 +8,7 @@ import {
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
 import {
+  gatewayAgentRoster,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
@@ -22,6 +24,7 @@ import {
   OPENROUTER_PLATFORM_PROVIDER_ID,
   platformModelRefs,
 } from "@octogee/shared/types/agent-models";
+import { parseAgentId } from "@octogee/shared/types/identity";
 
 const OPENCLAW_DIR = openClawDir();
 const CONFIG_PATH = openClawConfigPath();
@@ -35,12 +38,9 @@ export function shouldMaterializeAnthropicBrokerProfiles(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const gatewayClass = env.GATEWAY_CLASS ?? "";
-  const profile = env.GATEWAY_PROFILE ?? "";
   return (
     gatewayClass === "shared" ||
-    gatewayClass === "builder" ||
-    gatewayClass === "operator" ||
-    (!gatewayClass && profile === "operator")
+    gatewayClass === "builder"
   );
 }
 
@@ -134,6 +134,166 @@ export function applyMattermostPreBootPatches(
       changed = true;
       logFn(`forced commands.native=false on accounts.${accountId}`);
     }
+  }
+  return changed;
+}
+
+function accountRouteKey(accountId: string, agentId: string): string {
+  return `${accountId}\u0000${agentId}`;
+}
+
+function mattermostBindingFacts(value: unknown): {
+  agentId: string;
+  accountId: string;
+  hasPeer: boolean;
+} | null {
+  if (!isPlainObject(value) || typeof value.agentId !== "string") return null;
+  const match = value.match;
+  if (
+    !isPlainObject(match) ||
+    match.channel !== "mattermost" ||
+    typeof match.accountId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    agentId: value.agentId,
+    accountId: match.accountId,
+    hasPeer: match.peer !== undefined,
+  };
+}
+
+function managedAgentIdForMattermostAccount(accountId: string): string | null {
+  if (accountId.includes("-proj-")) {
+    const agentId = `octogee-${accountId}-coach`;
+    const parsed = parseAgentId(agentId);
+    return parsed.kind === "project" &&
+        `${parsed.username}-proj-${parsed.project}` === accountId
+      ? agentId
+      : null;
+  }
+  if (accountId.endsWith("-coach")) {
+    const agentId = `octogee-${accountId}`;
+    const parsed = parseAgentId(agentId);
+    return parsed.kind === "coach" && `${parsed.username}-coach` === accountId
+      ? agentId
+      : null;
+  }
+  return null;
+}
+
+function applySharedDefaultAgent(config: OpenClawConfig): boolean {
+  const agents = ensureNullishObjectProperty(config, "agents");
+  if (!agents) throw new Error("shared routing safety requires an agents object");
+  if (Array.isArray(agents.list)) {
+    const next = gatewayAgentRoster(agents.list, "");
+    if (valueEqual(agents.list, next)) return false;
+    agents.list = next;
+    return true;
+  }
+  if (agents.list !== undefined) {
+    throw new Error("shared routing safety requires agents.list to be an array");
+  }
+  const entries = objectProperty(agents, "entries");
+  if (!entries) {
+    if (agents.entries !== undefined) {
+      throw new Error("shared routing safety requires agents.entries to be an object");
+    }
+    agents.list = gatewayAgentRoster([], "");
+    return true;
+  }
+  if (Object.values(entries).some((entry) => !isPlainObject(entry))) {
+    throw new Error("shared routing safety requires every agent entry to be an object");
+  }
+  const list = Object.entries(entries)
+    .map(([id, entry]) => ({ ...(entry as Record<string, unknown>), id }));
+  const nextEntries = Object.fromEntries(
+    gatewayAgentRoster(list, "").map((entry) => {
+      const { id, ...rest } = entry as Record<string, unknown> & { id: string };
+      return [id, rest];
+    }),
+  );
+  if (valueEqual(entries, nextEntries)) return false;
+  agents.entries = nextEntries;
+  return true;
+}
+
+function managedMattermostRoutes(
+  accounts: Record<string, unknown>,
+  configuredAgentIds: ReadonlySet<string>,
+  logFn: (msg: string) => void,
+): { routes: Map<string, string>; quarantinedAccounts: Set<string> } {
+  const routes = new Map<string, string>();
+  const quarantinedAccounts = new Set<string>();
+  for (const accountId of Object.keys(accounts)) {
+    const agentId = managedAgentIdForMattermostAccount(accountId);
+    if (agentId && configuredAgentIds.has(agentId)) {
+      routes.set(accountId, agentId);
+      continue;
+    }
+    quarantinedAccounts.add(accountId);
+    logFn(
+      agentId
+        ? `refused account route without managed agent for ${accountId}`
+        : `refused unmanaged account route for ${accountId}`,
+    );
+  }
+  return { routes, quarantinedAccounts };
+}
+
+export function applySharedMattermostRoutingSafetyPatch(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  if (env.GATEWAY_CLASS !== "shared") return false;
+  let changed = applySharedDefaultAgent(config);
+  if (changed) {
+    logFn("installed the non-tenant default agent for unmatched routes");
+  }
+
+  const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
+  const accounts = objectProperty(mattermost, "accounts");
+  if (!accounts) return changed;
+  if (config.bindings !== undefined && !Array.isArray(config.bindings)) {
+    throw new Error("shared routing safety requires bindings to be an array");
+  }
+  const bindings = Array.isArray(config.bindings) ? config.bindings : [];
+
+  const configuredAgentIds = new Set(agentIdsFromConfig(config));
+  const { routes, quarantinedAccounts } = managedMattermostRoutes(
+    accounts,
+    configuredAgentIds,
+    logFn,
+  );
+  if (routes.size === 0 && quarantinedAccounts.size === 0) return changed;
+
+  const retained = bindings.filter((binding) => {
+    const facts = mattermostBindingFacts(binding);
+    if (!facts) return true;
+    if (quarantinedAccounts.has(facts.accountId)) return false;
+    const inferredAgentId = routes.get(facts.accountId);
+    return inferredAgentId === undefined || inferredAgentId === facts.agentId;
+  });
+  const present = new Set(
+    retained.flatMap((binding) => {
+      const facts = mattermostBindingFacts(binding);
+      return facts && !facts.hasPeer ? [accountRouteKey(facts.accountId, facts.agentId)] : [];
+    }),
+  );
+  for (const [accountId, agentId] of routes) {
+    if (present.has(accountRouteKey(accountId, agentId))) continue;
+    retained.push({
+      agentId,
+      match: { channel: "mattermost", accountId },
+    });
+  }
+  if (!valueEqual(bindings, retained)) {
+    config.bindings = retained;
+    changed = true;
+    logFn(
+      `converged Mattermost account routes (stable=${routes.size}, quarantined=${quarantinedAccounts.size})`,
+    );
   }
   return changed;
 }
@@ -281,6 +441,7 @@ export function applyPreBootPatches(
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
     applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
+    applySharedMattermostRoutingSafetyPatch(config, env, logFn),
     applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),
@@ -566,6 +727,20 @@ async function applyGatewayRootConfigFromFirestore(
   }
 }
 
+export function writeConfigAtomically(configPath: string, config: unknown): void {
+  const temporary = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, configPath);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
 
 let configRaw: string;
@@ -591,7 +766,7 @@ let configRaw: string;
   const policyChanged = applyPreBootPatches(config, process.env, log);
 
   if (overridesChanged || policyChanged) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+    writeConfigAtomically(CONFIG_PATH, config);
     log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
   } else {
     log("no changes needed");
@@ -660,10 +835,11 @@ const tryByField = async (
 }
 
 const isEntrypoint = process.argv[1] && process.argv[1].endsWith("pre-boot-config.ts") || process.argv[1]?.endsWith("pre-boot-config.js");
-if (isEntrypoint) {
-  main().catch((err) => {
+function exitPreBootWithError(error: unknown): never {
+  console.error(`[pre-boot] Fatal: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 
-    console.error(`[pre-boot] Warning: ${err.message}`);
-    process.exit(0);
-  });
+if (isEntrypoint) {
+  main().catch(exitPreBootWithError);
 }

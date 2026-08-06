@@ -4,6 +4,7 @@ import {
   createReleaseDigestManifest,
   releaseDigestManifestReference,
   releaseDigestAliasPlan,
+  validateBaselineReleaseDigestManifest,
   validateReleaseDigestManifest,
 } from "../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
 
@@ -24,16 +25,62 @@ function manifest() {
       "glm-controller": digest("3"),
       "octogee-api": digest("4"),
       "octogee-gateway": digest("5"),
-      "octogee-gateway-operator": digest("6"),
+      "octogee-gateway-builder": digest("6"),
       "octogee-ops-agent": digest("7"),
+      "octogee-project-runner": digest("8"),
     },
   });
+}
+
+function legacyManifest() {
+  return {
+    schemaVersion: 1,
+    sourceSha,
+    openclawVersion: "2026.7.1",
+    repository,
+    surfaces: {
+      gateway: {
+        "gateway-edge": digest("2"),
+        "octogee-gateway": digest("5"),
+        "octogee-gateway-operator": digest("6"),
+      },
+      platform: {
+        "artifact-worker": digest("1"),
+        "glm-controller": digest("3"),
+        "octogee-api": digest("4"),
+        "octogee-ops-agent": digest("7"),
+      },
+    },
+  };
+}
+
+function preBuilderManifest() {
+  return {
+    schemaVersion: 2,
+    sourceSha,
+    openclawVersion: "2026.7.1",
+    repository,
+    surfaces: {
+      gateway: {
+        "gateway-edge": digest("2"),
+        "octogee-gateway": digest("5"),
+        "octogee-gateway-operator": digest("6"),
+      },
+      platform: {
+        "artifact-worker": digest("1"),
+        "glm-controller": digest("3"),
+        "octogee-api": digest("4"),
+        "octogee-ops-agent": digest("7"),
+        "octogee-project-runner": digest("8"),
+      },
+    },
+  };
 }
 
 describe("release digest manifest", () => {
   it("records the complete immutable platform and gateway digest set under its full source SHA", () => {
     expect(manifest()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 3,
       sourceSha,
       openclawVersion: "2026.7.1",
       repository,
@@ -41,13 +88,14 @@ describe("release digest manifest", () => {
         gateway: {
           "gateway-edge": digest("2"),
           "octogee-gateway": digest("5"),
-          "octogee-gateway-operator": digest("6"),
+          "octogee-gateway-builder": digest("6"),
         },
         platform: {
           "artifact-worker": digest("1"),
           "glm-controller": digest("3"),
           "octogee-api": digest("4"),
           "octogee-ops-agent": digest("7"),
+          "octogee-project-runner": digest("8"),
         },
       },
     });
@@ -84,16 +132,20 @@ describe("release digest manifest", () => {
         target: `${repository}/octogee-gateway:aaaaaaa-oc2026.7.1`,
       },
       {
-        source: `${repository}/octogee-gateway-operator@${digest("6")}`,
-        target: `${repository}/octogee-gateway-operator:aaaaaaa`,
+        source: `${repository}/octogee-gateway-builder@${digest("6")}`,
+        target: `${repository}/octogee-gateway-builder:aaaaaaa`,
       },
       {
-        source: `${repository}/octogee-gateway-operator@${digest("6")}`,
-        target: `${repository}/octogee-gateway-operator:aaaaaaa-oc2026.7.1`,
+        source: `${repository}/octogee-gateway-builder@${digest("6")}`,
+        target: `${repository}/octogee-gateway-builder:aaaaaaa-oc2026.7.1`,
       },
       {
         source: `${repository}/octogee-ops-agent@${digest("7")}`,
         target: `${repository}/octogee-ops-agent:aaaaaaa`,
+      },
+      {
+        source: `${repository}/octogee-project-runner@${digest("8")}`,
+        target: `${repository}/octogee-project-runner:aaaaaaa`,
       },
     ]);
   });
@@ -109,10 +161,17 @@ describe("release digest manifest", () => {
         "glm-controller": digest("3"),
         "octogee-api": digest("4"),
         "octogee-gateway": digest("5"),
-        "octogee-gateway-operator": "latest",
+        "octogee-gateway-builder": "latest",
         "octogee-ops-agent": digest("7"),
+        "octogee-project-runner": digest("8"),
       },
-    })).toThrow("octogee-gateway-operator must be an immutable sha256 digest");
+    })).toThrow("octogee-gateway-builder must be an immutable sha256 digest");
+
+    const missingRunner = manifest();
+    delete missingRunner.surfaces.platform["octogee-project-runner"];
+    expect(() => validateReleaseDigestManifest(missingRunner, sourceSha, repository)).toThrow(
+      "manifest platform surface must contain exactly: artifact-worker, glm-controller, octogee-api, octogee-ops-agent, octogee-project-runner",
+    );
   });
 
   it("rejects a stored manifest that places an image on the wrong release surface", () => {
@@ -121,7 +180,7 @@ describe("release digest manifest", () => {
     delete malformed.surfaces.gateway["gateway-edge"];
 
     expect(() => releaseDigestAliasPlan(malformed, releaseSha)).toThrow(
-      "manifest gateway surface must contain exactly: gateway-edge, octogee-gateway, octogee-gateway-operator",
+      "manifest gateway surface must contain exactly: gateway-edge, octogee-gateway, octogee-gateway-builder",
     );
   });
 
@@ -143,6 +202,60 @@ describe("release digest manifest", () => {
       "manifest sourceSha does not match the expected SHA",
     );
     expect(() => validateReleaseDigestManifest(manifest(), sourceSha, `${repository}-other`)).toThrow(
+      "manifest repository does not match the expected repository",
+    );
+  });
+
+  it("accepts the exact pre-runner and pre-Builder shapes only for baseline carry-forward", () => {
+    expect(validateBaselineReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toEqual(
+      legacyManifest(),
+    );
+    expect(validateBaselineReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toEqual(
+      preBuilderManifest(),
+    );
+    expect(validateBaselineReleaseDigestManifest(manifest(), sourceSha, repository)).toEqual(manifest());
+    expect(() => validateReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toThrow(
+      "manifest schemaVersion must be 3",
+    );
+    expect(() => releaseDigestAliasPlan(legacyManifest(), sourceSha, repository)).toThrow(
+      "manifest schemaVersion must be 3",
+    );
+    expect(() => validateReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toThrow(
+      "manifest schemaVersion must be 3",
+    );
+  });
+
+  it("rejects legacy baselines with any image-set change other than the absent runner", () => {
+    const missingApi = structuredClone(legacyManifest());
+    delete missingApi.surfaces.platform["octogee-api"];
+    expect(() => validateBaselineReleaseDigestManifest(missingApi, sourceSha, repository)).toThrow(
+      "manifest platform surface must contain exactly: artifact-worker, glm-controller, octogee-api, octogee-ops-agent",
+    );
+
+    const addedRunner = structuredClone(legacyManifest());
+    addedRunner.surfaces.platform["octogee-project-runner"] = digest("8");
+    expect(() => validateBaselineReleaseDigestManifest(addedRunner, sourceSha, repository)).toThrow(
+      "manifest platform surface must contain exactly: artifact-worker, glm-controller, octogee-api, octogee-ops-agent",
+    );
+
+    const movedGatewayImage = structuredClone(legacyManifest());
+    movedGatewayImage.surfaces.platform["gateway-edge"] = movedGatewayImage.surfaces.gateway["gateway-edge"];
+    delete movedGatewayImage.surfaces.gateway["gateway-edge"];
+    expect(() => validateBaselineReleaseDigestManifest(movedGatewayImage, sourceSha, repository)).toThrow(
+      "manifest gateway surface must contain exactly: gateway-edge, octogee-gateway, octogee-gateway-operator",
+    );
+  });
+
+  it("rejects legacy baselines whose identity or digest contract is mutated", () => {
+    const mutableDigest = structuredClone(legacyManifest());
+    mutableDigest.surfaces.platform["octogee-api"] = "latest";
+    expect(() => validateBaselineReleaseDigestManifest(mutableDigest, sourceSha, repository)).toThrow(
+      "octogee-api must be an immutable sha256 digest",
+    );
+    expect(() => validateBaselineReleaseDigestManifest(legacyManifest(), otherSha, repository)).toThrow(
+      "manifest sourceSha does not match the expected SHA",
+    );
+    expect(() => validateBaselineReleaseDigestManifest(legacyManifest(), sourceSha, `${repository}-other`)).toThrow(
       "manifest repository does not match the expected repository",
     );
   });

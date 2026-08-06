@@ -1,4 +1,4 @@
-import { projectAgentId } from "../../shared/types/identity.js";
+import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
 import {
   mattermostAccountSecretRef,
@@ -17,6 +17,106 @@ const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
 // eslint-disable-next-line sonarjs/no-clear-text-protocols
 const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "http://llm-broker:3010/v1";
 const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
+const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
+
+export const PRODUCTIVITY_TOOL_NAMES = [
+  "octogee_google_calendar_list",
+  "octogee_google_gmail_read",
+  "octogee_google_gmail_write",
+  "octogee_google_drive_read",
+  "octogee_google_docs_read",
+  "octogee_google_docs_write",
+  "octogee_google_contacts_read",
+  "octogee_google_calendar_read",
+  "octogee_google_calendar_write",
+  "octogee_google_tasks_read",
+  "octogee_google_tasks_write",
+  "octogee_google_sheets_read",
+  "octogee_google_sheets_write",
+  "octogee_obsidian_read",
+  "octogee_obsidian_write",
+] as const;
+
+export const RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS = [
+  "preview_start",
+  "preview_stop",
+  "preview_list",
+  "octogee_publish",
+] as const;
+
+export const WORKSPACE_COACH_ALLOWED_TOOLS = [
+  "octogee_project_create",
+  "octogee_project_commit",
+  "octogee_project_list",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
+  "delegated_access",
+  "workspace_commit",
+  "brave_search",
+  "tavily_search",
+  "tavily_extract",
+  "octogee_chat_search",
+  "octogee_chat_history",
+  "octogee_chat_set_identity",
+  "octogee_status",
+  "octogee_ask_ops",
+  ...PRODUCTIVITY_TOOL_NAMES,
+] as const;
+
+export const PROJECT_AGENT_ALLOWED_TOOLS = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "web_search",
+  "web_fetch",
+  "brave_search",
+  "tavily_search",
+  "tavily_extract",
+  "octogee_project_commit",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+] as const;
+
+export const PROJECT_AGENT_DENIED_TOOLS = [
+  ...PRODUCTIVITY_TOOL_NAMES,
+  "exec",
+  "process",
+  "subagents",
+  "sessions_spawn",
+  "terminal",
+  ...RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
+  "workspace_commit",
+  "octogee_project_create",
+  "octogee_project_publish",
+  "delegated_access",
+  "octogee_status",
+  "octogee_chat_search",
+  "octogee_chat_history",
+  "octogee_chat_set_identity",
+  "bundle-mcp",
+  "automations",
+  "skill_workshop",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
+  "browser",
+] as const;
+
+function workspaceCoachTools(): Record<string, unknown> {
+  return {
+    profile: "coding",
+    alsoAllow: WORKSPACE_COACH_ALLOWED_TOOLS,
+    deny: RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
+    fs: { workspaceOnly: true },
+    toolsBySender: {},
+  };
+}
 
 function normalizedNonEmpty(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
@@ -80,6 +180,7 @@ export interface CustomerAgentInput {
   customerDir: string;
   agentDir: string;
   coach: { name: string; emoji: string; model: string };
+  customerMmUserId?: string | null;
   default?: boolean;
   memorySearch?: Record<string, unknown>;
 }
@@ -97,7 +198,7 @@ export function buildCustomerAgent(
     model: c.coach.model,
     identity: { name: c.coach.name, emoji: c.coach.emoji },
     heartbeat: { every: "60m", target: "last", lightContext: true },
-    tools: { fs: { workspaceOnly: true } },
+    tools: workspaceCoachTools(),
   };
   if (c.default) {
     agent.default = true;
@@ -240,6 +341,7 @@ export interface MattermostAccountInput {
 
 export interface MattermostAccountEntry {
   botToken: MattermostAccountSecretRef;
+  allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
   groups?: Record<string, { enabled: false }> | null;
@@ -287,8 +389,13 @@ export function buildMattermostAccounts(
       groupsPatch = { groups: null };
     }
     const accountId = `${c.slug}-coach`;
+    const ownerAllowFrom = typeof c.customerMmUserId === "string" &&
+        MATTERMOST_ID_RE.test(c.customerMmUserId)
+      ? [c.customerMmUserId]
+      : [];
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
+      allowFrom: ownerAllowFrom,
       groupPolicy: "open",
       ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
       ...groupsPatch,
@@ -303,8 +410,155 @@ export interface OpenClawBinding {
   match: {
     channel: "mattermost";
     accountId: string;
-    peer: { kind: "group"; id: string };
+    peer?: { kind: "group"; id: string };
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAccountBinding(value: unknown): value is OpenClawBinding {
+  if (!isRecord(value) || typeof value.agentId !== "string") return false;
+  const match = value.match;
+  return isRecord(match) &&
+    match.channel === "mattermost" &&
+    typeof match.accountId === "string" &&
+    match.peer === undefined;
+}
+
+function mattermostBindingKey(value: unknown): string | null {
+  if (!isRecord(value) || typeof value.agentId !== "string") return null;
+  const match = value.match;
+  if (
+    !isRecord(match) ||
+    match.channel !== "mattermost" ||
+    typeof match.accountId !== "string"
+  ) {
+    return null;
+  }
+  if (match.peer === undefined) {
+    return `${match.accountId}\u0000${value.agentId}\u0000account`;
+  }
+  if (
+    !isRecord(match.peer) ||
+    typeof match.peer.kind !== "string" ||
+    typeof match.peer.id !== "string"
+  ) {
+    return `${match.accountId}\u0000${value.agentId}\u0000malformed`;
+  }
+  return `${match.accountId}\u0000${value.agentId}\u0000${match.peer.kind}\u0000${match.peer.id}`;
+}
+
+export function mattermostAccountBindingsNeedActivation(
+  current: readonly unknown[],
+  desired: readonly OpenClawBinding[],
+): boolean {
+  return mattermostAccountBindingsNeedingActivation(current, desired).length > 0;
+}
+
+export function mattermostAccountBindingsNeedingActivation(
+  current: readonly unknown[],
+  desired: readonly OpenClawBinding[],
+): string[] {
+  const desiredAccountIds = new Set(
+    desired.filter(isAccountBinding).map((binding) => binding.match.accountId),
+  );
+  const desiredAgentUsernames = new Set(desired.flatMap((binding) => {
+    const parsed = parseAgentId(binding.agentId);
+    return parsed.kind === "unknown" ? [] : [parsed.username];
+  }));
+  const desiredRoutes = new Set(desired.flatMap((binding) => {
+    const key = mattermostBindingKey(binding);
+    return key ? [key] : [];
+  }));
+  const currentRoutes = new Set(current.flatMap((binding) => {
+    const key = mattermostBindingKey(binding);
+    return key ? [key] : [];
+  }));
+  const needsActivation = new Set<string>();
+
+  for (const binding of desired.filter(isAccountBinding)) {
+    const key = mattermostBindingKey(binding)!;
+    if (!currentRoutes.has(key)) needsActivation.add(binding.match.accountId);
+  }
+  for (const binding of current) {
+    const key = mattermostBindingKey(binding);
+    if (!key) continue;
+    const accountId = key.slice(0, key.indexOf("\u0000"));
+    const agentId = isRecord(binding) && typeof binding.agentId === "string"
+      ? binding.agentId
+      : "";
+    const parsedAgentId = parseAgentId(agentId);
+    const managedAgent = parsedAgentId.kind !== "unknown" &&
+      desiredAgentUsernames.has(parsedAgentId.username);
+    if (
+      (desiredAccountIds.has(accountId) || managedAgent) &&
+      !desiredRoutes.has(key)
+    ) {
+      needsActivation.add(accountId);
+    }
+  }
+  return [...needsActivation].sort();
+}
+
+export const SAFE_DEFAULT_AGENT_ID = "octogee-unmatched-route";
+
+export function buildSafeDefaultAgent(): Record<string, unknown> {
+  return {
+    id: SAFE_DEFAULT_AGENT_ID,
+    name: "Unmatched Mattermost route",
+    default: true,
+    tools: {
+      profile: "minimal",
+      alsoAllow: [],
+      fs: { workspaceOnly: true },
+    },
+  };
+}
+
+function withoutDefault(agent: unknown): unknown {
+  if (agent === null || typeof agent !== "object" || Array.isArray(agent)) return agent;
+  const entry = { ...(agent as Record<string, unknown>) };
+  delete entry.default;
+  return entry;
+}
+
+export function gatewayAgentRoster(
+  agents: readonly unknown[],
+  builderSlug: string | null = gatewayAgentRosterBuilderSlug(),
+): unknown[] {
+  const retained = agents
+    .filter((agent) => !(
+      agent !== null &&
+      typeof agent === "object" &&
+      !Array.isArray(agent) &&
+      (agent as { id?: unknown }).id === SAFE_DEFAULT_AGENT_ID
+    ));
+  if (builderSlug === null) return retained;
+  const withoutExistingDefault = retained.map(withoutDefault);
+  if (!builderSlug) return [buildSafeDefaultAgent(), ...withoutExistingDefault];
+  const dedicatedAgentId = `octogee-${builderSlug}-coach`;
+  return withoutExistingDefault.map((agent) => {
+    if (
+      agent === null ||
+      typeof agent !== "object" ||
+      Array.isArray(agent) ||
+      (agent as { id?: unknown }).id !== dedicatedAgentId
+    ) {
+      return agent;
+    }
+    return { ...(agent as Record<string, unknown>), default: true };
+  });
+}
+
+export function gatewayAgentRosterBuilderSlug(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const gatewayClass = env.GATEWAY_CLASS?.trim();
+  if (gatewayClass === "shared") return "";
+  if (gatewayClass === "builder") return env.GATEWAY_BUILDER_SLUG?.trim() || "";
+  return "";
 }
 
 export interface ProjectAgentState {
@@ -333,6 +587,7 @@ export interface ProjectAgentsBuildInput {
   agentsDir: string;
   coach: { name: string; emoji: string; model: string };
   projectAgents: ReadonlyArray<ProjectAgentState>;
+  ownerMmUserId?: string | null;
 }
 
 export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record<string, unknown>> {
@@ -341,6 +596,7 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
     .filter((p) => active.has(p.projectId))
     .map((p) => {
       const agentId = projectAgentId(input.slug, p.projectId);
+      const ownerToolPolicy = workspaceCoachTools();
       return {
         id: agentId,
         name: `${input.coach.name} (${input.slug}/${p.projectId})`,
@@ -348,7 +604,14 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
         agentDir: `${input.agentsDir}/${agentId}/agent`,
         model: input.coach.model,
         identity: { name: input.coach.name, emoji: input.coach.emoji },
-        tools: { fs: { workspaceOnly: true } },
+        tools: {
+          ...ownerToolPolicy,
+          profile: "minimal",
+          alsoAllow: PROJECT_AGENT_ALLOWED_TOOLS,
+          deny: PROJECT_AGENT_DENIED_TOOLS,
+          exec: { mode: "deny", host: "node" },
+          fs: { workspaceOnly: true },
+        },
       };
     });
 }
@@ -356,6 +619,7 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
 export function buildProjectAgentAccounts(
   slug: string,
   projectAgents: ReadonlyArray<ProjectAgentState>,
+  ownerMmUserId?: string | null,
 ): Record<string, MattermostAccountEntry> {
   const active = activeAgentProjectIds(projectAgents);
   const accounts: Record<string, MattermostAccountEntry> = {};
@@ -364,6 +628,9 @@ export function buildProjectAgentAccounts(
     const accountId = `${slug}-proj-${p.projectId}`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
+      allowFrom: typeof ownerMmUserId === "string" && MATTERMOST_ID_RE.test(ownerMmUserId)
+        ? [ownerMmUserId]
+        : [],
       groupPolicy: "open",
       commands: { native: false },
     };
@@ -387,7 +654,24 @@ export function buildCustomerBindings(
   return customers.flatMap((c) => {
     const coachAgentId = `octogee-${c.slug}-coach`;
     const coachAccountId = `${c.slug}-coach`;
-    return c.channels.map((binding) => {
+    const projectIds = [...(c.agentProjects ?? [])].sort();
+    const accountBindings: OpenClawBinding[] = [
+      {
+        agentId: coachAgentId,
+        match: {
+          channel: "mattermost",
+          accountId: coachAccountId,
+        },
+      },
+      ...projectIds.map((projectId) => ({
+        agentId: projectAgentId(c.slug, projectId),
+        match: {
+          channel: "mattermost" as const,
+          accountId: `${c.slug}-proj-${projectId}`,
+        },
+      })),
+    ];
+    const peerBindings = c.channels.map((binding) => {
       const projectAgent =
         binding.scope === "project" &&
         binding.projectId !== undefined &&
@@ -403,5 +687,6 @@ export function buildCustomerBindings(
         },
       };
     });
+    return [...accountBindings, ...peerBindings];
   });
 }

@@ -71,6 +71,9 @@ describe("secret-resolver — defense-in-depth", () => {
   beforeAll(() => {
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-resolver-test-"));
     fs.mkdirSync(path.join(agentsDir, "octogee-alice-coach", "agent"), { recursive: true });
+    fs.mkdirSync(path.join(agentsDir, "octogee-alice-proj-garden-coach", "agent"), {
+      recursive: true,
+    });
     fs.mkdirSync(path.join(agentsDir, "octogee-bob-coach", "agent"), { recursive: true });
     fs.mkdirSync(path.join(agentsDir, "main"), { recursive: true });
     fs.mkdirSync(path.join(agentsDir, "octogee-ops-gw-test"), { recursive: true });
@@ -223,6 +226,10 @@ describe("secret-resolver — defense-in-depth", () => {
     "agent-model-token-openrouter-octogee-alice-coach",
     "agent-model-token-openai-octogee-alice-coach",
     "agent-embedding-token-openai-octogee-alice-coach",
+    "agent-model-token-octogee-alice-proj-garden-coach",
+    "agent-model-token-openrouter-octogee-alice-proj-garden-coach",
+    "agent-model-token-openai-octogee-alice-proj-garden-coach",
+    "agent-embedding-token-openai-octogee-alice-proj-garden-coach",
   ])("accepts the known ref %s", async (id) => {
     const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
     const out = await runResolver(envFor(), stdin);
@@ -239,6 +246,25 @@ describe("secret-resolver — defense-in-depth", () => {
     const out = await runResolver(envFor(), stdin);
     const res = parseResponse(out.stdout);
     expect(res.errors?.[id]?.message).toMatch(/no provisioned agent dir/);
+  });
+
+  it("refuses a canonical project-agent ref that is not in this gateway roster", async () => {
+    const id = "agent-model-token-octogee-alice-proj-foreign-coach";
+    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
+    const out = await runResolver(envFor(), stdin);
+    const res = parseResponse(out.stdout);
+    expect(res.errors?.[id]?.message).toMatch(/not provisioned on this gateway/);
+  });
+
+  it.each([
+    "agent-model-token-octogee-alice-proj-garden-extra-coach",
+    "agent-model-token-octogee-alice-proj-gar-den-coach",
+    "agent-model-token-octogee-proj-garden-coach",
+  ])("refuses malformed project-agent ref %s", async (id) => {
+    const stdin = JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [id] });
+    const out = await runResolver(envFor(), stdin);
+    const res = parseResponse(out.stdout);
+    expect(res.errors?.[id]?.message).toMatch(/does not match/);
   });
 
   it("refuses the retired platform embedding ref grammar", async () => {
@@ -298,6 +324,21 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(v).toBe("ogk_shared-1_abc");
     expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
     expect(JSON.parse(seen!.init.body)).toEqual({ agentId: "octogee-tester5-coach" });
+  });
+
+  it("routes a canonical project-agent model token with the exact embedded agentId", async () => {
+    let seen: { url: string; init: { body: string } } | undefined;
+    const agentId = "octogee-tester5-proj-garden-coach";
+    const v = await resolveOne(`agent-model-token-${agentId}`, {
+      token: "ksa-tok",
+      fetchImpl: async (url, init) => {
+        seen = { url, init };
+        return { ok: true, status: 200, json: async () => ({ value: "ogk_shared-1_project" }) };
+      },
+    });
+    expect(v).toBe("ogk_shared-1_project");
+    expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
+    expect(JSON.parse(seen!.init.body)).toEqual({ agentId });
   });
 
   it("routes an OpenRouter agent-model-token id with an explicit provider", async () => {

@@ -1,21 +1,3 @@
-/**
- * Process-local mirrors of the fleet collections Cowboy's periodic ticks read.
- *
- * The placement tick, the operator-heartbeat poller and the orphan reaper each
- * re-scanned `users`, `gateways`, `glmGateways` and the `assignments` collection
- * group on a 15s/60s cadence — collections the process already receives through
- * live listeners. The mirrors here serve those reads from memory instead.
- *
- * A mirror is FRESH or it is NULL: it never serves a set it cannot vouch for.
- * On listener loss the mirror drops its contents and readers fall back to one
- * direct scan until a re-attached listener re-delivers the collection, so a lost
- * stream degrades to the old read cost rather than to a stale reconcile.
- *
- * `gateways` and `glmGateways` are fed by the reconciler's existing listeners
- * (index.ts `startReconciler`) whose payloads were previously discarded after
- * fingerprinting; `users` and `assignments` are owned here.
- */
-
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 

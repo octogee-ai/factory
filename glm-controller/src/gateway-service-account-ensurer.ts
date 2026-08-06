@@ -41,7 +41,7 @@ function ownershipMetadata(identity: GatewayServiceAccountIdentity): Record<stri
  * Render the gateway-scoped ServiceAccount manifest. The KSA
  * (`octogee-gw-<gatewayId>`) is gateway-scoped, NOT revision-scoped: it is
  * created once by Cowboy and referenced by every revision Helm release, so two
- * simultaneous revisions never race on ownership metadata. Operator gateways
+ * simultaneous revisions never race on ownership metadata. Builder gateways
  * carry the Workload Identity annotation binding the KSA to the gateway GSA.
  */
 export function serviceAccountManifest(opts: {

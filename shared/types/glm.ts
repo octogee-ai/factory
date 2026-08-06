@@ -14,13 +14,13 @@ export function isOperatorManaged(value: unknown): boolean {
   return resolveManagedBy(value) === "operator";
 }
 
-export const GATEWAY_PROFILES = ["standard", "operator"] as const;
+export const GATEWAY_PROFILES = ["standard", "builder"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 
-export const GATEWAY_CLASSES = ["shared", "builder", "operator"] as const;
+export const GATEWAY_CLASSES = ["shared", "builder"] as const;
 export type GatewayClass = (typeof GATEWAY_CLASSES)[number];
 
-export const GATEWAY_IMAGE_PROFILES = ["standard", "operator"] as const;
+export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"] as const;
 export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
 
 export interface GatewayDesiredState {
@@ -58,7 +58,7 @@ export interface GatewayDesiredState {
 
   gatewayContainerSecurityContext?: Record<string, unknown>;
 
-  operatorAccess?: OperatorGatewayAccessSpec;
+  builderAccess?: BuilderGatewayAccessSpec;
 
   lastError?: { at: number; message: string } | null;
 
@@ -85,7 +85,7 @@ export interface GatewayServiceAccountSpec {
   annotations?: Record<string, string>;
 }
 
-export interface OperatorGatewayAccessSpec {
+export interface BuilderGatewayAccessSpec {
   shellsEnabled?: boolean;
   controlUiEnabled?: boolean;
   platformMetadataEgress?: boolean;
@@ -95,42 +95,42 @@ export interface OperatorGatewayAccessSpec {
   verifiedBy?: string;
 }
 
-export const OPERATOR_GATEWAY_LOCKED_ACCESS: OperatorGatewayAccessSpec = {
+export const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec = {
   shellsEnabled: false,
   controlUiEnabled: false,
   reason: "runtime-trust-boundary-not-provisioned",
 };
 
-export function defaultOperatorGatewayAccess(
+export function defaultBuilderGatewayAccess(
   ownerUid: string | null | undefined,
   shellsEnabled = true,
-): OperatorGatewayAccessSpec {
+): BuilderGatewayAccessSpec {
   return ownerUid
     ? {
       shellsEnabled,
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     }
-    : OPERATOR_GATEWAY_LOCKED_ACCESS;
+    : BUILDER_GATEWAY_LOCKED_ACCESS;
 }
 
-export function resolveOperatorGatewayAccess(
+export function resolveBuilderGatewayAccess(
   ownerUid: string | null | undefined,
-  operatorAccess: OperatorGatewayAccessSpec | null | undefined,
-): OperatorGatewayAccessSpec {
+  builderAccess: BuilderGatewayAccessSpec | null | undefined,
+): BuilderGatewayAccessSpec {
   return {
-    ...defaultOperatorGatewayAccess(ownerUid),
-    ...(operatorAccess ?? {}),
+    ...defaultBuilderGatewayAccess(ownerUid),
+    ...(builderAccess ?? {}),
   };
 }
 
-export const OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
+export const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export const GATEWAY_ID_MAX_LENGTH = 32;
 export const GATEWAY_ID_REQUIREMENT =
   "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
 
-export const OPERATOR_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {
+export const BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {
   create: true,
 };
 
@@ -182,41 +182,24 @@ export function deriveGatewayIdentity(
   return gatewayId;
 }
 
-export function operatorGatewayServiceAccountName(gatewayId: string): string {
-  return `${OPERATOR_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
-}
-
-export function isOperatorGatewayShellAccessEnabled(
-  profile: GatewayProfile | undefined,
-  operatorAccess: OperatorGatewayAccessSpec | undefined,
-): boolean {
-  return profile === "operator" && operatorAccess?.shellsEnabled === true;
+export function builderGatewayServiceAccountName(gatewayId: string): string {
+  return `${BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
 
 export function isGatewayClassShellAccessEnabled(
   gatewayClass: GatewayClass | undefined,
-  operatorAccess: OperatorGatewayAccessSpec | undefined,
+  builderAccess: BuilderGatewayAccessSpec | undefined,
 ): boolean {
-  return (
-    (gatewayClass === "builder" || gatewayClass === "operator") &&
-    operatorAccess?.shellsEnabled === true
-  );
+  return gatewayClass === "builder" && builderAccess?.shellsEnabled === true;
 }
 
 export function isGatewayClassControlUiAccessEnabled(
   gatewayClass: GatewayClass | undefined,
-  operatorAccess: OperatorGatewayAccessSpec | undefined,
+  builderAccess: BuilderGatewayAccessSpec | undefined,
 ): boolean {
-  return (
-    (gatewayClass === "builder" || gatewayClass === "operator") &&
-    operatorAccess?.controlUiEnabled !== false
-  );
+  return gatewayClass === "builder" && builderAccess?.controlUiEnabled !== false;
 }
 
-// The user-doc shell state the PWA gates BuilderShell on (gatewayProfile +
-// shellsEnabled). A Builder gets BuilderShell when placed on a shell-enabled
-// builder/operator gateway they OWN; a guest migrated onto someone else's
-// gateway does not.
 export function resolveUserGatewayShellState(
   data:
     | {
@@ -224,7 +207,7 @@ export function resolveUserGatewayShellState(
         profile?: unknown;
         imageProfile?: unknown;
         ownerUid?: unknown;
-        operatorAccess?: OperatorGatewayAccessSpec;
+        builderAccess?: BuilderGatewayAccessSpec;
       }
     | undefined,
   uid: string,
@@ -236,8 +219,8 @@ export function resolveUserGatewayShellState(
   });
   const userOwns = data?.ownerUid === uid;
   return {
-    gatewayProfile: gatewayClass === "operator" ? "operator" : "standard",
-    shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.operatorAccess),
+    gatewayProfile: gatewayClass === "builder" ? "builder" : "standard",
+    shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.builderAccess),
   };
 }
 
@@ -573,7 +556,7 @@ export interface CustomerMigrationV2GatewayRootFence {
   latestRelease: number;
   desiredRelease: number;
   liveRelease: number;
-  gatewayClass: "builder" | "operator";
+  gatewayClass: "builder";
   ownerUid: string;
   builderSlug: string;
   configHash: string;
@@ -622,7 +605,7 @@ export interface HelmInstanceValue {
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  operatorAccess?: OperatorGatewayAccessSpec;
+  builderAccess?: BuilderGatewayAccessSpec;
 
   profile?: GatewayProfile;
   gatewayClass?: GatewayClass;
@@ -661,10 +644,7 @@ export function resolveGatewayClass(input: {
   profile?: GatewayProfile;
   imageProfile?: GatewayImageProfile;
 }): GatewayClass {
-  if (input.gatewayClass) return input.gatewayClass;
-  return input.profile === "operator" || input.imageProfile === "operator"
-    ? "operator"
-    : "shared";
+  return input.gatewayClass === "builder" ? "builder" : "shared";
 }
 
 export function resolveGatewayImageProfile(input: {
@@ -672,7 +652,8 @@ export function resolveGatewayImageProfile(input: {
   imageProfile?: GatewayImageProfile;
   profile?: GatewayProfile;
 }): GatewayImageProfile {
-  if (input.imageProfile) return input.imageProfile;
-  if (!input.gatewayClass && input.profile) return input.profile;
-  return resolveGatewayClass(input) === "operator" ? "operator" : "standard";
+  if (input.imageProfile === "builder") return "builder";
+  if (input.imageProfile === "standard") return "standard";
+  if (!input.gatewayClass && input.profile === "builder") return "builder";
+  return resolveGatewayClass(input) === "builder" ? "builder" : "standard";
 }

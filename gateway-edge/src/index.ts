@@ -19,16 +19,12 @@ import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
 import gitRoutes from "./routes/workspace/git.js";
 import githubReposRoutes from "./routes/workspace/github-repos.js";
-import publishRoutes from "./routes/projects/publish.js";
-import releasesRoutes from "./routes/projects/releases.js";
-import { projectPreviewRoutes, workspacePreviewRoutes } from "./routes/previews.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
-import internalProjectPublishRoutes from "./routes/internal/project-publish.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
@@ -182,7 +178,6 @@ app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
 if (surface === "sidecar") {
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
-  app.use("/internal/project", internalProjectPublishRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
 }
 
@@ -232,21 +227,6 @@ function mountSidecarLocalitySurface(app: Express, options: {
   workspaceLocality.use(gitRoutes);
   workspaceLocality.use(githubReposRoutes);
   mountApi(app, "/workspace", workspaceLocality);
-
-  const projectsLocality = Router();
-  projectsLocality.use("/:wid/:pid/publish", requireAuth);
-  projectsLocality.use("/:wid/:pid/preview", requireAuthenticatedUid);
-  projectsLocality.use("/:wid/:pid/releases", requireAuth);
-  projectsLocality.use("/:wid/:pid/preview-channel", requireAuth);
-  projectsLocality.use(projectPreviewRoutes);
-  projectsLocality.use(publishRoutes);
-  projectsLocality.use(releasesRoutes);
-  mountApi(app, "/projects", projectsLocality);
-
-  const workspacesLocality = Router();
-  workspacesLocality.use("/:wid/preview", requireAuthenticatedUid);
-  workspacesLocality.use(workspacePreviewRoutes);
-  mountApi(app, "/workspaces", workspacesLocality);
 
   // Deep byosub health runs on the customer's own pod (reached via the
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
@@ -315,20 +295,14 @@ if (process.env.NODE_ENV !== "test") {
       });
     });
   } else if (process.env.GATEWAY_EDGE_MODE === "router") {
-    if (!process.env.GATEWAY_ROUTER_PREVIEW_HOST) {
-      logger.error("FATAL: GATEWAY_ROUTER_PREVIEW_HOST is required in gateway-router mode");
-      process.exit(1);
-    }
     const server = createGatewayRouter({
       namespace: process.env.K8S_NAMESPACE || "default",
-      previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST,
       log: (message, meta) => logger.error(message, meta),
     });
     server.listen(PORT, () => {
       logger.info(`gateway-router boot — listening on port ${PORT}`, {
         port: PORT,
         namespace: process.env.K8S_NAMESPACE || "default",
-        previewHost: process.env.GATEWAY_ROUTER_PREVIEW_HOST || "",
         sha: process.env.BUILD_SHA || "unknown",
       });
     });

@@ -48,6 +48,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "url";
+import { parseAgentId } from "../shared/dist/types/identity.js";
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so this
 // resolver materializes byok-* keys through the octogee-api broker
@@ -108,9 +109,18 @@ function parseByokApiKeyId(id) {
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
-  /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 const AGENT_EMBEDDING_TOKEN_ID_RE =
-  /^agent-embedding-token-openai-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-embedding-token-openai-(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
+
+function parseAgentScopedId(id, pattern) {
+  const match = id.match(pattern);
+  const agentId = match?.groups?.agentId;
+  if (!agentId) return null;
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown") return null;
+  return { match, agentId, slug: parsed.username };
+}
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -118,17 +128,19 @@ const AGENT_EMBEDDING_TOKEN_ID_RE =
  *  new customer becomes visible on the next spawn. No TOCTOU concern
  *  within a single resolver invocation. Same env var as the provisioner's
  *  AGENTS_DIR (scripts/lib/config.ts:18-19). */
-function loadKnownSlugs() {
+function loadKnownAgentRoster() {
   try {
     const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });
     const slugs = new Set();
+    const agentIds = new Set();
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      // Agent dir naming: octogee-{slug}-coach (provisioner contract).
-      const m = e.name.match(/^octogee-(.+)-coach$/);
-      if (m && m[1]) slugs.add(m[1]);
+      const parsed = parseAgentId(e.name);
+      if (parsed.kind === "unknown") continue;
+      slugs.add(parsed.username);
+      agentIds.add(e.name);
     }
-    return slugs;
+    return { slugs, agentIds };
   } catch (err) {
     process.stderr.write(
       `[secret-resolver] could not enumerate AGENTS_DIR (${AGENTS_DIR}): ${err?.message || err}\n`,
@@ -140,11 +152,11 @@ function loadKnownSlugs() {
     // is BYOT keys won't resolve until the deploy is fixed; that's a loud,
     // visible failure (every BYOT call returns "Refused by resolver") which
     // is exactly the signal we want.
-    return new Set();
+    return { slugs: new Set(), agentIds: new Set() };
   }
 }
 
-const KNOWN_SLUGS = loadKnownSlugs();
+const KNOWN_AGENT_ROSTER = loadKnownAgentRoster();
 
 function audit(line) {
   process.stderr.write(`[secret-resolver/audit] ${line}\n`);
@@ -155,26 +167,26 @@ const VALID_ID_GRAMMAR_MESSAGE =
 
 function scopedSlugForId(id) {
   const byok = parseByokApiKeyId(id);
-  if (byok) return byok.slug;
-  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  if (agentToken?.groups) return agentToken.groups.slug;
-  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
-  if (embeddingToken?.groups) return embeddingToken.groups.slug;
+  if (byok) return { slug: byok.slug };
+  const agentToken = parseAgentScopedId(id, AGENT_MODEL_TOKEN_ID_RE);
+  if (agentToken) return { slug: agentToken.slug, agentId: agentToken.agentId };
+  const embeddingToken = parseAgentScopedId(id, AGENT_EMBEDDING_TOKEN_ID_RE);
+  if (embeddingToken) return { slug: embeddingToken.slug, agentId: embeddingToken.agentId };
   return null;
 }
 
-/** Validate a single id against grammar + known-slug allowlist. Returns
- *  null on success, or an error message string to surface in `errors[id]`.
- *  KNOWN_SLUGS is always a Set — `loadKnownSlugs` returns an empty Set on
- *  read failure (fail-closed), never null, so the slug check always runs. */
+/** Validate a single id against grammar and the gateway's on-disk agent roster. */
 function validateId(id) {
   if (typeof id !== "string" || id.length === 0 || id.length > 256) {
     return `id is not a non-empty string ≤256 chars`;
   }
-  const slug = scopedSlugForId(id);
-  if (!slug) return VALID_ID_GRAMMAR_MESSAGE;
-  if (!KNOWN_SLUGS.has(slug)) {
-    return `slug "${slug}" has no provisioned agent dir`;
+  const scope = scopedSlugForId(id);
+  if (!scope) return VALID_ID_GRAMMAR_MESSAGE;
+  if (!KNOWN_AGENT_ROSTER.slugs.has(scope.slug)) {
+    return `slug "${scope.slug}" has no provisioned agent dir`;
+  }
+  if (scope.agentId && !KNOWN_AGENT_ROSTER.agentIds.has(scope.agentId)) {
+    return `agent "${scope.agentId}" is not provisioned on this gateway`;
   }
   return null;
 }
@@ -207,20 +219,20 @@ export async function resolveOne(id, deps = {}) {
   // agent-model-token-{agentId} → the per-customer broker-token route; every
   // other id is a byok-* key. Both routes return { value } and roster-scope
   // server-side (the resolver holds no GCP creds and no agent identity).
-  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
+  const agentToken = parseAgentScopedId(id, AGENT_MODEL_TOKEN_ID_RE);
+  const embeddingToken = parseAgentScopedId(id, AGENT_EMBEDDING_TOKEN_ID_RE);
   let route = "/internal/byok/api-key";
   let payload = { id };
   if (agentToken) {
     route = "/internal/byok/agent-model-token";
     payload = {
-      agentId: agentToken.groups.agentId,
-      ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
+      agentId: agentToken.agentId,
+      ...(agentToken.match.groups.provider ? { provider: agentToken.match.groups.provider } : {}),
     };
   } else if (embeddingToken) {
     route = "/internal/byok/agent-model-token";
     payload = {
-      agentId: embeddingToken.groups.agentId,
+      agentId: embeddingToken.agentId,
       provider: "openai",
       purpose: "embeddings",
     };

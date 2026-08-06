@@ -454,7 +454,7 @@ function seedDurableGateway(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -641,7 +641,9 @@ describe("Admin onboarding placement", () => {
     };
     seedDurableGateway("gw-builder", {
       root: {
+        profile: "builder",
         gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-builder",
         builderSlug: "builder",
       },
@@ -807,13 +809,13 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayClass: "shared",
       imageProfile: "standard",
       sizingTier: "l",
-      operatorAccess: null,
+      builderAccess: null,
       serviceAccountName: null,
       serviceAccount: null,
     });
   });
 
-  it("rejects manually creating an owner operator gateway before side effects", async () => {
+  it("rejects the retired operator profile before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
@@ -823,7 +825,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/profile.*standard.*builder/i);
     expect(provisionerCalls).toEqual([]);
     expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
   });
@@ -838,7 +840,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
   });
@@ -852,7 +854,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayClass: "builder",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
@@ -883,11 +885,11 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayId: "ghost",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
-      profile: "operator",
+      gatewayClass: "builder",
       ownerUid: "uid-ghost",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/owner-only gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     const gwWrite = calls.find(
       (c) => c.collection === "gateways" && c.op === "doc.set",
@@ -1021,9 +1023,9 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
       heartbeat: { status: "ready", mountedCustomers: ["alice"] },
       root: {
         sizingTier: "l",
-        profile: "operator",
-        gatewayClass: "operator",
-        imageProfile: "operator",
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-bender",
         builderSlug: "bender",
       },
@@ -1043,9 +1045,9 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
-        profile: "operator",
-        gatewayClass: "operator",
-        imageProfile: "operator",
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-default",
         builderSlug: "default",
       },
@@ -1053,7 +1055,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
-    expect(g.sizing.tier).toBe("l");
+    expect(g.sizing.tier).toBe("xs");
     expect(g.sizing.resolvedFrom).toBe("class-default");
   });
 
@@ -1081,9 +1083,9 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     seedDurableGateway("bender", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
-        gatewayClass: "operator",
-        profile: "operator",
-        imageProfile: "operator",
+        gatewayClass: "builder",
+        profile: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-bender",
         builderSlug: "bender",
         sizingTier: "m",
@@ -1108,13 +1110,13 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
   });
 
-  it("defaults operator gateways to Spot even with a residual computeClass", async () => {
+  it("defaults Builder gateways to Spot even with a residual computeClass", async () => {
     seedDurableGateway("dedicated", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
-        gatewayClass: "operator",
-        profile: "operator",
-        imageProfile: "operator",
+        gatewayClass: "builder",
+        profile: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-dedicated",
         builderSlug: "dedicated",
         sizingTier: "m",
@@ -1458,7 +1460,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/rollout")
-      .send({ imageTag: "abcdef1", profile: "operator" });
+      .send({ imageTag: "abcdef1", profile: "builder" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/configuration is mutable/i);
     expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
@@ -1467,12 +1469,12 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   it("rejects a profile rollout before checking the image no-op boundary", async () => {
     seedDurableGateway("bender", {
       imageTag: "abcdef1",
-      root: { profile: "operator", gatewayClass: "operator", ownerUid: "uid-bender" },
+      root: { profile: "builder", gatewayClass: "builder", ownerUid: "uid-bender" },
     });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/bender/rollout")
-      .send({ imageTag: "abcdef1", profile: "operator" });
+      .send({ imageTag: "abcdef1", profile: "builder" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/configuration is mutable/i);
     expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
@@ -2012,12 +2014,12 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     seedDurableGateway("gw-operator", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
-        profile: "operator",
-        gatewayClass: "operator",
-        imageProfile: "operator",
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-owner",
         builderSlug: "owner",
-        operatorAccess: {
+        builderAccess: {
           shellsEnabled: true,
           reason: "owned-runtime-gateway",
         },
@@ -2031,7 +2033,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       .post("/api/admin/customers/uid-dave/assign")
       .send({ gatewayId: "gw-operator" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/owner-only gateway placement is managed by the disposable lifecycle/);
+    expect(res.body.error).toMatch(/Builder gateway placement is managed by the disposable lifecycle/);
 
     const grant = calls.find(
       (c) => c.collection === "glmGateways" && c.op === "doc.update" && c.docId === "gw-operator",

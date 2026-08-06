@@ -54,31 +54,28 @@ octogee-gw-{{ required "gatewayId is required (Cowboy must pass --set gatewayId=
 {{/*
 Resolve the product/security class for this gateway.
 
-New desired state passes `.Values.gatewayClass`. Legacy releases only have
-`.Values.profile`; `profile=operator` remains operator class, everything else
-defaults to shared.
+New desired state passes `.Values.gatewayClass`. Missing class defaults to the
+shared Barn; retired customer operator values are rejected by the schema.
 */}}
 {{- define "octogee-gateway.gatewayClass" -}}
 {{- if .Values.gatewayClass -}}
 {{- .Values.gatewayClass -}}
-{{- else if eq ((.Values.imageProfile | default .Values.profile) | default "") "operator" -}}
-operator
 {{- else -}}
 shared
 {{- end -}}
 {{- end }}
 
 {{/*
-Resolve the installed image/tooling profile. Shared and builder classes both
-use the standard image; operator class uses the operator image.
+Resolve the installed image/tooling profile. Shared uses the standard image;
+owner-bound disposable Builder gateways use the Builder image.
 */}}
 {{- define "octogee-gateway.imageProfile" -}}
 {{- if .Values.imageProfile -}}
 {{- .Values.imageProfile -}}
 {{- else if .Values.profile -}}
 {{- .Values.profile -}}
-{{- else if eq (include "octogee-gateway.gatewayClass" .) "operator" -}}
-operator
+{{- else if eq (include "octogee-gateway.gatewayClass" .) "builder" -}}
+builder
 {{- else -}}
 standard
 {{- end -}}

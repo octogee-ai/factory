@@ -4,17 +4,18 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { timestampMillis } from "@octogee/core/gateway-principal-access";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
 import {
   executeApprovedCalendarViaBroker,
   type ApprovedCalendarExecution,
-  type CalendarApprovalKind,
 } from "../lib/calendar-approval-executor.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
+const MALFORMED_APPROVAL_PREVIEW = "canonical productivity approval preview is malformed";
 const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface Deps {
@@ -25,8 +26,53 @@ interface Deps {
 
 type ApprovalState = "pending" | "approved" | "denied" | "executing" | "succeeded" | "failed" | "unknown";
 
+type ProductivityActionKind =
+  | "gmail-triage"
+  | "gmail-draft-create"
+  | "gmail-send"
+  | "calendar-create"
+  | "calendar-update"
+  | "calendar-delete"
+  | "docs-create"
+  | "docs-append"
+  | "tasks-create"
+  | "tasks-update"
+  | "sheets-create"
+  | "sheets-append"
+  | "obsidian-write"
+  | "project-create"
+  | "project-publish";
+
 const APPROVAL_STATES = new Set<ApprovalState>([
   "pending", "approved", "denied", "executing", "succeeded", "failed", "unknown",
+]);
+const PRODUCTIVITY_ACTION_KINDS = new Set<ProductivityActionKind>([
+  "gmail-triage",
+  "gmail-draft-create",
+  "gmail-send",
+  "calendar-create",
+  "calendar-update",
+  "calendar-delete",
+  "docs-create",
+  "docs-append",
+  "tasks-create",
+  "tasks-update",
+  "sheets-create",
+  "sheets-append",
+  "obsidian-write",
+  "project-create",
+  "project-publish",
+]);
+const ONE_LINE_ACTION_KINDS = new Set<ProductivityActionKind>([
+  "gmail-triage",
+  "gmail-draft-create",
+  "docs-create",
+  "docs-append",
+  "tasks-create",
+  "tasks-update",
+  "sheets-create",
+  "sheets-append",
+  "obsidian-write",
 ]);
 
 function isApprovalState(value: unknown): value is ApprovalState {
@@ -52,10 +98,170 @@ function hashesEqual(left: unknown, right: string | null): boolean {
 interface ProductivityApprovalView {
   approvalId: string;
   state: ApprovalState | "expired";
-  action: { kind: string };
+  action: { kind: ProductivityActionKind };
   preview: Record<string, unknown>;
   reason: string | null;
   approvalExpiresAt: string;
+}
+
+function requiredText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  return value;
+}
+
+function optionalText(value: unknown, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length > maxLength) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  return value;
+}
+
+function stringList(value: unknown, maxItems: number, maxLength: number): string[] {
+  if (
+    !Array.isArray(value)
+    || value.length > maxItems
+    || value.some((entry) => typeof entry !== "string" || entry.length === 0 || entry.length > maxLength)
+  ) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  return value as string[];
+}
+
+function projectOneLinePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const summary = requiredText(preview.summary, 512);
+  if (/[\r\n]/u.test(summary) || summary.trim().length === 0) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  return { summary };
+}
+
+function projectCreatePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const expectedKeys = new Set(["name", "slug", "tagline", "projectType", "recipe"]);
+  const keys = Object.keys(preview);
+  const name = requiredText(preview.name, 80);
+  const slug = requiredText(preview.slug, 16);
+  const tagline = preview.tagline;
+  const projectType = preview.projectType;
+  const recipe = preview.recipe;
+  if (
+    keys.length !== expectedKeys.size
+    || keys.some((key) => !expectedKeys.has(key))
+    || name.trim().length === 0
+    || !/^[a-z0-9]{1,16}$/u.test(slug)
+    || typeof tagline !== "string"
+    || tagline.length > 300
+    || (projectType !== null && !["game", "social", "planner", "trip", "other"].includes(String(projectType)))
+    || !isProjectRecipeId(recipe)
+  ) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  return { name, slug, tagline, projectType, recipe };
+}
+
+function validProjectPublishUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && /^ogp-[a-f0-9]{26}\.web\.app$/u.test(url.hostname)
+      && url.port === ""
+      && url.pathname === "/"
+      && value === url.origin
+      && url.username === ""
+      && url.password === ""
+      && url.search === ""
+      && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+function validProjectPublishSize(fileCount: unknown, totalBytes: unknown): boolean {
+  return Number.isSafeInteger(fileCount)
+    && Number(fileCount) >= 1
+    && Number(fileCount) <= 1_000
+    && Number.isSafeInteger(totalBytes)
+    && Number(totalBytes) >= 0
+    && Number(totalBytes) <= 24 * 1024 * 1024;
+}
+
+function projectPublishPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const projectName = requiredText(preview.projectName, 80);
+  const projectSlug = requiredText(preview.projectSlug, 16);
+  const publicUrl = requiredText(preview.publicUrl, 2_048);
+  const runId = requiredText(preview.runId, 36);
+  const sourceCommit = requiredText(preview.sourceCommit, 40);
+  const fileCount = preview.fileCount;
+  const totalBytes = preview.totalBytes;
+  if (
+    projectName.trim().length === 0
+    || !/^[a-z0-9]{1,16}$/u.test(projectSlug)
+    || !validProjectPublishUrl(publicUrl)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(runId)
+    || !/^[a-f0-9]{40}$/u.test(sourceCommit)
+    || !validProjectPublishSize(fileCount, totalBytes)
+  ) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  return { projectName, projectSlug, publicUrl, runId, sourceCommit, fileCount, totalBytes };
+}
+
+function projectGmailSendPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const to = stringList(preview.to, 100, 320);
+  if (to.length === 0) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  return {
+    to,
+    ...(preview.cc === undefined ? {} : { cc: stringList(preview.cc, 100, 320) }),
+    ...(preview.bcc === undefined ? {} : { bcc: stringList(preview.bcc, 100, 320) }),
+    subject: optionalText(preview.subject, 998) ?? "",
+    bodyPreview: optionalText(preview.bodyPreview, 4_000) ?? "",
+  };
+}
+
+function validCalendarTime(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/u.test(value)
+    || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u.test(value);
+}
+
+function validTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function projectCalendarPreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const start = requiredText(preview.start, 128);
+  const end = requiredText(preview.end, 128);
+  if (!validCalendarTime(start) || !validCalendarTime(end)) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  const timeZone = optionalText(preview.timeZone, 128);
+  if (timeZone !== undefined && !validTimeZone(timeZone)) {
+    throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  }
+  return {
+    ...(preview.summary === undefined ? {} : { summary: optionalText(preview.summary, 998) }),
+    ...(preview.description === undefined ? {} : { description: optionalText(preview.description, 4_000) }),
+    ...(preview.location === undefined ? {} : { location: optionalText(preview.location, 1_000) }),
+    start,
+    end,
+    ...(timeZone === undefined ? {} : { timeZone }),
+    ...(preview.attendees === undefined ? {} : { attendees: stringList(preview.attendees, 200, 320) }),
+  };
+}
+
+function projectActionPreview(kind: ProductivityActionKind, value: unknown): Record<string, unknown> {
+  const preview = record(value);
+  if (!preview) throw new Error(MALFORMED_APPROVAL_PREVIEW);
+  if (kind === "gmail-send") return projectGmailSendPreview(preview);
+  if (kind === "calendar-create" || kind === "calendar-update" || kind === "calendar-delete") {
+    return projectCalendarPreview(preview);
+  }
+  if (kind === "project-create") return projectCreatePreview(preview);
+  if (kind === "project-publish") return projectPublishPreview(preview);
+  if (ONE_LINE_ACTION_KINDS.has(kind)) return projectOneLinePreview(preview);
+  throw new Error("canonical productivity approval action is unsupported");
 }
 
 function projectApproval(id: string, data: Record<string, unknown>, now: number): ProductivityApprovalView {
@@ -66,15 +272,17 @@ function projectApproval(id: string, data: Record<string, unknown>, now: number)
     || typeof approvalExpiresAt !== "number"
     || !action
     || typeof action.kind !== "string"
+    || !PRODUCTIVITY_ACTION_KINDS.has(action.kind as ProductivityActionKind)
   ) {
     throw new Error("canonical productivity approval is malformed");
   }
+  const kind = action.kind as ProductivityActionKind;
   const state = data.state === "pending" && approvalExpiresAt <= now ? "expired" : data.state;
   return {
     approvalId: id,
     state,
-    action: { kind: action.kind },
-    preview: record(data.preview) ?? {},
+    action: { kind },
+    preview: projectActionPreview(kind, data.preview),
     reason: typeof data.reason === "string" ? data.reason : null,
     approvalExpiresAt: new Date(approvalExpiresAt).toISOString(),
   };
@@ -158,21 +366,19 @@ async function resolveApproval(
   });
 }
 
-function calendarExecution(approvalId: string, data: Record<string, unknown>): ApprovedCalendarExecution | null {
+function calendarExecution(
+  approvalId: string,
+  ownerUid: string,
+  data: Record<string, unknown>,
+): ApprovedCalendarExecution | null {
   const action = record(data.action);
-  const request = record(data.request);
   const kind = action?.kind;
   if (
-    !request
-    || typeof data.agentId !== "string"
-    || (kind !== "calendar-create" && kind !== "calendar-update" && kind !== "calendar-delete")
+    kind !== "calendar-create"
+    && kind !== "calendar-update"
+    && kind !== "calendar-delete"
   ) return null;
-  return {
-    approvalId,
-    agentId: data.agentId,
-    kind: kind as CalendarApprovalKind,
-    request,
-  };
+  return { approvalId, ownerUid };
 }
 
 async function respondToApproval(
@@ -204,7 +410,7 @@ async function respondToApproval(
     }
     let data = result.data;
     const execution = targetState === "approved" && data.state === "approved"
-      ? calendarExecution(approvalId, data)
+      ? calendarExecution(approvalId, req.uid!, data)
       : null;
     if (execution) {
       try {

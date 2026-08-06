@@ -4,15 +4,15 @@ import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const workflowTools = [
-  "preview_start",
-  "preview_stop",
-  "preview_list",
-  "octogee_publish",
-  "octogee_publish_draft",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",
+  "octogee_project_build",
+  "octogee_project_test",
+  "octogee_project_preview",
+  "octogee_project_run_status",
+  "octogee_project_publish",
   "octogee_board_list",
   "octogee_board_card_read",
   "octogee_board_card_create",
@@ -67,18 +67,43 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     );
   });
 
-  it("denies exec/process/subagents/sessions_spawn for standard agents, exec/process for subagents", () => {
+  it("denies host-code surfaces for standard agents and exec/process for subagents", () => {
     const template = readTemplate();
 
-    expect(template.tools.deny).toEqual(["exec", "process", "subagents", "sessions_spawn"]);
+    expect(template.tools.deny).toEqual([
+      "exec",
+      "process",
+      "subagents",
+      "sessions_spawn",
+      "terminal",
+      "preview_start",
+      "preview_stop",
+      "preview_list",
+      "octogee_publish",
+      "bundle-mcp",
+      "automations",
+      "skill_workshop",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "browser",
+    ]);
+    expect(template.cron).toEqual({ triggers: { enabled: false } });
+    expect(template.skills.workshop).toEqual({
+      autonomous: { mode: "off" },
+      approvalPolicy: "pending",
+      allowSymlinkTargetWrites: false,
+    });
     expect(template.tools.exec).toEqual({ mode: "deny" });
+    expect(template.tools.fs).toEqual({ workspaceOnly: true });
     expect(template.tools.subagents.tools.deny).toEqual(["exec", "process"]);
   });
 
-  it("scopes session tools to the owning agent (visibility=agent) so a coach reaches all its own channels but no other tenant's sessions", () => {
+  it("scopes session tools to the current conversation", () => {
     const template = readTemplate();
 
-    expect(template.tools.sessions).toEqual({ visibility: "agent" });
+    expect(template.tools.sessions).toEqual({ visibility: "self" });
+    expect(template.gateway.terminal).toEqual({ enabled: false });
   });
 
   it("allows Octogee workflow tools outside the core coding profile", () => {

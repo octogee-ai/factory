@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { projectCheckoutScopeForGatewayRoot } from "../routes/fleet-broker.js";
 
 function gatewayRoot(
-  gatewayClass: "shared" | "builder" | "operator",
+  gatewayClass: "shared" | "builder",
   allocation: Record<string, unknown> | null = null,
 ): Record<string, unknown> {
   const owned = gatewayClass !== "shared";
@@ -18,15 +18,15 @@ function gatewayRoot(
     liveRelease: 1,
     desiredStatus: "running",
     configSchemaVersion: 1,
-    profile: gatewayClass === "operator" ? "operator" : "standard",
+    profile: gatewayClass === "builder" ? "builder" : "standard",
     gatewayClass,
-    imageProfile: gatewayClass === "operator" ? "operator" : "standard",
+    imageProfile: gatewayClass === "builder" ? "builder" : "standard",
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: owned ? "uid-alice" : null,
     builderSlug: owned ? "alice" : null,
     openclawOverrides: null,
@@ -46,9 +46,9 @@ describe("projectCheckoutScopeForGatewayRoot", () => {
     )).toBe("workspace-and-projects");
   });
 
-  it("keeps non-disposable operator gateways workspace-only", () => {
+  it("keeps non-disposable builder gateways workspace-only", () => {
     expect(projectCheckoutScopeForGatewayRoot(
-      gatewayRoot("operator"),
+      gatewayRoot("builder"),
       "default",
       "uid-alice",
       "alice",
@@ -63,7 +63,7 @@ describe("projectCheckoutScopeForGatewayRoot", () => {
       "alice",
     )).toBe("workspace-only");
     expect(projectCheckoutScopeForGatewayRoot(
-      gatewayRoot("operator", {
+      gatewayRoot("builder", {
         kind: "disposable-builder",
         schemaVersion: 1,
         leaseId: "lease-alice",

@@ -1,12 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
-import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
+  filterOutCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   upsertAgentInFullAgentList,
@@ -53,9 +53,12 @@ function activationAgentForTarget(
   currentAgent: Record<string, unknown> | undefined,
   targetUsesKeyedEntries: boolean,
 ): Record<string, unknown> {
-  const agent = currentAgent && hasOwn(currentAgent, "model")
+  const selected: Record<string, unknown> = currentAgent && hasOwn(currentAgent, "model")
     ? { ...manifestAgent, model: currentAgent.model }
-    : manifestAgent;
+    : { ...manifestAgent };
+  delete selected.default;
+  if (currentAgent?.default === true) selected.default = true;
+  const agent = selected;
   if (targetUsesKeyedEntries || !hasOwn(agent, "memory")) return agent;
 
   const memory = agent.memory;
@@ -136,15 +139,28 @@ function validateManifestAgent(
   if (!Array.isArray(bindings) || bindings.length === 0) {
     throw new Error(`[migration-activation:${slug}] activation manifest has no channel bindings`);
   }
-  if (!bindings.every((binding) => isRecord(binding) && binding.agentId === expectedId)) {
-    throw new Error(`[migration-activation:${slug}] activation manifest contains binding for another agent`);
+  if (!bindings.every((binding) => {
+    if (!isRecord(binding) || binding.agentId !== expectedId || !isRecord(binding.match)) {
+      return false;
+    }
+    return binding.match.channel === "mattermost" &&
+      binding.match.accountId === expectedAccount;
+  })) {
+    throw new Error(`[migration-activation:${slug}] activation manifest contains foreign binding scope`);
   }
+  const stableBinding = {
+    agentId: expectedId,
+    match: { channel: "mattermost", accountId: expectedAccount },
+  };
+  const normalizedBindings = bindings.some((binding) => isAccountBinding(binding))
+    ? bindings
+    : [stableBinding, ...bindings];
   return {
     agentId: expectedId,
     accountId: expectedAccount,
     agent,
     mattermostAccount,
-    bindings,
+    bindings: normalizedBindings,
   };
 }
 
@@ -327,6 +343,84 @@ function manifestAgents(
   return [workspace, ...projectAgents];
 }
 
+function mattermostBindingKey(value: unknown): string | null {
+  if (!isRecord(value) || typeof value.agentId !== "string") return null;
+  const match = value.match;
+  if (
+    !isRecord(match) ||
+    match.channel !== "mattermost" ||
+    typeof match.accountId !== "string"
+  ) {
+    return null;
+  }
+  if (match.peer === undefined) {
+    return `${match.accountId}\u0000${value.agentId}\u0000account`;
+  }
+  if (
+    !isRecord(match.peer) ||
+    typeof match.peer.kind !== "string" ||
+    typeof match.peer.id !== "string"
+  ) {
+    return `${match.accountId}\u0000${value.agentId}\u0000malformed`;
+  }
+  return `${match.accountId}\u0000${value.agentId}\u0000${match.peer.kind}\u0000${match.peer.id}`;
+}
+
+function isAccountBinding(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.match)) return false;
+  return value.match.channel === "mattermost" &&
+    typeof value.match.accountId === "string" &&
+    value.match.peer === undefined;
+}
+
+function accountBindingsNeedingActivation(
+  current: readonly unknown[],
+  desired: readonly unknown[],
+): string[] {
+  const desiredAccountIds = new Set(desired.flatMap((binding) => {
+    if (!isAccountBinding(binding)) return [];
+    return [(binding as { match: { accountId: string } }).match.accountId];
+  }));
+  const desiredAgentUsernames = new Set(desired.flatMap((binding) => {
+    if (!isRecord(binding) || typeof binding.agentId !== "string") return [];
+    const parsed = parseAgentId(binding.agentId);
+    return parsed.kind === "unknown" ? [] : [parsed.username];
+  }));
+  const existing = new Set(current.flatMap((binding) => {
+    const key = mattermostBindingKey(binding);
+    return key ? [key] : [];
+  }));
+  const desiredKeys = new Set(desired.flatMap((binding) => {
+    const key = mattermostBindingKey(binding);
+    return key ? [key] : [];
+  }));
+  const affected = new Set<string>();
+  for (const binding of desired) {
+    if (!isAccountBinding(binding)) continue;
+    const key = mattermostBindingKey(binding)!;
+    const accountId = (binding as { match: { accountId: string } }).match.accountId;
+    if (!existing.has(key)) affected.add(accountId);
+  }
+  for (const binding of current) {
+    const key = mattermostBindingKey(binding);
+    if (!key) continue;
+    const accountId = key.slice(0, key.indexOf("\u0000"));
+    const agentId = isRecord(binding) && typeof binding.agentId === "string"
+      ? binding.agentId
+      : "";
+    const parsedAgentId = parseAgentId(agentId);
+    const managedAgent = parsedAgentId.kind !== "unknown" &&
+      desiredAgentUsernames.has(parsedAgentId.username);
+    if (
+      (desiredAccountIds.has(accountId) || managedAgent) &&
+      !desiredKeys.has(key)
+    ) {
+      affected.add(accountId);
+    }
+  }
+  return [...affected].sort();
+}
+
 export async function writeActivationManifest(
   rootDir: string,
   manifest: MigrationActivationManifest,
@@ -363,9 +457,11 @@ export async function applyOpenClawActivationManifest(
     cache?: ConfigCache;
     signal?: AbortSignal;
     log: (msg: string) => void;
+    onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
   },
-): Promise<{ elapsedMs: number }> {
+): Promise<{ elapsedMs: number; routingActivationRequired: boolean }> {
   const startedAt = Date.now();
+  let routingActivationRequired = false;
   await applyConfigPatch(
     {
       buildPatch: (current) => {
@@ -383,6 +479,14 @@ export async function applyOpenClawActivationManifest(
             targetUsesKeyedEntries,
           ),
         }));
+        const missingAccountIds = accountBindingsNeedingActivation(
+          currentBindings,
+          activationAgents.flatMap((entry) => entry.bindings),
+        );
+        if (missingAccountIds.length > 0 && !routingActivationRequired) {
+          opts.onRoutingActivationRequired?.(missingAccountIds);
+          routingActivationRequired = true;
+        }
         const nextAgents = targetUsesKeyedEntries
           ? activationAgents.map((entry) => entry.agent)
           : activationAgents.reduce(
@@ -400,13 +504,7 @@ export async function applyOpenClawActivationManifest(
             rebindPlatformEmbeddingRefs(nextAgents),
           ),
           bindings: [
-            ...currentBindings.filter(
-              (binding) => !(
-                isRecord(binding)
-                && typeof binding.agentId === "string"
-                && agentIdBelongsToSlug(binding.agentId, manifest.slug)
-              ),
-            ),
+            ...filterOutCustomerBindings(currentBindings, manifest.slug),
             ...activationAgents.flatMap((entry) => entry.bindings),
           ],
           channels: {
@@ -439,5 +537,5 @@ export async function applyOpenClawActivationManifest(
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
     },
   );
-  return { elapsedMs: Date.now() - startedAt };
+  return { elapsedMs: Date.now() - startedAt, routingActivationRequired };
 }

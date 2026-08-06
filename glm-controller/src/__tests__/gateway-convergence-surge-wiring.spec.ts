@@ -5,7 +5,7 @@ import { refineGatewayConvergenceAction } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const operatorRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
+const builderRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
 
 function gateway(): DurableGateway {
   return {
@@ -23,7 +23,7 @@ function gateway(): DurableGateway {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -162,37 +162,37 @@ describe("gateway convergence surge wiring", () => {
     expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
   });
 
-  it("uses the operator image receipt for operator gateway handoff and readiness", async () => {
+  it("uses the Builder image receipt for Builder gateway handoff and readiness", async () => {
     const standardImageTag = `def5678-oc2026.7.1@sha256:${"a".repeat(64)}`;
-    const operatorImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
-    const operatorGateway = {
+    const builderImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
+    const builderGateway = {
       ...gateway(),
-      gatewayClass: "operator" as const,
-      profile: "operator" as const,
-      imageProfile: "operator" as const,
+      gatewayClass: "builder" as const,
+      profile: "builder" as const,
+      imageProfile: "builder" as const,
       ownerUid: "uid-bender",
       builderSlug: "bender",
     };
-    const operatorArtifact: ReleasePayload = {
+    const builderArtifact: ReleasePayload = {
       ...artifact,
       imageTag: standardImageTag,
       profileImages: {
-        operator: {
-          imageRepository: operatorRepository,
-          imageTag: operatorImageTag,
+        builder: {
+          imageRepository: builderRepository,
+          imageTag: builderImageTag,
         },
       },
     };
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
 
     await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff, operatorGateway),
-      gateway: operatorGateway,
-      artifact: operatorArtifact,
-      runtime: runtime(operatorImageTag),
+      passDeps: passDeps(reconcileSurgeHandoff, builderGateway),
+      gateway: builderGateway,
+      artifact: builderArtifact,
+      runtime: runtime(builderImageTag),
       helmObserved: {
-        imageRepository: operatorRepository,
-        imageTag: operatorImageTag,
+        imageRepository: builderRepository,
+        imageTag: builderImageTag,
         replicas: 1,
         ownerUid: "uid-bender",
         builderSlug: "bender",
@@ -202,7 +202,7 @@ describe("gateway convergence surge wiring", () => {
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
       gatewayId: "bender",
-      desiredImageTag: operatorImageTag,
+      desiredImageTag: builderImageTag,
       requiresCustomerMigration: true,
       ownerlessOperatorPrewarm: false,
     });

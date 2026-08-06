@@ -38,9 +38,14 @@ function helmTemplate(
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
   const dedicated = setValues.gatewayClass === "builder" ||
-    setValues.gatewayClass === "operator" ||
-    setValues.profile === "operator" ||
-    setValues.imageProfile === "operator";
+    setValues.profile === "builder" ||
+    setValues.imageProfile === "builder";
+  if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "gatewayClass")) {
+    merged.gatewayClass = "builder";
+  }
+  if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "imageProfile")) {
+    merged.imageProfile = "builder";
+  }
   if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "ownerUid")) {
     merged.ownerUid = "test-owner";
     merged.builderSlug = "test-builder";
@@ -159,14 +164,14 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       computeClass: "octogee-gateway-test",
       gatewayClass: "shared",
     }), "Deployment", "octogee-gateway-default") ?? "";
-    const operator = findDoc(helmTemplate("octogee-gw-bender", {
+    const builder = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       computeClass: "octogee-gateway-test",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
     }), "Deployment", "octogee-gateway-bender") ?? "";
 
     expect(shared).not.toContain("cloud.google.com/compute-class");
-    expect(operator).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-test"/);
+    expect(builder).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-test"/);
   });
 
   it("keeps Shared Barn identities on different nodes and different Central zones", () => {
@@ -192,7 +197,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       gatewayId: "bender",
       ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
-      profile: "operator",
+      profile: "builder",
     }), "Deployment", "octogee-gateway-bender") ?? "";
 
     expect(dep).toMatch(/octogee\.ai\/owner-uid:\s*"uid-ceckert"/);
@@ -203,15 +208,15 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(() => helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       ownerUid: "uid-ceckert",
-      profile: "operator",
+      profile: "builder",
     })).toThrow(/ownerUid and builderSlug must be provided together/);
   });
 
-  it("rejects ownerless Operator gateways and renders owned Operators normally", () => {
+  it("rejects ownerless Builder gateways and renders owned Builders normally", () => {
     expect(() => helmTemplate("octogee-gw-builder-alice", {
       gatewayId: "builder-alice",
-      gatewayClass: "operator",
-      imageProfile: "operator",
+      gatewayClass: "builder",
+      imageProfile: "builder",
       ownerUid: "",
       builderSlug: "",
     })).toThrow(/ownerUid and builderSlug are required for owner-bound disposable gateways/);
@@ -220,8 +225,8 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       gatewayId: "bender",
       ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
-      gatewayClass: "operator",
-      imageProfile: "operator",
+      gatewayClass: "builder",
+      imageProfile: "builder",
     }), "Deployment", "octogee-gateway-bender") ?? "";
     expect(containerBlock(owned, "gateway")).not.toMatch(/GATEWAY_UNOWNED_OPERATOR_PREWARM/);
     expect(containerBlock(owned, "gateway-edge")).toMatch(
@@ -265,10 +270,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).toBeNull();
   });
 
-  it("operator profile references its per-gateway KSA and renders no ServiceAccount object", () => {
+  it("Builder profile references its per-gateway KSA and renders no ServiceAccount object", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
       "serviceAccount.create": "true",
     });
     // Even with serviceAccount.create=true (a legacy value), the chart no
@@ -279,10 +284,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/serviceAccountName:\s*octogee-gw-bender/);
   });
 
-  it("operator profile does not inherit the shared platform ServiceAccount when Cowboy omits an override", () => {
+  it("Builder profile does not inherit the shared platform ServiceAccount when Cowboy omits an override", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
 
@@ -296,17 +301,17 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/automountServiceAccountToken:\s*false/);
   });
 
-  it("stamps gateway-profile labels so alias Services can exclude operator pods after rollout", () => {
+  it("stamps gateway-profile labels so alias Services can exclude Builder pods after rollout", () => {
     const standardDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(standardDep).toMatch(/gateway-profile:\s*"standard"/);
 
-    const operatorDep =
+    const builderDep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
-    expect(operatorDep).toMatch(/gateway-profile:\s*"operator"/);
+    expect(builderDep).toMatch(/gateway-profile:\s*"builder"/);
   });
 
   it("stamps the gateway-image label (build tag) on pods so a roll is legible via `kubectl get pods -L gateway-image`", () => {
@@ -319,9 +324,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(selectorBlock).not.toMatch(/gateway-image/);
   });
 
-  it("stamps gateway-image on operator pods too", () => {
+  it("stamps gateway-image on Builder pods too", () => {
     const dep = findDoc(
-      helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator", imageTag: "deadbee1" }),
+      helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder", imageTag: "deadbee1" }),
       "Deployment",
       "octogee-gateway-bender",
     ) ?? "";
@@ -388,12 +393,12 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).toMatch(/name:\s*OPENAI_EMBEDDINGS_ENABLED\s*\n\s*value:\s*"false"/);
   });
 
-  it("operator profile uses the same tenant-bound broker token without mounting the sidecar token path", () => {
+  it("Builder profile uses the same tenant-bound broker token without mounting the sidecar token path", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
           gatewayId: "bender",
-          profile: "operator",
+          profile: "builder",
         }),
         "Deployment",
         "octogee-gateway-bender",
@@ -417,7 +422,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       findDoc(
         helmTemplate("octogee-gw-bender", {
           gatewayId: "bender",
-          profile: "operator",
+          profile: "builder",
         }),
         "Deployment",
         "octogee-gateway-bender",
@@ -432,10 +437,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/name:\s*kube-root-ca\.crt/);
   });
 
-  it("operator profile does not render cluster-scoped TokenReview RBAC in Cowboy-owned gateway releases", () => {
+  it("Builder profile does not render cluster-scoped TokenReview RBAC in Cowboy-owned gateway releases", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     expect(out).not.toMatch(/^kind:\s*ClusterRoleBinding\s*$/m);
     expect(findDoc(helmTemplate(), "ClusterRoleBinding", "octogee-gateway-tokenreview-octogee-test-default")).toBeNull();
@@ -452,10 +457,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toMatch(/name:\s*openclaw-device-auth\s*\n\s*emptyDir:\s*\{\}/);
   });
 
-  it("operator profile does not wire the SiteAPI deploy-broker hop", () => {
+  it("Builder profile does not wire the SiteAPI deploy-broker hop", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
+        helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder" }),
         "Deployment",
         "octogee-gateway-bender",
       ) ?? "";
@@ -473,12 +478,12 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("operator profile wires the durable-control signing secrets on gateway-edge without MM_ADMIN_PAT", () => {
+  it("Builder profile wires the durable-control signing secrets on gateway-edge without MM_ADMIN_PAT", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
           gatewayId: "bender",
-          profile: "operator",
+          profile: "builder",
         }),
         "Deployment",
         "octogee-gateway-bender",
@@ -564,6 +569,23 @@ const out = helmTemplate();
     expect(svc).toMatch(/name:\s*runner-metrics\s*\n\s*port:\s*9092\s*\n\s*targetPort:\s*9092/);
   });
 
+  it("does not expose retired gateway-local preview or site-build surfaces", () => {
+    const out = helmTemplate();
+    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(dep, "gateway");
+    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
+    const ingressPolicy = findDoc(
+      out,
+      "NetworkPolicy",
+      "octogee-gateway-ingress-default",
+    ) ?? "";
+
+    expect(gateway).not.toMatch(/containerPort:\s*9080/);
+    expect(gateway).not.toMatch(/name:\s*(?:SITE_BUILD_API_PORT|PREVIEW_HOST|PREVIEW_REQUIRE_GATEWAY_ID)/);
+    expect(svc).not.toMatch(/(?:port|targetPort):\s*9080/);
+    expect(ingressPolicy).not.toMatch(/port:\s*9080/);
+  });
+
   it("exposes the migration rsync port only on the gateway container", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -576,12 +598,12 @@ const out = helmTemplate();
   });
 
   it("does not expose builder-shell on locked runtime gateways", () => {
-    const out = helmTemplate("octogee-gw-default", { profile: "operator" });
+    const out = helmTemplate("octogee-gw-default", { profile: "builder" });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     expect(gw).not.toMatch(/name:\s*builder-shell/);
     expect(gw).toMatch(
-      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"false"/,
+      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"false"/,
     );
 
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
@@ -590,14 +612,14 @@ const out = helmTemplate();
 
   it("exposes builder-shell after explicit runtime shell access is enabled", () => {
     const out = helmTemplate("octogee-gw-default", {
-      profile: "operator",
-      "operatorAccess.shellsEnabled": "true",
+      profile: "builder",
+      "builderAccess.shellsEnabled": "true",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
     expect(gw).toMatch(
-      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
+      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
     );
     expect(gw).toMatch(
       /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
@@ -611,13 +633,13 @@ const out = helmTemplate();
   it("exposes builder-shell on builder gateways when shell access is enabled", () => {
     const out = helmTemplate("octogee-gw-default", {
       gatewayClass: "builder",
-      "operatorAccess.shellsEnabled": "true",
+      "builderAccess.shellsEnabled": "true",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
     expect(gw).toMatch(
-      /- name:\s*OPERATOR_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
+      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
     );
     expect(gw).toMatch(
       /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
@@ -659,7 +681,7 @@ const out = helmTemplate();
   it("renders a PodDisruptionBudget keyed by gateway-instance for an isolated gateway", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
     });
     const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-bender");
     expect(pdb).not.toBeNull();
@@ -671,10 +693,10 @@ const out = helmTemplate();
     expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
   });
 
-  it("protects a healthy operator gateway from voluntary eviction", () => {
+  it("protects a healthy Builder gateway from voluntary eviction", () => {
     const pdb =
       findDoc(
-        helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "operator" }),
+        helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder" }),
         "PodDisruptionBudget",
         "octogee-gateway-bender",
       ) ?? "";
@@ -686,7 +708,7 @@ const out = helmTemplate();
   it("pdb.enabled=false renders no PodDisruptionBudget", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
       "pdb.enabled": "false",
     });
     expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-bender")).toBeNull();
@@ -802,9 +824,9 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     );
   });
 
-  it("operator gateway-edge sidecar omits platform secret refs but keeps the per-gateway token", () => {
+  it("Builder gateway-edge sidecar omits platform secret refs but keeps the per-gateway token", () => {
     const out = helmTemplate("octogee-gw-default", {
-      profile: "operator",
+      profile: "builder",
       "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME": "projects/octogee/locations/us/keyRings/r/cryptoKeys/k",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
@@ -834,16 +856,7 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
 });
 
 describe("helm/octogee-gateway/ — gateway container required env", () => {
-  it("threads PREVIEW_HOST when preview.host is set (so test gateways advertise the right host)", () => {
-    const out = helmTemplate("octogee-gw-default", {
-      "preview.host": "preview-test.octogee.com",
-    });
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).toMatch(/- name:\s*PREVIEW_HOST[\s\S]*?value:\s*"preview-test\.octogee\.com"/);
-    expect(dep).toMatch(/- name:\s*PREVIEW_REQUIRE_GATEWAY_ID[\s\S]*?value:\s*"true"/);
-  });
-
-  it("threads APP_URL into the gateway container so preview tools return environment-correct Canvas links", () => {
+  it("threads APP_URL into the gateway container for environment-correct app links", () => {
     const out = helmTemplate("octogee-gw-default", {
       "gatewayEdge.env.APP_URL": "https://app-octogee-test.web.app",
     });
@@ -877,7 +890,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     );
   });
 
-  it("keeps MM_ADMIN_PAT out of the runtime gateway container (operator shells must not inherit platform MM admin)", () => {
+  it("keeps MM_ADMIN_PAT out of the runtime gateway container (Builder shells must not inherit platform MM admin)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
@@ -904,7 +917,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   it("accepts no roll-context values — the target-candidate boot plane is retired", () => {
     const dep = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
       ownerUid: "uid-ceckert",
       builderSlug: "ceckert",
     }), "Deployment", "octogee-gateway-bender") ?? "";
@@ -916,7 +929,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     const isolated = findDoc(
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         ownerUid: "uid-ceckert",
         builderSlug: "ceckert",
       }),
@@ -936,15 +949,15 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
   });
 
   it("requires and publishes the native Dashboard bridge for every isolated gateway", () => {
-    for (const gatewayClass of ["builder", "operator"]) {
+    for (const gatewayClass of ["builder", "builder"]) {
       const enabled = findDoc(
         helmTemplate(`octogee-gw-${gatewayClass}`, {
           gatewayId: gatewayClass,
           gatewayClass,
           ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
-          "operatorAccess.shellsEnabled": "false",
-          "operatorAccess.controlUiEnabled": "false",
+          "builderAccess.shellsEnabled": "false",
+          "builderAccess.controlUiEnabled": "false",
         }),
         "Deployment",
         `octogee-gateway-${gatewayClass}`,
@@ -971,7 +984,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     }
 
     const disabledValueSets: Array<Record<string, string>> = [
-      { gatewayId: "shared", gatewayClass: "shared", "operatorAccess.shellsEnabled": "true", "operatorAccess.controlUiEnabled": "true" },
+      { gatewayId: "shared", gatewayClass: "shared", "builderAccess.shellsEnabled": "true", "builderAccess.controlUiEnabled": "true" },
     ];
     for (const values of disabledValueSets) {
       const disabled = findDoc(
@@ -984,10 +997,10 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     }
   });
 
-  it("omits the Mattermost admin-PAT bootstrap init container on operator gateways", () => {
+  it("omits the Mattermost admin-PAT bootstrap init container on Builder gateways", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
@@ -1030,10 +1043,10 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(dep).not.toMatch(/mountPath:\s*\/home\/node\/\.openclaw\b/);
   });
 
-  it("operator gateways mount the data volume only on fix-perms, gateway, and gateway-edge", () => {
+  it("Builder gateways mount the data volume only on fix-perms, gateway, and gateway-edge", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
@@ -1145,10 +1158,10 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).not.toMatch(/name:\s*octogee-anthropic/);
   });
 
-  it("renders operator model access through the broker URL without provider-standard API key env", () => {
+  it("renders Builder model access through the broker URL without provider-standard API key env", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-default", {
-        profile: "operator",
+        profile: "builder",
         "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME": "projects/octogee/locations/us/keyRings/r/cryptoKeys/k",
       }),
       "Deployment",
@@ -1220,9 +1233,9 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
     expect(gw).toMatch(/value:\s*["']?http:\/\/127\.0\.0\.1:9090["']?/);
   });
 
-  it("omits platform tokens from operator gateway + gateway-edge containers", () => {
+  it("omits platform tokens from Builder gateway + gateway-edge containers", () => {
     const dep = findDoc(
-      helmTemplate("octogee-gw-default", { profile: "operator" }),
+      helmTemplate("octogee-gw-default", { profile: "builder" }),
       "Deployment",
       "octogee-gateway-default",
     );
@@ -1272,17 +1285,17 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
   it("threads the chart's profile through to gateway and gateway-edge containers", () => {
     const operatorDep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
     const operatorGateway = containerBlock(operatorDep, "gateway");
     const operatorEdge = containerBlock(operatorDep, "gateway-edge");
     expect(operatorGateway).toMatch(
-      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
+      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"builder"/,
     );
     expect(operatorEdge).toMatch(
-      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"operator"/,
+      /- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"builder"/,
     );
 
 const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
@@ -1357,10 +1370,10 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     expect(dep).toMatch(/emptyDir:\s*\{\}/);
   });
 
-  it("operator gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
+  it("Builder gateway sets no safe-to-evict (extended-duration is unsupported on Spot)", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
@@ -1398,8 +1411,8 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
   it("restricts :3005 (builder-shell) to same-instance pods — the backstop intent", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
-        profile: "operator",
-        "operatorAccess.shellsEnabled": "true",
+        profile: "builder",
+        "builderAccess.shellsEnabled": "true",
       }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
@@ -1415,7 +1428,7 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
         gatewayClass: "builder",
-        "operatorAccess.shellsEnabled": "true",
+        "builderAccess.shellsEnabled": "true",
       }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
@@ -1429,8 +1442,8 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
   it("allows other pod ports from any source — listed in a rule WITHOUT `from:` so the LB / sibling workloads / Prometheus can reach them", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
-        profile: "operator",
-        "operatorAccess.shellsEnabled": "true",
+        profile: "builder",
+        "builderAccess.shellsEnabled": "true",
       }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
@@ -1447,7 +1460,7 @@ expect(open).toMatch(/port:\s*3001/);
 expect(open).not.toMatch(/port:\s*8080/);
     expect(open).not.toMatch(/port:\s*9092/);
     
-    expect(open).toMatch(/port:\s*9080/);
+expect(open).not.toMatch(/port:\s*9080/);
 
 expect(open).toMatch(/port:\s*18789/);
   });
@@ -1455,8 +1468,8 @@ expect(open).toMatch(/port:\s*18789/);
   it("scopes runner-metrics (:9092) to the gke-gmp-system namespace (GMP collectors) — never the open any-source rule", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
-        profile: "operator",
-        "operatorAccess.shellsEnabled": "true",
+        profile: "builder",
+        "builderAccess.shellsEnabled": "true",
       }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
@@ -1471,8 +1484,8 @@ expect(open).toMatch(/port:\s*18789/);
   it("allows migration rsync ingress only from peer gateway pods — never the open any-source rule", () => {
     const np = findDoc(
       helmTemplate("octogee-gw-default", {
-        profile: "operator",
-        "operatorAccess.shellsEnabled": "true",
+        profile: "builder",
+        "builderAccess.shellsEnabled": "true",
       }),
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
@@ -1489,27 +1502,27 @@ expect(open).toMatch(/port:\s*18789/);
   });
 
   it("is NOT rendered for locked runtime gateways before shell access is provisioned", () => {
-    const out = helmTemplate("octogee-gw-default", { profile: "operator" });
+    const out = helmTemplate("octogee-gw-default", { profile: "builder" });
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });
 
   it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
     const out = helmTemplate("octogee-gw-default", {
-      profile: "operator",
-      "operatorAccess.shellsEnabled": "true",
+      profile: "builder",
+      "builderAccess.shellsEnabled": "true",
       "networkPolicy.enabled": "false",
     });
     expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
   });
 });
 
-describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolicy", () => {
+describe("helm/octogee-gateway/ - Builder platform metadata egress NetworkPolicy", () => {
   const policyName = "octogee-gateway-metadata-egress-bender";
 
-  it("is NOT rendered by default for locked operator gateways", () => {
+  it("is NOT rendered by default for locked Builder gateways", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
   });
@@ -1517,7 +1530,7 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
   it("is NOT rendered for standard-profile gateways even when the carve-out flag is set", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      "operatorAccess.platformMetadataEgress": "true",
+      "builderAccess.platformMetadataEgress": "true",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
   });
@@ -1525,8 +1538,8 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
   it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
-      "operatorAccess.platformMetadataEgress": "true",
+      profile: "builder",
+      "builderAccess.platformMetadataEgress": "true",
       "networkPolicy.enabled": "false",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
@@ -1536,8 +1549,8 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
     const np = findDoc(
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        profile: "operator",
-        "operatorAccess.platformMetadataEgress": "true",
+        profile: "builder",
+        "builderAccess.platformMetadataEgress": "true",
       }),
       "NetworkPolicy",
       policyName,
@@ -1560,17 +1573,17 @@ describe("helm/octogee-gateway/ - operator platform metadata egress NetworkPolic
   });
 });
 
-describe("helm/octogee-gateway/ - operator Kubernetes API-server egress NetworkPolicy", () => {
+describe("helm/octogee-gateway/ - Builder Kubernetes API-server egress NetworkPolicy", () => {
   const policyName = "octogee-gateway-apiserver-egress-bender";
   const apiServerCidr = (lastOctet: number) =>
     ["10", "128", "0", String(lastOctet)].join(".") + "/32";
   const apiServerCidrPattern = (lastOctet: number) =>
     new RegExp(`cidr:\\s*"${escapeRegex(apiServerCidr(lastOctet))}"`);
 
-  it("is NOT rendered by default for locked operator gateways", () => {
+  it("is NOT rendered by default for locked Builder gateways", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
   });
@@ -1578,7 +1591,7 @@ describe("helm/octogee-gateway/ - operator Kubernetes API-server egress NetworkP
   it("is NOT rendered for standard-profile gateways even when API-server CIDRs are set", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+      "builderAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
   });
@@ -1586,8 +1599,8 @@ describe("helm/octogee-gateway/ - operator Kubernetes API-server egress NetworkP
   it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
-      "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+      profile: "builder",
+      "builderAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
       "networkPolicy.enabled": "false",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
@@ -1597,9 +1610,9 @@ describe("helm/octogee-gateway/ - operator Kubernetes API-server egress NetworkP
     const np = findDoc(
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        profile: "operator",
-        "operatorAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
-        "operatorAccess.kubeApiServerEgressCidrs[1]": apiServerCidr(3),
+        profile: "builder",
+        "builderAccess.kubeApiServerEgressCidrs[0]": apiServerCidr(2),
+        "builderAccess.kubeApiServerEgressCidrs[1]": apiServerCidr(3),
       }),
       "NetworkPolicy",
       policyName,
@@ -1636,10 +1649,10 @@ describe("helm/octogee-gateway/ — required value validation", () => {
   });
 
   describe("env dedup — gateway profiles omit INTERNAL_SERVICE_KEY from the pod", () => {
-    it("standard and operator profiles render no INTERNAL_SERVICE_KEY entries", () => {
+    it("standard and Builder profiles render no INTERNAL_SERVICE_KEY entries", () => {
       const operatorOut = helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        profile: "operator",
+        profile: "builder",
       });
       const baselineOut = helmTemplate();
       const operatorDep = findDoc(
@@ -1660,10 +1673,10 @@ describe("helm/octogee-gateway/ — required value validation", () => {
       expect(count(baselineDep!)).toBe(0);
     });
 
-    it("INTERNAL_SERVICE_KEY is absent from both operator containers", () => {
+    it("INTERNAL_SERVICE_KEY is absent from both Builder containers", () => {
       const out = helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        profile: "operator",
+        profile: "builder",
       });
       const dep = findDoc(out, "Deployment", "octogee-gateway-bender");
       expect(dep).not.toBeNull();
@@ -1741,20 +1754,20 @@ describe("helm/octogee-gateway/ — OPENCLAW_GATEWAY_TOKEN platform-owned", () =
     expect(dep).not.toMatch(/name:\s*OPENCLAW_GATEWAY_TOKEN[\s\S]{0,80}\n\s+value:\s*[^\n]+/);
   });
 
-  it("derives the secret name from gatewayId so operator and cattle gateways get distinct secrets", () => {
+  it("derives the secret name from gatewayId so Builder and cattle gateways get distinct secrets", () => {
     const benderOut = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     const benderDep = findDoc(benderOut, "Deployment", "octogee-gateway-bender") ?? "";
     expect(benderDep).toMatch(/name:\s*gateway-auth-token-bender\b/);
     expect(benderDep).not.toMatch(/name:\s*gateway-auth-token-default\b/);
   });
 
-  it("operator profile threads the same secret on the same three containers (no profile-specific drift)", () => {
+  it("Builder profile threads the same secret on the same three containers (no profile-specific drift)", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
@@ -1783,10 +1796,10 @@ describe("helm/octogee-gateway/ — GCP_PROJECT_ID on gateway-edge", () => {
     expect(ge).toMatch(/- name:\s*GCP_PROJECT_ID[\s\S]*?value:\s*"octogee"/);
   });
 
-  it("renders GCP_PROJECT_ID on the gateway-edge container for operator profile", () => {
+  it("renders GCP_PROJECT_ID on the gateway-edge container for Builder profile", () => {
     const dep =
       findDoc(
-        helmTemplate("octogee-gw-default", { profile: "operator" }),
+        helmTemplate("octogee-gw-default", { profile: "builder" }),
         "Deployment",
         "octogee-gateway-default",
       ) ?? "";
@@ -1802,8 +1815,8 @@ describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
         gatewayId: "builder-alice",
         ownerUid: "uid-alice",
         builderSlug: "alice",
-        gatewayClass: "operator",
-        imageProfile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
       }),
       "Deployment",
       "octogee-gateway-builder-alice",
@@ -1853,9 +1866,9 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
     return { status: result.status, stderr: result.stderr };
   }
 
-  it("renders operator profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
+  it("renders Builder profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
     const result = templateWithLegacyGatewayEdgeSecrets({
-      profile: "operator",
+      profile: "builder",
       ownerUid: "test-owner",
       builderSlug: "test-builder",
     });
@@ -1897,7 +1910,7 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
     expect(result.stderr).toMatch(/schema|values don't meet|validation/i);
   });
 
-  it("rejects an empty profile when set to an unknown enum value (operator gateways have an explicit set of profiles)", () => {
+  it("rejects an empty profile when set to an unknown enum value (Builder gateways have an explicit set of profiles)", () => {
     const args = [
       "template",
       "octogee-gw-default",
@@ -2001,10 +2014,10 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
     expect(bad).toEqual([]);
   });
 
-  it("operator profile: no env entry sets both `value` and `valueFrom`", () => {
+  it("Builder profile: no env entry sets both `value` and `valueFrom`", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      profile: "operator",
+      profile: "builder",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-bender") ?? "";
     const bad = findDoubleSetEntries(collectAllEnvEntries(dep));
@@ -2029,7 +2042,7 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
     expect(nameless).toEqual([]);
   });
 
-  describe("workspace auto-commit env wiring (operator vs cattle defaults)", () => {
+  describe("workspace auto-commit env wiring (Builder vs cattle defaults)", () => {
     it("omits WORKSPACE_AUTOSAVE_ENABLED when the helm value is unset — gateway code defaults from profile", () => {
       const out = helmTemplate("octogee-gw-default");
       const gateway = containerBlock(
@@ -2039,10 +2052,10 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
       expect(gateway).not.toMatch(/WORKSPACE_AUTOSAVE_ENABLED/);
     });
 
-    it("renders the override when workspaceAutosaveEnabled=true (operator opts back in)", () => {
+    it("renders the override when workspaceAutosaveEnabled=true (Builder opts back in)", () => {
       const out = helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
-        profile: "operator",
+        profile: "builder",
         workspaceAutosaveEnabled: "true",
       });
       const gateway = containerBlock(

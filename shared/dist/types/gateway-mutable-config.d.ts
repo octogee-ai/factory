@@ -1,4 +1,4 @@
-import { type GatewayClass, type GatewayImageProfile, type GatewayModelBrokerLimits, type GatewayProfile, type GatewayServiceAccountSpec, type OperatorGatewayAccessSpec } from "./glm.js";
+import { type GatewayClass, type GatewayImageProfile, type GatewayModelBrokerLimits, type GatewayProfile, type GatewayServiceAccountSpec, type BuilderGatewayAccessSpec } from "./glm.js";
 import { type SizingTier } from "./sizing.js";
 export declare const GATEWAY_CONFIG_SCHEMA_VERSION: 1;
 export interface GatewayMutableConfig {
@@ -11,7 +11,7 @@ export interface GatewayMutableConfig {
     gatewayContainerSecurityContext: Record<string, unknown> | null;
     serviceAccountName: string | null;
     serviceAccount: GatewayServiceAccountSpec | null;
-    operatorAccess: OperatorGatewayAccessSpec | null;
+    builderAccess: BuilderGatewayAccessSpec | null;
     ownerUid: string | null;
     builderSlug: string | null;
     openclawOverrides: Record<string, unknown> | null;

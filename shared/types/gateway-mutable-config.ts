@@ -3,13 +3,13 @@ import {
   isGatewayClass,
   isGatewayProfile,
   isValidGatewayId,
-  operatorGatewayServiceAccountName,
+  builderGatewayServiceAccountName,
   type GatewayClass,
   type GatewayImageProfile,
   type GatewayModelBrokerLimits,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
-  type OperatorGatewayAccessSpec,
+  type BuilderGatewayAccessSpec,
 } from "./glm.js";
 import { isSizingTier, type SizingTier } from "./sizing.js";
 
@@ -39,7 +39,7 @@ export interface GatewayMutableConfig {
   gatewayContainerSecurityContext: Record<string, unknown> | null;
   serviceAccountName: string | null;
   serviceAccount: GatewayServiceAccountSpec | null;
-  operatorAccess: OperatorGatewayAccessSpec | null;
+  builderAccess: BuilderGatewayAccessSpec | null;
   ownerUid: string | null;
   builderSlug: string | null;
   openclawOverrides: Record<string, unknown> | null;
@@ -96,7 +96,7 @@ function isNullableSizingTier(value: unknown): value is SizingTier | null {
   return value === null || isSizingTier(value);
 }
 
-function isNullableOperatorAccess(value: unknown): value is OperatorGatewayAccessSpec | null {
+function isNullableBuilderAccess(value: unknown): value is BuilderGatewayAccessSpec | null {
   if (value === null) return true;
   if (!isRecord(value)) return false;
   const validPowerAccess = isOptionalBoolean(value.shellsEnabled) &&
@@ -181,6 +181,15 @@ function hasLegalOwnershipAndAllocation(value: Record<string, unknown>): boolean
   return isOwnedGateway(value) && hasLegalOwnedAllocation(value);
 }
 
+function hasLegalClassProfiles(value: Record<string, unknown>): boolean {
+  if (value.gatewayClass === "shared") {
+    return (value.profile === null || value.profile === "standard") &&
+      value.imageProfile === "standard";
+  }
+  return (value.profile === null || value.profile === "builder") &&
+    value.imageProfile === "builder";
+}
+
 export function isBareGatewayId(value: unknown): value is string {
   return isValidGatewayId(value) && !REVISION_GATEWAY_ID_RE.test(value);
 }
@@ -201,13 +210,14 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableRecord(value.gatewayContainerSecurityContext) &&
     isNullableServiceAccountName(value.serviceAccountName) &&
     isNullableServiceAccount(value.serviceAccount) &&
-    isNullableOperatorAccess(value.operatorAccess) &&
+    isNullableBuilderAccess(value.builderAccess) &&
     isNullableString(value.ownerUid) &&
     isNullableString(value.builderSlug) &&
     isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     (value.preemption === undefined || value.preemption === null) &&
     isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
+    hasLegalClassProfiles(value) &&
     hasLegalOwnershipAndAllocation(value)
   );
 }
@@ -220,7 +230,7 @@ export function isGatewayMutableConfigForGateway(
   const serviceAccountName = value.serviceAccountName;
   if (serviceAccountName === null || serviceAccountName === "") return true;
   if (PLATFORM_SERVICE_ACCOUNT_NAMES.has(serviceAccountName)) return false;
-  const generatedName = operatorGatewayServiceAccountName(gatewayId);
+  const generatedName = builderGatewayServiceAccountName(gatewayId);
   const legacyName = `${LEGACY_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
   if (serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX)) {
     return serviceAccountName === generatedName;
@@ -249,5 +259,5 @@ export function effectiveGatewayServiceAccountNameForGateway(
   config: GatewayMutableConfig,
   gatewayId: string,
 ): string {
-  return config.serviceAccountName || operatorGatewayServiceAccountName(gatewayId);
+  return config.serviceAccountName || builderGatewayServiceAccountName(gatewayId);
 }

@@ -201,6 +201,17 @@ spec:
       ports:
         - protocol: TCP
           port: 3010
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [octogee-project-run-broker, octogee-project-run-controller]
+      ports:
+        - protocol: TCP
+          port: 3002
+        - protocol: TCP
+          port: 3003
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -296,8 +307,6 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
-        - protocol: TCP
-          port: 9080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
