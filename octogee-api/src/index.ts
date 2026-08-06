@@ -313,7 +313,6 @@ function recordProductEvent(
 }
 
 function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
-  const executeApprovedCalendar = createApprovedCalendarApprovalExecutor({ db });
   return {
     mmRestProxyHandler,
     mattermostMintRoutes,
@@ -326,13 +325,7 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)
-      .use(createProductivityApprovalRoutes({
-        db,
-        executeApprovedCalendar: ({ approvalId, ownerUid }) => executeApprovedCalendar({
-          approvalId,
-          expectedOwnerUid: ownerUid,
-        }).then(() => undefined),
-      })),
+      .use(createProductivityApprovalRoutes({ db })),
   };
 }
 

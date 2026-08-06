@@ -340,7 +340,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {
         brokerUrl: "${FLEET_BROKER_URL}",
         tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
-        requireWriteApproval: true,
       },
     });
     expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
@@ -374,7 +373,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {
         brokerUrl: "${FLEET_BROKER_URL}",
         tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
-        requireWriteApproval: true,
       },
     });
     expect(out.plugins.entries["octogee-access-tools"]).toEqual({
@@ -547,7 +545,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       config: {
         timeoutMs: 1500,
         baseUrl: "http://connector-tools",
-        requireWriteApproval: false,
       },
     });
     expect(out.auth.profiles["openai-codex:default"]).toEqual({
@@ -1102,7 +1099,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(out.plugins.entries["octogee-connector-tools"].config).toEqual({
       ...brokerPluginConfig,
-      requireWriteApproval: true,
     });
     for (const pluginId of [
       "octogee-access-tools",
