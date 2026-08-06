@@ -461,7 +461,7 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ created: true });
-    expect(projectProvisioning.ensureProjectGiteaRepo).toHaveBeenCalledWith(input);
+    expect(projectProvisioning.ensureProjectGiteaRepo).toHaveBeenCalledWith({ ...input, githubBacked: false });
   });
 
   it("provision-project-repo resolves the type default when a pre-recipe sender omits it", async () => {

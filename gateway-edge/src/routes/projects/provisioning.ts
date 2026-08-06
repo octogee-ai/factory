@@ -8,6 +8,7 @@ import { internalFetch } from "../../lib/internal-fetch.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
 import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
+import { seedBoardWelcomeIssue } from "../../lib/board-welcome.js";
 import type { ProjectRecipeId } from "@octogee/shared/types/project";
 
 export interface ProjectRepoProvisioningResult {
@@ -33,6 +34,10 @@ export async function ensureProjectGiteaRepo(input: {
   projectType: string | null;
   visibility: string;
   recipe: ProjectRecipeId;
+  // GitHub-backed projects still get this Gitea repo, but their Board reads
+  // the GitHub repo — a welcome issue here would be invisible (and seeding
+  // into a Builder's imported GitHub repo is not ours to do).
+  githubBacked?: boolean;
 }): Promise<{ created: boolean }> {
   const org = workspaceGiteaOrg(input.workspaceId);
   const repoName = projectRepoName(input.slug);
@@ -70,6 +75,11 @@ export async function ensureProjectGiteaRepo(input: {
     );
   } catch (error) {
     throw new ProjectRepoProvisioningError(errorMessage(error), created);
+  }
+  // A provisioning retry re-enters with the repo already created — seeding
+  // again would duplicate the welcome card.
+  if (created && !input.githubBacked) {
+    await seedBoardWelcomeIssue({ workspaceId: input.workspaceId, slug: input.slug, name: input.name });
   }
   return { created };
 }

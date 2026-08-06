@@ -141,7 +141,7 @@ upgrade — never hand them the raw error.
 
 ## Platform Tools
 
-Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask_ops` when unsure.
+Use live tools only. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 
 - Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
@@ -150,6 +150,7 @@ Use only the live tools exposed this turn. Skills hold schemas; ask `octogee_ask
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`.
+- Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
 - Deliver: `workspace_commit`; `preview_start`, `preview_list`, `preview_stop`;
   `octogee_publish`, `octogee_publish_draft`.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.

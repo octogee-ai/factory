@@ -811,6 +811,12 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
         "octogee_project_commit",
         "octogee_project_list",
         "octogee_project_set_recipe",
+        "octogee_board_list",
+        "octogee_board_card_read",
+        "octogee_board_card_create",
+        "octogee_board_card_update",
+        "octogee_board_card_move",
+        "octogee_board_card_comment",
       ],
     });
   });

@@ -105,6 +105,13 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("octogee-board-tools resolves to its own job", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-board-tools/board-client.ts"],
+      ["octogee-board-tools"],
+    );
+  });
+
   it("octogee-project-tools resolves to its own job", () => {
     expectJobs(
       ["infra/gateway/extensions/octogee-project-tools/project-client.ts"],

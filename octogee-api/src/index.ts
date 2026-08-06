@@ -24,6 +24,7 @@ import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broke
 import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
+import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentProductivityRoutes } from "./routes/agent-productivity.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
@@ -419,6 +420,7 @@ export function createApp(opts: CreateAppOptions = {}) {
       properties: { source: "agent" },
     }),
   }));
+  app.use("/internal/agent-board", createAgentBoardRoutes({ db }));
   app.use("/internal/agent-productivity", createAgentProductivityRoutes({ db }));
   app.use("/internal/agent-productivity", createAgentObsidianRoutes({ db, featurePolicy }));
   app.use(

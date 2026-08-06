@@ -472,6 +472,7 @@ async function provisionProjectCodeRepo(
     projectType: plan.projectType,
     visibility: plan.targetVisibility,
     recipe: plan.recipe,
+    githubBacked: plan.ghRepoSource !== null,
   });
   artifacts.repoCreated = repoResult.created;
   if (!repoResult.error) return;

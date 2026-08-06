@@ -93,6 +93,7 @@ interface ProjectRepoProvisionRequest {
   projectType: string | null;
   visibility: "private" | "public" | "unlisted";
   recipe?: ProjectRecipeId;
+  githubBacked?: boolean;
 }
 
 function validProjectRepoName(value: unknown): value is string {
@@ -320,6 +321,7 @@ router.post("/provision-project-repo", async (req: Request, res: Response) => {
       projectType: input.projectType,
       visibility: input.visibility,
       recipe: input.recipe ?? defaultProjectRecipe(input.projectType),
+      githubBacked: input.githubBacked === true,
     });
     res.json(result);
   } catch (err) {

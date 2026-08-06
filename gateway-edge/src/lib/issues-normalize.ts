@@ -75,6 +75,35 @@ export function normalizeIssues(raw: unknown): WorkspaceIssue[] {
   return raw.filter((item) => !isPullRequest(item)).map(normalizeIssue);
 }
 
+export interface WorkspaceComment {
+  id: number;
+  body: string;
+  author: string;
+  createdAt: string;
+}
+
+interface RawComment {
+  id?: unknown;
+  body?: unknown;
+  user?: { login?: unknown } | null;
+  created_at?: unknown;
+}
+
+export function normalizeComment(raw: unknown): WorkspaceComment {
+  const r = raw as RawComment;
+  return {
+    id: typeof r.id === "number" ? r.id : 0,
+    body: str(r.body),
+    author: str(r.user?.login),
+    createdAt: str(r.created_at),
+  };
+}
+
+export function normalizeComments(raw: unknown): WorkspaceComment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeComment).filter((c) => c.id > 0);
+}
+
 export function normalizeLabel(raw: unknown): WorkspaceLabel {
   const r = raw as { name?: unknown; color?: unknown };
   return { name: str(r.name), color: str(r.color) };
