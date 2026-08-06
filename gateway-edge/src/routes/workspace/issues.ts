@@ -13,7 +13,7 @@ import {
   IssueNotFoundError,
   NotAnIssueError,
 } from "../../lib/issues.js";
-import { isValidColumn, isValidLabelName } from "../../lib/issues-write.js";
+import { isValidColumn, isValidLabelName, type ColumnKey } from "../../lib/issues-write.js";
 import {
   deleteIssueAsset,
   IssueAssetTooLargeError,
@@ -73,6 +73,76 @@ function parseString(value: unknown, res: Response, field: string): string | nul
   return value;
 }
 
+// null = responded 400; undefined = field absent.
+function parseTitleField(value: unknown, res: Response): string | null | undefined {
+  const raw = parseString(value, res, "title");
+  if (raw === null || raw === undefined) return raw;
+  const title = raw.trim();
+  if (title.length === 0 || title.length > MAX_TITLE) {
+    res.status(400).json({ error: title.length === 0 ? "Missing title" : "Title too long" });
+    return null;
+  }
+  return title;
+}
+
+function parseBodyField(value: unknown, res: Response): string | null | undefined {
+  const raw = parseString(value, res, "body");
+  if (raw === null || raw === undefined) return raw;
+  if (raw.length > MAX_BODY) {
+    res.status(400).json({ error: "Body too long" });
+    return null;
+  }
+  return raw;
+}
+
+interface CreateInput {
+  title: string;
+  body: string;
+  status: ColumnKey;
+  labels?: string[];
+}
+
+function parseCreateInput(req: Request, res: Response): CreateInput | null {
+  const title = parseTitleField(req.body?.title, res);
+  if (title === null) return null;
+  if (title === undefined) {
+    res.status(400).json({ error: "Missing title" });
+    return null;
+  }
+  const body = parseBodyField(req.body?.body, res);
+  if (body === null) return null;
+  const rawStatus = parseString(req.body?.status, res, "status");
+  if (rawStatus === null) return null;
+  const status = rawStatus ?? "backlog";
+  if (!isValidColumn(status)) {
+    res.status(400).json({ error: "Invalid column" });
+    return null;
+  }
+  const labels = parseLabels(req.body?.labels, res);
+  if (labels === null) return null;
+  return { title, body: body ?? "", status, ...(labels ? { labels } : {}) };
+}
+
+interface EditInput {
+  title?: string;
+  body?: string;
+  labels?: string[];
+}
+
+function parseEditInput(req: Request, res: Response): EditInput | null {
+  const title = parseTitleField(req.body?.title, res);
+  if (title === null) return null;
+  const body = parseBodyField(req.body?.body, res);
+  if (body === null) return null;
+  const labels = parseLabels(req.body?.labels, res);
+  if (labels === null) return null;
+  if (title === undefined && body === undefined && labels === undefined) {
+    res.status(400).json({ error: "Nothing to update" });
+    return null;
+  }
+  return { title, body, labels };
+}
+
 // The Board is project-scoped — issues live in the project repo. Reject workspace-scope
 // targets so a workspace canvas can't read or mutate workspace-repo issues. Inputs are
 // re-validated here too: the privileged provider call never trusts the client's
@@ -98,34 +168,9 @@ router.post(
   "/issues",
   withFileTarget(async (req, res, _next, target) => {
     if (!requireProject(target, res)) return;
-    const rawTitle = parseString(req.body?.title, res, "title");
-    if (rawTitle === null) return;
-    const rawBody = parseString(req.body?.body, res, "body");
-    if (rawBody === null) return;
-    const rawStatus = parseString(req.body?.status, res, "status");
-    if (rawStatus === null) return;
-    const title = (rawTitle ?? "").trim();
-    const body = rawBody ?? "";
-    const status = rawStatus ?? "backlog";
-    if (!title) {
-      res.status(400).json({ error: "Missing title" });
-      return;
-    }
-    if (title.length > MAX_TITLE) {
-      res.status(400).json({ error: "Title too long" });
-      return;
-    }
-    if (body.length > MAX_BODY) {
-      res.status(400).json({ error: "Body too long" });
-      return;
-    }
-    if (!isValidColumn(status)) {
-      res.status(400).json({ error: "Invalid column" });
-      return;
-    }
-    const labels = parseLabels(req.body?.labels, res);
-    if (labels === null) return;
-    const issue = await createIssue(target, { title, body, status, ...(labels ? { labels } : {}) });
+    const input = parseCreateInput(req, res);
+    if (input === null) return;
+    const issue = await createIssue(target, input);
     res.status(201).json({ issue });
   }, { access: "write" }),
 );
@@ -155,28 +200,10 @@ router.patch(
     if (!requireProject(target, res)) return;
     const num = parseIssueNumber(req, res);
     if (num === null) return;
-    const rawTitle = parseString(req.body?.title, res, "title");
-    if (rawTitle === null) return;
-    const rawBody = parseString(req.body?.body, res, "body");
-    if (rawBody === null) return;
-    const title = rawTitle === undefined ? undefined : rawTitle.trim();
-    const body = rawBody;
-    if (title !== undefined && (title.length === 0 || title.length > MAX_TITLE)) {
-      res.status(400).json({ error: title.length === 0 ? "Missing title" : "Title too long" });
-      return;
-    }
-    if (body !== undefined && body.length > MAX_BODY) {
-      res.status(400).json({ error: "Body too long" });
-      return;
-    }
-    const labels = parseLabels(req.body?.labels, res);
-    if (labels === null) return;
-    if (title === undefined && body === undefined && labels === undefined) {
-      res.status(400).json({ error: "Nothing to update" });
-      return;
-    }
+    const input = parseEditInput(req, res);
+    if (input === null) return;
     try {
-      const issue = await updateIssue(target, num, { title, body, labels });
+      const issue = await updateIssue(target, num, input);
       res.json({ issue });
     } catch (e) {
       if (respondNotAnIssue(res, e)) return;
