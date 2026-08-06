@@ -181,7 +181,7 @@ const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)
 const RELEASE_VERSION_PATTERN = new RegExp(`^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
     `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`);
 const RELEASE_MANIFEST_SURFACE_IMAGES = {
-    gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"],
+    gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
     platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"],
 };
 export class ReleaseDigestAliasError extends Error {

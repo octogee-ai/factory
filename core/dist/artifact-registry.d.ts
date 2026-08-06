@@ -29,7 +29,7 @@ export declare function ensureKeepTag(opts: PinOpts): Promise<void>;
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;
 declare const RELEASE_MANIFEST_SURFACE_IMAGES: {
     readonly gateway: readonly ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"];
-    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"];
+    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"];
 };
 export interface ReleaseDigestManifest {
     sourceSha: string;
