@@ -15,12 +15,21 @@ describe("deployment target Helm values", () => {
 
     expect(rendered).toContain('deploymentTargetId: "test-central"');
     expect(rendered).toContain('deploymentProjectId: "octogee-test"');
+    expect(rendered).toContain('customerHostingProjectId: "octogee-customer-hosting-test"');
+    expect(rendered.match(/customerHostingProjectId:/g)).toHaveLength(1);
+    expect(rendered).not.toContain("OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID:");
+    expect(rendered).not.toContain("projectPublisher:");
     expect(rendered).not.toContain("platformComputeClass");
+    expect(rendered).toContain(`projectRunner:
+  controlPlaneCidr: "34.58.245.121/32"`);
     expect(rendered).toContain(`networkPolicy:
   enforceDefaultDeny: false`);
     expect(rendered).toContain('connectionName: "octogee:us-central1:octogee-pg"');
     expect(rendered).toContain(
       'repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-api"',
+    );
+    expect(rendered).toContain(
+      'repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner"',
     );
     expect(rendered).toContain(
       'OCTOGEE_KMS_KEY_NAME: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest"',
@@ -75,9 +84,11 @@ describe("deployment target Helm values", () => {
   );
 
   it.each(["prod-central", "test-central", "build-week-central"])(
-    "does not enable the WEST network boundary for central target %s",
+    "renders the exact central project runner control plane for %s",
     (targetId) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
+      expect(rendered).toContain(`projectRunner:
+  controlPlaneCidr: "34.58.245.121/32"`);
       expect(rendered).toContain("enforceDefaultDeny: false");
     },
   );

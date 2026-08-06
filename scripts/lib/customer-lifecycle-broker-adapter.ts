@@ -62,6 +62,7 @@ import {
   generateCustomerSshKey,
   gitExec,
   initWorkspaceRepo,
+  projectCheckoutMatchesSource,
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
 } from "./git.js";
@@ -84,6 +85,8 @@ import {
   buildMattermostAccounts,
   buildProjectAgentAccounts,
   buildProjectAgents,
+  gatewayAgentRoster,
+  mattermostAccountBindingsNeedingActivation,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
@@ -121,6 +124,11 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import {
+  activatePendingMattermostRouting,
+  markMattermostRoutingActivationPending,
+  mattermostRoutingActivationPending,
+} from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
@@ -170,7 +178,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
   adminMmUserId?: string;
-  isOperatorGateway?: () => boolean;
+  isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
 
@@ -221,12 +229,10 @@ function buildRemoveCustomerPatchLocal(
           ),
         }
       : { list: rebindPlatformEmbeddingRefs(nextAgents) },
-    bindings: currentBindings.filter((binding) => {
-      const agentId = binding && typeof binding === "object"
-        ? (binding as { agentId?: unknown }).agentId
-        : undefined;
-      return typeof agentId !== "string" || !slugs.some((slug) => agentIdBelongsToSlug(agentId, slug));
-    }),
+    bindings: slugs.reduce(
+      (retained, slug) => filterOutCustomerBindings(retained, slug),
+      currentBindings,
+    ),
     channels: { mattermost: { accounts } },
   };
 }
@@ -315,10 +321,15 @@ async function listProjectsNeedingClone(
   if (!snapshot) return [];
   return snapshot.projects.flatMap((p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
-    if (fs.existsSync(path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug, ".git"))) {
+    const repoSource = projectRepoSourceFromDoc(p.repoSource);
+    if (projectCheckoutMatchesSource(
+      slug,
+      p.projectSlug,
+      p.giteaRepoName ?? "",
+      repoSource,
+    )) {
       return [];
     }
-    const repoSource = projectRepoSourceFromDoc(p.repoSource);
     if (!repoSource && !p.giteaRepoName) {
       ctx.log(
         `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,
@@ -393,6 +404,17 @@ function platformModelDefaults(
   return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : null;
 }
 
+function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
+  return {
+    ...ctx.rpc,
+    configPatch: (
+      patch: object,
+      baseHash: string,
+      options?: { replacePaths?: readonly string[] },
+    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
+  };
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -442,6 +464,7 @@ async function applyAddCustomerConfigPatch(
       emoji: identity.emoji,
       model: DEFAULT_COACH.model,
     },
+    customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
     default: process.env.GATEWAY_BUILDER_SLUG?.trim() === snapshot.slug,
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
@@ -454,6 +477,7 @@ async function applyAddCustomerConfigPatch(
     agentsDir: AGENTS_DIR,
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
+    ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
   });
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
@@ -477,7 +501,11 @@ async function applyAddCustomerConfigPatch(
     ],
     removePrefixes: evictionSlugs.map((slug) => `${slug}-proj-`),
   });
-  const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
+  const projectAccounts = buildProjectAgentAccounts(
+    snapshot.slug,
+    projectAgents,
+    brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
+  );
   const bindings = buildCustomerBindings([
     {
       slug: snapshot.slug,
@@ -485,20 +513,26 @@ async function applyAddCustomerConfigPatch(
       agentProjects: activeAgentProjectIds(projectAgents),
     },
   ]);
+  let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
+  const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const startedAt = Date.now();
-  const convergedRpc = {
-    ...ctx.rpc,
-    configPatch: (
-      patch: object,
-      baseHash: string,
-      options?: { replacePaths?: readonly string[] },
-    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
-  };
   await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
         let existingBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
+        const missingAccountIds = mattermostAccountBindingsNeedingActivation(
+          existingBindings,
+          bindings,
+        );
+        if (missingAccountIds.length > 0) {
+          markMattermostRoutingActivationPending(
+            OPENCLAW_DIR,
+            routingActivationReason,
+            missingAccountIds,
+          );
+          routingActivationRequired = true;
+        }
         for (const slug of [snapshot.slug, ...evictionSlugs]) {
           existingBindings = filterOutCustomerBindings(existingBindings, slug);
         }
@@ -516,7 +550,7 @@ async function applyAddCustomerConfigPatch(
         const targetAgents = customerAgentRosterPatch(
           current,
           snapshot.slug,
-          rebindPlatformEmbeddingRefs(nextAgents),
+          rebindPlatformEmbeddingRefs(gatewayAgentRoster(nextAgents)),
         );
         const evictionPatch = evictionSlugs.length > 0
           ? buildRemoveCustomerPatchLocal(current, evictionSlugs)
@@ -556,12 +590,19 @@ async function applyAddCustomerConfigPatch(
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
-      rpc: convergedRpc,
+      rpc: convergedConfigRpc(ctx),
       cache: ctx.configCache,
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
       signal: callOpts?.signal,
     },
   );
+  if (routingActivationRequired) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
     elapsedMs: Date.now() - startedAt,
@@ -806,6 +847,7 @@ async function activateImportedCustomer(
     });
   }
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   await pruneWorkspaceOnlyProjectCheckouts(
     CUSTOMERS_DIR,
     slug,
@@ -819,12 +861,23 @@ async function activateImportedCustomer(
     cache: ctx.configCache,
     signal: opts?.signal,
     log: ctx.log,
+    onRoutingActivationRequired: (accountIds) => {
+      markMattermostRoutingActivationPending(
+        OPENCLAW_DIR,
+        routingActivationReason,
+        accountIds,
+      );
+    },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
-  ctx.log(
-    `[import:${slug}] activation relies on config-patch hot-reload; no explicit gateway restart requested`,
-  );
 
   ctx.log(
     `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
@@ -919,7 +972,7 @@ export function buildBrokeredLifecycleAdapter(
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
-    isOperatorGateway: opts.isOperatorGateway ?? (() => false),
+    isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     projectCheckoutScope: (slug) =>
       ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
       ?? ctx.projectCheckoutScope?.(slug)

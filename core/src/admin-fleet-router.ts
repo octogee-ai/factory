@@ -274,7 +274,7 @@ function resolveSizingForResponse(
 }
 
 function normalizeGatewayProfile(profile: unknown): GatewayProfile {
-  return profile === "operator" ? "operator" : "standard";
+  return profile === "builder" ? "builder" : "standard";
 }
 
 function normalizeGatewayClass(doc: GlmDoc | undefined): GatewayClass {
@@ -2392,7 +2392,7 @@ function validateSharedGatewayCreate(
     return {
       status: 400,
       body: {
-        error: "owner-only gateways are created by the disposable lifecycle",
+        error: "Builder gateways are created by the disposable lifecycle",
       },
     };
   }
@@ -3186,9 +3186,9 @@ function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleaseP
     imageRepository: `${manifest.repository}/octogee-gateway`,
     imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
     profileImages: {
-      operator: {
-        imageRepository: `${manifest.repository}/octogee-gateway-operator`,
-        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-operator"]}`,
+      builder: {
+        imageRepository: `${manifest.repository}/octogee-gateway-builder`,
+        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
       },
     },
     gatewayEdgeImage: {
@@ -3803,7 +3803,7 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "gatewayContainerSecurityContext",
   "serviceAccountName",
   "serviceAccount",
-  "operatorAccess",
+  "builderAccess",
   "ownerUid",
   "builderSlug",
   "openclawOverrides",
@@ -3918,7 +3918,7 @@ function buildCreateGatewayConfig(args: {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -5668,7 +5668,7 @@ router.post(
         }
         if (target.root.gatewayClass !== "shared") {
           res.status(400).json({
-            error: "owner-only gateway placement is managed by the disposable lifecycle",
+            error: "Builder gateway placement is managed by the disposable lifecycle",
             gatewayId: targetGatewayId,
           });
           return;
@@ -5697,7 +5697,7 @@ router.post(
             profile: target.root.profile ?? undefined,
             imageProfile: target.root.imageProfile,
             ownerUid: target.root.ownerUid ?? undefined,
-            operatorAccess: target.root.operatorAccess ?? undefined,
+            builderAccess: target.root.builderAccess ?? undefined,
           },
           uid,
         );
@@ -7415,7 +7415,7 @@ router.get(
         }
         if (target.root.gatewayClass !== "shared") {
           res.status(400).json({
-            error: "owner-only gateway placement is managed by the disposable lifecycle",
+            error: "Builder gateway placement is managed by the disposable lifecycle",
             gatewayId: command.ok.gatewayId,
           });
           return;
@@ -7572,7 +7572,7 @@ router.get(
                     profile: targetRoot.profile ?? undefined,
                     imageProfile: targetRoot.imageProfile,
                     ownerUid: targetRoot.ownerUid ?? undefined,
-                    operatorAccess: targetRoot.operatorAccess ?? undefined,
+                    builderAccess: targetRoot.builderAccess ?? undefined,
                   },
                   uid,
                 );

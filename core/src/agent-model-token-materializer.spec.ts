@@ -287,7 +287,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
   });
 
   it("asserts EVERY broker provider surface per agent — anthropic profile + openrouter + openai catalogs", () => {
-    const written = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    const written = materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
       agentsDir,
       openRouter: {
         baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
@@ -299,21 +299,43 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
       },
     });
     expect(written).toBe(1);
-    const agentHome = path.join(agentsDir, "octogee-a-coach", "agent");
+    const agentHome = path.join(agentsDir, "octogee-alice-coach", "agent");
     const store = readAuthProfileStore(agentHome) as {
       profiles: Record<string, { keyRef: { id: string } }>;
     };
-    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-a-coach");
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-alice-coach");
     const models = JSON.parse(fs.readFileSync(path.join(agentHome, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
   it("falls back to anthropic-only when no openrouter config is supplied", () => {
-    expect(materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir })).toBe(1);
+    expect(materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir })).toBe(1);
     expect(
-      fs.existsSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json")),
+      fs.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent", "models.json")),
     ).toBe(false);
+  });
+
+  it("materializes bound broker profiles and catalogs for a canonical project agent", () => {
+    const agentId = "octogee-alice-proj-garden-coach";
+    expect(
+      materializeBrokerProfilesForAgents([agentId], {
+        agentsDir,
+        openRouter: {
+          baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+          models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+        },
+      }),
+    ).toBe(1);
+    const store = readAuthProfileStore(path.join(agentsDir, agentId, "agent")) as {
+      profiles: Record<string, { keyRef: { id: string } }>;
+    };
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe(
+      `agent-model-token-${agentId}`,
+    );
+    expect(store.profiles["platform-openrouter:default"].keyRef.id).toBe(
+      `agent-model-token-openrouter-${agentId}`,
+    );
   });
 });
 
@@ -328,12 +350,12 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
 
   it("materializes anthropic:default for each agent under agentsDir/<id>/agent", () => {
     expect(
-      materializeAnthropicBrokerForAgents(["octogee-a-coach", "octogee-b-coach"], { agentsDir }),
+      materializeAnthropicBrokerForAgents(["octogee-alice-coach", "octogee-bob-coach"], { agentsDir }),
     ).toBe(2);
-    const store = readAuthProfileStore(path.join(agentsDir, "octogee-a-coach", "agent")) as {
+    const store = readAuthProfileStore(path.join(agentsDir, "octogee-alice-coach", "agent")) as {
       profiles: Record<string, { keyRef: { id: string } }>;
     };
-    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-a-coach");
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-alice-coach");
   });
 
   it("is tolerant — a failure on one agent does not abort the sweep", () => {
@@ -344,11 +366,16 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
     ).toBe(1);
   });
 
-  it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", () => {
+  it("skips malformed and foreign agent ids while accepting project agents", () => {
+    const projectAgentId = "octogee-alice-proj-garden-coach";
     expect(
-      materializeAnthropicBrokerForAgents(["octogee-a-coach", "octogee-a-alex", "main"], { agentsDir }),
-    ).toBe(1);
-    expect(readAuthProfileStore(path.join(agentsDir, "octogee-a-alex", "agent"))).toBeNull();
+      materializeAnthropicBrokerForAgents(
+        ["octogee-alice-coach", projectAgentId, "octogee-alice-alex", "main"],
+        { agentsDir },
+      ),
+    ).toBe(2);
+    expect(readAuthProfileStore(path.join(agentsDir, projectAgentId, "agent"))).not.toBeNull();
+    expect(readAuthProfileStore(path.join(agentsDir, "octogee-alice-alex", "agent"))).toBeNull();
   });
 });
 

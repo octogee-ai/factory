@@ -14,6 +14,11 @@ import {
   assertAgentImportRepositoryExpansionSafe,
   sanitizeAgentImportRepositoryHistory,
 } from "./agent-import-git.js";
+import {
+  WORKSPACE_GIT_HARDENING_PINS,
+  workspaceGitCommandArgs,
+  workspaceGitEnvironment,
+} from "./workspace-git.js";
 
 const OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
@@ -69,7 +74,14 @@ function sourceGitEnvironment(
 
 function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitEnvironment()): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const commandArgs = fs.existsSync(path.join(cwd, ".git"))
+      ? workspaceGitCommandArgs(cwd, args)
+      : [...WORKSPACE_GIT_HARDENING_PINS, ...args];
+    const child = spawn("/usr/bin/git", commandArgs, {
+      cwd,
+      env: workspaceGitEnvironment(env, cwd),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let size = 0;

@@ -112,7 +112,7 @@ describe("buildInstancesMap", () => {
     expect(map.canary).toMatchObject({ gatewayId: "canary", image: { tag: "def" } });
   });
 
-  it("propagates builderSlug for dedicated builder/operator config restore", () => {
+  it("propagates builderSlug for dedicated Builder config restore", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "jack", gatewayClass: "builder", builderSlug: "jack" }),
     ]);
@@ -146,35 +146,36 @@ describe("buildInstancesMap", () => {
     expect(map).toEqual({});
   });
 
-  it("propagates the operator profile onto the helm instance value (so the chart can gate env injection)", () => {
+  it("propagates the Builder profile onto the Helm instance value", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder" }),
     ]);
-    expect(map.bender.profile).toBe("operator");
+    expect(map.bender.profile).toBe("builder");
   });
 
-  it("defaults operator-profile gateways to a locked dedicated ServiceAccount and shell access", () => {
+  it("defaults Builder gateways to a locked dedicated ServiceAccount and shell access", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
       }),
     ]);
     expect(map.bender).toMatchObject({
       serviceAccountName: "octogee-gw-bender",
       serviceAccount: { create: true },
-      operatorAccess: {
+      builderAccess: {
         shellsEnabled: false,
         reason: "runtime-trust-boundary-not-provisioned",
       },
     });
   });
 
-  it("enables shell access for an operator-profile gateway with a Builder owner", () => {
+  it("enables shell access for a Builder gateway with a Builder owner", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" }),
+      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" }),
     ]);
-    expect(map.bender.operatorAccess).toMatchObject({
+    expect(map.bender.builderAccess).toMatchObject({
       shellsEnabled: true,
       controlUiEnabled: true,
     });
@@ -184,12 +185,13 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "hobby",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-hobby",
-        operatorAccess: { shellsEnabled: false },
+        builderAccess: { shellsEnabled: false },
       }),
     ]);
-    expect(map.hobby.operatorAccess).toMatchObject({
+    expect(map.hobby.builderAccess).toMatchObject({
       shellsEnabled: false,
       controlUiEnabled: true,
     });
@@ -199,22 +201,22 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "jack", gatewayClass: "builder", ownerUid: "uid-jack" }),
     ]);
-    expect(map.jack.operatorAccess).toMatchObject({
+    expect(map.jack.builderAccess).toMatchObject({
       shellsEnabled: true,
       reason: "owned-runtime-gateway",
     });
     expect(map.jack.serviceAccountName).toBe("octogee-gw-jack");
     expect(map.jack.serviceAccount).toEqual({ create: true });
-    expect(map.jack.operatorAccess?.platformMetadataEgress).toBeUndefined();
+    expect(map.jack.builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
-  it("injects resolved apiserver egress CIDRs into an owned operator gateway with shells", () => {
+  it("injects resolved apiserver egress CIDRs into an owned Builder gateway with shells", () => {
     const map = buildInstancesMap(
-      [mkDesired({ gatewayId: "bender", profile: "operator", ownerUid: "uid-chris" })],
+      [mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" })],
       undefined,
       ["10.128.0.2/32", "34.118.224.1/32"],
     );
-    expect(map.bender.operatorAccess).toMatchObject({
+    expect(map.bender.builderAccess).toMatchObject({
       shellsEnabled: true,
       kubeApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
@@ -222,60 +224,64 @@ describe("buildInstancesMap", () => {
 
   it("does not inject egress CIDRs into a shared gateway", () => {
     const map = buildInstancesMap([mkDesired({ gatewayId: "default" })], undefined, ["10.128.0.2/32"]);
-    expect(map.default.operatorAccess).toBeUndefined();
+    expect(map.default.builderAccess).toBeUndefined();
   });
 
-  it("leaves a working operator gateway's egress intact when no CIDRs resolved (read failure)", () => {
+  it("leaves a working Builder gateway's egress intact when no CIDRs resolved", () => {
     const map = buildInstancesMap(
       [
         mkDesired({
           gatewayId: "bender",
-          profile: "operator",
+          gatewayClass: "builder",
+          imageProfile: "builder",
           ownerUid: "uid-chris",
-          operatorAccess: { shellsEnabled: true, kubeApiServerEgressCidrs: ["10.128.0.2/32"] },
+          builderAccess: { shellsEnabled: true, kubeApiServerEgressCidrs: ["10.128.0.2/32"] },
         }),
       ],
       undefined,
       [],
     );
-    expect(map.bender.operatorAccess?.kubeApiServerEgressCidrs).toEqual(["10.128.0.2/32"]);
+    expect(map.bender.builderAccess?.kubeApiServerEgressCidrs).toEqual(["10.128.0.2/32"]);
   });
 
-  it("does not let an operator-profile gateway inherit the platform default ServiceAccount", () => {
+  it("does not let a Builder gateway inherit the platform default ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         serviceAccountName: "octogee-gateway",
       }),
     ]);
     expect(map.bender.serviceAccountName).toBe("octogee-gw-bender");
     expect(map.bender.serviceAccount).toEqual({ create: true });
-    expect(map.bender.operatorAccess?.platformMetadataEgress).toBeUndefined();
+    expect(map.bender.builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
-  it("leaves a generated operator ServiceAccount GSA-less", () => {
+  it("leaves a generated Builder ServiceAccount GSA-less", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender-canary-2026",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-chris",
         serviceAccountName: "octogee-gw-bender-canary-2026",
         serviceAccount: { create: true },
       }),
     ]);
     expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
-    expect(map["bender-canary-2026"].operatorAccess).toMatchObject({
+    expect(map["bender-canary-2026"].builderAccess).toMatchObject({
       shellsEnabled: true,
     });
-    expect(map["bender-canary-2026"].operatorAccess?.platformMetadataEgress).toBeUndefined();
+    expect(map["bender-canary-2026"].builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
-  it("does not require a platform gateway GSA for a generated operator ServiceAccount", () => {
+  it("does not require a platform gateway GSA for a generated Builder ServiceAccount", () => {
     const map = buildInstancesMap([
         mkDesired({
           gatewayId: "bender-canary-2026",
-          profile: "operator",
+          gatewayClass: "builder",
+          imageProfile: "builder",
           serviceAccountName: "octogee-gw-bender-canary-2026",
           serviceAccount: { create: true },
         }),
@@ -287,7 +293,8 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender-canary-2026",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-chris",
         serviceAccountName: "octogee-gw-bender-canary-2026",
         serviceAccount: {
@@ -299,7 +306,7 @@ describe("buildInstancesMap", () => {
         },
       }),
     ]);
-    expect(map["bender-canary-2026"].operatorAccess).toMatchObject({
+    expect(map["bender-canary-2026"].builderAccess).toMatchObject({
       shellsEnabled: true,
       platformMetadataEgress: true,
     });
@@ -309,7 +316,8 @@ describe("buildInstancesMap", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
-        profile: "operator",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         serviceAccountName: "octogee-gw-bender",
         serviceAccount: {
           create: true,
@@ -322,38 +330,40 @@ describe("buildInstancesMap", () => {
     expect(map.bender.serviceAccount?.annotations).toEqual({
       "iam.gke.io/gcp-service-account": "custom@octogee.iam.gserviceaccount.com",
     });
-    expect(map.bender.operatorAccess?.platformMetadataEgress).toBeUndefined();
+    expect(map.bender.builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
   it.each([
     "octogee-gateway@octogee.iam.gserviceaccount.com",
     "external@other-project.iam.gserviceaccount.com",
-  ])("rejects metadata egress for a non-dedicated operator GSA (%s)", (serviceAccount) => {
+  ])("rejects metadata egress for a non-dedicated Builder GSA (%s)", (serviceAccount) => {
     expect(() =>
       buildInstancesMap([
         mkDesired({
           gatewayId: "bender",
-          profile: "operator",
+          gatewayClass: "builder",
+          imageProfile: "builder",
           serviceAccountName: "octogee-gw-bender",
           serviceAccount: {
             create: true,
             annotations: { [WORKLOAD_IDENTITY_ANNOTATION]: serviceAccount },
           },
-          operatorAccess: { shellsEnabled: true, platformMetadataEgress: true },
+          builderAccess: { shellsEnabled: true, platformMetadataEgress: true },
         }),
       ]),
     ).toThrow(/dedicated Workload Identity GSA/u);
   });
 
-  it("preserves an explicit custom operator ServiceAccount name", () => {
+  it("preserves an explicit custom Builder ServiceAccount name", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
-        profile: "operator",
-        serviceAccountName: "custom-operator-ksa",
+        gatewayClass: "builder",
+        imageProfile: "builder",
+        serviceAccountName: "custom-builder-ksa",
       }),
     ]);
-    expect(map.bender.serviceAccountName).toBe("custom-operator-ksa");
+    expect(map.bender.serviceAccountName).toBe("custom-builder-ksa");
     expect(map.bender.serviceAccount).toBeUndefined();
   });
 
@@ -382,7 +392,7 @@ describe("buildInstancesMap", () => {
 
   it("never carries a persistence knob in Helm values (emptyDir only)", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", profile: "operator" }),
+      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder" }),
     ]);
     expect("persistence" in map.bender).toBe(false);
   });
@@ -854,7 +864,7 @@ describe("isReplicasOnlyUpdate", () => {
 
 describe("isImageRoll — the in-place-roll detector behind the mounted-gateway guard", () => {
   const REPO3 = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-  const OP_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator";
+  const BUILDER_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
   const base = () => ({
     enabled: true as const,
     image: { repository: REPO3, tag: "abc" },
@@ -878,7 +888,7 @@ describe("isImageRoll — the in-place-roll detector behind the mounted-gateway 
         kind: "update",
         gatewayId: "bender",
         from: { ...base(), image: { repository: REPO3, tag: "abc" } },
-        to: { ...base(), image: { repository: OP_REPO, tag: "abc" } },
+        to: { ...base(), image: { repository: BUILDER_REPO, tag: "abc" } },
       }),
     ).toBe(true);
   });
@@ -894,13 +904,13 @@ describe("isImageRoll — the in-place-roll detector behind the mounted-gateway 
     ).toBe(false);
   });
 
-  it("returns false for a config-only update at the same image (egress/operatorAccess)", () => {
+  it("returns false for a config-only update at the same image (egress/builderAccess)", () => {
     expect(
       isImageRoll({
         kind: "update",
         gatewayId: "bender",
-        from: { ...base(), operatorAccess: { shellsEnabled: false } },
-        to: { ...base(), operatorAccess: { shellsEnabled: true } },
+        from: { ...base(), builderAccess: { shellsEnabled: false } },
+        to: { ...base(), builderAccess: { shellsEnabled: true } },
       }),
     ).toBe(false);
   });

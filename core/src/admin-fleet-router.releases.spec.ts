@@ -307,7 +307,7 @@ function seedNewSchemaGateway(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -380,7 +380,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
   const sourceSha = "a".repeat(40);
   const manifestDigest = `sha256:${"b".repeat(64)}`;
   const gatewayDigest = `sha256:${"c".repeat(64)}`;
-  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const builderDigest = `sha256:${"d".repeat(64)}`;
   const edgeDigest = `sha256:${"e".repeat(64)}`;
 
   function releaseManifest(overrides: Partial<{
@@ -396,13 +396,14 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
         gateway: {
           "gateway-edge": edgeDigest,
           "octogee-gateway": gatewayDigest,
-          "octogee-gateway-operator": operatorDigest,
+          "octogee-gateway-builder": builderDigest,
         },
         platform: {
           "artifact-worker": `sha256:${"1".repeat(64)}`,
           "glm-controller": `sha256:${"2".repeat(64)}`,
           "octogee-api": `sha256:${"3".repeat(64)}`,
           "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+          "octogee-project-runner": `sha256:${"5".repeat(64)}`,
         },
       },
     };
@@ -451,9 +452,9 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: `aaaaaaa-oc2026.7.1@${gatewayDigest}`,
       profileImages: {
-        operator: {
-          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator",
-          imageTag: `aaaaaaa-oc2026.7.1@${operatorDigest}`,
+        builder: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          imageTag: `aaaaaaa-oc2026.7.1@${builderDigest}`,
         },
       },
       gatewayEdgeImage: {
@@ -1526,11 +1527,13 @@ describe("PATCH /customers/:uid/placement", () => {
 });
 
 describe("PATCH /customers/:uid/placement", () => {
-  it("rejects direct owner placement without creating a migration", async () => {
+  it("rejects direct Builder placement without creating a migration", async () => {
     const { app, store } = mkApp({
       "users/uid-alice": builderUser("source"),
       ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
-        gatewayClass: "operator",
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-alice",
         builderSlug: "alice",
       }),
@@ -1541,7 +1544,7 @@ describe("PATCH /customers/:uid/placement", () => {
       .send({ managedBy: "operator", gatewayId: "legacy-owner" })
       .expect(400)
       .expect({
-        error: "owner-only gateway placement is managed by the disposable lifecycle",
+        error: "Builder gateway placement is managed by the disposable lifecycle",
         gatewayId: "legacy-owner",
       });
 
@@ -1558,7 +1561,9 @@ describe("manual gateway migrations", () => {
     const { app, store } = mkApp({
       "users/uid-alice": builderUser("source"),
       ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
-        gatewayClass: "operator",
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "builder",
         ownerUid: "uid-alice",
         builderSlug: "alice",
       }),
@@ -1686,14 +1691,30 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(res.body.error).toMatch(/credential|BYOSUB/i);
   });
 
-  it("rejects a manual owner-only gateway before provisioning any runtime state", async () => {
+  it.each(["profile", "gatewayClass", "imageProfile"] as const)(
+    "rejects the retired operator value for %s",
+    async (field) => {
+      const { app } = mkApp();
+      const res = await request(app).post("/gateways").send({
+        gatewayId: "alpha",
+        imageRepository: REPO,
+        imageTag: "abc1234",
+        [field]: "operator",
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.got).toBe("operator");
+    },
+  );
+
+  it("rejects a manual Builder gateway before provisioning any runtime state", async () => {
     const { app, store } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "operator",
       imageRepository: REPO,
       imageTag: "abc1234",
-      gatewayClass: "operator",
-      imageProfile: "operator",
+      gatewayClass: "builder",
+      imageProfile: "builder",
       ownerUid: "uid-owner",
     });
 
@@ -1720,19 +1741,19 @@ describe("admin target resolution", () => {
     expect(res.status).toBe(404);
   });
 
-  it("rejects a manual owner-only target so the disposable lifecycle owns placement", async () => {
+  it("rejects a manual Builder target so the disposable lifecycle owns placement", async () => {
     const { app, store } = mkApp({
       ...seedServingGateway(
         "operator",
         sharedPayload(),
         undefined,
         {
-          profile: "operator",
-          gatewayClass: "operator",
-          imageProfile: "operator",
+          profile: "builder",
+          gatewayClass: "builder",
+          imageProfile: "builder",
           ownerUid: "uid-alice",
           builderSlug: "alice",
-          operatorAccess: { shellsEnabled: true, reason: "owned-runtime-gateway" },
+          builderAccess: { shellsEnabled: true, reason: "owned-runtime-gateway" },
         },
       ),
       "users/uid-alice": { username: "alice" },
@@ -2000,7 +2021,7 @@ describe("POST /gateways/:id/releases — cut release n+1 from prev + patch", ()
 
     const res = await request(app)
       .patch("/gateways/bench")
-      .send({ gatewayClass: "operator", ownerUid: "uid-new", builderSlug: "new" });
+      .send({ gatewayClass: "builder", ownerUid: "uid-new", builderSlug: "new" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/disposable lifecycle/);
@@ -2588,12 +2609,12 @@ describe("DELETE /gateways/:id — retirement claim", () => {
 
   it("leaves disposable termination exclusively to the Builder runtime lifecycle", async () => {
     const seed = seedServingGateway("run-alice", sharedPayload(), readyHeartbeat(), {
-      profile: "operator",
-      gatewayClass: "operator",
-      imageProfile: "operator",
+      profile: "builder",
+      gatewayClass: "builder",
+      imageProfile: "builder",
       ownerUid: "uid-alice",
       builderSlug: "alice",
-      operatorAccess: { shellsEnabled: true },
+      builderAccess: { shellsEnabled: true },
       allocation: {
         kind: "disposable-builder",
         schemaVersion: 1,
@@ -2649,27 +2670,33 @@ describe("PATCH /gateways/:id — payload fields on a new-schema gateway route t
 });
 
 describe("durable config PATCHes", () => {
-  it("updates operator access and security context on the root without changing a legacy desired doc", async () => {
+  it("updates builder access and security context on the root without changing a legacy desired doc", async () => {
     const { app, store } = mkApp(
       seedNewSchemaGateway(
         "bench",
         sharedPayload(),
-        { gatewayClass: "builder", ownerUid: "uid-1", builderSlug: "chris" },
+        {
+          profile: "builder",
+          gatewayClass: "builder",
+          imageProfile: "builder",
+          ownerUid: "uid-1",
+          builderSlug: "chris",
+        },
       ),
     );
     const res = await request(app)
       .patch("/gateways/bench")
       .send({
-        operatorAccess: { shellsEnabled: true, reason: "debug" },
+        builderAccess: { shellsEnabled: true, reason: "debug" },
         gatewayContainerSecurityContext: { runAsNonRoot: true },
       });
     expect(res.status).toBe(202);
     const root = store.get("gateways/bench") as Record<string, unknown>;
-    expect(root.operatorAccess).toEqual({ shellsEnabled: true, reason: "debug" });
+    expect(root.builderAccess).toEqual({ shellsEnabled: true, reason: "debug" });
     expect(root.gatewayContainerSecurityContext).toEqual({ runAsNonRoot: true });
     expect(root.ownerUid).toBe("uid-1");
     expect(root.builderSlug).toBe("chris");
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/bench`)?.operatorAccess).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/bench`)?.builderAccess).toBeUndefined();
   });
 
   it("applies explicit null-clears to the root without a release", async () => {

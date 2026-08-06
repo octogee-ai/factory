@@ -180,21 +180,21 @@ describe("fetchGatewayToken", () => {
     ).rejects.toMatchObject({ code: "fetch-failed" });
   });
 
-  it("operator profile uses the local in-pod OPENCLAW_GATEWAY_TOKEN instead of Secret Manager", async () => {
-    process.env.GATEWAY_PROFILE = "operator";
+  it("Builder profile uses the local in-pod OPENCLAW_GATEWAY_TOKEN instead of Secret Manager", async () => {
+    process.env.GATEWAY_PROFILE = "builder";
     process.env.GATEWAY_ID = "gw-test";
-    process.env.OPENCLAW_GATEWAY_TOKEN = "operator-local-token";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "builder-local-token";
     const err = Object.assign(new Error("PERMISSION_DENIED: locked KSA has no SM access"), { code: 7 });
     const client = makeClient(undefined, err);
     const token = await fetchGatewayToken({ gatewayId: "gw-test", client });
-    expect(token).toBe("operator-local-token");
+    expect(token).toBe("builder-local-token");
     expect(client.accessSecretVersion).not.toHaveBeenCalled();
   });
 
-  it("operator env fallback is local-gateway only", async () => {
-    process.env.GATEWAY_PROFILE = "operator";
+  it("Builder env fallback is local-gateway only", async () => {
+    process.env.GATEWAY_PROFILE = "builder";
     process.env.GATEWAY_ID = "gw-local";
-    process.env.OPENCLAW_GATEWAY_TOKEN = "operator-local-token";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "builder-local-token";
     const err = Object.assign(new Error("PERMISSION_DENIED: locked KSA has no SM access"), { code: 7 });
     const client = makeClient(undefined, err);
     await expect(

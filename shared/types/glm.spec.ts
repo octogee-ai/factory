@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
-  defaultOperatorGatewayAccess,
+  GATEWAY_CLASSES,
+  defaultBuilderGatewayAccess,
   deriveGatewayIdentity,
-  OPERATOR_GATEWAY_LOCKED_ACCESS,
+  BUILDER_GATEWAY_LOCKED_ACCESS,
   isValidGatewayId,
   isValidNewGatewayId,
-  operatorGatewayServiceAccountName,
+  builderGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveUserGatewayShellState,
@@ -63,14 +64,14 @@ describe("deriveGatewayIdentity", () => {
   });
 });
 
-describe("operatorGatewayServiceAccountName", () => {
-  it("prefixes the bare gateway id with the operator KSA prefix", () => {
-    expect(operatorGatewayServiceAccountName("bender")).toBe("octogee-gw-bender");
-    expect(operatorGatewayServiceAccountName("default")).toBe("octogee-gw-default");
+describe("builderGatewayServiceAccountName", () => {
+  it("prefixes the bare gateway id with the Builder KSA prefix", () => {
+    expect(builderGatewayServiceAccountName("bender")).toBe("octogee-gw-bender");
+    expect(builderGatewayServiceAccountName("default")).toBe("octogee-gw-default");
   });
 
   it("uses the gateway id verbatim — ids are bare, no prefix manipulation", () => {
-    expect(operatorGatewayServiceAccountName("mountain-mama")).toBe(
+    expect(builderGatewayServiceAccountName("mountain-mama")).toBe(
       "octogee-gw-mountain-mama",
     );
   });
@@ -137,9 +138,17 @@ describe("isValidNewGatewayId", () => {
 });
 
 describe("gateway class/profile resolution", () => {
-  it("keeps legacy profile=operator compatible for class and image", () => {
-    expect(resolveGatewayClass({ profile: "operator" })).toBe("operator");
-    expect(resolveGatewayImageProfile({ profile: "operator" })).toBe("operator");
+  it("exposes exactly the Barn and disposable Builder customer classes", () => {
+    expect(GATEWAY_CLASSES).toEqual(["shared", "builder"]);
+  });
+
+  it("does not infer a customer class from a legacy runtime profile", () => {
+    expect(resolveGatewayClass({ profile: "operator" as never })).toBe("shared");
+  });
+
+  it("fails stale customer class and image values closed at runtime", () => {
+    expect(resolveGatewayClass({ gatewayClass: "operator" as never })).toBe("shared");
+    expect(resolveGatewayImageProfile({ imageProfile: "operator" as never })).toBe("standard");
   });
 
   it("defaults missing legacy profile to shared class + standard image", () => {
@@ -147,36 +156,32 @@ describe("gateway class/profile resolution", () => {
     expect(resolveGatewayImageProfile({})).toBe("standard");
   });
 
-  it("derives the operator image from explicit operator class", () => {
-    expect(resolveGatewayClass({ gatewayClass: "operator", profile: "standard" })).toBe("operator");
-    expect(resolveGatewayImageProfile({ gatewayClass: "operator", profile: "standard" })).toBe("operator");
+  it("maps the Builder class to its Builder image profile", () => {
+    expect(resolveGatewayClass({ gatewayClass: "builder", profile: "standard" })).toBe("builder");
+    expect(resolveGatewayImageProfile({ gatewayClass: "builder", profile: "standard" })).toBe("builder");
   });
 
   it("lets explicit imageProfile override the class-derived image", () => {
-    expect(resolveGatewayImageProfile({ gatewayClass: "builder", imageProfile: "operator" })).toBe("operator");
-    expect(resolveGatewayImageProfile({ gatewayClass: "operator", imageProfile: "standard" })).toBe("standard");
+    expect(resolveGatewayImageProfile({ gatewayClass: "builder", imageProfile: "builder" })).toBe("builder");
+    expect(resolveGatewayImageProfile({ gatewayClass: "shared", imageProfile: "standard" })).toBe("standard");
   });
 });
 
-describe("defaultOperatorGatewayAccess", () => {
+describe("defaultBuilderGatewayAccess", () => {
   it("grants shells and Control UI to an owned runtime gateway and locks an un-owned one", () => {
-    expect(defaultOperatorGatewayAccess("uid-chris")).toEqual({
+    expect(defaultBuilderGatewayAccess("uid-chris")).toEqual({
       shellsEnabled: true,
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     });
-    expect(defaultOperatorGatewayAccess(null)).toEqual(OPERATOR_GATEWAY_LOCKED_ACCESS);
-    expect(defaultOperatorGatewayAccess(undefined)).toEqual(OPERATOR_GATEWAY_LOCKED_ACCESS);
+    expect(defaultBuilderGatewayAccess(null)).toEqual(BUILDER_GATEWAY_LOCKED_ACCESS);
+    expect(defaultBuilderGatewayAccess(undefined)).toEqual(BUILDER_GATEWAY_LOCKED_ACCESS);
   });
 });
 
 describe("isGatewayClassControlUiAccessEnabled", () => {
   it("enables Control UI for isolated classes by default and honors an explicit disable", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
-      shellsEnabled: true,
-      controlUiEnabled: true,
-    })).toBe(true);
-    expect(isGatewayClassControlUiAccessEnabled("operator", {
       shellsEnabled: true,
       controlUiEnabled: true,
     })).toBe(true);
@@ -191,7 +196,7 @@ describe("isGatewayClassControlUiAccessEnabled", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
       shellsEnabled: false,
     })).toBe(true);
-    expect(isGatewayClassControlUiAccessEnabled("operator", {
+    expect(isGatewayClassControlUiAccessEnabled("builder", {
       shellsEnabled: true,
       controlUiEnabled: false,
     })).toBe(false);
@@ -199,18 +204,18 @@ describe("isGatewayClassControlUiAccessEnabled", () => {
 });
 
 describe("resolveUserGatewayShellState", () => {
-  it("enables BuilderShell for the owner of an operator-class gateway with shells on", () => {
+  it("does not infer BuilderShell from the retired operator image profile", () => {
     expect(
       resolveUserGatewayShellState(
         {
-          gatewayClass: "operator",
+          gatewayClass: "shared",
           imageProfile: "operator",
           ownerUid: "uid-chris",
-          operatorAccess: { shellsEnabled: true },
+          builderAccess: { shellsEnabled: true },
         },
         "uid-chris",
       ),
-    ).toEqual({ gatewayProfile: "operator", shellsEnabled: true });
+    ).toEqual({ gatewayProfile: "standard", shellsEnabled: false });
   });
 
   it("enables BuilderShell for the owner of a builder-class gateway with shells on", () => {
@@ -220,29 +225,29 @@ describe("resolveUserGatewayShellState", () => {
           gatewayClass: "builder",
           imageProfile: "standard",
           ownerUid: "uid-chris",
-          operatorAccess: { shellsEnabled: true },
+          builderAccess: { shellsEnabled: true },
         },
         "uid-chris",
       ),
-    ).toEqual({ gatewayProfile: "standard", shellsEnabled: true });
+    ).toEqual({ gatewayProfile: "builder", shellsEnabled: true });
   });
 
   it("does not infer shell access for a non-owner", () => {
     expect(
       resolveUserGatewayShellState(
-        { gatewayClass: "operator", ownerUid: "uid-bender", operatorAccess: { shellsEnabled: true } },
+        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { shellsEnabled: true } },
         "uid-jack",
       ).shellsEnabled,
     ).toBe(false);
   });
 
-  it("denies a guest migrated onto someone else's operator gateway", () => {
+  it("denies a guest migrated onto someone else's Builder gateway", () => {
     expect(
       resolveUserGatewayShellState(
-        { gatewayClass: "operator", ownerUid: "uid-bender", operatorAccess: { shellsEnabled: true } },
+        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { shellsEnabled: true } },
         "uid-jack",
       ),
-    ).toEqual({ gatewayProfile: "operator", shellsEnabled: false });
+    ).toEqual({ gatewayProfile: "builder", shellsEnabled: false });
   });
 
   it("never enables shells on a shared gateway", () => {
@@ -251,10 +256,10 @@ describe("resolveUserGatewayShellState", () => {
     ).toEqual({ gatewayProfile: "standard", shellsEnabled: false });
   });
 
-  it("respects an explicitly locked operatorAccess even for the owner", () => {
+  it("respects explicitly locked Builder access even for the owner", () => {
     expect(
       resolveUserGatewayShellState(
-        { gatewayClass: "operator", ownerUid: "uid-chris", operatorAccess: { shellsEnabled: false } },
+        { gatewayClass: "builder", ownerUid: "uid-chris", builderAccess: { shellsEnabled: false } },
         "uid-chris",
       ).shellsEnabled,
     ).toBe(false);

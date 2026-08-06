@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { customerSshKeyPath, gitExec } from "./git.js";
 import {
-  MATTERMOST_ACCOUNT_SECRET_PROVIDER,
+  mattermostAccountSecretRef,
   mattermostAccountSecretsPath,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
@@ -178,11 +178,14 @@ function changedJsonPaths(
   return paths;
 }
 
-function accountUsesMattermostSecret(value: unknown): boolean {
+function accountUsesMattermostSecret(accountId: string, value: unknown): boolean {
   if (!isObject(value)) return false;
   const botToken = value.botToken;
-  return isObject(botToken) && botToken.source === "file" &&
-    botToken.provider === MATTERMOST_ACCOUNT_SECRET_PROVIDER;
+  const expected = mattermostAccountSecretRef(accountId);
+  return isObject(botToken)
+    && botToken.source === expected.source
+    && botToken.provider === expected.provider
+    && botToken.id === expected.id;
 }
 
 function desiredMattermostSecrets(
@@ -195,7 +198,9 @@ function desiredMattermostSecrets(
   const accounts = isObject(mattermost.accounts) ? mattermost.accounts : {};
   const next: Record<string, string> = {};
   for (const [accountId, account] of Object.entries(accounts)) {
-    if (!accountUsesMattermostSecret(account) && extracted[accountId] === undefined) continue;
+    if (!accountUsesMattermostSecret(accountId, account) && extracted[accountId] === undefined) {
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(extracted, accountId)) {
       next[accountId] = extracted[accountId];
     } else if (Object.prototype.hasOwnProperty.call(current, accountId)) {

@@ -73,7 +73,8 @@ function env(port?: number, openclawDir = "/home/node/.openclaw"): NodeJS.Proces
   return {
     GATEWAY_ID: "bender",
     GATEWAY_REVISION_ID: "bender-r7",
-    GATEWAY_CLASS: "operator",
+    GATEWAY_CLASS: "builder",
+    GATEWAY_PROFILE: "builder",
     API_PUBLIC_URL: "https://api.octogee.com",
     APP_URL: "https://app.octogee.com",
     OPENCLAW_GATEWAY_URL: `http://127.0.0.1:${port ?? 18789}`,
@@ -510,7 +511,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       tempDirs.push(openclawDir);
       const currentConfig: Record<string, unknown> = { customerSetting: "before" };
       reconcilePlatformInvariants(currentConfig, {
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         gatewayId: "bender",
         apiOrigin: "https://api.octogee.com",
       });
@@ -742,10 +743,43 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     router.attach(edge);
     const edgePort = await listen(edge);
 
-    const rejected = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
-      headers: { cookie: issue(manager), origin: "https://evil.example" },
+    const rejectedStatus = await new Promise<number>((resolve, reject) => {
+      const rejected = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+        headers: { cookie: issue(manager), origin: "https://evil.example" },
+      });
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        rejected.terminate();
+        reject(new Error("cross-origin handshake timed out"));
+      }, 2_000);
+      const settle = (callback: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback();
+      };
+      rejected.once("unexpected-response", (_request, response) => {
+        const status = response.statusCode ?? 0;
+        response.resume();
+        settle(() => {
+          rejected.terminate();
+          resolve(status);
+        });
+      });
+      rejected.once("open", () => {
+        settle(() => {
+          rejected.terminate();
+          reject(new Error("cross-origin handshake unexpectedly opened"));
+        });
+      });
+      rejected.once("error", (error) => {
+        settle(() => reject(error));
+      });
     });
-    await new Promise<void>((resolve) => rejected.once("error", () => resolve()));
+    expect(rejectedStatus).toBe(403);
+    expect(upstreamOrigin).toBeUndefined();
 
     const browserFrames: Array<Record<string, unknown>> = [];
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {

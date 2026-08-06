@@ -10,13 +10,6 @@ function toCidrs(raw: string, sink: Set<string>): void {
   }
 }
 
-// Resolve the live Kubernetes API-server egress CIDRs so operator gateways can
-// reach the apiserver for builder-shell TokenReview. On GKE Dataplane V2 (Cilium)
-// the NetworkPolicy is enforced on the POST-DNAT destination, so we need the real
-// endpoint(s) from `endpoints/kubernetes` — the EndpointSlice is empty on managed
-// control planes — plus the ClusterIP for any pre-DNAT match. Both as /32.
-// Returns [] on failure: callers must NOT inject an empty set (would strip a
-// working gateway's egress); the prior value stands until a resolve succeeds.
 export async function resolveApiServerEgressCidrs(
   kubectl: KubectlRunner,
   log: (msg: string) => void,
@@ -50,14 +43,11 @@ export async function resolveApiServerEgressCidrs(
     log(`[apiserver-egress] resolve threw: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (cidrs.size === 0) {
-    log("[apiserver-egress] ⚠ resolved no apiserver CIDRs — operator builder-shell egress unchanged until this succeeds");
+    log("[apiserver-egress] ⚠ resolved no apiserver CIDRs — Builder shell egress unchanged until this succeeds");
   }
   return [...cidrs].sort();
 }
 
-// The control-plane endpoint is stable, so resolve once and cache: one read per
-// TTL window, not per reconcile tick. Empties aren't cached, so a transient read
-// failure self-heals on the next reconcile.
 export function createCachedApiServerEgressResolver(
   kubectl: KubectlRunner,
   log: (msg: string) => void,

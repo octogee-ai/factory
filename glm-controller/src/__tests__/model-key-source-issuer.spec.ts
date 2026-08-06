@@ -134,7 +134,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
     expect(deps.writeSourceSecret).not.toHaveBeenCalled();
   });
 
-  it("issues a broker token source for operator gateways too", async () => {
+  it("issues a broker token source for Builder gateways", async () => {
     const deps = makeDeps({
       backend: {
         issueGatewayModelKey: vi.fn(async () => ({
@@ -148,7 +148,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
 
     const result = await issuer.syncGatewayModelKeySource({
       gatewayId: "bender",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
       desiredStatus: "running",
       ownerUid: "uid-bender",
     });

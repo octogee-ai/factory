@@ -52,7 +52,6 @@ interface DeprovisionInput {
   uid?: unknown;
   
   skipAuth?: unknown;
-  skipHosting?: unknown;
 }
 
 export function createDeprovisionCustomerHandler(
@@ -65,7 +64,6 @@ export function createDeprovisionCustomerHandler(
       return { steps: [], success: false, error: "missing uid in op.input" };
     }
     const skipAuth = input.skipAuth === true;
-    const skipHosting = input.skipHosting === true;
 
     const cleanup = await deps.loadCleanupContext(uid);
     if (!cleanup) {
@@ -131,7 +129,6 @@ const nukeCtx: NukeCloudCtx = {
       chatArtifactIds: cleanup.chatArtifactIds,
       agentImportIds: cleanup.agentImportIds,
       skipAuth,
-      skipHosting,
     };
     const stepResults = await nukeUserCloudSide(nukeCtx, deps.cloudCleanup);
     for (const r of stepResults) {

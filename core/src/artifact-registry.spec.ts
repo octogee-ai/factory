@@ -291,12 +291,12 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
   const sourceSha = "a".repeat(40);
   const manifestDigest = `sha256:${"b".repeat(64)}`;
   const gatewayDigest = `sha256:${"c".repeat(64)}`;
-  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const builderDigest = `sha256:${"d".repeat(64)}`;
   const edgeDigest = `sha256:${"e".repeat(64)}`;
   const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceSha,
     openclawVersion: "2026.7.1",
     repository,
@@ -304,13 +304,14 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       gateway: {
         "gateway-edge": edgeDigest,
         "octogee-gateway": gatewayDigest,
-        "octogee-gateway-operator": operatorDigest,
+        "octogee-gateway-builder": builderDigest,
       },
       platform: {
         "artifact-worker": `sha256:${"1".repeat(64)}`,
         "glm-controller": `sha256:${"2".repeat(64)}`,
         "octogee-api": `sha256:${"3".repeat(64)}`,
         "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+        "octogee-project-runner": `sha256:${"5".repeat(64)}`,
       },
     },
   };
@@ -346,7 +347,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       manifestDigest,
       surfaces: { gateway: { "octogee-gateway": gatewayDigest } },
     });
-    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(10);
+    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(11);
     await expect(authority.ensureAliases(aliases)).resolves.toEqual([{
       alias: aliases[0].alias,
       status: "already-applied",
@@ -371,6 +372,31 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
         version: `projects/octogee/locations/us-central1/repositories/octogee/packages/octogee-gateway/versions/${gatewayDigest}`,
       }),
     });
+  });
+
+  it("rejects legacy v1 manifests at the current release authority boundary", async () => {
+    const authority = createCentralReleaseAuthority({
+      project: "octogee",
+      location: "us-central1",
+      repository: "octogee",
+    });
+    const legacy = structuredClone(manifest);
+    legacy.schemaVersion = 1;
+    delete legacy.surfaces.platform["octogee-project-runner"];
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify(legacy));
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}`,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        schemaVersion: 2,
+        layers: [{ digest: `sha256:${"f".repeat(64)}` }],
+      }))
+      .mockResolvedValueOnce(new Response(archive));
+
+    await expect(authority.resolveManifest(sourceSha)).rejects.toThrow(
+      "release digest manifest schemaVersion must be 2",
+    );
   });
 
   it("rejects an alias race when the persisted target is not the manifest digest", async () => {

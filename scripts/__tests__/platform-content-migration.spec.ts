@@ -22,7 +22,7 @@ import {
 } from '../ops/migrate-platform-content.js'
 
 describe('platform content migration plan', () => {
-  it('resolves the canonical exact-commit operator image to its Artifact Registry digest', () => {
+  it('resolves the canonical exact-commit Builder image to its Artifact Registry digest', () => {
     const commands: Array<{ command: string; args: readonly string[] }> = []
     const image = resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
@@ -44,7 +44,7 @@ describe('platform content migration plan', () => {
           },
           results: {
             images: [{
-              name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa',
+              name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa',
               digest: `sha256:${'b'.repeat(64)}`,
             }],
           },
@@ -57,14 +57,14 @@ describe('platform content migration plan', () => {
       canonicalOpenclawVersion: '2026.7.1',
       tag: 'aaaaaaa-oc2026.7.1',
       digest: `sha256:${'b'.repeat(64)}`,
-      reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1@sha256:${'b'.repeat(64)}`,
+      reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa-oc2026.7.1@sha256:${'b'.repeat(64)}`,
     })
     expect(commands).toEqual([
       {
         command: 'gcloud',
         args: [
           'artifacts', 'docker', 'images', 'describe',
-          'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa-oc2026.7.1',
+          'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa-oc2026.7.1',
           '--project=octogee', '--format=json',
         ],
       },
@@ -83,7 +83,7 @@ describe('platform content migration plan', () => {
   })
 
   it('reads the canonical OpenClaw version from the real repository layout', () => {
-    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.1')
+    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe('2026.7.2-beta.7')
   })
 
   it('rejects duplicate canonical OpenClaw version declarations', () => {
@@ -122,7 +122,7 @@ describe('platform content migration plan', () => {
         _IMAGE_TAG: 'aaaaaaa',
         _OPENCLAW_VERSION: '2026.7.1',
       },
-      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
     }]],
     ['a different OpenClaw version', [{
       status: 'SUCCESS',
@@ -131,7 +131,7 @@ describe('platform content migration plan', () => {
         _IMAGE_TAG: 'aaaaaaa',
         _OPENCLAW_VERSION: '2026.7.0',
       },
-      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
     }]],
     ['a different image digest', [{
       status: 'SUCCESS',
@@ -140,9 +140,9 @@ describe('platform content migration plan', () => {
         _IMAGE_TAG: 'aaaaaaa',
         _OPENCLAW_VERSION: '2026.7.1',
       },
-      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:aaaaaaa', digest: `sha256:${'c'.repeat(64)}` }] },
+      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'c'.repeat(64)}` }] },
     }]],
-  ])('rejects an operator digest backed by %s', (_label, builds) => {
+  ])('rejects a Builder digest backed by %s', (_label, builds) => {
     expect(() => resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
       artifactRegistryProjectId: 'octogee',
@@ -281,7 +281,7 @@ describe('platform content migration plan', () => {
       service: 'gitea',
       migrationId: 'migration-20260722',
       scratchDisk: 'scratch-disk',
-      image: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:v0.3.1@sha256:' + 'a'.repeat(64),
+      image: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:v0.3.1@sha256:' + 'a'.repeat(64),
     }) as { items: Array<Record<string, any>> }
     const pv = manifest.items.find((item) => item.kind === 'PersistentVolume')!
     const pod = manifest.items.find((item) => item.kind === 'Pod')!
@@ -350,7 +350,7 @@ describe('platform content migration plan', () => {
       { kind: 'deployment', name: 'gitea', claim: 'gitea-data', serviceAccount: 'gitea', env: [], envFrom: [] },
       'gitea',
       'migration-20260722',
-      'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-operator:v0.3.1@sha256:' + 'a'.repeat(64),
+      'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:v0.3.1@sha256:' + 'a'.repeat(64),
     ) as Record<string, any>
     const command = manifest.spec.containers[0].command.at(-1)
     expect(manifest.spec.containers[0].volumeMounts).toEqual([

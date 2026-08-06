@@ -31,7 +31,9 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
     "--namespace=octogee-test",
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
-  if (setValues.profile === "operator") {
+  if (setValues.profile === "builder") {
+    merged.gatewayClass = "builder";
+    merged.imageProfile = "builder";
     merged.ownerUid = "test-owner";
     merged.builderSlug = "test-builder";
   }
@@ -108,15 +110,15 @@ describe("helm/octogee-gateway/ — sizing tier explicit override", () => {
 
   it("explicit sizingTier beats profile-default", () => {
     // both profiles default to small; force medium to prove explicit wins.
-    const out = helmTemplate({ profile: "operator", sizingTier: "m" });
+    const out = helmTemplate({ profile: "builder", sizingTier: "m" });
     expectResourcesMatchTier(out, "m");
   });
 });
 
 describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () => {
-  it("operator profile without sizingTier renders small (profile default)", () => {
-    const out = helmTemplate({ profile: "operator" });
-    expectResourcesMatchTier(out, "l");
+  it("Builder profile without sizingTier renders extra-small (class default)", () => {
+    const out = helmTemplate({ profile: "builder" });
+    expectResourcesMatchTier(out, "xs");
   });
 
   it("standard profile without sizingTier renders small resources", () => {
@@ -129,10 +131,10 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
     expectResourcesMatchTier(out, "l");
   });
 
-  it("operator-profile pod label is the resolved tier, not the bare profile string", () => {
-    const out = helmTemplate({ profile: "operator" });
+  it("Builder-profile pod label is the resolved tier, not the bare profile string", () => {
+    const out = helmTemplate({ profile: "builder" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("l");
+    expect(c.podLabels.tier).toBe("xs");
   });
 
   it("standard-profile pod label resolves to small", () => {

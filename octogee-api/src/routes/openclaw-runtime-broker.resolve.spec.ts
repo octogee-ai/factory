@@ -134,7 +134,7 @@ function desiredDoc(extra: Record<string, unknown> = {}): Record<string, unknown
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,

@@ -15,6 +15,24 @@ export declare function codexStagingHomeDir(openclawDir: string, agentId: string
 export declare function codexStagingAuthJsonPath(openclawDir: string, agentId: string): string;
 export declare function codexAgentDir(openclawDir: string, agentId: string): string;
 export declare function codexAuthStatePath(openclawDir: string, agentId: string): string;
+export interface CustomerOauthRuntimePurgeResult {
+    removedFiles: number;
+    removedDirectories: number;
+    scrubbedProfileStores: number;
+    resetSessions: number;
+    affectedAgentIds: string[];
+}
+interface CustomerOauthRuntimePurgeOptions {
+    openclawDir: string;
+    homeDir: string;
+    agentIds: readonly string[];
+    resetSessionStores?: boolean;
+    directRuntimeModelRefs?: readonly string[];
+    allowedModelRefs?: readonly string[];
+    allowedProviderIds?: readonly string[];
+    modelProviders?: Record<string, unknown>;
+}
+export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRuntimePurgeOptions): CustomerOauthRuntimePurgeResult;
 /**
  * Reads the codex auth-state payload as text — preferring the SQLite
  * auth_profile_state row (openclaw v2026.6.5+) and falling back to the
@@ -43,3 +61,4 @@ export declare function restoreByosubCredentials(opts: {
     failed: number;
     skipped: number;
 }>;
+export {};

@@ -10,6 +10,12 @@ import {
   type AgentImportWorkspacePolicy,
 } from "@octogee/shared/types/agent-import";
 import { getExtension, getMimeType, isTextFile } from "../routes/workspace/helpers.js";
+import {
+  WORKSPACE_GIT_HARDENING_PINS,
+  workspaceMutationLeaseGitDir,
+  workspaceGitCommandArgs,
+  workspaceGitEnvironment,
+} from "./workspace-git.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const IMPORT_ID_RE = /^[A-Za-z0-9._-]{1,160}$/;
@@ -248,12 +254,66 @@ async function command(
 
 const GIT_COMMAND = "/usr/bin/git";
 
+function agentImportGitArgs(cwd: string, args: string[]): string[] {
+  const localTransport = ["fetch", "ls-remote", "push"].includes(args[0] ?? "")
+    ? ["-c", "protocol.file.allow=always"]
+    : [];
+  return workspaceGitCommandArgs(cwd, [...localTransport, ...args]);
+}
+
+function agentImportGitEnvironment(env?: NodeJS.ProcessEnv, cwd?: string): NodeJS.ProcessEnv {
+  return workspaceGitEnvironment(env ?? buildAgentImportGitEnvironment(), cwd);
+}
+
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, label = "git"): Promise<string> {
-  return command(GIT_COMMAND, args, { cwd, env, label });
+  return command(GIT_COMMAND, agentImportGitArgs(cwd, args), {
+    cwd,
+    env: agentImportGitEnvironment(env, cwd),
+    label,
+  });
+}
+
+function gitChild(
+  cwd: string,
+  args: string[],
+  options: { input?: string | Buffer; maxOutput?: number; env?: NodeJS.ProcessEnv } = {},
+) {
+  return runChild(GIT_COMMAND, agentImportGitArgs(cwd, args), {
+    cwd,
+    env: agentImportGitEnvironment(options.env, cwd),
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.maxOutput === undefined ? {} : { maxOutput: options.maxOutput }),
+  });
+}
+
+function gitDefault(
+  cwd: string,
+  args: string[],
+  options: { input?: string | Buffer; maxOutput?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<CommandResult> {
+  return defaultRun(GIT_COMMAND, agentImportGitArgs(cwd, args), {
+    cwd,
+    env: agentImportGitEnvironment(options.env, cwd),
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.maxOutput === undefined ? {} : { maxOutput: options.maxOutput }),
+  });
+}
+
+function gitCommand(
+  cwd: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; label?: string; input?: string | Buffer } = {},
+): Promise<string> {
+  return command(GIT_COMMAND, agentImportGitArgs(cwd, args), {
+    cwd,
+    env: agentImportGitEnvironment(options.env, cwd),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.input === undefined ? {} : { input: options.input }),
+  });
 }
 
 async function readRef(cwd: string, ref: string): Promise<string | null> {
-  const result = await defaultRun(GIT_COMMAND, ["rev-parse", "--verify", ref], { cwd });
+  const result = await gitDefault(cwd, ["rev-parse", "--verify", ref]);
   if (!result.error && (result.status === 1 || result.status === 128)) return null;
   if (result.error || result.status !== 0) throw safeCommandError("git ref lookup", result);
   return requireSha(result.stdout.trim(), "git ref");
@@ -307,9 +367,9 @@ interface RepositoryExpansionLimits {
 }
 
 async function storedObjectMetadata(repoDir: string): Promise<string[]> {
-  const objectMetadata = await runChild(GIT_COMMAND, [
+  const objectMetadata = await gitChild(repoDir, [
     "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
-  ], { cwd: repoDir, maxOutput: 32 * 1024 * 1024 });
+  ], { maxOutput: 32 * 1024 * 1024 });
   if (objectMetadata.error || objectMetadata.status !== 0) {
     if ((objectMetadata.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
       throw new AgentImportGitError("archive_too_large", "source repository has too many stored objects");
@@ -369,8 +429,7 @@ async function reachableObjectMetadata(repoDir: string, head: string): Promise<s
     return id && SHA_RE.test(id) ? [id] : [];
   }))];
   if (ids.length === 0) throw new AgentImportGitError("invalid_git_history", "source history has no objects");
-  const checked = await runChild(GIT_COMMAND, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], {
-    cwd: repoDir,
+  const checked = await gitChild(repoDir, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], {
     input: `${ids.join("\n")}\n`,
     maxOutput: 32 * 1024 * 1024,
   });
@@ -388,8 +447,7 @@ async function reachableObjectMetadata(repoDir: string, head: string): Promise<s
 async function assertNoLfsPointers(repoDir: string, lfsCandidates: string[]): Promise<void> {
   for (let offset = 0; offset < lfsCandidates.length; offset += 1_000) {
     const ids = lfsCandidates.slice(offset, offset + 1_000);
-    const batch = await runChild(GIT_COMMAND, ["cat-file", "--batch"], {
-      cwd: repoDir,
+    const batch = await gitChild(repoDir, ["cat-file", "--batch"], {
       input: `${ids.join("\n")}\n`,
       maxOutput: 2 * 1024 * 1024,
     });
@@ -496,8 +554,7 @@ async function historyTrees(repoDir: string, head: string): Promise<Map<string, 
     const id = line.split(" ", 1)[0];
     return SHA_RE.test(id) ? [id] : [];
   }))];
-  const check = await command(GIT_COMMAND, ["cat-file", "--batch-check"], {
-    cwd: repoDir,
+  const check = await gitCommand(repoDir, ["cat-file", "--batch-check"], {
     input: `${objectIds.join("\n")}\n`,
     label: "git tree batch check",
   });
@@ -505,8 +562,7 @@ async function historyTrees(repoDir: string, head: string): Promise<Map<string, 
     const [id, type] = line.split(" ", 3);
     return SHA_RE.test(id) && type === "tree" ? [id] : [];
   });
-  const batch = await runChild(GIT_COMMAND, ["cat-file", "--batch"], {
-    cwd: repoDir,
+  const batch = await gitChild(repoDir, ["cat-file", "--batch"], {
     input: `${treeIds.join("\n")}\n`,
     maxOutput: MAX_TREE_METADATA_OUTPUT,
   });
@@ -659,8 +715,7 @@ async function historyEntriesForCommit(repoDir: string, commit: string): Promise
   entries: SanitizedHistoryEntry[];
   removedBlockedPath: boolean;
 }> {
-  const result = await runChild(GIT_COMMAND, ["ls-tree", "-r", "-z", commit], {
-    cwd: repoDir,
+  const result = await gitChild(repoDir, ["ls-tree", "-r", "-z", commit], {
     maxOutput: MAX_TREE_METADATA_OUTPUT,
   });
   if (result.error || result.status !== 0) {
@@ -684,8 +739,7 @@ async function writeSanitizedHistoryTree(repoDir: string, entries: SanitizedHist
       const indexInfo = Buffer.from(entries.map(({ mode, objectId, relative }) =>
         `${mode} ${objectId}\t${relative}\0`
       ).join(""), "utf8");
-      await command(GIT_COMMAND, ["update-index", "-z", "--index-info"], {
-        cwd: repoDir,
+      await gitCommand(repoDir, ["update-index", "-z", "--index-info"], {
         env,
         input: indexInfo,
         label: "git sanitized index",
@@ -710,11 +764,10 @@ async function commitSanitizedHistory(
     GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
     GIT_COMMITTER_DATE: "1970-01-01T00:00:00Z",
   });
-  return requireSha(await command(
-    GIT_COMMAND,
+  return requireSha(await gitCommand(
+    repoDir,
     ["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])],
     {
-      cwd: repoDir,
       env,
       input: "Sanitized agent import history\n",
       label: "git sanitized history commit",
@@ -723,7 +776,7 @@ async function commitSanitizedHistory(
 }
 
 async function deleteSourceRef(repoDir: string, ref: string): Promise<void> {
-  const symbolic = await defaultRun(GIT_COMMAND, ["symbolic-ref", "-q", ref], { cwd: repoDir });
+  const symbolic = await gitDefault(repoDir, ["symbolic-ref", "-q", ref]);
   if (!symbolic.error && symbolic.status === 0) {
     await git(repoDir, ["symbolic-ref", DELETE_REF_ARGUMENT, ref], undefined, GIT_SOURCE_REF_CLEANUP);
     return;
@@ -919,10 +972,10 @@ async function commitTree(
     GIT_COMMITTER_NAME: "Octogee Agent Import",
     GIT_COMMITTER_EMAIL: "agent-import@octogee.invalid",
   });
-  return requireSha(await command(
-    GIT_COMMAND,
+  return requireSha(await gitCommand(
+    repoDir,
     ["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])],
-    { cwd: repoDir, env, input: `${message}\n`, label: "git commit-tree" },
+    { env, input: `${message}\n`, label: "git commit-tree" },
   ), "created commit");
 }
 
@@ -1110,7 +1163,10 @@ async function resumeAgentImportRepository(
   if (options.push !== false) {
     await withWorkspaceMutationLease(
       options.targetDir,
-      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
+        workspaceDir,
+        gitDir: workspaceMutationLeaseGitDir(workspaceDir),
+      })),
       async () => {
         if (await currentMainHead(options.targetDir) !== refs.currentHead) {
           throw new AgentImportGitError("destination_changed", "destination workspace changed after preview");
@@ -1149,7 +1205,18 @@ export async function applyAgentImportRepository(
   const stageDir = path.join(stageRoot, "source");
   let retainBlobs = false;
   try {
-    await command(GIT_COMMAND, ["clone", "--quiet", "--no-hardlinks", options.sourceDir, stageDir], { label: "source staging clone" });
+    await command(
+      GIT_COMMAND,
+      [
+        ...WORKSPACE_GIT_HARDENING_PINS,
+        "-c", "protocol.file.allow=always",
+        "clone", "--quiet", "--no-hardlinks", options.sourceDir, stageDir,
+      ],
+      {
+        env: agentImportGitEnvironment(),
+        label: "source staging clone",
+      },
+    );
     clearWorkingTree(stageDir);
     readDirectory(options.sourceDir, stageDir);
     for (const platformPath of PLATFORM_MANAGED_WORKSPACE_DIRECTORIES) {
@@ -1172,7 +1239,10 @@ export async function applyAgentImportRepository(
     await git(options.targetDir, ["fetch", "--quiet", "--no-tags", stageDir, importCommit]);
     await withWorkspaceMutationLease(
       options.targetDir,
-      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+      options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
+        workspaceDir,
+        gitDir: workspaceMutationLeaseGitDir(workspaceDir),
+      })),
       async () => {
         await ensureCleanDestination(options.targetDir);
         if (await currentMainHead(options.targetDir) !== destinationHead) {
@@ -1239,7 +1309,10 @@ export async function rollbackAgentImportRepository(options: {
       if (options.push !== false) {
         await withWorkspaceMutationLease(
           options.targetDir,
-          options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+          options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
+            workspaceDir,
+            gitDir: workspaceMutationLeaseGitDir(workspaceDir),
+          })),
           async () => {
             if (await currentMainHead(options.targetDir) !== current) {
               throw new AgentImportGitError("rollback_window_closed", "workspace changed after import");
@@ -1265,7 +1338,10 @@ export async function rollbackAgentImportRepository(options: {
   );
   await withWorkspaceMutationLease(
     options.targetDir,
-    options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({ workspaceDir })),
+    options.acquireMutationLease ?? ((workspaceDir) => acquireWorkspaceMutationLeaseSync({
+      workspaceDir,
+      gitDir: workspaceMutationLeaseGitDir(workspaceDir),
+    })),
     async () => {
       await ensureCleanDestination(options.targetDir);
       if (await currentMainHead(options.targetDir) !== importCommit) {

@@ -67,6 +67,7 @@ export const globalRateLimit = rateLimit({
   message: { error: "Too many requests, please try again later." },
   skip: (req: Request) => {
     if (isHealthOrMetricsPath(req.path)) return true;
+    if (req.path === "/p" || req.path.startsWith("/p/")) return true;
     if (!isInternalPath(req.path)) return false;
     return hasMatchingInternalServiceKey(req) || carriesWellFormedSaToken(req);
   },

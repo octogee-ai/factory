@@ -19,7 +19,6 @@ router:
   serviceName: gateway-router
   replicas: 2
   port: 3001
-  previewHost: preview.octogee.com
 
 # No-shell platform CronJobs run under their own least-privilege KSA. Its
 # projected octogee-api-audience token tenant-binds the call (kind=platform),

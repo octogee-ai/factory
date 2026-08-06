@@ -4,7 +4,7 @@ import { ensureOwnedGatewaysRetired } from "../lib/customer-ops/customer-gateway
 
 interface Root {
   ownerUid: string | null;
-  gatewayClass: "shared" | "builder" | "operator";
+  gatewayClass: "shared" | "builder";
   desiredStatus: "running" | "paused" | "retired";
   managedBy?: "operator";
   allocation?: { kind: string };
@@ -56,12 +56,12 @@ function harness(
 }
 
 describe("owned customer gateway retirement", () => {
-  it("retires the owned disposable Operator gateway while the user's current placement is shared", async () => {
+  it("retires the owned disposable Builder gateway while the user's current placement is shared", async () => {
     const { db } = harness({
       default: { ownerUid: null, gatewayClass: "shared", desiredStatus: "running" },
       "builder-alice": {
         ownerUid: "uid-1",
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder" },
       },
@@ -86,7 +86,7 @@ describe("owned customer gateway retirement", () => {
     const { db } = harness({
       "builder-alice": {
         ownerUid: "uid-1",
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder" },
       },
@@ -110,7 +110,7 @@ describe("owned customer gateway retirement", () => {
     const { db } = harness({
       "run-alice": {
         ownerUid: "uid-1",
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder" },
       },
@@ -137,7 +137,7 @@ describe("owned customer gateway retirement", () => {
       {
         "builder-alice": {
           ownerUid: "uid-1",
-          gatewayClass: "operator",
+          gatewayClass: "builder",
           desiredStatus: "retired",
           allocation: { kind: "disposable-builder" },
         },
@@ -165,7 +165,7 @@ describe("owned customer gateway retirement", () => {
       {
         "builder-alice": {
           ownerUid: "uid-1",
-          gatewayClass: "operator",
+          gatewayClass: "builder",
           desiredStatus: "retired",
           managedBy: "operator",
           allocation: { kind: "disposable-builder" },
@@ -191,7 +191,7 @@ describe("owned customer gateway retirement", () => {
       {
         "builder-alice": {
           ownerUid: "uid-1",
-          gatewayClass: "operator",
+          gatewayClass: "builder",
           desiredStatus: "retired",
           managedBy: "operator",
           allocation: { kind: "disposable-builder" },
@@ -229,9 +229,9 @@ describe("owned customer gateway retirement", () => {
 
   it("retires a legacy owner root without a disposable allocation", async () => {
     const { db } = harness({
-      "legacy-operator": {
+      "legacy-builder": {
         ownerUid: "uid-1",
-        gatewayClass: "operator",
+        gatewayClass: "builder",
         desiredStatus: "running",
       },
     });
@@ -246,7 +246,7 @@ describe("owned customer gateway retirement", () => {
     })).resolves.toBe("retirement-pending");
 
     expect(claimRetirement).toHaveBeenCalledWith(expect.objectContaining({
-      gatewayId: "legacy-operator",
+      gatewayId: "legacy-builder",
     }));
   });
 });
