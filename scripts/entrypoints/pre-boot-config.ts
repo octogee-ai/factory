@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { agentIdsFromConfig } from "../lib/byosub-restore.js";
+import { discardUnusableAgentStores } from "../lib/unusable-agent-store.js";
+import { AGENTS_DIR } from "../lib/config.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
@@ -595,6 +597,16 @@ let configRaw: string;
     log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
   } else {
     log("no changes needed");
+  }
+
+  // A store openclaw cannot open refuses the whole gateway, not just its agent,
+  // so clear those before startup — and before the broker sweep below, which
+  // needs a store openclaw owns to write into.
+  const sweep = discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: log });
+  if (sweep.discarded.length > 0) {
+    log(
+      `discarded ${sweep.discarded.length} unusable agent store(s); openclaw will create current ones`,
+    );
   }
 
   // Model-ready boot: every customer-agent gets EVERY broker provider surface

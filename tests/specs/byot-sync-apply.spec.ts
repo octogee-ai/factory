@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { DatabaseSync } from "node:sqlite";
 import {
   readAuthProfileStore,
   resolveAuthDbPath,
@@ -28,6 +29,25 @@ async function loadModule() {
 
 function agentDirFor(slug: string): string {
   return path.join(TMP_ROOT, "agents", `octogee-${slug}-coach`, "agent");
+}
+
+// The gateway stands up every rostered agent's database at startup; BYOT sync
+// only updates it. Fixtures create the same thing openclaw would have — a bare
+// agent dir is state the gateway itself refuses to boot behind.
+function mkAgentDir(slug: string): string {
+  const dir = agentDirFor(slug);
+  fs.mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(resolveAuthDbPath(dir));
+  try {
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS auth_profile_store (store_key TEXT NOT NULL PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+       CREATE TABLE IF NOT EXISTS auth_profile_state (state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+       PRAGMA user_version = 16;`,
+    );
+  } finally {
+    db.close();
+  }
+  return dir;
 }
 
 function authDbPath(slug: string): string {
@@ -58,7 +78,7 @@ describe("applyByotState — enabled write path", () => {
   test("writes the auth_profile_store row into openclaw-agent.sqlite when agent dir exists", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     const changed = applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(true);
@@ -70,7 +90,7 @@ describe("applyByotState — enabled write path", () => {
   test("idempotent — second call returns false when stored profile already matches", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
     expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
@@ -79,7 +99,7 @@ describe("applyByotState — enabled write path", () => {
   test("stored payload has the expected SecretRef shape", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
 
@@ -98,7 +118,7 @@ describe("applyByotState — enabled write path", () => {
   test("never embeds plaintext key (defense-in-depth — only SecretRef)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     const raw = JSON.stringify(authProfilesStored(slug));
@@ -109,7 +129,7 @@ describe("applyByotState — enabled write path", () => {
   test("no auth-profiles.json file is written — SQLite is the only durable target", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     expect(fs.existsSync(path.join(agentDirFor(slug), "auth-profiles.json"))).toBe(
@@ -125,7 +145,7 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
   test("anthropic → openai-compatible clears the auth_profile_store row AND writes models.json", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     const modelsPath = path.join(agentDirFor(slug), "models.json");
@@ -154,7 +174,7 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
   test("openai-compatible → anthropic removes models.json AND writes the auth_profile_store row", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
     const modelsPath = path.join(agentDirFor(slug), "models.json");
@@ -168,7 +188,7 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
   test("openai → openai-compatible clears the auth_profile_store row AND writes models.json", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "openai", model: "openai/gpt-4o" });
     expect(authProfilesStored(slug)).not.toBeNull();
@@ -181,7 +201,7 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
   test("disable from any provider removes BOTH BYOT artifacts (models.json file + auth_profile_store row)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
     expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(true);
@@ -196,7 +216,7 @@ describe("applyByotState — disabled remove path", () => {
   test("clears the auth_profile_store row when disabled and the row existed", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
     applyByotState(slug, { slug, provider: "anthropic" });
     expect(authProfilesStored(slug)).not.toBeNull();
 
@@ -207,7 +227,7 @@ describe("applyByotState — disabled remove path", () => {
   test("disable when no row present is a no-op (returns false)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
     expect(applyByotState(slug, null)).toBe(false);
   });
 });
@@ -220,8 +240,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("disable WITHOUT a marker leaves a pre-existing auth_profile_store row untouched (openclaw owns the doctor-migrated row)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    const dir = agentDirFor(slug);
-    fs.mkdirSync(dir, { recursive: true });
+    const dir = mkAgentDir(slug);
 
     // Pre-existing payload (post-doctor cache, owned by openclaw).
     const openclawCacheBody = { profiles: { sample: { type: "oauth" } } };
@@ -236,7 +255,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("BYOT-on writes the marker file alongside the auth_profile_store row", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
     expect(fs.existsSync(markerPath(slug))).toBe(true);
@@ -248,7 +267,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("BYOT-on idempotent: second call does NOT rewrite the marker", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     const firstMarker = fs.readFileSync(markerPath(slug), "utf8");
@@ -263,7 +282,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("disable WITH the marker present clears both BYOT artifacts AND the marker", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     expect(authProfilesStored(slug)).not.toBeNull();
@@ -277,7 +296,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("re-enable after disable rewrites both the auth_profile_store row AND the marker", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     applyByotState(slug, null);
@@ -292,7 +311,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
   test("BYOT-on writes marker even when content already matches (pre-marker rollouts)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
-    fs.mkdirSync(agentDirFor(slug), { recursive: true });
+    mkAgentDir(slug);
 
     applyByotState(slug, { slug, provider: "anthropic" });
     fs.unlinkSync(markerPath(slug));

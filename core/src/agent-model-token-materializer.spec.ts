@@ -24,12 +24,17 @@ import {
   upsertOpenRouterBrokerModel,
   upsertAnthropicBrokerProfile,
 } from "./agent-model-token-materializer.js";
+import {
+  seedOpenClawAgentDb,
+  seedOpenClawAgentDbForId,
+} from "./fixtures/openclaw-agent-db.js";
 
 describe("agent-model-token materializer", () => {
   let agentDir: string;
 
   beforeEach(() => {
     agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-"));
+    seedOpenClawAgentDb(agentDir);
   });
   afterEach(() => {
     fs.rmSync(agentDir, { recursive: true, force: true });
@@ -166,6 +171,7 @@ describe("model-readiness: openrouter catalog upsert", () => {
   let agentDir: string;
   beforeEach(() => {
     agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-cat-"));
+    seedOpenClawAgentDb(agentDir);
   });
   afterEach(() => {
     fs.rmSync(agentDir, { recursive: true, force: true });
@@ -229,6 +235,7 @@ describe("model-readiness: openai catalog upsert", () => {
   let agentDir: string;
   beforeEach(() => {
     agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-oai-"));
+    seedOpenClawAgentDb(agentDir);
   });
   afterEach(() => {
     fs.rmSync(agentDir, { recursive: true, force: true });
@@ -287,6 +294,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
   });
 
   it("asserts EVERY broker provider surface per agent — anthropic profile + openrouter + openai catalogs", () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
     const written = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter: {
@@ -310,6 +318,7 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
   });
 
   it("falls back to anthropic-only when no openrouter config is supplied", () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
     expect(materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir })).toBe(1);
     expect(
       fs.existsSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json")),
@@ -327,6 +336,8 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
   });
 
   it("materializes anthropic:default for each agent under agentsDir/<id>/agent", () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
+    seedOpenClawAgentDbForId(agentsDir, "octogee-b-coach");
     expect(
       materializeAnthropicBrokerForAgents(["octogee-a-coach", "octogee-b-coach"], { agentsDir }),
     ).toBe(2);
@@ -337,6 +348,7 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
   });
 
   it("is tolerant — a failure on one agent does not abort the sweep", () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-good-coach");
     // a path collision (file where the agent dir should be) makes one agent fail
     fs.writeFileSync(path.join(agentsDir, "octogee-bad-coach"), "x");
     expect(
@@ -344,7 +356,34 @@ describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
     ).toBe(1);
   });
 
+  it("skips an agent openclaw has not initialized rather than writing a stub database", () => {
+    const logs: string[] = [];
+    expect(
+      materializeAnthropicBrokerForAgents(["octogee-fresh-coach"], {
+        agentsDir,
+        logFn: (m) => logs.push(m),
+      }),
+    ).toBe(0);
+    expect(
+      fs.existsSync(path.join(agentsDir, "octogee-fresh-coach", "agent", "openclaw-agent.sqlite")),
+    ).toBe(false);
+    expect(logs.join("\n")).toContain("octogee-fresh-coach");
+  });
+
+  it("seeds the profile on the next sweep once openclaw has created the database", () => {
+    expect(materializeAnthropicBrokerForAgents(["octogee-late-coach"], { agentsDir })).toBe(0);
+    seedOpenClawAgentDbForId(agentsDir, "octogee-late-coach");
+    expect(materializeAnthropicBrokerForAgents(["octogee-late-coach"], { agentsDir })).toBe(1);
+    const store = readAuthProfileStore(path.join(agentsDir, "octogee-late-coach", "agent")) as {
+      profiles: Record<string, { keyRef: { id: string } }>;
+    };
+    expect(store.profiles["anthropic:default"].keyRef.id).toBe(
+      "agent-model-token-octogee-late-coach",
+    );
+  });
+
   it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
     expect(
       materializeAnthropicBrokerForAgents(["octogee-a-coach", "octogee-a-alex", "main"], { agentsDir }),
     ).toBe(1);

@@ -237,6 +237,7 @@
         "enabled": true,
         "hooks": {
           "allowPromptInjection": true,
+          "allowConversationAccess": true,
           "timeouts": {
             "before_prompt_build": 3000
           }
