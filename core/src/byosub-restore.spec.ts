@@ -29,6 +29,12 @@ import {
   openAiBrokerProfileEntry,
   openRouterBrokerProfileEntry,
 } from "./agent-model-token-materializer.js";
+import { seedOpenClawAgentDbForId } from "./fixtures/openclaw-agent-db.js";
+
+// openclaw creates every rostered agent's database at gateway startup; restore
+// only ever updates it. Fixtures must stand up that database first.
+const seedAgent = (oc: string, agentId: string) =>
+  seedOpenClawAgentDbForId(path.join(oc, "agents"), agentId);
 
 const tmpDirs: string[] = [];
 function mkTmp(): string {
@@ -540,6 +546,7 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
 describe("restoreByosubCredentials", () => {
   it("anthropic → materializes a claude-cli OAuth profile into the SQLite store, no auth.json file", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const home = mkTmp();
     const agentId = "octogee-a-coach";
     const ssoCredential = JSON.stringify({
@@ -613,6 +620,7 @@ describe("restoreByosubCredentials", () => {
 
   it("anthropic setup-token restores the agent profile without claiming native Claude CLI continuity", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const home = mkTmp();
     const agentId = "octogee-a-coach";
     const r = await restoreByosubCredentials({
@@ -637,6 +645,7 @@ describe("restoreByosubCredentials", () => {
 
   it("anthropic without native restore keeps the store-only setup-token path", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const r = await restoreByosubCredentials({
       plan: [
@@ -658,6 +667,7 @@ describe("restoreByosubCredentials", () => {
 
   it("atomically writes auth.json (0600) into the agent codex-home, creating dirs", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const item = {
       agentId: "octogee-a-coach",
       provider: "openai" as const,
@@ -759,6 +769,8 @@ describe("restoreByosubCredentials", () => {
 
   it("isolates per-item failure: one bad fetch does not abort the others; never throws", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
+    seedAgent(oc, "octogee-b-coach");
     const mk = (a: string, s: string) => ({
       agentId: a,
       provider: "openai" as const,
@@ -783,6 +795,7 @@ describe("restoreByosubCredentials", () => {
 
   it("restores Codex when SQLite contains only platform broker profiles, preserving every broker profile", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     const targetPath = path.join(agentDir, "codex-home", "auth.json");
@@ -860,6 +873,7 @@ describe("restoreByosubCredentials", () => {
 
   it("KEYSTONE: a healthy on-disk Codex OAuth profile is NOT clobbered — skip, no SM read (the refresh_token_reused root cause)", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -910,6 +924,7 @@ describe("restoreByosubCredentials", () => {
 
   it("materializes missing Codex auth.json from the healthy SQLite credential without fetching or replacing it", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -969,6 +984,7 @@ describe("restoreByosubCredentials", () => {
 
   it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -998,6 +1014,7 @@ describe("restoreByosubCredentials", () => {
 
   it("recovery: on-disk cred present but openclaw flagged auth_permanent → restore REPLACES the dead cred", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = path.join(oc, "agents", agentId, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -1083,6 +1100,7 @@ describe("readCodexAuthStateText — SQLite state row preferred, JSON file fallb
 describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 gap)", () => {
   it("openclaw flagged auth_permanent in SQLite state row → restore REPLACES the dead cred", async () => {
     const oc = mkTmp();
+    seedAgent(oc, "octogee-a-coach");
     const agentId = "octogee-a-coach";
     const agentDir = codexAgentDir(oc, agentId);
     fs.mkdirSync(agentDir, { recursive: true });
