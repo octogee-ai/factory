@@ -379,7 +379,7 @@ function validateReleaseDigestManifest(input: unknown, manifestDigest: string, e
     ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"],
     "release digest manifest",
   );
-  if (manifest.schemaVersion !== 2) throw new Error("release digest manifest schemaVersion must be 2");
+  if (manifest.schemaVersion !== 3) throw new Error("release digest manifest schemaVersion must be 3");
   const sourceSha = typeof manifest.sourceSha === "string"
     ? assertSourceSha(manifest.sourceSha)
     : assertSourceSha("");
@@ -417,7 +417,7 @@ function validateResolvedReleaseDigestManifest(
 ): ReleaseDigestManifest {
   return validateReleaseDigestManifest(
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sourceSha: manifest.sourceSha,
       openclawVersion: manifest.openclawVersion,
       repository: manifest.repository,
