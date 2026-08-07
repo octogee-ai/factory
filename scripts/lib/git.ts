@@ -456,7 +456,13 @@ export function workspaceGitignore(): string {
     "_pending_*.json",
     ".byot-managed",
     ".system/",
+    // openclaw's own state — `.openclaw/` is the current directory form, and
+    // the root-level file is the pre-2026.7.2 one. Committing either lets a
+    // mount's clone restore state openclaw has already migrated away, which
+    // 2026.7.2 rejects outright ("Legacy workspace setup state requires
+    // migration") on every agent turn.
     ".openclaw/",
+    "openclaw-workspace-state.json",
     ".ssh/",
     "",
     "# Blob cache (provisioner-managed, synced from GCS)",
