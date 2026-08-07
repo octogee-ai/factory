@@ -8,6 +8,7 @@ import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
+  type BrokerProfileSweepOptions,
 } from "./agent-model-token-materializer.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
@@ -471,9 +472,9 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
-// Only openclaw creates an agent's store, and for an agent mounted after boot
-// that can happen after BOTH the gateway-ready sweep and the mount's own retry
-// have already run — leaving the catalog in place but its broker profile
+// Only openclaw writes an agent's auth-profile store, and it can refuse the
+// apply at both of the one-shot moments — the gateway-ready sweep and the
+// mount's own retry — leaving the catalog in place but the broker profile
 // unwritten, so the agent's first turn fails on credentials instead of on an
 // unknown model. So this is level-triggered: retried on a timer until every
 // rostered coach has its profile, rather than fired at two hopeful moments.
@@ -483,17 +484,21 @@ const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
  *  timer and must not reprint the same warning forever. */
 let lastDeferredSignature: string | null = null;
 
-/** Write the broker profiles earlier passes could only defer. Idempotent — a
- *  profile already present is a no-op, so this is safe to call on every tick. */
-/** Test seam only — the memo below is module state, so a spec exercising the
+/** Test seam only — the memo above is module state, so a spec exercising the
  *  quiet-once-settled behaviour must be able to start from a known point. */
 export function _resetBrokerProfileLogStateForTests(): void {
   lastDeferredSignature = null;
 }
 
+/** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
+ *  — a profile already applied spawns nothing, so this is safe on every tick. */
 export function materializeDeferredBrokerProfiles(
   log: (msg: string) => void,
-  deps: { agentsDir?: string; readConfig?: () => unknown } = {},
+  deps: {
+    agentsDir?: string;
+    readConfig?: () => unknown;
+    secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+  } = {},
 ): void {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
@@ -507,6 +512,7 @@ export function materializeDeferredBrokerProfiles(
   const sweep = materializeBrokerProfilesForAgents(agentIds, {
     logFn: log,
     ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
+    ...(deps.secretsApply ? { secretsApply: deps.secretsApply } : {}),
     ...(openRouterBaseUrl
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
       : {}),
@@ -520,7 +526,7 @@ export function materializeDeferredBrokerProfiles(
     if (sweep.deferred.length > 0) {
       log(
         `[agent-model-token] broker profile still deferred for ${sweep.deferred.join(", ")}` +
-          ` — waiting for openclaw to create their stores; retrying every ${
+          ` — ${sweep.deferralReason ?? "openclaw refused the secrets apply"}; retrying every ${
             BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
           }s`,
       );
@@ -532,8 +538,8 @@ export function materializeDeferredBrokerProfiles(
 }
 
 /** The level-triggered half of broker-profile materialization: retried until
- *  openclaw has created every rostered coach's store. Null on gateways that do
- *  not provision — they mount no customers, so there is nothing to converge. */
+ *  openclaw has accepted every rostered coach's profiles. Null on gateways that
+ *  do not provision — they mount no customers, so there is nothing to converge. */
 function startBrokerProfileRetry(
   provisions: boolean,
   log: (msg: string) => void,

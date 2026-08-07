@@ -28,11 +28,14 @@ vi.mock("./gateway-rpc", () => ({
   createGatewayRpc: createGatewayRpcSpy,
 }));
 
-const SUBPROCESS_GUARD = (name: string) => () => {
+// Hoisted: byot-sync's import graph reaches openclaw-secrets-apply, whose
+// top-level `child_process` import evaluates the mock factory below before a
+// plain module const would be initialized.
+const SUBPROCESS_GUARD = vi.hoisted(() => (name: string) => () => {
   throw new Error(
     `byot-sync must not shell out (called ${name}) — use the in-process gateway-rpc client.`,
   );
-};
+});
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
   return {

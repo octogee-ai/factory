@@ -353,16 +353,24 @@ function removeLegacyMattermostConfig(
   return defaultChanged || tokenChanged;
 }
 
+/** The roster entry to mutate, whichever shape openclaw is storing. 2026.7.2
+ *  migrates `agents.list` into keyed `agents.entries`, where the key is the id
+ *  and the entry carries none. */
+function rosterAgentEntry(agents: UnknownRecord | null, agentId: string): UnknownRecord | null {
+  const entries = asRecord(agents?.entries);
+  if (entries) return asRecord(entries[agentId]);
+  return Array.isArray(agents?.list)
+    ? asRecord(agents.list.find((entry) => asRecord(entry)?.id === agentId))
+    : null;
+}
+
 function selectBuilderCoach(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): boolean {
   const builderSlug = env.GATEWAY_BUILDER_SLUG?.trim();
-  const builderCoachId = builderSlug ? `octogee-${builderSlug}-coach` : "";
-  const builderCoach = Array.isArray(agents?.list)
-    ? agents.list.find((entry) => asRecord(entry)?.id === builderCoachId)
-    : undefined;
-  const coach = asRecord(builderCoach);
+  if (!builderSlug) return false;
+  const coach = rosterAgentEntry(agents, `octogee-${builderSlug}-coach`);
   if (!coach || coach.default === true) return false;
   coach.default = true;
   return true;

@@ -218,6 +218,15 @@ function manifestAgents(manifest) {
     const { projectAgents, ...workspace } = manifest;
     return [workspace, ...projectAgents];
 }
+/**
+ * Every agent id the activation installs. The caller compares it against the
+ * target's live roster: residue the manifest does not carry has to leave by
+ * `agents.delete` before the patch, because 2026.7.2 refuses a config write
+ * that drops roster entries.
+ */
+export function activationManifestAgentIds(manifest) {
+    return manifestAgents(manifest).map((entry) => entry.agentId);
+}
 export async function writeActivationManifest(rootDir, manifest) {
     const relPath = activationManifestTarPath(manifest.slug);
     const fullPath = path.join(rootDir, relPath);

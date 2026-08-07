@@ -140,8 +140,29 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
       accountId,
       started: true as const,
     })),
+    ...rosterRpc(),
     ...overrides,
   } as GatewayRpcClient;
+}
+
+// The add path reads the live roster to decide which agents leave by
+// `agents.delete` and which arrive by `agents.create`, so every add fixture
+// needs all three calls.
+function rosterRpc(config: unknown = { agents: { entries: {} } }) {
+  return {
+    configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+    agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
+      ok: true as const,
+      agentId,
+      removedBindings: 0,
+    })),
+    agentsCreate: vi.fn(async ({ name, workspace }: { name: string; workspace: string }) => ({
+      ok: true as const,
+      agentId: name,
+      name,
+      workspace,
+    })),
+  };
 }
 
 // The roster is now removed one `agents.delete` at a time, so every eviction
@@ -151,18 +172,36 @@ function mkRemovalRpc(
   overrides: Partial<GatewayRpcClient> = {},
 ): GatewayRpcClient {
   return {
-    configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
-    agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
-      ok: true as const,
-      agentId,
-      removedBindings: 0,
-    })),
+    ...rosterRpc(config),
     ...overrides,
   } as unknown as GatewayRpcClient;
 }
 
 function keyedRoster(agentIds: readonly string[]): Record<string, unknown> {
   return Object.fromEntries(agentIds.map((agentId) => [agentId, { model: "house" }]));
+}
+
+function aliceSnapshot(
+  overrides: Partial<FleetBrokerUserSnapshot> = {},
+): FleetBrokerUserSnapshot {
+  return {
+    uid: "uid-alice",
+    slug: "alice",
+    tier: "standard",
+    gatewayId: "default",
+    status: "",
+    agentIds: [],
+    repoUrl: "",
+    mattermostUserId: "mm-alice",
+    customerMmUserId: "mm-alice",
+    greetingPosted: false,
+    channels: [],
+    projects: [],
+    ownerName: "Alice",
+    coachToken: "pat-1",
+    coachMmUserId: "mm-alice-coach",
+    ...overrides,
+  };
 }
 
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
@@ -181,6 +220,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.readActivationManifest.mockResolvedValue({
       slug: "tester10",
       appliedFingerprint: "fp-tester10",
+      agentId: "octogee-tester10-coach",
+      projectAgents: [],
     });
     mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
@@ -192,6 +233,39 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       tempStateDir = null;
     }
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  });
+
+  it("deletes target roster residue the manifest does not carry before activating", async () => {
+    mocks.readActivationManifest.mockResolvedValue({
+      slug: "tester10",
+      appliedFingerprint: "fp-tester10",
+      agentId: "octogee-tester10-coach",
+      projectAgents: [],
+    });
+    const client = mkClient();
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      ...rosterRpc({
+        agents: {
+          entries: keyedRoster([
+            "octogee-tester10-coach",
+            "octogee-tester10-proj-residue-coach",
+            "octogee-keeper-coach",
+          ]),
+        },
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+
+    await adapter.activateImportedCustomer("tester10", {});
+
+    expect(vi.mocked(rpc.agentsDelete).mock.calls.map(([params]) => params.agentId)).toEqual([
+      "octogee-tester10-proj-residue-coach",
+    ]);
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
@@ -265,7 +339,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     } as unknown as GatewayRpcClient;
     mocks.readActivationManifest
       .mockRejectedValueOnce(new LegacyActivationManifestFingerprintError("legacy"))
-      .mockResolvedValueOnce({ slug: "tester10", appliedFingerprint: "desired-fingerprint" });
+      .mockResolvedValueOnce({
+        slug: "tester10",
+        appliedFingerprint: "desired-fingerprint",
+        agentId: "octogee-tester10-coach",
+        projectAgents: [],
+      });
     const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
 
     await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
@@ -686,6 +765,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("channels-start");
         return { channel: "mattermost", accountId: "alice-coach", started: true };
       }),
+      ...rosterRpc(),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -736,6 +816,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("config-changed");
         return { ok: true as const, hash: "persisted-hash" };
       }),
+      ...rosterRpc(),
     } as unknown as GatewayRpcClient;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
       await options.rpc.configPatch({}, "base-hash");
@@ -1048,29 +1129,85 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(Object.keys(patch.agents.entries)).toEqual(["octogee-fresh-coach"]);
   });
 
-  it("patches beta keyed entries with id-free values and removes stale project entries", async () => {
+  it("deletes the Builder's own retired project agents before patching — 2026.7.2 refuses a roster drop", async () => {
+    const roster = {
+      agents: {
+        entries: keyedRoster([
+          "octogee-alice-coach",
+          "octogee-alice-proj-old-coach",
+          "octogee-bob-coach",
+        ]),
+      },
+    };
+    const rpc = mkRemovalRpc(roster);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
+      _coachPersonalToken: "pat-1",
+    });
+
+    expect(vi.mocked(rpc.agentsDelete).mock.calls.map(([params]) => params.agentId)).toEqual([
+      "octogee-alice-proj-old-coach",
+    ]);
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => { agents: { entries: Record<string, unknown> } };
+    };
+    const patch = args.buildPatch({
+      agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-bob-coach"]) },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    });
+
+    expect(Object.values(patch.agents.entries)).not.toContain(null);
+    expect(Object.keys(patch.agents.entries)).toEqual(["octogee-alice-coach"]);
+  });
+
+  it("creates an agent the roster does not carry yet through agents.create, not the patch alone", async () => {
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-bob-coach"]) } });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
+      _coachPersonalToken: "pat-1",
+    });
+
+    expect(vi.mocked(rpc.agentsCreate).mock.calls.map(([params]) => params)).toEqual([
+      { name: "octogee-alice-coach", workspace: expect.stringContaining("customers/alice") },
+    ]);
+  });
+
+  it("leaves an already-rostered agent to the pure-patch update path", async () => {
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-alice-coach"]) } });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
+      _coachPersonalToken: "pat-1",
+    });
+
+    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the roster after creating, because agents.create rewrites the config", async () => {
+    const rpc = mkRemovalRpc({ agents: { entries: {} } });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
+      _coachPersonalToken: "pat-1",
+    });
+
+    const cache = vi.mocked(applyConfigPatch).mock.calls.at(-1)![1] as {
+      cache?: { current: unknown; hash: string };
+    };
+    expect(cache.cache).toEqual({ current: undefined, hash: "" });
+  });
+
+  it("patches beta keyed entries with id-free values and skips foreign agents", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
       rpc: mkGatewayRpc(),
       log: vi.fn(),
     });
-    const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-alice",
-      slug: "alice",
-      tier: "standard",
-      gatewayId: "default",
-      status: "",
-      agentIds: [],
-      repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
-      greetingPosted: false,
-      channels: [],
-      projects: [],
-      ownerName: "Alice",
-      coachToken: "pat-1",
-      coachMmUserId: "mm-alice-coach",
-    };
+    const snapshot = aliceSnapshot();
 
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
 
@@ -1086,7 +1223,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         entries: {
           "octogee-ops-eggman": { model: "house" },
           "octogee-alice-coach": { model: "stale" },
-          "octogee-alice-proj-old-coach": { model: "stale" },
         },
       },
       bindings: [],
@@ -1094,7 +1230,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     };
 
     const patch = args.buildPatch(current);
-    expect(patch.agents.entries["octogee-alice-proj-old-coach"]).toBeNull();
     expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
       model: "platform-openrouter/openai/gpt-5.6-luna",
       memory: {

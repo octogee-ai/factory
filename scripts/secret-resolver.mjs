@@ -71,7 +71,17 @@ export const BROKER_BASE_URL =
   process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL || `http://${BROKER_HOST}:3001`;
 export const KSA_TOKEN_PATH =
   process.env.OCTOGEE_API_SA_TOKEN_PATH || "/var/run/secrets/octogee-gateway-broker/token";
-export const BROKER_REQUEST_TIMEOUT_MS = 4000;
+
+// OpenClaw's exec-provider contract is batch-fatal: any entry in the errors{}
+// response makes it discard the WHOLE resolution batch and cold every owner on
+// this provider. A single transient broker blip therefore costs every agent its
+// credentials, so each id gets one retry — but the whole per-id budget must fit
+// inside the provider's 5000ms timeoutMs, or the gateway kills the resolver
+// mid-retry and loses the batch anyway.
+export const BROKER_ATTEMPTS = 2;
+export const BROKER_ATTEMPT_TIMEOUT_MS = 2200;
+export const BROKER_RETRY_BACKOFF_MS = 250;
+export const BROKER_TOTAL_BUDGET_MS = 4800;
 
 const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
@@ -188,6 +198,66 @@ async function readRequest() {
   return JSON.parse(raw);
 }
 
+function brokerRouteFor(id) {
+  // agent-model-token-{agentId} → the per-customer broker-token route; every
+  // other id is a byok-* key. Both routes return { value } and roster-scope
+  // server-side (the resolver holds no GCP creds and no agent identity).
+  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
+  if (agentToken) {
+    return {
+      route: "/internal/byok/agent-model-token",
+      payload: {
+        agentId: agentToken.groups.agentId,
+        ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
+      },
+    };
+  }
+  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
+  if (embeddingToken) {
+    return {
+      route: "/internal/byok/agent-model-token",
+      payload: {
+        agentId: embeddingToken.groups.agentId,
+        provider: "openai",
+        purpose: "embeddings",
+      },
+    };
+  }
+  return { route: "/internal/byok/api-key", payload: { id } };
+}
+
+function retryable(error) {
+  const err = error instanceof Error ? error : new Error(String(error));
+  err.retryable = true;
+  return err;
+}
+
+/** A 5xx or a transport failure may be a blip; a 4xx is the broker's decision
+ *  and a malformed 200 is a broken contract — neither heals on retry. */
+async function brokerAttempt(fetchImpl, url, headers, payload, timeoutMs) {
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    throw retryable(err);
+  }
+  if (!res.ok) {
+    const error = new Error(`byok broker returned ${res.status}`);
+    if (res.status >= 500) error.retryable = true;
+    throw error;
+  }
+  const body = await res.json();
+  if (typeof body?.value !== "string") {
+    throw new Error("byok broker: malformed response (no value)");
+  }
+  return body.value;
+}
+
 /**
  * Materialize one byok-* ref via the octogee-api broker. The broker re-validates
  * the id grammar, roster-scopes the slug to THIS gateway, and reads Secret
@@ -199,46 +269,36 @@ async function readRequest() {
 export async function resolveOne(id, deps = {}) {
   const token = deps.token ?? fs.readFileSync(KSA_TOKEN_PATH, "utf8").trim();
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const requestTimeoutMs = deps.requestTimeoutMs ?? BROKER_REQUEST_TIMEOUT_MS;
+  const attemptTimeoutMs = deps.requestTimeoutMs ?? BROKER_ATTEMPT_TIMEOUT_MS;
+  const backoffMs = deps.retryBackoffMs ?? BROKER_RETRY_BACKOFF_MS;
+  const budgetMs = deps.budgetMs ?? BROKER_TOTAL_BUDGET_MS;
+  const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
   const headers = { "content-type": "application/json", "x-k8s-sa-token": token };
   if (process.env.INTERNAL_SERVICE_KEY) {
     headers["x-internal-service-key"] = process.env.INTERNAL_SERVICE_KEY;
   }
-  // agent-model-token-{agentId} → the per-customer broker-token route; every
-  // other id is a byok-* key. Both routes return { value } and roster-scope
-  // server-side (the resolver holds no GCP creds and no agent identity).
-  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
-  let route = "/internal/byok/api-key";
-  let payload = { id };
-  if (agentToken) {
-    route = "/internal/byok/agent-model-token";
-    payload = {
-      agentId: agentToken.groups.agentId,
-      ...(agentToken.groups.provider ? { provider: agentToken.groups.provider } : {}),
-    };
-  } else if (embeddingToken) {
-    route = "/internal/byok/agent-model-token";
-    payload = {
-      agentId: embeddingToken.groups.agentId,
-      provider: "openai",
-      purpose: "embeddings",
-    };
+  const { route, payload } = brokerRouteFor(id);
+  const url = `${BROKER_BASE_URL}${route}`;
+  const startedAt = now();
+  const remainingMs = () => budgetMs - (now() - startedAt);
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await brokerAttempt(
+        fetchImpl,
+        url,
+        headers,
+        payload,
+        Math.min(attemptTimeoutMs, Math.max(1, remainingMs())),
+      );
+    } catch (err) {
+      const budgetLeft = remainingMs() - backoffMs;
+      if (attempt >= BROKER_ATTEMPTS || err?.retryable !== true || budgetLeft <= 0) throw err;
+      audit(`retry id=${JSON.stringify(id)} attempt=${attempt} reason=${JSON.stringify(err.message)}`);
+      await sleep(backoffMs);
+    }
   }
-  const res = await fetchImpl(`${BROKER_BASE_URL}${route}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(requestTimeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`byok broker returned ${res.status}`);
-  }
-  const body = await res.json();
-  if (typeof body?.value !== "string") {
-    throw new Error("byok broker: malformed response (no value)");
-  }
-  return body.value;
 }
 
 /** Cap on per-call audit-log lines for rejects. A flood of rejects

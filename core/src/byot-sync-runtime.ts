@@ -639,7 +639,7 @@ function materializePlatformBrokerSurfaces(slug: string): boolean {
   if (result.deferred.length > 0) {
     log(
       `[byot-sync] ${slug}: broker profile deferred for ${result.deferred.join(", ")}` +
-        ` — openclaw has not created the store yet; the boot sweep retries it`,
+        ` — openclaw refused the secrets apply; the level-triggered sweep retries it`,
     );
   }
   return result.materialized > 0;

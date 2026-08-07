@@ -28,6 +28,13 @@ export declare function extractOpenClawActivationManifest(configPath: string, sl
     botToken?: string;
     resolveBotToken?: (accountId: string) => Promise<string | undefined>;
 }): Promise<MigrationActivationManifest>;
+/**
+ * Every agent id the activation installs. The caller compares it against the
+ * target's live roster: residue the manifest does not carry has to leave by
+ * `agents.delete` before the patch, because 2026.7.2 refuses a config write
+ * that drops roster entries.
+ */
+export declare function activationManifestAgentIds(manifest: MigrationActivationManifest): string[];
 export declare function writeActivationManifest(rootDir: string, manifest: MigrationActivationManifest): Promise<{
     cwd: string;
     path: string;

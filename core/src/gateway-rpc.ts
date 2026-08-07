@@ -164,7 +164,39 @@ export interface GatewayAgentsDeleteResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayAgentsCreateParams {
+  name: string;
+  workspace: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+}
+
+export interface GatewayAgentsCreateResult {
+  ok: true;
+  agentId: string;
+  name?: string;
+  workspace?: string;
+  [extra: string]: unknown;
+}
+
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
+
+/**
+ * openclaw refuses `agents.create` for an id already in the roster with
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
+ * raced another writer has to treat that as already-done; every other refusal —
+ * an unwritable workspace, a wedged deletion journal, a transport failure —
+ * must still fail the mount.
+ */
+export function isAgentAlreadyExistsRpcError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    AGENT_ALREADY_EXISTS_MESSAGE.test(err.message)
+  );
+}
 
 /**
  * openclaw refuses `agents.delete` for an id that is neither rostered nor
@@ -210,6 +242,7 @@ export interface GatewayRpcClient {
     timeoutMs?: number,
   ): Promise<GatewayToolsCatalogResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
+  agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
   agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
@@ -754,6 +787,21 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
       }
       return payload as CronAddResult;
+    },
+
+    async agentsCreate(params) {
+      const payload = await call("agents.create", params);
+      if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.create payload missing `ok: true`");
+      }
+      const agentId = (payload as { agentId?: unknown }).agentId;
+      if (typeof agentId !== "string" || agentId.length === 0) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "agents.create payload missing string `agentId`",
+        );
+      }
+      return payload as GatewayAgentsCreateResult;
     },
 
     async agentsDelete(params) {

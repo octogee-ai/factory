@@ -1,12 +1,16 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 
-import {
-  AgentDatabaseNotInitializedError,
-  readAuthProfileStore,
-  writeAuthProfileStore,
-} from "./auth-profile-sqlite.js";
+import { readAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
+import {
+  OpenClawSecretsApplyError,
+  applyOpenClawSecretsPlan,
+  authProfileApiKeyTarget,
+  buildOpenClawSecretsPlan,
+  type ApplyOpenClawSecretsPlanOptions,
+  type AuthProfileApiKeyTarget,
+} from "./openclaw-secrets-apply.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
@@ -207,52 +211,96 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** Which broker provider surfaces this pod carries. A profile whose provider is
+ *  unconfigured is pure risk: openclaw's exec resolver is batch-fatal, so one
+ *  unresolvable ref colds every other owner on the provider. */
+export interface PlatformBrokerProfileSurfaces {
+  openRouter: boolean;
+  openAi: boolean;
+}
+
+interface PlatformBrokerProfileDesire {
+  profileId: string;
+  provider: string;
+  entry: { keyRef: { id: string } };
+}
+
 /**
- * Upsert the per-agent broker-token `anthropic:default` profile, MERGING into the
- * agent's existing auth-profile store.
- *
- * The store is last-writer-wins on a single JSON blob, and a byosub OAuth profile
- * (openai-codex / anthropic:claude-cli) may already be the agent's PRIMARY — so we
- * read-merge-write to add anthropic:default without clobbering it, and preserve the
- * store's top-level (e.g. an OAuth store's `version`). anthropic:default is always
- * the broker token here: it is the platform/anthropic-BYOK primary for plain
- * customers and the Haiku-fallback credential for BYOS/non-anthropic-BYOK ones.
- *
- * Idempotent — returns false (no write) when the desired profile is already present.
+ * The per-agent platform profiles, each pinned to its own owner-scoped broker
+ * token. `anthropic:default` is always the broker token: the platform /
+ * anthropic-BYOK primary for plain customers and the Haiku-fallback credential
+ * for BYOS or non-anthropic-BYOK ones.
  */
-export function upsertAnthropicBrokerProfile(agentDir: string, agentId: string): boolean {
-  const store = asRecord(readAuthProfileStore(agentDir));
-  const profiles = asRecord(store.profiles);
-  const desired = agentModelTokenProfileEntry(agentId);
-  if (JSON.stringify(profiles[ANTHROPIC_DEFAULT_PROFILE_ID]) === JSON.stringify(desired)) {
-    return false;
-  }
-  writeAuthProfileStore(agentDir, {
-    ...store,
-    profiles: { ...profiles, [ANTHROPIC_DEFAULT_PROFILE_ID]: desired },
+function desiredPlatformBrokerProfiles(
+  agentId: string,
+  surfaces: PlatformBrokerProfileSurfaces,
+): PlatformBrokerProfileDesire[] {
+  return [
+    {
+      profileId: ANTHROPIC_DEFAULT_PROFILE_ID,
+      provider: "anthropic",
+      entry: agentModelTokenProfileEntry(agentId),
+    },
+    ...(surfaces.openRouter
+      ? [{
+        profileId: OPENROUTER_BROKER_PROFILE_ID,
+        provider: OPENROUTER_BROKER_PROVIDER_ID,
+        entry: openRouterBrokerProfileEntry(agentId),
+      }]
+      : []),
+    ...(surfaces.openAi
+      ? [{
+        profileId: OPENAI_BROKER_PROFILE_ID,
+        provider: OPENAI_BROKER_PROVIDER_ID,
+        entry: openAiBrokerProfileEntry(agentId),
+      }]
+      : []),
+  ];
+}
+
+function profileTarget(
+  agentId: string,
+  desire: PlatformBrokerProfileDesire,
+): AuthProfileApiKeyTarget {
+  return authProfileApiKeyTarget({
+    agentId,
+    profileId: desire.profileId,
+    provider: desire.provider,
+    refId: desire.entry.keyRef.id,
   });
-  return true;
 }
 
-export function upsertOpenRouterBrokerProfile(agentDir: string, agentId: string): boolean {
-  return upsertBrokerProfile(agentDir, OPENROUTER_BROKER_PROFILE_ID, openRouterBrokerProfileEntry(agentId));
+export function platformBrokerProfileTargets(
+  agentId: string,
+  surfaces: PlatformBrokerProfileSurfaces,
+): AuthProfileApiKeyTarget[] {
+  return desiredPlatformBrokerProfiles(agentId, surfaces).map((desire) =>
+    profileTarget(agentId, desire),
+  );
 }
 
-export function upsertOpenAiBrokerProfile(agentDir: string, agentId: string): boolean {
-  return upsertBrokerProfile(agentDir, OPENAI_BROKER_PROFILE_ID, openAiBrokerProfileEntry(agentId));
+/** The store is read-only to us — openclaw's `secrets apply` is the only writer.
+ *  Reading it keeps the sweep from spawning the CLI once everything has settled. */
+export function missingPlatformBrokerProfileTargets(
+  agentDir: string,
+  agentId: string,
+  surfaces: PlatformBrokerProfileSurfaces,
+): AuthProfileApiKeyTarget[] {
+  const profiles = asRecord(asRecord(readAuthProfileStore(agentDir)).profiles);
+  return desiredPlatformBrokerProfiles(agentId, surfaces)
+    .filter((desire) => !profileRefMatches(profiles[desire.profileId], desire))
+    .map((desire) => profileTarget(agentId, desire));
 }
 
-function upsertBrokerProfile(agentDir: string, profileId: string, desired: unknown): boolean {
-  const store = asRecord(readAuthProfileStore(agentDir));
-  const profiles = asRecord(store.profiles);
-  if (JSON.stringify(profiles[profileId]) === JSON.stringify(desired)) {
-    return false;
-  }
-  writeAuthProfileStore(agentDir, {
-    ...store,
-    profiles: { ...profiles, [profileId]: desired },
-  });
-  return true;
+/** openclaw stores the resolved key alongside the ref, so an applied profile is
+ *  never byte-equal to the desired entry — the ref identity is what settles it. */
+function profileRefMatches(stored: unknown, desire: PlatformBrokerProfileDesire): boolean {
+  const profile = asRecord(stored);
+  return (
+    profile.type === "api_key" &&
+    profile.provider === desire.provider &&
+    asRecord(profile.keyRef).id === desire.entry.keyRef.id
+  );
 }
 
 function readJsonFile(pathname: string): Record<string, unknown> {
@@ -270,21 +318,11 @@ function writeJsonFile(pathname: string, value: unknown): void {
   fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 }
 
-/** A catalog upsert splits into two independent surfaces: `models.json` (plain
- *  filesystem, always writable) and the auth-profile store (sqlite, which only
- *  openclaw creates). `profileDeferred` marks the second one as not-yet-possible
- *  so a later sweep retries it — never as failed. */
-export interface PlatformBrokerCatalogResult {
-  wrote: boolean;
-  profileDeferred: boolean;
-}
-
 export function upsertOpenRouterBrokerModel(
   agentDir: string,
-  agentId: string,
   input: OpenRouterBrokerModelInput,
-): PlatformBrokerCatalogResult {
-  return upsertOpenRouterBrokerCatalog(agentDir, agentId, {
+): boolean {
+  return upsertOpenRouterBrokerCatalog(agentDir, {
     baseUrl: input.baseUrl,
     models: [input],
   });
@@ -292,45 +330,29 @@ export function upsertOpenRouterBrokerModel(
 
 export function upsertOpenRouterBrokerCatalog(
   agentDir: string,
-  agentId: string,
   input: OpenRouterBrokerCatalogInput,
-): PlatformBrokerCatalogResult {
+): boolean {
   return upsertPlatformBrokerCatalog(agentDir, input, {
     providerId: OPENROUTER_BROKER_PROVIDER_ID,
     profileId: OPENROUTER_BROKER_PROFILE_ID,
     marker: OPENROUTER_PLATFORM_MARKER,
-    upsertProfile: () => upsertOpenRouterBrokerProfile(agentDir, agentId),
   });
 }
 
 export function upsertOpenAiBrokerCatalog(
   agentDir: string,
-  agentId: string,
   input: OpenRouterBrokerCatalogInput,
-): PlatformBrokerCatalogResult {
+): boolean {
   return upsertPlatformBrokerCatalog(agentDir, input, {
     providerId: OPENAI_BROKER_PROVIDER_ID,
     profileId: OPENAI_BROKER_PROFILE_ID,
     marker: OPENAI_PLATFORM_MARKER,
-    upsertProfile: () => upsertOpenAiBrokerProfile(agentDir, agentId),
   });
 }
 
-/** Runs a store-backed profile write, reporting "not yet" separately from
- *  "failed" — the store is absent until openclaw boots, which is a retry, not
- *  an error. Any other failure still throws. */
-function upsertProfileAllowingDeferral(upsert: () => boolean): {
-  wrote: boolean;
-  deferred: boolean;
-} {
-  try {
-    return { wrote: upsert(), deferred: false };
-  } catch (error) {
-    if (error instanceof AgentDatabaseNotInitializedError) return { wrote: false, deferred: true };
-    throw error;
-  }
-}
-
+/** The catalog is plain filesystem state and must land whatever the profile
+ *  write does: models.json is what makes the model KNOWN to openclaw, and an
+ *  unknown model fails the turn outright. */
 function upsertPlatformBrokerCatalog(
   agentDir: string,
   input: OpenRouterBrokerCatalogInput,
@@ -338,12 +360,8 @@ function upsertPlatformBrokerCatalog(
     providerId: string;
     profileId: string;
     marker: string;
-    upsertProfile: () => boolean;
   },
-): PlatformBrokerCatalogResult {
-  // The profile write must not gate the catalog write: models.json is what makes
-  // the model KNOWN to openclaw, and an unknown model fails the turn outright.
-  const profile = upsertProfileAllowingDeferral(ids.upsertProfile);
+): boolean {
   const modelsPath = path.join(agentDir, "models.json");
   const markerPath = path.join(agentDir, ids.marker);
   const current = readJsonFile(modelsPath);
@@ -365,10 +383,10 @@ function upsertPlatformBrokerCatalog(
   };
   const changed =
     JSON.stringify(current) !== JSON.stringify(next) || !fs.existsSync(markerPath);
-  if (!changed) return { wrote: profile.wrote, profileDeferred: profile.deferred };
+  if (!changed) return false;
   writeJsonFile(modelsPath, next);
   fs.writeFileSync(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
-  return { wrote: true, profileDeferred: profile.deferred };
+  return true;
 }
 
 export function removeOpenRouterBrokerModel(agentDir: string): boolean {
@@ -395,46 +413,6 @@ export function removeOpenRouterBrokerModel(agentDir: string): boolean {
   return true;
 }
 
-/**
- * Boot/reconcile materialization: ensure every shared customer-agent has its
- * anthropic:default broker-token profile. Idempotent + tolerant — a failure on
- * one agent (corrupt store, missing dir) never aborts the sweep. Returns the
- * count actually written. `agentsDir` is injectable for tests.
- */
-export function materializeAnthropicBrokerForAgents(
-  agentIds: string[],
-  opts: { agentsDir?: string; logFn?: (m: string) => void } = {},
-): number {
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-  let count = 0;
-  for (const agentId of agentIds) {
-    if (!COACH_AGENT_RE.test(agentId)) {
-      opts.logFn?.(
-        `[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`,
-      );
-      continue;
-    }
-    try {
-      if (upsertAnthropicBrokerProfile(path.join(agentsDir, agentId, "agent"), agentId)) {
-        count++;
-        opts.logFn?.(`[agent-model-token] materialized anthropic broker profile for ${agentId}`);
-      }
-    } catch (e) {
-      opts.logFn?.(
-        `⚠ [agent-model-token] materialize failed for ${agentId}: ${(e as Error).message}`,
-      );
-    }
-  }
-  return count;
-}
-
-/**
- * Model-ready boot sweep: assert BOTH broker provider surfaces per agent —
- * the anthropic:default profile AND the full OpenRouter catalog (when the
- * broker's OpenRouter base URL is configured). After this, switching any
- * agent to any catalog model is a pure agents.list flip. Same tolerance
- * semantics as the anthropic-only sweep; returns agents with any write.
- */
 function catalogState(
   configured: OpenRouterBrokerCatalogInput | undefined,
   wrote: boolean,
@@ -443,65 +421,94 @@ function catalogState(
   return wrote ? "written" : "ok";
 }
 
-/** Agents whose catalogs landed but whose store-backed profiles still need a
- *  retry once openclaw is up. `materialized` counts agents with any write. */
+/** Agents whose catalogs landed but whose profiles openclaw has not accepted
+ *  yet. `materialized` counts agents with any write. The reason travels with the
+ *  result rather than being logged per agent: this sweep is level-triggered, and
+ *  a line printed here would reprint on every tick forever. */
 export interface BrokerProfileSweepResult {
   materialized: number;
   deferred: string[];
+  deferralReason?: string;
 }
 
-/** An unconfigured surface counts as neither written nor deferred. */
-function surfaceOutcome(result: PlatformBrokerCatalogResult | null): {
+export interface BrokerProfileSweepOptions {
+  agentsDir?: string;
+  openRouter?: OpenRouterBrokerCatalogInput;
+  openAi?: OpenRouterBrokerCatalogInput;
+  logFn?: (m: string) => void;
+  /** Child-process seam for `openclaw secrets apply`. */
+  secretsApply?: ApplyOpenClawSecretsPlanOptions;
+}
+
+/**
+ * Hands the agent's missing platform profiles to openclaw. A refused apply is a
+ * deferral, not a failure: pre-boot there is no gateway to accept it, and the
+ * level-triggered sweep retries every tick until it lands.
+ */
+interface AgentMaterializeOutcome {
   wrote: boolean;
-  deferred: boolean;
-} {
-  return { wrote: result?.wrote === true, deferred: result?.profileDeferred === true };
+  deferralReason?: string;
+}
+
+function applyMissingPlatformBrokerProfiles(
+  agentHome: string,
+  agentId: string,
+  opts: BrokerProfileSweepOptions,
+): AgentMaterializeOutcome {
+  const missing = missingPlatformBrokerProfileTargets(agentHome, agentId, {
+    openRouter: opts.openRouter !== undefined,
+    openAi: opts.openAi !== undefined,
+  });
+  if (missing.length === 0) return { wrote: false };
+  try {
+    applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(missing), opts.secretsApply ?? {});
+    return { wrote: true };
+  } catch (error) {
+    if (!(error instanceof OpenClawSecretsApplyError)) throw error;
+    return { wrote: false, deferralReason: error.message };
+  }
 }
 
 function materializeOneAgent(
   agentId: string,
   agentsDir: string,
-  opts: {
-    openRouter?: OpenRouterBrokerCatalogInput;
-    openAi?: OpenRouterBrokerCatalogInput;
-    logFn?: (m: string) => void;
-  },
-): { wrote: boolean; deferred: boolean } {
+  opts: BrokerProfileSweepOptions,
+): AgentMaterializeOutcome {
   const agentHome = path.join(agentsDir, agentId, "agent");
-  const anthropic = upsertProfileAllowingDeferral(() =>
-    upsertAnthropicBrokerProfile(agentHome, agentId),
-  );
-  const catalog = surfaceOutcome(
-    opts.openRouter ? upsertOpenRouterBrokerCatalog(agentHome, agentId, opts.openRouter) : null,
-  );
-  const openAi = surfaceOutcome(
-    opts.openAi ? upsertOpenAiBrokerCatalog(agentHome, agentId, opts.openAi) : null,
-  );
+  const catalog = opts.openRouter
+    ? upsertOpenRouterBrokerCatalog(agentHome, opts.openRouter)
+    : false;
+  const openAi = opts.openAi
+    ? upsertOpenAiBrokerCatalog(agentHome, opts.openAi)
+    : false;
+  const profiles = applyMissingPlatformBrokerProfiles(agentHome, agentId, opts);
 
-  const wrote = anthropic.wrote || catalog.wrote || openAi.wrote;
-  const deferred = anthropic.deferred || catalog.deferred || openAi.deferred;
+  const wrote = profiles.wrote || catalog || openAi;
   if (wrote) {
     opts.logFn?.(
       `[agent-model-token] model-ready: ${agentId}` +
-        ` (anthropic ${anthropic.wrote ? "written" : "ok"},` +
-        ` openrouter ${catalogState(opts.openRouter, catalog.wrote)},` +
-        ` openai ${catalogState(opts.openAi, openAi.wrote)})`,
+        ` (profiles ${profiles.wrote ? "applied" : "ok"},` +
+        ` openrouter ${catalogState(opts.openRouter, catalog)},` +
+        ` openai ${catalogState(opts.openAi, openAi)})`,
     );
   }
-  return { wrote, deferred };
+  return { wrote, ...(profiles.deferralReason ? { deferralReason: profiles.deferralReason } : {}) };
 }
 
+/**
+ * Model-ready sweep: assert every broker provider surface per agent — the
+ * platform auth profiles AND the OpenRouter/OpenAI catalogs (when the broker's
+ * base URLs are configured). After this, switching any agent to any catalog
+ * model is a pure roster flip. Tolerant — a failure on one agent never aborts
+ * the sweep.
+ */
 export function materializeBrokerProfilesForAgents(
   agentIds: string[],
-  opts: {
-    agentsDir?: string;
-    openRouter?: OpenRouterBrokerCatalogInput;
-    openAi?: OpenRouterBrokerCatalogInput;
-    logFn?: (m: string) => void;
-  } = {},
+  opts: BrokerProfileSweepOptions = {},
 ): BrokerProfileSweepResult {
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
   let materialized = 0;
+  let deferralReason: string | undefined;
   const deferred: string[] = [];
   for (const agentId of agentIds) {
     if (!COACH_AGENT_RE.test(agentId)) {
@@ -511,14 +518,17 @@ export function materializeBrokerProfilesForAgents(
       continue;
     }
     try {
-      const result = materializeOneAgent(agentId, agentsDir, opts);
+      const result = materializeOneAgent(agentId, agentsDir, { ...opts, agentsDir });
       if (result.wrote) materialized++;
-      if (result.deferred) deferred.push(agentId);
+      if (result.deferralReason) {
+        deferred.push(agentId);
+        deferralReason ??= result.deferralReason;
+      }
     } catch (e) {
       opts.logFn?.(
         `⚠ [agent-model-token] model-ready materialize failed for ${agentId}: ${(e as Error).message}`,
       );
     }
   }
-  return { materialized, deferred };
+  return { materialized, deferred, ...(deferralReason ? { deferralReason } : {}) };
 }

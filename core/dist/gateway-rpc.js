@@ -10,6 +10,19 @@ import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
+/**
+ * openclaw refuses `agents.create` for an id already in the roster with
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
+ * raced another writer has to treat that as already-done; every other refusal —
+ * an unwritable workspace, a wedged deletion journal, a transport failure —
+ * must still fail the mount.
+ */
+export function isAgentAlreadyExistsRpcError(err) {
+    return (err instanceof OpenclawWireError &&
+        err.code === "rpc-error" &&
+        AGENT_ALREADY_EXISTS_MESSAGE.test(err.message));
+}
 /**
  * openclaw refuses `agents.delete` for an id that is neither rostered nor
  * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
@@ -440,6 +453,17 @@ export function createGatewayRpc(opts = {}) {
             const p = payload;
             if (typeof p.id !== "string" || p.id.length === 0) {
                 throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
+            }
+            return payload;
+        },
+        async agentsCreate(params) {
+            const payload = await call("agents.create", params);
+            if (!payload || typeof payload !== "object" || payload.ok !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "agents.create payload missing `ok: true`");
+            }
+            const agentId = payload.agentId;
+            if (typeof agentId !== "string" || agentId.length === 0) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "agents.create payload missing string `agentId`");
             }
             return payload;
         },

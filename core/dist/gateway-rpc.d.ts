@@ -136,6 +136,28 @@ export interface GatewayAgentsDeleteResult {
     failed?: unknown[];
     [extra: string]: unknown;
 }
+export interface GatewayAgentsCreateParams {
+    name: string;
+    workspace: string;
+    model?: string;
+    emoji?: string;
+    avatar?: string;
+}
+export interface GatewayAgentsCreateResult {
+    ok: true;
+    agentId: string;
+    name?: string;
+    workspace?: string;
+    [extra: string]: unknown;
+}
+/**
+ * openclaw refuses `agents.create` for an id already in the roster with
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
+ * raced another writer has to treat that as already-done; every other refusal —
+ * an unwritable workspace, a wedged deletion journal, a transport failure —
+ * must still fail the mount.
+ */
+export declare function isAgentAlreadyExistsRpcError(err: unknown): boolean;
 /**
  * openclaw refuses `agents.delete` for an id that is neither rostered nor
  * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
@@ -174,6 +196,7 @@ export interface GatewayRpcClient {
         includePlugins: true;
     }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
+    agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
     agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;

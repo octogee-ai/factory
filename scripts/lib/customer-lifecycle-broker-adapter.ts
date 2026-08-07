@@ -34,6 +34,11 @@ import {
   deleteRosterAgents,
 } from "./agent-roster-deletion.js";
 import {
+  createRosterAgents,
+  rosterAgentSpecsFromEntries,
+  unrosteredAgentSpecs,
+} from "./agent-roster-creation.js";
+import {
   type CustomerContext,
   type CustomerLifecycleAdapter,
   type CustomerStateImportMode,
@@ -108,6 +113,7 @@ import {
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
+  activationManifestAgentIds,
   applyOpenClawActivationManifest,
   LegacyActivationManifestFingerprintError,
   MIGRATION_ACTIVATION_DIR,
@@ -213,7 +219,7 @@ function buildRemoveCustomerAccountsPatch(
   return { channels: { mattermost: { accounts } } };
 }
 
-async function currentConfigForRemoval(ctx: BrokerCtx): Promise<unknown> {
+async function currentRosterConfig(ctx: BrokerCtx): Promise<unknown> {
   if (ctx.configCache.hash !== "" && ctx.configCache.current !== undefined) {
     return ctx.configCache.current;
   }
@@ -223,22 +229,91 @@ async function currentConfigForRemoval(ctx: BrokerCtx): Promise<unknown> {
   return fetched.config;
 }
 
-async function deleteDepartingCustomerAgents(
+function invalidateConfigCache(ctx: BrokerCtx): void {
+  ctx.configCache.current = undefined;
+  ctx.configCache.hash = "";
+}
+
+async function deleteAgentsAndInvalidateCache(
   ctx: BrokerCtx,
-  slugs: readonly string[],
+  agentIds: readonly string[],
   logPrefix: string,
 ): Promise<void> {
-  if (slugs.length === 0) return;
-  const current = await currentConfigForRemoval(ctx);
-  const agentIds = slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug));
   if (agentIds.length === 0) return;
   try {
     await deleteRosterAgents(agentIds, { rpc: ctx.rpc, log: ctx.log, logPrefix });
   } finally {
     // Each delete rewrites the roster and prunes bindings, so any cached
     // snapshot — and its base hash — is stale the moment the first one lands.
-    ctx.configCache.current = undefined;
-    ctx.configCache.hash = "";
+    invalidateConfigCache(ctx);
+  }
+}
+
+async function deleteDepartingCustomerAgents(
+  ctx: BrokerCtx,
+  slugs: readonly string[],
+  logPrefix: string,
+): Promise<void> {
+  if (slugs.length === 0) return;
+  const current = await currentRosterConfig(ctx);
+  await deleteAgentsAndInvalidateCache(
+    ctx,
+    slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
+    logPrefix,
+  );
+}
+
+/**
+ * Every agent the mount does not want, in one pass: the evicted slugs' agents
+ * plus the admitted Builder's OWN superseded ones — a project agent retired
+ * since the last mount. Both leave by `agents.delete`, because 2026.7.2 refuses
+ * a config write that drops roster entries, so neither can be nulled out of the
+ * roster patch that follows.
+ */
+async function deleteSupersededCustomerAgents(
+  ctx: BrokerCtx,
+  input: {
+    slug: string;
+    evictionSlugs: readonly string[];
+    keepAgentIds: readonly string[];
+    logPrefix: string;
+  },
+): Promise<void> {
+  const current = await currentRosterConfig(ctx);
+  const keep = new Set(input.keepAgentIds);
+  await deleteAgentsAndInvalidateCache(
+    ctx,
+    [
+      ...input.evictionSlugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
+      ...customerAgentIdsInRoster(current, input.slug).filter((agentId) => !keep.has(agentId)),
+    ],
+    input.logPrefix,
+  );
+}
+
+/**
+ * Introduce the agents the roster does not carry yet. config.patch may add a
+ * roster entry, but for an id `agents.delete` has already tombstoned it would
+ * add a rostered-but-fenced agent whose every store access fails. Only
+ * `agents.create` clears the tombstone; already-rostered ids stay on the pure
+ * patch path.
+ */
+async function createMissingCustomerAgents(
+  ctx: BrokerCtx,
+  agentEntries: readonly unknown[],
+  logPrefix: string,
+): Promise<void> {
+  const current = await currentRosterConfig(ctx);
+  const missing = unrosteredAgentSpecs(current, rosterAgentSpecsFromEntries(agentEntries));
+  if (missing.length === 0) return;
+  // The project checkouts clone AFTER the mount patch, so a new project agent's
+  // workspace does not exist yet. The directory is ours to own; checkoutProjectRepo
+  // clones into an existing dest via its adopt path.
+  await Promise.all(missing.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
+  try {
+    await createRosterAgents(missing, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+  } finally {
+    invalidateConfigCache(ctx);
   }
 }
 
@@ -385,7 +460,8 @@ function materializeCustomerBrokerProfiles(
   if (materialized.deferred.length > 0) {
     logFn(
       `[add:${slug}] broker profile deferred for ${materialized.deferred.join(", ")}` +
-        ` — openclaw has not created the store yet; the post-boot sweep retries it`,
+        ` — ${materialized.deferralReason ?? "openclaw refused the secrets apply"};` +
+        ` the post-boot sweep retries it`,
     );
   }
 }
@@ -502,7 +578,18 @@ async function applyAddCustomerConfigPatch(
       agentProjects: activeAgentProjectIds(projectAgents),
     },
   ]);
-  await deleteDepartingCustomerAgents(ctx, evictionSlugs, `[add:${snapshot.slug}]`);
+  const customerAgentEntries = [agentEntry, ...projectAgentEntries];
+  await deleteSupersededCustomerAgents(ctx, {
+    slug: snapshot.slug,
+    evictionSlugs,
+    keepAgentIds: brokerAgentIds,
+    logPrefix: `[add:${snapshot.slug}]`,
+  });
+  await createMissingCustomerAgents(
+    ctx,
+    customerAgentEntries,
+    `[add:${snapshot.slug}]`,
+  );
   const startedAt = Date.now();
   const convergedRpc = {
     ...ctx.rpc,
@@ -520,10 +607,11 @@ async function applyAddCustomerConfigPatch(
         for (const slug of [snapshot.slug, ...evictionSlugs]) {
           existingBindings = filterOutCustomerBindings(existingBindings, slug);
         }
-        const nextAgents = replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
-          agentEntry,
-          ...projectAgentEntries,
-        ]);
+        const nextAgents = replaceCustomerAgentsInFullAgentList(
+          current,
+          snapshot.slug,
+          customerAgentEntries,
+        );
         return {
           agents: {
             ...(coachModelDefaults
@@ -832,6 +920,12 @@ async function activateImportedCustomer(
       `[import:${slug}] discarded imported ${discarded.agentId} store (schema ${discarded.schemaVersion})`,
     );
   }
+  await deleteSupersededCustomerAgents(ctx, {
+    slug,
+    evictionSlugs: [],
+    keepAgentIds: activationManifestAgentIds(safeManifest),
+    logPrefix: `[import:${slug}]`,
+  });
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,

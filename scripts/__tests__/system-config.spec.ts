@@ -506,6 +506,39 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost).not.toHaveProperty("token");
   });
 
+  // openclaw 2026.7.2 migrates agents.list into keyed agents.entries at pre-boot,
+  // where the key is the id and the entry carries none. Reading only the list
+  // leaves the Builder's coach un-defaulted on every current pod.
+  it("selects the Builder coach out of a migrated keyed roster", () => {
+    const config = {
+      agents: {
+        entries: {
+          "octogee-ceckert-coach": { name: "BenderEcho (ceckert)" },
+          "octogee-bob-coach": { name: "Bob" },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(true);
+    expect(config.agents.entries["octogee-ceckert-coach"]).toMatchObject({ default: true });
+    expect(config.agents.entries["octogee-bob-coach"]).not.toHaveProperty("default");
+  });
+
+  it("is a no-op on a keyed roster whose Builder coach is already the default", () => {
+    const config = {
+      agents: { entries: { "octogee-ceckert-coach": { default: true } } },
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(false);
+  });
+
+  it("does not default a coach when no Builder slug is configured", () => {
+    const config = { agents: { entries: { "octogee-ceckert-coach": {} } } };
+
+    expect(removeLegacyMacConfig(config, {})).toBe(false);
+    expect(config.agents.entries["octogee-ceckert-coach"]).not.toHaveProperty("default");
+  });
+
   it("preserves historical-looking Mattermost variants and never externalizes the placeholder", () => {
     const missingDefaultSelector = {
       channels: {
