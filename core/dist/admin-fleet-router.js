@@ -741,11 +741,22 @@ function openclawVersionFromImageTag(imageTag) {
     const match = imageTag.match(/^[0-9a-f]{7,40}-oc(.+)$/u);
     return match?.[1] ?? null;
 }
+const OPENCLAW_VERSION_PRODUCT_PREFIX = /^openclaw\s+/iu;
+function withoutBuildSuffix(value) {
+    if (!value.endsWith(")"))
+        return value;
+    const opensAt = value.lastIndexOf("(");
+    return opensAt === -1 ? value : value.slice(0, opensAt);
+}
+function reportedOpenclawVersion(value) {
+    if (typeof value !== "string")
+        return null;
+    const version = withoutBuildSuffix(value.trim().replace(OPENCLAW_VERSION_PRODUCT_PREFIX, "")).trim();
+    return version.length === 0 || version === "unknown" ? null : version;
+}
 function projectOpenclawVersion(data, glmDoc) {
-    if (typeof data.openclawVersion === "string" && data.openclawVersion !== "unknown") {
-        return data.openclawVersion;
-    }
-    return openclawVersionFromImageTag(glmDoc?.imageTag);
+    return reportedOpenclawVersion(data.openclawVersion) ??
+        openclawVersionFromImageTag(glmDoc?.imageTag);
 }
 function projectImageTag(data, glmDoc) {
     if (typeof data.version === "string")
