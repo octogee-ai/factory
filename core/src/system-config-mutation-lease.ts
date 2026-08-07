@@ -115,6 +115,26 @@ export function systemConfigSyncLockPath(
   return path.join(openclawDir, lockName);
 }
 
+// Another process can quarantine-rename the lock between any two reads here;
+// null means the lock vanished mid-read, which is a released lock.
+function readLockHeartbeatMtimeMs(lockPath: string, stat: fs.Stats): number | null {
+  if (!stat.isDirectory()) return stat.mtimeMs;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (entries.length !== 1 || !OWNER_TOKEN_RE.test(entries[0])) return stat.mtimeMs;
+  try {
+    return fs.statSync(path.join(lockPath, entries[0])).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function quarantineExpiredLease(lockPath: string, staleAfterMs: number, now: number): boolean {
   let stat: fs.Stats;
   try {
@@ -123,26 +143,8 @@ function quarantineExpiredLease(lockPath: string, staleAfterMs: number, now: num
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
     throw error;
   }
-  let heartbeatMtimeMs = stat.mtimeMs;
-  if (stat.isDirectory()) {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(lockPath);
-    } catch (error) {
-      // Another process can quarantine-rename the lock between our stat and
-      // this read; a vanished lock is a released lock.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-      throw error;
-    }
-    if (entries.length === 1 && OWNER_TOKEN_RE.test(entries[0])) {
-      try {
-        heartbeatMtimeMs = fs.statSync(path.join(lockPath, entries[0])).mtimeMs;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-        throw error;
-      }
-    }
-  }
+  const heartbeatMtimeMs = readLockHeartbeatMtimeMs(lockPath, stat);
+  if (heartbeatMtimeMs === null) return true;
   if (now - heartbeatMtimeMs <= staleAfterMs) return false;
   const quarantinePath = `${lockPath}.stale.${randomUUID()}`;
   try {
