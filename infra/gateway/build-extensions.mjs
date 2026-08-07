@@ -1,21 +1,15 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+
+import { extensionDirectories, readExtensionPackage } from "./extension-manifest.mjs";
 
 const extensionsRoot = path.resolve(process.argv[2] ?? "/octogee/extensions");
 const esbuild = path.resolve(
   process.argv[3] ?? "/octogee/scripts/node_modules/.bin/esbuild",
 );
-
-function extensionDirectories() {
-  return readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^octogee-.+-tools$/u.test(entry.name))
-    .map((entry) => path.join(extensionsRoot, entry.name))
-    .filter((dir) => existsSync(path.join(dir, "openclaw.plugin.json")))
-    .sort();
-}
 
 function removeTypeScriptSources(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -29,12 +23,11 @@ function removeTypeScriptSources(dir) {
   }
 }
 
-const directories = extensionDirectories();
+const directories = extensionDirectories(extensionsRoot);
 if (directories.length === 0) throw new Error(`no Octogee extensions found in ${extensionsRoot}`);
 
 for (const dir of directories) {
-  const packageJsonPath = path.join(dir, "package.json");
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  const packageJson = readExtensionPackage(dir);
   if (packageJson.type !== "module") {
     throw new Error(`${path.basename(dir)} must declare package.json type=module`);
   }
