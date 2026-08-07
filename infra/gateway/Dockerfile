@@ -105,60 +105,30 @@ COPY --chown=node:node templates/ /octogee/templates/
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ and projected into ~/.openclaw/extensions/.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
-COPY --chown=node:node infra/gateway/build-extensions.mjs /octogee/infra/gateway/
+COPY --chown=node:node infra/gateway/build-extensions.mjs \
+      infra/gateway/extension-manifest.mjs \
+      infra/gateway/install-extension-deps.mjs \
+      infra/gateway/verify-extension-deps.mjs \
+      /octogee/infra/gateway/
 RUN node /octogee/infra/gateway/build-extensions.mjs \
       /octogee/extensions \
       /octogee/scripts/node_modules/.bin/esbuild
 
-# octogee-chat-tools runtime deps
-WORKDIR /octogee/extensions/octogee-chat-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-chat-tools/node_modules
+# ── Extension runtime deps ──────────────────────────────────────────────────
+# Every extension declaring `dependencies`, enumerated from the image tree.
+# A hand-maintained list here is what shipped octogee-board-tools with no
+# node_modules: esbuild bundles with `--packages=external`, so `typebox`
+# resolves at load time or not at all.
+WORKDIR /octogee/extensions
+RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions \
+    && chown -R node:node /octogee/extensions
 
-# octogee-preview-tools runtime deps
-WORKDIR /octogee/extensions/octogee-preview-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-preview-tools/node_modules
-
-# octogee-workspace-tools runtime deps
-WORKDIR /octogee/extensions/octogee-workspace-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-workspace-tools/node_modules
-
-# octogee-publish-tools runtime deps
-WORKDIR /octogee/extensions/octogee-publish-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-publish-tools/node_modules
-
-# octogee-connector-tools runtime deps
-WORKDIR /octogee/extensions/octogee-connector-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-connector-tools/node_modules
-
-# octogee-status-tools runtime deps
-WORKDIR /octogee/extensions/octogee-status-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-status-tools/node_modules
-
-# octogee-ops-tools runtime deps
-WORKDIR /octogee/extensions/octogee-ops-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-ops-tools/node_modules
-
-# octogee-project-tools runtime deps
-WORKDIR /octogee/extensions/octogee-project-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-project-tools/node_modules
-
-# octogee-web-tools runtime deps
-WORKDIR /octogee/extensions/octogee-web-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-web-tools/node_modules
-
-# octogee-access-tools runtime deps
-WORKDIR /octogee/extensions/octogee-access-tools
-RUN npm install --omit=dev --no-audit --no-fund 2>&1 | tail -50 \
-    && chown -R node:node /octogee/extensions/octogee-access-tools/node_modules
+# ── Extension dependency gate ───────────────────────────────────────────────
+# A plugin whose imports do not resolve is skipped at boot — the gateway comes
+# up Ready with fewer plugins than configured and only `openclaw` CLI output
+# names the missing module. Load each declared dependency from its extension
+# directory here, where a failure can still stop the image from being pushed.
+RUN node /octogee/infra/gateway/verify-extension-deps.mjs /octogee/extensions
 
 # ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
