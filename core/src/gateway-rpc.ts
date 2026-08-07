@@ -150,6 +150,37 @@ export interface CronAddResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayAgentsDeleteParams {
+  agentId: string;
+  deleteFiles?: boolean;
+}
+
+export interface GatewayAgentsDeleteResult {
+  ok: true;
+  agentId: string;
+  removedBindings?: number;
+  removed?: Array<{ path: string; method: "trash" | "missing" }>;
+  failed?: unknown[];
+  [extra: string]: unknown;
+}
+
+const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+
+/**
+ * openclaw refuses `agents.delete` for an id that is neither rostered nor
+ * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
+ * (server-methods/agents.ts respondAgentNotFound). An eviction has to treat
+ * that as already-done; every other refusal — the default agent, a wedged
+ * deletion journal, a transport failure — must still fail the eviction.
+ */
+export function isAgentNotFoundRpcError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    AGENT_NOT_FOUND_MESSAGE.test(err.message)
+  );
+}
+
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
   configApply(config: object, baseHash: string): Promise<ConfigPatchResult>;
@@ -179,6 +210,7 @@ export interface GatewayRpcClient {
     timeoutMs?: number,
   ): Promise<GatewayToolsCatalogResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
+  agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -722,6 +754,14 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
       }
       return payload as CronAddResult;
+    },
+
+    async agentsDelete(params) {
+      const payload = await call("agents.delete", params);
+      if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload missing `ok: true`");
+      }
+      return payload as GatewayAgentsDeleteResult;
     },
 
     async secretsReload() {

@@ -248,22 +248,43 @@ function isLegacyMacAgent(agent: UnknownRecord, exactIds: ReadonlySet<string>): 
     recordString(agent, "workspace") === "/home/node/.openclaw/workspace/ops";
 }
 
+// 2026.7.2 rewrites `agents.list` into keyed `agents.entries` at pre-boot, so a
+// list-only reader would leave the legacy Mac lane rostered forever. Both forms
+// are swept: the migration leaves the pre-migration list behind, and a removal
+// that clears only one of them puts the agent back on the next normalization.
 function removeLegacyMacAgents(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): { changed: boolean; removedIds: Set<string> } {
   const removedIds = new Set<string>();
-  if (!Array.isArray(agents?.list)) return { changed: false, removedIds };
   const exactIds = legacyMacAgentIds(env);
-  const kept = agents.list.filter((entry) => {
-    const agent = asRecord(entry);
-    if (!agent || !isLegacyMacAgent(agent, exactIds)) return true;
-    const id = recordString(agent, "id");
-    if (id) removedIds.add(id);
-    return false;
-  });
-  const changed = kept.length !== agents.list.length;
-  if (changed) agents.list = kept;
+  let changed = false;
+
+  const entries = asRecord(agents?.entries);
+  if (entries) {
+    for (const [id, value] of Object.entries(entries)) {
+      const agent = asRecord(value);
+      if (!agent || !isLegacyMacAgent({ ...agent, id }, exactIds)) continue;
+      delete entries[id];
+      removedIds.add(id);
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(agents?.list)) {
+    const kept = agents.list.filter((entry) => {
+      const agent = asRecord(entry);
+      if (!agent || !isLegacyMacAgent(agent, exactIds)) return true;
+      const id = recordString(agent, "id");
+      if (id) removedIds.add(id);
+      return false;
+    });
+    if (kept.length !== agents.list.length) {
+      agents.list = kept;
+      changed = true;
+    }
+  }
+
   return { changed, removedIds };
 }
 

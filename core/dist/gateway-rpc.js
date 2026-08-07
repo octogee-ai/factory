@@ -9,6 +9,19 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+/**
+ * openclaw refuses `agents.delete` for an id that is neither rostered nor
+ * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
+ * (server-methods/agents.ts respondAgentNotFound). An eviction has to treat
+ * that as already-done; every other refusal — the default agent, a wedged
+ * deletion journal, a transport failure — must still fail the eviction.
+ */
+export function isAgentNotFoundRpcError(err) {
+    return (err instanceof OpenclawWireError &&
+        err.code === "rpc-error" &&
+        AGENT_NOT_FOUND_MESSAGE.test(err.message));
+}
 function configChangedHash(data) {
     let parsed;
     try {
@@ -427,6 +440,13 @@ export function createGatewayRpc(opts = {}) {
             const p = payload;
             if (typeof p.id !== "string" || p.id.length === 0) {
                 throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
+            }
+            return payload;
+        },
+        async agentsDelete(params) {
+            const payload = await call("agents.delete", params);
+            if (!payload || typeof payload !== "object" || payload.ok !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload missing `ok: true`");
             }
             return payload;
         },

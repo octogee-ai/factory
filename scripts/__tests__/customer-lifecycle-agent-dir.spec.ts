@@ -247,14 +247,26 @@ describe("customer lifecycle config patch agent directories", () => {
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
+      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => ({
+        ok: true as const,
+        agentId,
+        removedBindings: 0,
+      }));
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
-        rpc: {} as GatewayRpcClient,
+        rpc: {
+          configGet: vi.fn(async () => ({
+            config: { agents: { entries: { "octogee-alice-coach": { model: "house" } } } },
+            hash: "cfg-hash",
+          })),
+          agentsDelete,
+        } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
 
       await adapter.removeImportedCustomerBySlug("alice");
 
+      expect(agentsDelete).toHaveBeenCalledWith({ agentId: "octogee-alice-coach", deleteFiles: false });
       expect(fsSync.existsSync(customerDir)).toBe(false);
       expect(fsSync.existsSync(customerKey)).toBe(true);
     });

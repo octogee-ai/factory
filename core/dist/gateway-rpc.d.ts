@@ -121,6 +121,29 @@ export interface CronAddResult {
     id: string;
     [extra: string]: unknown;
 }
+export interface GatewayAgentsDeleteParams {
+    agentId: string;
+    deleteFiles?: boolean;
+}
+export interface GatewayAgentsDeleteResult {
+    ok: true;
+    agentId: string;
+    removedBindings?: number;
+    removed?: Array<{
+        path: string;
+        method: "trash" | "missing";
+    }>;
+    failed?: unknown[];
+    [extra: string]: unknown;
+}
+/**
+ * openclaw refuses `agents.delete` for an id that is neither rostered nor
+ * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
+ * (server-methods/agents.ts respondAgentNotFound). An eviction has to treat
+ * that as already-done; every other refusal — the default agent, a wedged
+ * deletion journal, a transport failure — must still fail the eviction.
+ */
+export declare function isAgentNotFoundRpcError(err: unknown): boolean;
 export interface GatewayRpcClient {
     configGet(): Promise<ConfigGetResult>;
     configApply(config: object, baseHash: string): Promise<ConfigPatchResult>;
@@ -151,6 +174,7 @@ export interface GatewayRpcClient {
         includePlugins: true;
     }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
+    agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;
 }

@@ -620,6 +620,66 @@ describe("system_config restore", () => {
     ]);
   });
 
+  // 2026.7.2 rewrites agents.list into keyed agents.entries at pre-boot, so a
+  // list-only reader silently keeps the legacy Mac lane on every current pod.
+  it("removes the shape-matched legacy Mac agent from the keyed roster", () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        entries: {
+          "octogee-ops-bender": {
+            identity: { name: "Mac" },
+            workspace: "/home/node/.openclaw/workspace/ops",
+          },
+          "octogee-ceckert-coach": { model: "house" },
+        },
+      },
+      bindings: [
+        { agentId: "octogee-ops-bender", match: { channel: "mattermost" } },
+        { agentId: "octogee-ceckert-coach", match: { channel: "mattermost" } },
+      ],
+    };
+
+    expect(removeLegacyMacConfig(config, {
+      GATEWAY_ID: "bender",
+      GATEWAY_BUILDER_SLUG: "ceckert",
+    })).toBe(true);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
+    ]);
+    expect(config.bindings).toEqual([
+      expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
+    ]);
+  });
+
+  it("removes an exact-id legacy Mac agent from the keyed roster", () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        entries: {
+          "octogee-ops-${GATEWAY_ID}": { model: "house" },
+          "octogee-ceckert-coach": { model: "house" },
+        },
+      },
+      bindings: [],
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(true);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
+    ]);
+  });
+
+  it("leaves a keyed roster without a legacy Mac lane untouched", () => {
+    const config: Record<string, unknown> = {
+      agents: { entries: { "octogee-ceckert-coach": { model: "house" } } },
+      bindings: [{ agentId: "octogee-ceckert-coach" }],
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(false);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
+    ]);
+  });
+
   it("one-time state cleanup deletes only exact Mac directories and memory files", () => {
     const removedAgentDir = path.join(openclawDir, "agents", "octogee-ops-ceckert");
     const keptAgentDir = path.join(openclawDir, "agents", "octogee-ceckert-coach");
