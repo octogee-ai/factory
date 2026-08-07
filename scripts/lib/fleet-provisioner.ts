@@ -471,21 +471,42 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
-/** Write the broker profiles pre-boot could only defer: openclaw has created
- *  every rostered agent's store by the time healthz passes. Idempotent — a
- *  profile already present is a no-op. */
-export function materializeDeferredBrokerProfiles(log: (msg: string) => void): void {
+// Only openclaw creates an agent's store, and for an agent mounted after boot
+// that can happen after BOTH the gateway-ready sweep and the mount's own retry
+// have already run — leaving the catalog in place but its broker profile
+// unwritten, so the agent's first turn fails on credentials instead of on an
+// unknown model. So this is level-triggered: retried on a timer until every
+// rostered coach has its profile, rather than fired at two hopeful moments.
+const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
+
+/** Last deferral set reported, so a steady state stays quiet — this runs on a
+ *  timer and must not reprint the same warning forever. */
+let lastDeferredSignature: string | null = null;
+
+/** Write the broker profiles earlier passes could only defer. Idempotent — a
+ *  profile already present is a no-op, so this is safe to call on every tick. */
+/** Test seam only — the memo below is module state, so a spec exercising the
+ *  quiet-once-settled behaviour must be able to start from a known point. */
+export function _resetBrokerProfileLogStateForTests(): void {
+  lastDeferredSignature = null;
+}
+
+export function materializeDeferredBrokerProfiles(
+  log: (msg: string) => void,
+  deps: { agentsDir?: string; readConfig?: () => unknown } = {},
+): void {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
   let agentIds: string[];
   try {
-    agentIds = agentIdsFromConfig(readOpenClawConfig());
+    agentIds = agentIdsFromConfig((deps.readConfig ?? readOpenClawConfig)());
   } catch (error) {
     log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
     return;
   }
   const sweep = materializeBrokerProfilesForAgents(agentIds, {
     logFn: log,
+    ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
     ...(openRouterBaseUrl
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
       : {}),
@@ -494,12 +515,34 @@ export function materializeDeferredBrokerProfiles(log: (msg: string) => void): v
   if (sweep.materialized > 0) {
     log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
   }
-  if (sweep.deferred.length > 0) {
-    log(
-      `⚠ [agent-model-token] post-boot sweep still deferred for ${sweep.deferred.join(", ")}` +
-        ` — those agents have no store even though openclaw is up`,
-    );
+  const signature = sweep.deferred.join(",");
+  if (signature !== lastDeferredSignature) {
+    if (sweep.deferred.length > 0) {
+      log(
+        `[agent-model-token] broker profile still deferred for ${sweep.deferred.join(", ")}` +
+          ` — waiting for openclaw to create their stores; retrying every ${
+            BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
+          }s`,
+      );
+    } else if (lastDeferredSignature !== null) {
+      log("[agent-model-token] broker profiles settled — every rostered coach has its profile");
+    }
+    lastDeferredSignature = signature;
   }
+}
+
+/** The level-triggered half of broker-profile materialization: retried until
+ *  openclaw has created every rostered coach's store. Null on gateways that do
+ *  not provision — they mount no customers, so there is nothing to converge. */
+function startBrokerProfileRetry(
+  provisions: boolean,
+  log: (msg: string) => void,
+): NodeJS.Timeout | null {
+  if (!provisions) return null;
+  materializeDeferredBrokerProfiles(log);
+  return setInterval(() => {
+    materializeDeferredBrokerProfiles(log);
+  }, BROKER_PROFILE_RETRY_INTERVAL_MS);
 }
 
 export async function waitForOpenClawHealthz(input: {
@@ -1145,10 +1188,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     opts.log(
       `[fleet] OpenClaw healthz ready; transitioning gateways/${opts.gatewayId} to status=ready`,
     );
-    // Pre-boot could only write the catalogs — the auth-profile stores did not
-    // exist yet. openclaw has now created them for every rostered agent, so the
-    // deferred profiles land here, before any agent turn needs its broker token.
-    materializeDeferredBrokerProfiles(opts.log);
     await emitHeartbeat("ready");
   };
 
@@ -1198,6 +1237,8 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
         void emitHeartbeat(runtime.status);
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
+
+  const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log);
 
   const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
     if (!pathGatewayIdMatchesPod(req.params.gatewayId, opts.gatewayId)) {
@@ -1284,6 +1325,7 @@ return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (brokerProfileTimer) clearInterval(brokerProfileTimer);
       stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {

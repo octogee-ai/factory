@@ -1591,9 +1591,10 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       provider: "octogee-mattermost",
       id: "/alice-proj-orbit",
     });
-    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-      groups: { "po-1": { enabled: false } },
-    });
+    // The plugin schema has no per-channel mute, so the coach account clears
+    // `groups` rather than listing the project channel; the project channel
+    // still reaches its own agent through the partitioned bindings above.
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({ groups: null });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });
