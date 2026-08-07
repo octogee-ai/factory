@@ -616,7 +616,7 @@ let configRaw: string;
   // through openclaw's own `secrets apply`, which has nothing to answer it at
   // pre-boot, so they defer by design and the post-boot sweep applies them.
   if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
-    const sweep = materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
+    const sweep = await materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
       logFn: log,
       ...platformBrokerCatalogOpts(process.env),
     });

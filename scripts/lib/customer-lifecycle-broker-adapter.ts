@@ -438,14 +438,14 @@ function coachToken(
   return brokerSnapshot?.coachToken ?? null;
 }
 
-function materializeCustomerBrokerProfiles(
+async function materializeCustomerBrokerProfiles(
   agentIds: string[],
   slug: string,
   logFn: (message: string) => void,
-): void {
+): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
-  const materialized = materializeBrokerProfilesForAgents(agentIds, {
+  const materialized = await materializeBrokerProfilesForAgents(agentIds, {
     logFn,
     ...(openRouterBaseUrl
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
@@ -552,7 +552,7 @@ async function applyAddCustomerConfigPatch(
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
   );
-  materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
+  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
   const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   evictionSlugs = await currentEvictionSlugs(
     snapshot.slug,

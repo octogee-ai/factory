@@ -494,6 +494,21 @@ export function createGatewayRpc(opts = {}) {
             }
             return p;
         },
+        async secretsApply(params) {
+            const payload = await call("secrets.apply", {
+                plan: params.plan,
+                allowExec: true,
+                ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
+            });
+            if (!payload || typeof payload !== "object") {
+                throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
+            }
+            const p = payload;
+            if (p.changed !== undefined && typeof p.changed !== "boolean") {
+                throw new OpenclawWireError(INVALID_RESPONSE, `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`);
+            }
+            return payload;
+        },
         async isGatewayUp(timeoutMs) {
             const t = timeoutMs ?? connectTimeoutMs;
             try {

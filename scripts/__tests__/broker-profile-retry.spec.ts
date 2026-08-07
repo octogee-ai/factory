@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DatabaseSync } from "node:sqlite";
 
+import { OpenclawWireError } from "@octogee/core/gateway-rpc";
 import {
   _resetBrokerProfileLogStateForTests,
   materializeDeferredBrokerProfiles,
@@ -32,12 +33,14 @@ function seedAgentStore(agentsDir: string, agentId: string): void {
   }
 }
 
-/** Mirrors what `openclaw secrets apply` persists, so the next sweep's
+/** Mirrors what openclaw's secrets.apply persists, so the next sweep's
  *  idempotency read settles. */
-function writeAppliedProfiles(agentsDir: string, planPath: string): void {
-  const plan = JSON.parse(fs.readFileSync(planPath, "utf8")) as {
+function writeAppliedProfiles(
+  agentsDir: string,
+  plan: {
     targets: Array<{ path: string; agentId: string; authProfileProvider: string; ref: unknown }>;
-  };
+  },
+): void {
   for (const target of plan.targets) {
     const dir = path.join(agentsDir, target.agentId, "agent");
     const db = new DatabaseSync(path.join(dir, "openclaw-agent.sqlite"));
@@ -76,26 +79,27 @@ describe("broker profile retry (level-triggered)", () => {
   let agentsDir: string;
   let logs: string[];
   let applyOutcome: "refuse" | "accept";
-  let run: ReturnType<typeof vi.fn>;
+  let apply: ReturnType<typeof vi.fn>;
   const readConfig = () => ({ agents: { entries: { [AGENT]: { model: "house" } } } });
   const sweep = () =>
     materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
       readConfig,
-      secretsApply: { run },
+      secretsApply: { rpc: { secretsApply: apply } },
     });
 
   beforeEach(() => {
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-bpr-"));
     logs = [];
     applyOutcome = "refuse";
-    run = vi.fn((_command: string, args: string[]) => {
-      const planPath = args[args.indexOf("--from") + 1]!;
+    apply = vi.fn(async ({ plan }: Parameters<typeof writeAppliedProfiles>[1] extends infer P
+      ? { plan: P }
+      : never) => {
       if (applyOutcome === "refuse") {
-        return { status: 3, stdout: "", stderr: "gateway is not accepting secrets yet" };
+        throw new OpenclawWireError("rpc-error", "gateway is not accepting secrets yet");
       }
-      writeAppliedProfiles(agentsDir, planPath);
-      return { status: 0, stdout: "", stderr: "" };
+      writeAppliedProfiles(agentsDir, plan);
+      return { mode: "write", changed: true };
     });
     _resetBrokerProfileLogStateForTests();
   });
@@ -103,62 +107,60 @@ describe("broker profile retry (level-triggered)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("applies the profiles through openclaw's CLI rather than writing the store", () => {
+  it("applies the profiles through openclaw's secrets.apply RPC rather than writing the store", async () => {
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";
 
-    sweep();
+    await sweep();
 
-    expect(run).toHaveBeenCalledWith(
-      expect.any(String),
-      ["secrets", "apply", "--from", expect.any(String), "--allow-exec"],
-      expect.objectContaining({ env: expect.any(Object) }),
-    );
+    expect(apply).toHaveBeenCalledWith({
+      plan: expect.objectContaining({ generatedBy: "manual", targets: expect.any(Array) }),
+    });
   });
 
-  it("reports a deferral while openclaw refuses the apply", () => {
-    sweep();
+  it("reports a deferral while openclaw refuses the apply", async () => {
+    await sweep();
 
     expect(logs.some((m) => m.includes("still deferred") && m.includes(AGENT))).toBe(true);
   });
 
-  it("stays quiet while the deferral is unchanged — it runs on a timer", () => {
-    sweep();
+  it("stays quiet while the deferral is unchanged — it runs on a timer", async () => {
+    await sweep();
     const afterFirst = logs.length;
 
-    sweep();
-    sweep();
+    await sweep();
+    await sweep();
 
     expect(logs.length).toBe(afterFirst);
   });
 
-  it("settles on a later pass once openclaw accepts the apply", () => {
-    sweep();
+  it("settles on a later pass once openclaw accepts the apply", async () => {
+    await sweep();
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";
     logs = [];
 
-    sweep();
+    await sweep();
 
     expect(logs.some((m) => m.includes("settled"))).toBe(true);
     expect(logs.some((m) => m.includes("still deferred"))).toBe(false);
   });
 
-  it("stops spawning the CLI once every profile has settled", () => {
+  it("stops calling the gateway once every profile has settled", async () => {
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";
-    sweep();
-    const afterFirst = run.mock.calls.length;
+    await sweep();
+    const afterFirst = apply.mock.calls.length;
 
-    sweep();
+    await sweep();
 
-    expect(run.mock.calls.length).toBe(afterFirst);
+    expect(apply.mock.calls.length).toBe(afterFirst);
   });
 
-  it("survives an unreadable config rather than killing the timer", () => {
-    materializeDeferredBrokerProfiles((m) => logs.push(m), {
+  it("survives an unreadable config rather than killing the timer", async () => {
+    await materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
-      secretsApply: { run },
+      secretsApply: { rpc: { secretsApply: apply } },
       readConfig: () => {
         throw new Error("config gone");
       },

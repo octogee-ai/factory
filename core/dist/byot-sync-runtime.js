@@ -419,10 +419,10 @@ function mountedAgentIdsForSlug(slug) {
         return [`octogee-${slug}-coach`];
     }
 }
-function materializePlatformBrokerSurfaces(slug) {
+async function materializePlatformBrokerSurfaces(slug) {
     const baseUrl = configuredOpenRouterBaseUrl();
     const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-    const result = materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
+    const result = await materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
         agentsDir: AGENTS_DIR,
         openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
         openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
@@ -485,8 +485,8 @@ async function requestRestartIfRequired(runtimePatch, actions, reason, platformC
     }
     return requested;
 }
-function materializePlatformCatalog(slug, actions) {
-    const changed = actions.materializePlatformBrokerSurfaces(slug);
+async function materializePlatformCatalog(slug, actions) {
+    const changed = await actions.materializePlatformBrokerSurfaces(slug);
     if (changed)
         actions.markPlatformCatalogRestartPending();
     return {
@@ -499,7 +499,7 @@ function isBrokerResolvedAnthropic(desired, usesBrokerToken) {
 }
 async function clearBrokerResolvedAnthropic(slug, actions) {
     const changed = actions.applyByotState(slug, null);
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     log(`[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`);
     const restartRequested = await requestRestartIfRequired({ patched: false, changed: false, restartRequired: false }, actions, undefined, catalog.restartPending);
     if ((changed || catalog.changed || catalog.restartPending) && !restartRequested) {
@@ -529,7 +529,7 @@ async function syncStandardByotState(slug, desired, actions) {
 }
 async function syncOperatorByotState(slug, desired, actions) {
     const restore = await restoreOauthIfNeeded(slug, desired, actions);
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
@@ -583,7 +583,7 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
     // A suppressed byosub owner may carry a pre-gate OAuth profile in the
     // store — purge it; every other shared path preserves the store.
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)

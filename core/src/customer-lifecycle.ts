@@ -84,7 +84,7 @@ export interface CustomerLifecycleAdapter {
    * first attempt runs too early and defers; this is called once the coach is
    * confirmed running+connected, when the store is guaranteed to exist.
    */
-  materializeBrokerProfiles?: (slug: string) => void;
+  materializeBrokerProfiles?: (slug: string) => void | Promise<void>;
 
   /**
    * Read-only probe of the on-disk openclaw.json: is this customer's
@@ -1068,7 +1068,7 @@ async function verifyChannelReady(
   adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
   // The coach is running, so openclaw has created its store — retry the broker
   // profiles the mount deferred, BEFORE the greeting turn needs them.
-  adapter.materializeBrokerProfiles?.(slug);
+  await adapter.materializeBrokerProfiles?.(slug);
 }
 
 async function scheduleGreetingIfNeeded(

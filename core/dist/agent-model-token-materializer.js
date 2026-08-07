@@ -272,7 +272,7 @@ function catalogState(configured, wrote) {
         return "unconfigured";
     return wrote ? "written" : "ok";
 }
-function applyMissingPlatformBrokerProfiles(agentHome, agentId, opts) {
+async function applyMissingPlatformBrokerProfiles(agentHome, agentId, opts) {
     const missing = missingPlatformBrokerProfileTargets(agentHome, agentId, {
         openRouter: opts.openRouter !== undefined,
         openAi: opts.openAi !== undefined,
@@ -280,7 +280,7 @@ function applyMissingPlatformBrokerProfiles(agentHome, agentId, opts) {
     if (missing.length === 0)
         return { wrote: false };
     try {
-        applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(missing), opts.secretsApply ?? {});
+        await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(missing), opts.secretsApply ?? {});
         return { wrote: true };
     }
     catch (error) {
@@ -289,7 +289,7 @@ function applyMissingPlatformBrokerProfiles(agentHome, agentId, opts) {
         return { wrote: false, deferralReason: error.message };
     }
 }
-function materializeOneAgent(agentId, agentsDir, opts) {
+async function materializeOneAgent(agentId, agentsDir, opts) {
     const agentHome = path.join(agentsDir, agentId, "agent");
     const catalog = opts.openRouter
         ? upsertOpenRouterBrokerCatalog(agentHome, opts.openRouter)
@@ -297,7 +297,7 @@ function materializeOneAgent(agentId, agentsDir, opts) {
     const openAi = opts.openAi
         ? upsertOpenAiBrokerCatalog(agentHome, opts.openAi)
         : false;
-    const profiles = applyMissingPlatformBrokerProfiles(agentHome, agentId, opts);
+    const profiles = await applyMissingPlatformBrokerProfiles(agentHome, agentId, opts);
     const wrote = profiles.wrote || catalog || openAi;
     if (wrote) {
         opts.logFn?.(`[agent-model-token] model-ready: ${agentId}` +
@@ -314,7 +314,7 @@ function materializeOneAgent(agentId, agentsDir, opts) {
  * model is a pure roster flip. Tolerant — a failure on one agent never aborts
  * the sweep.
  */
-export function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
+export async function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     const agentsDir = opts.agentsDir ?? AGENTS_DIR;
     let materialized = 0;
     let deferralReason;
@@ -325,7 +325,7 @@ export function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
             continue;
         }
         try {
-            const result = materializeOneAgent(agentId, agentsDir, { ...opts, agentsDir });
+            const result = await materializeOneAgent(agentId, agentsDir, { ...opts, agentsDir });
             if (result.wrote)
                 materialized++;
             if (result.deferralReason) {

@@ -67,7 +67,7 @@ export interface CustomerLifecycleAdapter {
      * first attempt runs too early and defers; this is called once the coach is
      * confirmed running+connected, when the store is guaranteed to exist.
      */
-    materializeBrokerProfiles?: (slug: string) => void;
+    materializeBrokerProfiles?: (slug: string) => void | Promise<void>;
     /**
      * Read-only probe of the on-disk openclaw.json: is this customer's
      * coach fully wired (agent registered + MM account configured + at
