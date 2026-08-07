@@ -492,14 +492,14 @@ export function _resetBrokerProfileLogStateForTests(): void {
 
 /** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
  *  — a profile already applied spawns nothing, so this is safe on every tick. */
-export function materializeDeferredBrokerProfiles(
+export async function materializeDeferredBrokerProfiles(
   log: (msg: string) => void,
   deps: {
     agentsDir?: string;
     readConfig?: () => unknown;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
   } = {},
-): void {
+): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
   let agentIds: string[];
@@ -509,7 +509,7 @@ export function materializeDeferredBrokerProfiles(
     log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
     return;
   }
-  const sweep = materializeBrokerProfilesForAgents(agentIds, {
+  const sweep = await materializeBrokerProfilesForAgents(agentIds, {
     logFn: log,
     ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
     ...(deps.secretsApply ? { secretsApply: deps.secretsApply } : {}),
@@ -545,10 +545,18 @@ function startBrokerProfileRetry(
   log: (msg: string) => void,
 ): NodeJS.Timeout | null {
   if (!provisions) return null;
-  materializeDeferredBrokerProfiles(log);
-  return setInterval(() => {
-    materializeDeferredBrokerProfiles(log);
-  }, BROKER_PROFILE_RETRY_INTERVAL_MS);
+  let sweepInFlight = false;
+  const sweep = () => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    void materializeDeferredBrokerProfiles(log)
+      .catch((error) => log(`⚠ [agent-model-token] sweep failed: ${String(error)}`))
+      .finally(() => {
+        sweepInFlight = false;
+      });
+  };
+  sweep();
+  return setInterval(sweep, BROKER_PROFILE_RETRY_INTERVAL_MS);
 }
 
 export async function waitForOpenClawHealthz(input: {

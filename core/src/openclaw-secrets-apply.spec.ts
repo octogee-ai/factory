@@ -1,7 +1,5 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { OpenclawWireError } from "./gateway-rpc.js";
 import {
   OpenClawSecretsApplyError,
   applyOpenClawSecretsPlan,
@@ -9,18 +7,6 @@ import {
   buildOpenClawSecretsPlan,
   type OpenClawSecretsPlan,
 } from "./openclaw-secrets-apply.js";
-
-const tmpDirs: string[] = [];
-
-function mkTmp(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "secrets-apply-"));
-  tmpDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
 
 function target() {
   return authProfileApiKeyTarget({
@@ -33,6 +19,14 @@ function target() {
 
 function plan(): OpenClawSecretsPlan {
   return buildOpenClawSecretsPlan([target()], () => new Date("2026-08-07T00:00:00.000Z"));
+}
+
+function makeRpc(overrides?: { secretsApply?: ReturnType<typeof vi.fn> }) {
+  return {
+    secretsApply:
+      overrides?.secretsApply ?? vi.fn(async () => ({ mode: "write", changed: true })),
+    close: vi.fn(async () => {}),
+  };
 }
 
 describe("authProfileApiKeyTarget", () => {
@@ -64,85 +58,63 @@ describe("buildOpenClawSecretsPlan", () => {
 });
 
 describe("applyOpenClawSecretsPlan", () => {
-  it("runs `secrets apply --from <plan> --allow-exec` against a 0600 plan file", () => {
-    const tmpRoot = mkTmp();
-    let seen: { file: string; mode: number; body: unknown } | null = null;
-    const run = vi.fn((_command: string, args: string[]) => {
-      const file = args[args.indexOf("--from") + 1]!;
-      seen = {
-        file,
-        mode: fs.statSync(file).mode & 0o777,
-        body: JSON.parse(fs.readFileSync(file, "utf8")),
-      };
-      return { status: 0, stdout: "applied 1 target", stderr: "" };
-    });
+  it("sends the plan through the gateway secrets.apply RPC", async () => {
+    const rpc = makeRpc();
 
-    applyOpenClawSecretsPlan(plan(), { run, tmpRoot, command: "openclaw" });
+    await applyOpenClawSecretsPlan(plan(), { rpc });
 
-    expect(run).toHaveBeenCalledWith(
-      "openclaw",
-      ["secrets", "apply", "--from", expect.any(String), "--allow-exec"],
-      expect.objectContaining({ env: expect.any(Object) }),
-    );
-    expect(seen!.mode).toBe(0o600);
-    expect(seen!.body).toEqual(plan());
+    expect(rpc.secretsApply).toHaveBeenCalledWith({ plan: plan() });
   });
 
-  it("adds --dry-run when the caller asks for one", () => {
-    const run = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
-
-    applyOpenClawSecretsPlan(plan(), { run, tmpRoot: mkTmp(), dryRun: true });
-
-    expect(run.mock.calls[0]![1]).toEqual([
-      "secrets",
-      "apply",
-      "--from",
-      expect.any(String),
-      "--allow-exec",
-      "--dry-run",
-    ]);
-  });
-
-  it("deletes the plan file even when the command fails", () => {
-    const tmpRoot = mkTmp();
-    let planPath = "";
-    const run = vi.fn((_command: string, args: string[]) => {
-      planPath = args[args.indexOf("--from") + 1]!;
-      return { status: 3, stdout: "", stderr: "resolver refused agent-model-token-…" };
+  it("wraps a gateway refusal as a deferrable apply error", async () => {
+    const rpc = makeRpc({
+      secretsApply: vi
+        .fn()
+        .mockRejectedValue(
+          new OpenclawWireError("rpc-error", "secrets.apply failed: provider refused"),
+        ),
     });
 
-    expect(() => applyOpenClawSecretsPlan(plan(), { run, tmpRoot })).toThrow(
+    await expect(applyOpenClawSecretsPlan(plan(), { rpc })).rejects.toThrow(
       OpenClawSecretsApplyError,
     );
-    expect(fs.existsSync(planPath)).toBe(false);
-  });
-
-  it("names the exit status and stderr so a failed apply is never silent", () => {
-    const run = vi.fn(() => ({ status: 3, stdout: "", stderr: "exec resolver returned errors" }));
-
-    expect(() => applyOpenClawSecretsPlan(plan(), { run, tmpRoot: mkTmp() })).toThrow(
-      /exit 3.*exec resolver returned errors/s,
+    await expect(applyOpenClawSecretsPlan(plan(), { rpc })).rejects.toThrow(
+      /provider refused/,
     );
   });
 
-  it("surfaces a spawn failure rather than treating it as applied", () => {
-    const run = vi.fn(() => ({
-      status: null,
-      stdout: "",
-      stderr: "",
-      error: new Error("spawn openclaw ENOENT"),
-    }));
+  it("wraps a transport failure as a deferrable apply error (pre-boot gateway)", async () => {
+    const rpc = makeRpc({
+      secretsApply: vi
+        .fn()
+        .mockRejectedValue(new OpenclawWireError("connect-failed", "WS open timed out")),
+    });
 
-    expect(() => applyOpenClawSecretsPlan(plan(), { run, tmpRoot: mkTmp() })).toThrow(
-      /spawn openclaw ENOENT/,
+    await expect(applyOpenClawSecretsPlan(plan(), { rpc })).rejects.toThrow(
+      /WS open timed out/,
     );
   });
 
-  it("does not run the command at all for an empty plan", () => {
-    const run = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
+  it("rethrows non-wire errors untouched", async () => {
+    const boom = new TypeError("bad plan construction");
+    const rpc = makeRpc({ secretsApply: vi.fn().mockRejectedValue(boom) });
 
-    applyOpenClawSecretsPlan(buildOpenClawSecretsPlan([]), { run, tmpRoot: mkTmp() });
+    await expect(applyOpenClawSecretsPlan(plan(), { rpc })).rejects.toBe(boom);
+  });
 
-    expect(run).not.toHaveBeenCalled();
+  it("does not call the gateway at all for an empty plan", async () => {
+    const rpc = makeRpc();
+
+    await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan([]), { rpc });
+
+    expect(rpc.secretsApply).not.toHaveBeenCalled();
+  });
+
+  it("leaves an injected client open for the caller to manage", async () => {
+    const rpc = makeRpc();
+
+    await applyOpenClawSecretsPlan(plan(), { rpc });
+
+    expect(rpc.close).not.toHaveBeenCalled();
   });
 });

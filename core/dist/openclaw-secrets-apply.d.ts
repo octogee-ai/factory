@@ -1,3 +1,4 @@
+import { type GatewayRpcClient } from "./gateway-rpc.js";
 export interface AuthProfileApiKeyTarget {
     type: "auth-profiles.api_key.key";
     path: string;
@@ -16,22 +17,6 @@ export interface OpenClawSecretsPlan {
     generatedBy: "manual";
     targets: AuthProfileApiKeyTarget[];
 }
-export interface SecretsApplyCommandResult {
-    status: number | null;
-    stdout: string;
-    stderr: string;
-    error?: Error;
-}
-export type SecretsApplyRunner = (command: string, args: string[], options: {
-    env: NodeJS.ProcessEnv;
-}) => SecretsApplyCommandResult;
-export interface ApplyOpenClawSecretsPlanOptions {
-    command?: string;
-    tmpRoot?: string;
-    env?: NodeJS.ProcessEnv;
-    dryRun?: boolean;
-    run?: SecretsApplyRunner;
-}
 export declare class OpenClawSecretsApplyError extends Error {
     readonly status: number | null;
     constructor(message: string, status: number | null);
@@ -44,7 +29,10 @@ export declare function authProfileApiKeyTarget(input: {
     refProvider?: string;
 }): AuthProfileApiKeyTarget;
 export declare function buildOpenClawSecretsPlan(targets: readonly AuthProfileApiKeyTarget[], now?: () => Date): OpenClawSecretsPlan;
-/** Applies a plan through the openclaw CLI. Throws OpenClawSecretsApplyError on
- *  any spawn failure or non-zero exit — the caller decides whether that is fatal
- *  or a retry. */
-export declare function applyOpenClawSecretsPlan(plan: OpenClawSecretsPlan, opts?: ApplyOpenClawSecretsPlanOptions): void;
+export interface ApplyOpenClawSecretsPlanOptions {
+    rpc?: Pick<GatewayRpcClient, "secretsApply" | "close">;
+}
+/** Applies a plan through the gateway RPC. Throws OpenClawSecretsApplyError on
+ *  any transport or gateway refusal — the caller decides whether that is fatal
+ *  or a deferral for the next sweep. */
+export declare function applyOpenClawSecretsPlan(plan: OpenClawSecretsPlan, opts?: ApplyOpenClawSecretsPlanOptions): Promise<void>;

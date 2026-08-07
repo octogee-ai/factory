@@ -9,6 +9,29 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+function parseSecretsReloadPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
+    }
+    const p = payload;
+    if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
+        throw new OpenclawWireError(INVALID_RESPONSE, `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`);
+    }
+    if (p.ok !== undefined && typeof p.ok !== "boolean") {
+        throw new OpenclawWireError(INVALID_RESPONSE, `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`);
+    }
+    return p;
+}
+function parseSecretsApplyPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
+    }
+    const p = payload;
+    if (p.changed !== undefined && typeof p.changed !== "boolean") {
+        throw new OpenclawWireError(INVALID_RESPONSE, `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`);
+    }
+    return payload;
+}
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
 /**
@@ -481,18 +504,14 @@ export function createGatewayRpc(opts = {}) {
         agentsCreate: (params) => callAgentsCreate(call, params),
         agentsDelete: (params) => callAgentsDelete(call, params),
         async secretsReload() {
-            const payload = await call("secrets.reload", {});
-            if (!payload || typeof payload !== "object") {
-                throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
-            }
-            const p = payload;
-            if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
-                throw new OpenclawWireError(INVALID_RESPONSE, `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`);
-            }
-            if (p.ok !== undefined && typeof p.ok !== "boolean") {
-                throw new OpenclawWireError(INVALID_RESPONSE, `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`);
-            }
-            return p;
+            return parseSecretsReloadPayload(await call("secrets.reload", {}));
+        },
+        async secretsApply(params) {
+            return parseSecretsApplyPayload(await call("secrets.apply", {
+                plan: params.plan,
+                allowExec: true,
+                ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
+            }));
         },
         async isGatewayUp(timeoutMs) {
             const t = timeoutMs ?? connectTimeoutMs;

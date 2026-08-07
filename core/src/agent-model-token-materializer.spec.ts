@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
+import { OpenclawWireError } from "./gateway-rpc.js";
 import {
   agentModelTokenSecretId,
   OPENAI_BROKER_PROVIDER_ID,
@@ -33,9 +34,8 @@ const ALL_SURFACES = { openRouter: true, openAi: true };
  *  idempotency read sees what openclaw would have persisted. */
 function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
   const plans: unknown[] = [];
-  const run = vi.fn((_command: string, args: string[]) => {
-    const planPath = args[args.indexOf("--from") + 1]!;
-    const plan = JSON.parse(fs.readFileSync(planPath, "utf8")) as {
+  const apply = vi.fn(async ({ plan }: {
+    plan: {
       targets: Array<{
         path: string;
         agentId: string;
@@ -43,8 +43,9 @@ function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
         ref: { id: string };
       }>;
     };
+  }) => {
     plans.push(plan);
-    if (opts.fail) return { status: 3, stdout: "", stderr: "gateway is not running" };
+    if (opts.fail) throw new OpenclawWireError("connect-failed", "gateway is not running");
     for (const target of plan.targets) {
       const agentDir = path.join(agentsDir, target.agentId, "agent");
       const store = (readAuthProfileStore(agentDir) ?? {}) as Record<string, unknown>;
@@ -58,9 +59,9 @@ function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
       };
       writeAuthProfileStore(agentDir, { ...store, profiles });
     }
-    return { status: 0, stdout: "", stderr: "" };
+    return { mode: "write", changed: true };
   });
-  return { plans, secretsApply: { run } };
+  return { plans, secretsApply: { rpc: { secretsApply: apply } }, apply };
 }
 
 describe("platform broker profile targets", () => {
@@ -392,11 +393,11 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("hands every profile to openclaw's secrets apply and writes both catalogs itself", () => {
+  it("hands every profile to openclaw's secrets.apply RPC and writes both catalogs itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    const { plans, secretsApply } = fakeSecretsApply(agentsDir);
+    const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
 
-    const written = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    const written = await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       openAi,
@@ -404,7 +405,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     });
 
     expect(written.materialized).toBe(1);
-    expect(secretsApply.run).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledOnce();
     expect(plans).toEqual([
       expect.objectContaining({
         generatedBy: "manual",
@@ -417,38 +418,40 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
-  it("never writes the auth-profile store itself", () => {
+  it("never writes the auth-profile store itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    const secretsApply = { run: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })) };
+    const secretsApply = {
+      rpc: { secretsApply: vi.fn(async () => ({ mode: "write", changed: true })) },
+    };
 
-    materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, secretsApply });
+    await materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, secretsApply });
 
     expect(
       readAuthProfileStore(path.join(agentsDir, "octogee-a-coach", "agent")),
     ).toBeNull();
   });
 
-  it("stops spawning the CLI once every profile has settled", () => {
+  it("stops calling the gateway once every profile has settled", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    const { secretsApply } = fakeSecretsApply(agentsDir);
+    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
 
-    materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, openRouter, secretsApply });
-    const settled = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    await materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, openRouter, secretsApply });
+    const settled = await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       secretsApply,
     });
 
-    expect(secretsApply.run).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledOnce();
     expect(settled).toEqual({ materialized: 0, deferred: [] });
   });
 
-  it("falls back to the anthropic profile alone when no catalog is configured", () => {
+  it("falls back to the anthropic profile alone when no catalog is configured", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
     const { plans, secretsApply } = fakeSecretsApply(agentsDir);
 
     expect(
-      materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, secretsApply })
+      (await materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, secretsApply }))
         .materialized,
     ).toBe(1);
 
@@ -460,27 +463,27 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     );
   });
 
-  it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", () => {
-    const { secretsApply } = fakeSecretsApply(agentsDir);
+  it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", async () => {
+    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
 
-    materializeBrokerProfilesForAgents(["octogee-a-coach", "octogee-a-alex", "main"], {
+    await materializeBrokerProfilesForAgents(["octogee-a-coach", "octogee-a-alex", "main"], {
       agentsDir,
       secretsApply,
     });
 
-    expect(secretsApply.run).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledOnce();
     expect(
       readAuthProfileStore(path.join(agentsDir, "octogee-a-alex", "agent")),
     ).toBeNull();
   });
 
-  it("is tolerant — one agent's failure does not abort the sweep", () => {
+  it("is tolerant — one agent's failure does not abort the sweep", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-good-coach");
     fs.writeFileSync(path.join(agentsDir, "octogee-bad-coach"), "x");
     const { secretsApply } = fakeSecretsApply(agentsDir);
 
-    const result = materializeBrokerProfilesForAgents(
+    const result = await materializeBrokerProfilesForAgents(
       ["octogee-good-coach", "octogee-bad-coach"],
       { agentsDir, openRouter, secretsApply },
     );
@@ -511,10 +514,10 @@ describe("model-readiness before openclaw can accept the plan", () => {
       fs.readFileSync(path.join(agentsDir, "octogee-a-coach", "agent", "models.json"), "utf8"),
     );
 
-  it("writes the platform-openrouter catalog even though the apply is refused", () => {
+  it("writes the platform-openrouter catalog even though the apply is refused", async () => {
     const { secretsApply } = fakeSecretsApply(agentsDir, { fail: true });
 
-    materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       secretsApply,
@@ -523,11 +526,11 @@ describe("model-readiness before openclaw can accept the plan", () => {
     expect(modelsJson().providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
   });
 
-  it("returns the agent as deferred with the CLI's own reason instead of silently dropping it", () => {
+  it("returns the agent as deferred with the gateway's own reason instead of silently dropping it", async () => {
     const logs: string[] = [];
     const { secretsApply } = fakeSecretsApply(agentsDir, { fail: true });
 
-    const result = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    const result = await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       secretsApply,
@@ -543,9 +546,9 @@ describe("model-readiness before openclaw can accept the plan", () => {
     expect(logs.join("\n")).not.toContain("gateway is not running");
   });
 
-  it("applies the profiles on a retry once openclaw can accept them", () => {
+  it("applies the profiles on a retry once openclaw can accept them", async () => {
     const failing = fakeSecretsApply(agentsDir, { fail: true });
-    materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       secretsApply: failing.secretsApply,
@@ -553,7 +556,7 @@ describe("model-readiness before openclaw can accept the plan", () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
     const { secretsApply } = fakeSecretsApply(agentsDir);
 
-    const retry = materializeBrokerProfilesForAgents(["octogee-a-coach"], {
+    const retry = await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,
       openRouter,
       secretsApply,

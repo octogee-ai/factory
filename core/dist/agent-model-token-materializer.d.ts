@@ -115,4 +115,4 @@ export interface BrokerProfileSweepOptions {
  * model is a pure roster flip. Tolerant — a failure on one agent never aborts
  * the sweep.
  */
-export declare function materializeBrokerProfilesForAgents(agentIds: string[], opts?: BrokerProfileSweepOptions): BrokerProfileSweepResult;
+export declare function materializeBrokerProfilesForAgents(agentIds: string[], opts?: BrokerProfileSweepOptions): Promise<BrokerProfileSweepResult>;
