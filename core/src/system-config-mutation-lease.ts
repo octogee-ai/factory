@@ -125,7 +125,15 @@ function quarantineExpiredLease(lockPath: string, staleAfterMs: number, now: num
   }
   let heartbeatMtimeMs = stat.mtimeMs;
   if (stat.isDirectory()) {
-    const entries = fs.readdirSync(lockPath);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(lockPath);
+    } catch (error) {
+      // Another process can quarantine-rename the lock between our stat and
+      // this read; a vanished lock is a released lock.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
     if (entries.length === 1 && OWNER_TOKEN_RE.test(entries[0])) {
       try {
         heartbeatMtimeMs = fs.statSync(path.join(lockPath, entries[0])).mtimeMs;
