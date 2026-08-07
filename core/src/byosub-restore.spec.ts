@@ -842,4 +842,42 @@ describe("agentIdsFromConfig", () => {
       }),
     ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-bender"]);
   });
+
+  // OpenClaw 2026.7.2 migrates agents.list to keyed agents.entries at pre-boot
+  // ("Moved agents.list to keyed agents.entries"), so on every current pod the
+  // list form is gone. Reading only .list returns [] and every caller becomes a
+  // silent no-op — the model-ready boot sweep, git-identity hydration, byosub
+  // syncback, and the broker-profile retry all quietly stop doing their work.
+  it("reads the keyed agents.entries roster 2026.7.2 migrates to", () => {
+    expect(
+      agentIdsFromConfig({
+        agents: {
+          entries: {
+            main: { model: "x" },
+            "octogee-ceckert-coach": { model: "y" },
+            "octogee-ceckert-proj-cityscout-coach": {},
+          },
+        },
+      }),
+    ).toEqual(["main", "octogee-ceckert-coach", "octogee-ceckert-proj-cityscout-coach"]);
+  });
+
+  it("ignores keys a removal nulled out rather than reporting a dead agent", () => {
+    expect(
+      agentIdsFromConfig({
+        agents: { entries: { "octogee-a-coach": {}, "octogee-gone-coach": null } },
+      }),
+    ).toEqual(["octogee-a-coach"]);
+  });
+
+  it("still reads the legacy list form, and prefers entries when both exist", () => {
+    expect(agentIdsFromConfig({ agents: { list: [{ id: "octogee-legacy-coach" }] } })).toEqual([
+      "octogee-legacy-coach",
+    ]);
+    expect(
+      agentIdsFromConfig({
+        agents: { entries: { "octogee-new-coach": {} }, list: [{ id: "octogee-stale-coach" }] },
+      }),
+    ).toEqual(["octogee-new-coach"]);
+  });
 });

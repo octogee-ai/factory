@@ -180,9 +180,17 @@ const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
 const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const RELEASE_VERSION_PATTERN = new RegExp(`^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
     `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`);
+// The release workflow's generator
+// (.github/actions/release-digest-manifest/release-digest-manifest.mjs) is the
+// only thing that writes a manifest, so it — not this file — sets the contract.
+// Keep the two in lockstep; scripts/__tests__/release-digest-manifest-contract
+// holds them together. `octogee-project-runner` is deliberately absent: PR #3128
+// was reverted and nothing builds that image, so demanding it here made every
+// cut unsatisfiable against a manifest our own generator had just written.
+const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
 const RELEASE_MANIFEST_SURFACE_IMAGES = {
     gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
-    platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"],
+    platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"],
 };
 export class ReleaseDigestAliasError extends Error {
     aliasOutcomes;
@@ -227,8 +235,9 @@ function exactObjectKeys(value, expected, description) {
 function validateReleaseDigestManifest(input, manifestDigest, expectedRepository) {
     const manifest = plainRecord(input, "release digest manifest");
     exactObjectKeys(manifest, ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"], "release digest manifest");
-    if (manifest.schemaVersion !== 3)
-        throw new Error("release digest manifest schemaVersion must be 3");
+    if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
+        throw new Error(`release digest manifest schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`);
+    }
     const sourceSha = typeof manifest.sourceSha === "string"
         ? assertSourceSha(manifest.sourceSha)
         : assertSourceSha("");
@@ -261,7 +270,7 @@ function validateReleaseDigestManifest(input, manifestDigest, expectedRepository
 }
 function validateResolvedReleaseDigestManifest(manifest, expectedRepository) {
     return validateReleaseDigestManifest({
-        schemaVersion: 3,
+        schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
         sourceSha: manifest.sourceSha,
         openclawVersion: manifest.openclawVersion,
         repository: manifest.repository,
@@ -341,9 +350,10 @@ function digestFromImageReference(reference, expectedRepository) {
         throw new Error("release alias target must be digest-bound");
     return assertDigest(reference.slice(at + 1), "release alias target");
 }
-export function createCentralReleaseAuthority(coordinates) {
+export function createCentralReleaseAuthority(coordinates, deps = {}) {
     const repository = dockerRepository(coordinates);
     const packages = packagesBaseForCoordinates(coordinates);
+    const accessToken = deps.getAccessToken ?? getAccessToken;
     async function resolveTagDigest(packageName, tag, token) {
         const response = await arFetch(`${packages}/${packageName}/tags/${encodeURIComponent(tag)}`, "GET", token);
         if (response.status === 404)
@@ -352,7 +362,7 @@ export function createCentralReleaseAuthority(coordinates) {
         return digestFromVersion(tagBody.version, `artifact-registry ${packageName}:${tag}`);
     }
     async function resolveManifestFromTag(tag) {
-        const token = await getAccessToken();
+        const token = await accessToken();
         const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
         if (!manifestDigest)
             throw new Error(`release digest manifest ${tag} does not exist`);

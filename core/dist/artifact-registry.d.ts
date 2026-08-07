@@ -29,7 +29,7 @@ export declare function ensureKeepTag(opts: PinOpts): Promise<void>;
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;
 declare const RELEASE_MANIFEST_SURFACE_IMAGES: {
     readonly gateway: readonly ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"];
-    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner"];
+    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"];
 };
 export interface ReleaseDigestManifest {
     sourceSha: string;
@@ -67,7 +67,13 @@ export interface CentralReleaseAuthorityCoordinates {
     location: string;
     repository: string;
 }
-export declare function createCentralReleaseAuthority(coordinates: CentralReleaseAuthorityCoordinates): CentralReleaseAuthority;
+/** Injectable so the generator/authority contract can be exercised without
+ *  Application Default Credentials — CI has none, and a contract test must not
+ *  depend on the ambient cloud identity of whoever runs it. */
+export interface CentralReleaseAuthorityDeps {
+    getAccessToken?: () => Promise<string>;
+}
+export declare function createCentralReleaseAuthority(coordinates: CentralReleaseAuthorityCoordinates, deps?: CentralReleaseAuthorityDeps): CentralReleaseAuthority;
 /** The referenced tags this env currently pins for `service` (keep-<env>- stripped). */
 export declare function listKeepTags(opts: PinCoords & {
     service: string;

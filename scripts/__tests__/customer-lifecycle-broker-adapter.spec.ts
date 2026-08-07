@@ -35,7 +35,7 @@ const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
 }));
 const brokerCatalogMocks = vi.hoisted(() => ({
-  materializeBrokerProfilesForAgents: vi.fn(() => 1),
+  materializeBrokerProfilesForAgents: vi.fn(() => ({ materialized: 1, deferred: [] })),
 }));
 const contextFileConvergenceMocks = vi.hoisted(() => ({
   reassertConvergedContextFilesForSlug: vi.fn(() => []),
@@ -1085,7 +1085,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
-      return 1;
+      return { materialized: 1, deferred: [] };
     });
     patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
       events.push("config-patch");
@@ -1591,9 +1591,10 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       provider: "octogee-mattermost",
       id: "/alice-proj-orbit",
     });
-    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-      groups: { "po-1": { enabled: false } },
-    });
+    // The plugin schema has no per-channel mute, so the coach account clears
+    // `groups` rather than listing the project channel; the project channel
+    // still reaches its own agent through the partitioned bindings above.
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({ groups: null });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });

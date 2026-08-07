@@ -15,4 +15,14 @@ describe("workspaceGitignore", () => {
       expect(content).toContain(line);
     }
   });
+
+  // openclaw owns this file and 2026.7.2 treats it as unmigrated legacy state:
+  // its presence makes every agent turn throw "Legacy workspace setup state
+  // requires migration". `.openclaw/` covers the current state directory, but
+  // the older root-level filename was never excluded, so it was auto-committed
+  // into workspace repos — and from there every mount's clone restores it,
+  // outliving pod rolls, releases, and openclaw's own migration.
+  it("excludes openclaw's workspace state file so a clone cannot restore it", () => {
+    expect(workspaceGitignore()).toMatch(/^openclaw-workspace-state\.json$/m);
+  });
 });

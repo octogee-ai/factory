@@ -296,7 +296,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
   const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 
   const manifest = {
-    schemaVersion: 3,
+    schemaVersion: 1,
     sourceSha,
     openclawVersion: "2026.7.1",
     repository,
@@ -311,7 +311,6 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
         "glm-controller": `sha256:${"2".repeat(64)}`,
         "octogee-api": `sha256:${"3".repeat(64)}`,
         "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
-        "octogee-project-runner": `sha256:${"5".repeat(64)}`,
       },
     },
   };
@@ -347,7 +346,9 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       manifestDigest,
       surfaces: { gateway: { "octogee-gateway": gatewayDigest } },
     });
-    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(11);
+    // 7 images each get a `:<short-sha>` alias; the 3 gateway-surface images
+    // get an additional `:<short-sha>-oc<version>` alias.
+    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(10);
     await expect(authority.ensureAliases(aliases)).resolves.toEqual([{
       alias: aliases[0].alias,
       status: "already-applied",
@@ -374,16 +375,23 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     });
   });
 
-  it("rejects legacy v1 manifests at the current release authority boundary", async () => {
+  it("rejects a manifest whose schema the generator no longer emits", async () => {
+    // A schema-3 manifest is still tagged in Artifact Registry
+    // (…-schema3-backup) and carries an `octogee-project-runner` surface no
+    // build produces. Resolving one would cut a release against images that
+    // cannot exist, so the boundary refuses anything off-contract.
     const authority = createCentralReleaseAuthority({
       project: "octogee",
       location: "us-central1",
       repository: "octogee",
     });
-    const legacy = structuredClone(manifest);
-    legacy.schemaVersion = 1;
-    delete legacy.surfaces.platform["octogee-project-runner"];
-    const archive = tarFile("release-digest-manifest.json", JSON.stringify(legacy));
+    const offContract = structuredClone(manifest) as typeof manifest & {
+      schemaVersion: number;
+      surfaces: { platform: Record<string, string> };
+    };
+    offContract.schemaVersion = 3;
+    offContract.surfaces.platform["octogee-project-runner"] = `sha256:${"5".repeat(64)}`;
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify(offContract));
     fetchMock
       .mockResolvedValueOnce(jsonResponse({
         version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}`,
@@ -395,7 +403,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       .mockResolvedValueOnce(new Response(archive));
 
     await expect(authority.resolveManifest(sourceSha)).rejects.toThrow(
-      "release digest manifest schemaVersion must be 3",
+      "release digest manifest schemaVersion must be 1",
     );
   });
 
