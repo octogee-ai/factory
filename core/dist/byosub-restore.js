@@ -3,9 +3,27 @@ import * as path from "path";
 import { buildCodexAuthJsonFromStore, buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
 import { readAuthProfileState, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
+/**
+ * Every rostered agent id, from either roster form.
+ *
+ * 2026.7.2 rewrites `agents.list` into keyed `agents.entries` at pre-boot, so on
+ * a current pod the list form is simply absent. Reading only `.list` there
+ * returns [] and turns every caller into a silent no-op — the model-ready boot
+ * sweep, git-identity hydration, byosub syncback and the broker-profile retry
+ * all quietly stop working. Entries win when both are present: the migration
+ * leaves the pre-migration list behind, so it is the stale copy.
+ */
 export function agentIdsFromConfig(config) {
-    const list = config
-        ?.agents?.list;
+    const agents = config?.agents;
+    const entries = agents?.entries;
+    if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+        // A nulled key is how a removal deletes an agent in openclaw's merge-patch;
+        // reporting it would hand callers an agent that no longer exists.
+        return Object.entries(entries)
+            .filter(([id, entry]) => id.length > 0 && entry !== null && entry !== undefined)
+            .map(([id]) => id);
+    }
+    const list = agents?.list;
     if (!Array.isArray(list))
         return [];
     return list
