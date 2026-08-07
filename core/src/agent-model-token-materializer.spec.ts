@@ -448,7 +448,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
 
   it("falls back to the anthropic profile alone when no catalog is configured", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
+    const { plans, secretsApply } = fakeSecretsApply(agentsDir);
 
     expect(
       (await materializeBrokerProfilesForAgents(["octogee-a-coach"], { agentsDir, secretsApply }))
@@ -481,7 +481,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
   it("is tolerant — one agent's failure does not abort the sweep", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-good-coach");
     fs.writeFileSync(path.join(agentsDir, "octogee-bad-coach"), "x");
-    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
+    const { secretsApply } = fakeSecretsApply(agentsDir);
 
     const result = await materializeBrokerProfilesForAgents(
       ["octogee-good-coach", "octogee-bad-coach"],
@@ -554,7 +554,7 @@ describe("model-readiness before openclaw can accept the plan", () => {
       secretsApply: failing.secretsApply,
     });
     seedOpenClawAgentDbForId(agentsDir, "octogee-a-coach");
-    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
+    const { secretsApply } = fakeSecretsApply(agentsDir);
 
     const retry = await materializeBrokerProfilesForAgents(["octogee-a-coach"], {
       agentsDir,

@@ -76,6 +76,40 @@ export interface SecretsApplyRpcResult {
   warningCount?: number;
 }
 
+function parseSecretsReloadPayload(payload: unknown): SecretsReloadResult {
+  if (!payload || typeof payload !== "object") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
+  }
+  const p = payload as { ok?: unknown; warningCount?: unknown };
+  if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
+    );
+  }
+  if (p.ok !== undefined && typeof p.ok !== "boolean") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
+    );
+  }
+  return p as SecretsReloadResult;
+}
+
+function parseSecretsApplyPayload(payload: unknown): SecretsApplyRpcResult {
+  if (!payload || typeof payload !== "object") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
+  }
+  const p = payload as { changed?: unknown };
+  if (p.changed !== undefined && typeof p.changed !== "boolean") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`,
+    );
+  }
+  return payload as SecretsApplyRpcResult;
+}
+
 export interface GatewayRestartRequestResult {
   [extra: string]: unknown;
 }
@@ -850,49 +884,17 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     agentsDelete: (params) => callAgentsDelete(call, params),
 
     async secretsReload() {
-      const payload = await call("secrets.reload", {});
-      if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "secrets.reload returned non-object payload",
-        );
-      }
-      const p = payload as { ok?: unknown; warningCount?: unknown };
-      if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
-        );
-      }
-      if (p.ok !== undefined && typeof p.ok !== "boolean") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
-        );
-      }
-      return p as SecretsReloadResult;
+      return parseSecretsReloadPayload(await call("secrets.reload", {}));
     },
 
     async secretsApply(params) {
-      const payload = await call("secrets.apply", {
-        plan: params.plan,
-        allowExec: true,
-        ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
-      });
-      if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "secrets.apply returned non-object payload",
-        );
-      }
-      const p = payload as { changed?: unknown };
-      if (p.changed !== undefined && typeof p.changed !== "boolean") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`,
-        );
-      }
-      return payload as SecretsApplyRpcResult;
+      return parseSecretsApplyPayload(
+        await call("secrets.apply", {
+          plan: params.plan,
+          allowExec: true,
+          ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
+        }),
+      );
     },
 
     async isGatewayUp(timeoutMs) {
