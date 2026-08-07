@@ -26,6 +26,10 @@ import {
   type MigrationRunnerDeps,
   type ReportedStep,
 } from "@octogee/core/fleet-migration-runner";
+import {
+  decideRollStateMigration,
+  type RollStateMigrationDecision,
+} from "../roll-state-migration.js";
 
 // At most one migration per target gateway at a time. Enforced durably, before
 // this handler ever runs, by the operation queue in index.ts (operation-queue.ts
@@ -55,6 +59,9 @@ export interface MigrateCustomerDeps {
     uid: string,
     toGatewayId: string,
   ) => Promise<FleetBrokerUserSnapshot | null>;
+
+  /** The openclaw version a live gateway reports through its heartbeat. */
+  readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
@@ -528,6 +535,152 @@ interface PreparedMigration {
   targets: MigrationTargets;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   urls: Map<string, string>;
+  stateMigration: RollStateMigrationDecision;
+}
+
+// OpenClaw state does not survive a version change, so a cross-version move
+// carries none: the source flushes its durable work, the cutover flips the
+// roster, and the destination's own reconcile mounts the customer from
+// Firestore/Gitea/Mattermost like any other assigned customer.
+async function provisionCustomerOnTarget(input: {
+  deps: MigrateCustomerDeps;
+  ctx: OperationContext;
+  operationId: string;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+  stateMigration: RollStateMigrationDecision;
+  automatic: boolean;
+}): Promise<OperationResult> {
+  const { deps, ctx, targets, uid, slug, migrationId, automatic } = input;
+  deps.log(
+    `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
+    `provision-fresh (${input.stateMigration.reason})`,
+  );
+  const sourceUrl = await deps.resolveGatewayUrl(targets.fromGatewayId);
+  const client = deps.buildClient((transportId) => {
+    if (transportId !== targets.fromGatewayId) {
+      throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
+    }
+    return sourceUrl;
+  });
+  const step = (name: string, action: () => Promise<unknown>) =>
+    reportFreshStep(deps, ctx, name, action);
+  const sourceAssignment = {
+    gatewayId: targets.fromGatewayId,
+    uid,
+    slug,
+    epoch: targets.fromEpoch,
+    updatedByOperationId: input.operationId,
+    automatic,
+  };
+  try {
+    await deps.setAssignmentState({
+      ...sourceAssignment,
+      state: "quiescing",
+      createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
+    });
+    await step("quiesce-source", () => client.quiesce({
+      migrationId,
+      gatewayId: targets.fromGatewayId,
+      slug,
+    }));
+    await step("flush-source", () => client.flushGateway({
+      migrationId,
+      gatewayId: targets.fromGatewayId,
+      slug,
+      reason: "migration-final",
+    }));
+    await step("cutover-firestore", () => deps.commitCutover({
+      uid,
+      slug,
+      toGatewayId: targets.toGatewayId,
+      fromGatewayId: targets.fromGatewayId,
+      flipMirror: targets.fromGatewayId !== targets.toGatewayId,
+      automatic,
+    }));
+  } catch (error) {
+    await restoreSourceServing(deps, {
+      ...sourceAssignment,
+      state: "serving",
+      createIfMissing: false,
+    });
+    return { steps: [], success: false, error: errorMessage(error), rolledBack: true };
+  }
+  await discardSourceFootprint(deps, ctx, {
+    client,
+    migrationId,
+    gatewayId: targets.fromGatewayId,
+    slug,
+  });
+  return { steps: [], success: true, rolledBack: false };
+}
+
+async function reportFreshStep(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  name: string,
+  action: () => Promise<unknown>,
+): Promise<void> {
+  await ctx.reportStep(reportedToOperationStep({ name, status: "running" }, deps.now()));
+  try {
+    await action();
+  } catch (error) {
+    await ctx.reportStep(reportedToOperationStep(
+      { name, status: "failed", error: errorMessage(error) },
+      deps.now(),
+    ));
+    throw error;
+  }
+  await ctx.reportStep(reportedToOperationStep({ name, status: "done" }, deps.now()));
+}
+
+// Post-cutover cleanup: the destination already owns the customer, so a source
+// that cannot be reached stays a stale local footprint for Cowboy's eviction
+// sweep rather than failing a migration that has already landed.
+async function discardSourceFootprint(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  input: {
+    client: MigrationClient;
+    migrationId: string;
+    gatewayId: string;
+    slug: string;
+  },
+): Promise<void> {
+  try {
+    await reportFreshStep(deps, ctx, "unmount-source", () => input.client.unmount({
+      migrationId: input.migrationId,
+      gatewayId: input.gatewayId,
+      slug: input.slug,
+    }));
+  } catch (error) {
+    deps.log(
+      `[migrate-customer] ⚠ source unmount failed after cutover gateway=${input.gatewayId} ` +
+      `slug=${input.slug}: ${errorMessage(error)} — the destination already serves`,
+    );
+  }
+}
+
+// The customer stays quiescing (the edge answers 503) until a retry re-drives
+// the migration, so a failure here is loud.
+async function restoreSourceServing(
+  deps: MigrateCustomerDeps,
+  assignment: Parameters<MigrateCustomerDeps["setAssignmentState"]>[0],
+): Promise<void> {
+  try {
+    await deps.setAssignmentState(assignment);
+  } catch (error) {
+    deps.log(
+      `[migrate-customer] ❌ FAILED to restore assignment serving for uid=${assignment.uid} ` +
+      `on ${assignment.gatewayId}: ${errorMessage(error)} — the customer stays quiescing`,
+    );
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function failure(error: string, rolledBack?: false): OperationResult {
@@ -613,7 +766,11 @@ async function prepareMigration(
   ctx: OperationContext,
   migrationInput: MigrateCustomerInput,
   request: { uid: string; toGatewayId: string },
-): Promise<PreparedMigration | { result: OperationResult } | { error: string; rolledBack?: false }> {
+): Promise<
+  | PreparedMigration
+  | { result: OperationResult; stateMigration?: RollStateMigrationDecision }
+  | { error: string; rolledBack?: false }
+> {
   let user: UserGatewayInfo | null;
   try {
     user = await deps.readUser(request.uid);
@@ -645,6 +802,24 @@ async function prepareMigration(
         rolledBack: false,
       };
     }
+    const automatic = resolveOperationOrigin(op.origin) === "automatic";
+    const stateMigration = await decideCustomerStateMigration(deps, resolved.targets);
+    if (stateMigration.strategy === "provision-fresh") {
+      return {
+        result: await provisionCustomerOnTarget({
+          deps,
+          ctx,
+          operationId: op.id,
+          targets: resolved.targets,
+          uid: request.uid,
+          slug: user.slug,
+          migrationId,
+          stateMigration,
+          automatic,
+        }),
+        stateMigration,
+      };
+    }
     if (await deps.useDurableMigration(user.currentGatewayId, request.toGatewayId)) {
       const result = await executeOrdinaryMigrationV2({
         deps,
@@ -655,7 +830,7 @@ async function prepareMigration(
         slug: user.slug,
         migrationId,
       });
-      return { result };
+      return { result, stateMigration };
     }
     const urls = new Map<string, string>();
     urls.set(
@@ -682,6 +857,7 @@ async function prepareMigration(
         ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
         : {}),
       urls,
+      stateMigration,
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
@@ -746,6 +922,25 @@ async function executeMigration(
   };
 }
 
+async function decideCustomerStateMigration(
+  deps: MigrateCustomerDeps,
+  targets: MigrationTargets,
+): Promise<RollStateMigrationDecision> {
+  const [sourceOpenclawVersion, targetOpenclawVersion] = await Promise.all([
+    deps.readGatewayOpenclawVersion(targets.fromGatewayId),
+    deps.readGatewayOpenclawVersion(targets.toGatewayId),
+  ]);
+  return decideRollStateMigration({ sourceOpenclawVersion, targetOpenclawVersion });
+}
+
+function withStateMigration(
+  result: OperationResult,
+  stateMigration: RollStateMigrationDecision | undefined,
+): OperationResult {
+  if (!stateMigration) return result;
+  return { ...result, output: { ...result.output, stateMigration } };
+}
+
 export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     const input = op.input as MigrateCustomerInput;
@@ -757,13 +952,18 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
     if (resumed) return resumed;
     const prepared = await prepareMigration(deps, op, ctx, input, request);
     if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
-    if ("result" in prepared) return prepared.result;
-    return executeMigration(
-      deps,
-      ctx,
-      prepared,
-      op.id,
-      resolveOperationOrigin(op.origin) === "automatic",
+    if ("result" in prepared) {
+      return withStateMigration(prepared.result, prepared.stateMigration);
+    }
+    return withStateMigration(
+      await executeMigration(
+        deps,
+        ctx,
+        prepared,
+        op.id,
+        resolveOperationOrigin(op.origin) === "automatic",
+      ),
+      prepared.stateMigration,
     );
   };
 }

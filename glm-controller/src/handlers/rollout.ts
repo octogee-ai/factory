@@ -1,10 +1,17 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
+import {
+  decideRollStateMigration,
+  openclawVersionFromGatewayImageTag,
+  type RollStateMigrationDecision,
+} from "../roll-state-migration.js";
 
 export interface RolloutDeps {
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
+  /** The openclaw version the live pod reports through its heartbeat. */
+  readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
   activateDesiredRelease: (input: {
     gatewayId: string;
     targetRelease: number;
@@ -123,8 +130,19 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       completedAt: deps.now(),
       ...(outcome.error ? { error: outcome.error } : {}),
     });
-    return outcome.success ? { steps: [], success: true } : fail(outcome.error ?? "roll failed");
+    const journaled = outcome.stateMigration
+      ? { output: { stateMigration: outcome.stateMigration } }
+      : {};
+    return outcome.success
+      ? { steps: [], success: true, ...journaled }
+      : { ...fail(outcome.error ?? "roll failed"), ...journaled };
   };
+}
+
+interface RollOutcome {
+  success: boolean;
+  error?: string;
+  stateMigration?: RollStateMigrationDecision;
 }
 
 async function runReleaseRoll(
@@ -132,19 +150,27 @@ async function runReleaseRoll(
   target: RollTarget,
   operationId: string,
   progress: RollProgress,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<RollOutcome> {
   const recorded = await awaitTargetRelease(deps, target, progress);
   if (!recorded.success) return recorded;
+  const stateMigration = decideRollStateMigration({
+    sourceOpenclawVersion: await deps.readGatewayOpenclawVersion(target.gatewayId),
+    targetOpenclawVersion: openclawVersionFromGatewayImageTag(recorded.payload.imageTag),
+  });
+  deps.log(
+    `[rollout] ${target.gatewayId} → release ${target.targetRelease}: ` +
+    `${stateMigration.strategy} (${stateMigration.reason})`,
+  );
   const activationWindow = await awaitActivationWindow(deps, target);
-  if (!activationWindow.success) return activationWindow;
+  if (!activationWindow.success) return { ...activationWindow, stateMigration };
   const activation = await deps.activateDesiredRelease({
     gatewayId: target.gatewayId,
     targetRelease: target.targetRelease,
     operationId,
   });
-  if (!activation.success) return activation;
+  if (!activation.success) return { ...activation, stateMigration };
   deps.requestReconcileTick?.(target.gatewayId);
-  return awaitConvergence(deps, target, progress);
+  return { ...await awaitConvergence(deps, target, progress), stateMigration };
 }
 
 interface RollNarration {
@@ -156,7 +182,9 @@ async function awaitTargetRelease(
   deps: RolloutDeps,
   target: RollTarget,
   progress: RollProgress,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<
+  { success: true; payload: ReleasePayload } | { success: false; error: string }
+> {
   for (;;) {
     const gateway = await deps.readGatewayDoc(target.gatewayId);
     if (!gateway) {
@@ -174,7 +202,7 @@ async function awaitTargetRelease(
       };
     }
     const payload = await deps.readReleasePayload(target.gatewayId, target.targetRelease);
-    if (payload?.imageTag === target.imageTag) return { success: true };
+    if (payload?.imageTag === target.imageTag) return { success: true, payload };
     if (deps.now() - progress.startedAt >= deps.releaseRecordTimeoutMs) {
       return {
         success: false,

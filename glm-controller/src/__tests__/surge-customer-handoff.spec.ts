@@ -6,6 +6,16 @@ import {
   type SurgeCustomerHandoffDeps,
   type SurgePod,
 } from "../surge-customer-handoff.js";
+import { decideRollStateMigration } from "../roll-state-migration.js";
+
+const MIGRATE_STATE = decideRollStateMigration({
+  sourceOpenclawVersion: "2026.7.2-beta.7",
+  targetOpenclawVersion: "2026.7.2-beta.7",
+});
+const PROVISION_FRESH = decideRollStateMigration({
+  sourceOpenclawVersion: "2026.7.1",
+  targetOpenclawVersion: "2026.7.2-beta.7",
+});
 
 const oldPod: SurgePod = {
   uid: "old-uid",
@@ -140,6 +150,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "27b966b-oc2026.7.1",
       requiresCustomerMigration: false,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
   });
 
@@ -161,6 +172,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([]);
@@ -173,6 +185,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -195,6 +208,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "cf36a88-oc2026.7.1",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -214,6 +228,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -232,6 +247,53 @@ describe("surge customer handoff", () => {
     expect(h.assignments().every((item) => item.updatedByOperationId === h.operationId)).toBe(true);
   });
 
+  it("carries no state across an openclaw version change — gates, then releases a blank target", async () => {
+    const h = harness();
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: PROVISION_FRESH,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u2:quiescing",
+      "release:target-uid",
+    ]);
+    expect(h.deps.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.readDurableSessionDigest).not.toHaveBeenCalled();
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(PROVISION_FRESH.reason));
+  });
+
+  it("restores the roster to serving once the blank replacement is the only pod", async () => {
+    const pods = [oldPod, targetPod];
+    const h = harness({ pods, assignments: [assignment("u1", "alice")] });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: PROVISION_FRESH,
+    })).resolves.toEqual({ ready: false });
+
+    pods.splice(0, pods.length, { ...targetPod, ready: true });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: PROVISION_FRESH,
+    })).resolves.toEqual({ ready: true });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "release:target-uid",
+      "assignment:u1:serving",
+    ]);
+  });
+
   it("gates but does not transfer an assigned customer that the source never mounted", async () => {
     const pods = [oldPod, targetPod];
     const h = harness({
@@ -247,6 +309,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -264,6 +327,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: true });
     expect(h.events.slice(-2)).toEqual([
       "assignment:u1:serving",
@@ -281,6 +345,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("source mounted customer orphan has no assignment");
 
     expect(h.events).toEqual([
@@ -303,6 +368,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: true });
 
     expect(h.events).toEqual(["assignment:u1:serving"]);
@@ -322,6 +388,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([]);
   });
@@ -340,6 +407,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([]);
 
@@ -349,6 +417,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: true });
     expect(h.events).toEqual([
       "assignment:u1:serving",
@@ -363,6 +432,7 @@ describe("surge customer handoff", () => {
         gatewayId: "default",
         desiredImageTag: "new-sha",
         requiresCustomerMigration: true,
+        stateMigration: MIGRATE_STATE,
       })).resolves.toEqual({ ready: false });
     }
     expect(h.events).toEqual([]);
@@ -378,6 +448,7 @@ describe("surge customer handoff", () => {
       gatewayId: "trial-op-000001",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
       ownerlessOperatorPrewarm: true,
     })).resolves.toEqual({ ready: false });
 
@@ -394,6 +465,7 @@ describe("surge customer handoff", () => {
       gatewayId: "trial-op-000001",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
       ownerlessOperatorPrewarm: true,
     })).resolves.toEqual({ ready: false });
 
@@ -410,6 +482,7 @@ describe("surge customer handoff", () => {
       gatewayId: "trial-op-000001",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
+      stateMigration: MIGRATE_STATE,
       ownerlessOperatorPrewarm: true,
     })).resolves.toEqual({ ready: false });
 
@@ -426,6 +499,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
       ownerlessOperatorPrewarm: false,
     })).resolves.toEqual({ ready: false });
 
@@ -444,6 +518,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -481,6 +556,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
@@ -511,6 +587,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual(["assignment:u1:serving"]);
@@ -534,6 +611,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([]);
@@ -557,6 +635,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: true });
 
     expect(h.events).toEqual(["assignment:u1:serving"]);
@@ -578,6 +657,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
   });
@@ -594,6 +674,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
   });
@@ -610,6 +691,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
   });
@@ -624,6 +706,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("rsync failed");
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -644,6 +727,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("bob rsync failed");
 
     expect(h.events).toEqual([
@@ -668,6 +752,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("assignment write failed");
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -687,6 +772,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow(/target cleanup failed/);
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -706,6 +792,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -727,6 +814,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("connection refused");
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
