@@ -245,36 +245,6 @@ export function buildCoachAccountFragment(
   };
 }
 
-export function buildRemoveCustomerPatch(
-  current: unknown,
-  slug: string,
-  agentId: string,
-): {
-  bindings: AgentBinding[];
-  channels: { mattermost: { accounts: Record<string, null> } };
-} {
-  const existing = (current as { bindings?: unknown })?.bindings;
-  const currentBindings: AgentBinding[] = Array.isArray(existing)
-    ? (existing as AgentBinding[])
-    : [];
-  // Vegas: the customer's project agents ({slug}-proj-{pid} accounts and
-  // octogee-{slug}-proj-{pid}-coach bindings) leave with the customer.
-  const currentAccounts =
-    (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
-      ?.channels?.mattermost?.accounts ?? {};
-  const accounts: Record<string, null> = { [`${slug}-coach`]: null };
-  for (const key of Object.keys(currentAccounts)) {
-    if (key.startsWith(`${slug}-proj-`)) accounts[key] = null;
-  }
-  return {
-    bindings: filterOutCustomerBindings(
-      currentBindings.filter((b) => b?.agentId !== agentId),
-      slug,
-    ),
-    channels: { mattermost: { accounts } },
-  };
-}
-
 export function buildRemoveCustomerConfig(
   current: OpenclawConfigShape & Record<string, unknown>,
   slug: string,
