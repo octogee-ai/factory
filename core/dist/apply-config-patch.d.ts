@@ -55,6 +55,9 @@ export declare function customerAgentRosterPatch(current: unknown, slug: string,
 export declare function filterOutCustomerBindings<T extends {
     agentId?: unknown;
 }>(bindings: readonly T[], slug: string): T[];
+export declare function mergeCustomerBindings<T extends {
+    agentId?: unknown;
+}>(current: readonly T[], slugs: readonly string[], nextCustomerBindings: readonly T[]): readonly T[];
 export declare function staleProjectAgentAccountNulls(current: unknown, slug: string, keepAccountIds: readonly string[]): Record<string, null>;
 /**
  * The replacePaths set for customer config patches that rebuild non-id arrays:

@@ -24,7 +24,7 @@ import {
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
   customerConfigReplacePaths,
-  filterOutCustomerBindings,
+  mergeCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   type ConfigCache,
@@ -603,10 +603,7 @@ async function applyAddCustomerConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
-        let existingBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
-        for (const slug of [snapshot.slug, ...evictionSlugs]) {
-          existingBindings = filterOutCustomerBindings(existingBindings, slug);
-        }
+        const currentBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
         const nextAgents = replaceCustomerAgentsInFullAgentList(
           current,
           snapshot.slug,
@@ -623,7 +620,11 @@ async function applyAddCustomerConfigPatch(
               rebindPlatformEmbeddingRefs(nextAgents),
             ),
           },
-          bindings: [...existingBindings, ...bindings],
+          bindings: mergeCustomerBindings(
+            currentBindings,
+            [snapshot.slug, ...evictionSlugs],
+            bindings,
+          ),
           channels: {
             mattermost: {
               accounts: {
