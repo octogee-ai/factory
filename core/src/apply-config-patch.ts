@@ -248,10 +248,25 @@ function isDestructiveArrayGuardError(err: OpenclawWireError): boolean {
   return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
 }
 
+/**
+ * openclaw 2026.7.2's roster guard: a config write may not drop
+ * `agents.entries` keys unless it carries `allowedAgentRosterRemovals`, which
+ * only `agents.delete` supplies. config.patch never can, so an identical retry
+ * is guaranteed to fail — retrying to the deadline only delays the real fix.
+ */
+function isAgentRosterDropGuardError(err: OpenclawWireError): boolean {
+  return (
+    err.code === "rpc-error" &&
+    /would drop agent roster entries without an explicit deletion/i.test(err.message)
+  );
+}
+
 export function isPermanentConfigPatchFailure(err: unknown): boolean {
   return (
     err instanceof OpenclawWireError &&
-    (isPermanentConfigPatchError(err) || isDestructiveArrayGuardError(err))
+    (isPermanentConfigPatchError(err) ||
+      isDestructiveArrayGuardError(err) ||
+      isAgentRosterDropGuardError(err))
   );
 }
 
@@ -270,6 +285,14 @@ function throwIfPermanentConfigPatchFailure(
     ctx.log(
       `⚠ ${ctx.prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
         `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`,
+    );
+    throw err;
+  }
+
+  if (isAgentRosterDropGuardError(err)) {
+    ctx.log(
+      `⚠ ${ctx.prefix}config.patch rejected by the agent-roster guard (permanent — config.patch cannot carry the removal allowance). ` +
+        `The caller must delete the departing agents with agents.delete before patching: ${err.message}`,
     );
     throw err;
   }
@@ -508,18 +531,22 @@ export function replaceCustomerAgentsInFullAgentList(
   return next;
 }
 
+/**
+ * The customer's slice of the agent roster, as a merge patch that only ever
+ * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
+ * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,
+ * which only its own `agents.delete` supplies — so a retired project agent is
+ * deleted by RPC before the patch, never nulled inside it.
+ */
 export function customerAgentRosterPatch(
   current: unknown,
   slug: string,
   agentEntries: readonly unknown[],
-): { list: unknown[] } | { entries: Record<string, Record<string, unknown> | null> } {
+): { list: unknown[] } | { entries: Record<string, Record<string, unknown>> } {
   const currentEntries = keyedAgentEntries(current);
   if (!currentEntries) return { list: [...agentEntries] };
 
-  const entries: Record<string, Record<string, unknown> | null> = {};
-  for (const [id] of Object.entries(currentEntries)) {
-    if (isCustomerAgentId(id, slug)) entries[id] = null;
-  }
+  const entries: Record<string, Record<string, unknown>> = {};
   for (const agent of agentEntries) {
     const [id, entry] = keyedEntryFromAgent(agent);
     if (
@@ -635,15 +662,14 @@ export function customerConfigFullAgentListReplacePaths(current: unknown, slug: 
 }
 
 /**
- * Array paths under the keyed agent entries a customer removal nulls out.
+ * Array paths under the customer's keyed agent entries.
  *
- * `customerAgentRosterPatch` removes a customer by setting
- * `agents.entries.<id>` to null, which destroys every array beneath it. The
- * gateway's destructive-array guard walks base-vs-merged and reports each one
- * by name (collectBaseArrayPaths, on its `isPlainObject(base) &&
- * !isPlainObject(patch)` branch), so each has to be confirmed or the whole
- * removal is refused — `model.fallbacks` on any coach with a house fallback is
- * enough to block it. Same shape as customerMattermostAccountArrayPaths.
+ * `customerAgentRosterPatch` rewrites each entry wholesale, so any array it
+ * shrinks — `model.fallbacks` on the BYOK-override → house-pin transition,
+ * `tools.alsoAllow` on a free-tier trim — trips the gateway's destructive-array
+ * guard. The guard walks base-vs-merged and reports each shrunk array by exact
+ * name (collectBaseArrayPaths), so each has to be confirmed or the whole patch
+ * is refused. Same shape as customerMattermostAccountArrayPaths.
  */
 function customerKeyedAgentEntryArrayPaths(current: unknown, slug: string): string[] {
   const entries = keyedAgentEntries(current);

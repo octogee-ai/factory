@@ -78,13 +78,30 @@ function openClawRuntimeHarness(initialConfig: Record<string, unknown> = {
     }
     if (method === "config.patch") {
       const raw = JSON.parse(String(params.raw)) as {
-        agents: { list: Array<Record<string, unknown>> };
+        agents: {
+          list?: Array<Record<string, unknown>>;
+          entries?: Record<string, Record<string, unknown>>;
+        };
       };
-      const agents = (config.agents as { list: Array<Record<string, unknown>> }).list;
-      for (const agentPatch of raw.agents.list) {
-        const agent = agents.find((candidate) => candidate.id === agentPatch.id);
-        if (!agent) throw new Error("missing agent");
-        merge(agent, Object.fromEntries(Object.entries(agentPatch).filter(([key]) => key !== "id")));
+      const roster = config.agents as {
+        list?: Array<Record<string, unknown>>;
+        entries?: Record<string, Record<string, unknown>>;
+      };
+      if (raw.agents.entries) {
+        // 2026.7.2 keyed roster: the key is the id and the entry carries none.
+        if (!roster.entries) throw new Error("config has no keyed agent entries");
+        for (const [agentId, entryPatch] of Object.entries(raw.agents.entries)) {
+          const entry = roster.entries[agentId];
+          if (!entry) throw new Error("missing agent");
+          merge(entry, entryPatch);
+        }
+      } else {
+        if (!roster.list) throw new Error("config has no agent list");
+        for (const agentPatch of raw.agents.list ?? []) {
+          const agent = roster.list.find((candidate) => candidate.id === agentPatch.id);
+          if (!agent) throw new Error("missing agent");
+          merge(agent, Object.fromEntries(Object.entries(agentPatch).filter(([key]) => key !== "id")));
+        }
       }
       revision += 1;
       return { ok: true };
@@ -567,6 +584,61 @@ describe("AgentImportService apply and rollback", () => {
           heartbeat: { every: "30m", jitter: "5m", lightContext: true },
         },
       ] },
+    });
+  });
+
+  // openclaw 2026.7.2 migrates agents.list into keyed agents.entries at pre-boot.
+  // A patch that still ships agents.list is at best canonicalized and at worst
+  // inert, so the import would report success over a coach it never touched.
+  it("patches a migrated keyed roster through agents.entries, preserving the same field content", async () => {
+    const before = {
+      agents: {
+        entries: {
+          other: { name: "Other", tools: { profile: "full" } },
+          "octogee-jack-coach": {
+            name: "Octo",
+            tools: { profile: "safe" },
+            heartbeat: { every: "60m", jitter: "5m" },
+          },
+        },
+      },
+    };
+    const runtime = openClawRuntimeHarness(before);
+    const invokeOpenClaw = runtime.invokeOpenClaw;
+    const h = harness({ invokeOpenClaw });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: artifacts(),
+    });
+
+    await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(2, "config.patch", expect.objectContaining({
+      raw: JSON.stringify({
+        agents: { entries: { "octogee-jack-coach": { skipBootstrap: true } } },
+      }),
+    }));
+    expect(invokeOpenClaw).toHaveBeenNthCalledWith(6, "config.patch", {
+      raw: JSON.stringify({
+        agents: {
+          entries: {
+            "octogee-jack-coach": { heartbeat: { every: "30m", lightContext: true } },
+          },
+        },
+      }),
+      baseHash: "config-1",
+    });
+    expect(runtime.config()).toEqual({
+      agents: {
+        entries: {
+          other: before.agents.entries.other,
+          "octogee-jack-coach": {
+            ...before.agents.entries["octogee-jack-coach"],
+            skipBootstrap: true,
+            heartbeat: { every: "30m", jitter: "5m", lightContext: true },
+          },
+        },
+      },
     });
   });
 

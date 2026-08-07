@@ -23,11 +23,21 @@ import {
   applyConfigPatch,
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
+  customerConfigReplacePaths,
   filterOutCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   type ConfigCache,
 } from "./apply-config-patch.js";
+import {
+  customerAgentIdsInRoster,
+  deleteRosterAgents,
+} from "./agent-roster-deletion.js";
+import {
+  createRosterAgents,
+  rosterAgentSpecsFromEntries,
+  unrosteredAgentSpecs,
+} from "./agent-roster-creation.js";
 import {
   type CustomerContext,
   type CustomerLifecycleAdapter,
@@ -103,6 +113,7 @@ import {
 import { blobSyncForSlug } from "./blob-sync.js";
 import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
+  activationManifestAgentIds,
   applyOpenClawActivationManifest,
   LegacyActivationManifestFingerprintError,
   MIGRATION_ACTIVATION_DIR,
@@ -187,16 +198,14 @@ interface BrokerCtx {
   configRemovedForEviction: Set<string>;
 }
 
-function buildRemoveCustomerPatchLocal(
+// The roster and the departing agents' bindings are `agents.delete`'s job —
+// 2026.7.2 rejects any config write that drops roster entries without the
+// allowance only that RPC carries. What is left for the patch is the Mattermost
+// accounts openclaw's agent deletion does not touch.
+function buildRemoveCustomerAccountsPatch(
   current: unknown,
   slugs: readonly string[],
-): {
-  agents: ReturnType<typeof customerAgentRosterPatch>;
-  bindings: unknown[];
-  channels: { mattermost: { accounts: Record<string, null> } };
-} {
-  const bindings = (current as { bindings?: unknown })?.bindings;
-  const currentBindings = Array.isArray(bindings) ? bindings : [];
+): { channels: { mattermost: { accounts: Record<string, null> } } } {
   const currentAccounts =
     (current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } })
       ?.channels?.mattermost?.accounts ?? {};
@@ -207,29 +216,105 @@ function buildRemoveCustomerPatchLocal(
       if (accountId.startsWith(`${slug}-proj-`)) accounts[accountId] = null;
     }
   }
-  const rosterPatches = slugs.map((slug) => customerAgentRosterPatch(current, slug, []));
-  const keyed = rosterPatches.every((patch) => "entries" in patch);
-  let nextAgents = replaceCustomerAgentsInFullAgentList(current, slugs[0]!, []);
-  for (const slug of slugs.slice(1)) {
-    nextAgents = replaceCustomerAgentsInFullAgentList({ agents: { list: nextAgents } }, slug, []);
+  return { channels: { mattermost: { accounts } } };
+}
+
+async function currentRosterConfig(ctx: BrokerCtx): Promise<unknown> {
+  if (ctx.configCache.hash !== "" && ctx.configCache.current !== undefined) {
+    return ctx.configCache.current;
   }
-  return {
-    agents: keyed
-      ? {
-          entries: Object.assign(
-            {},
-            ...rosterPatches.map((patch) => "entries" in patch ? patch.entries : {}),
-          ),
-        }
-      : { list: rebindPlatformEmbeddingRefs(nextAgents) },
-    bindings: currentBindings.filter((binding) => {
-      const agentId = binding && typeof binding === "object"
-        ? (binding as { agentId?: unknown }).agentId
-        : undefined;
-      return typeof agentId !== "string" || !slugs.some((slug) => agentIdBelongsToSlug(agentId, slug));
-    }),
-    channels: { mattermost: { accounts } },
-  };
+  const fetched = await ctx.rpc.configGet();
+  ctx.configCache.current = fetched.config;
+  ctx.configCache.hash = fetched.hash;
+  return fetched.config;
+}
+
+function invalidateConfigCache(ctx: BrokerCtx): void {
+  ctx.configCache.current = undefined;
+  ctx.configCache.hash = "";
+}
+
+async function deleteAgentsAndInvalidateCache(
+  ctx: BrokerCtx,
+  agentIds: readonly string[],
+  logPrefix: string,
+): Promise<void> {
+  if (agentIds.length === 0) return;
+  try {
+    await deleteRosterAgents(agentIds, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+  } finally {
+    // Each delete rewrites the roster and prunes bindings, so any cached
+    // snapshot — and its base hash — is stale the moment the first one lands.
+    invalidateConfigCache(ctx);
+  }
+}
+
+async function deleteDepartingCustomerAgents(
+  ctx: BrokerCtx,
+  slugs: readonly string[],
+  logPrefix: string,
+): Promise<void> {
+  if (slugs.length === 0) return;
+  const current = await currentRosterConfig(ctx);
+  await deleteAgentsAndInvalidateCache(
+    ctx,
+    slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
+    logPrefix,
+  );
+}
+
+/**
+ * Every agent the mount does not want, in one pass: the evicted slugs' agents
+ * plus the admitted Builder's OWN superseded ones — a project agent retired
+ * since the last mount. Both leave by `agents.delete`, because 2026.7.2 refuses
+ * a config write that drops roster entries, so neither can be nulled out of the
+ * roster patch that follows.
+ */
+async function deleteSupersededCustomerAgents(
+  ctx: BrokerCtx,
+  input: {
+    slug: string;
+    evictionSlugs: readonly string[];
+    keepAgentIds: readonly string[];
+    logPrefix: string;
+  },
+): Promise<void> {
+  const current = await currentRosterConfig(ctx);
+  const keep = new Set(input.keepAgentIds);
+  await deleteAgentsAndInvalidateCache(
+    ctx,
+    [
+      ...input.evictionSlugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
+      ...customerAgentIdsInRoster(current, input.slug).filter((agentId) => !keep.has(agentId)),
+    ],
+    input.logPrefix,
+  );
+}
+
+/**
+ * Introduce the agents the roster does not carry yet. config.patch may add a
+ * roster entry, but for an id `agents.delete` has already tombstoned it would
+ * add a rostered-but-fenced agent whose every store access fails. Only
+ * `agents.create` clears the tombstone; already-rostered ids stay on the pure
+ * patch path.
+ */
+async function createMissingCustomerAgents(
+  ctx: BrokerCtx,
+  agentEntries: readonly unknown[],
+  logPrefix: string,
+): Promise<void> {
+  const current = await currentRosterConfig(ctx);
+  const missing = unrosteredAgentSpecs(current, rosterAgentSpecsFromEntries(agentEntries));
+  if (missing.length === 0) return;
+  // The project checkouts clone AFTER the mount patch, so a new project agent's
+  // workspace does not exist yet. The directory is ours to own; checkoutProjectRepo
+  // clones into an existing dest via its adopt path.
+  await Promise.all(missing.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
+  try {
+    await createRosterAgents(missing, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+  } finally {
+    invalidateConfigCache(ctx);
+  }
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
@@ -375,7 +460,8 @@ function materializeCustomerBrokerProfiles(
   if (materialized.deferred.length > 0) {
     logFn(
       `[add:${slug}] broker profile deferred for ${materialized.deferred.join(", ")}` +
-        ` — openclaw has not created the store yet; the post-boot sweep retries it`,
+        ` — ${materialized.deferralReason ?? "openclaw refused the secrets apply"};` +
+        ` the post-boot sweep retries it`,
     );
   }
 }
@@ -492,6 +578,18 @@ async function applyAddCustomerConfigPatch(
       agentProjects: activeAgentProjectIds(projectAgents),
     },
   ]);
+  const customerAgentEntries = [agentEntry, ...projectAgentEntries];
+  await deleteSupersededCustomerAgents(ctx, {
+    slug: snapshot.slug,
+    evictionSlugs,
+    keepAgentIds: brokerAgentIds,
+    logPrefix: `[add:${snapshot.slug}]`,
+  });
+  await createMissingCustomerAgents(
+    ctx,
+    customerAgentEntries,
+    `[add:${snapshot.slug}]`,
+  );
   const startedAt = Date.now();
   const convergedRpc = {
     ...ctx.rpc,
@@ -509,34 +607,21 @@ async function applyAddCustomerConfigPatch(
         for (const slug of [snapshot.slug, ...evictionSlugs]) {
           existingBindings = filterOutCustomerBindings(existingBindings, slug);
         }
-        let nextAgents = replaceCustomerAgentsInFullAgentList(current, snapshot.slug, [
-          agentEntry,
-          ...projectAgentEntries,
-        ]);
-        for (const slug of evictionSlugs) {
-          nextAgents = replaceCustomerAgentsInFullAgentList(
-            { agents: { list: nextAgents } },
-            slug,
-            [],
-          );
-        }
-        const targetAgents = customerAgentRosterPatch(
+        const nextAgents = replaceCustomerAgentsInFullAgentList(
           current,
           snapshot.slug,
-          rebindPlatformEmbeddingRefs(nextAgents),
+          customerAgentEntries,
         );
-        const evictionPatch = evictionSlugs.length > 0
-          ? buildRemoveCustomerPatchLocal(current, evictionSlugs)
-          : null;
-        const agents = evictionPatch && "entries" in targetAgents && "entries" in evictionPatch.agents
-          ? { entries: { ...targetAgents.entries, ...evictionPatch.agents.entries } }
-          : targetAgents;
         return {
           agents: {
             ...(coachModelDefaults
               ? { defaults: { models: coachModelDefaults } }
               : {}),
-            ...agents,
+            ...customerAgentRosterPatch(
+              current,
+              snapshot.slug,
+              rebindPlatformEmbeddingRefs(nextAgents),
+            ),
           },
           bindings: [...existingBindings, ...bindings],
           channels: {
@@ -549,7 +634,10 @@ async function applyAddCustomerConfigPatch(
                   snapshot.slug,
                   Object.keys(projectAccounts),
                 ),
-                ...(evictionPatch?.channels.mattermost.accounts ?? {}),
+                ...(evictionSlugs.length > 0
+                  ? buildRemoveCustomerAccountsPatch(current, evictionSlugs)
+                    .channels.mattermost.accounts
+                  : {}),
               },
             },
           },
@@ -587,11 +675,12 @@ async function applyRemoveCustomerConfigPatch(
 ): Promise<readonly string[]> {
   const slugs = [...new Set([slug, ...(evictionBatch ?? [])])];
   if (!ctx.configRemovedForEviction.has(slug)) {
+    await deleteDepartingCustomerAgents(ctx, slugs, `[remove:${slug}]`);
     await applyConfigPatch(
       {
-        buildPatch: (current) => buildRemoveCustomerPatchLocal(current, slugs),
+        buildPatch: (current) => buildRemoveCustomerAccountsPatch(current, slugs),
         buildReplacePaths: (current) => [...new Set(
-          slugs.flatMap((batchSlug) => customerConfigAgentRosterReplacePaths(current, batchSlug)),
+          slugs.flatMap((batchSlug) => customerConfigReplacePaths(current, batchSlug)),
         )],
         logPrefix: `[remove:${slug}]`,
       },
@@ -831,6 +920,12 @@ async function activateImportedCustomer(
       `[import:${slug}] discarded imported ${discarded.agentId} store (schema ${discarded.schemaVersion})`,
     );
   }
+  await deleteSupersededCustomerAgents(ctx, {
+    slug,
+    evictionSlugs: [],
+    keepAgentIds: activationManifestAgentIds(safeManifest),
+    logPrefix: `[import:${slug}]`,
+  });
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,

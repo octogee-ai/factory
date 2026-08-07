@@ -891,6 +891,17 @@ describe("isPermanentConfigPatchFailure", () => {
       isPermanentConfigPatchFailure(new OpenclawWireError("timeout", "timed out")),
     ).toBe(false);
   });
+
+  it("classifies the roster-drop refusal as permanent — an identical retry can never carry the allowance", () => {
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError(
+          "rpc-error",
+          "Config write would drop agent roster entries without an explicit deletion: octogee-alice-proj-old-coach",
+        ),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("fullAgentListReplacePaths — the guard confirmation set for full agents.list patches", () => {
@@ -1034,7 +1045,7 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
 });
 
 describe("customerAgentRosterPatch", () => {
-  it("uses beta keyed entries, deletes retired customer keys, and translates memorySearch", () => {
+  it("uses beta keyed entries, upserts only live agents, and translates memorySearch", () => {
     const current = {
       agents: {
         entries: {
@@ -1059,10 +1070,27 @@ describe("customerAgentRosterPatch", () => {
           model: "new",
           memory: { search: { provider: "openai-compatible" } },
         },
-        "octogee-alice-proj-old-coach": null,
       },
     });
     expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+  });
+
+  it("never nulls a retired customer entry — 2026.7.2 refuses roster drops without agents.delete", () => {
+    const current = {
+      agents: {
+        entries: {
+          "octogee-alice-coach": { model: "old" },
+          "octogee-alice-proj-retired-coach": { model: "old" },
+        },
+      },
+    };
+
+    const patch = customerAgentRosterPatch(current, "alice", [
+      { id: "octogee-alice-coach", model: "new" },
+    ]) as { entries: Record<string, unknown> };
+
+    expect(Object.values(patch.entries)).not.toContain(null);
+    expect(patch.entries).not.toHaveProperty("octogee-alice-proj-retired-coach");
   });
 
   it("retains the stable list patch and destructive array guard confirmations", () => {

@@ -4,7 +4,7 @@ import {
 } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
 import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
-import advertisedMethods from "./openclaw-2026.7.1-advertised-methods.json" with { type: "json" };
+import advertisedMethods from "./openclaw-2026.7.2-advertised-methods.json" with { type: "json" };
 import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 export const OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS = Object.freeze(
@@ -82,7 +82,12 @@ const DELEGATED_MUTABLE_PATHS = new Set([
   "agents.list[].model.primary",
   "agents.list[].model.fallbacks[]",
   "agents.list[].name",
+  "agents.entries.*.model",
+  "agents.entries.*.model.primary",
+  "agents.entries.*.model.fallbacks[]",
+  "agents.entries.*.name",
 ]);
+const DELEGATED_PATH_KEY_WILDCARD = "*";
 const SCHEMA_METADATA_FIELDS = [
   "type", "title", "description", "format", "minimum", "maximum",
   "minLength", "maxLength", "minItems", "maxItems", "readOnly",
@@ -234,13 +239,61 @@ function collectChangedConfigPaths(
   changed.add(path);
 }
 
-function delegatedMutationUsesSafePaths(
+function pathSegmentMatches(patternSegment: string, segment: string): boolean {
+  return patternSegment === segment ||
+    patternSegment === DELEGATED_PATH_KEY_WILDCARD && segment.length > 0 && !segment.endsWith("[]");
+}
+
+function pathMatchesDelegatedPattern(path: string, pattern: string): boolean {
+  const segments = path.split(".");
+  const patternSegments = pattern.split(".");
+  return segments.length === patternSegments.length &&
+    segments.every((segment, index) => pathSegmentMatches(patternSegments[index], segment));
+}
+
+function pathWithinDelegatedPattern(path: string, pattern: string): boolean {
+  const segments = path.split(".");
+  const patternSegments = pattern.split(".");
+  return segments.length <= patternSegments.length &&
+    segments.every((segment, index) =>
+      pathSegmentMatches(patternSegments[index], segment) ||
+      index === segments.length - 1 && patternSegments[index] === `${segment}[]`);
+}
+
+function delegatedMutablePath(path: string): boolean {
+  return [...DELEGATED_MUTABLE_PATHS].some((pattern) =>
+    pathMatchesDelegatedPattern(path, pattern));
+}
+
+function rosterEntryIds(config: Record<string, unknown>): string[] | null {
+  const entries = record(record(config.agents)?.entries);
+  return entries
+    ? Object.entries(entries)
+      .filter(([, entry]) => entry !== null && entry !== undefined)
+      .map(([id]) => id)
+      .sort()
+    : null;
+}
+
+function delegatedRosterMembershipPreserved(
+  current: Record<string, unknown>,
+  proposed: Record<string, unknown>,
+): boolean {
+  const currentIds = rosterEntryIds(current);
+  const proposedIds = rosterEntryIds(proposed);
+  if (!currentIds || !proposedIds) return currentIds === proposedIds;
+  return currentIds.length === proposedIds.length &&
+    currentIds.every((id, index) => id === proposedIds[index]);
+}
+
+function delegatedMutationIsSafe(
   current: Record<string, unknown>,
   proposed: Record<string, unknown>,
 ): boolean {
   const changed = new Set<string>();
   collectChangedConfigPaths(current, proposed, "", changed);
-  return [...changed].every((path) => DELEGATED_MUTABLE_PATHS.has(path));
+  return delegatedRosterMembershipPreserved(current, proposed) &&
+    [...changed].every((path) => delegatedMutablePath(path));
 }
 
 function normalizedConfigPath(value: unknown): string | null {
@@ -250,9 +303,8 @@ function normalizedConfigPath(value: unknown): string | null {
 }
 
 function delegatedConfigPathIsSafe(path: string): boolean {
-  return DELEGATED_MUTABLE_PATHS.has(path) || [...DELEGATED_MUTABLE_PATHS].some(
-    (candidate) => candidate.startsWith(`${path}.`) || candidate.startsWith(`${path}[]`),
-  );
+  return [...DELEGATED_MUTABLE_PATHS].some((pattern) =>
+    pathWithinDelegatedPattern(path, pattern));
 }
 
 function delegatedSchemaLookupIsSafe(request: Record<string, unknown>): boolean {
@@ -463,7 +515,7 @@ export function evaluateDelegatedOpenClawControlRpc(
   if (profile === "delegated-config" && decision.category === "config_mutation") {
     const proposed = decision.proposedConfig;
     const current = context.currentConfig?.raw;
-    return proposed && current && delegatedMutationUsesSafePaths(current, proposed)
+    return proposed && current && delegatedMutationIsSafe(current, proposed)
       ? decision
       : { allowed: false, category: decision.category, reason: "config-unsafe-path" };
   }
@@ -505,15 +557,17 @@ export function projectOpenClawHelloForProfile(
   return projected;
 }
 
+function safeShortString(value: unknown): value is string {
+  return boundedString(value, 256) && value !== REDACTED_SENTINEL;
+}
+
 function safeModelSelection(value: unknown): unknown {
-  if (boundedString(value, 256) && value !== REDACTED_SENTINEL) return value;
+  if (safeShortString(value)) return value;
   const item = record(value);
   if (!item) return undefined;
-  const primary = boundedString(item.primary, 256) && item.primary !== REDACTED_SENTINEL
-    ? item.primary
-    : undefined;
+  const primary = safeShortString(item.primary) ? item.primary : undefined;
   const fallbacks = Array.isArray(item.fallbacks)
-    ? item.fallbacks.filter((entry) => boundedString(entry, 256) && entry !== REDACTED_SENTINEL)
+    ? item.fallbacks.filter((entry) => safeShortString(entry))
     : undefined;
   return {
     ...(primary ? { primary } : {}),
@@ -535,18 +589,34 @@ function safeAgentDefaults(value: unknown): Record<string, unknown> | null {
   };
 }
 
-function safeAgent(value: unknown): Record<string, unknown> | null {
+function safeAgentEntry(value: unknown): Record<string, unknown> | null {
   const item = record(value);
-  if (!item || !boundedString(item.id, 256) || item.id === REDACTED_SENTINEL) return null;
+  if (!item) return null;
   const model = safeModelSelection(item.model);
   return {
-    id: item.id,
-    ...(boundedString(item.name, 256) && item.name !== REDACTED_SENTINEL
-      ? { name: item.name }
-      : {}),
+    ...(safeShortString(item.name) ? { name: item.name } : {}),
     ...(typeof item.default === "boolean" ? { default: item.default } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+function safeAgent(value: unknown): Record<string, unknown> | null {
+  const item = record(value);
+  if (!item || !safeShortString(item.id)) return null;
+  const entry = safeAgentEntry(item);
+  return entry ? { id: item.id, ...entry } : null;
+}
+
+function safeAgentEntries(value: unknown): Record<string, unknown> | undefined {
+  const entries = record(value);
+  if (!entries) return undefined;
+  const projected: Record<string, unknown> = {};
+  for (const [id, entry] of Object.entries(entries)) {
+    const safe = safeAgentEntry(entry);
+    if (!safe || !safeShortString(id) || BLOCKED_OBJECT_KEYS.has(id)) continue;
+    projected[id] = safe;
+  }
+  return projected;
 }
 
 function safeDelegatedConfig(value: unknown): Record<string, unknown> {
@@ -554,12 +624,14 @@ function safeDelegatedConfig(value: unknown): Record<string, unknown> {
   const agents = record(config?.agents);
   if (!agents) return {};
   const defaults = safeAgentDefaults(agents.defaults);
+  const entries = safeAgentEntries(agents.entries);
   const list = Array.isArray(agents.list)
     ? agents.list.map(safeAgent).filter((agent): agent is Record<string, unknown> => agent !== null)
     : undefined;
   return {
     agents: {
       ...(defaults ? { defaults } : {}),
+      ...(entries ? { entries } : {}),
       ...(list ? { list } : {}),
     },
   };
@@ -651,6 +723,18 @@ function delegatedSchemaProperties(value: unknown, path: string): Record<string,
   return safeProperties;
 }
 
+function delegatedSchemaAdditionalProperties(
+  value: unknown,
+  path: string,
+): Record<string, unknown> | null {
+  const wildcardPath = path
+    ? `${path}.${DELEGATED_PATH_KEY_WILDCARD}`
+    : DELEGATED_PATH_KEY_WILDCARD;
+  return value !== undefined && delegatedConfigPathIsSafe(wildcardPath)
+    ? delegatedSchemaNode(value, wildcardPath)
+    : null;
+}
+
 function delegatedSchemaItems(value: unknown, path: string): Record<string, unknown> | null {
   const itemsPath = `${path}[]`;
   return value !== undefined && delegatedConfigPathIsSafe(itemsPath)
@@ -674,6 +758,8 @@ function delegatedSchemaNode(value: unknown, path = ""): Record<string, unknown>
   const projected = schemaMetadata(node);
   const properties = delegatedSchemaProperties(node.properties, path);
   if (Object.keys(properties).length > 0) projected.properties = properties;
+  const additionalProperties = delegatedSchemaAdditionalProperties(node.additionalProperties, path);
+  if (additionalProperties) projected.additionalProperties = additionalProperties;
   const items = delegatedSchemaItems(node.items, path);
   if (items) projected.items = items;
   const required = delegatedRequiredFields(node.required, properties);

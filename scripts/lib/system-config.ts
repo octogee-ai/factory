@@ -248,22 +248,43 @@ function isLegacyMacAgent(agent: UnknownRecord, exactIds: ReadonlySet<string>): 
     recordString(agent, "workspace") === "/home/node/.openclaw/workspace/ops";
 }
 
+// 2026.7.2 rewrites `agents.list` into keyed `agents.entries` at pre-boot, so a
+// list-only reader would leave the legacy Mac lane rostered forever. Both forms
+// are swept: the migration leaves the pre-migration list behind, and a removal
+// that clears only one of them puts the agent back on the next normalization.
 function removeLegacyMacAgents(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): { changed: boolean; removedIds: Set<string> } {
   const removedIds = new Set<string>();
-  if (!Array.isArray(agents?.list)) return { changed: false, removedIds };
   const exactIds = legacyMacAgentIds(env);
-  const kept = agents.list.filter((entry) => {
-    const agent = asRecord(entry);
-    if (!agent || !isLegacyMacAgent(agent, exactIds)) return true;
-    const id = recordString(agent, "id");
-    if (id) removedIds.add(id);
-    return false;
-  });
-  const changed = kept.length !== agents.list.length;
-  if (changed) agents.list = kept;
+  let changed = false;
+
+  const entries = asRecord(agents?.entries);
+  if (entries) {
+    for (const [id, value] of Object.entries(entries)) {
+      const agent = asRecord(value);
+      if (!agent || !isLegacyMacAgent({ ...agent, id }, exactIds)) continue;
+      delete entries[id];
+      removedIds.add(id);
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(agents?.list)) {
+    const kept = agents.list.filter((entry) => {
+      const agent = asRecord(entry);
+      if (!agent || !isLegacyMacAgent(agent, exactIds)) return true;
+      const id = recordString(agent, "id");
+      if (id) removedIds.add(id);
+      return false;
+    });
+    if (kept.length !== agents.list.length) {
+      agents.list = kept;
+      changed = true;
+    }
+  }
+
   return { changed, removedIds };
 }
 
@@ -332,16 +353,24 @@ function removeLegacyMattermostConfig(
   return defaultChanged || tokenChanged;
 }
 
+/** The roster entry to mutate, whichever shape openclaw is storing. 2026.7.2
+ *  migrates `agents.list` into keyed `agents.entries`, where the key is the id
+ *  and the entry carries none. */
+function rosterAgentEntry(agents: UnknownRecord | null, agentId: string): UnknownRecord | null {
+  const entries = asRecord(agents?.entries);
+  if (entries) return asRecord(entries[agentId]);
+  return Array.isArray(agents?.list)
+    ? asRecord(agents.list.find((entry) => asRecord(entry)?.id === agentId))
+    : null;
+}
+
 function selectBuilderCoach(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): boolean {
   const builderSlug = env.GATEWAY_BUILDER_SLUG?.trim();
-  const builderCoachId = builderSlug ? `octogee-${builderSlug}-coach` : "";
-  const builderCoach = Array.isArray(agents?.list)
-    ? agents.list.find((entry) => asRecord(entry)?.id === builderCoachId)
-    : undefined;
-  const coach = asRecord(builderCoach);
+  if (!builderSlug) return false;
+  const coach = rosterAgentEntry(agents, `octogee-${builderSlug}-coach`);
   if (!coach || coach.default === true) return false;
   coach.default = true;
   return true;

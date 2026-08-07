@@ -9,6 +9,32 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
+/**
+ * openclaw refuses `agents.create` for an id already in the roster with
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
+ * raced another writer has to treat that as already-done; every other refusal —
+ * an unwritable workspace, a wedged deletion journal, a transport failure —
+ * must still fail the mount.
+ */
+export function isAgentAlreadyExistsRpcError(err) {
+    return (err instanceof OpenclawWireError &&
+        err.code === "rpc-error" &&
+        AGENT_ALREADY_EXISTS_MESSAGE.test(err.message));
+}
+/**
+ * openclaw refuses `agents.delete` for an id that is neither rostered nor
+ * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
+ * (server-methods/agents.ts respondAgentNotFound). An eviction has to treat
+ * that as already-done; every other refusal — the default agent, a wedged
+ * deletion journal, a transport failure — must still fail the eviction.
+ */
+export function isAgentNotFoundRpcError(err) {
+    return (err instanceof OpenclawWireError &&
+        err.code === "rpc-error" &&
+        AGENT_NOT_FOUND_MESSAGE.test(err.message));
+}
 function configChangedHash(data) {
     let parsed;
     try {
@@ -298,6 +324,30 @@ function createIdentityResolver(initialIdentity) {
         return identity;
     };
 }
+function resolveRpcTraceSettings() {
+    return {
+        traceVerbose: /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? ""),
+        slowTraceMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10),
+        failureSampleMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10),
+    };
+}
+async function callOkPayload(call, method, params) {
+    const payload = await call(method, params);
+    if (!payload || typeof payload !== "object" || payload.ok !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, `${method} payload missing \`ok: true\``);
+    }
+    return payload;
+}
+async function callAgentsCreate(call, params) {
+    const payload = await callOkPayload(call, "agents.create", params);
+    if (typeof payload.agentId !== "string" || payload.agentId.length === 0) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.create payload missing string `agentId`");
+    }
+    return payload;
+}
+async function callAgentsDelete(call, params) {
+    return (await callOkPayload(call, "agents.delete", params));
+}
 export function createGatewayRpc(opts = {}) {
     const url = opts.url ??
         `ws://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || 18789}`;
@@ -305,9 +355,7 @@ export function createGatewayRpc(opts = {}) {
     const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
     const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
     const scopes = opts.scopes ?? ["operator.admin"];
-    const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
-    const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
-    const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
+    const { traceVerbose, slowTraceMs, failureSampleMs } = resolveRpcTraceSettings();
     const onConnectTrace = opts.onConnectTrace ??
         createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
     const resolveIdentity = createIdentityResolver(opts.identity);
@@ -430,6 +478,8 @@ export function createGatewayRpc(opts = {}) {
             }
             return payload;
         },
+        agentsCreate: (params) => callAgentsCreate(call, params),
+        agentsDelete: (params) => callAgentsDelete(call, params),
         async secretsReload() {
             const payload = await call("secrets.reload", {});
             if (!payload || typeof payload !== "object") {

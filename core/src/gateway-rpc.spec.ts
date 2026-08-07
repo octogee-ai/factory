@@ -5,6 +5,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   OpenclawWireError,
   createGatewayRpc,
+  isAgentAlreadyExistsRpcError,
+  isAgentNotFoundRpcError,
   type ConnectTrace,
   type GatewayRpcClient,
 } from "./gateway-rpc.js";
@@ -677,6 +679,190 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(2);
+    });
+  });
+
+  describe("agentsDelete", () => {
+    it("calls `agents.delete` with the agent id and returns the gateway payload", async () => {
+      let captured: unknown = "not-called";
+      server.setHandler("agents.delete", (params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            agentId: "octogee-alice-coach",
+            removedBindings: 2,
+            removed: [{ path: "/state/agents/octogee-alice-coach", method: "trash" }],
+            failed: [],
+          },
+        };
+      });
+
+      const result = await client.agentsDelete({ agentId: "octogee-alice-coach" });
+
+      expect(captured).toEqual({ agentId: "octogee-alice-coach" });
+      expect(result).toMatchObject({ ok: true, agentId: "octogee-alice-coach", removedBindings: 2 });
+    });
+
+    it("forwards deleteFiles when the caller pins it", async () => {
+      let captured: unknown = "not-called";
+      server.setHandler("agents.delete", (params) => {
+        captured = params;
+        return { ok: true, payload: { ok: true, agentId: "octogee-alice-coach", removedBindings: 0 } };
+      });
+
+      await client.agentsDelete({ agentId: "octogee-alice-coach", deleteFiles: false });
+
+      expect(captured).toEqual({ agentId: "octogee-alice-coach", deleteFiles: false });
+    });
+
+    it("throws OpenclawWireError('invalid-response') when the payload is missing `ok: true`", async () => {
+      server.setHandler("agents.delete", () => ({
+        ok: true,
+        payload: { agentId: "octogee-alice-coach" },
+      }));
+
+      await expect(client.agentsDelete({ agentId: "octogee-alice-coach" })).rejects.toMatchObject({
+        name: "OpenclawWireError",
+        code: "invalid-response",
+      });
+    });
+
+    it("surfaces the gateway's not-found refusal as an rpc-error the caller can classify", async () => {
+      server.setHandler("agents.delete", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: `agent "octogee-ghost-coach" not found` },
+      }));
+
+      const err = await client
+        .agentsDelete({ agentId: "octogee-ghost-coach" })
+        .then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(OpenclawWireError);
+      expect(isAgentNotFoundRpcError(err)).toBe(true);
+    });
+
+    it("does not classify an unrelated agents.delete refusal as not-found", async () => {
+      server.setHandler("agents.delete", () => ({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: `Agent "octogee-alice-coach" is the default and cannot be deleted. Reassign default first.`,
+        },
+      }));
+
+      const err = await client
+        .agentsDelete({ agentId: "octogee-alice-coach" })
+        .then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(OpenclawWireError);
+      expect(isAgentNotFoundRpcError(err)).toBe(false);
+    });
+  });
+
+  describe("agentsCreate", () => {
+    it("calls `agents.create` with the requested name and workspace and returns the gateway payload", async () => {
+      let captured: unknown = "not-called";
+      server.setHandler("agents.create", (params) => {
+        captured = params;
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            agentId: "octogee-alice-coach",
+            name: "octogee-alice-coach",
+            workspace: "/home/node/.openclaw/customers/alice",
+          },
+        };
+      });
+
+      const result = await client.agentsCreate({
+        name: "octogee-alice-coach",
+        workspace: "/home/node/.openclaw/customers/alice",
+      });
+
+      expect(captured).toEqual({
+        name: "octogee-alice-coach",
+        workspace: "/home/node/.openclaw/customers/alice",
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        agentId: "octogee-alice-coach",
+        workspace: "/home/node/.openclaw/customers/alice",
+      });
+    });
+
+    it("throws OpenclawWireError('invalid-response') when the payload is missing `ok: true`", async () => {
+      server.setHandler("agents.create", () => ({
+        ok: true,
+        payload: { agentId: "octogee-alice-coach" },
+      }));
+
+      await expect(
+        client.agentsCreate({ name: "octogee-alice-coach", workspace: "/w" }),
+      ).rejects.toMatchObject({ name: "OpenclawWireError", code: "invalid-response" });
+    });
+
+    it("throws OpenclawWireError('invalid-response') when the payload carries no agentId", async () => {
+      server.setHandler("agents.create", () => ({
+        ok: true,
+        payload: { ok: true, name: "octogee-alice-coach" },
+      }));
+
+      await expect(
+        client.agentsCreate({ name: "octogee-alice-coach", workspace: "/w" }),
+      ).rejects.toMatchObject({ name: "OpenclawWireError", code: "invalid-response" });
+    });
+
+    it("surfaces the gateway's already-exists refusal as an rpc-error the caller can classify", async () => {
+      server.setHandler("agents.create", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: `agent "octogee-alice-coach" already exists` },
+      }));
+
+      const err = await client
+        .agentsCreate({ name: "octogee-alice-coach", workspace: "/w" })
+        .then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(OpenclawWireError);
+      expect(isAgentAlreadyExistsRpcError(err)).toBe(true);
+    });
+
+    it("does not classify an unrelated agents.create refusal as already-exists", async () => {
+      server.setHandler("agents.create", () => ({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "workspace path is outside the state dir" },
+      }));
+
+      const err = await client
+        .agentsCreate({ name: "octogee-alice-coach", workspace: "/w" })
+        .then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(OpenclawWireError);
+      expect(isAgentAlreadyExistsRpcError(err)).toBe(false);
+    });
+  });
+
+  describe("isAgentAlreadyExistsRpcError", () => {
+    it("rejects non-wire errors and non-rpc wire codes so transport failures still fail loudly", () => {
+      expect(isAgentAlreadyExistsRpcError(new Error(`agent "x" already exists`))).toBe(false);
+      expect(
+        isAgentAlreadyExistsRpcError(
+          new OpenclawWireError("connect-failed", `agent "x" already exists`),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("isAgentNotFoundRpcError", () => {
+    it("rejects non-wire errors and non-rpc wire codes so transport failures still fail loudly", () => {
+      expect(isAgentNotFoundRpcError(new Error(`agent "x" not found`))).toBe(false);
+      expect(
+        isAgentNotFoundRpcError(
+          new OpenclawWireError("connect-failed", `agent "x" not found`),
+        ),
+      ).toBe(false);
     });
   });
 

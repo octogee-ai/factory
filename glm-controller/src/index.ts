@@ -92,6 +92,12 @@ import {
   assertSurgeAssignmentCoverage,
   reconcileSurgeCustomerHandoff,
 } from "./surge-customer-handoff.js";
+import {
+  decideRollStateMigration,
+  heartbeatOpenclawVersion,
+  openclawVersionFromGatewayImageTag,
+  type RollStateMigrationDecision,
+} from "./roll-state-migration.js";
 import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
   createSurgePodTransport,
@@ -569,6 +575,15 @@ async function readReleasePayloadFromFirestore(
   return readGatewayArtifact(db, gatewayId, release);
 }
 
+async function readGatewayOpenclawVersionFromFirestore(
+  db: Firestore,
+  gatewayId: string,
+): Promise<string | null> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const runtime = snap.exists ? snap.data() : undefined;
+  return isGatewayRuntimeDoc(runtime) ? heartbeatOpenclawVersion(runtime.heartbeat) : null;
+}
+
 function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
   const del = FieldValue.delete();
   const out: Record<string, unknown> = {};
@@ -878,6 +893,7 @@ interface GatewayConvergencePassDeps {
     desiredImageTag: string;
     requiresCustomerMigration: boolean;
     ownerlessOperatorPrewarm: boolean;
+    stateMigration: RollStateMigrationDecision;
   }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
 }
@@ -933,6 +949,10 @@ export async function refineGatewayConvergenceAction(input: {
     desiredImageTag: desiredImage.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
     ownerlessOperatorPrewarm: false,
+    stateMigration: decideRollStateMigration({
+      sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),
+      targetOpenclawVersion: openclawVersionFromGatewayImageTag(desiredImage.imageTag),
+    }),
   });
   if (
     handoff.ready &&
@@ -2993,6 +3013,8 @@ async function buildHandlers(
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
+    readGatewayOpenclawVersion: (gatewayId) =>
+      readGatewayOpenclawVersionFromFirestore(db, gatewayId),
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         {
@@ -3257,6 +3279,8 @@ async function buildHandlers(
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
+    readGatewayOpenclawVersion: (gatewayId) =>
+      readGatewayOpenclawVersionFromFirestore(db, gatewayId),
     activateDesiredRelease: async ({ gatewayId, targetRelease, operationId }) =>
       db.runTransaction(async (transaction) => {
         const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);

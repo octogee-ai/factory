@@ -506,6 +506,39 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost).not.toHaveProperty("token");
   });
 
+  // openclaw 2026.7.2 migrates agents.list into keyed agents.entries at pre-boot,
+  // where the key is the id and the entry carries none. Reading only the list
+  // leaves the Builder's coach un-defaulted on every current pod.
+  it("selects the Builder coach out of a migrated keyed roster", () => {
+    const config = {
+      agents: {
+        entries: {
+          "octogee-ceckert-coach": { name: "BenderEcho (ceckert)" },
+          "octogee-bob-coach": { name: "Bob" },
+        },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(true);
+    expect(config.agents.entries["octogee-ceckert-coach"]).toMatchObject({ default: true });
+    expect(config.agents.entries["octogee-bob-coach"]).not.toHaveProperty("default");
+  });
+
+  it("is a no-op on a keyed roster whose Builder coach is already the default", () => {
+    const config = {
+      agents: { entries: { "octogee-ceckert-coach": { default: true } } },
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(false);
+  });
+
+  it("does not default a coach when no Builder slug is configured", () => {
+    const config = { agents: { entries: { "octogee-ceckert-coach": {} } } };
+
+    expect(removeLegacyMacConfig(config, {})).toBe(false);
+    expect(config.agents.entries["octogee-ceckert-coach"]).not.toHaveProperty("default");
+  });
+
   it("preserves historical-looking Mattermost variants and never externalizes the placeholder", () => {
     const missingDefaultSelector = {
       channels: {
@@ -617,6 +650,66 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost.defaultAccount).toBe("default");
     expect(config.bindings).toEqual([
       expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
+    ]);
+  });
+
+  // 2026.7.2 rewrites agents.list into keyed agents.entries at pre-boot, so a
+  // list-only reader silently keeps the legacy Mac lane on every current pod.
+  it("removes the shape-matched legacy Mac agent from the keyed roster", () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        entries: {
+          "octogee-ops-bender": {
+            identity: { name: "Mac" },
+            workspace: "/home/node/.openclaw/workspace/ops",
+          },
+          "octogee-ceckert-coach": { model: "house" },
+        },
+      },
+      bindings: [
+        { agentId: "octogee-ops-bender", match: { channel: "mattermost" } },
+        { agentId: "octogee-ceckert-coach", match: { channel: "mattermost" } },
+      ],
+    };
+
+    expect(removeLegacyMacConfig(config, {
+      GATEWAY_ID: "bender",
+      GATEWAY_BUILDER_SLUG: "ceckert",
+    })).toBe(true);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
+    ]);
+    expect(config.bindings).toEqual([
+      expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
+    ]);
+  });
+
+  it("removes an exact-id legacy Mac agent from the keyed roster", () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        entries: {
+          "octogee-ops-${GATEWAY_ID}": { model: "house" },
+          "octogee-ceckert-coach": { model: "house" },
+        },
+      },
+      bindings: [],
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(true);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
+    ]);
+  });
+
+  it("leaves a keyed roster without a legacy Mac lane untouched", () => {
+    const config: Record<string, unknown> = {
+      agents: { entries: { "octogee-ceckert-coach": { model: "house" } } },
+      bindings: [{ agentId: "octogee-ceckert-coach" }],
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(false);
+    expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
+      "octogee-ceckert-coach",
     ]);
   });
 

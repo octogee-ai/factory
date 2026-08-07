@@ -1,3 +1,4 @@
+import { type ApplyOpenClawSecretsPlanOptions, type AuthProfileApiKeyTarget } from "./openclaw-secrets-apply.js";
 export declare const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export declare const OPENROUTER_BROKER_PROFILE_ID = "platform-openrouter:default";
 export declare const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
@@ -75,53 +76,43 @@ export interface OpenRouterBrokerCatalogInput {
 export declare function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openRouterBrokerCatalogJson(_agentId: string, input: OpenRouterBrokerCatalogInput): OpenRouterBrokerModelsJson;
-/**
- * Upsert the per-agent broker-token `anthropic:default` profile, MERGING into the
- * agent's existing auth-profile store.
- *
- * The store is last-writer-wins on a single JSON blob, and a byosub OAuth profile
- * (openai-codex / anthropic:claude-cli) may already be the agent's PRIMARY — so we
- * read-merge-write to add anthropic:default without clobbering it, and preserve the
- * store's top-level (e.g. an OAuth store's `version`). anthropic:default is always
- * the broker token here: it is the platform/anthropic-BYOK primary for plain
- * customers and the Haiku-fallback credential for BYOS/non-anthropic-BYOK ones.
- *
- * Idempotent — returns false (no write) when the desired profile is already present.
- */
-export declare function upsertAnthropicBrokerProfile(agentDir: string, agentId: string): boolean;
-export declare function upsertOpenRouterBrokerProfile(agentDir: string, agentId: string): boolean;
-export declare function upsertOpenAiBrokerProfile(agentDir: string, agentId: string): boolean;
-/** A catalog upsert splits into two independent surfaces: `models.json` (plain
- *  filesystem, always writable) and the auth-profile store (sqlite, which only
- *  openclaw creates). `profileDeferred` marks the second one as not-yet-possible
- *  so a later sweep retries it — never as failed. */
-export interface PlatformBrokerCatalogResult {
-    wrote: boolean;
-    profileDeferred: boolean;
+/** Which broker provider surfaces this pod carries. A profile whose provider is
+ *  unconfigured is pure risk: openclaw's exec resolver is batch-fatal, so one
+ *  unresolvable ref colds every other owner on the provider. */
+export interface PlatformBrokerProfileSurfaces {
+    openRouter: boolean;
+    openAi: boolean;
 }
-export declare function upsertOpenRouterBrokerModel(agentDir: string, agentId: string, input: OpenRouterBrokerModelInput): PlatformBrokerCatalogResult;
-export declare function upsertOpenRouterBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): PlatformBrokerCatalogResult;
-export declare function upsertOpenAiBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): PlatformBrokerCatalogResult;
+export declare function platformBrokerProfileTargets(agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
+/** The store is read-only to us — openclaw's `secrets apply` is the only writer.
+ *  Reading it keeps the sweep from spawning the CLI once everything has settled. */
+export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
+export declare function upsertOpenRouterBrokerModel(agentDir: string, input: OpenRouterBrokerModelInput): boolean;
+export declare function upsertOpenRouterBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
+export declare function upsertOpenAiBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function removeOpenRouterBrokerModel(agentDir: string): boolean;
-/**
- * Boot/reconcile materialization: ensure every shared customer-agent has its
- * anthropic:default broker-token profile. Idempotent + tolerant — a failure on
- * one agent (corrupt store, missing dir) never aborts the sweep. Returns the
- * count actually written. `agentsDir` is injectable for tests.
- */
-export declare function materializeAnthropicBrokerForAgents(agentIds: string[], opts?: {
-    agentsDir?: string;
-    logFn?: (m: string) => void;
-}): number;
-/** Agents whose catalogs landed but whose store-backed profiles still need a
- *  retry once openclaw is up. `materialized` counts agents with any write. */
+/** Agents whose catalogs landed but whose profiles openclaw has not accepted
+ *  yet. `materialized` counts agents with any write. The reason travels with the
+ *  result rather than being logged per agent: this sweep is level-triggered, and
+ *  a line printed here would reprint on every tick forever. */
 export interface BrokerProfileSweepResult {
     materialized: number;
     deferred: string[];
+    deferralReason?: string;
 }
-export declare function materializeBrokerProfilesForAgents(agentIds: string[], opts?: {
+export interface BrokerProfileSweepOptions {
     agentsDir?: string;
     openRouter?: OpenRouterBrokerCatalogInput;
     openAi?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
-}): BrokerProfileSweepResult;
+    /** Child-process seam for `openclaw secrets apply`. */
+    secretsApply?: ApplyOpenClawSecretsPlanOptions;
+}
+/**
+ * Model-ready sweep: assert every broker provider surface per agent — the
+ * platform auth profiles AND the OpenRouter/OpenAI catalogs (when the broker's
+ * base URLs are configured). After this, switching any agent to any catalog
+ * model is a pure roster flip. Tolerant — a failure on one agent never aborts
+ * the sweep.
+ */
+export declare function materializeBrokerProfilesForAgents(agentIds: string[], opts?: BrokerProfileSweepOptions): BrokerProfileSweepResult;
