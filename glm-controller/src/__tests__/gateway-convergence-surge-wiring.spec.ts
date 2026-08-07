@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
-import type { GatewayRuntimeDoc } from "@octogee/shared/types/gateway-runtime";
+import type { GatewayRuntimeDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { refineGatewayConvergenceAction } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 import { decideRollStateMigration } from "../roll-state-migration.js";
