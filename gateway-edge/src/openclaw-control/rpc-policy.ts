@@ -4,7 +4,7 @@ import {
 } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
 import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
-import advertisedMethods from "./openclaw-2026.7.1-advertised-methods.json" with { type: "json" };
+import advertisedMethods from "./openclaw-2026.7.2-advertised-methods.json" with { type: "json" };
 import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 export const OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS = Object.freeze(
