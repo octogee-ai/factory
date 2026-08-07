@@ -1075,6 +1075,51 @@ describe("customerAgentRosterPatch", () => {
     );
   });
 
+  it("confirms the arrays a nulled keyed agent entry destroys", () => {
+    // Nulling `agents.entries.<id>` deletes every array beneath it. OpenClaw's
+    // destructive-array guard walks base-vs-merged and reports each one
+    // (collectBaseArrayPaths on the `isPlainObject(base) && !isPlainObject(patch)`
+    // branch), so an unconfirmed path refuses the whole removal:
+    //   config.patch would remove entries from array path(s):
+    //   agents.entries.octogee-alice-coach.model.fallbacks
+    // That is what deadlocked the TEST shared-b surge handoff — imports landed,
+    // unmount never did, and Cowboy re-migrated the same customers in a loop.
+    const current = {
+      agents: {
+        entries: {
+          "octogee-alice-coach": {
+            model: { fallbacks: ["platform-openrouter/z-ai/glm-5.2"] },
+            tools: { alsoAllow: ["octogee_status"] },
+          },
+          "octogee-alice-proj-orbit-coach": {
+            model: { fallbacks: ["platform-openrouter/z-ai/glm-5.2"] },
+          },
+          "octogee-bob-coach": { model: { fallbacks: ["untouched"] } },
+        },
+      },
+    };
+
+    const paths = customerConfigAgentRosterReplacePaths(current, "alice");
+
+    expect(paths).toEqual(expect.arrayContaining([
+      "agents.entries.octogee-alice-coach.model.fallbacks",
+      "agents.entries.octogee-alice-coach.tools.alsoAllow",
+      "agents.entries.octogee-alice-proj-orbit-coach.model.fallbacks",
+    ]));
+    // Another customer's arrays are not ours to confirm — a removal that could
+    // silently shrink them should still be refused.
+    expect(paths).not.toContain("agents.entries.octogee-bob-coach.model.fallbacks");
+  });
+
+  it("confirms nothing extra for a keyed agent entry that holds no arrays", () => {
+    // test31 deprovisioned cleanly on the unfixed build precisely because its
+    // entry had no arrays to destroy; the guard had nothing to report.
+    const current = {
+      agents: { entries: { "octogee-alice-coach": { model: "house" } } },
+    };
+    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+  });
+
   it("confirms arrays under every one of the customer's project accounts", () => {
     const current = {
       agents: { list: [] },
