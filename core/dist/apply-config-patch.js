@@ -354,6 +354,32 @@ export function customerAgentRosterPatch(current, slug, agentEntries) {
 export function filterOutCustomerBindings(bindings, slug) {
     return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
 }
+// Rebuilding bindings as filter-out-then-append reorders the array on every
+// converge, which defeats config.patch's local no-op and buys a full reload
+// cycle for a content-identical write. Keep the current array — order and
+// identity — whenever the merged content is the same multiset.
+export function mergeCustomerBindings(current, slugs, nextCustomerBindings) {
+    let kept = current;
+    for (const slug of slugs) {
+        kept = filterOutCustomerBindings(kept, slug);
+    }
+    const rebuilt = [...kept, ...nextCustomerBindings];
+    if (rebuilt.length !== current.length)
+        return rebuilt;
+    const counts = new Map();
+    for (const binding of current) {
+        const key = JSON.stringify(binding);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const binding of rebuilt) {
+        const key = JSON.stringify(binding);
+        const remaining = counts.get(key);
+        if (!remaining)
+            return rebuilt;
+        counts.set(key, remaining - 1);
+    }
+    return current;
+}
 // config.patch merges: omitting a retired project-agent account keeps it
 // alive on a revoked token. Every account rebuild must null the customer's
 // `{slug}-proj-*` keys that are no longer active. The prefix is cross-tenant
