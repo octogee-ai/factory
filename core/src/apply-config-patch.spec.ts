@@ -22,6 +22,7 @@ import {
   customerConfigReplacePaths,
   filterOutCustomerBindings,
   fullAgentListReplacePaths,
+  mergeCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
@@ -1187,6 +1188,70 @@ describe("filterOutCustomerBindings", () => {
       "octogee-bob-coach",
       "octogee-mac-default",
     ]);
+  });
+});
+
+describe("mergeCustomerBindings", () => {
+  const aliceCoach = {
+    agentId: "octogee-alice-coach",
+    match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "g1" } },
+  };
+  const bobCoach = {
+    agentId: "octogee-bob-coach",
+    match: { channel: "mattermost", accountId: "bob-coach", peer: { kind: "group", id: "g2" } },
+  };
+  const carolCoach = {
+    agentId: "octogee-carol-coach",
+    match: { channel: "mattermost", accountId: "carol-coach", peer: { kind: "group", id: "g3" } },
+  };
+
+  it("returns the current array untouched when the customer's binding content is unchanged", () => {
+    const current = [aliceCoach, bobCoach, carolCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+    expect(next).toBe(current);
+  });
+
+  it("keeps current order when unchanged even though rebuild would have appended", () => {
+    const current = [bobCoach, aliceCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-bob-coach", "octogee-alice-coach"]);
+  });
+
+  it("rewrites when the customer gains a binding", () => {
+    const added = {
+      agentId: "octogee-bob-proj-x-coach",
+      match: { channel: "mattermost", accountId: "bob-proj-x", peer: { kind: "group", id: "g9" } },
+    };
+    const current = [aliceCoach, bobCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [bobCoach, added]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.agentId)).toEqual([
+      "octogee-alice-coach",
+      "octogee-bob-coach",
+      "octogee-bob-proj-x-coach",
+    ]);
+  });
+
+  it("rewrites when a binding's content changes", () => {
+    const moved = structuredClone(bobCoach);
+    moved.match.peer.id = "g2-moved";
+    const current = [aliceCoach, bobCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [moved]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.match.peer.id)).toEqual(["g1", "g2-moved"]);
+  });
+
+  it("rewrites to drop eviction slugs' bindings", () => {
+    const current = [aliceCoach, bobCoach, carolCoach];
+    const next = mergeCustomerBindings(current, ["bob", "carol"], [structuredClone(bobCoach)]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
+  });
+
+  it("appends a first-time customer's bindings", () => {
+    const current = [aliceCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [bobCoach]);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
   });
 });
 
