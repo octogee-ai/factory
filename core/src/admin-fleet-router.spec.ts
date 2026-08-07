@@ -197,6 +197,36 @@ describe("projectGatewaySummary — gateway identity projection", () => {
   });
 });
 
+describe("projectGatewaySummary — openclaw version projection", () => {
+  function summaryFor(heartbeat: Record<string, unknown>, glmDoc: Record<string, unknown> = {}) {
+    return projectGatewaySummary(
+      { id: "default", data: () => ({ gatewayId: "default", ...heartbeat }) },
+      { gatewayId: "default", ...glmDoc },
+      Date.now(),
+    );
+  }
+
+  it.each([
+    ["OpenClaw 2026.7.1 (2ddb9a9)", "2026.7.1"],
+    ["OpenClaw 2026.7.2-beta.7", "2026.7.2-beta.7"],
+    ["2026.7.1 (2ddb9a9)", "2026.7.1"],
+    ["  OpenClaw 2026.7.1  ", "2026.7.1"],
+  ])("projects the raw `openclaw --version` string %j as the bare version", (reported, expected) => {
+    expect(summaryFor({ openclawVersion: reported }).openclawVersion).toBe(expected);
+  });
+
+  it.each(["unknown", "OpenClaw unknown", "", "   "])(
+    "falls back to the image tag when the pod reports %j",
+    (reported) => {
+      const summary = summaryFor(
+        { openclawVersion: reported },
+        { imageTag: "0bf497e-oc2026.7.2-beta.7" },
+      );
+      expect(summary.openclawVersion).toBe("2026.7.2-beta.7");
+    },
+  );
+});
+
 describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   const now = 1_722_000_900_000;
 
@@ -1549,6 +1579,39 @@ describe("fleet gateway projection", () => {
       paused: 1,
       unreachable: 0,
     });
+  });
+
+  it("reports the bare openclaw version from a verbatim `openclaw --version` heartbeat", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "default" },
+      users: {},
+      gateways: { default: durableGatewayRoot("default", { liveRelease: 1 }) },
+      glmGateways: {
+        default: {
+          docKind: "runtime",
+          gatewayId: "default",
+          release: 1,
+          lifecycle: "serving",
+          desiredStatus: "running",
+          helm: {
+            imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+            imageTag: "1234567",
+          },
+          heartbeat: {
+            status: "ready",
+            mountedCustomers: [],
+            lastHeartbeatAt: Date.now(),
+            openclawVersion: "OpenClaw 2026.7.1 (2ddb9a9)",
+          },
+        },
+      },
+    });
+
+    const res = await request(app).get("/gateways").expect(200);
+
+    expect(res.body.gateways).toEqual([
+      expect.objectContaining({ gatewayId: "default", openclawVersion: "2026.7.1" }),
+    ]);
   });
 
   it("rejects termination when the canonical shared assignment is missing", async () => {
