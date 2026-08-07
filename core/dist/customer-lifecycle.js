@@ -511,6 +511,9 @@ async function verifyChannelReady(adapter, slug, verifyTimeoutMs) {
         throw new Error(`[add:${slug}] channel didn't reach running+connected within ${verifyTimeoutMs}ms (waited ${elapsed}ms) — failing the mount; fleet will retry`);
     }
     adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
+    // The coach is running, so openclaw has created its store — retry the broker
+    // profiles the mount deferred, BEFORE the greeting turn needs them.
+    adapter.materializeBrokerProfiles?.(slug);
 }
 async function scheduleGreetingIfNeeded(adapter, uid, snapshot) {
     if (snapshot.greetingPosted)

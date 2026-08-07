@@ -45,9 +45,7 @@ import {
 import {
   openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
-  upsertAnthropicBrokerProfile,
-  upsertOpenAiBrokerCatalog,
-  upsertOpenRouterBrokerCatalog,
+  materializeBrokerProfilesForAgents,
 } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, type AgentModelSelections } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
@@ -530,7 +528,7 @@ export interface SyncByotForCustomerDeps {
   applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
-  materializeAnthropicBroker?: (slug: string) => boolean;
+  materializePlatformBrokerSurfaces?: (slug: string) => boolean;
   applyAgentModelOverrides?: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart?: () => boolean;
@@ -549,7 +547,7 @@ interface SyncByotActions {
   applyOauthRuntimeModelAllowlist: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
-  materializeAnthropicBroker: (slug: string) => boolean;
+  materializePlatformBrokerSurfaces: (slug: string) => boolean;
   applyAgentModelOverrides: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
   hasPendingPlatformCatalogRestart: () => boolean;
@@ -629,26 +627,22 @@ function mountedAgentIdsForSlug(slug: string): string[] {
   }
 }
 
-function materializeAnthropicBroker(slug: string): boolean {
+function materializePlatformBrokerSurfaces(slug: string): boolean {
   const baseUrl = configuredOpenRouterBaseUrl();
   const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-  let changed = false;
-  for (const agentId of mountedAgentIdsForSlug(slug)) {
-    try {
-      const agentHome = path.join(AGENTS_DIR, agentId, "agent");
-      const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
-      const wroteCatalog = baseUrl
-        ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
-        : false;
-      const wroteOpenAi = openAiBaseUrl
-        ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
-        : false;
-      changed = wroteProfile || wroteCatalog || wroteOpenAi || changed;
-    } catch (error) {
-      log(`⚠ [byot-sync] model catalog materialization failed for ${agentId}: ${(error as Error).message}`);
-    }
+  const result = materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
+    agentsDir: AGENTS_DIR,
+    openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
+    openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+    logFn: log,
+  });
+  if (result.deferred.length > 0) {
+    log(
+      `[byot-sync] ${slug}: broker profile deferred for ${result.deferred.join(", ")}` +
+        ` — openclaw has not created the store yet; the boot sweep retries it`,
+    );
   }
-  return changed;
+  return result.materialized > 0;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {
@@ -682,7 +676,8 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
       ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
-    materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+    materializePlatformBrokerSurfaces:
+      deps?.materializePlatformBrokerSurfaces ?? materializePlatformBrokerSurfaces,
     applyAgentModelOverrides:
       deps?.applyAgentModelOverrides ??
       ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
@@ -726,7 +721,7 @@ function materializePlatformCatalog(
   slug: string,
   actions: SyncByotActions,
 ): { changed: boolean; restartPending: boolean } {
-  const changed = actions.materializeAnthropicBroker(slug);
+  const changed = actions.materializePlatformBrokerSurfaces(slug);
   if (changed) actions.markPlatformCatalogRestartPending();
   return {
     changed,

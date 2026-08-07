@@ -235,6 +235,7 @@ return "ssh-pubkey";
       record("waitForAccountHealthy");
       return state.healthy;
     },
+    materializeBrokerProfiles: () => record("materializeBrokerProfiles"),
 
     notifyOpsOfSignup: async () => {
       record("notifyOpsOfSignup");
@@ -365,6 +366,21 @@ expect(result.steps).toEqual([
 
     expect(verifyIndex).toBeGreaterThan(patchIndex);
     expect(verifyIndex).toBeGreaterThan(reassertIndex);
+  });
+
+  // The mount's first materialization runs before openclaw has created the
+  // agent store, so it defers. Retrying here — after the coach reports
+  // running+connected — is what gets the broker profile in place before the
+  // greeting turn resolves its model.
+  it("retries the deferred broker profiles once the coach is verified, before the greeting", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
+    const materializeIdx = state.calls.indexOf("materializeBrokerProfiles");
+    const greetingIdx = state.calls.indexOf("scheduleBootGreetingCron");
+
+    expect(materializeIdx).toBeGreaterThan(verifyIdx);
+    expect(greetingIdx).toBeGreaterThan(materializeIdx);
   });
 
   it("ensures the per-workspace Gitea org BEFORE the workspace repo (#963)", async () => {

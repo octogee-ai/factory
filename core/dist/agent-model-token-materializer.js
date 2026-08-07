@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
+import { AgentDatabaseNotInitializedError, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
@@ -193,7 +193,7 @@ export function upsertOpenRouterBrokerCatalog(agentDir, agentId, input) {
         providerId: OPENROUTER_BROKER_PROVIDER_ID,
         profileId: OPENROUTER_BROKER_PROFILE_ID,
         marker: OPENROUTER_PLATFORM_MARKER,
-        wroteProfile: upsertOpenRouterBrokerProfile(agentDir, agentId),
+        upsertProfile: () => upsertOpenRouterBrokerProfile(agentDir, agentId),
     });
 }
 export function upsertOpenAiBrokerCatalog(agentDir, agentId, input) {
@@ -201,10 +201,26 @@ export function upsertOpenAiBrokerCatalog(agentDir, agentId, input) {
         providerId: OPENAI_BROKER_PROVIDER_ID,
         profileId: OPENAI_BROKER_PROFILE_ID,
         marker: OPENAI_PLATFORM_MARKER,
-        wroteProfile: upsertOpenAiBrokerProfile(agentDir, agentId),
+        upsertProfile: () => upsertOpenAiBrokerProfile(agentDir, agentId),
     });
 }
+/** Runs a store-backed profile write, reporting "not yet" separately from
+ *  "failed" — the store is absent until openclaw boots, which is a retry, not
+ *  an error. Any other failure still throws. */
+function upsertProfileAllowingDeferral(upsert) {
+    try {
+        return { wrote: upsert(), deferred: false };
+    }
+    catch (error) {
+        if (error instanceof AgentDatabaseNotInitializedError)
+            return { wrote: false, deferred: true };
+        throw error;
+    }
+}
 function upsertPlatformBrokerCatalog(agentDir, input, ids) {
+    // The profile write must not gate the catalog write: models.json is what makes
+    // the model KNOWN to openclaw, and an unknown model fails the turn outright.
+    const profile = upsertProfileAllowingDeferral(ids.upsertProfile);
     const modelsPath = path.join(agentDir, "models.json");
     const markerPath = path.join(agentDir, ids.marker);
     const current = readJsonFile(modelsPath);
@@ -224,10 +240,10 @@ function upsertPlatformBrokerCatalog(agentDir, input, ids) {
     };
     const changed = JSON.stringify(current) !== JSON.stringify(next) || !fs.existsSync(markerPath);
     if (!changed)
-        return ids.wroteProfile;
+        return { wrote: profile.wrote, profileDeferred: profile.deferred };
     writeJsonFile(modelsPath, next);
     fs.writeFileSync(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
-    return true;
+    return { wrote: true, profileDeferred: profile.deferred };
 }
 export function removeOpenRouterBrokerModel(agentDir) {
     const markerPath = path.join(agentDir, OPENROUTER_PLATFORM_MARKER);
@@ -291,34 +307,44 @@ function catalogState(configured, wrote) {
         return "unconfigured";
     return wrote ? "written" : "ok";
 }
+/** An unconfigured surface counts as neither written nor deferred. */
+function surfaceOutcome(result) {
+    return { wrote: result?.wrote === true, deferred: result?.profileDeferred === true };
+}
+function materializeOneAgent(agentId, agentsDir, opts) {
+    const agentHome = path.join(agentsDir, agentId, "agent");
+    const anthropic = upsertProfileAllowingDeferral(() => upsertAnthropicBrokerProfile(agentHome, agentId));
+    const catalog = surfaceOutcome(opts.openRouter ? upsertOpenRouterBrokerCatalog(agentHome, agentId, opts.openRouter) : null);
+    const openAi = surfaceOutcome(opts.openAi ? upsertOpenAiBrokerCatalog(agentHome, agentId, opts.openAi) : null);
+    const wrote = anthropic.wrote || catalog.wrote || openAi.wrote;
+    const deferred = anthropic.deferred || catalog.deferred || openAi.deferred;
+    if (wrote) {
+        opts.logFn?.(`[agent-model-token] model-ready: ${agentId}` +
+            ` (anthropic ${anthropic.wrote ? "written" : "ok"},` +
+            ` openrouter ${catalogState(opts.openRouter, catalog.wrote)},` +
+            ` openai ${catalogState(opts.openAi, openAi.wrote)})`);
+    }
+    return { wrote, deferred };
+}
 export function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-    let count = 0;
+    let materialized = 0;
+    const deferred = [];
     for (const agentId of agentIds) {
         if (!COACH_AGENT_RE.test(agentId)) {
             opts.logFn?.(`[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`);
             continue;
         }
         try {
-            const agentHome = path.join(agentsDir, agentId, "agent");
-            const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
-            const wroteCatalog = opts.openRouter
-                ? upsertOpenRouterBrokerCatalog(agentHome, agentId, opts.openRouter)
-                : false;
-            const wroteOpenAi = opts.openAi
-                ? upsertOpenAiBrokerCatalog(agentHome, agentId, opts.openAi)
-                : false;
-            if (wroteProfile || wroteCatalog || wroteOpenAi) {
-                count++;
-                opts.logFn?.(`[agent-model-token] model-ready: ${agentId}` +
-                    ` (anthropic ${wroteProfile ? "written" : "ok"},` +
-                    ` openrouter ${catalogState(opts.openRouter, wroteCatalog)},` +
-                    ` openai ${catalogState(opts.openAi, wroteOpenAi)})`);
-            }
+            const result = materializeOneAgent(agentId, agentsDir, opts);
+            if (result.wrote)
+                materialized++;
+            if (result.deferred)
+                deferred.push(agentId);
         }
         catch (e) {
             opts.logFn?.(`⚠ [agent-model-token] model-ready materialize failed for ${agentId}: ${e.message}`);
         }
     }
-    return count;
+    return { materialized, deferred };
 }

@@ -9,7 +9,7 @@ import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvi
 import { codexAuthJsonPath, restoreByosubCredentials, } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, GATEWAY_CLASS, OPENCLAW_DIR, isOperatorGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
-import { openAiCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, upsertAnthropicBrokerProfile, upsertOpenAiBrokerCatalog, upsertOpenRouterBrokerCatalog, } from "./agent-model-token-materializer.js";
+import { openAiCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { parseBuilderAgentModelDefault } from "@octogee/shared/types/platform-config";
@@ -419,27 +419,20 @@ function mountedAgentIdsForSlug(slug) {
         return [`octogee-${slug}-coach`];
     }
 }
-function materializeAnthropicBroker(slug) {
+function materializePlatformBrokerSurfaces(slug) {
     const baseUrl = configuredOpenRouterBaseUrl();
     const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-    let changed = false;
-    for (const agentId of mountedAgentIdsForSlug(slug)) {
-        try {
-            const agentHome = path.join(AGENTS_DIR, agentId, "agent");
-            const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
-            const wroteCatalog = baseUrl
-                ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
-                : false;
-            const wroteOpenAi = openAiBaseUrl
-                ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
-                : false;
-            changed = wroteProfile || wroteCatalog || wroteOpenAi || changed;
-        }
-        catch (error) {
-            log(`⚠ [byot-sync] model catalog materialization failed for ${agentId}: ${error.message}`);
-        }
+    const result = materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
+        agentsDir: AGENTS_DIR,
+        openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
+        openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+        logFn: log,
+    });
+    if (result.deferred.length > 0) {
+        log(`[byot-sync] ${slug}: broker profile deferred for ${result.deferred.join(", ")}` +
+            ` — openclaw has not created the store yet; the boot sweep retries it`);
     }
-    return changed;
+    return result.materialized > 0;
 }
 function configuredOpenRouterBaseUrl() {
     const raw = process.env.OPENROUTER_BASE_URL?.trim();
@@ -467,7 +460,7 @@ function syncActions(deps) {
             ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
         requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
         triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
-        materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+        materializePlatformBrokerSurfaces: deps?.materializePlatformBrokerSurfaces ?? materializePlatformBrokerSurfaces,
         applyAgentModelOverrides: deps?.applyAgentModelOverrides ??
             ((slug, agentModels, opts) => applyAgentModelOverrides(slug, agentModels, opts, patchDeps)),
         ...(deps?.refreshCoachRuntimeSessions
@@ -493,7 +486,7 @@ async function requestRestartIfRequired(runtimePatch, actions, reason, platformC
     return requested;
 }
 function materializePlatformCatalog(slug, actions) {
-    const changed = actions.materializeAnthropicBroker(slug);
+    const changed = actions.materializePlatformBrokerSurfaces(slug);
     if (changed)
         actions.markPlatformCatalogRestartPending();
     return {

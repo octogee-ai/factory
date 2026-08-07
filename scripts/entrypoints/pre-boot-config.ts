@@ -611,15 +611,22 @@ let configRaw: string;
 
   // Model-ready boot: every customer-agent gets EVERY broker provider surface
   // (anthropic:default profile + the OpenRouter and OpenAI catalogs) before
-  // openclaw boots, so any catalog model is dynamically selectable. Local
-  // writes (db-less-safe); the secret-resolver fetches tokens at runtime.
+  // openclaw boots, so any catalog model is dynamically selectable. The
+  // catalogs are plain models.json writes and always land here; the profiles
+  // need a store only openclaw creates, so at pre-boot they defer by design
+  // and the post-boot sweep writes them.
   if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
-    const materialized = materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
+    const sweep = materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
       logFn: log,
       ...platformBrokerCatalogOpts(process.env),
     });
-    if (materialized > 0) {
-      log(`model-ready broker profiles materialized for ${materialized} agent(s)`);
+    if (sweep.materialized > 0) {
+      log(`model-ready broker profiles materialized for ${sweep.materialized} agent(s)`);
+    }
+    if (sweep.deferred.length > 0) {
+      log(
+        `model-ready: broker profile deferred for ${sweep.deferred.length} agent(s) until openclaw creates their stores`,
+      );
     }
   }
 

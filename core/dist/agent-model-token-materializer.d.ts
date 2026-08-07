@@ -91,9 +91,17 @@ export declare function openRouterBrokerCatalogJson(_agentId: string, input: Ope
 export declare function upsertAnthropicBrokerProfile(agentDir: string, agentId: string): boolean;
 export declare function upsertOpenRouterBrokerProfile(agentDir: string, agentId: string): boolean;
 export declare function upsertOpenAiBrokerProfile(agentDir: string, agentId: string): boolean;
-export declare function upsertOpenRouterBrokerModel(agentDir: string, agentId: string, input: OpenRouterBrokerModelInput): boolean;
-export declare function upsertOpenRouterBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): boolean;
-export declare function upsertOpenAiBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): boolean;
+/** A catalog upsert splits into two independent surfaces: `models.json` (plain
+ *  filesystem, always writable) and the auth-profile store (sqlite, which only
+ *  openclaw creates). `profileDeferred` marks the second one as not-yet-possible
+ *  so a later sweep retries it — never as failed. */
+export interface PlatformBrokerCatalogResult {
+    wrote: boolean;
+    profileDeferred: boolean;
+}
+export declare function upsertOpenRouterBrokerModel(agentDir: string, agentId: string, input: OpenRouterBrokerModelInput): PlatformBrokerCatalogResult;
+export declare function upsertOpenRouterBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): PlatformBrokerCatalogResult;
+export declare function upsertOpenAiBrokerCatalog(agentDir: string, agentId: string, input: OpenRouterBrokerCatalogInput): PlatformBrokerCatalogResult;
 export declare function removeOpenRouterBrokerModel(agentDir: string): boolean;
 /**
  * Boot/reconcile materialization: ensure every shared customer-agent has its
@@ -105,9 +113,15 @@ export declare function materializeAnthropicBrokerForAgents(agentIds: string[], 
     agentsDir?: string;
     logFn?: (m: string) => void;
 }): number;
+/** Agents whose catalogs landed but whose store-backed profiles still need a
+ *  retry once openclaw is up. `materialized` counts agents with any write. */
+export interface BrokerProfileSweepResult {
+    materialized: number;
+    deferred: string[];
+}
 export declare function materializeBrokerProfilesForAgents(agentIds: string[], opts?: {
     agentsDir?: string;
     openRouter?: OpenRouterBrokerCatalogInput;
     openAi?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
-}): number;
+}): BrokerProfileSweepResult;
