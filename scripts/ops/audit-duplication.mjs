@@ -19,8 +19,9 @@ const MIN_SPAN = 12;
 const MIN_TEST_ONLY_SPAN = 25;
 const SUFFIXES = ["Local", "Impl", "Internal", "Inner", "Helper", "V2", "2", "New", "Old", "Copy"];
 
-const DEF_RE =
-  /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*[(<]|^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?[(<]/;
+const FN_DEF_RE = /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*[(<]/;
+const CONST_DEF_RE = /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?[(<]/;
+const matchDef = (line) => FN_DEF_RE.exec(line) ?? CONST_DEF_RE.exec(line);
 
 function walk(dir, out = []) {
   let entries;
@@ -58,14 +59,14 @@ const defs = new Map();
 for (const f of src) {
   const lines = text.get(f).split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const m = DEF_RE.exec(lines[i]);
+    const m = matchDef(lines[i]);
     if (!m) continue;
     // Span runs to the next top-level definition. Measuring to the first
     // column-0 `}` scores a multi-line return-type annotation as the whole body.
     let end = i + 1;
-    while (end < lines.length && !DEF_RE.test(lines[end])) end++;
+    while (end < lines.length && !matchDef(lines[end])) end++;
     while (end > i + 1 && !lines[end - 1].trim()) end--;
-    const name = m[1] ?? m[2];
+    const name = m[1];
     if (!defs.has(name)) defs.set(name, []);
     defs.get(name).push({ file: rel(f), line: i + 1, span: end - i, exported: lines[i].startsWith("export") });
   }
@@ -109,7 +110,7 @@ section("A2. suffix twins — a copy renamed so it can coexist with its original
 
 const isBarrel = (f) => {
   const t = text.get(f).trim();
-  return /^\s*export \* from/m.test(t) && t.split("\n").every((l) => !l.trim() || l.startsWith("export *"));
+  return /^export \* from/m.test(t) && t.split("\n").every((l) => !l.trim() || l.startsWith("export *"));
 };
 const consumers = prod.filter((f) => !isBarrel(f));
 
