@@ -299,6 +299,115 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(JSON.stringify(projected)).not.toMatch(/REDACTED|owner-secret|baseUrl/u);
   });
 
+  it("projects the keyed roster with the exact field policy the list form gets", () => {
+    const projected = projectOpenClawServerFrameForProfile({
+      type: "res",
+      id: "config-read",
+      ok: true,
+      payload: {
+        hash: "hash-1",
+        raw: JSON.stringify({
+          agents: {
+            defaults: { model: { primary: "anthropic/claude" } },
+            entries: {
+              "octogee-ceckert-coach": {
+                name: "Coach",
+                default: true,
+                model: { primary: "anthropic/claude", fallbacks: ["openai/gpt-5"] },
+                workspace: "/workspace/ceckert",
+                memorySearch: { remote: { apiKey: "owner-secret" } },
+              },
+              "octogee-ops-gw-bender": { model: "openai/gpt-5" },
+              "octogee-blank-coach": { workspace: "/workspace/blank" },
+            },
+          },
+        }),
+      },
+    }, "config.get", "delegated-config");
+
+    expect(JSON.parse(String((projected!.payload as Record<string, unknown>).raw))).toEqual({
+      agents: {
+        defaults: { model: { primary: "anthropic/claude" } },
+        entries: {
+          "octogee-ceckert-coach": {
+            name: "Coach",
+            default: true,
+            model: { primary: "anthropic/claude", fallbacks: ["openai/gpt-5"] },
+          },
+          "octogee-ops-gw-bender": { model: "openai/gpt-5" },
+          "octogee-blank-coach": {},
+        },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toMatch(/owner-secret|workspace/u);
+  });
+
+  it("drops roster keys and entry fields a hostile keyed config could smuggle through", () => {
+    const projected = projectOpenClawServerFrameForProfile({
+      type: "res",
+      id: "config-read",
+      ok: true,
+      payload: {
+        hash: "hash-1",
+        raw: JSON.stringify({
+          agents: {
+            entries: {
+              __OPENCLAW_REDACTED__: { name: "Sentinel" },
+              ["__proto__"]: { name: "Polluted" },
+              "": { name: "Empty" },
+              [`octogee-${"a".repeat(260)}-coach`]: { name: "Oversized" },
+              "octogee-gone-coach": null,
+              "octogee-scalar-coach": "not-an-entry",
+              "octogee-live-coach": {
+                name: "__OPENCLAW_REDACTED__",
+                default: "yes",
+                model: {
+                  primary: "__OPENCLAW_REDACTED__",
+                  fallbacks: ["openai/gpt-5", "__OPENCLAW_REDACTED__"],
+                },
+              },
+            },
+          },
+        }),
+      },
+    }, "config.get", "delegated-config");
+
+    const raw = JSON.parse(String((projected!.payload as Record<string, unknown>).raw));
+    expect(raw).toEqual({
+      agents: {
+        entries: {
+          "octogee-live-coach": { model: { fallbacks: ["openai/gpt-5"] } },
+        },
+      },
+    });
+    expect(Object.getPrototypeOf(raw.agents.entries)).toBe(Object.prototype);
+    expect(JSON.stringify(projected)).not.toMatch(/REDACTED|Polluted|Sentinel|Oversized/u);
+  });
+
+  it("projects both roster shapes when a migrated config still carries the stale list", () => {
+    const projected = projectOpenClawServerFrameForProfile({
+      type: "res",
+      id: "config-read",
+      ok: true,
+      payload: {
+        hash: "hash-1",
+        raw: JSON.stringify({
+          agents: {
+            entries: { "octogee-new-coach": { name: "New", workspace: "/workspace/new" } },
+            list: [{ id: "octogee-stale-coach", name: "Stale", workspace: "/workspace/stale" }],
+          },
+        }),
+      },
+    }, "config.get", "delegated-config");
+
+    expect(JSON.parse(String((projected!.payload as Record<string, unknown>).raw))).toEqual({
+      agents: {
+        entries: { "octogee-new-coach": { name: "New" } },
+        list: [{ id: "octogee-stale-coach", name: "Stale" }],
+      },
+    });
+  });
+
   it("projects delegated model reads through a strict display-safe schema", () => {
     const projected = projectOpenClawServerFrameForProfile({
       type: "res",
@@ -390,6 +499,48 @@ describe("OpenClaw Dashboard RPC policy", () => {
     ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
   });
 
+  it("lets helpers edit keyed roster labels and models but never roster membership", () => {
+    const current = validConfig({
+      agents: {
+        entries: {
+          "octogee-ceckert-coach": {
+            name: "Coach",
+            model: "openai/gpt-5",
+            workspace: "/workspace/ceckert",
+          },
+          "octogee-aug04-coach": { name: "Aug04", model: "openai/gpt-5" },
+        },
+      },
+    });
+    const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+    const decide = (entries: Record<string, unknown>) => evaluateDelegatedOpenClawControlRpc(
+      request("config.patch", {
+        raw: JSON.stringify({ agents: { entries } }),
+        baseHash: "hash-1",
+      }),
+      context,
+      "delegated-config",
+    );
+
+    expect(decide({ "octogee-ceckert-coach": { name: "Primary" } }))
+      .toMatchObject({ allowed: true });
+    expect(decide({
+      "octogee-ceckert-coach": {
+        model: { primary: "openai/gpt-5.1", fallbacks: ["anthropic/claude"] },
+      },
+    })).toMatchObject({ allowed: true });
+    expect(decide({ "octogee-ceckert-coach": { workspace: "/workspace/attacker" } }))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide({ "octogee-ceckert-coach": { default: false } }))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide({ "octogee-helper-coach": { name: "Helper", model: "openai/gpt-5.1" } }))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide({ "octogee-aug04-coach": null }))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    expect(decide({ "octogee-ceckert-coach": [{ name: "Smuggled" }] }))
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+  });
+
   it("projects config schema to editable safe paths and rejects unsafe schema lookups", () => {
     const projected = projectOpenClawServerFrameForProfile({
       type: "res",
@@ -455,6 +606,102 @@ describe("OpenClaw Dashboard RPC policy", () => {
       policyContext(),
       "delegated-config",
     )).toMatchObject({ allowed: true, category: "read" });
+  });
+
+  it("opens the keyed roster schema branch to exactly the fields the list branch exposes", () => {
+    const projected = projectOpenClawServerFrameForProfile({
+      type: "res",
+      id: "schema-read",
+      ok: true,
+      payload: {
+        schema: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "object",
+              properties: {
+                entries: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string", title: "Name" },
+                      model: {
+                        type: "object",
+                        properties: {
+                          primary: { type: "string" },
+                          fallbacks: { type: "array", items: { type: "string" } },
+                        },
+                      },
+                      workspace: { type: "string", description: "Secret filesystem path" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }, "config.schema", "delegated-config");
+
+    expect(projected).toEqual({
+      type: "res",
+      id: "schema-read",
+      ok: true,
+      payload: {
+        schema: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "object",
+              properties: {
+                entries: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string", title: "Name" },
+                      model: {
+                        type: "object",
+                        properties: {
+                          primary: { type: "string" },
+                          fallbacks: { type: "array", items: { type: "string" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    for (const path of [
+      "agents.entries.octogee-ceckert-coach.name",
+      "agents.entries.octogee-ceckert-coach.model",
+      "agents.entries.octogee-ceckert-coach.model.primary",
+      "agents.entries.octogee-ceckert-coach.model.fallbacks",
+    ]) {
+      expect(evaluateDelegatedOpenClawControlRpc(
+        request("config.schema.lookup", { path }),
+        policyContext(),
+        "delegated-config",
+      ), path).toMatchObject({ allowed: true, category: "read" });
+    }
+    for (const path of [
+      "agents.entries.octogee-ceckert-coach.workspace",
+      "agents.entries.octogee-ceckert-coach.sandbox.docker.setupCommand",
+      "agents.entries.octogee-ceckert-coach.memorySearch.remote.apiKey",
+      "agents.entries..name",
+      "agents.entries[0].name",
+    ]) {
+      expect(evaluateDelegatedOpenClawControlRpc(
+        request("config.schema.lookup", { path }),
+        policyContext(),
+        "delegated-config",
+      ), path).toMatchObject({ allowed: false, reason: "method-unavailable" });
+    }
   });
 
   it("preserves native redaction sentinels for OpenClaw to restore from its unredacted snapshot", () => {
