@@ -266,18 +266,26 @@ async function brokerAttempt(fetchImpl, url, headers, payload, timeoutMs) {
  * (token, fetchImpl) are injectable for tests; production reads the projected KSA
  * token from disk and uses the global fetch.
  */
-export async function resolveOne(id, deps = {}) {
+function resolverDeps(deps) {
   const token = deps.token ?? fs.readFileSync(KSA_TOKEN_PATH, "utf8").trim();
-  const fetchImpl = deps.fetchImpl ?? fetch;
-  const attemptTimeoutMs = deps.requestTimeoutMs ?? BROKER_ATTEMPT_TIMEOUT_MS;
-  const backoffMs = deps.retryBackoffMs ?? BROKER_RETRY_BACKOFF_MS;
-  const budgetMs = deps.budgetMs ?? BROKER_TOTAL_BUDGET_MS;
-  const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const now = deps.now ?? Date.now;
   const headers = { "content-type": "application/json", "x-k8s-sa-token": token };
   if (process.env.INTERNAL_SERVICE_KEY) {
     headers["x-internal-service-key"] = process.env.INTERNAL_SERVICE_KEY;
   }
+  return {
+    fetchImpl: deps.fetchImpl ?? fetch,
+    attemptTimeoutMs: deps.requestTimeoutMs ?? BROKER_ATTEMPT_TIMEOUT_MS,
+    backoffMs: deps.retryBackoffMs ?? BROKER_RETRY_BACKOFF_MS,
+    budgetMs: deps.budgetMs ?? BROKER_TOTAL_BUDGET_MS,
+    sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+    now: deps.now ?? Date.now,
+    headers,
+  };
+}
+
+export async function resolveOne(id, deps = {}) {
+  const { fetchImpl, attemptTimeoutMs, backoffMs, budgetMs, sleep, now, headers } =
+    resolverDeps(deps);
   const { route, payload } = brokerRouteFor(id);
   const url = `${BROKER_BASE_URL}${route}`;
   const startedAt = now();

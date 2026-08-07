@@ -618,6 +618,56 @@ function createIdentityResolver(initialIdentity?: DeviceIdentity): () => DeviceI
   };
 }
 
+function resolveRpcTraceSettings(): {
+  traceVerbose: boolean;
+  slowTraceMs: number;
+  failureSampleMs: number;
+} {
+  return {
+    traceVerbose: /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? ""),
+    slowTraceMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10),
+    failureSampleMs: Number.parseInt(
+      process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000",
+      10,
+    ),
+  };
+}
+
+type GatewayCall = (method: string, params: object) => Promise<unknown>;
+
+async function callOkPayload(
+  call: GatewayCall,
+  method: string,
+  params: object,
+): Promise<Record<string, unknown>> {
+  const payload = await call(method, params);
+  if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+    throw new OpenclawWireError(INVALID_RESPONSE, `${method} payload missing \`ok: true\``);
+  }
+  return payload as Record<string, unknown>;
+}
+
+async function callAgentsCreate(
+  call: GatewayCall,
+  params: GatewayAgentsCreateParams,
+): Promise<GatewayAgentsCreateResult> {
+  const payload = await callOkPayload(call, "agents.create", params);
+  if (typeof payload.agentId !== "string" || payload.agentId.length === 0) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "agents.create payload missing string `agentId`",
+    );
+  }
+  return payload as GatewayAgentsCreateResult;
+}
+
+async function callAgentsDelete(
+  call: GatewayCall,
+  params: GatewayAgentsDeleteParams,
+): Promise<GatewayAgentsDeleteResult> {
+  return (await callOkPayload(call, "agents.delete", params)) as GatewayAgentsDeleteResult;
+}
+
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
   const url =
     opts.url ??
@@ -626,9 +676,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
-  const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
-  const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
-  const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
+  const { traceVerbose, slowTraceMs, failureSampleMs } = resolveRpcTraceSettings();
 
   const onConnectTrace =
     opts.onConnectTrace ??
@@ -789,28 +837,9 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return payload as CronAddResult;
     },
 
-    async agentsCreate(params) {
-      const payload = await call("agents.create", params);
-      if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
-        throw new OpenclawWireError(INVALID_RESPONSE, "agents.create payload missing `ok: true`");
-      }
-      const agentId = (payload as { agentId?: unknown }).agentId;
-      if (typeof agentId !== "string" || agentId.length === 0) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "agents.create payload missing string `agentId`",
-        );
-      }
-      return payload as GatewayAgentsCreateResult;
-    },
+    agentsCreate: (params) => callAgentsCreate(call, params),
 
-    async agentsDelete(params) {
-      const payload = await call("agents.delete", params);
-      if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
-        throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload missing `ok: true`");
-      }
-      return payload as GatewayAgentsDeleteResult;
-    },
+    agentsDelete: (params) => callAgentsDelete(call, params),
 
     async secretsReload() {
       const payload = await call("secrets.reload", {});
