@@ -31,7 +31,10 @@ import {
 } from "../lib/system-config.js";
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
-import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
+import {
+  assertPlatformInvariants,
+  reconcilePlatformInvariants,
+} from "../lib/system-config-invariants.js";
 import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 
 vi.mock("../lib/git.js", () => ({
@@ -218,6 +221,7 @@ describe("system_config restore", () => {
         GATEWAY_CLASS: "builder",
         GATEWAY_ID: "builder-green",
         GATEWAY_BUILDER_SLUG: "acme",
+        API_PUBLIC_URL: "https://api.octogee.com",
       },
       log: () => {},
     });
@@ -225,6 +229,68 @@ describe("system_config restore", () => {
     const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
     expect(seeded.plugins.entries["octogee-connector-tools"].config)
       .not.toHaveProperty("requireWriteApproval");
+  });
+
+  it("stamps the isolated platform shape onto a config seeded from the shared template", async () => {
+    templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+    const env = {
+      GATEWAY_CLASS: "operator",
+      GATEWAY_ID: "robert-xs-bd6a8f5a",
+      GATEWAY_BUILDER_SLUG: "robert",
+      API_PUBLIC_URL: "https://api.octogee.com",
+    };
+
+    await restoreSystemConfigForSlug("robert", {
+      openclawDir,
+      templatePath,
+      env,
+      log: () => {},
+    });
+
+    const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
+    expect(seeded.gateway.controlUi).toMatchObject({
+      allowedOrigins: ["https://api.octogee.com"],
+      basePath: "/g/robert-xs-bd6a8f5a/openclaw",
+      allowInsecureAuth: false,
+      dangerouslyDisableDeviceAuth: false,
+    });
+  });
+
+  it("refuses to seed an isolated gateway that cannot resolve its own api origin", async () => {
+    templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+
+    await expect(restoreSystemConfigForSlug("robert", {
+      openclawDir,
+      templatePath,
+      env: { GATEWAY_CLASS: "operator", GATEWAY_ID: "robert-xs-bd6a8f5a" },
+      log: () => {},
+    })).rejects.toThrow(/apiOrigin/);
+  });
+
+  it("leaves a shared-class seeded config on the shared platform shape", async () => {
+    templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+    const env = { GATEWAY_ID: "shared-a", GATEWAY_BUILDER_SLUG: "acme" };
+
+    await restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath,
+      env,
+      log: () => {},
+    });
+
+    const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
+    expect(seeded.gateway.controlUi.basePath).toBeUndefined();
   });
 
   it("does not report a seeded durable config until its initial commit is pushed", async () => {
@@ -358,8 +424,9 @@ describe("system_config restore", () => {
       recover,
     })).resolves.toMatchObject({ seeded: false, restored: true });
     expect(recover).toHaveBeenCalledOnce();
-    expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")))
-      .toEqual({ recovered: true });
+    const restored = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(restored).toMatchObject({ recovered: true });
+    expect(restored).not.toHaveProperty("stock");
     expect(gitExec).not.toHaveBeenCalledWith(
       repoDir,
       ["commit", "-m", "initial system_config openclaw template"],

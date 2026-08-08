@@ -450,14 +450,26 @@ function retainedSeedGitStateMatches(repoDir: string, keyPath: string): boolean 
   return tracked !== null && tracked.split("\n").sort().join("\n") === expected;
 }
 
-function retainedSeedFilesMatch(repoDir: string, templatePath: string): boolean {
+function seedConfigContents(templatePath: string, env: NodeJS.ProcessEnv): string {
+  const template = fs.readFileSync(templatePath, "utf-8");
+  const value = JSON.parse(template) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return template.endsWith("\n") ? template : `${template}\n`;
+  }
+  reconcilePlatformInvariants(value as UnknownRecord, env);
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function retainedSeedFilesMatch(
+  repoDir: string,
+  templatePath: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
   try {
     const configContents = fs.readFileSync(path.join(repoDir, OPENCLAW_CONFIG_FILENAME), "utf8");
     const config = JSON.parse(configContents);
     if (!asRecord(config)) return false;
-    const template = fs.readFileSync(templatePath, "utf8");
-    JSON.parse(template);
-    if (configContents !== (template.endsWith("\n") ? template : `${template}\n`)) return false;
+    if (configContents !== seedConfigContents(templatePath, env)) return false;
     const metadata = readSystemConfigMetadata(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME));
     return metadata?.schemaVersion === CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION &&
       metadata.lastMigration === "initial" &&
@@ -472,11 +484,12 @@ function retryRetainedInitialSeedPush(
   slug: string,
   repoDir: string,
   templatePath: string,
-  keyPath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
+  const keyPath = customerSshKeyPath(slug);
   if (!retainedSeedGitStateMatches(repoDir, keyPath)) return false;
-  if (!retainedSeedFilesMatch(repoDir, templatePath)) return false;
+  if (!retainedSeedFilesMatch(repoDir, templatePath, env)) return false;
   if (gitExec(repoDir, ["push", "-u", "origin", "main"], keyPath) === null) {
     log(`[system_config] retained initial push retry failed for ${slug}/${systemConfigRepoName()}`);
     return false;
@@ -489,13 +502,14 @@ function cloneOrReuseSystemConfigRepo(
   slug: string,
   dir: string,
   templatePath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
   if (fs.existsSync(path.join(dir, ".git"))) {
     setRepoSshCommand(dir, slug);
     const sshKey = customerSshKeyPath(slug);
     if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
-      if (retryRetainedInitialSeedPush(slug, dir, templatePath, sshKey, log)) return true;
+      if (retryRetainedInitialSeedPush(slug, dir, templatePath, env, log)) return true;
       if (
         gitExec(dir, ["ls-remote", "origin", MAIN_REF], sshKey) === "" &&
         gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
@@ -534,17 +548,30 @@ function cloneOrReuseSystemConfigRepo(
   return true;
 }
 
+function reconcilePlatformInvariantsAtPath(configPath: string, env: NodeJS.ProcessEnv): void {
+  const contents = fs.readFileSync(configPath, "utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
+    return;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  reconcilePlatformInvariants(value as UnknownRecord, env);
+  const next = `${JSON.stringify(value, null, 2)}\n`;
+  if (next !== contents) atomicWrite(configPath, next);
+}
+
 function seedSystemConfigIfMissing(
   slug: string,
   repoDir: string,
   templatePath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
   const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
   if (fs.existsSync(configPath)) return false;
-  const template = fs.readFileSync(templatePath, "utf-8");
-  JSON.parse(template);
-  fs.writeFileSync(configPath, template.endsWith("\n") ? template : `${template}\n`, "utf-8");
+  fs.writeFileSync(configPath, seedConfigContents(templatePath, env), "utf-8");
   atomicWrite(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME), `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
     lastMigration: "initial",
@@ -676,14 +703,14 @@ export async function restoreSystemConfigForSlug(
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
   const repoDir = systemConfigDir(openclawDir);
   const templatePath = opts.templatePath ?? path.join(TEMPLATES_DIR, "..", "infra", "gateway", "openclaw.template.json");
+  const env = opts.env ?? process.env;
 
   await ensureIdentityAndRepo(slug, log);
-  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, log)) {
+  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, env, log)) {
     return { skipped: "checkout-unavailable", seeded: false, restored: false };
   }
 
   const configPath = systemConfigPath(openclawDir);
-  const env = opts.env ?? process.env;
   let seeded = false;
   if (!fs.existsSync(configPath)) {
     if (repositoryHasHead(slug, repoDir)) {
@@ -692,7 +719,7 @@ export async function restoreSystemConfigForSlug(
         return { skipped: "accepted-head-unavailable", seeded: false, restored: false };
       }
     } else {
-      seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, log);
+      seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, env, log);
     }
   }
   try {
@@ -705,6 +732,7 @@ export async function restoreSystemConfigForSlug(
     }
     await reconcileSystemConfigSchema(openclawDir, env);
   }
+  reconcilePlatformInvariantsAtPath(configPath, env);
   log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
   return { seeded, restored: true, configPath };
 }
@@ -1582,12 +1610,7 @@ function doctorRetryResult(context: BootCheckpointContext): SystemConfigBootChec
 
 function reconcileBootConfig(context: BootCheckpointContext): void {
   try {
-    const value = JSON.parse(fs.readFileSync(context.configPath, "utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const before = fs.readFileSync(context.configPath, "utf8");
-    reconcilePlatformInvariants(value as UnknownRecord, context.env);
-    const after = `${JSON.stringify(value, null, 2)}\n`;
-    if (after !== before) atomicWrite(context.configPath, after);
+    reconcilePlatformInvariantsAtPath(context.configPath, context.env);
   } catch (error) {
     (context.opts.log ?? defaultLog)(
       `[system_config] boot reconciliation deferred to accepted-head recovery: ${error instanceof Error ? error.message : String(error)}`,
