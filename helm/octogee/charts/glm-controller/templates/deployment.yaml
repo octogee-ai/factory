@@ -92,12 +92,15 @@ spec:
               value: {{ .Values.posthog.host | quote }}
             - name: POSTHOG_PROJECT_ID
               value: {{ .Values.posthog.projectId | quote }}
+            # Required, not optional: erasure config is all-three-or-nothing, so a
+            # missing secret would ship a partial set and fail every erase-customer
+            # op on config instead of refusing to start.
             - name: POSTHOG_PERSONAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.posthog.personalApiKeySecretName | quote }}
                   key: {{ .Values.posthog.personalApiKeySecretKey | quote }}
-                  optional: true
+                  optional: false
             {{- end }}
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
