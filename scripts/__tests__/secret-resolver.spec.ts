@@ -385,8 +385,9 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
   // OpenClaw's exec-resolver protocol is batch-fatal: ANY entry in the errors{}
   // response makes it discard the WHOLE batch and cold every owner on the
   // provider. One retry per id is therefore worth far more than it costs — but
-  // the whole budget has to land inside the provider's 5000ms timeoutMs or the
-  // gateway kills the resolver mid-retry and every id in the batch is lost.
+  // the whole budget has to land inside the provider's timeoutMs or the gateway
+  // kills the resolver mid-retry and every id in the batch is lost. That budget
+  // is read from the shipped template so the two cannot drift.
   describe("per-id retry", () => {
     function countingFetch(
       outcomes: Array<{ ok: boolean; status: number; body?: unknown } | "throw">,
@@ -405,12 +406,37 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
       return { calls, fetchImpl };
     }
 
-    it("keeps the whole per-id budget inside the provider's 5000ms timeoutMs", () => {
+    it("keeps the whole per-id budget inside the provider's configured timeoutMs", () => {
+      const template = JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, "../../infra/gateway/openclaw.template.json"),
+          "utf8",
+        ),
+      ) as { secrets: { providers: Record<string, { timeoutMs?: number }> } };
+      const providerTimeoutMs = template.secrets.providers["gcp-secret-manager"]?.timeoutMs;
+
       expect(BROKER_ATTEMPTS).toBe(2);
       expect(
         BROKER_ATTEMPTS * BROKER_ATTEMPT_TIMEOUT_MS + BROKER_RETRY_BACKOFF_MS,
       ).toBeLessThanOrEqual(BROKER_TOTAL_BUDGET_MS);
-      expect(BROKER_TOTAL_BUDGET_MS).toBeLessThan(5000);
+      expect(providerTimeoutMs).toBeDefined();
+      expect(BROKER_TOTAL_BUDGET_MS).toBeLessThan(providerTimeoutMs!);
+    });
+
+    // The provider timeout covers the whole batch — a node spawn plus one
+    // concurrent broker call per id — not a single id. At 5000ms it had no
+    // headroom over the 4800ms per-id budget, so a routine sweep of a dozen
+    // agents timed out the batch and left every profile deferred.
+    it("leaves the batch room for a spawn and a fan-out beyond one id's budget", () => {
+      const template = JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, "../../infra/gateway/openclaw.template.json"),
+          "utf8",
+        ),
+      ) as { secrets: { providers: Record<string, { timeoutMs?: number }> } };
+      const providerTimeoutMs = template.secrets.providers["gcp-secret-manager"]!.timeoutMs!;
+
+      expect(providerTimeoutMs - BROKER_TOTAL_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
     });
 
     it("retries a 5xx once and returns the second attempt's value", async () => {
