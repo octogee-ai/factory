@@ -7,5 +7,6 @@ export interface InternalFetchOptions {
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
     timeoutSignal?: (timeoutMs: number) => AbortSignal;
+    requireProjectedToken?: boolean;
 }
 export declare function internalFetch(url: string | URL, init?: RequestInit, opts?: InternalFetchOptions): Promise<Response>;

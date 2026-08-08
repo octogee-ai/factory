@@ -448,10 +448,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(paths).toEqual(expect.arrayContaining([
       { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-coach") },
       { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-proj-orbit-coach") },
-      { cwd: tempStateDir, path: path.join("memory", "octogee-tester10-proj-orbit-coach.sqlite-wal") },
     ]));
     expect(paths).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ path: expect.stringContaining("octogee-other-") }),
+    ]));
+    expect(paths).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: expect.stringMatching(/\.sqlite-(wal|shm)$/u) }),
     ]));
     await expect(adapter.quiesceCustomer("tester10", 1)).resolves.toEqual({
       drained: false,

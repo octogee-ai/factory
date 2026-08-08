@@ -820,10 +820,7 @@ function agentIdsForMigration(slug: string): string[] {
 
 function memoryPathsForAgent(agentId: string): Array<{ cwd: string; path: string }> {
   const stateDir = resolveOpenClawStateDir();
-  return [".sqlite", ".sqlite-wal", ".sqlite-shm"].map((suffix) => ({
-    cwd: stateDir,
-    path: path.join("memory", `${agentId}${suffix}`),
-  }));
+  return [{ cwd: stateDir, path: path.join("memory", `${agentId}.sqlite`) }];
 }
 
 async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path: string }>> {
