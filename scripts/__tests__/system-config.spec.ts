@@ -253,9 +253,9 @@ describe("system_config restore", () => {
     expect(seeded.gateway.controlUi).toMatchObject({
       allowedOrigins: ["https://api.octogee.com"],
       basePath: "/g/robert-xs-bd6a8f5a/openclaw",
-      allowInsecureAuth: false,
       dangerouslyDisableDeviceAuth: false,
     });
+    expect(seeded.gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
   });
 
   it("refuses to seed an isolated gateway that cannot resolve its own api origin", async () => {

@@ -57,7 +57,6 @@ describe("system config platform invariants", () => {
         controlUi: {
           basePath: "/g/bender/openclaw",
           allowedOrigins: ["https://api-test.octogee.com"],
-          allowInsecureAuth: false,
           dangerouslyDisableDeviceAuth: false,
         },
       },
