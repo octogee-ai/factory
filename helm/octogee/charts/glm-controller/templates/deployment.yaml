@@ -179,23 +179,32 @@ spec:
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http
+          # A reconcile pass holds the event loop for seconds at a time — a full
+          # convergence over the shared pool has been measured near 12s — so
+          # /healthz cannot answer inside kubelet's 1s default. At that default
+          # the liveness probe killed Cowboy mid-reconcile every few minutes,
+          # abandoning whatever operation it had claimed: that is how a rollout
+          # sat "running" with no worker while migrations queued behind it.
           startupProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 30
-            failureThreshold: 3
+            timeoutSeconds: 15
+            failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
