@@ -17,6 +17,20 @@ const builder = {
 const barn = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
+  it("strips config keys OpenClaw retired instead of stamping them back", () => {
+    const config: Record<string, unknown> = {
+      gateway: { controlUi: { allowInsecureAuth: false } },
+      logging: { redactSensitive: "tools" },
+    };
+
+    reconcilePlatformInvariants(config, barn);
+
+    const gateway = config.gateway as { controlUi: Record<string, unknown> };
+    expect(gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
+    expect(config.logging as Record<string, unknown>).not.toHaveProperty("redactSensitive");
+    expect(platformInvariantViolations(config, barn)).toEqual([]);
+  });
+
   it("reconciles Barn auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },
@@ -149,7 +163,6 @@ describe("system config platform invariants", () => {
         },
         terminal: { enabled: false },
       },
-      logging: { redactSensitive: "tools" },
       channels: {
         mattermost: {
           baseUrl: "${MM_URL}",
