@@ -149,26 +149,6 @@ export interface SystemConfigAuditResult {
   errorCode?: string;
 }
 
-export type SystemConfigBootCheckpointResult =
-  | {
-      ready: true;
-      acceptedCommit: string;
-      recoveredFromCommit?: string;
-    }
-  | { ready: false; errorCode: string; rejectedCommit?: string };
-
-interface SystemConfigBootCheckpointOptions {
-  openclawDir?: string;
-  env?: NodeJS.ProcessEnv;
-  log?: (message: string) => void;
-  validateConfig: (configPath: string) => void;
-  recover?: typeof recoverSystemConfigHead;
-  sync?: typeof syncSystemConfigForSlug;
-  now?: () => Date;
-  doctorResult?: "ok" | "error";
-  verifyAcceptedDurableSet?: (repoDir: string, acceptedCommit: string) => boolean;
-}
-
 export function systemConfigDir(openclawDir = OPENCLAW_DIR): string {
   return path.join(openclawDir, "system_config");
 }
@@ -402,21 +382,6 @@ export function removeLegacyMacState(
   }
 }
 
-function legacyMacStateCleanupPending(openclawDir: string): boolean {
-  const metadata = readSystemConfigMetadata(
-    path.join(systemConfigDir(openclawDir), SYSTEM_CONFIG_METADATA_FILENAME),
-  );
-  return metadata?.pendingStateCleanup === SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP;
-}
-
-function clearLegacyMacStateCleanup(openclawDir: string): void {
-  const metadataPath = path.join(systemConfigDir(openclawDir), SYSTEM_CONFIG_METADATA_FILENAME);
-  const metadata = readSystemConfigMetadata(metadataPath);
-  if (metadata?.pendingStateCleanup !== SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP) return;
-  delete metadata.pendingStateCleanup;
-  atomicWrite(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
-}
-
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
   const pubKey = generateCustomerSshKey(slug);
   await createGiteaUser(slug, pubKey);
@@ -450,14 +415,26 @@ function retainedSeedGitStateMatches(repoDir: string, keyPath: string): boolean 
   return tracked !== null && tracked.split("\n").sort().join("\n") === expected;
 }
 
-function retainedSeedFilesMatch(repoDir: string, templatePath: string): boolean {
+function seedConfigContents(templatePath: string, env: NodeJS.ProcessEnv): string {
+  const template = fs.readFileSync(templatePath, "utf-8");
+  const value = JSON.parse(template) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return template.endsWith("\n") ? template : `${template}\n`;
+  }
+  reconcilePlatformInvariants(value as UnknownRecord, env);
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function retainedSeedFilesMatch(
+  repoDir: string,
+  templatePath: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
   try {
     const configContents = fs.readFileSync(path.join(repoDir, OPENCLAW_CONFIG_FILENAME), "utf8");
     const config = JSON.parse(configContents);
     if (!asRecord(config)) return false;
-    const template = fs.readFileSync(templatePath, "utf8");
-    JSON.parse(template);
-    if (configContents !== (template.endsWith("\n") ? template : `${template}\n`)) return false;
+    if (configContents !== seedConfigContents(templatePath, env)) return false;
     const metadata = readSystemConfigMetadata(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME));
     return metadata?.schemaVersion === CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION &&
       metadata.lastMigration === "initial" &&
@@ -472,11 +449,12 @@ function retryRetainedInitialSeedPush(
   slug: string,
   repoDir: string,
   templatePath: string,
-  keyPath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
+  const keyPath = customerSshKeyPath(slug);
   if (!retainedSeedGitStateMatches(repoDir, keyPath)) return false;
-  if (!retainedSeedFilesMatch(repoDir, templatePath)) return false;
+  if (!retainedSeedFilesMatch(repoDir, templatePath, env)) return false;
   if (gitExec(repoDir, ["push", "-u", "origin", "main"], keyPath) === null) {
     log(`[system_config] retained initial push retry failed for ${slug}/${systemConfigRepoName()}`);
     return false;
@@ -489,13 +467,14 @@ function cloneOrReuseSystemConfigRepo(
   slug: string,
   dir: string,
   templatePath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
   if (fs.existsSync(path.join(dir, ".git"))) {
     setRepoSshCommand(dir, slug);
     const sshKey = customerSshKeyPath(slug);
     if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
-      if (retryRetainedInitialSeedPush(slug, dir, templatePath, sshKey, log)) return true;
+      if (retryRetainedInitialSeedPush(slug, dir, templatePath, env, log)) return true;
       if (
         gitExec(dir, ["ls-remote", "origin", MAIN_REF], sshKey) === "" &&
         gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
@@ -534,17 +513,30 @@ function cloneOrReuseSystemConfigRepo(
   return true;
 }
 
+function reconcilePlatformInvariantsAtPath(configPath: string, env: NodeJS.ProcessEnv): void {
+  const contents = fs.readFileSync(configPath, "utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
+    return;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  reconcilePlatformInvariants(value as UnknownRecord, env);
+  const next = `${JSON.stringify(value, null, 2)}\n`;
+  if (next !== contents) atomicWrite(configPath, next);
+}
+
 function seedSystemConfigIfMissing(
   slug: string,
   repoDir: string,
   templatePath: string,
+  env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
   const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
   if (fs.existsSync(configPath)) return false;
-  const template = fs.readFileSync(templatePath, "utf-8");
-  JSON.parse(template);
-  fs.writeFileSync(configPath, template.endsWith("\n") ? template : `${template}\n`, "utf-8");
+  fs.writeFileSync(configPath, seedConfigContents(templatePath, env), "utf-8");
   atomicWrite(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME), `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
     lastMigration: "initial",
@@ -676,14 +668,14 @@ export async function restoreSystemConfigForSlug(
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
   const repoDir = systemConfigDir(openclawDir);
   const templatePath = opts.templatePath ?? path.join(TEMPLATES_DIR, "..", "infra", "gateway", "openclaw.template.json");
+  const env = opts.env ?? process.env;
 
   await ensureIdentityAndRepo(slug, log);
-  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, log)) {
+  if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, env, log)) {
     return { skipped: "checkout-unavailable", seeded: false, restored: false };
   }
 
   const configPath = systemConfigPath(openclawDir);
-  const env = opts.env ?? process.env;
   let seeded = false;
   if (!fs.existsSync(configPath)) {
     if (repositoryHasHead(slug, repoDir)) {
@@ -692,7 +684,7 @@ export async function restoreSystemConfigForSlug(
         return { skipped: "accepted-head-unavailable", seeded: false, restored: false };
       }
     } else {
-      seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, log);
+      seeded = seedSystemConfigIfMissing(slug, repoDir, templatePath, env, log);
     }
   }
   try {
@@ -705,6 +697,7 @@ export async function restoreSystemConfigForSlug(
     }
     await reconcileSystemConfigSchema(openclawDir, env);
   }
+  reconcilePlatformInvariantsAtPath(configPath, env);
   log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
   return { seeded, restored: true, configPath };
 }
@@ -1540,255 +1533,6 @@ export function auditSystemConfigForSlug(
     worktreeDirty,
     configHash,
   };
-}
-
-interface BootCheckpointContext {
-  slug: string;
-  openclawDir: string;
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  now: () => Date;
-  opts: SystemConfigBootCheckpointOptions;
-}
-
-function recordBootDoctorResult(context: BootCheckpointContext): void {
-  if (!context.opts.doctorResult) return;
-  const current = readSystemConfigStatus(context.openclawDir);
-  updateSystemConfigStatus(context.openclawDir, {
-    state: context.opts.doctorResult === "ok" ? current.state : "error",
-    doctorResult: context.opts.doctorResult,
-    ...(context.opts.doctorResult === "error" ? {
-      lastErrorCode: "openclaw-doctor-failed",
-      lastErrorAt: context.now().toISOString(),
-      dirtySince: current.dirtySince ?? context.now().toISOString(),
-      runtimeReady: false,
-    } : {}),
-  }, context.now);
-}
-
-function doctorRetryResult(context: BootCheckpointContext): SystemConfigBootCheckpointResult {
-  const current = readSystemConfigStatus(context.openclawDir);
-  const at = context.now().toISOString();
-  updateSystemConfigStatus(context.openclawDir, {
-    state: "error",
-    doctorResult: "error",
-    runtimeReady: false,
-    dirtySince: current.dirtySince ?? at,
-    lastErrorCode: "openclaw-doctor-failed",
-    lastErrorAt: at,
-  }, context.now);
-  return { ready: false, errorCode: "openclaw-doctor-retry-required" };
-}
-
-function reconcileBootConfig(context: BootCheckpointContext): void {
-  try {
-    const value = JSON.parse(fs.readFileSync(context.configPath, "utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const before = fs.readFileSync(context.configPath, "utf8");
-    reconcilePlatformInvariants(value as UnknownRecord, context.env);
-    const after = `${JSON.stringify(value, null, 2)}\n`;
-    if (after !== before) atomicWrite(context.configPath, after);
-  } catch (error) {
-    (context.opts.log ?? defaultLog)(
-      `[system_config] boot reconciliation deferred to accepted-head recovery: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-function bootRecoveryResult(
-  context: BootCheckpointContext,
-  recovery: Exclude<SystemConfigRecoveryResult, { outcome: "accepted" }>,
-): SystemConfigBootCheckpointResult {
-  if (recovery.outcome === "unavailable") {
-    const errorCode = recovery.errorCode ?? "no-valid-ancestor";
-    updateSystemConfigStatus(context.openclawDir, {
-      state: "unavailable",
-      bootRecovery: "unavailable",
-      lastErrorCode: errorCode,
-      lastErrorAt: context.now().toISOString(),
-      dirtySince: context.now().toISOString(),
-      openclawVersion: context.env.OPENCLAW_VERSION?.trim() || "unknown",
-    }, context.now);
-    return { ready: false, errorCode, rejectedCommit: recovery.rejectedCommit };
-  }
-  const current = readSystemConfigStatus(context.openclawDir);
-  const at = context.now().toISOString();
-  updateSystemConfigStatus(context.openclawDir, {
-    state: "error",
-    acceptedCommit: recovery.acceptedCommit,
-    restoredCommit: recovery.recoveredFromCommit,
-    configHash: `sha256:${systemConfigFingerprint(context.configPath)}`,
-    bootRecovery: "recovered",
-    recoveryCount: (current.recoveryCount ?? 0) + 1,
-    dirtySince: current.dirtySince ?? at,
-    lastSyncedAt: context.now().toISOString(),
-    lastErrorCode: "accepted-ancestor-retry-required",
-    lastErrorAt: at,
-    openclawVersion: context.env.OPENCLAW_VERSION?.trim() || "unknown",
-  }, context.now);
-  return {
-    ready: false,
-    errorCode: "accepted-ancestor-retry-required",
-    rejectedCommit: recovery.rejectedCommit,
-  };
-}
-
-function activeDurableSetMatchesAcceptedHead(repoDir: string, acceptedCommit: string): boolean {
-  for (const filename of SYSTEM_CONFIG_DURABLE_FILENAMES) {
-    const accepted = readSystemConfigCommitBlob(repoDir, acceptedCommit, filename);
-    if (accepted === null) return false;
-    try {
-      if (!fs.readFileSync(path.join(repoDir, filename)).equals(Buffer.from(accepted))) return false;
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
-
-function postPushDurableMismatchResult(
-  context: BootCheckpointContext,
-  acceptedCommit: string,
-): SystemConfigBootCheckpointResult {
-  const current = readSystemConfigStatus(context.openclawDir);
-  const at = context.now().toISOString();
-  updateSystemConfigStatus(context.openclawDir, {
-    state: "error",
-    acceptedCommit,
-    runtimeReady: false,
-    dirtySince: current.dirtySince ?? at,
-    lastErrorCode: "post-push-durable-mismatch",
-    lastErrorAt: at,
-  }, context.now);
-  return { ready: false, errorCode: "post-push-durable-mismatch" };
-}
-
-function bootCheckpointFailed(result: SystemConfigSyncResult): boolean {
-  return !result.pushed || Boolean(result.pending || result.rejected || result.skipped);
-}
-
-function transientBootDurabilityFailure(
-  result: SystemConfigSyncResult,
-  errorCode: string,
-): boolean {
-  return !result.rejected && !result.skipped &&
-    (errorCode === "push-failed" || errorCode === "remote-head-unavailable");
-}
-
-function failedBootCheckpointResult(
-  context: BootCheckpointContext,
-  recovery: Extract<SystemConfigRecoveryResult, { outcome: "accepted" }>,
-  syncResult: SystemConfigSyncResult,
-): SystemConfigBootCheckpointResult {
-  const errorCode = syncResult.errorCode ?? syncResult.skipped ?? "boot-checkpoint-pending";
-  if (!transientBootDurabilityFailure(syncResult, errorCode)) {
-    return { ready: false, errorCode };
-  }
-  const current = readSystemConfigStatus(context.openclawDir);
-  const at = context.now().toISOString();
-  const acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
-  updateSystemConfigStatus(context.openclawDir, {
-    state: "error",
-    acceptedCommit,
-    bootRecovery: "none",
-    schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    openclawVersion: context.env.OPENCLAW_VERSION?.trim() || "unknown",
-    dirtySince: current.dirtySince ?? at,
-    lastErrorCode: errorCode,
-    lastErrorAt: current.lastErrorAt ?? at,
-  }, context.now);
-  return { ready: false, errorCode };
-}
-
-function finishBootCheckpoint(
-  context: BootCheckpointContext,
-  recovery: Extract<SystemConfigRecoveryResult, { outcome: "accepted" }>,
-  syncResult: SystemConfigSyncResult,
-): SystemConfigBootCheckpointResult {
-  if (bootCheckpointFailed(syncResult)) {
-    return failedBootCheckpointResult(context, recovery, syncResult);
-  }
-  let acceptedCommit = syncResult.acceptedCommit ?? recovery.acceptedCommit;
-  const verifyAcceptedDurableSet = context.opts.verifyAcceptedDurableSet ??
-    activeDurableSetMatchesAcceptedHead;
-  if (!verifyAcceptedDurableSet(systemConfigDir(context.openclawDir), acceptedCommit)) {
-    return postPushDurableMismatchResult(context, acceptedCommit);
-  }
-  if (legacyMacStateCleanupPending(context.openclawDir)) {
-    removeLegacyMacState(context.openclawDir, context.env);
-    clearLegacyMacStateCleanup(context.openclawDir);
-    const cleanupSyncResult = (context.opts.sync ?? syncSystemConfigForSlug)(context.slug, {
-      openclawDir: context.openclawDir,
-      env: context.env,
-      now: context.now,
-      validateConfig: context.opts.validateConfig,
-      durablePolicy: true,
-      source: "boot-migration",
-    });
-    if (bootCheckpointFailed(cleanupSyncResult)) {
-      return failedBootCheckpointResult(
-        context,
-        { outcome: "accepted", acceptedCommit },
-        cleanupSyncResult,
-      );
-    }
-    acceptedCommit = cleanupSyncResult.acceptedCommit ?? acceptedCommit;
-    if (!verifyAcceptedDurableSet(systemConfigDir(context.openclawDir), acceptedCommit)) {
-      return postPushDurableMismatchResult(context, acceptedCommit);
-    }
-  }
-  updateSystemConfigStatus(context.openclawDir, {
-    state: "clean",
-    acceptedCommit,
-    bootRecovery: "none",
-    schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    openclawVersion: context.env.OPENCLAW_VERSION?.trim() || "unknown",
-    lastErrorCode: null,
-    lastErrorAt: null,
-  }, context.now);
-  return { ready: true, acceptedCommit };
-}
-
-export function checkpointBootSystemConfigForSlug(
-  slug: string,
-  opts: SystemConfigBootCheckpointOptions,
-): SystemConfigBootCheckpointResult {
-  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const repoDir = systemConfigDir(openclawDir);
-  const configPath = systemConfigPath(openclawDir);
-  const env = opts.env ?? process.env;
-  const now = opts.now ?? (() => new Date());
-  const context = { slug, openclawDir, configPath, env, now, opts };
-  recordBootDoctorResult(context);
-  reconcileBootConfig(context);
-
-  const recovery: SystemConfigRecoveryResult = (opts.recover ?? recoverSystemConfigHead)({
-    slug,
-    openclawDir,
-    repoDir,
-    configPath,
-    env,
-    validateConfig: opts.validateConfig,
-    now,
-    acceptCurrent: opts.doctorResult !== "error",
-  });
-  if (recovery.outcome !== "accepted") {
-    const result = bootRecoveryResult(context, recovery);
-    return opts.doctorResult === "error" && result.ready
-      ? doctorRetryResult(context)
-      : result;
-  }
-  if (opts.doctorResult === "error") return doctorRetryResult(context);
-
-  const syncResult = (opts.sync ?? syncSystemConfigForSlug)(slug, {
-    openclawDir,
-    env,
-    now,
-    validateConfig: opts.validateConfig,
-    durablePolicy: true,
-    source: "boot-migration",
-  });
-  return finishBootCheckpoint(context, recovery, syncResult);
 }
 
 export function pushDirtySystemConfigForSlug(
