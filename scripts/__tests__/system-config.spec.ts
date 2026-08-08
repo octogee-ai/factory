@@ -755,6 +755,7 @@ describe("system_config restore", () => {
 
   it("adopts legacy customer Mattermost tokens into the untracked file provider", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: { list: [{ id: "octogee-acme-coach" }] },
       channels: {
         mattermost: {
           accounts: {
@@ -806,7 +807,7 @@ describe("system_config restore", () => {
     expect(tracked.agents.list).toEqual([
       expect.objectContaining({ id: "octogee-acme-coach", default: true }),
     ]);
-    expect(tracked.channels.mattermost.accounts).toEqual({ default: {} });
+    expect(tracked.channels.mattermost.accounts).toEqual({});
     expect(tracked.channels.mattermost.defaultAccount).toBe("default");
   });
 
@@ -816,6 +817,7 @@ describe("system_config restore", () => {
       lastMigration: "remove-mac-and-externalize-mattermost-tokens",
     });
     writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: { list: [{ id: "octogee-acme-coach" }] },
       channels: {
         mattermost: {
           accounts: {
@@ -827,10 +829,18 @@ describe("system_config restore", () => {
 
     await restoreSystemConfigForSlug("acme", { openclawDir, templatePath, log: () => {} });
 
-    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")).toContain(
-      "must-be-rejected-by-audit",
-    );
+    const tracked = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8");
+    expect(JSON.parse(tracked).channels.mattermost.accounts["acme-coach"].botToken).toEqual({
+      source: "file",
+      provider: "octogee-mattermost",
+      id: "/acme-coach",
+    });
+    expect(tracked).not.toContain("must-be-rejected-by-audit");
     expect(fs.existsSync(path.join(openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 1,
+      lastMigration: "remove-mac-and-externalize-mattermost-tokens",
+    });
   });
 
   it("fails closed when tracked migration metadata is malformed", async () => {
@@ -902,10 +912,11 @@ describe("system_config restore", () => {
 
   it("uses the tracked repository file as the active config without expanding secrets", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: { list: [{ id: "octogee-acme-coach" }] },
       channels: {
         mattermost: {
           baseUrl: "${MM_URL}",
-          accounts: { default: { botToken: "${MM_BOT_TOKEN}" } },
+          accounts: { "acme-coach": { botToken: "${MM_BOT_TOKEN}" } },
         },
       },
     });
@@ -920,9 +931,11 @@ describe("system_config restore", () => {
     expect(result).toMatchObject({ restored: true, configPath: systemConfigPath(openclawDir) });
     const tracked = fs.readFileSync(systemConfigPath(openclawDir), "utf-8");
     expect(JSON.parse(tracked).channels.mattermost.accounts).toEqual({
-      default: { botToken: "${MM_BOT_TOKEN}" },
+      "acme-coach": {
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/acme-coach" },
+        allowFrom: [],
+      },
     });
-    expect(tracked).toContain("${MM_BOT_TOKEN}");
     expect(tracked).not.toContain("must-not-enter-git");
     expect(fs.existsSync(path.join(openclawDir, "openclaw.json"))).toBe(false);
   });
