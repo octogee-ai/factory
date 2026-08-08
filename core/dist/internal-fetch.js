@@ -18,6 +18,9 @@ async function buildHeaders(init, opts) {
         headers.set("X-Internal-Service-Key", internalServiceKey);
     }
     const token = await readProjectedToken(opts.tokenPath ?? process.env.OCTOGEE_API_SA_TOKEN_PATH ?? DEFAULT_PROJECTED_API_TOKEN_PATH);
+    if (opts.requireProjectedToken && !token) {
+        throw new Error("projected service-account token unavailable");
+    }
     if (token)
         headers.set(K8S_SA_TOKEN_HEADER, token);
     return headers;

@@ -29,7 +29,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe("scripts internalFetch", () => {
+describe("internalFetch", () => {
   it("adds both internal key and projected service-account token headers", async () => {
     const seen: RequestInit[] = [];
     await internalFetch(
@@ -68,6 +68,24 @@ describe("scripts internalFetch", () => {
     const headers = new Headers(seen[0].headers);
     expect(headers.get("x-internal-service-key")).toBe("service-key");
     expect(headers.get("x-k8s-sa-token")).toBeNull();
+  });
+
+  it("fails before fetch when a caller requires projected tenant identity but its token is absent", async () => {
+    let called = false;
+
+    await expect(internalFetch(
+      "http://octogee-api/internal/automations/authorize",
+      {},
+      {
+        requireProjectedToken: true,
+        tokenPath: path.join(os.tmpdir(), "missing-token-" + Math.random()),
+        fetchImpl: async () => {
+          called = true;
+          return new Response("ok");
+        },
+      },
+    )).rejects.toThrow("projected service-account token unavailable");
+    expect(called).toBe(false);
   });
 
   it("bounds a signal-less request and names the call when the timeout trips", async () => {
