@@ -70,7 +70,6 @@ import {
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
-  type AssignmentState,
 } from "@octogee/shared/types/gateway-releases";
 import {
   cowboyMayMarkGatewayLive,
@@ -91,6 +90,7 @@ import {
 import {
   assertSurgeAssignmentCoverage,
   reconcileSurgeCustomerHandoff,
+  type SurgeCustomerHandoffDeps,
 } from "./surge-customer-handoff.js";
 import {
   decideRollStateMigration,
@@ -2293,6 +2293,67 @@ interface ControllerRuntime {
   chartFingerprint: string;
 }
 
+function buildSurgeHandoffDeps(input: {
+  db: Firestore;
+  runKubectl: KubectlSubprocess;
+  privateKey: string;
+}): SurgeCustomerHandoffDeps {
+  const { db, runKubectl, privateKey } = input;
+  return {
+    ...createSurgePodTransport({ privateKey, log }),
+    listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
+    readAssignments: async (gatewayId) => {
+      const [assignments, userSnapshot] = await Promise.all([
+        readAssignmentDocsForGateway(db, gatewayId),
+        db.collection("users")
+          .where("provisioning.openclaw.gatewayId", "==", gatewayId)
+          .get(),
+      ]);
+      const projected = assignments.map((assignment) => ({
+        uid: assignment.uid,
+        slug: assignment.slug,
+        state: assignment.state,
+        epoch: assignment.epoch,
+        updatedByOperationId: assignment.updatedByOperationId,
+      }));
+      const assignedUsers = userSnapshot.docs.map((doc) => {
+        const slug = slugFromAssignedUser(doc.data() as Record<string, unknown>);
+        if (!slug) throw new Error(`assigned user ${doc.id} has no gateway slug`);
+        return { uid: doc.id, slug };
+      });
+      const retained = await pruneSurgeOrphanAssignments({
+        db,
+        gatewayId,
+        assignments: projected,
+        users: assignedUsers,
+        now: Date.now(),
+        log,
+      });
+      assertSurgeAssignmentCoverage(retained, assignedUsers);
+      return retained;
+    },
+    readDurableSessionDigest: ({ pod, slug }) =>
+      readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug),
+    markAssignment: (assignment) => markAssignmentState(
+      {
+        db: db as unknown as FleetStateFirestore,
+        serverTimestamp: () => FieldValue.serverTimestamp(),
+        log,
+      },
+      assignment,
+    ),
+    readOwnerOperation: async (operationId) => {
+      const snapshot = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .doc(operationId)
+        .get();
+      if (!snapshot.exists) return null;
+      return { status: (snapshot.data() as Operation).status };
+    },
+    log,
+  };
+}
+
 async function createControllerRuntime(
   db: Firestore,
   maintenanceGate: ControllerMaintenanceGate,
@@ -2393,76 +2454,11 @@ async function createControllerRuntime(
     },
   );
 
-  const surgeTransport = createSurgePodTransport({
+  const surgeHandoffDeps = buildSurgeHandoffDeps({
+    db,
+    runKubectl,
     privateKey: fleetControllerPrivateKey,
-    log,
   });
-  const surgeHandoffDeps = {
-    ...surgeTransport,
-    listPods: (gatewayId: string) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
-    readAssignments: async (gatewayId: string) => {
-      const [assignments, userSnapshot] = await Promise.all([
-        readAssignmentDocsForGateway(db, gatewayId),
-        db.collection("users")
-          .where("provisioning.openclaw.gatewayId", "==", gatewayId)
-          .get(),
-      ]);
-      const projected = assignments.map((assignment) => ({
-        uid: assignment.uid,
-        slug: assignment.slug,
-        state: assignment.state,
-        epoch: assignment.epoch,
-        updatedByOperationId: assignment.updatedByOperationId,
-      }));
-      const assignedUsers = userSnapshot.docs.map((doc) => {
-        const slug = slugFromAssignedUser(doc.data() as Record<string, unknown>);
-        if (!slug) throw new Error(`assigned user ${doc.id} has no gateway slug`);
-        return { uid: doc.id, slug };
-      });
-      const retained = await pruneSurgeOrphanAssignments({
-        db,
-        gatewayId,
-        assignments: projected,
-        users: assignedUsers,
-        now: Date.now(),
-        log,
-      });
-      assertSurgeAssignmentCoverage(retained, assignedUsers);
-      return retained;
-    },
-    readDurableSessionDigest: ({ pod, slug }: {
-      pod: { uid: string; name: string; podIP: string; ready: boolean };
-      slug: string;
-    }) => readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug),
-    markAssignment: (input: {
-      gatewayId: string;
-      uid: string;
-      slug: string;
-      epoch: number;
-      state: "serving" | "quiescing";
-      updatedByOperationId: string;
-      expected: {
-        state: AssignmentState;
-        updatedByOperationId: string | null;
-      };
-    }) => markAssignmentState(
-      {
-        db: db as unknown as FleetStateFirestore,
-        serverTimestamp: () => FieldValue.serverTimestamp(),
-        log,
-      },
-      input,
-    ),
-    readOwnerOperation: async (operationId: string) => {
-      const snapshot = await db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .doc(operationId)
-        .get();
-      if (!snapshot.exists) return null;
-      return { status: (snapshot.data() as Operation).status };
-    },
-    log,
-  };
 
   const runGatewayConvergence = (gatewayIds?: readonly string[]) =>
     runGatewayConvergencePass({
