@@ -29,9 +29,10 @@ const NEVER_SEEN_SIBLING_ABSENCE_OBSERVATIONS = 3;
 const SEEN_SIBLING_ABSENCE_MS = 60_000;
 
 // A healthy sibling pins the absence debounce at zero forever, so the hold needs
-// its own deadline. It outlives the controller's 15m stuck-op budget: past that
-// the handoff is not coming, and a pod that never goes Ready is the worse state.
-export const SURGE_READINESS_HOLD_DEADLINE_MS = 20 * 60_000;
+// its own deadline. Releasing here is a hard cutover with no state transfer, and a
+// sibling that is still Ready is still serving — so the deadline sits far above the
+// slowest legitimate handoff (six 330s control calls per customer), not near it.
+export const SURGE_READINESS_HOLD_DEADLINE_MS = 60 * 60_000;
 const HOLD_PROGRESS_LOG_MS = 60_000;
 
 interface SurgeReadinessSelfReleaseState {
