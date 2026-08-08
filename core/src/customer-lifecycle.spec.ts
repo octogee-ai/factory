@@ -1673,6 +1673,32 @@ releaseFirst();
     expect(retry.steps).toContain("verify-channel-ready");
   });
 
+  it("names the hung step in the deadline error", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    const hangingAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      readGiteaCustomerPubKeys: () => new Promise(() => {}),
+    };
+
+    await expect(
+      addCustomerToGateway(hangingAdapter, "uid-test", { mountDeadlineMs: 25 }),
+    ).rejects.toThrow(/step "ssh-key" is hung/);
+  });
+
+  it("names load-snapshot as the hung step when the snapshot fetch never returns", async () => {
+    const state = makeState(snap({ status: "" }), emptyDisk());
+    const realAdapter = makeAdapter(state);
+    const hangingAdapter: CustomerLifecycleAdapter = {
+      ...realAdapter,
+      loadUserSnapshot: () => new Promise(() => {}),
+    };
+
+    await expect(
+      addCustomerToGateway(hangingAdapter, "uid-test", { mountDeadlineMs: 25 }),
+    ).rejects.toThrow(/step "load-snapshot" is hung/);
+  });
+
   it("stops the inner pipeline at the next checkpoint after mountDeadlineMs trips", async () => {
     const state = makeState(snap({ status: "" }), emptyDisk());
     const realAdapter = makeAdapter(state);
