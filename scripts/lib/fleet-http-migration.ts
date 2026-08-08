@@ -43,6 +43,14 @@ import {
   MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
+import {
+  checkpointAgentStoresForCarry,
+  clearSqliteSidecars,
+  findUnreadableStore,
+  isSqliteStorePath,
+  listSqliteStores,
+  SQLITE_SIDECAR_EXCLUDE_ARGS,
+} from "./agent-store-carry.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
@@ -329,6 +337,7 @@ function tarArgsForSources(
     : [];
   return [
     "-cf", "-",
+    ...SQLITE_SIDECAR_EXCLUDE_ARGS,
     ...excludes,
     ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
   ];
@@ -561,6 +570,7 @@ export function createExportHandler(deps: MigrationHandlerDeps): RequestHandler 
 res.status(404).json({ error: "no export paths", message: `nothing to export for slug=${body.slug}` });
         return;
       }
+      await checkpointAgentStoresForCarry({ sources, log });
       log(
         `[migration-http] export migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s)`,
       );
@@ -1440,6 +1450,8 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
+      await checkpointAgentStoresForCarry({ sources, log });
+
       const activationManifest = mode !== "final"
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
@@ -1458,6 +1470,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           "-a",
           "--relative",
           "--ignore-missing-args",
+          ...SQLITE_SIDECAR_EXCLUDE_ARGS,
           "--password-file",
           passwordFile,
           ...sources.map((source) => rsyncSourceArg(source)),
@@ -1520,6 +1533,24 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: violation });
         return;
       }
+      const staged = await listSqliteStores(session.stageDir);
+      const unreadable = await findUnreadableStore({
+        storePaths: staged,
+        relativeTo: session.stageDir,
+      });
+      if (unreadable) {
+        const message = `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+        log(
+          `[migration-rsync] ⚠ finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${message}`,
+        );
+        res.status(400).json({ error: "rsync import failed validation", message });
+        return;
+      }
+      await clearSqliteSidecars(
+        staged.map((store) =>
+          path.join(session.importDir, path.relative(session.stageDir, store)),
+        ),
+      );
       await copyStageToOpenClaw(session.stageDir, session.importDir);
       if (mode === "final") {
         deps.adapter.markCustomerMigratingIn?.(body.slug);
@@ -1638,6 +1669,8 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
+      await checkpointAgentStoresForCarry({ sources, log });
+
       const activationManifest = body.mode !== "final" && body.mode !== undefined
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
@@ -1778,6 +1811,30 @@ res.status(499).json({ error: "client disconnected", message });
   res.destroy(err instanceof Error ? err : new Error(message));
 }
 
+async function extractValidatedImport(input: {
+  tarPath: string;
+  importDir: string;
+  slug: string;
+  mode: MigrationImportMode;
+}): Promise<string | null> {
+  const entries = await listTarEntries(input.tarPath);
+  const traversal = findPathTraversalViolation(entries, input.slug, input.mode);
+  if (traversal !== null) return traversal;
+
+  const delivered = entries
+    .filter((entry) => isSqliteStorePath(entry))
+    .map((entry) => path.join(input.importDir, entry));
+  await clearSqliteSidecars(delivered);
+  await extractTarToDir(input.tarPath, input.importDir);
+
+  const unreadable = await findUnreadableStore({
+    storePaths: delivered,
+    relativeTo: input.importDir,
+  });
+  if (!unreadable) return null;
+  return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+}
+
 export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -1807,8 +1864,7 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
 
       await streamRequestToFile(req, tarPath);
 
-      const entries = await listTarEntries(tarPath);
-      const violation = findPathTraversalViolation(entries, slug, mode);
+      const violation = await extractValidatedImport({ tarPath, importDir, slug, mode });
       if (violation !== null) {
         log(
           `[migration-http] ⚠ import migrationId=${migrationId} slug=${slug} rejected: ${violation}`,
@@ -1819,8 +1875,6 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
         });
         return;
       }
-
-      await extractTarToDir(tarPath, importDir);
 
       if (mode === "keys") {
         const response: ImportResponse = { migrationId, slug, imported: true };
