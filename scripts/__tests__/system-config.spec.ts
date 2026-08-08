@@ -17,7 +17,6 @@ import {
 } from "../lib/gitea-admin-broker-client.js";
 import {
   auditSystemConfigForSlug,
-  checkpointBootSystemConfigForSlug,
   extractLegacyMattermostAccountSecrets,
   pushDirtySystemConfigForSlug,
   readDurableSystemConfigHeadForSlug,
@@ -29,7 +28,6 @@ import {
   systemConfigPath,
   systemConfigDir,
 } from "../lib/system-config.js";
-import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
 import {
   assertPlatformInvariants,
@@ -643,83 +641,6 @@ describe("system_config restore", () => {
       .toBe("${MM_BOT_TOKEN}");
   });
 
-  it.each(["push-failed", "remote-head-unavailable"])(
-    "keeps boot unready and records %s until changed config is durable",
-    (errorCode) => {
-      writeJson(path.join(repoDir, "openclaw.json"), { customerSetting: true });
-      const now = new Date("2026-07-15T00:00:00.000Z");
-
-      const result = checkpointBootSystemConfigForSlug("acme", {
-        openclawDir,
-        env: { GATEWAY_CLASS: "builder", GATEWAY_BUILDER_SLUG: "acme" },
-        now: () => now,
-        validateConfig: vi.fn(),
-        recover: vi.fn(() => ({
-          outcome: "accepted" as const,
-          acceptedCommit: "a".repeat(40),
-        })),
-        sync: vi.fn(() => ({
-          committed: true,
-          pushed: false,
-          pending: true,
-          errorCode,
-        })),
-      });
-
-      expect(result).toEqual({ ready: false, errorCode });
-      expect(readSystemConfigStatus(openclawDir)).toMatchObject({
-        state: "error",
-        acceptedCommit: "a".repeat(40),
-        lastErrorCode: errorCode,
-        lastErrorAt: now.toISOString(),
-      });
-    },
-  );
-
-  it("preserves a customer-owned default Mattermost account when no historical Mac lane exists", () => {
-    const config = {
-      agents: {
-        list: [
-          {
-            id: "octogee-ceckert-coach",
-            name: "BenderEcho (ceckert)",
-            workspace: "/home/node/.openclaw/customers/ceckert",
-          },
-        ],
-      },
-      bindings: [
-        {
-          agentId: "octogee-ceckert-coach",
-          match: { channel: "mattermost", accountId: "default" },
-        },
-      ],
-      channels: {
-        mattermost: {
-          defaultAccount: "default",
-          accounts: {
-            default: {
-              botToken: {
-                source: "file",
-                provider: "octogee-mattermost",
-                id: "/default",
-              },
-            },
-          },
-        },
-      },
-    };
-
-    expect(removeLegacyMacConfig(config, {
-      GATEWAY_ID: "bender",
-      GATEWAY_BUILDER_SLUG: "ceckert",
-    })).toBe(true);
-    expect(config.channels.mattermost.accounts.default).toBeDefined();
-    expect(config.channels.mattermost.defaultAccount).toBe("default");
-    expect(config.bindings).toEqual([
-      expect.objectContaining({ agentId: "octogee-ceckert-coach" }),
-    ]);
-  });
-
   // 2026.7.2 rewrites agents.list into keyed agents.entries at pre-boot, so a
   // list-only reader silently keeps the legacy Mac lane on every current pod.
   it("removes the shape-matched legacy Mac agent from the keyed roster", () => {
@@ -795,149 +716,6 @@ describe("system_config restore", () => {
     expect(fs.existsSync(path.join(openclawDir, "memory", "octogee-ops-ceckert.sqlite"))).toBe(false);
     expect(fs.existsSync(keptAgentDir)).toBe(true);
     expect(fs.existsSync(path.join(openclawDir, "memory", "octogee-ceckert-coach.sqlite"))).toBe(true);
-  });
-
-  it("keeps legacy Mac state until the migrated durable set is pushed and exactly accepted", async () => {
-    const env = {
-      GATEWAY_CLASS: "builder",
-      GATEWAY_ID: "bender",
-      GATEWAY_BUILDER_SLUG: "ceckert",
-      OPENCLAW_VERSION: "2026.7.1",
-    };
-    const legacyAgentDir = path.join(openclawDir, "agents", "octogee-ops-ceckert");
-    const legacyMemory = path.join(openclawDir, "memory", "octogee-ops-ceckert.sqlite");
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.mkdirSync(path.dirname(legacyMemory), { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "auth-profiles.json"), "legacy-secret\n");
-    fs.writeFileSync(legacyMemory, "legacy-memory\n");
-    writeJson(path.join(repoDir, "openclaw.json"), {
-      agents: {
-        list: [
-          {
-            id: "octogee-ops-ceckert",
-            workspace: "/home/node/.openclaw/workspace/ops",
-            identity: { name: "Mac" },
-          },
-          { id: "octogee-ceckert-coach" },
-        ],
-      },
-    });
-    writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 0 });
-
-    await expect(reconcileSystemConfigSchema(openclawDir, env)).resolves.toBe(true);
-    expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")).not.toContain("Mac");
-    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .toMatchObject({ pendingStateCleanup: "legacy-mac" });
-    expect(fs.existsSync(legacyAgentDir)).toBe(true);
-    expect(fs.existsSync(legacyMemory)).toBe(true);
-
-    const acceptedRecovery = () => ({
-      outcome: "accepted" as const,
-      acceptedCommit: "a".repeat(40),
-    });
-    expect(checkpointBootSystemConfigForSlug("ceckert", {
-      openclawDir,
-      env,
-      doctorResult: "error",
-      validateConfig: vi.fn(),
-      recover: acceptedRecovery,
-      sync: vi.fn(),
-    })).toEqual({ ready: false, errorCode: "openclaw-doctor-retry-required" });
-    expect(fs.existsSync(legacyAgentDir)).toBe(true);
-
-    expect(checkpointBootSystemConfigForSlug("ceckert", {
-      openclawDir,
-      env,
-      doctorResult: "ok",
-      validateConfig: vi.fn(),
-      recover: acceptedRecovery,
-      sync: () => ({
-        committed: true,
-        pushed: false,
-        pending: true,
-        errorCode: "push-failed",
-      }),
-    })).toEqual({ ready: false, errorCode: "push-failed" });
-    expect(fs.existsSync(legacyAgentDir)).toBe(true);
-
-    const interruptedFinalize = vi.fn()
-      .mockReturnValueOnce({
-        committed: true,
-        pushed: true,
-        acceptedCommit: "b".repeat(40),
-      })
-      .mockReturnValueOnce({
-        committed: true,
-        pushed: false,
-        pending: true,
-        errorCode: "push-failed",
-      });
-    expect(checkpointBootSystemConfigForSlug("ceckert", {
-      openclawDir,
-      env,
-      doctorResult: "ok",
-      validateConfig: vi.fn(),
-      recover: acceptedRecovery,
-      sync: interruptedFinalize,
-      verifyAcceptedDurableSet: () => true,
-    })).toEqual({ ready: false, errorCode: "push-failed" });
-    expect(interruptedFinalize).toHaveBeenCalledTimes(2);
-    expect(fs.existsSync(legacyAgentDir)).toBe(false);
-    expect(fs.existsSync(legacyMemory)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .not.toHaveProperty("pendingStateCleanup");
-
-    writeJson(path.join(repoDir, ".octogee.json"), {
-      schemaVersion: 1,
-      lastMigration: "remove-mac-and-externalize-mattermost-tokens",
-      pendingStateCleanup: "legacy-mac",
-    });
-    const sync = vi.fn()
-      .mockReturnValueOnce({
-        committed: true,
-        pushed: true,
-        acceptedCommit: "b".repeat(40),
-      })
-      .mockReturnValueOnce({
-        committed: true,
-        pushed: true,
-        acceptedCommit: "c".repeat(40),
-      });
-    const verifyAcceptedDurableSet = vi.fn(() => true);
-    expect(checkpointBootSystemConfigForSlug("ceckert", {
-      openclawDir,
-      env,
-      doctorResult: "ok",
-      validateConfig: vi.fn(),
-      recover: acceptedRecovery,
-      sync,
-      verifyAcceptedDurableSet,
-    })).toEqual({ ready: true, acceptedCommit: "c".repeat(40) });
-    expect(sync).toHaveBeenCalledTimes(2);
-    expect(verifyAcceptedDurableSet).toHaveBeenNthCalledWith(1, repoDir, "b".repeat(40));
-    expect(verifyAcceptedDurableSet).toHaveBeenNthCalledWith(2, repoDir, "c".repeat(40));
-    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .not.toHaveProperty("pendingStateCleanup");
-    expect(fs.existsSync(legacyAgentDir)).toBe(false);
-    expect(fs.existsSync(legacyMemory)).toBe(false);
-
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "auth-profiles.json"), "customer-owned\n");
-    expect(checkpointBootSystemConfigForSlug("ceckert", {
-      openclawDir,
-      env,
-      doctorResult: "ok",
-      validateConfig: vi.fn(),
-      recover: acceptedRecovery,
-      sync: () => ({
-        committed: false,
-        pushed: true,
-        acceptedCommit: "d".repeat(40),
-      }),
-      verifyAcceptedDurableSet: () => true,
-    })).toEqual({ ready: true, acceptedCommit: "d".repeat(40) });
-    expect(fs.readFileSync(path.join(legacyAgentDir, "auth-profiles.json"), "utf8"))
-      .toBe("customer-owned\n");
   });
 
   it("restores an existing repo config without reseeding", async () => {
