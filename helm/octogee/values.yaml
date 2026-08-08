@@ -290,7 +290,7 @@ networkPolicy:
   privateServicesCidr: ""
 
 projectRunner:
-  controlPlaneCidr: ""
+  apiServerEgressCidrs: []
 
 # ── llm-broker ───────────────────────────────────────────────────────────────
 # Dedicated, shell-less cluster service that holds the real platform model key

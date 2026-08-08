@@ -1591,16 +1591,22 @@ describe("customer OAuth runtime purge", () => {
       "octogee-chat-tools",
       "octogee-connector-tools",
       "octogee-access-tools",
-      "octogee-preview-tools",
       "octogee-project-tools",
+      "octogee-board-tools",
       "octogee-status-tools",
       "octogee-ops-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",
-      "octogee-publish-tools",
+      "parallel",
       "openai",
     ]);
     expect(patch.plugins.entries.codex).toBeUndefined();
+    expect(patch.plugins.entries).not.toHaveProperty("octogee-preview-tools");
+    expect(patch.plugins.entries).not.toHaveProperty("octogee-publish-tools");
+    expect(patch.plugins.entries["octogee-board-tools"].config).toEqual({
+      brokerUrl: "${FLEET_BROKER_URL}",
+      tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+    });
     expect(patch.plugins.entries["octogee-connector-tools"].config).toEqual({
       brokerUrl: "${FLEET_BROKER_URL}",
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
@@ -1777,9 +1783,9 @@ describe("customer OAuth runtime purge", () => {
     ) as any;
 
     expect(patch.plugins.enabled).toBe(true);
-    expect(patch.plugins.allow).not.toContain("parallel");
+    expect(patch.plugins.allow).toContain("parallel");
     expect(patch.plugins.entries.acpx).toBeNull();
-    expect(patch.plugins.entries.parallel).toBeNull();
+    expect(patch.plugins.entries.parallel).toEqual({ enabled: true });
     expect(patch.plugins.load).toBeNull();
     expect(patch.plugins.installs).toBeNull();
     expect(patch.plugins.entries["octogee-chat-tools"].config).toEqual({

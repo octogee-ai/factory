@@ -18,7 +18,6 @@ const TARGET_STRING_FIELDS = [
     "region",
     "clusterName",
     "namespace",
-    "projectRunnerControlPlaneCidr",
     "siteOrigin",
     "appOrigin",
     "apiOrigin",
@@ -52,21 +51,24 @@ function stringFields(value, fields, label) {
         stringField(value, field, label);
     }
 }
-function narrowIpv4Cidr(value, label) {
-    const invalid = () => new Error(`${label} must be a canonical IPv4 /28-/32 CIDR`);
-    if (typeof value !== "string")
+function apiServerEgressCidrs(value, label) {
+    const invalid = () => new Error(`${label} must contain unique canonical IPv4 /32 CIDRs`);
+    if (!Array.isArray(value) || value.length === 0 || new Set(value).size !== value.length) {
         throw invalid();
-    const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{2})$/u.exec(value);
-    if (!match)
-        throw invalid();
-    const octets = match.slice(1, 5).map(Number);
-    const prefix = Number(match[5]);
-    if (octets.some((part) => part > 255) || prefix < 28 || prefix > 32)
-        throw invalid();
-    const address = octets.reduce((result, part) => ((result << 8) | part) >>> 0, 0);
-    const mask = prefix === 32 ? 0xffff_ffff : (0xffff_ffff << (32 - prefix)) >>> 0;
-    if (address === 0 || (address & mask) !== address)
-        throw invalid();
+    }
+    for (const cidr of value) {
+        if (typeof cidr !== "string")
+            throw invalid();
+        const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/32$/u.exec(cidr);
+        if (!match)
+            throw invalid();
+        const octets = match.slice(1, 5).map(Number);
+        if (octets.some((part) => part > 255) || octets.every((part) => part === 0)) {
+            throw invalid();
+        }
+        if (`${octets.join(".")}/32` !== cidr)
+            throw invalid();
+    }
 }
 function validatePromotionSourceField(target, targetId, environment) {
     if (environment === "prod") {
@@ -168,7 +170,7 @@ export function validateDeploymentTargetsDocument(document) {
             throw new Error(`deployment target ${targetId}.lifecycle is invalid: ${lifecycle}`);
         }
         stringFields(target, TARGET_STRING_FIELDS, `deployment target ${targetId}`);
-        narrowIpv4Cidr(target.projectRunnerControlPlaneCidr, `deployment target ${targetId}.projectRunnerControlPlaneCidr`);
+        apiServerEgressCidrs(target.projectRunnerApiServerEgressCidrs, `deployment target ${targetId}.projectRunnerApiServerEgressCidrs`);
         stringFields(record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`), ["projectId", "location", "repository"], `deployment target ${targetId}.artifactRegistry`);
         const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
         stringFields(cloudSql, [
@@ -221,7 +223,7 @@ function settings(targetId, target) {
         clusterName: target.clusterName,
         kubeContext: `gke_${target.clusterProjectId}_${target.region}_${target.clusterName}`,
         namespace: target.namespace,
-        projectRunnerControlPlaneCidr: target.projectRunnerControlPlaneCidr,
+        projectRunnerApiServerEgressCidrs: [...target.projectRunnerApiServerEgressCidrs],
         artifactRegistryProjectId: target.artifactRegistry.projectId,
         artifactRegistryLocation: target.artifactRegistry.location,
         artifactRegistryName: target.artifactRegistry.repository,

@@ -19,7 +19,7 @@ export function renderDeploymentTargetHelmValues(settings) {
   projectRunnerImage:
     repository: ${quoted(`${registry}/octogee-project-runner`)}
 projectRunner:
-  controlPlaneCidr: ${quoted(settings.projectRunnerControlPlaneCidr)}
+  apiServerEgressCidrs: ${JSON.stringify(settings.projectRunnerApiServerEgressCidrs)}
 networkPolicy:
   enforceDefaultDeny: ${networkBoundary !== undefined}
   controlPlaneCidr: ${quoted(networkBoundary?.controlPlaneCidr ?? "")}

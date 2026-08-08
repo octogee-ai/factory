@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { parseDocument } from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CHART_PATH = path.join(REPO_ROOT, "helm/octogee-gateway");
@@ -1398,13 +1399,9 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
   });
 });
 
-function splitNetworkPolicyRules(np: string): { restricted: string; open: string } {
-  const fromIdx = np.indexOf("- from:");
-  const openIdx = np.indexOf("\n    - ports:", fromIdx);
-  if (fromIdx === -1 || openIdx === -1) {
-    throw new Error(`NetworkPolicy structure unexpected — fromIdx=${fromIdx} openIdx=${openIdx}`);
-  }
-  return { restricted: np.slice(fromIdx, openIdx), open: np.slice(openIdx) };
+function networkPolicyIngressRules(np: string): Array<Record<string, any>> {
+  const parsed = parseDocument(np).toJSON() as { spec?: { ingress?: Array<Record<string, any>> } };
+  return parsed.spec?.ingress ?? [];
 }
 
 describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist", () => {
@@ -1418,10 +1415,16 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
       "octogee-gateway-builder-shell-default",
     );
     expect(np).not.toBeNull();
-    const { restricted } = splitNetworkPolicyRules(np!);
-    expect(restricted).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*default/);
-    expect(restricted).toMatch(/port:\s*3005/);
-    expect(restricted).not.toMatch(/port:\s*3003/);
+    const rule = networkPolicyIngressRules(np!).find((candidate) =>
+      candidate.ports?.some((port: any) => port.port === 3005));
+    expect(rule).toEqual({
+      from: [{
+        podSelector: {
+          matchLabels: { app: "octogee-gateway", "gateway-instance": "default" },
+        },
+      }],
+      ports: [{ protocol: "TCP", port: 3005 }],
+    });
   });
 
   it("renders the same builder-shell backstop for builder gateways when shells are enabled", () => {
@@ -1434,35 +1437,43 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
       "octogee-gateway-builder-shell-default",
     );
     expect(np).not.toBeNull();
-    const { restricted } = splitNetworkPolicyRules(np!);
-    expect(restricted).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*default/);
-    expect(restricted).toMatch(/port:\s*3005/);
+    expect(networkPolicyIngressRules(np!).some((candidate) =>
+      candidate.from?.[0]?.podSelector?.matchLabels?.["gateway-instance"] === "default"
+      && candidate.ports?.some((port: any) => port.port === 3005))).toBe(true);
   });
 
-  it("allows other pod ports from any source — listed in a rule WITHOUT `from:` so the LB / sibling workloads / Prometheus can reach them", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-default", {
+  it("never widens gateway-edge, fleet-control, or OpenClaw ingress beyond the generic source policy", () => {
+    const out = helmTemplate("octogee-gw-default", {
         profile: "builder",
         "builderAccess.shellsEnabled": "true",
-      }),
+    });
+    const shellPolicy = findDoc(
+      out,
       "NetworkPolicy",
       "octogee-gateway-builder-shell-default",
     );
-    expect(np).not.toBeNull();
-    const { open } = splitNetworkPolicyRules(np!);
-    
-    expect(open).not.toMatch(/from:/);
+    expect(shellPolicy).not.toBeNull();
+    const shellRules = networkPolicyIngressRules(shellPolicy!);
+    expect(shellRules.every((rule) => Array.isArray(rule.from) && rule.from.length > 0)).toBe(true);
+    expect(shellRules.flatMap((rule) => rule.ports.map((port: any) => port.port)).sort((a, b) => a - b))
+      .toEqual([3005, 9092, 30873]);
 
-expect(open).toMatch(/port:\s*3003/);
-
-expect(open).toMatch(/port:\s*3001/);
-
-expect(open).not.toMatch(/port:\s*8080/);
-    expect(open).not.toMatch(/port:\s*9092/);
-    
-expect(open).not.toMatch(/port:\s*9080/);
-
-expect(open).toMatch(/port:\s*18789/);
+    const genericPolicy = findDoc(out, "NetworkPolicy", "octogee-gateway-ingress-default");
+    expect(genericPolicy).not.toBeNull();
+    const genericRules = networkPolicyIngressRules(genericPolicy!);
+    const sourcesForPort = (port: number) => genericRules
+      .filter((rule) => rule.ports.some((candidate: any) => candidate.port === port))
+      .flatMap((rule) => rule.from.map((source: any) => source.podSelector?.matchLabels?.app))
+      .filter(Boolean)
+      .sort();
+    expect(sourcesForPort(3001)).toEqual([
+      "gateway-router",
+      "mattermost-callback-router",
+      "octogee-api",
+    ]);
+    expect(sourcesForPort(3003)).toEqual(["glm-controller", "octogee-gateway"]);
+    expect(genericRules.some((rule) =>
+      rule.ports.some((candidate: any) => candidate.port === 18789))).toBe(false);
   });
 
   it("scopes runner-metrics (:9092) to the gke-gmp-system namespace (GMP collectors) — never the open any-source rule", () => {
@@ -1475,10 +1486,11 @@ expect(open).toMatch(/port:\s*18789/);
       "octogee-gateway-builder-shell-default",
     );
     expect(np).not.toBeNull();
-    const { restricted, open } = splitNetworkPolicyRules(np!);
-    expect(restricted).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*gke-gmp-system/);
-    expect(restricted).toMatch(/port:\s*9092/);
-    expect(open).not.toMatch(/port:\s*9092/);
+    const rule = networkPolicyIngressRules(np!).find((candidate) =>
+      candidate.ports?.some((port: any) => port.port === 9092));
+    expect(rule?.from).toEqual([{
+      namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "gke-gmp-system" } },
+    }]);
   });
 
   it("allows migration rsync ingress only from peer gateway pods — never the open any-source rule", () => {
@@ -1491,9 +1503,11 @@ expect(open).toMatch(/port:\s*18789/);
       "octogee-gateway-builder-shell-default",
     );
     expect(np).not.toBeNull();
-    const { restricted, open } = splitNetworkPolicyRules(np!);
-    expect(restricted).toMatch(/app:\s*octogee-gateway[\s\S]*?port:\s*30873/);
-    expect(open).not.toMatch(/port:\s*30873/);
+    const rule = networkPolicyIngressRules(np!).find((candidate) =>
+      candidate.ports?.some((port: any) => port.port === 30873));
+    expect(rule?.from).toEqual([{
+      podSelector: { matchLabels: { app: "octogee-gateway" } },
+    }]);
   });
 
   it("is NOT rendered for shared gateways (cattle don't expose :3005 so no backstop needed)", () => {

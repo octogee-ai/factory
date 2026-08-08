@@ -588,7 +588,7 @@ function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
         bound.podName,
         agentId,
       );
-    if (!assigned) {
+    if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
       res.status(403).json(FORBIDDEN);
       return;
     }

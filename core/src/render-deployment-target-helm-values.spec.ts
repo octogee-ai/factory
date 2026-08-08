@@ -21,7 +21,7 @@ describe("deployment target Helm values", () => {
     expect(rendered).not.toContain("projectPublisher:");
     expect(rendered).not.toContain("platformComputeClass");
     expect(rendered).toContain(`projectRunner:
-  controlPlaneCidr: "34.58.245.121/32"`);
+  apiServerEgressCidrs: ["10.128.0.2/32","34.118.224.1/32"]`);
     expect(rendered).toContain(`networkPolicy:
   enforceDefaultDeny: false`);
     expect(rendered).toContain('connectionName: "octogee:us-central1:octogee-pg"');
@@ -84,11 +84,11 @@ describe("deployment target Helm values", () => {
   );
 
   it.each(["prod-central", "test-central", "build-week-central"])(
-    "renders the exact central project runner control plane for %s",
+    "renders the exact central project runner API-server destinations for %s",
     (targetId) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
       expect(rendered).toContain(`projectRunner:
-  controlPlaneCidr: "34.58.245.121/32"`);
+  apiServerEgressCidrs: ["10.128.0.2/32","34.118.224.1/32"]`);
       expect(rendered).toContain("enforceDefaultDeny: false");
     },
   );

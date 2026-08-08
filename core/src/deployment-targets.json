@@ -18,7 +18,10 @@
       "region": "us-central1",
       "clusterName": "octogee-gateway",
       "namespace": "octogee",
-      "projectRunnerControlPlaneCidr": "34.58.245.121/32",
+      "projectRunnerApiServerEgressCidrs": [
+        "10.128.0.2/32",
+        "34.118.224.1/32"
+      ],
       "artifactRegistry": {
         "projectId": "octogee",
         "location": "us-central1",
@@ -69,7 +72,10 @@
       "region": "us-central1",
       "clusterName": "octogee-gateway",
       "namespace": "octogee-test",
-      "projectRunnerControlPlaneCidr": "34.58.245.121/32",
+      "projectRunnerApiServerEgressCidrs": [
+        "10.128.0.2/32",
+        "34.118.224.1/32"
+      ],
       "artifactRegistry": {
         "projectId": "octogee",
         "location": "us-central1",
@@ -120,7 +126,10 @@
       "region": "us-central1",
       "clusterName": "octogee-gateway",
       "namespace": "octogee-build-week",
-      "projectRunnerControlPlaneCidr": "34.58.245.121/32",
+      "projectRunnerApiServerEgressCidrs": [
+        "10.128.0.2/32",
+        "34.118.224.1/32"
+      ],
       "artifactRegistry": {
         "projectId": "octogee",
         "location": "us-central1",

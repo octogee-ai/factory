@@ -241,6 +241,13 @@ describe("system config platform invariants", () => {
       "octogee_project_preview",
       "octogee_project_run_status",
       "octogee_project_publish",
+      "octogee_project_set_recipe",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
       "octogee_google_gmail_read",
     ]));
     expect(agents.list[0].tools.toolsBySender).toEqual({});
@@ -253,6 +260,13 @@ describe("system config platform invariants", () => {
         "octogee_project_preview",
         "octogee_project_run_status",
         "octogee_project_publish",
+        "octogee_project_set_recipe",
+        "octogee_board_list",
+        "octogee_board_card_read",
+        "octogee_board_card_create",
+        "octogee_board_card_update",
+        "octogee_board_card_move",
+        "octogee_board_card_comment",
       ]),
     );
     expect((config.channels as any).mattermost.accounts["alice-coach"].allowFrom).toEqual(["f".repeat(26)]);
@@ -281,6 +295,13 @@ describe("system config platform invariants", () => {
       "octogee_project_test",
       "octogee_project_preview",
       "octogee_project_run_status",
+      "octogee_project_set_recipe",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
     ]));
     expect(agents.list[1].tools.alsoAllow).not.toContain("workspace_commit");
     expect(agents.list[1].tools.deny).toEqual(expect.arrayContaining([
@@ -299,6 +320,8 @@ describe("system config platform invariants", () => {
       "octogee_project_publish",
     ]));
     expect(agents.list[1].tools.deny).not.toContain("octogee_project_commit");
+    expect((config.plugins as any).allow).toContain("parallel");
+    expect((config.plugins as any).entries.parallel).toEqual({ enabled: true });
     expect(agents.list[1].tools.alsoAllow).not.toEqual(expect.arrayContaining([
       "octogee_chat_search",
       "octogee_chat_history",

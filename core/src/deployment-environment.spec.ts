@@ -62,7 +62,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip",
       giteaStaticIpName: "gitea-ip",
       previewStaticIpName: "preview-ip",
-      projectRunnerControlPlaneCidr: "34.58.245.121/32",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetSettings("prod-central")).toMatchObject({
@@ -91,7 +91,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip",
       giteaStaticIpName: "gitea-ip",
       previewStaticIpName: "preview-ip",
-      projectRunnerControlPlaneCidr: "34.58.245.121/32",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetSettings("test-central")).toMatchObject({
@@ -111,7 +111,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip-test",
       giteaStaticIpName: "gitea-ip-test",
       previewStaticIpName: "preview-ip-test",
-      projectRunnerControlPlaneCidr: "34.58.245.121/32",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetsForEnvironment("prod")).toEqual([
@@ -223,17 +223,27 @@ describe("deployment environment registry", () => {
     );
   });
 
-  it("accepts only canonical narrow project runner control-plane CIDRs", () => {
+  it("accepts only a non-empty unique list of canonical project runner API-server /32s", () => {
     const candidate = structuredClone(deploymentTargetsDocument) as {
-      targets: Record<string, { projectRunnerControlPlaneCidr: string }>;
+      targets: Record<string, { projectRunnerApiServerEgressCidrs: unknown }>;
     };
-    candidate.targets["test-central"].projectRunnerControlPlaneCidr = "10.128.0.0/28";
+    candidate.targets["test-central"].projectRunnerApiServerEgressCidrs = [
+      "10.128.0.2/32",
+      "34.118.224.1/32",
+    ];
     expect(() => validateDeploymentTargetsDocument(candidate)).not.toThrow();
 
-    for (const cidr of ["34.58.245.121/27", "10.128.0.2/28", "0.0.0.0/32", "300.1.1.1/32"]) {
-      candidate.targets["test-central"].projectRunnerControlPlaneCidr = cidr;
-      expect(() => validateDeploymentTargetsDocument(candidate), cidr).toThrow(
-        "deployment target test-central.projectRunnerControlPlaneCidr must be a canonical IPv4 /28-/32 CIDR",
+    for (const cidrs of [
+      [],
+      ["34.58.245.121/27"],
+      ["0.0.0.0/32"],
+      ["300.1.1.1/32"],
+      ["10.128.0.2/32", "10.128.0.2/32"],
+      "10.128.0.2/32",
+    ]) {
+      candidate.targets["test-central"].projectRunnerApiServerEgressCidrs = cidrs;
+      expect(() => validateDeploymentTargetsDocument(candidate), JSON.stringify(cidrs)).toThrow(
+        "deployment target test-central.projectRunnerApiServerEgressCidrs must contain unique canonical IPv4 /32 CIDRs",
       );
     }
   });

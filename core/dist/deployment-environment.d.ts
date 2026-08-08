@@ -47,7 +47,7 @@ interface DeploymentTargetDocument {
     region: string;
     clusterName: string;
     namespace: string;
-    projectRunnerControlPlaneCidr: string;
+    projectRunnerApiServerEgressCidrs: string[];
     artifactRegistry: ArtifactRegistryDocument;
     cloudSql: CloudSqlDocument;
     kms: KmsDocument;
@@ -82,7 +82,7 @@ export interface DeploymentEnvironmentSettings {
     clusterName: string;
     kubeContext: string;
     namespace: string;
-    projectRunnerControlPlaneCidr: string;
+    projectRunnerApiServerEgressCidrs: string[];
     artifactRegistryProjectId: string;
     artifactRegistryLocation: string;
     artifactRegistryName: string;

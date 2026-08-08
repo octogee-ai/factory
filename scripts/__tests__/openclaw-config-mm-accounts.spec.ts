@@ -88,6 +88,28 @@ describe("buildCustomerAgent", () => {
     expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(runTools));
   });
 
+  it("keeps recipe and Board workflows available to coaches and project-locked agents", () => {
+    const coach = buildCustomerAgent({
+      uid: "uid-chris",
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentDir: "/agents/octogee-chris-coach/agent",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+    });
+    const projectTools = [
+      "octogee_project_set_recipe",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
+    ];
+    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(projectTools));
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(expect.arrayContaining(projectTools));
+    expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(projectTools));
+  });
+
   it("exposes publish only to the Workspace Coach", () => {
     const coach = buildCustomerAgent({
       uid: "uid-chris",

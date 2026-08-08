@@ -691,13 +691,13 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-chat-tools",
   "octogee-connector-tools",
   "octogee-access-tools",
-  "octogee-preview-tools",
   "octogee-project-tools",
+  "octogee-board-tools",
   "octogee-status-tools",
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
-  "octogee-publish-tools",
+  "parallel",
   "openai",
 ] as const;
 
@@ -735,8 +735,14 @@ const CUSTOMER_PLUGIN_ENTRIES = {
       tokenPath: BROKER_TOKEN_PATH_PLACEHOLDER,
     },
   },
-  "octogee-preview-tools": { enabled: true, config: {} },
   "octogee-project-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+      tokenPath: BROKER_TOKEN_PATH_PLACEHOLDER,
+    },
+  },
+  "octogee-board-tools": {
     enabled: true,
     config: {
       brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
@@ -767,7 +773,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     },
   },
   "octogee-workspace-tools": { enabled: true, config: {} },
-  "octogee-publish-tools": { enabled: true, config: {} },
+  parallel: { enabled: true },
 } as const;
 
 const CUSTOMER_SECRET_PROVIDERS = {

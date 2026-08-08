@@ -11,6 +11,7 @@ const workflowTools = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_set_recipe",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
@@ -56,6 +57,13 @@ const customerStructuredTools = [
   "octogee_project_preview",
   "octogee_project_run_status",
   "octogee_project_publish",
+  "octogee_project_set_recipe",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
 ];
 const approvedPlugins = [
   "mattermost",
@@ -70,6 +78,7 @@ const approvedPlugins = [
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
+  "parallel",
   "openai",
 ];
 const brokerPluginConfig = {
@@ -282,6 +291,13 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         "octogee_project_preview",
         "octogee_project_run_status",
         "octogee_project_commit",
+        "octogee_project_set_recipe",
+        "octogee_board_list",
+        "octogee_board_card_read",
+        "octogee_board_card_create",
+        "octogee_board_card_update",
+        "octogee_board_card_move",
+        "octogee_board_card_comment",
       ]),
     );
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toEqual(
@@ -510,6 +526,13 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee_project_test",
       "octogee_project_preview",
       "octogee_project_run_status",
+      "octogee_project_set_recipe",
+      "octogee_board_list",
+      "octogee_board_card_read",
+      "octogee_board_card_create",
+      "octogee_board_card_update",
+      "octogee_board_card_move",
+      "octogee_board_card_comment",
     ]));
     expect(projectTools.alsoAllow).not.toEqual(expect.arrayContaining([
       "workspace_commit",
@@ -1084,7 +1107,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.load).toBeUndefined();
     expect(out.plugins.installs).toBeUndefined();
     expect(out.plugins.entries.acpx).toBeUndefined();
-    expect(out.plugins.entries.parallel).toBeUndefined();
+    expect(out.plugins.entries.parallel).toEqual({ enabled: true });
     expect(out.plugins.entries["octogee-chat-tools"]).toEqual({
       enabled: true,
       hooks: {

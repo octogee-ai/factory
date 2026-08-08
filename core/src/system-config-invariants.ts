@@ -76,6 +76,7 @@ const REQUIRED_PLUGINS = [
   "octogee-status-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
+  "parallel",
 ] as const;
 
 const RETIRED_PLUGINS = [
@@ -166,17 +167,31 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_project_preview",
   "octogee_project_run_status",
   "octogee_project_publish",
+  "octogee_project_set_recipe",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
 ] as const;
 
 const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
+  "octogee_project_set_recipe",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
   "octogee_project_run_status",
   "octogee_project_publish",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
   "delegated_access",
   "workspace_commit",
   "brave_search",
@@ -222,6 +237,13 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_project_test",
   "octogee_project_preview",
   "octogee_project_run_status",
+  "octogee_project_set_recipe",
+  "octogee_board_list",
+  "octogee_board_card_read",
+  "octogee_board_card_create",
+  "octogee_board_card_update",
+  "octogee_board_card_move",
+  "octogee_board_card_comment",
 ] as const;
 
 const PROJECT_AGENT_DENIED_TOOLS = [
