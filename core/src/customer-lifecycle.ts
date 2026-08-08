@@ -301,6 +301,8 @@ export type AddCustomerStep =
   | "mark-complete"
   | "notify-ops";
 
+const VERIFY_CHANNEL_READY = "verify-channel-ready";
+
 export interface AddCustomerResult {
   newCustomer: boolean;
   steps: AddCustomerStep[];
@@ -344,6 +346,23 @@ export function _inFlightUidsHasForTests(uid: string): boolean {
   return inFlightUids.has(uid);
 }
 
+export type MountStep =
+  | "load-snapshot"
+  | "ssh-key"
+  | "claim-slot"
+  | "workspace-repo"
+  | "byos-restore"
+  | "mattermost"
+  | "config-patch"
+  | "reassert-converged"
+  | "community-membership"
+  | "verify-channel-ready"
+  | "blob-sync"
+  | "project-clones"
+  | "finalize";
+
+export type MarkStep = (step: MountStep) => void;
+
 export interface AddCustomerOptions {
   verifyTimeoutMs?: number;
   customersDir?: string;
@@ -362,8 +381,8 @@ export async function addCustomerToGateway(
   uid: string,
   opts: AddCustomerOptions = {},
 ): Promise<AddCustomerResult> {
-  return runUidMountExclusive(uid, opts, (signal) =>
-    addCustomerToGatewayInner(adapter, uid, { ...opts, signal }),
+  return runUidMountExclusive(uid, opts, (signal, markStep) =>
+    addCustomerToGatewayInner(adapter, uid, { ...opts, signal, markStep }),
   );
 }
 
@@ -372,15 +391,15 @@ export async function restoreCustomerRuntimeFromSnapshot(
   snapshot: UserSnapshot,
   opts: AddCustomerOptions = {},
 ): Promise<RestoreCustomerRuntimeResult> {
-  return runUidMountExclusive(snapshot.uid, opts, (signal) =>
-    restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, { ...opts, signal }),
+  return runUidMountExclusive(snapshot.uid, opts, (signal, markStep) =>
+    restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, { ...opts, signal, markStep }),
   );
 }
 
 async function runUidMountExclusive<T>(
   uid: string,
   opts: AddCustomerOptions,
-  work: (signal: AbortSignal) => Promise<T>,
+  work: (signal: AbortSignal, markStep: MarkStep) => Promise<T>,
 ): Promise<T> {
   if (inFlightUids.has(uid)) {
     throw new ConcurrentMountError(uid);
@@ -388,9 +407,10 @@ async function runUidMountExclusive<T>(
   inFlightUids.add(uid);
   const deadlineMs = opts.mountDeadlineMs ?? ADD_CUSTOMER_DEADLINE_MS;
   const controller = new AbortController();
-  const deadlineErr = new Error(
-    `[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — a step is hung; releasing in-flight lock so the next retry can run`,
-  );
+  let step: MountStep = "load-snapshot";
+  const markStep: MarkStep = (next) => {
+    step = next;
+  };
 
   const externalAbortListener = () => controller.abort(opts.signal?.reason);
   if (opts.signal?.aborted) {
@@ -400,11 +420,19 @@ async function runUidMountExclusive<T>(
   }
   let timer: NodeJS.Timeout | null = null;
   if (!controller.signal.aborted && Number.isFinite(deadlineMs) && deadlineMs > 0) {
-    timer = setTimeout(() => controller.abort(deadlineErr), deadlineMs);
+    timer = setTimeout(
+      () =>
+        controller.abort(
+          new Error(
+            `[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; releasing in-flight lock so the next retry can run`,
+          ),
+        ),
+      deadlineMs,
+    );
   }
   opts.onSignalCreated?.(controller.signal);
   try {
-    return await raceWithSignal(work(controller.signal), controller.signal);
+    return await raceWithSignal(work(controller.signal, markStep), controller.signal);
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener("abort", externalAbortListener);
@@ -437,13 +465,14 @@ function raceWithSignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 async function restoreCustomerRuntimeFromSnapshotInner(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
-  opts: AddCustomerOptions,
+  opts: AddCustomerOptions & { markStep?: MarkStep },
 ): Promise<RestoreCustomerRuntimeResult> {
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
   const customersDir = opts.customersDir ?? "/home/node/.openclaw/customers";
   const ctx = buildCustomerContext(snapshot, customersDir);
   const steps: AddCustomerStep[] = [];
   const { signal } = opts;
+  const markStep = opts.markStep ?? (() => {});
   const { slug, uid } = snapshot;
   const startedAt = Date.now();
 
@@ -452,9 +481,11 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   );
 
   throwIfAborted(signal, uid);
+  markStep("ssh-key");
   steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
   throwIfAborted(signal, uid);
 
+  markStep("workspace-repo");
   const workspaceSteps = snapshot.repoUrl
     ? await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)
     : [];
@@ -466,10 +497,12 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   }
   throwIfAborted(signal, uid);
 
+  markStep("byos-restore");
   const byos = await restoreByos(adapter, slug);
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
+  markStep("config-patch");
   await applyConfigPatchAndMount(adapter, snapshot, null, {
     byosActive: byos.present,
     signal,
@@ -477,16 +510,20 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
+  markStep("reassert-converged");
   steps.push(...(await reassertConvergedState(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
+  markStep("community-membership");
   steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
   throwIfAborted(signal, uid);
 
+  markStep(VERIFY_CHANNEL_READY);
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
-  steps.push("verify-channel-ready");
+  steps.push(VERIFY_CHANNEL_READY);
   throwIfAborted(signal, uid);
 
+  markStep("project-clones");
   if (rehydratesProjectCheckouts(adapter, snapshot)) {
     steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
   }
@@ -583,6 +620,7 @@ async function addCustomerToGatewayInner(
     verifyTimeoutMs?: number;
     customersDir?: string;
     signal?: AbortSignal;
+    markStep?: MarkStep;
     convergeContent?: boolean;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
@@ -591,6 +629,7 @@ async function addCustomerToGatewayInner(
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
   const customersDir = opts.customersDir ?? "/home/node/.openclaw/customers";
   const { signal } = opts;
+  const markStep = opts.markStep ?? (() => {});
   const steps: AddCustomerStep[] = [];
   const attachStartedAt = Date.now();
 
@@ -601,42 +640,50 @@ async function addCustomerToGatewayInner(
   const { slug } = snapshot;
 
   if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
+    markStep("ssh-key");
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
     adapter.log(
       `[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
     );
     throwIfAborted(signal, uid);
+    markStep(VERIFY_CHANNEL_READY);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     // Fleet heartbeat must include this customer as mounted — same as
     // the non-short-circuit path which calls onMounted after config.patch.
     if (adapter.onMounted) adapter.onMounted(slug);
-    steps.push("verify-channel-ready");
+    steps.push(VERIFY_CHANNEL_READY);
     // This short-circuit never reaches cloneMissingProjects, so it makes no claim about
     // project checkouts — reporting them pending here would re-ensure forever.
     return { newCustomer: false, steps, pendingProjectClones: [] };
   }
 
   if (snapshot.status !== "complete") {
+    markStep("claim-slot");
     await adapter.setProvisioningStatus(uid, "provisioning");
     steps.push("claim-slot");
   }
 
+  markStep("ssh-key");
   steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
   throwIfAborted(signal, uid);
 
+  markStep("workspace-repo");
   steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
   throwIfAborted(signal, uid);
 
+  markStep("byos-restore");
   const byos = await restoreByos(adapter, slug);
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
+  markStep("mattermost");
   const mm = await provisionMattermostIfMissing(adapter, uid, snapshot, ctx);
   snapshot = mm.snapshot;
   steps.push(...mm.steps);
   throwIfAborted(signal, uid);
 
+  markStep("config-patch");
   const appliedFingerprint = await applyConfigPatchAndMount(
     adapter,
     snapshot,
@@ -651,25 +698,31 @@ async function addCustomerToGatewayInner(
   steps.push("config-patch");
   throwIfAborted(signal, uid);
 
+  markStep("reassert-converged");
   steps.push(...(await reassertConvergedState(adapter, snapshot)));
   throwIfAborted(signal, uid);
 
+  markStep("community-membership");
   steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
   throwIfAborted(signal, uid);
 
+  markStep(VERIFY_CHANNEL_READY);
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
-  steps.push("verify-channel-ready");
+  steps.push(VERIFY_CHANNEL_READY);
   throwIfAborted(signal, uid);
 
+  markStep("blob-sync");
   steps.push(...(await runBlobSync(adapter, slug)));
   throwIfAborted(signal, uid);
 
+  markStep("project-clones");
   const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
     ? await cloneMissingProjects(adapter, slug)
     : { steps: [], pending: [] };
   steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
+  markStep("finalize");
   adapter.log(
     `✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`,
   );
