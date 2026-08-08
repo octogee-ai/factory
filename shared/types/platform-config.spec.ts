@@ -50,14 +50,14 @@ describe("parsePlatformFreeConfig", () => {
 });
 
 describe("parsePlatformTrialConfig", () => {
-  it("seeds the seven-day Personal-only momentum Signup Offer", () => {
+  it("seeds the seven-day momentum Signup Offer with a Hobby builder gateway", () => {
     expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
       schemaVersion: 2,
       offerId: "builder-signup",
       offerVersion: 3,
       durationDays: 7,
       defaultPersonalTier: "personal",
-      defaultBuilderTier: null,
+      defaultBuilderTier: "hobby",
       budgetPolicy: {
         schemaVersion: 1,
         currency: "USD",
@@ -69,7 +69,7 @@ describe("parsePlatformTrialConfig", () => {
     expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(2);
   });
 
-  it("accepts every Personal tier and keeps the momentum offer Personal-only", () => {
+  it("accepts every Personal tier and every provisionable builder tier", () => {
     for (const personalTier of ["personal_free", "personal", "personal_pro", "personal_pro_max"]) {
       expect(
         parsePlatformTrialConfig({
@@ -82,9 +82,7 @@ describe("parsePlatformTrialConfig", () => {
       expect(
         parsePlatformTrialConfig({
           ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-          offerVersion: 1,
           defaultBuilderTier: builderTier,
-          budgetPolicy: undefined,
         }),
       ).not.toBeNull();
     }
@@ -94,22 +92,13 @@ describe("parsePlatformTrialConfig", () => {
         defaultBuilderTier: null,
       }),
     ).toMatchObject({ defaultBuilderTier: null });
+    // enterprise has no instance size, so nothing can provision it.
     expect(
       parsePlatformTrialConfig({
         ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-        offerVersion: 1,
         defaultBuilderTier: "enterprise",
-        budgetPolicy: undefined,
       }),
     ).toBeNull();
-    expect(parsePlatformTrialConfig({
-      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-      defaultBuilderTier: "hobby",
-    })).toBeNull();
-    expect(parsePlatformTrialConfig({
-      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-      durationDays: 14,
-    })).toBeNull();
   });
 
   it("rejects malformed and unsupported configs", () => {
@@ -138,9 +127,7 @@ describe("parsePlatformTrialConfig", () => {
     ).toBe(hash);
     expect(trialConfigHash({
       ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-      offerVersion: 1,
       defaultBuilderTier: "team",
-      budgetPolicy: undefined,
     })).not.toBe(hash);
     expect(
       trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 14 }),
