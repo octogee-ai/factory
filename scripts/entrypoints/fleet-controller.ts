@@ -88,7 +88,7 @@ export function createFleetSystemConfigFlush(
   };
 }
 
-export function createFleetSharedSystemConfigFlush(
+export function createFleetSystemConfigVerifyFlush(
   builderSlug: string,
   expectedRemoteCommit?: string,
   readAcceptedCommit: typeof readDurableSystemConfigHeadForSlug =
@@ -103,6 +103,40 @@ export function createFleetSharedSystemConfigFlush(
     }
     return { acceptedCommit };
   };
+}
+
+// Shared pods hold no per-builder durable config: their builders have no
+// {slug}/system_config repo, so a migration flush has no durable step to run
+// and a converge fence commit aimed at one is a caller contract violation.
+export function createFleetFlushSystemConfigSync(input: {
+  slug: string;
+  builderSlug: string;
+  builder: boolean;
+  expectedSystemConfigCommit?: string;
+  log?: (message: string) => void;
+  sync?: typeof syncSystemConfigForSlug;
+  readAcceptedCommit?: typeof readDurableSystemConfigHeadForSlug;
+}): (() => Promise<{ acceptedCommit: string }>) | undefined {
+  if (!input.builderSlug) {
+    if (input.expectedSystemConfigCommit) {
+      throw new Error(
+        `converge fence rejected: this gateway holds no durable system config for ${input.slug}`,
+      );
+    }
+    return undefined;
+  }
+  return input.builder
+    ? createFleetSystemConfigFlush(
+        input.slug,
+        input.log ?? log,
+        input.sync ?? syncSystemConfigForSlug,
+        input.expectedSystemConfigCommit,
+      )
+    : createFleetSystemConfigVerifyFlush(
+        input.slug,
+        input.expectedSystemConfigCommit,
+        input.readAcceptedCommit ?? readDurableSystemConfigHeadForSlug,
+      );
 }
 
 export function createAssignedFingerprintReader(
@@ -220,14 +254,13 @@ async function main(): Promise<void> {
               strict: true,
               store: createBrokeredBlobStore(brokerClient),
             }),
-        syncSystemConfig: builder
-          ? createFleetSystemConfigFlush(
-              slug,
-              log,
-              syncSystemConfigForSlug,
-              expectedSystemConfigCommit,
-            )
-          : createFleetSharedSystemConfigFlush(slug, expectedSystemConfigCommit),
+        syncSystemConfig: createFleetFlushSystemConfigSync({
+          slug,
+          builderSlug: entrypointConfig.builderSlug,
+          builder,
+          expectedSystemConfigCommit,
+          log,
+        }),
         log,
       });
     },

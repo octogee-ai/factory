@@ -8,7 +8,8 @@ import {
 } from "@octogee/core/system-config-mutation-lease";
 import {
   createAssignedFingerprintReader,
-  createFleetSharedSystemConfigFlush,
+  createFleetFlushSystemConfigSync,
+  createFleetSystemConfigVerifyFlush,
   createFleetSystemConfigFlush,
   createFleetControllerMutationGatedRpc,
   createSystemConfigMutationGatedRpc,
@@ -143,10 +144,10 @@ describe("fleet-controller entrypoint config", () => {
     }));
   });
 
-  it("uses the accepted remote system config commit when the source is Shared", async () => {
+  it("verifies the accepted remote system config commit for a dedicated builder pod", async () => {
     const acceptedCommit = "a".repeat(40);
     const readAcceptedCommit = vi.fn(() => acceptedCommit);
-    const flush = createFleetSharedSystemConfigFlush(
+    const flush = createFleetSystemConfigVerifyFlush(
       "alice",
       undefined,
       readAcceptedCommit,
@@ -156,10 +157,10 @@ describe("fleet-controller entrypoint config", () => {
     expect(readAcceptedCommit).toHaveBeenCalledExactlyOnceWith("alice");
   });
 
-  it("rejects a Shared target whose durable system config commit drifted during migration", async () => {
+  it("rejects a dedicated target whose durable system config commit drifted during migration", async () => {
     const expectedCommit = "a".repeat(40);
     const observedCommit = "b".repeat(40);
-    const flush = createFleetSharedSystemConfigFlush(
+    const flush = createFleetSystemConfigVerifyFlush(
       "alice",
       expectedCommit,
       () => observedCommit,
@@ -168,6 +169,64 @@ describe("fleet-controller entrypoint config", () => {
     await expect(flush()).rejects.toThrow(
       `durable system config head changed: expected ${expectedCommit}, observed ${observedCommit}`,
     );
+  });
+
+  it("skips the migration durable-config step on a shared pod, whose builders have no system_config repo", () => {
+    const readAcceptedCommit = vi.fn();
+    const sync = createFleetFlushSystemConfigSync({
+      slug: "aug04",
+      builderSlug: "",
+      builder: false,
+      readAcceptedCommit,
+    });
+
+    expect(sync).toBeUndefined();
+    expect(readAcceptedCommit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a converge fence commit sent to a pod that holds no durable config", () => {
+    expect(() => createFleetFlushSystemConfigSync({
+      slug: "aug04",
+      builderSlug: "",
+      builder: false,
+      expectedSystemConfigCommit: "a".repeat(40),
+    })).toThrow("no durable system config");
+  });
+
+  it("verifies the durable head for a dedicated builder pod flush", async () => {
+    const acceptedCommit = "c".repeat(40);
+    const readAcceptedCommit = vi.fn(() => acceptedCommit);
+    const sync = createFleetFlushSystemConfigSync({
+      slug: "alice",
+      builderSlug: "alice",
+      builder: false,
+      readAcceptedCommit,
+    });
+
+    await expect(sync?.()).resolves.toEqual({ acceptedCommit });
+    expect(readAcceptedCommit).toHaveBeenCalledExactlyOnceWith("alice");
+  });
+
+  it("checkpoints the durable config for an operator pod flush", async () => {
+    const acceptedCommit = "d".repeat(40);
+    const checkpointSync = vi.fn(() => ({
+      committed: true,
+      pushed: true,
+      acceptedCommit,
+    }));
+    const sync = createFleetFlushSystemConfigSync({
+      slug: "bender",
+      builderSlug: "bender",
+      builder: true,
+      log: () => {},
+      sync: checkpointSync as never,
+    });
+
+    await expect(sync?.()).resolves.toEqual({ acceptedCommit });
+    expect(checkpointSync).toHaveBeenCalledWith("bender", expect.objectContaining({
+      durablePolicy: true,
+      source: "auto-watch",
+    }));
   });
 
   it("ignores a leftover roll-era freeze marker — identity-pure mutation (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {
