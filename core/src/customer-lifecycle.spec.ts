@@ -153,6 +153,9 @@ return "ssh-pubkey";
     ensureGiteaOrg: async () => {
       record("ensureGiteaOrg");
     },
+    ensureSystemConfigRepo: async () => {
+      record("ensureSystemConfigRepo");
+    },
     readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
     readGiteaCustomerPubKeys: async () => {
       if (state.giteaReadShouldThrow) {
@@ -391,6 +394,16 @@ expect(result.steps).toEqual([
 
 expect(orgIdx).toBeGreaterThan(-1);
     expect(repoIdx).toBeGreaterThan(orgIdx);
+  });
+
+  it("ensures the durable system_config repo for every customer, not just non-shared pods (#3196)", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const orgIdx = state.calls.indexOf("ensureGiteaOrg");
+    const systemConfigIdx = state.calls.indexOf("ensureSystemConfigRepo");
+
+    expect(systemConfigIdx).toBeGreaterThan(-1);
+    expect(systemConfigIdx).toBeGreaterThan(orgIdx);
   });
 
   it("converges BYOS from the durable ref on mount, BEFORE the config-patch reload (no user-doc signal needed)", async () => {

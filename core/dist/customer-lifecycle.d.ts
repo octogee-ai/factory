@@ -130,6 +130,7 @@ export interface CustomerLifecycleAdapter {
     generateCustomerSshKey: (slug: string) => string;
     createGiteaUser: (slug: string, pubKey: string) => Promise<void>;
     ensureGiteaOrg: (slug: string) => Promise<void>;
+    ensureSystemConfigRepo: (slug: string) => Promise<void>;
     readLocalCustomerPubKey: (slug: string) => string | null;
     readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
     deleteCustomerSshKey: (slug: string) => Promise<void>;

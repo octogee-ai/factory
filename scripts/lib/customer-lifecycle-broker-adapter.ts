@@ -76,7 +76,10 @@ import {
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
 } from "./git.js";
-import { ensureGiteaOrgForWorkspace } from "./gitea-admin-broker-client.js";
+import {
+  ensureGiteaOrgForWorkspace,
+  ensureSystemConfigRepo,
+} from "./gitea-admin-broker-client.js";
 import {
   hasMountedMarker,
   clearMountedMarker,
@@ -1147,6 +1150,7 @@ export function buildBrokeredLifecycleAdapter(
     generateCustomerSshKey,
     createGiteaUser,
     ensureGiteaOrg: ensureGiteaOrgForWorkspace,
+    ensureSystemConfigRepo,
     readLocalCustomerPubKey,
     readGiteaCustomerPubKeys,
     deleteCustomerSshKey,

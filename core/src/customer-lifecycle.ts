@@ -161,6 +161,8 @@ export interface CustomerLifecycleAdapter {
 
 ensureGiteaOrg: (slug: string) => Promise<void>;
 
+  ensureSystemConfigRepo: (slug: string) => Promise<void>;
+
 readLocalCustomerPubKey: (slug: string) => string | null;
 
 readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
@@ -814,6 +816,11 @@ async function ensureWorkspaceRepo(
   ctx: CustomerContext,
 ): Promise<AddCustomerStep[]> {
   await adapter.ensureGiteaOrg(snapshot.slug);
+  // A builder born onto a shared pod never runs the non-shared pre-boot
+  // restore, which is the only other thing that creates this repo. Without it
+  // the migration flush reads a head that does not exist and the move retries
+  // forever (#3196).
+  await adapter.ensureSystemConfigRepo(snapshot.slug);
   return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
 }
 
