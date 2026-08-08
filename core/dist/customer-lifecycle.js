@@ -129,9 +129,23 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
 function githubRepoSourceOf(target) {
     return target.repoSource?.provider === "github" ? target.repoSource : null;
 }
-function projectCloneOptions(target) {
+function projectCloneOptions(target, githubToken) {
     const repoSource = githubRepoSourceOf(target);
-    return repoSource ? { repoSource } : undefined;
+    if (!repoSource)
+        return undefined;
+    return githubToken ? { repoSource, githubToken } : { repoSource };
+}
+function createGithubCloneTokenResolver(adapter, slug) {
+    let pending = null;
+    return async (target) => {
+        if (!githubRepoSourceOf(target) || !adapter.resolveGithubCloneToken)
+            return null;
+        pending ??= adapter.resolveGithubCloneToken(slug).catch((err) => {
+            adapter.log(`[${slug}] ⚠ GitHub clone credential unavailable: ${String(err)}`);
+            return null;
+        });
+        return await pending;
+    };
 }
 function projectCloneSourceLabel(target) {
     const repoSource = githubRepoSourceOf(target);
@@ -142,6 +156,7 @@ function hasProjectCloneSource(target) {
 }
 async function cloneProjectsFromSnapshot(adapter, snapshot) {
     const steps = [];
+    const githubCloneToken = createGithubCloneTokenResolver(adapter, snapshot.slug);
     for (const p of snapshot.projects ?? []) {
         if (p.provisioningState !== undefined && p.provisioningState !== "active")
             continue;
@@ -150,7 +165,7 @@ async function cloneProjectsFromSnapshot(adapter, snapshot) {
             continue;
         }
         try {
-            const ok = await adapter.cloneProjectRepo(snapshot.slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
+            const ok = await adapter.cloneProjectRepo(snapshot.slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p, await githubCloneToken(p)));
             if (ok)
                 steps.push("project-clone");
         }
@@ -484,13 +499,14 @@ async function reconcileCommunityMembershipIfSupported(adapter, ctx) {
 async function cloneMissingProjects(adapter, slug) {
     const toClone = await adapter.listProjectsNeedingClone(slug);
     const steps = [];
+    const githubCloneToken = createGithubCloneTokenResolver(adapter, slug);
     for (const p of toClone) {
         if (!hasProjectCloneSource(p)) {
             adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
             continue;
         }
         try {
-            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
+            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p, await githubCloneToken(p)));
             if (ok) {
                 steps.push("project-clone");
                 adapter.log(`[add:${slug}/${p.projectSlug}] cloned from ${projectCloneSourceLabel(p)}`);

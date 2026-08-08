@@ -57,6 +57,7 @@ export interface ProjectCloneTarget {
 
 export interface ProjectCloneOptions {
   repoSource?: ProjectRepoSource | null;
+  githubToken?: string | null;
 }
 
 export interface CustomerContext {
@@ -187,6 +188,9 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
 
   listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
+
+  resolveGithubCloneToken?: (slug: string) => Promise<string | null>;
+
   cloneProjectRepo: (
     customerSlug: string,
     projectSlug: string,
@@ -538,9 +542,28 @@ function githubRepoSourceOf(target: ProjectCloneTarget): ProjectRepoSource | nul
   return target.repoSource?.provider === "github" ? target.repoSource : null;
 }
 
-function projectCloneOptions(target: ProjectCloneTarget): ProjectCloneOptions | undefined {
+function projectCloneOptions(
+  target: ProjectCloneTarget,
+  githubToken?: string | null,
+): ProjectCloneOptions | undefined {
   const repoSource = githubRepoSourceOf(target);
-  return repoSource ? { repoSource } : undefined;
+  if (!repoSource) return undefined;
+  return githubToken ? { repoSource, githubToken } : { repoSource };
+}
+
+function createGithubCloneTokenResolver(
+  adapter: CustomerLifecycleAdapter,
+  slug: string,
+): (target: ProjectCloneTarget) => Promise<string | null> {
+  let pending: Promise<string | null> | null = null;
+  return async (target) => {
+    if (!githubRepoSourceOf(target) || !adapter.resolveGithubCloneToken) return null;
+    pending ??= adapter.resolveGithubCloneToken(slug).catch((err) => {
+      adapter.log(`[${slug}] ⚠ GitHub clone credential unavailable: ${String(err)}`);
+      return null;
+    });
+    return await pending;
+  };
 }
 
 function projectCloneSourceLabel(target: ProjectCloneTarget): string {
@@ -557,6 +580,7 @@ async function cloneProjectsFromSnapshot(
   snapshot: UserSnapshot,
 ): Promise<AddCustomerStep[]> {
   const steps: AddCustomerStep[] = [];
+  const githubCloneToken = createGithubCloneTokenResolver(adapter, snapshot.slug);
   for (const p of snapshot.projects ?? []) {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") continue;
     if (!hasProjectCloneSource(p)) {
@@ -570,7 +594,7 @@ async function cloneProjectsFromSnapshot(
         snapshot.slug,
         p.projectSlug,
         p.giteaRepoName,
-        projectCloneOptions(p),
+        projectCloneOptions(p, await githubCloneToken(p)),
       );
       if (ok) steps.push("project-clone");
     } catch (err) {
@@ -1029,6 +1053,7 @@ async function cloneMissingProjects(
 ): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {
   const toClone = await adapter.listProjectsNeedingClone(slug);
   const steps: AddCustomerStep[] = [];
+  const githubCloneToken = createGithubCloneTokenResolver(adapter, slug);
   for (const p of toClone) {
     if (!hasProjectCloneSource(p)) {
       adapter.log(
@@ -1041,7 +1066,7 @@ async function cloneMissingProjects(
         slug,
         p.projectSlug,
         p.giteaRepoName,
-        projectCloneOptions(p),
+        projectCloneOptions(p, await githubCloneToken(p)),
       );
       if (ok) {
         steps.push("project-clone");

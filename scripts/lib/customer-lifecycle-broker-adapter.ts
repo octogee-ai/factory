@@ -435,6 +435,17 @@ async function listProjectsNeedingClone(
   });
 }
 
+async function resolveGithubCloneToken(ctx: BrokerCtx, slug: string): Promise<string | null> {
+  const snapshot = await snapshotForSlug(ctx, slug);
+  const uid = snapshot?.uid ?? await ctx.client.uidForSlug(slug);
+  if (!uid) return null;
+  const token = await ctx.client.githubCloneToken(uid);
+  if (!token) {
+    ctx.log(`[add:${slug}] GitHub not connected — project clone will use anonymous access`);
+  }
+  return token;
+}
+
 function cloneProjectRepoForTarget(
   customerSlug: string,
   projectSlug: string,
@@ -1173,6 +1184,7 @@ export function buildBrokeredLifecycleAdapter(
       );
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
+    resolveGithubCloneToken: (slug) => resolveGithubCloneToken(ctx, slug),
     cloneProjectRepo: cloneProjectRepoForTarget,
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
