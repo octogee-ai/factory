@@ -2453,6 +2453,14 @@ async function createControllerRuntime(
       },
       input,
     ),
+    readOwnerOperation: async (operationId: string) => {
+      const snapshot = await db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .doc(operationId)
+        .get();
+      if (!snapshot.exists) return null;
+      return { status: (snapshot.data() as Operation).status };
+    },
     log,
   };
 
