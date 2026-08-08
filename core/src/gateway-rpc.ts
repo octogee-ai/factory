@@ -69,6 +69,47 @@ export interface SecretsReloadResult {
   ok?: boolean;
 }
 
+export interface SecretsApplyRpcResult {
+  mode?: string;
+  changed?: boolean;
+  changedFiles?: string[];
+  warningCount?: number;
+}
+
+function parseSecretsReloadPayload(payload: unknown): SecretsReloadResult {
+  if (!payload || typeof payload !== "object") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
+  }
+  const p = payload as { ok?: unknown; warningCount?: unknown };
+  if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
+    );
+  }
+  if (p.ok !== undefined && typeof p.ok !== "boolean") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
+    );
+  }
+  return p as SecretsReloadResult;
+}
+
+function parseSecretsApplyPayload(payload: unknown): SecretsApplyRpcResult {
+  if (!payload || typeof payload !== "object") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
+  }
+  const p = payload as { changed?: unknown };
+  if (p.changed !== undefined && typeof p.changed !== "boolean") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`,
+    );
+  }
+  return payload as SecretsApplyRpcResult;
+}
+
 export interface GatewayRestartRequestResult {
   ok: true;
   status: "scheduled" | "deferred" | "coalesced";
@@ -159,6 +200,69 @@ export interface CronAddResult {
   [extra: string]: unknown;
 }
 
+export interface GatewayAgentsDeleteParams {
+  agentId: string;
+  deleteFiles?: boolean;
+}
+
+export interface GatewayAgentsDeleteResult {
+  ok: true;
+  agentId: string;
+  removedBindings?: number;
+  removed?: Array<{ path: string; method: "trash" | "missing" }>;
+  failed?: unknown[];
+  [extra: string]: unknown;
+}
+
+export interface GatewayAgentsCreateParams {
+  name: string;
+  workspace: string;
+  model?: string;
+  emoji?: string;
+  avatar?: string;
+}
+
+export interface GatewayAgentsCreateResult {
+  ok: true;
+  agentId: string;
+  name?: string;
+  workspace?: string;
+  [extra: string]: unknown;
+}
+
+const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
+const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
+
+/**
+ * openclaw refuses `agents.create` for an id already in the roster with
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
+ * raced another writer has to treat that as already-done; every other refusal —
+ * an unwritable workspace, a wedged deletion journal, a transport failure —
+ * must still fail the mount.
+ */
+export function isAgentAlreadyExistsRpcError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    AGENT_ALREADY_EXISTS_MESSAGE.test(err.message)
+  );
+}
+
+/**
+ * openclaw refuses `agents.delete` for an id that is neither rostered nor
+ * mid-deletion with `errorShape(INVALID_REQUEST, 'agent "<id>" not found')`
+ * (server-methods/agents.ts respondAgentNotFound). An eviction has to treat
+ * that as already-done; every other refusal — the default agent, a wedged
+ * deletion journal, a transport failure — must still fail the eviction.
+ */
+export function isAgentNotFoundRpcError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    AGENT_NOT_FOUND_MESSAGE.test(err.message)
+  );
+}
+
 export interface GatewayRpcClient {
   configGet(): Promise<ConfigGetResult>;
   configApply(config: object, baseHash: string): Promise<ConfigPatchResult>;
@@ -177,6 +281,7 @@ export interface GatewayRpcClient {
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
+  secretsApply(params: { plan: object; dryRun?: boolean }): Promise<SecretsApplyRpcResult>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string }): Promise<GatewaySessionsListResult>;
   sessionsReset(params: {
@@ -189,6 +294,8 @@ export interface GatewayRpcClient {
     timeoutMs?: number,
   ): Promise<GatewayToolsCatalogResult>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
+  agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
+  agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -567,6 +674,21 @@ function createIdentityResolver(initialIdentity?: DeviceIdentity): () => DeviceI
   };
 }
 
+function resolveRpcTraceSettings(): {
+  traceVerbose: boolean;
+  slowTraceMs: number;
+  failureSampleMs: number;
+} {
+  return {
+    traceVerbose: /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? ""),
+    slowTraceMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10),
+    failureSampleMs: Number.parseInt(
+      process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000",
+      10,
+    ),
+  };
+}
+
 type GatewayCall = (
   method: string,
   params: unknown,
@@ -632,6 +754,39 @@ async function requestGatewayRestart(
   return result as GatewayRestartRequestResult;
 }
 
+async function callOkPayload(
+  call: GatewayCall,
+  method: string,
+  params: object,
+): Promise<Record<string, unknown>> {
+  const payload = await call(method, params);
+  if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+    throw new OpenclawWireError(INVALID_RESPONSE, `${method} payload missing \`ok: true\``);
+  }
+  return payload as Record<string, unknown>;
+}
+
+async function callAgentsCreate(
+  call: GatewayCall,
+  params: GatewayAgentsCreateParams,
+): Promise<GatewayAgentsCreateResult> {
+  const payload = await callOkPayload(call, "agents.create", params);
+  if (typeof payload.agentId !== "string" || payload.agentId.length === 0) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "agents.create payload missing string `agentId`",
+    );
+  }
+  return payload as GatewayAgentsCreateResult;
+}
+
+async function callAgentsDelete(
+  call: GatewayCall,
+  params: GatewayAgentsDeleteParams,
+): Promise<GatewayAgentsDeleteResult> {
+  return (await callOkPayload(call, "agents.delete", params)) as GatewayAgentsDeleteResult;
+}
+
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {
   const url =
     opts.url ??
@@ -640,9 +795,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
   const scopes = opts.scopes ?? ["operator.admin"];
-  const traceVerbose = /^(1|true|yes|debug)$/i.test(process.env.OCTOGEE_RPC_TRACE_VERBOSE ?? "");
-  const slowTraceMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10);
-  const failureSampleMs = Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10);
+  const { traceVerbose, slowTraceMs, failureSampleMs } = resolveRpcTraceSettings();
 
   const onConnectTrace =
     opts.onConnectTrace ??
@@ -767,28 +920,22 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return payload as CronAddResult;
     },
 
+    agentsCreate: (params) => callAgentsCreate(call, params),
+
+    agentsDelete: (params) => callAgentsDelete(call, params),
+
     async secretsReload() {
-      const payload = await call("secrets.reload", {});
-      if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "secrets.reload returned non-object payload",
-        );
-      }
-      const p = payload as { ok?: unknown; warningCount?: unknown };
-      if (p.warningCount !== undefined && typeof p.warningCount !== "number") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          `secrets.reload payload.warningCount must be a number when present (got ${typeof p.warningCount})`,
-        );
-      }
-      if (p.ok !== undefined && typeof p.ok !== "boolean") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          `secrets.reload payload.ok must be a boolean when present (got ${typeof p.ok})`,
-        );
-      }
-      return p as SecretsReloadResult;
+      return parseSecretsReloadPayload(await call("secrets.reload", {}));
+    },
+
+    async secretsApply(params) {
+      return parseSecretsApplyPayload(
+        await call("secrets.apply", {
+          plan: params.plan,
+          allowExec: true,
+          ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
+        }),
+      );
     },
 
     async isGatewayUp(timeoutMs) {

@@ -22,6 +22,7 @@ import {
   customerConfigReplacePaths,
   filterOutCustomerBindings,
   fullAgentListReplacePaths,
+  mergeCustomerBindings,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
@@ -891,6 +892,17 @@ describe("isPermanentConfigPatchFailure", () => {
       isPermanentConfigPatchFailure(new OpenclawWireError("timeout", "timed out")),
     ).toBe(false);
   });
+
+  it("classifies the roster-drop refusal as permanent — an identical retry can never carry the allowance", () => {
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError(
+          "rpc-error",
+          "Config write would drop agent roster entries without an explicit deletion: octogee-alice-proj-old-coach",
+        ),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("fullAgentListReplacePaths — the guard confirmation set for full agents.list patches", () => {
@@ -1034,7 +1046,7 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
 });
 
 describe("customerAgentRosterPatch", () => {
-  it("uses beta keyed entries, deletes retired customer keys, and translates memorySearch", () => {
+  it("uses beta keyed entries, upserts only live agents, and translates memorySearch", () => {
     const current = {
       agents: {
         entries: {
@@ -1059,10 +1071,27 @@ describe("customerAgentRosterPatch", () => {
           model: "new",
           memory: { search: { provider: "openai-compatible" } },
         },
-        "octogee-alice-proj-old-coach": null,
       },
     });
     expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+  });
+
+  it("never nulls a retired customer entry — 2026.7.2 refuses roster drops without agents.delete", () => {
+    const current = {
+      agents: {
+        entries: {
+          "octogee-alice-coach": { model: "old" },
+          "octogee-alice-proj-retired-coach": { model: "old" },
+        },
+      },
+    };
+
+    const patch = customerAgentRosterPatch(current, "alice", [
+      { id: "octogee-alice-coach", model: "new" },
+    ]) as { entries: Record<string, unknown> };
+
+    expect(Object.values(patch.entries)).not.toContain(null);
+    expect(patch.entries).not.toHaveProperty("octogee-alice-proj-retired-coach");
   });
 
   it("retains the stable list patch and destructive array guard confirmations", () => {
@@ -1175,6 +1204,70 @@ describe("filterOutCustomerBindings", () => {
       },
       { agentId: "octogee-mac-default" },
     ]);
+  });
+});
+
+describe("mergeCustomerBindings", () => {
+  const aliceCoach = {
+    agentId: "octogee-alice-coach",
+    match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "g1" } },
+  };
+  const bobCoach = {
+    agentId: "octogee-bob-coach",
+    match: { channel: "mattermost", accountId: "bob-coach", peer: { kind: "group", id: "g2" } },
+  };
+  const carolCoach = {
+    agentId: "octogee-carol-coach",
+    match: { channel: "mattermost", accountId: "carol-coach", peer: { kind: "group", id: "g3" } },
+  };
+
+  it("returns the current array untouched when the customer's binding content is unchanged", () => {
+    const current = [aliceCoach, bobCoach, carolCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+    expect(next).toBe(current);
+  });
+
+  it("keeps current order when unchanged even though rebuild would have appended", () => {
+    const current = [bobCoach, aliceCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-bob-coach", "octogee-alice-coach"]);
+  });
+
+  it("rewrites when the customer gains a binding", () => {
+    const added = {
+      agentId: "octogee-bob-proj-x-coach",
+      match: { channel: "mattermost", accountId: "bob-proj-x", peer: { kind: "group", id: "g9" } },
+    };
+    const current = [aliceCoach, bobCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [bobCoach, added]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.agentId)).toEqual([
+      "octogee-alice-coach",
+      "octogee-bob-coach",
+      "octogee-bob-proj-x-coach",
+    ]);
+  });
+
+  it("rewrites when a binding's content changes", () => {
+    const moved = structuredClone(bobCoach);
+    moved.match.peer.id = "g2-moved";
+    const current = [aliceCoach, bobCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [moved]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.match.peer.id)).toEqual(["g1", "g2-moved"]);
+  });
+
+  it("rewrites to drop eviction slugs' bindings", () => {
+    const current = [aliceCoach, bobCoach, carolCoach];
+    const next = mergeCustomerBindings(current, ["bob", "carol"], [structuredClone(bobCoach)]);
+    expect(next).not.toBe(current);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
+  });
+
+  it("appends a first-time customer's bindings", () => {
+    const current = [aliceCoach];
+    const next = mergeCustomerBindings(current, ["bob"], [bobCoach]);
+    expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
   });
 });
 

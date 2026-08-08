@@ -89,20 +89,21 @@ spec:
                 secretKeyRef:
                   name: stripe-secrets
                   key: secret_key
-            {{- if .Values.posthog.host }}
+            {{- if and .Values.posthog.host .Values.posthog.projectId }}
             - name: POSTHOG_HOST
               value: {{ .Values.posthog.host | quote }}
-            {{- end }}
-            {{- if .Values.posthog.projectId }}
             - name: POSTHOG_PROJECT_ID
               value: {{ .Values.posthog.projectId | quote }}
-            {{- end }}
+            # Required, not optional: erasure config is all-three-or-nothing, so a
+            # missing secret would ship a partial set and fail every erase-customer
+            # op on config instead of refusing to start.
             - name: POSTHOG_PERSONAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.posthog.personalApiKeySecretName | quote }}
                   key: {{ .Values.posthog.personalApiKeySecretKey | quote }}
-                  optional: true
+                  optional: false
+            {{- end }}
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_MS
@@ -180,24 +181,33 @@ spec:
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http
+          # A reconcile pass holds the event loop for seconds at a time — a full
+          # convergence over the shared pool has been measured near 12s — so
+          # /healthz cannot answer inside kubelet's 1s default. At that default
+          # the liveness probe killed Cowboy mid-reconcile every few minutes,
+          # abandoning whatever operation it had claimed: that is how a rollout
+          # sat "running" with no worker while migrations queued behind it.
           startupProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 30
-            failureThreshold: 3
+            timeoutSeconds: 15
+            failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

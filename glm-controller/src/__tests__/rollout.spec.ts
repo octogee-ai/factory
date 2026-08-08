@@ -7,6 +7,7 @@ import {
 import type { Operation } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext } from "../operation-router.js";
+import { decideRollStateMigration } from "../roll-state-migration.js";
 
 function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
@@ -70,6 +71,7 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
   return {
     readGatewayDoc: async () => mkGateway(),
     readReleasePayload: async () => mkPayload(),
+    readGatewayOpenclawVersion: async () => "beta2",
     activateDesiredRelease: vi.fn(async () => ({ success: true as const })),
     requestReconcileTick: vi.fn(),
     releaseRecordTimeoutMs: 10_000,
@@ -437,6 +439,87 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(res.success).toBe(false);
     expect(res.error).toContain("did not converge within 5000ms");
     expect(res.error).toContain("converging r1 → r2");
+  });
+
+  it("journals a state migration when the release keeps the gateway's openclaw version", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
+      readReleasePayload: async () => mkPayload({ imageTag: "cafe123-oc2026.7.2-beta.7" }),
+      readGatewayOpenclawVersion: async () => "2026.7.2-beta.7",
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-oc2026.7.2-beta.7" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(true);
+    expect(res.output).toEqual({
+      stateMigration: decideRollStateMigration({
+        sourceOpenclawVersion: "2026.7.2-beta.7",
+        targetOpenclawVersion: "2026.7.2-beta.7",
+      }),
+    });
+    expect((res.output?.stateMigration as { strategy: string }).strategy).toBe("migrate-state");
+  });
+
+  it("journals a fresh provision across an openclaw version change", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
+      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      readGatewayOpenclawVersion: async () => "2026.7.1",
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(true);
+    expect(res.output).toEqual({
+      stateMigration: {
+        strategy: "provision-fresh",
+        sourceOpenclawVersion: "2026.7.1",
+        targetOpenclawVersion: "2026.7.2-beta.7",
+        reason: expect.stringContaining("2026.7.1"),
+      },
+    });
+    expect(deps.logs.some((line) => line.includes("provision-fresh"))).toBe(true);
+  });
+
+  it("journals a fresh provision when the source gateway reports no openclaw version", async () => {
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
+      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      readGatewayOpenclawVersion: async () => null,
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(true);
+    expect(res.output).toMatchObject({
+      stateMigration: { strategy: "provision-fresh", sourceOpenclawVersion: null },
+    });
+  });
+
+  it("journals the chosen strategy even when the roll never converges", async () => {
+    const deps = mkDeps({
+      convergeTimeoutMs: 5_000,
+      readGatewayDoc: async () => mkGateway(),
+      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      readGatewayOpenclawVersion: async () => "2026.7.1",
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.output).toMatchObject({ stateMigration: { strategy: "provision-fresh" } });
   });
 
   it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {

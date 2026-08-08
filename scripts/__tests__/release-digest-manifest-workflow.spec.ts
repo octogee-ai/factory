@@ -168,15 +168,19 @@ describe("releasev2 digest manifest", () => {
     );
   });
 
-  it("validates the exact baseline manifest before carrying its digests forward on main", () => {
+  // A published manifest is immutable, so schema-gating it can only ever fail a
+  // build over history nobody can change — which is exactly how the schemaVersion 3
+  // baseline for e73417174 killed the release for b19f92b24 after all seven images
+  // had built. An absent baseline is already tolerated a few lines down, and an old
+  // one is strictly more useful than none, so the baseline is read, never judged.
+  it("reads the baseline manifest as a lookup table instead of schema-gating it", () => {
     const writer = workflow.slice(
       workflow.indexOf("  write-release-digest-manifest:"),
       workflow.indexOf("  site:"),
     );
 
-    expect(writer).toContain("release-digest-manifest.mjs validate-baseline");
-    expect(writer).toContain('"$BASE_SHA" "$AR_REPO"');
-    expect(writer).not.toContain('prior.get("surfaces"');
+    expect(writer).not.toContain("release-digest-manifest.mjs validate");
+    expect(writer).toContain('prior.get("surfaces"');
     expect(writer).toContain("confirmed absent baseline manifest");
     expect(writer).toContain("could not read baseline digest manifest");
   });
@@ -187,10 +191,6 @@ describe("releasev2 digest manifest", () => {
       workflow.indexOf("  site:"),
     );
 
-    expect(workflow.match(/release-digest-manifest\.mjs validate-baseline/g)).toHaveLength(1);
-    expect(writer).toMatch(
-      /release-digest-manifest\.mjs validate-baseline \\\n\s+"\$BASE_MANIFEST_FILE" "\$BASE_SHA" "\$AR_REPO"/,
-    );
     expect(writer).toContain('"octogee-api", "octogee-project-runner"');
     expect(writer).toContain("if image in baseline:");
     expect(writer).toContain("missing SHA-addressed image and baseline manifest entry");

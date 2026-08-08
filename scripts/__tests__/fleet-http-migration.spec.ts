@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Readable, Writable } from "node:stream";
 import {
   createActivateImportHandler,
@@ -1205,6 +1206,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
     
     expect(args).toEqual([
       "-cf", "-",
+      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
       "-C", "/state", "agents/octogee-chris-coach",
       "-C", "/openclaw", "customer-keys/chris",
     ]);
@@ -1766,6 +1768,225 @@ describe("queued-rsync migration control handlers", () => {
   });
 });
 
+describe("agent sqlite stores across an rsync carry", () => {
+  const CARRIED_STORE = path.join(
+    "agents",
+    "octogee-chris-coach",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+  const tempRoots: string[] = [];
+
+  afterEach(async () => {
+    for (const root of tempRoots.splice(0)) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  async function mkTempRoot(): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "carry-"));
+    tempRoots.push(root);
+    return root;
+  }
+
+  async function writeStore(
+    root: string,
+    rel: string,
+    seed: (db: DatabaseSync) => void,
+  ): Promise<string> {
+    const dbPath = path.join(root, rel);
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("CREATE TABLE transcript_events(body TEXT)");
+    seed(db);
+    db.close();
+    return dbPath;
+  }
+
+  function rowCount(dbPath: string): number {
+    const db = new DatabaseSync(dbPath);
+    try {
+      return (db.prepare("SELECT count(*) AS c FROM transcript_events").get() as { c: number }).c;
+    } finally {
+      db.close();
+    }
+  }
+
+  function pushRsync(stateDir: string, migrationId: string): {
+    handler: ReturnType<typeof createPushRsyncStateHandler>;
+    req: Request;
+  } {
+    const body: PushRsyncStateRequestBody = {
+      migrationId,
+      slug: "chris",
+      mode: "pre",
+      targetHost: TARGET_POD_IP,
+      targetPort: 30873,
+      transferUser: "migration",
+      transferKey: "b".repeat(64),
+    };
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: stateDir, path: path.join("agents", "octogee-chris-coach") },
+      ]),
+    });
+    return {
+      handler: createPushRsyncStateHandler(mkDeps({ adapter })),
+      req: mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, migrationId, JSON.stringify(body)),
+      }),
+    };
+  }
+
+  it("checkpoints each store and leaves its wal/shm siblings out of the copy set", async () => {
+    const stateDir = await mkTempRoot();
+    const dbPath = await writeStore(stateDir, CARRIED_STORE, () => {});
+    const live = new DatabaseSync(dbPath);
+    live.prepare("INSERT INTO transcript_events VALUES (?)").run("newest");
+    expect((await fs.stat(`${dbPath}-wal`)).size).toBeGreaterThan(0);
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const { handler, req } = pushRsync(stateDir, "mig-carry-wal");
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("--exclude=*.sqlite-wal");
+    expect(args).toContain("--exclude=*.sqlite-shm");
+    const carried = path.join(stateDir, "carried.sqlite");
+    await fs.copyFile(dbPath, carried);
+    live.close();
+    expect(rowCount(carried)).toBe(1);
+  });
+
+  it("fails the push instead of carrying a store it cannot checkpoint", async () => {
+    const stateDir = await mkTempRoot();
+    const dbPath = path.join(stateDir, CARRIED_STORE);
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    await fs.writeFile(dbPath, "this is not a database");
+    const { handler, req } = pushRsync(stateDir, "mig-carry-bad");
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({
+      error: "push-rsync-state failed",
+      message: expect.stringContaining("could not be checkpointed for carry"),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  async function prepareImport(input: {
+    migrationId: string;
+    importDir: string;
+    daemon: ReturnType<typeof mkFakeChild>;
+  }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => input.importDir),
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      markCustomerMigratingIn: vi.fn(),
+      onMounted: vi.fn(),
+    });
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30873,
+      waitForRsyncReady: vi.fn(async () => undefined),
+      pauseSystemConfigWatch: vi.fn(async () => undefined),
+      resumeSystemConfigWatch: vi.fn(async () => undefined),
+    });
+    spawnMock.mockReturnValueOnce(input.daemon);
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId: input.migrationId,
+      slug: "chris",
+      mode: "final",
+      transferUser: "migration",
+      transferKey: "c".repeat(64),
+    };
+    await createPrepareRsyncImportHandler(deps)(
+      mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, input.migrationId, JSON.stringify(body)),
+      }),
+      mkResponse().res,
+      vi.fn(),
+    );
+    const [, daemonArgs] = spawnMock.mock.calls[0] as [string, string[]];
+    const configPath = daemonArgs
+      .find((arg) => arg.startsWith("--config="))!
+      .slice("--config=".length);
+    const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf-8"))![1]!;
+    return { deps, stageDir };
+  }
+
+  async function finishImport(
+    deps: MigrationHandlerDeps,
+    migrationId: string,
+  ): Promise<ReturnType<typeof mkResponse>> {
+    const body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", mode: "final" };
+    const response = mkResponse();
+    await createFinishRsyncImportHandler(deps)(
+      mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, migrationId, JSON.stringify(body)),
+      }),
+      response.res,
+      vi.fn(),
+    );
+    return response;
+  }
+
+  it("rejects a carried store that does not open instead of delivering it", async () => {
+    const importDir = await mkTempRoot();
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-unreadable",
+      importDir,
+      daemon: mkFakeChild(),
+    });
+    const staged = path.join(stageDir, CARRIED_STORE);
+    await fs.mkdir(path.dirname(staged), { recursive: true });
+    await fs.writeFile(staged, "this is not a database");
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-unreadable");
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toMatchObject({
+      error: "rsync import failed validation",
+      message: expect.stringContaining(`carried agent store ${CARRIED_STORE} does not open`),
+    });
+    expect(spawnMock.mock.calls).toHaveLength(1);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("clears the destination sidecars that would replay over the carried store", async () => {
+    const importDir = await mkTempRoot();
+    const stale = await writeStore(importDir, CARRIED_STORE, (db) => {
+      db.exec("INSERT INTO transcript_events VALUES ('stale')");
+    });
+    await fs.writeFile(`${stale}-wal`, "stale wal frames");
+    await fs.writeFile(`${stale}-shm`, Buffer.alloc(32768));
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-sidecars",
+      importDir,
+      daemon: mkFakeChild(),
+    });
+    const sourceDir = await mkTempRoot();
+    const carried = await writeStore(sourceDir, CARRIED_STORE, (db) => {
+      db.exec("INSERT INTO transcript_events VALUES ('carried')");
+    });
+    const staged = path.join(stageDir, CARRIED_STORE);
+    await fs.mkdir(path.dirname(staged), { recursive: true });
+    await fs.copyFile(carried, staged);
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, "mig-carry-sidecars");
+
+    expect(getStatus()).toBe(200);
+    await expect(fs.access(`${stale}-wal`)).rejects.toThrow();
+    await expect(fs.access(`${stale}-shm`)).rejects.toThrow();
+  });
+});
+
 describe("createPushStateHandler", () => {
   it("streams a tar directly into the target gateway import endpoint", async () => {
     const adapter = mkAdapter({
@@ -1807,6 +2028,7 @@ describe("createPushStateHandler", () => {
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
+      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
       "-C", "/state", "agents/octogee-chris-coach",
       "-C", "/openclaw", "customers/chris",
     ]);
@@ -1843,6 +2065,7 @@ describe("createPushStateHandler", () => {
       expect(getStatus()).toBe(200);
       expect(spawnMock.mock.calls[0][1]).toEqual([
         "-cf", "-",
+        "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
         "--exclude=customers/chris/projects",
         "-C", "/state", "agents/octogee-chris-coach",
         "-C", "/openclaw", "customers/chris",
@@ -1878,6 +2101,7 @@ describe("createPushStateHandler", () => {
     expect(getStatus()).toBe(200);
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
+      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
       "-C", "/openclaw", "customers/chris",
     ]);
   });
@@ -1917,6 +2141,7 @@ describe("createPushStateHandler", () => {
     expect(getStatus()).toBe(200);
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
+      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
       "-C", "/openclaw", "customer-keys/chris",
     ]);
     expect(adapter.exportOpenClawActivationManifest).not.toHaveBeenCalled();

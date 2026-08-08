@@ -351,9 +351,10 @@ function digestFromImageReference(reference, expectedRepository) {
         throw new Error("release alias target must be digest-bound");
     return assertDigest(reference.slice(at + 1), "release alias target");
 }
-export function createCentralReleaseAuthority(coordinates) {
+export function createCentralReleaseAuthority(coordinates, deps = {}) {
     const repository = dockerRepository(coordinates);
     const packages = packagesBaseForCoordinates(coordinates);
+    const accessToken = deps.getAccessToken ?? getAccessToken;
     async function resolveTagDigest(packageName, tag, token) {
         const response = await arFetch(`${packages}/${packageName}/tags/${encodeURIComponent(tag)}`, "GET", token);
         if (response.status === 404)
@@ -362,7 +363,7 @@ export function createCentralReleaseAuthority(coordinates) {
         return digestFromVersion(tagBody.version, `artifact-registry ${packageName}:${tag}`);
     }
     async function resolveManifestFromTag(tag) {
-        const token = await getAccessToken();
+        const token = await accessToken();
         const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
         if (!manifestDigest)
             throw new Error(`release digest manifest ${tag} does not exist`);

@@ -421,6 +421,18 @@ function accountBindingsNeedingActivation(
   return [...affected].sort();
 }
 
+/**
+ * Every agent id the activation installs. The caller compares it against the
+ * target's live roster: residue the manifest does not carry has to leave by
+ * `agents.delete` before the patch, because 2026.7.2 refuses a config write
+ * that drops roster entries.
+ */
+export function activationManifestAgentIds(
+  manifest: MigrationActivationManifest,
+): string[] {
+  return manifestAgents(manifest).map((entry) => entry.agentId);
+}
+
 export async function writeActivationManifest(
   rootDir: string,
   manifest: MigrationActivationManifest,

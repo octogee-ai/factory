@@ -134,9 +134,21 @@ function isPermanentConfigPatchError(err) {
 function isDestructiveArrayGuardError(err) {
     return err.code === "rpc-error" && /would remove entries from array path/i.test(err.message);
 }
+/**
+ * openclaw 2026.7.2's roster guard: a config write may not drop
+ * `agents.entries` keys unless it carries `allowedAgentRosterRemovals`, which
+ * only `agents.delete` supplies. config.patch never can, so an identical retry
+ * is guaranteed to fail — retrying to the deadline only delays the real fix.
+ */
+function isAgentRosterDropGuardError(err) {
+    return (err.code === "rpc-error" &&
+        /would drop agent roster entries without an explicit deletion/i.test(err.message));
+}
 export function isPermanentConfigPatchFailure(err) {
     return (err instanceof OpenclawWireError &&
-        (isPermanentConfigPatchError(err) || isDestructiveArrayGuardError(err)));
+        (isPermanentConfigPatchError(err) ||
+            isDestructiveArrayGuardError(err) ||
+            isAgentRosterDropGuardError(err)));
 }
 function throwIfPermanentConfigPatchFailure(err, ctx) {
     if (isPermanentConfigPatchError(err)) {
@@ -146,6 +158,11 @@ function throwIfPermanentConfigPatchFailure(err, ctx) {
     if (isDestructiveArrayGuardError(err)) {
         ctx.log(`⚠ ${ctx.prefix}config.patch rejected by the destructive-array guard (permanent — identical retries cannot pass). ` +
             `The caller's buildReplacePaths must confirm every shrunk array path: ${err.message}`);
+        throw err;
+    }
+    if (isAgentRosterDropGuardError(err)) {
+        ctx.log(`⚠ ${ctx.prefix}config.patch rejected by the agent-roster guard (permanent — config.patch cannot carry the removal allowance). ` +
+            `The caller must delete the departing agents with agents.delete before patching: ${err.message}`);
         throw err;
     }
 }
@@ -313,15 +330,18 @@ export function replaceCustomerAgentsInFullAgentList(current, slug, agentEntries
         next.push(...agentEntries);
     return next;
 }
+/**
+ * The customer's slice of the agent roster, as a merge patch that only ever
+ * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
+ * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,
+ * which only its own `agents.delete` supplies — so a retired project agent is
+ * deleted by RPC before the patch, never nulled inside it.
+ */
 export function customerAgentRosterPatch(current, slug, agentEntries) {
     const currentEntries = keyedAgentEntries(current);
     if (!currentEntries)
         return { list: [...agentEntries] };
     const entries = {};
-    for (const [id] of Object.entries(currentEntries)) {
-        if (isCustomerAgentId(id, slug))
-            entries[id] = null;
-    }
     for (const agent of agentEntries) {
         const [id, entry] = keyedEntryFromAgent(agent);
         if (isCustomerAgentId(id, slug) ||
@@ -346,6 +366,32 @@ export function filterOutCustomerBindings(bindings, slug) {
         return !isCustomerAgentId(agentId, slug) &&
             !isCustomerMattermostAccountBinding(binding, slug);
     });
+}
+// Rebuilding bindings as filter-out-then-append reorders the array on every
+// converge, which defeats config.patch's local no-op and buys a full reload
+// cycle for a content-identical write. Keep the current array — order and
+// identity — whenever the merged content is the same multiset.
+export function mergeCustomerBindings(current, slugs, nextCustomerBindings) {
+    let kept = current;
+    for (const slug of slugs) {
+        kept = filterOutCustomerBindings(kept, slug);
+    }
+    const rebuilt = [...kept, ...nextCustomerBindings];
+    if (rebuilt.length !== current.length)
+        return rebuilt;
+    const counts = new Map();
+    for (const binding of current) {
+        const key = JSON.stringify(binding);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const binding of rebuilt) {
+        const key = JSON.stringify(binding);
+        const remaining = counts.get(key);
+        if (!remaining)
+            return rebuilt;
+        counts.set(key, remaining - 1);
+    }
+    return current;
 }
 // config.patch merges: omitting a retired project-agent account keeps it
 // alive on a revoked token. Every account rebuild must null the customer's
@@ -435,15 +481,14 @@ export function customerConfigFullAgentListReplacePaths(current, slug) {
     ];
 }
 /**
- * Array paths under the keyed agent entries a customer removal nulls out.
+ * Array paths under the customer's keyed agent entries.
  *
- * `customerAgentRosterPatch` removes a customer by setting
- * `agents.entries.<id>` to null, which destroys every array beneath it. The
- * gateway's destructive-array guard walks base-vs-merged and reports each one
- * by name (collectBaseArrayPaths, on its `isPlainObject(base) &&
- * !isPlainObject(patch)` branch), so each has to be confirmed or the whole
- * removal is refused — `model.fallbacks` on any coach with a house fallback is
- * enough to block it. Same shape as customerMattermostAccountArrayPaths.
+ * `customerAgentRosterPatch` rewrites each entry wholesale, so any array it
+ * shrinks — `model.fallbacks` on the BYOK-override → house-pin transition,
+ * `tools.alsoAllow` on a free-tier trim — trips the gateway's destructive-array
+ * guard. The guard walks base-vs-merged and reports each shrunk array by exact
+ * name (collectBaseArrayPaths), so each has to be confirmed or the whole patch
+ * is refused. Same shape as customerMattermostAccountArrayPaths.
  */
 function customerKeyedAgentEntryArrayPaths(current, slug) {
     const entries = keyedAgentEntries(current);

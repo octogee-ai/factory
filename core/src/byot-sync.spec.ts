@@ -28,11 +28,14 @@ vi.mock("./gateway-rpc", () => ({
   createGatewayRpc: createGatewayRpcSpy,
 }));
 
-const SUBPROCESS_GUARD = (name: string) => () => {
+// Hoisted: byot-sync's import graph reaches openclaw-secrets-apply, whose
+// top-level `child_process` import evaluates the mock factory below before a
+// plain module const would be initialized.
+const SUBPROCESS_GUARD = vi.hoisted(() => (name: string) => () => {
   throw new Error(
     `byot-sync must not shell out (called ${name}) — use the in-process gateway-rpc client.`,
   );
-};
+});
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
   return {
@@ -1613,6 +1616,7 @@ describe("customer OAuth runtime purge", () => {
     fs.mkdirSync(path.dirname(native), { recursive: true });
     fs.writeFileSync(native, "secret");
     for (const agentId of [coachId, projectId]) {
+      seedAgent(oc, agentId);
       const auth = codexAuthJsonPath(oc, agentId);
       fs.mkdirSync(path.dirname(auth), { recursive: true });
       fs.writeFileSync(auth, "secret");
@@ -2071,7 +2075,7 @@ describe("standard gateway — BYOS materialization", () => {
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
-        materializeAnthropicBroker: materializeFn,
+        materializePlatformBrokerSurfaces: materializeFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -2282,7 +2286,7 @@ describe("Builder gateway — native subscription runtime", () => {
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyAgentModelOverrides: applyAgentModelOverridesFn,
-        materializeAnthropicBroker: vi.fn(() => false),
+        materializePlatformBrokerSurfaces: vi.fn(() => false),
         hasPendingPlatformCatalogRestart: () => false,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -2336,7 +2340,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
         applyByotState: applyByotStateFn,
-        materializeAnthropicBroker: materializeFn,
+        materializePlatformBrokerSurfaces: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         triggerSecretsReload: reloadFn,
         requestGatewayRestart: requestGatewayRestartFn,
@@ -2361,7 +2365,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "anthropic" } },
       },
-      baseDeps({ applyByotState: applyByotStateFn, materializeAnthropicBroker: materializeFn }),
+      baseDeps({ applyByotState: applyByotStateFn, materializePlatformBrokerSurfaces: materializeFn }),
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
@@ -2386,7 +2390,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       },
       baseDeps({
         applyByotState: applyByotStateFn,
-        materializeAnthropicBroker: materializeFn,
+        materializePlatformBrokerSurfaces: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         triggerSecretsReload: reloadFn,
@@ -2424,7 +2428,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       },
       baseDeps({
         applyByotState: applyByotStateFn,
-        materializeAnthropicBroker: materializeFn,
+        materializePlatformBrokerSurfaces: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         triggerSecretsReload: reloadFn,
@@ -2449,7 +2453,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "grok", model: "grok-2" } },
       },
-      baseDeps({ applyByotState: applyByotStateFn, materializeAnthropicBroker: materializeFn }),
+      baseDeps({ applyByotState: applyByotStateFn, materializePlatformBrokerSurfaces: materializeFn }),
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith(
@@ -2514,7 +2518,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isOperatorGateway: () => true,
+        isBuilderGateway: () => true,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2552,9 +2556,9 @@ describe("operator gateway — runtime sync stays narrow", () => {
         provisioning: { openclaw: { status: "complete" } },
       },
       {
-        isOperatorGateway: () => true,
+        isBuilderGateway: () => true,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
-        materializeAnthropicBroker: materializeBrokerFn,
+        materializePlatformBrokerSurfaces: materializeBrokerFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
         hasPendingPlatformCatalogRestart: () => restartPending,
@@ -2583,12 +2587,12 @@ describe("operator gateway — runtime sync stays narrow", () => {
       .mockResolvedValueOnce(true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const deps = {
-      isOperatorGateway: () => operatorGateway,
+      isBuilderGateway: () => operatorGateway,
       purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
       applyByotState: vi.fn(() => false),
       applyCoachModelPatch: vi.fn(async () => false),
       applyCoachToolsConvergence: vi.fn(async () => false),
-      materializeAnthropicBroker: materializeBrokerFn,
+      materializePlatformBrokerSurfaces: materializeBrokerFn,
       requestGatewayRestart: requestGatewayRestartFn,
       triggerSecretsReload: triggerSecretsReloadFn,
       hasPendingPlatformCatalogRestart: () => restartPending,
@@ -2665,7 +2669,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isOperatorGateway: () => true,
+        isBuilderGateway: () => true,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => true),
         restoreOauthStoreForSlug: vi.fn(async () => ({
@@ -2750,14 +2754,14 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "anthropic" } },
       },
       {
-        isOperatorGateway: () => true,
+        isBuilderGateway: () => true,
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         usesLlmBrokerToken: () => true,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyCoachToolsConvergence: vi.fn(async () => false),
-        materializeAnthropicBroker: materializeBrokerFn,
+        materializePlatformBrokerSurfaces: materializeBrokerFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
         hasPendingPlatformCatalogRestart: () => restartPending,
@@ -3413,7 +3417,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
         applyCoachModelPatch: vi.fn(async () => false),
-        materializeAnthropicBroker: vi.fn(() => false),
+        materializePlatformBrokerSurfaces: vi.fn(() => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
       },

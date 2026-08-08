@@ -338,6 +338,13 @@ export interface CentralReleaseAuthorityCoordinates {
   repository: string;
 }
 
+/** Injectable so the generator/authority contract can be exercised without
+ *  Application Default Credentials — CI has none, and a contract test must not
+ *  depend on the ambient cloud identity of whoever runs it. */
+export interface CentralReleaseAuthorityDeps {
+  getAccessToken?: () => Promise<string>;
+}
+
 function assertSourceSha(value: string): string {
   if (!SOURCE_SHA_PATTERN.test(value)) {
     throw new Error("release source SHA must be a full lowercase commit SHA");
@@ -529,9 +536,11 @@ function digestFromImageReference(reference: string, expectedRepository: string)
 
 export function createCentralReleaseAuthority(
   coordinates: CentralReleaseAuthorityCoordinates,
+  deps: CentralReleaseAuthorityDeps = {},
 ): CentralReleaseAuthority {
   const repository = dockerRepository(coordinates);
   const packages = packagesBaseForCoordinates(coordinates);
+  const accessToken = deps.getAccessToken ?? getAccessToken;
 
   async function resolveTagDigest(packageName: string, tag: string, token: string): Promise<string | null> {
     const response = await arFetch(
@@ -545,7 +554,7 @@ export function createCentralReleaseAuthority(
   }
 
   async function resolveManifestFromTag(tag: string): Promise<ReleaseDigestManifest> {
-    const token = await getAccessToken();
+    const token = await accessToken();
     const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
     if (!manifestDigest) throw new Error(`release digest manifest ${tag} does not exist`);
     const manifestResponse = await fetch(

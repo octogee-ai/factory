@@ -344,7 +344,10 @@ export interface MattermostAccountEntry {
   allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
-  groups?: Record<string, { enabled: false }> | null;
+  /** Only ever `null` — see buildMattermostAccounts. The plugin's group entry
+   *  schema omits `enabled`, so there is no per-channel mute to express; the
+   *  key exists solely to clear entries written before 2026.7.2. */
+  groups?: null;
 
 commands?: {
     native: false;
@@ -371,23 +374,18 @@ export function buildMattermostAccounts(
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
-    const groups = Object.fromEntries(
-      (c.channels ?? [])
-        .filter(
-          (channel) =>
-            channel.scope === "project" &&
-            channel.projectId !== undefined &&
-            c.agentProjects?.has(channel.projectId) === true,
-        )
-        .map((channel) => [channel.channelId, { enabled: false }] as const),
-    );
+    // Per-channel mutes are not expressible: the mattermost plugin builds its
+    // group entry as buildGroupEntrySchema().omit({ skills, enabled, allowFrom,
+    // systemPrompt }), so `enabled` is rejected outright and config.patch fails
+    // the whole document — taking the mount, and every customer queued behind
+    // it in the same reconcile batch, down with it. Clearing the key is also
+    // the repair path for configs a prior release already wrote.
+    // Project channels still reach the right agent: buildCustomerBindings binds
+    // them to the project agent's OWN account, not the workspace coach's.
     const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
-    let groupsPatch: Pick<MattermostAccountEntry, "groups"> = {};
-    if (Object.keys(groups).length > 0) {
-      groupsPatch = { groups };
-    } else if (managesGroups) {
-      groupsPatch = { groups: null };
-    }
+    const groupsPatch: Pick<MattermostAccountEntry, "groups"> = managesGroups
+      ? { groups: null }
+      : {};
     const accountId = `${c.slug}-coach`;
     const ownerAllowFrom = typeof c.customerMmUserId === "string" &&
         MATTERMOST_ID_RE.test(c.customerMmUserId)

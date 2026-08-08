@@ -6,6 +6,16 @@ export interface ByosubRestorePlanItem {
     targetPath?: string;
     openclawDir: string;
 }
+/**
+ * Every rostered agent id, from either roster form.
+ *
+ * 2026.7.2 rewrites `agents.list` into keyed `agents.entries` at pre-boot, so on
+ * a current pod the list form is simply absent. Reading only `.list` there
+ * returns [] and turns every caller into a silent no-op — the model-ready boot
+ * sweep, git-identity hydration, byosub syncback and the broker-profile retry
+ * all quietly stop working. Entries win when both are present: the migration
+ * leaves the pre-migration list behind, so it is the stale copy.
+ */
 export declare function agentIdsFromConfig(config: unknown): string[];
 export declare function isSafeAgentId(agentId: string): boolean;
 export declare function codexHomeDir(openclawDir: string, agentId: string): string;

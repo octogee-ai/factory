@@ -79,11 +79,12 @@ function serveManifest(manifest: unknown): void {
 }
 
 describe("release digest manifest — generator/authority contract", () => {
-  const authority = () => createCentralReleaseAuthority({
-    project: "octogee",
-    location: "us-central1",
-    repository: "octogee",
-  });
+  // No Application Default Credentials in CI — and this contract must hold
+  // regardless of whose cloud identity runs it.
+  const authority = () => createCentralReleaseAuthority(
+    { project: "octogee", location: "us-central1", repository: "octogee" },
+    { getAccessToken: async () => "test-token" },
+  );
 
   it("accepts a manifest the generator actually produces", async () => {
     serveManifest(createReleaseDigestManifest({

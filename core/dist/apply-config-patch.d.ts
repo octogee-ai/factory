@@ -40,12 +40,22 @@ export interface ApplyConfigPatchResult {
 export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: ApplyConfigPatchOptions): Promise<ApplyConfigPatchResult>;
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
 export declare function replaceCustomerAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
+/**
+ * The customer's slice of the agent roster, as a merge patch that only ever
+ * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
+ * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,
+ * which only its own `agents.delete` supplies — so a retired project agent is
+ * deleted by RPC before the patch, never nulled inside it.
+ */
 export declare function customerAgentRosterPatch(current: unknown, slug: string, agentEntries: readonly unknown[]): {
     list: unknown[];
 } | {
-    entries: Record<string, Record<string, unknown> | null>;
+    entries: Record<string, Record<string, unknown>>;
 };
 export declare function filterOutCustomerBindings<T>(bindings: readonly T[], slug: string): T[];
+export declare function mergeCustomerBindings<T extends {
+    agentId?: unknown;
+}>(current: readonly T[], slugs: readonly string[], nextCustomerBindings: readonly T[]): readonly T[];
 export declare function staleProjectAgentAccountNulls(current: unknown, slug: string, keepAccountIds: readonly string[]): Record<string, null>;
 /**
  * The replacePaths set for customer config patches that rebuild non-id arrays:

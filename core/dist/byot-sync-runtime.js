@@ -9,7 +9,7 @@ import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvi
 import { codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, restoreByosubCredentials, } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
-import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, upsertAnthropicBrokerProfile, upsertOpenAiBrokerCatalog, upsertOpenRouterBrokerCatalog, } from "./agent-model-token-materializer.js";
+import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
@@ -1063,27 +1063,20 @@ function mountedAgentIdsForSlug(slug) {
         return [`octogee-${slug}-coach`];
     }
 }
-function materializeAnthropicBroker(slug) {
+async function materializePlatformBrokerSurfaces(slug) {
     const baseUrl = configuredOpenRouterBaseUrl();
     const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-    let changed = false;
-    for (const agentId of mountedAgentIdsForSlug(slug)) {
-        try {
-            const agentHome = path.join(AGENTS_DIR, agentId, "agent");
-            const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
-            const wroteCatalog = baseUrl
-                ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
-                : false;
-            const wroteOpenAi = openAiBaseUrl
-                ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
-                : false;
-            changed = wroteProfile || wroteCatalog || wroteOpenAi || changed;
-        }
-        catch (error) {
-            log(`⚠ [byot-sync] model catalog materialization failed for ${agentId}: ${error.message}`);
-        }
+    const result = await materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
+        agentsDir: AGENTS_DIR,
+        openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
+        openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+        logFn: log,
+    });
+    if (result.deferred.length > 0) {
+        log(`[byot-sync] ${slug}: broker profile deferred for ${result.deferred.join(", ")}` +
+            ` — openclaw refused the secrets apply; the level-triggered sweep retries it`);
     }
-    return changed;
+    return result.materialized > 0;
 }
 function configuredOpenRouterBaseUrl() {
     const raw = process.env.OPENROUTER_BASE_URL?.trim();
@@ -1135,7 +1128,7 @@ function syncActions(deps) {
             ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
         requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
         triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
-        materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+        materializePlatformBrokerSurfaces: deps?.materializePlatformBrokerSurfaces ?? materializePlatformBrokerSurfaces,
         purgeCustomerOauthRuntime: deps?.purgeCustomerOauthRuntime ??
             ((slug, safeModelRef, purgeDeps) => purgeCustomerOauthRuntime(slug, safeModelRef, {
                 ...(deps?.applyConfigPatch ? { applyConfigPatch: deps.applyConfigPatch } : {}),
@@ -1166,8 +1159,8 @@ async function requestRestartIfRequired(runtimePatch, actions, reason, platformC
     }
     return requested;
 }
-function materializePlatformCatalog(slug, actions) {
-    const changed = actions.materializeAnthropicBroker(slug);
+async function materializePlatformCatalog(slug, actions) {
+    const changed = await actions.materializePlatformBrokerSurfaces(slug);
     if (changed)
         actions.markPlatformCatalogRestartPending();
     return {
@@ -1180,7 +1173,7 @@ function isBrokerResolvedAnthropic(desired, usesBrokerToken) {
 }
 async function clearBrokerResolvedAnthropic(slug, actions) {
     const changed = actions.applyByotState(slug, null);
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     log(`[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`);
     const restartRequested = await requestRestartIfRequired({ patched: false, changed: false, restartRequired: false }, actions, undefined, catalog.restartPending);
     if ((changed || catalog.changed || catalog.restartPending) && !restartRequested) {
@@ -1212,7 +1205,7 @@ async function syncStandardByotState(slug, desired, actions, opts) {
 }
 async function syncBuilderByotState(slug, desired, actions) {
     const restore = await restoreOauthIfNeeded(slug, desired, actions);
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
@@ -1253,7 +1246,7 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
     // A suppressed byosub owner may carry a pre-gate OAuth profile in the
     // store — purge it; every other shared path preserves the store.
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });
-    const catalog = materializePlatformCatalog(slug, actions);
+    const catalog = await materializePlatformCatalog(slug, actions);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)

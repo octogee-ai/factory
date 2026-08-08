@@ -47,9 +47,7 @@ import {
   OPENAI_BROKER_PROFILE_ID,
   openRouterCatalogInputForBaseUrl,
   openRouterBrokerCatalogJson,
-  upsertAnthropicBrokerProfile,
-  upsertOpenAiBrokerCatalog,
-  upsertOpenRouterBrokerCatalog,
+  materializeBrokerProfilesForAgents,
 } from "./agent-model-token-materializer.js";
 import {
   agentIdBelongsToSlug,
@@ -540,7 +538,7 @@ export interface SyncByotForCustomerDeps {
   applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload?: typeof triggerSecretsReload;
-  materializeAnthropicBroker?: (slug: string) => boolean;
+  materializePlatformBrokerSurfaces?: (slug: string) => Promise<boolean> | boolean;
   purgeCustomerOauthRuntime?: typeof purgeCustomerOauthRuntime;
   applyAgentModelOverrides?: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
@@ -560,7 +558,7 @@ interface SyncByotActions {
   applyOauthRuntimeModelAllowlist: typeof applyOauthRuntimeModelAllowlist;
   requestGatewayRestart: typeof requestGatewayRestartForRuntimeChange;
   triggerSecretsReload: typeof triggerSecretsReload;
-  materializeAnthropicBroker: (slug: string) => boolean;
+  materializePlatformBrokerSurfaces: (slug: string) => Promise<boolean> | boolean;
   purgeCustomerOauthRuntime: typeof purgeCustomerOauthRuntime;
   applyAgentModelOverrides: typeof applyAgentModelOverrides;
   refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
@@ -1449,26 +1447,22 @@ function mountedAgentIdsForSlug(slug: string): string[] {
   }
 }
 
-function materializeAnthropicBroker(slug: string): boolean {
+async function materializePlatformBrokerSurfaces(slug: string): Promise<boolean> {
   const baseUrl = configuredOpenRouterBaseUrl();
   const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
-  let changed = false;
-  for (const agentId of mountedAgentIdsForSlug(slug)) {
-    try {
-      const agentHome = path.join(AGENTS_DIR, agentId, "agent");
-      const wroteProfile = upsertAnthropicBrokerProfile(agentHome, agentId);
-      const wroteCatalog = baseUrl
-        ? upsertOpenRouterBrokerCatalog(agentHome, agentId, openRouterCatalogInputForBaseUrl(baseUrl))
-        : false;
-      const wroteOpenAi = openAiBaseUrl
-        ? upsertOpenAiBrokerCatalog(agentHome, agentId, openAiCatalogInputForBaseUrl(openAiBaseUrl))
-        : false;
-      changed = wroteProfile || wroteCatalog || wroteOpenAi || changed;
-    } catch (error) {
-      log(`⚠ [byot-sync] model catalog materialization failed for ${agentId}: ${(error as Error).message}`);
-    }
+  const result = await materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
+    agentsDir: AGENTS_DIR,
+    openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
+    openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+    logFn: log,
+  });
+  if (result.deferred.length > 0) {
+    log(
+      `[byot-sync] ${slug}: broker profile deferred for ${result.deferred.join(", ")}` +
+        ` — openclaw refused the secrets apply; the level-triggered sweep retries it`,
+    );
   }
-  return changed;
+  return result.materialized > 0;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {
@@ -1533,7 +1527,8 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
       ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
-    materializeAnthropicBroker: deps?.materializeAnthropicBroker ?? materializeAnthropicBroker,
+    materializePlatformBrokerSurfaces:
+      deps?.materializePlatformBrokerSurfaces ?? materializePlatformBrokerSurfaces,
     purgeCustomerOauthRuntime:
       deps?.purgeCustomerOauthRuntime ??
       ((slug, safeModelRef, purgeDeps) =>
@@ -1581,11 +1576,11 @@ async function requestRestartIfRequired(
   return requested;
 }
 
-function materializePlatformCatalog(
+async function materializePlatformCatalog(
   slug: string,
   actions: SyncByotActions,
-): { changed: boolean; restartPending: boolean } {
-  const changed = actions.materializeAnthropicBroker(slug);
+): Promise<{ changed: boolean; restartPending: boolean }> {
+  const changed = await actions.materializePlatformBrokerSurfaces(slug);
   if (changed) actions.markPlatformCatalogRestartPending();
   return {
     changed,
@@ -1605,7 +1600,7 @@ async function clearBrokerResolvedAnthropic(
   actions: SyncByotActions,
 ): Promise<void> {
   const changed = actions.applyByotState(slug, null);
-  const catalog = materializePlatformCatalog(slug, actions);
+  const catalog = await materializePlatformCatalog(slug, actions);
   log(
     `[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`,
   );
@@ -1668,7 +1663,7 @@ async function syncBuilderByotState(
   actions: SyncByotActions,
 ): Promise<void> {
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
-  const catalog = materializePlatformCatalog(slug, actions);
+  const catalog = await materializePlatformCatalog(slug, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
@@ -1736,7 +1731,7 @@ async function syncSharedBrokerByotState(
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true },
   );
 
-  const catalog = materializePlatformCatalog(slug, actions);
+  const catalog = await materializePlatformCatalog(slug, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
 
   const patched = restore.present && desired.coachModelInput

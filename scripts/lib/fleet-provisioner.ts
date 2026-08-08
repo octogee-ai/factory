@@ -2,6 +2,14 @@ import express from "express";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
+import { agentIdsFromConfig } from "./byosub-restore.js";
+import { readOpenClawConfig } from "./config.js";
+import {
+  materializeBrokerProfilesForAgents,
+  openAiCatalogInputForBaseUrl,
+  openRouterCatalogInputForBaseUrl,
+  type BrokerProfileSweepOptions,
+} from "./agent-model-token-materializer.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
@@ -459,6 +467,93 @@ export function buildFleetHealthResponse(input: {
 interface FleetRuntime {
   mountedCustomers: string[];
   status: "booting" | "ready";
+}
+
+// Only openclaw writes an agent's auth-profile store, and it can refuse the
+// apply at both of the one-shot moments — the gateway-ready sweep and the
+// mount's own retry — leaving the catalog in place but the broker profile
+// unwritten, so the agent's first turn fails on credentials instead of on an
+// unknown model. So this is level-triggered: retried on a timer until every
+// rostered coach has its profile, rather than fired at two hopeful moments.
+const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
+
+/** Last deferral set reported, so a steady state stays quiet — this runs on a
+ *  timer and must not reprint the same warning forever. */
+let lastDeferredSignature: string | null = null;
+
+/** Test seam only — the memo above is module state, so a spec exercising the
+ *  quiet-once-settled behaviour must be able to start from a known point. */
+export function _resetBrokerProfileLogStateForTests(): void {
+  lastDeferredSignature = null;
+}
+
+/** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
+ *  — a profile already applied spawns nothing, so this is safe on every tick. */
+export async function materializeDeferredBrokerProfiles(
+  log: (msg: string) => void,
+  deps: {
+    agentsDir?: string;
+    readConfig?: () => unknown;
+    secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+  } = {},
+): Promise<void> {
+  const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
+  const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  let agentIds: string[];
+  try {
+    agentIds = agentIdsFromConfig((deps.readConfig ?? readOpenClawConfig)());
+  } catch (error) {
+    log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
+    return;
+  }
+  const sweep = await materializeBrokerProfilesForAgents(agentIds, {
+    logFn: log,
+    ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
+    ...(deps.secretsApply ? { secretsApply: deps.secretsApply } : {}),
+    ...(openRouterBaseUrl
+      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+      : {}),
+    ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
+  });
+  if (sweep.materialized > 0) {
+    log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
+  }
+  const signature = sweep.deferred.join(",");
+  if (signature !== lastDeferredSignature) {
+    if (sweep.deferred.length > 0) {
+      log(
+        `[agent-model-token] broker profile still deferred for ${sweep.deferred.join(", ")}` +
+          ` — ${sweep.deferralReason ?? "openclaw refused the secrets apply"}; retrying every ${
+            BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
+          }s`,
+      );
+    } else if (lastDeferredSignature !== null) {
+      log("[agent-model-token] broker profiles settled — every rostered coach has its profile");
+    }
+    lastDeferredSignature = signature;
+  }
+}
+
+/** The level-triggered half of broker-profile materialization: retried until
+ *  openclaw has accepted every rostered coach's profiles. Null on gateways that
+ *  do not provision — they mount no customers, so there is nothing to converge. */
+function startBrokerProfileRetry(
+  provisions: boolean,
+  log: (msg: string) => void,
+): NodeJS.Timeout | null {
+  if (!provisions) return null;
+  let sweepInFlight = false;
+  const sweep = () => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    void materializeDeferredBrokerProfiles(log)
+      .catch((error) => log(`⚠ [agent-model-token] sweep failed: ${String(error)}`))
+      .finally(() => {
+        sweepInFlight = false;
+      });
+  };
+  sweep();
+  return setInterval(sweep, BROKER_PROFILE_RETRY_INTERVAL_MS);
 }
 
 export async function waitForOpenClawHealthz(input: {
@@ -1151,6 +1246,8 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
+  const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log);
+
   const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
     if (!pathGatewayIdMatchesPod(req.params.gatewayId, opts.gatewayId)) {
       opts.log(
@@ -1236,6 +1333,7 @@ return {
     whenReady: waitForGatewayReady(),
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (brokerProfileTimer) clearInterval(brokerProfileTimer);
       stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  activationManifestAgentIds,
   activationManifestTarPath,
   applyOpenClawActivationManifest,
   extractOpenClawActivationManifest,
@@ -39,7 +40,58 @@ function manifest(): MigrationActivationManifest {
   };
 }
 
+describe("activationManifestAgentIds", () => {
+  it("lists the coach and every project agent the activation installs", () => {
+    expect(
+      activationManifestAgentIds({
+        ...manifest(),
+        projectAgents: [
+          {
+            agentId: "octogee-alice-proj-orbit-coach",
+            accountId: "alice-proj-orbit",
+            agent: { id: "octogee-alice-proj-orbit-coach" },
+            mattermostAccount: {},
+            bindings: [],
+          },
+        ],
+      }),
+    ).toEqual(["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]);
+  });
+});
+
 describe("migration activation manifest", () => {
+  it("never nulls a roster entry the target still carries — removals go through agents.delete", async () => {
+    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+      hash: "h2",
+      config: patch,
+    }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            entries: {
+              "octogee-alice-coach": { model: "house" },
+              "octogee-alice-proj-residue-coach": { model: "house" },
+            },
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0][0] as {
+      agents: { entries: Record<string, unknown> };
+    };
+    expect(Object.values(patch.agents.entries)).not.toContain(null);
+    expect(patch.agents.entries).not.toHaveProperty("octogee-alice-proj-residue-coach");
+  });
+
   it("extracts only the per-customer OpenClaw fragments needed for local activation", async () => {
     const dir = await mkTmp();
     const configPath = path.join(dir, "openclaw.json");

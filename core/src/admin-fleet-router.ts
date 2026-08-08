@@ -1243,11 +1243,25 @@ function openclawVersionFromImageTag(imageTag: unknown): string | null {
   return match?.[1] ?? null;
 }
 
+const OPENCLAW_VERSION_PRODUCT_PREFIX = /^openclaw\s+/iu;
+
+function withoutBuildSuffix(value: string): string {
+  if (!value.endsWith(")")) return value;
+  const opensAt = value.lastIndexOf("(");
+  return opensAt === -1 ? value : value.slice(0, opensAt);
+}
+
+function reportedOpenclawVersion(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const version = withoutBuildSuffix(
+    value.trim().replace(OPENCLAW_VERSION_PRODUCT_PREFIX, ""),
+  ).trim();
+  return version.length === 0 || version === "unknown" ? null : version;
+}
+
 function projectOpenclawVersion(data: GlmDoc, glmDoc: GlmDoc | undefined): string | null {
-  if (typeof data.openclawVersion === "string" && data.openclawVersion !== "unknown") {
-    return data.openclawVersion;
-  }
-  return openclawVersionFromImageTag(glmDoc?.imageTag);
+  return reportedOpenclawVersion(data.openclawVersion) ??
+    openclawVersionFromImageTag(glmDoc?.imageTag);
 }
 
 function projectImageTag(data: GlmDoc, glmDoc: GlmDoc | undefined): string | null {

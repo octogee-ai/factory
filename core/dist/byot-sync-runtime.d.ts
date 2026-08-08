@@ -63,7 +63,7 @@ export interface SyncByotForCustomerDeps {
     applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
     requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
     triggerSecretsReload?: typeof triggerSecretsReload;
-    materializeAnthropicBroker?: (slug: string) => boolean;
+    materializePlatformBrokerSurfaces?: (slug: string) => Promise<boolean> | boolean;
     purgeCustomerOauthRuntime?: typeof purgeCustomerOauthRuntime;
     applyAgentModelOverrides?: typeof applyAgentModelOverrides;
     refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;

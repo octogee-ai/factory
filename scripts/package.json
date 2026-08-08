@@ -20,7 +20,8 @@
     "audit-coverage": "tsx ops/audit-coverage.ts",
     "verify-silent-post": "tsx ops/verify-silent-post.ts",
     "verify:mattermost-capability": "tsx ops/verify-mattermost-capability-artifact.ts",
-    "scope": "tsx ops/scope.ts"
+    "scope": "tsx ops/scope.ts",
+    "audit-duplication": "node ops/audit-duplication.mjs"
   },
   "allowScripts": {
     "node-pty": true,
@@ -69,11 +70,11 @@
     "glob": "^13.0.0",
     "ip-address": "^10.2.1",
     "protobufjs": "^7.6.3",
-    "re2": "1.25.2",
+    "re2": "1.26.1",
     "tar": "^7.5.16",
     "tmp": "^0.2.7",
     "uuid": "^14.0.0",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.1",
     "@opentelemetry/core": "^2.8.0",
     "postcss": "8.5.25",
     "undici@<7.0.0": "^6.28.0"

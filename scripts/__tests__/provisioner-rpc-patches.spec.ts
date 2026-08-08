@@ -3,7 +3,6 @@ import {
   buildCoachAgentEntry,
   buildCoachBindings,
   buildCoachAccountFragment,
-  buildRemoveCustomerPatch,
   type ProvisioningContext,
 } from "../lib/provisionSteps.js";
 
@@ -133,76 +132,5 @@ describe("buildCoachAccountFragment", () => {
       botToken: "tok-marie",
       groupPolicy: "open",
     });
-  });
-});
-
-describe("buildRemoveCustomerPatch", () => {
-  const SIBLING_AGENT = "octogee-zoe-coach";
-  const SIBLING_ACCOUNT = "zoe-coach";
-
-  function mkCurrent(): Record<string, any> {
-    return {
-      agents: {
-        list: [
-          { id: AGENT_ID, model: "anthropic/claude-sonnet-4-6" },
-          { id: SIBLING_AGENT, model: "anthropic/claude-sonnet-4-6" },
-        ],
-      },
-      bindings: [
-        { agentId: AGENT_ID, match: { peer: { id: "ch-coach-dm" } } },
-        { agentId: SIBLING_AGENT, match: { peer: { id: "ch-zoe-dm" } } },
-      ],
-      channels: {
-        mattermost: {
-          accounts: {
-            [ACCOUNT_ID]: { botToken: "tok-marie", allowlist: ["mm-marie"] },
-            [SIBLING_ACCOUNT]: { botToken: "tok-zoe", allowlist: ["mm-zoe"] },
-          },
-        },
-      },
-    };
-  }
-
-  it("deletes the coach MM account via an explicit null sentinel (merge-patch deletion)", () => {
-    const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    const accounts = patch.channels.mattermost.accounts;
-
-expect(Object.prototype.hasOwnProperty.call(accounts, ACCOUNT_ID)).toBe(true);
-    expect(accounts[ACCOUNT_ID]).toBeNull();
-  });
-
-  it("does NOT touch sibling accounts (no null, not even present in the fragment)", () => {
-    const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-
-expect(Object.keys(patch.channels.mattermost.accounts)).toEqual([ACCOUNT_ID]);
-  });
-
-  it("ships bindings as the filtered wholesale array (no id → array-replace), preserving siblings", () => {
-    const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    expect(patch.bindings).toEqual([
-      { agentId: SIBLING_AGENT, match: { peer: { id: "ch-zoe-dm" } } },
-    ]);
-  });
-
-  it("does not construct a full agent list from the redacted config.get snapshot", () => {
-    const patch = buildRemoveCustomerPatch(mkCurrent(), SLUG, AGENT_ID) as any;
-    expect(patch).not.toHaveProperty("agents");
-  });
-
-  it("is pure — does not mutate `current`", () => {
-    const current = mkCurrent();
-    buildRemoveCustomerPatch(current, SLUG, AGENT_ID);
-    expect(current.agents.list).toHaveLength(2);
-    expect(current.bindings).toHaveLength(2);
-    expect(Object.keys(current.channels.mattermost.accounts)).toEqual([
-      ACCOUNT_ID,
-      SIBLING_ACCOUNT,
-    ]);
-  });
-
-  it("tolerates a sparse `current` (no bindings / no accounts)", () => {
-    const patch = buildRemoveCustomerPatch({}, SLUG, AGENT_ID) as any;
-    expect(patch.bindings).toEqual([]);
-    expect(patch.channels.mattermost.accounts[ACCOUNT_ID]).toBeNull();
   });
 });

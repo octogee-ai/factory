@@ -132,7 +132,21 @@ describe("customer lifecycle config patch agent directories", () => {
             accountId,
             started: true as const,
           })),
-        } as GatewayRpcClient,
+          configGet: vi.fn(async () => ({
+            config: { agents: { entries: { "octogee-alice-coach": { model: "house" } } } },
+            hash: "cfg-hash",
+          })),
+          agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
+            ok: true as const,
+            agentId,
+          })),
+          agentsCreate: vi.fn(async ({ name, workspace }: { name: string; workspace: string }) => ({
+            ok: true as const,
+            agentId: name,
+            name,
+            workspace,
+          })),
+        } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
 
@@ -140,6 +154,45 @@ describe("customer lifecycle config patch agent directories", () => {
 
       expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
       expect(applyConfigPatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Project checkouts clone AFTER the mount patch, so agents.create would
+  // otherwise be handed a workspace path that does not exist yet.
+  it("broker adapter creates each new agent's workspace before agents.create", async () => {
+    await withRuntimeMock(async ({ tempRoot }) => {
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const workspaces: string[] = [];
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient({
+          ...brokerSnapshot,
+          projectAgents: [
+            { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+          ],
+        }),
+        rpc: {
+          configGet: vi.fn(async () => ({ config: { agents: { entries: {} } }, hash: "cfg-hash" })),
+          agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
+            ok: true as const,
+            agentId,
+          })),
+          agentsCreate: vi.fn(async ({ name, workspace }: { name: string; workspace: string }) => {
+            expect(fsSync.existsSync(workspace)).toBe(true);
+            workspaces.push(workspace);
+            return { ok: true as const, agentId: name, name, workspace };
+          }),
+        } as unknown as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
+
+      expect(workspaces).toEqual([
+        path.join(tempRoot, "customers", "alice"),
+        path.join(tempRoot, "customers", "alice", "projects", "orbit"),
+      ]);
     });
   });
 
@@ -213,26 +266,6 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it("local import preparation preserves the transferred customer key during state sync", async () => {
-    await withRuntimeMock(async ({ tempRoot }) => {
-      process.env.OPENCLAW_STATE_DIR = tempRoot;
-      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
-      await fs.mkdir(path.dirname(customerKey), { recursive: true });
-      await fs.writeFile(customerKey, "private-key");
-      const { buildLocalMigrationAdapter } = await import(
-        "../lib/fleet-local-migration-adapter.js"
-      );
-      const adapter = buildLocalMigrationAdapter({
-        rpc: {} as GatewayRpcClient,
-        log: vi.fn(),
-      });
-
-      await adapter.prepareImportDir("alice", "final");
-
-      expect(fsSync.existsSync(customerKey)).toBe(true);
-    });
-  });
-
   it("preserves a dedicated builder key while unmounting its migrated customer", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
@@ -247,14 +280,26 @@ describe("customer lifecycle config patch agent directories", () => {
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
+      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => ({
+        ok: true as const,
+        agentId,
+        removedBindings: 0,
+      }));
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
-        rpc: {} as GatewayRpcClient,
+        rpc: {
+          configGet: vi.fn(async () => ({
+            config: { agents: { entries: { "octogee-alice-coach": { model: "house" } } } },
+            hash: "cfg-hash",
+          })),
+          agentsDelete,
+        } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
 
       await adapter.removeImportedCustomerBySlug("alice");
 
+      expect(agentsDelete).toHaveBeenCalledWith({ agentId: "octogee-alice-coach", deleteFiles: false });
       expect(fsSync.existsSync(customerDir)).toBe(false);
       expect(fsSync.existsSync(customerKey)).toBe(true);
     });

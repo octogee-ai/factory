@@ -5,27 +5,32 @@ import { buildCodexAuthJsonFromStore, buildCodexAuthProfilesStore, buildClaudeCl
 import { readAuthProfileState, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 import { agentModelTokenProfileEntry, openAiBrokerProfileEntry, openRouterBrokerProfileEntry, } from "./agent-model-token-materializer.js";
+/**
+ * Every rostered agent id, from either roster form.
+ *
+ * 2026.7.2 rewrites `agents.list` into keyed `agents.entries` at pre-boot, so on
+ * a current pod the list form is simply absent. Reading only `.list` there
+ * returns [] and turns every caller into a silent no-op — the model-ready boot
+ * sweep, git-identity hydration, byosub syncback and the broker-profile retry
+ * all quietly stop working. Entries win when both are present: the migration
+ * leaves the pre-migration list behind, so it is the stale copy.
+ */
 export function agentIdsFromConfig(config) {
     const agents = config?.agents;
-    const ids = new Set();
-    if (Array.isArray(agents?.list)) {
-        for (const agent of agents.list) {
-            const id = agent && typeof agent === "object"
-                ? agent.id
-                : undefined;
-            if (typeof id === "string" && id.length > 0)
-                ids.add(id);
-        }
+    const entries = agents?.entries;
+    if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+        // A nulled key is how a removal deletes an agent in openclaw's merge-patch;
+        // reporting it would hand callers an agent that no longer exists.
+        return Object.entries(entries)
+            .filter(([id, entry]) => id.length > 0 && entry !== null && entry !== undefined)
+            .map(([id]) => id);
     }
-    if (agents?.entries &&
-        typeof agents.entries === "object" &&
-        !Array.isArray(agents.entries)) {
-        for (const id of Object.keys(agents.entries)) {
-            if (id.length > 0)
-                ids.add(id);
-        }
-    }
-    return [...ids];
+    const list = agents?.list;
+    if (!Array.isArray(list))
+        return [];
+    return list
+        .map((a) => a && typeof a === "object" ? a.id : undefined)
+        .filter((id) => typeof id === "string" && id.length > 0);
 }
 const SAFE_AGENT_ID = /^[a-z0-9-]{1,64}$/;
 export function isSafeAgentId(agentId) {

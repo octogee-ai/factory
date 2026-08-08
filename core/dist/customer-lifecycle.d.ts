@@ -62,6 +62,13 @@ export interface CustomerLifecycleAdapter {
     log: (msg: string) => void;
     isBuilderGateway?: () => boolean;
     /**
+     * Re-run the platform broker-profile materialization for this customer's
+     * agents. Only openclaw creates an agent's auth-profile store, so the mount's
+     * first attempt runs too early and defers; this is called once the coach is
+     * confirmed running+connected, when the store is guaranteed to exist.
+     */
+    materializeBrokerProfiles?: (slug: string) => void | Promise<void>;
+    /**
      * Read-only probe of the on-disk openclaw.json: is this customer's
      * coach fully wired (agent registered + MM account configured + at
      * least one binding linking the agent to the MM account)?
@@ -229,6 +236,8 @@ export declare class ConcurrentMountError extends Error {
 }
 export declare function _resetInFlightUidsForTests(): void;
 export declare function _inFlightUidsHasForTests(uid: string): boolean;
+export type MountStep = "load-snapshot" | "ssh-key" | "claim-slot" | "workspace-repo" | "byos-restore" | "mattermost" | "config-patch" | "reassert-converged" | "community-membership" | "verify-channel-ready" | "blob-sync" | "project-clones" | "finalize";
+export type MarkStep = (step: MountStep) => void;
 export interface AddCustomerOptions {
     verifyTimeoutMs?: number;
     customersDir?: string;

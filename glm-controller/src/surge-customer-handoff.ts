@@ -1,5 +1,6 @@
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
+import type { RollStateMigrationDecision } from "./roll-state-migration.js";
 
 export interface SurgePod {
   uid: string;
@@ -110,6 +111,7 @@ export interface ReconcileSurgeCustomerHandoffInput {
   desiredImageTag: string;
   requiresCustomerMigration: boolean;
   ownerlessOperatorPrewarm?: boolean;
+  stateMigration: RollStateMigrationDecision;
 }
 
 function operationId(gatewayId: string, targetPodUid: string): string {
@@ -351,6 +353,44 @@ function sourceForTransfer(
   return source.pod;
 }
 
+async function migrateAssignedState(
+  deps: SurgeCustomerHandoffDeps,
+  context: {
+    input: ReconcileSurgeCustomerHandoffInput;
+    assignments: readonly SurgeAssignment[];
+    sourcePod: SurgePod;
+    targetPod: SurgePod;
+    ownedBy: string;
+  },
+): Promise<void> {
+  const { input, assignments, sourcePod, targetPod, ownedBy } = context;
+  const sourceHealth = await deps.readPodHealth(sourcePod);
+  if (!sourceHealth) {
+    throw new Error(`source health unavailable after gating assignments on ${input.gatewayId}`);
+  }
+  const assignmentBySlug = new Map(assignments.map((assignment) => [assignment.slug, assignment]));
+  const unassignedMount = sourceHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
+  if (unassignedMount) {
+    throw new Error(`source mounted customer ${unassignedMount} has no assignment on ${input.gatewayId}`);
+  }
+  const mounted = new Set(sourceHealth.mountedCustomers);
+  for (const assignment of assignments) {
+    if (!mounted.has(assignment.slug)) {
+      deps.log(
+        `[surge-handoff] retaining unmounted assignment without transfer ` +
+        `gateway=${input.gatewayId} uid=${assignment.uid} slug=${assignment.slug}`,
+      );
+    }
+  }
+  await transferAssignments(deps, {
+    input,
+    assignments: assignments.filter((assignment) => mounted.has(assignment.slug)),
+    sourcePod,
+    targetPod,
+    ownedBy,
+  });
+}
+
 async function migrateAssignmentsAndReleaseTarget(
   deps: SurgeCustomerHandoffDeps,
   context: {
@@ -382,32 +422,14 @@ async function migrateAssignmentsAndReleaseTarget(
         assignment.updatedByOperationId = ownedBy;
       }
     }
-    const sourceHealth = await deps.readPodHealth(sourcePod);
-    if (!sourceHealth) {
-      throw new Error(`source health unavailable after gating assignments on ${input.gatewayId}`);
+    if (input.stateMigration.strategy === "provision-fresh") {
+      deps.log(
+        `[surge-handoff] skipping state migration; the replacement provisions fresh ` +
+        `gateway=${input.gatewayId} — ${input.stateMigration.reason}`,
+      );
+    } else {
+      await migrateAssignedState(deps, { input, assignments, sourcePod, targetPod, ownedBy });
     }
-    const assignmentBySlug = new Map(assignments.map((assignment) => [assignment.slug, assignment]));
-    const unassignedMount = sourceHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
-    if (unassignedMount) {
-      throw new Error(`source mounted customer ${unassignedMount} has no assignment on ${input.gatewayId}`);
-    }
-    const mounted = new Set(sourceHealth.mountedCustomers);
-    const assignmentsWithState = assignments.filter((assignment) => mounted.has(assignment.slug));
-    for (const assignment of assignments) {
-      if (!mounted.has(assignment.slug)) {
-        deps.log(
-          `[surge-handoff] retaining unmounted assignment without transfer ` +
-          `gateway=${input.gatewayId} uid=${assignment.uid} slug=${assignment.slug}`,
-        );
-      }
-    }
-    await transferAssignments(deps, {
-      input,
-      assignments: assignmentsWithState,
-      sourcePod,
-      targetPod,
-      ownedBy,
-    });
   } catch (error) {
     if (error instanceof SurgeTargetCleanupError) throw error;
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);

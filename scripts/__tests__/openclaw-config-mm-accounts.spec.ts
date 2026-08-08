@@ -494,7 +494,14 @@ describe("buildMattermostAccounts", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("disables workspace coach inbound routing only in channels owned by active project agents", () => {
+  // OpenClaw 2026.7.2's mattermost plugin builds its group entry as
+  // buildGroupEntrySchema().omit({ skills, enabled, allowFrom, systemPrompt }),
+  // so a per-channel mute cannot be expressed at all. Emitting one is not
+  // merely ignored — config.patch rejects the whole document with
+  // 'must not have additional properties: "enabled"', which fails the mount
+  // permanently and, because reconcile defers the rest of the batch, strands
+  // every other customer queued for that gateway.
+  it("never emits a per-channel group entry — the plugin schema has no such property", () => {
     const accounts = buildMattermostAccounts(
       [
         {
@@ -511,9 +518,9 @@ describe("buildMattermostAccounts", () => {
       new Map([["uid-a", "tok-chris"]]),
     );
 
-    expect(accounts["chris-coach"].groups).toEqual({
-      "proj-orbit": { enabled: false },
-    });
+    // null, not omitted: it must actively clear entries a prior release wrote.
+    expect(accounts["chris-coach"].groups).toBeNull();
+    expect(JSON.stringify(accounts["chris-coach"])).not.toContain("enabled");
   });
 
   it("clears stale workspace coach inbound exclusions when no project agent remains active", () => {

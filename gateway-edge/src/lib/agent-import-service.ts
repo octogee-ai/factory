@@ -273,15 +273,7 @@ function configGet(value: unknown): { config: JsonObject; hash: string } {
 }
 
 function coachFromConfig(config: JsonObject, coachId: string): JsonObject {
-  const agents = record(config.agents);
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
-    throw new AgentImportServiceError("coach_config_missing", "OpenClaw config has no agent list");
-  }
-  const matches = list.flatMap((entry) => {
-    const agent = record(entry);
-    return agent?.id === coachId ? [agent] : [];
-  });
+  const matches = agentList(config).filter((agent) => agent.id === coachId);
   if (matches.length !== 1) {
     throw new AgentImportServiceError("coach_config_missing", "Octogee coach config is missing or ambiguous");
   }
@@ -382,9 +374,24 @@ function runtimePatchState(
   return "diverged";
 }
 
+function keyedAgentEntries(config: JsonObject): JsonObject | null {
+  return record(record(config.agents)?.entries);
+}
+
+/**
+ * The roster as id-carrying objects, whichever shape openclaw is storing.
+ * 2026.7.2 migrates `agents.list` into keyed `agents.entries`, where the key is
+ * the id and the entry carries none.
+ */
 function agentList(config: JsonObject): JsonObject[] {
-  const agents = record(config.agents);
-  const list = agents?.list;
+  const entries = keyedAgentEntries(config);
+  if (entries) {
+    return Object.entries(entries).flatMap(([id, entry]) => {
+      const agent = record(entry);
+      return agent ? [{ ...cloneValue(agent), id }] : [];
+    });
+  }
+  const list = record(config.agents)?.list;
   if (!Array.isArray(list)) {
     throw new AgentImportServiceError("coach_config_missing", "OpenClaw config has no agent list");
   }
@@ -395,8 +402,12 @@ function safelyIdKeyedAgentList(config: JsonObject): boolean {
   return agentList(config).every((entry) => typeof record(entry)?.id === "string");
 }
 
-function coachPatch(coachId: string, patch: JsonObject): JsonObject {
-  return { agents: { list: [{ id: coachId, ...cloneValue(patch) }] } };
+/** A keyed entry carries no `id` — the key is the id, and shipping one anyway
+ *  would add a stray field to the agent. */
+function coachPatch(config: JsonObject, coachId: string, patch: JsonObject): JsonObject {
+  return keyedAgentEntries(config)
+    ? { agents: { entries: { [coachId]: cloneValue(patch) } } }
+    : { agents: { list: [{ id: coachId, ...cloneValue(patch) }] } };
 }
 
 function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, coachId: string, patch: JsonObject): void {
@@ -791,7 +802,7 @@ export class AgentImportService {
       }
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(coachId, runtimePatch)),
+          raw: JSON.stringify(coachPatch(before.config, coachId, runtimePatch)),
           baseHash: before.hash,
         });
       } catch {
@@ -974,7 +985,7 @@ export class AgentImportService {
       }
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(coachId, runtimePatch)),
+          raw: JSON.stringify(coachPatch(before.config, coachId, runtimePatch)),
           baseHash: before.hash,
         });
         const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
@@ -996,7 +1007,7 @@ export class AgentImportService {
           throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
         }
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(coachId, reversePatch)),
+          raw: JSON.stringify(coachPatch(rollbackBase.config, coachId, reversePatch)),
           baseHash: rollbackBase.hash,
         });
         const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
@@ -1017,7 +1028,7 @@ export class AgentImportService {
         throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
       }
       await this.deps.invokeOpenClaw("config.patch", {
-        raw: JSON.stringify(coachPatch(coachId, patch)),
+        raw: JSON.stringify(coachPatch(before.config, coachId, patch)),
         baseHash: before.hash,
       });
       const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));

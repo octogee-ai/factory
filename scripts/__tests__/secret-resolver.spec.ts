@@ -8,8 +8,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // resolver's main() is import-guarded, so this import is inert.
 import {
   resolveOne as resolveOneRaw,
+  BROKER_ATTEMPTS,
+  BROKER_ATTEMPT_TIMEOUT_MS,
   BROKER_BASE_URL,
-  BROKER_REQUEST_TIMEOUT_MS,
+  BROKER_RETRY_BACKOFF_MS,
+  BROKER_TOTAL_BUDGET_MS,
   KSA_TOKEN_PATH,
 } from "../secret-resolver.mjs";
 const resolveOne = resolveOneRaw as (
@@ -26,6 +29,10 @@ const resolveOne = resolveOneRaw as (
       },
     ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
     requestTimeoutMs?: number;
+    retryBackoffMs?: number;
+    budgetMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
   },
 ) => Promise<string>;
 
@@ -295,21 +302,25 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/api-key`);
     expect(seen?.init.headers["x-k8s-sa-token"]).toBe("ksa-tok");
     expect(seen?.init.signal).toBeInstanceOf(AbortSignal);
-    expect(BROKER_REQUEST_TIMEOUT_MS).toBe(4000);
     expect(JSON.parse(seen!.init.body)).toEqual({ id: "byok-tester5-grok" });
   });
 
   it("aborts a stalled broker request within the configured resolver deadline", async () => {
+    let attempts = 0;
     await expect(
       resolveOne("byok-tester5-grok", {
         token: "ksa-tok",
         requestTimeoutMs: 10,
-        fetchImpl: async (_url, init) =>
-          await new Promise<never>((_resolve, reject) => {
+        sleep: async () => {},
+        fetchImpl: async (_url, init) => {
+          attempts++;
+          return await new Promise<never>((_resolve, reject) => {
             init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
-          }),
+          });
+        },
       }),
     ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(attempts).toBe(2);
   });
 
   it("routes an agent-model-token id to /internal/byok/agent-model-token with the embedded agentId", async () => {
@@ -410,6 +421,140 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
         fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
       }),
     ).rejects.toThrow(/malformed/);
+  });
+
+  // OpenClaw's exec-resolver protocol is batch-fatal: ANY entry in the errors{}
+  // response makes it discard the WHOLE batch and cold every owner on the
+  // provider. One retry per id is therefore worth far more than it costs — but
+  // the whole budget has to land inside the provider's timeoutMs or the gateway
+  // kills the resolver mid-retry and every id in the batch is lost. That budget
+  // is read from the shipped template so the two cannot drift.
+  describe("per-id retry", () => {
+    function countingFetch(
+      outcomes: Array<{ ok: boolean; status: number; body?: unknown } | "throw">,
+    ) {
+      const calls: number[] = [];
+      const fetchImpl = async () => {
+        const outcome = outcomes[calls.length] ?? outcomes[outcomes.length - 1]!;
+        calls.push(1);
+        if (outcome === "throw") throw new Error("ECONNRESET");
+        return {
+          ok: outcome.ok,
+          status: outcome.status,
+          json: async () => outcome.body ?? {},
+        };
+      };
+      return { calls, fetchImpl };
+    }
+
+    it("keeps the whole per-id budget inside the provider's configured timeoutMs", () => {
+      const template = JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, "../../infra/gateway/openclaw.template.json"),
+          "utf8",
+        ),
+      ) as { secrets: { providers: Record<string, { timeoutMs?: number }> } };
+      const providerTimeoutMs = template.secrets.providers["gcp-secret-manager"]?.timeoutMs;
+
+      expect(BROKER_ATTEMPTS).toBe(2);
+      expect(
+        BROKER_ATTEMPTS * BROKER_ATTEMPT_TIMEOUT_MS + BROKER_RETRY_BACKOFF_MS,
+      ).toBeLessThanOrEqual(BROKER_TOTAL_BUDGET_MS);
+      expect(providerTimeoutMs).toBeDefined();
+      expect(BROKER_TOTAL_BUDGET_MS).toBeLessThan(providerTimeoutMs!);
+    });
+
+    // The provider timeout covers the whole batch — a node spawn plus one
+    // concurrent broker call per id — not a single id. At 5000ms it had no
+    // headroom over the 4800ms per-id budget, so a routine sweep of a dozen
+    // agents timed out the batch and left every profile deferred.
+    it("leaves the batch room for a spawn and a fan-out beyond one id's budget", () => {
+      const template = JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, "../../infra/gateway/openclaw.template.json"),
+          "utf8",
+        ),
+      ) as { secrets: { providers: Record<string, { timeoutMs?: number }> } };
+      const providerTimeoutMs = template.secrets.providers["gcp-secret-manager"]!.timeoutMs!;
+
+      expect(providerTimeoutMs - BROKER_TOTAL_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
+    });
+
+    it("retries a 5xx once and returns the second attempt's value", async () => {
+      const { calls, fetchImpl } = countingFetch([
+        { ok: false, status: 503 },
+        { ok: true, status: 200, body: { value: "recovered" } },
+      ]);
+
+      await expect(
+        resolveOne("byok-tester5-grok", { token: "t", fetchImpl, sleep: async () => {} }),
+      ).resolves.toBe("recovered");
+      expect(calls).toHaveLength(2);
+    });
+
+    it("retries a network error once", async () => {
+      const { calls, fetchImpl } = countingFetch([
+        "throw",
+        { ok: true, status: 200, body: { value: "recovered" } },
+      ]);
+
+      await expect(
+        resolveOne("byok-tester5-grok", { token: "t", fetchImpl, sleep: async () => {} }),
+      ).resolves.toBe("recovered");
+      expect(calls).toHaveLength(2);
+    });
+
+    it("does NOT retry a 403 — the broker already decided", async () => {
+      const { calls, fetchImpl } = countingFetch([{ ok: false, status: 403 }]);
+
+      await expect(
+        resolveOne("byok-tester5-grok", { token: "t", fetchImpl, sleep: async () => {} }),
+      ).rejects.toThrow(/403/);
+      expect(calls).toHaveLength(1);
+    });
+
+    it("does NOT retry a malformed 200 — a broken contract does not heal on retry", async () => {
+      const { calls, fetchImpl } = countingFetch([{ ok: true, status: 200, body: {} }]);
+
+      await expect(
+        resolveOne("byok-tester5-grok", { token: "t", fetchImpl, sleep: async () => {} }),
+      ).rejects.toThrow(/malformed/);
+      expect(calls).toHaveLength(1);
+    });
+
+    it("gives up rather than starting a second attempt the budget cannot fund", async () => {
+      const { calls, fetchImpl } = countingFetch([{ ok: false, status: 503 }]);
+      let clock = 0;
+
+      await expect(
+        resolveOne("byok-tester5-grok", {
+          token: "t",
+          fetchImpl,
+          sleep: async () => {},
+          budgetMs: 100,
+          now: () => (clock += 90),
+        }),
+      ).rejects.toThrow(/503/);
+      expect(calls).toHaveLength(1);
+    });
+
+    it("backs off between attempts", async () => {
+      const slept: number[] = [];
+      const { fetchImpl } = countingFetch([
+        { ok: false, status: 500 },
+        { ok: true, status: 200, body: { value: "v" } },
+      ]);
+
+      await resolveOne("byok-tester5-grok", {
+        token: "t",
+        fetchImpl,
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+      });
+
+      expect(slept).toEqual([BROKER_RETRY_BACKOFF_MS]);
+    });
   });
 
   it("defaults (no broker env) to same-namespace short DNS + the mounted gateway-broker token — existing-config compatible (#1730 P1)", () => {

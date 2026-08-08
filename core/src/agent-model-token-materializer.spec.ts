@@ -1,12 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  readAuthProfileStore,
-  writeAuthProfileStore,
-} from "./auth-profile-sqlite.js";
+import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
+import { OpenclawWireError } from "./gateway-rpc.js";
 import {
   agentModelTokenSecretId,
   OPENAI_BROKER_PROVIDER_ID,
@@ -14,22 +12,108 @@ import {
   OPENROUTER_BROKER_PROVIDER_ID,
   OPENROUTER_BROKER_PROFILE_ID,
   agentModelTokenProfileEntry,
-  materializeAnthropicBrokerForAgents,
   materializeBrokerProfilesForAgents,
+  missingPlatformBrokerProfileTargets,
   openAiCatalogInputForBaseUrl,
+  platformBrokerProfileTargets,
   upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
   openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
   upsertOpenRouterBrokerModel,
-  upsertAnthropicBrokerProfile,
 } from "./agent-model-token-materializer.js";
 import {
   seedOpenClawAgentDb,
   seedOpenClawAgentDbForId,
 } from "./fixtures/openclaw-agent-db.js";
 
-describe("agent-model-token materializer", () => {
+const ALL_SURFACES = { openRouter: true, openAi: true };
+
+/** Stands in for `openclaw secrets apply` — the provisioner's only writer of the
+ *  auth-profile store. Records every plan and mirrors it into the store so the
+ *  idempotency read sees what openclaw would have persisted. */
+function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
+  const plans: unknown[] = [];
+  const apply = vi.fn(async ({ plan }: {
+    plan: {
+      targets: Array<{
+        path: string;
+        agentId: string;
+        authProfileProvider: string;
+        ref: { id: string };
+      }>;
+    };
+  }) => {
+    plans.push(plan);
+    if (opts.fail) throw new OpenclawWireError("connect-failed", "gateway is not running");
+    for (const target of plan.targets) {
+      const agentDir = path.join(agentsDir, target.agentId, "agent");
+      const store = (readAuthProfileStore(agentDir) ?? {}) as Record<string, unknown>;
+      const profiles = (store.profiles ?? {}) as Record<string, unknown>;
+      const profileId = target.path.replace(/^profiles\./, "").replace(/\.key$/, "");
+      profiles[profileId] = {
+        type: "api_key",
+        provider: target.authProfileProvider,
+        keyRef: { source: "exec", provider: "gcp-secret-manager", id: target.ref.id },
+        key: "resolved-by-openclaw",
+      };
+      writeAuthProfileStore(agentDir, { ...store, profiles });
+    }
+    return { mode: "write", changed: true };
+  });
+  return { plans, secretsApply: { rpc: { secretsApply: apply } }, apply };
+}
+
+describe("platform broker profile targets", () => {
+  it("addresses one api_key target per configured surface, each on its own broker-token ref", () => {
+    expect(platformBrokerProfileTargets("octogee-alice-coach", ALL_SURFACES)).toEqual([
+      {
+        type: "auth-profiles.api_key.key",
+        path: "profiles.anthropic:default.key",
+        ref: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "agent-model-token-octogee-alice-coach",
+        },
+        agentId: "octogee-alice-coach",
+        authProfileProvider: "anthropic",
+      },
+      {
+        type: "auth-profiles.api_key.key",
+        path: `profiles.${OPENROUTER_BROKER_PROFILE_ID}.key`,
+        ref: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "agent-model-token-openrouter-octogee-alice-coach",
+        },
+        agentId: "octogee-alice-coach",
+        authProfileProvider: OPENROUTER_BROKER_PROVIDER_ID,
+      },
+      {
+        type: "auth-profiles.api_key.key",
+        path: `profiles.${OPENAI_BROKER_PROFILE_ID}.key`,
+        ref: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "agent-model-token-openai-octogee-alice-coach",
+        },
+        agentId: "octogee-alice-coach",
+        authProfileProvider: OPENAI_BROKER_PROVIDER_ID,
+      },
+    ]);
+  });
+
+  it("omits a surface this pod does not carry — an unresolvable ref colds the whole exec batch", () => {
+    expect(
+      platformBrokerProfileTargets("octogee-alice-coach", {
+        openRouter: false,
+        openAi: false,
+      }).map((target) => target.authProfileProvider),
+    ).toEqual(["anthropic"]);
+  });
+});
+
+describe("missingPlatformBrokerProfileTargets", () => {
   let agentDir: string;
 
   beforeEach(() => {
@@ -40,66 +124,85 @@ describe("agent-model-token materializer", () => {
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
-  it("creates the anthropic:default broker-token profile on an empty store", () => {
-    expect(upsertAnthropicBrokerProfile(agentDir, "octogee-alice-coach")).toBe(true);
-    const store = readAuthProfileStore(agentDir) as { profiles: Record<string, unknown> };
-    expect(store.profiles["anthropic:default"]).toEqual(
-      agentModelTokenProfileEntry("octogee-alice-coach"),
-    );
+  it("reports every profile when the store is empty", () => {
     expect(
-      (store.profiles["anthropic:default"] as { keyRef: { id: string } }).keyRef.id,
-    ).toBe("agent-model-token-octogee-alice-coach");
+      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", ALL_SURFACES),
+    ).toHaveLength(3);
   });
 
-  it("MERGES into an existing byosub OAuth store — preserves the OAuth primary and version", () => {
+  it("reports every profile when openclaw has not created the store at all", () => {
+    const fresh = path.join(agentDir, "never-booted");
+    expect(
+      missingPlatformBrokerProfileTargets(fresh, "octogee-alice-coach", ALL_SURFACES),
+    ).toHaveLength(3);
+  });
+
+  it("settles on a profile openclaw already resolved — the ref identity is the match, not the key", () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
-        "openai-codex": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "acc",
-          refresh: "ref",
-          expires: 0,
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: agentModelTokenProfileEntry("octogee-alice-coach").keyRef,
+          key: "sk-resolved-by-openclaw",
         },
       },
     });
-    expect(upsertAnthropicBrokerProfile(agentDir, "octogee-bob-coach")).toBe(true);
 
-    const store = readAuthProfileStore(agentDir) as {
-      version: number;
-      profiles: Record<string, unknown>;
-    };
-    expect(store.version).toBe(1); // top-level preserved
-    expect(store.profiles["openai-codex"]).toMatchObject({ type: "oauth", access: "acc" }); // not clobbered
-    expect(store.profiles["anthropic:default"]).toEqual(
-      agentModelTokenProfileEntry("octogee-bob-coach"),
-    );
+    expect(
+      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+        openRouter: false,
+        openAi: false,
+      }),
+    ).toEqual([]);
   });
 
-  it("MERGES alongside a claude-cli OAuth primary (the adjacent anthropic:-keyed profile)", () => {
+  it("still reports a profile pinned to another agent's broker token", () => {
+    writeAuthProfileStore(agentDir, {
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: agentModelTokenProfileEntry("octogee-bob-coach").keyRef,
+        },
+      },
+    });
+
+    expect(
+      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+        openRouter: false,
+        openAi: false,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("leaves a byosub OAuth primary alone — it is not one of ours to assert", () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "acc",
-          refresh: "ref",
-          expires: 0,
-        },
+        "openai-codex": { type: "oauth", provider: "openai-codex", access: "acc" },
       },
     });
-    expect(upsertAnthropicBrokerProfile(agentDir, "octogee-cc-coach")).toBe(true);
-    const store = readAuthProfileStore(agentDir) as { profiles: Record<string, unknown> };
-    // both anthropic:-keyed profiles coexist — the exact shape the connect path needs
-    expect(store.profiles["anthropic:claude-cli"]).toMatchObject({ type: "oauth", access: "acc" });
-    expect(store.profiles["anthropic:default"]).toEqual(agentModelTokenProfileEntry("octogee-cc-coach"));
-  });
 
-  it("is idempotent — a second upsert is a no-op write", () => {
-    expect(upsertAnthropicBrokerProfile(agentDir, "octogee-alice-coach")).toBe(true);
-    expect(upsertAnthropicBrokerProfile(agentDir, "octogee-alice-coach")).toBe(false);
+    expect(
+      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+        openRouter: false,
+        openAi: false,
+      }).map((target) => target.path),
+    ).toEqual(["profiles.anthropic:default.key"]);
+  });
+});
+
+describe("agent-model-token catalogs", () => {
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-cat0-"));
+    seedOpenClawAgentDb(agentDir);
+  });
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
   it("creates an OpenRouter custom-provider model file backed by the provider-specific broker token", () => {
@@ -112,7 +215,7 @@ describe("agent-model-token materializer", () => {
 
     const baseUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010/v1";
     expect(
-      upsertOpenRouterBrokerModel(agentDir, "octogee-alice-coach", {
+      upsertOpenRouterBrokerModel(agentDir, {
         baseUrl,
         model: "z-ai/glm-5.2",
       }),
@@ -134,13 +237,15 @@ describe("agent-model-token materializer", () => {
         OPENROUTER_BROKER_PROVIDER_ID
       ],
     ).toMatchObject({ api: "openai-completions" });
-    const store = readAuthProfileStore(agentDir) as {
-      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
-    };
-    expect(store.profiles[OPENROUTER_BROKER_PROFILE_ID]).toMatchObject({
-      provider: OPENROUTER_BROKER_PROVIDER_ID,
-      keyRef: { id: "agent-model-token-openrouter-octogee-alice-coach" },
+  });
+
+  it("writes no auth-profile row of its own — only openclaw writes that store", () => {
+    upsertOpenRouterBrokerModel(agentDir, {
+      baseUrl: "http://llm-broker:3010/v1",
+      model: "z-ai/glm-5.2",
     });
+
+    expect(readAuthProfileStore(agentDir)).toBeNull();
   });
 
   it("builds the top-level OpenRouter provider config with the live broker token string OpenClaw validates", () => {
@@ -186,7 +291,7 @@ describe("model-readiness: openrouter catalog upsert", () => {
   };
 
   it("writes ALL catalog models under the platform-openrouter provider with the agent's broker token", () => {
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
     expect(provider).toMatchObject({
@@ -208,13 +313,6 @@ describe("model-readiness: openrouter catalog upsert", () => {
         },
       ],
     });
-    const store = readAuthProfileStore(agentDir) as {
-      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
-    };
-    expect(store.profiles[OPENROUTER_BROKER_PROFILE_ID]).toMatchObject({
-      provider: OPENROUTER_BROKER_PROVIDER_ID,
-      keyRef: { id: "agent-model-token-openrouter-octogee-a-coach" },
-    });
   });
 
   it("is idempotent and preserves sibling custom providers", () => {
@@ -223,8 +321,8 @@ describe("model-readiness: openrouter catalog upsert", () => {
       path.join(agentDir, "models.json"),
       JSON.stringify({ providers: { grok: { api: "openai-completions", baseUrl: "x", models: [] } } }),
     );
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
-    expect(upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, CATALOG)).toBe(true);
+    expect(upsertOpenRouterBrokerCatalog(agentDir, CATALOG)).toBe(false);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     expect(models.providers.grok).toBeTruthy();
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models).toHaveLength(2);
@@ -247,28 +345,21 @@ describe("model-readiness: openai catalog upsert", () => {
   };
 
   it("writes catalog models under platform-openai with the agent's openai broker token", () => {
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
+    expect(upsertOpenAiBrokerCatalog(agentDir, CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENAI_BROKER_PROVIDER_ID];
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe(OPENAI_BROKER_PROFILE_ID);
     expect(provider.models.map((m: { id: string }) => m.id)).toEqual(["gpt-5.4-mini"]);
-    const store = readAuthProfileStore(agentDir) as {
-      profiles: Record<string, { provider: string; keyRef: { id: string } }>;
-    };
-    expect(store.profiles[OPENAI_BROKER_PROFILE_ID]).toMatchObject({
-      provider: OPENAI_BROKER_PROVIDER_ID,
-      keyRef: { id: "agent-model-token-openai-octogee-a-coach" },
-    });
   });
 
   it("coexists with the platform-openrouter provider entry", () => {
-    upsertOpenRouterBrokerCatalog(agentDir, "octogee-a-coach", {
+    upsertOpenRouterBrokerCatalog(agentDir, {
       baseUrl: CATALOG.baseUrl,
       models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
     });
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(true);
-    expect(upsertOpenAiBrokerCatalog(agentDir, "octogee-a-coach", CATALOG)).toBe(false);
+    expect(upsertOpenAiBrokerCatalog(agentDir, CATALOG)).toBe(true);
+    expect(upsertOpenAiBrokerCatalog(agentDir, CATALOG)).toBe(false);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID]).toBeTruthy();
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID]).toBeTruthy();
@@ -284,8 +375,17 @@ describe("openAiCatalogInputForBaseUrl", () => {
   });
 });
 
-describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
+describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
   let agentsDir: string;
+  const openRouter = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+  };
+  const openAi = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
+  };
+
   beforeEach(() => {
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-ready-"));
   });
@@ -293,50 +393,119 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("asserts EVERY broker provider surface per agent — anthropic profile + openrouter + openai catalogs", () => {
+  it("hands every profile to openclaw's secrets.apply RPC and writes both catalogs itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
-    const written = materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+    const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
+
+    const written = await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
       agentsDir,
-      openRouter: {
-        baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
-        models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
-      },
-      openAi: {
-        baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
-        models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
-      },
+      openRouter,
+      openAi,
+      secretsApply,
     });
-    expect(written).toBe(1);
+
+    expect(written.materialized).toBe(1);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(plans).toEqual([
+      expect.objectContaining({
+        generatedBy: "manual",
+        targets: platformBrokerProfileTargets("octogee-alice-coach", ALL_SURFACES),
+      }),
+    ]);
     const agentHome = path.join(agentsDir, "octogee-alice-coach", "agent");
-    const store = readAuthProfileStore(agentHome) as {
-      profiles: Record<string, { keyRef: { id: string } }>;
-    };
-    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-alice-coach");
     const models = JSON.parse(fs.readFileSync(path.join(agentHome, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
-  it("falls back to anthropic-only when no openrouter config is supplied", () => {
+  it("never writes the auth-profile store itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
-    expect(materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir })).toBe(1);
+    const secretsApply = {
+      rpc: { secretsApply: vi.fn(async () => ({ mode: "write", changed: true })) },
+    };
+
+    await materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir, secretsApply });
+
     expect(
-      fs.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent", "models.json")),
-    ).toBe(false);
+      readAuthProfileStore(path.join(agentsDir, "octogee-alice-coach", "agent")),
+    ).toBeNull();
   });
 
-  it("materializes bound broker profiles and catalogs for a canonical project agent", () => {
+  it("stops calling the gateway once every profile has settled", async () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
+    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
+
+    await materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir, openRouter, secretsApply });
+    const settled = await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+      agentsDir,
+      openRouter,
+      secretsApply,
+    });
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(settled).toEqual({ materialized: 0, deferred: [] });
+  });
+
+  it("falls back to the anthropic profile alone when no catalog is configured", async () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
+    const { plans, secretsApply } = fakeSecretsApply(agentsDir);
+
+    expect(
+      (await materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir, secretsApply }))
+        .materialized,
+    ).toBe(1);
+
+    expect((plans[0] as { targets: unknown[] }).targets).toEqual(
+      platformBrokerProfileTargets("octogee-alice-coach", { openRouter: false, openAi: false }),
+    );
+    expect(fs.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent", "models.json"))).toBe(
+      false,
+    );
+  });
+
+  it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", async () => {
+    const { secretsApply, apply } = fakeSecretsApply(agentsDir);
+    seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
+
+    await materializeBrokerProfilesForAgents(["octogee-alice-coach", "octogee-alice-alex", "main"], {
+      agentsDir,
+      secretsApply,
+    });
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(
+      readAuthProfileStore(path.join(agentsDir, "octogee-alice-alex", "agent")),
+    ).toBeNull();
+  });
+
+  it("is tolerant — one agent's failure does not abort the sweep", async () => {
+    seedOpenClawAgentDbForId(agentsDir, "octogee-good-coach");
+    fs.writeFileSync(path.join(agentsDir, "octogee-bad-coach"), "x");
+    const { secretsApply } = fakeSecretsApply(agentsDir);
+
+    const result = await materializeBrokerProfilesForAgents(
+      ["octogee-good-coach", "octogee-bad-coach"],
+      { agentsDir, openRouter, secretsApply },
+    );
+
+    expect(result.materialized).toBe(1);
+  });
+
+  it("materializes bound broker profiles and catalogs for a canonical project agent", async () => {
     const agentId = "octogee-alice-proj-garden-coach";
     seedOpenClawAgentDbForId(agentsDir, agentId);
-    expect(
-      materializeBrokerProfilesForAgents([agentId], {
-        agentsDir,
-        openRouter: {
-          baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
-          models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
-        },
-      }),
-    ).toBe(1);
+    const { plans, secretsApply } = fakeSecretsApply(agentsDir);
+
+    const written = await materializeBrokerProfilesForAgents([agentId], {
+      agentsDir,
+      openRouter,
+      secretsApply,
+    });
+
+    expect(written.materialized).toBe(1);
+    expect((plans[0] as { targets: unknown[] }).targets).toEqual(
+      platformBrokerProfileTargets(agentId, { openRouter: true, openAi: false }),
+    );
     const store = readAuthProfileStore(path.join(agentsDir, agentId, "agent")) as {
       profiles: Record<string, { keyRef: { id: string } }>;
     };
@@ -349,74 +518,85 @@ describe("materializeBrokerProfilesForAgents (model-ready boot sweep)", () => {
   });
 });
 
-describe("materializeAnthropicBrokerForAgents (boot/reconcile sweep)", () => {
+// The pre-boot sweep runs BEFORE openclaw exists, so nothing can accept the plan.
+// The catalog is pure JSON and must land anyway — gating it on the profile write
+// leaves models.providers["platform-openrouter"] absent and every agent turn
+// fails "Unknown model: platform-openrouter/...".
+describe("model-readiness before openclaw can accept the plan", () => {
+  const openRouter = {
+    baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
+    models: [{ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }],
+  };
   let agentsDir: string;
   beforeEach(() => {
-    agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-loop-"));
+    agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-nodb-"));
   });
   afterEach(() => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("materializes anthropic:default for each agent under agentsDir/<id>/agent", () => {
-    seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
-    seedOpenClawAgentDbForId(agentsDir, "octogee-bob-coach");
-    expect(
-      materializeAnthropicBrokerForAgents(["octogee-alice-coach", "octogee-bob-coach"], { agentsDir }),
-    ).toBe(2);
-    const store = readAuthProfileStore(path.join(agentsDir, "octogee-alice-coach", "agent")) as {
-      profiles: Record<string, { keyRef: { id: string } }>;
-    };
-    expect(store.profiles["anthropic:default"].keyRef.id).toBe("agent-model-token-octogee-alice-coach");
-  });
-
-  it("is tolerant — a failure on one agent does not abort the sweep", () => {
-    seedOpenClawAgentDbForId(agentsDir, "octogee-good-coach");
-    // a path collision (file where the agent dir should be) makes one agent fail
-    fs.writeFileSync(path.join(agentsDir, "octogee-bad-coach"), "x");
-    expect(
-      materializeAnthropicBrokerForAgents(["octogee-good-coach", "octogee-bad-coach"], { agentsDir }),
-    ).toBe(1);
-  });
-
-  it("skips an agent openclaw has not initialized rather than writing a stub database", () => {
-    const logs: string[] = [];
-    expect(
-      materializeAnthropicBrokerForAgents(["octogee-fresh-coach"], {
-        agentsDir,
-        logFn: (m) => logs.push(m),
-      }),
-    ).toBe(0);
-    expect(
-      fs.existsSync(path.join(agentsDir, "octogee-fresh-coach", "agent", "openclaw-agent.sqlite")),
-    ).toBe(false);
-    expect(logs.join("\n")).toContain("octogee-fresh-coach");
-  });
-
-  it("seeds the profile on the next sweep once openclaw has created the database", () => {
-    expect(materializeAnthropicBrokerForAgents(["octogee-late-coach"], { agentsDir })).toBe(0);
-    seedOpenClawAgentDbForId(agentsDir, "octogee-late-coach");
-    expect(materializeAnthropicBrokerForAgents(["octogee-late-coach"], { agentsDir })).toBe(1);
-    const store = readAuthProfileStore(path.join(agentsDir, "octogee-late-coach", "agent")) as {
-      profiles: Record<string, { keyRef: { id: string } }>;
-    };
-    expect(store.profiles["anthropic:default"].keyRef.id).toBe(
-      "agent-model-token-octogee-late-coach",
+  const modelsJson = (): { providers: Record<string, { models: { id: string }[] }> } =>
+    JSON.parse(
+      fs.readFileSync(path.join(agentsDir, "octogee-alice-coach", "agent", "models.json"), "utf8"),
     );
+
+  it("writes the platform-openrouter catalog even though the apply is refused", async () => {
+    const { secretsApply } = fakeSecretsApply(agentsDir, { fail: true });
+
+    await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+      agentsDir,
+      openRouter,
+      secretsApply,
+    });
+
+    expect(modelsJson().providers[OPENROUTER_BROKER_PROVIDER_ID].models[0].id).toBe("z-ai/glm-5.2");
   });
 
-  it("skips malformed and foreign agent ids while accepting project agents", () => {
-    const projectAgentId = "octogee-alice-proj-garden-coach";
+  it("returns the agent as deferred with the gateway's own reason instead of silently dropping it", async () => {
+    const logs: string[] = [];
+    const { secretsApply } = fakeSecretsApply(agentsDir, { fail: true });
+
+    const result = await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+      agentsDir,
+      openRouter,
+      secretsApply,
+      logFn: (m) => logs.push(m),
+    });
+
+    expect(result.deferred).toEqual(["octogee-alice-coach"]);
+    // the catalog DID land — only the profiles deferred
+    expect(result.materialized).toBe(1);
+    expect(result.deferralReason).toContain("gateway is not running");
+    // The reason must NOT be logged here: this sweep is level-triggered, and a
+    // per-agent line would reprint every tick forever.
+    expect(logs.join("\n")).not.toContain("gateway is not running");
+  });
+
+  it("applies the profiles on a retry once openclaw can accept them", async () => {
+    const failing = fakeSecretsApply(agentsDir, { fail: true });
+    await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+      agentsDir,
+      openRouter,
+      secretsApply: failing.secretsApply,
+    });
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
-    seedOpenClawAgentDbForId(agentsDir, projectAgentId);
+    const { secretsApply } = fakeSecretsApply(agentsDir);
+
+    const retry = await materializeBrokerProfilesForAgents(["octogee-alice-coach"], {
+      agentsDir,
+      openRouter,
+      secretsApply,
+    });
+
+    expect(retry.deferred).toEqual([]);
+    expect(retry.materialized).toBe(1);
     expect(
-      materializeAnthropicBrokerForAgents(
-        ["octogee-alice-coach", projectAgentId, "octogee-alice-alex", "main"],
-        { agentsDir },
+      missingPlatformBrokerProfileTargets(
+        path.join(agentsDir, "octogee-alice-coach", "agent"),
+        "octogee-alice-coach",
+        { openRouter: true, openAi: false },
       ),
-    ).toBe(2);
-    expect(readAuthProfileStore(path.join(agentsDir, projectAgentId, "agent"))).not.toBeNull();
-    expect(readAuthProfileStore(path.join(agentsDir, "octogee-alice-alex", "agent"))).toBeNull();
+    ).toEqual([]);
   });
 });
 
