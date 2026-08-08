@@ -3,6 +3,7 @@ import {
   observeReadySibling,
   startAfterSurgeReadiness,
   startSurgeReadinessSelfRelease,
+  SURGE_READINESS_HOLD_DEADLINE_MS,
 } from "../lib/surge-reconcile-gate.js";
 
 describe("surge reconcile gate", () => {
@@ -173,6 +174,78 @@ describe("surge reconcile gate", () => {
     expect(release).not.toHaveBeenCalled();
 
     now = 60_000;
+    runScheduled();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+
+    stop();
+  });
+
+  it("releases at the hold cap while a Ready sibling keeps the absence debounce pinned", async () => {
+    let now = 0;
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => undefined);
+    const log = vi.fn();
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => ({ kind: "sibling", podUid: "source-uid" }),
+      release,
+      schedule: (callback) => {
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log,
+    });
+
+    for (const nextNow of [60_000, SURGE_READINESS_HOLD_DEADLINE_MS - 1]) {
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+      now = nextNow;
+      runScheduled();
+    }
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    expect(release).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("still holding readiness after 60s"));
+
+    now = SURGE_READINESS_HOLD_DEADLINE_MS;
+    runScheduled();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("cap without a handoff release"));
+
+    stop();
+  });
+
+  it("releases at the hold cap when the sibling probe never stops failing", async () => {
+    let now = 0;
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => undefined);
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => {
+        throw new Error("Ready sibling health returned HTTP 503");
+      },
+      release,
+      schedule: (callback) => {
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log: vi.fn(),
+    });
+
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    expect(release).not.toHaveBeenCalled();
+
+    now = SURGE_READINESS_HOLD_DEADLINE_MS;
     runScheduled();
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
 
