@@ -15,6 +15,20 @@ const isolated = {
 };
 
 describe("system config platform invariants", () => {
+  it("strips config keys OpenClaw retired instead of stamping them back", () => {
+    const config: Record<string, unknown> = {
+      gateway: { controlUi: { allowInsecureAuth: false } },
+      logging: { redactSensitive: "tools" },
+    };
+
+    reconcilePlatformInvariants(config, isolated);
+
+    const gateway = config.gateway as { controlUi: Record<string, unknown> };
+    expect(gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
+    expect(config.logging as Record<string, unknown>).not.toHaveProperty("redactSensitive");
+    expect(platformInvariantViolations(config, isolated)).toEqual([]);
+  });
+
   it("reconciles isolated route, auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },
@@ -35,13 +49,11 @@ describe("system config platform invariants", () => {
         controlUi: {
           basePath: "/g/bender/openclaw",
           allowedOrigins: ["https://api.octogee.com"],
-          allowInsecureAuth: false,
           dangerouslyDisableDeviceAuth: false,
           dangerouslyAllowHostHeaderOriginFallback: false,
         },
         terminal: { enabled: false },
       },
-      logging: { redactSensitive: "tools" },
       channels: {
         mattermost: {
           baseUrl: "${MM_URL}",

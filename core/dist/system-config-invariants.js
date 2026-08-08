@@ -98,11 +98,11 @@ export function platformInvariantTable(context) {
             path: "gateway.controlUi.basePath",
             value: isolated ? `/g/${gatewayId}/openclaw` : ABSENT,
         },
-        { kind: "exact", path: "gateway.controlUi.allowInsecureAuth", value: isolated ? false : ABSENT },
+        { kind: "exact", path: "gateway.controlUi.allowInsecureAuth", value: ABSENT },
         { kind: "exact", path: "gateway.controlUi.dangerouslyDisableDeviceAuth", value: isolated ? false : ABSENT },
         { kind: "exact", path: "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback", value: false },
         { kind: "exact", path: "gateway.terminal.enabled", value: false },
-        { kind: "exact", path: "logging.redactSensitive", value: "tools" },
+        { kind: "exact", path: "logging.redactSensitive", value: ABSENT },
         {
             kind: "exact",
             path: "secrets.providers.octogee-mattermost",
