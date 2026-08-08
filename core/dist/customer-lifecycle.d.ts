@@ -239,6 +239,8 @@ export declare class ConcurrentMountError extends Error {
 }
 export declare function _resetInFlightUidsForTests(): void;
 export declare function _inFlightUidsHasForTests(uid: string): boolean;
+export type MountStep = "load-snapshot" | "ssh-key" | "claim-slot" | "workspace-repo" | "byos-restore" | "mattermost" | "config-patch" | "reassert-converged" | "community-membership" | "verify-channel-ready" | "blob-sync" | "project-clones" | "finalize";
+export type MarkStep = (step: MountStep) => void;
 export interface AddCustomerOptions {
     verifyTimeoutMs?: number;
     customersDir?: string;
