@@ -28,10 +28,19 @@ export interface StartSurgeReadinessSelfReleaseOptions {
 const NEVER_SEEN_SIBLING_ABSENCE_OBSERVATIONS = 3;
 const SEEN_SIBLING_ABSENCE_MS = 60_000;
 
+// A healthy sibling pins the absence debounce at zero forever, so the hold needs
+// its own deadline. Releasing here is a hard cutover with no state transfer, and a
+// sibling that is still Ready is still serving — so the deadline sits far above the
+// slowest legitimate handoff (six 330s control calls per customer), not near it.
+export const SURGE_READINESS_HOLD_DEADLINE_MS = 60 * 60_000;
+const HOLD_PROGRESS_LOG_MS = 60_000;
+
 interface SurgeReadinessSelfReleaseState {
+  startedAt: number;
   sawSibling: boolean;
   absenceObservations: number;
   siblingAbsentSince: number | null;
+  lastProgressLogAt: number;
 }
 
 function defaultSchedule(callback: () => void): () => void {
@@ -80,50 +89,86 @@ function resetAbsence(state: SurgeReadinessSelfReleaseState): void {
   state.siblingAbsentSince = null;
 }
 
-function shouldSelfRelease(
+function describeObservation(observation: ReadySiblingObservation): string {
+  if (observation.kind === "sibling") {
+    return `Ready sibling podUid=${observation.podUid ?? "legacy"}`;
+  }
+  if (observation.kind === "self") return "stable Service resolves to this pod";
+  return `no Ready sibling: ${observation.reason}`;
+}
+
+function logHoldProgress(
   state: SurgeReadinessSelfReleaseState,
   observation: ReadySiblingObservation,
-  now: () => number,
+  at: number,
   log: (message: string) => void,
-): boolean {
+): void {
+  if (at - state.lastProgressLogAt < HOLD_PROGRESS_LOG_MS) return;
+  state.lastProgressLogAt = at;
+  log(
+    `[surge-handoff] still holding readiness after ` +
+    `${Math.round((at - state.startedAt) / 1_000)}s — ${describeObservation(observation)}`,
+  );
+}
+
+function holdDeadlineReason(
+  state: SurgeReadinessSelfReleaseState,
+  at: number,
+  detail: string,
+): string | null {
+  return at - state.startedAt >= SURGE_READINESS_HOLD_DEADLINE_MS
+    ? `readiness hold hit its ${Math.round(SURGE_READINESS_HOLD_DEADLINE_MS / 60_000)}m cap ` +
+      `without a handoff release — ${detail}`
+    : null;
+}
+
+function selfReleaseReason(
+  state: SurgeReadinessSelfReleaseState,
+  observation: ReadySiblingObservation,
+  at: number,
+  log: (message: string) => void,
+): string | null {
+  const capped = holdDeadlineReason(state, at, describeObservation(observation));
+  if (capped) return capped;
+  logHoldProgress(state, observation, at, log);
   if (observation.kind === "sibling") {
     if (!state.sawSibling) {
       log(`[surge-handoff] Ready sibling observed podUid=${observation.podUid ?? "legacy"}`);
     }
     state.sawSibling = true;
     resetAbsence(state);
-    return false;
+    return null;
   }
   if (observation.kind === "self") {
     resetAbsence(state);
     log("[surge-handoff] stable Service resolved to this pod before marker release");
-    return false;
+    return null;
   }
   if (!state.sawSibling) {
     state.absenceObservations += 1;
     if (state.absenceObservations === 1) {
       log(`[surge-handoff] no Ready sibling observed: ${observation.reason}`);
     }
-    return state.absenceObservations >= NEVER_SEEN_SIBLING_ABSENCE_OBSERVATIONS;
+    return state.absenceObservations >= NEVER_SEEN_SIBLING_ABSENCE_OBSERVATIONS
+      ? "never observed a Ready sibling"
+      : null;
   }
   if (state.siblingAbsentSince === null) {
-    state.siblingAbsentSince = now();
+    state.siblingAbsentSince = at;
     log(`[surge-handoff] Ready sibling disappeared: ${observation.reason}`);
   }
-  return now() - state.siblingAbsentSince >= SEEN_SIBLING_ABSENCE_MS;
+  return at - state.siblingAbsentSince >= SEEN_SIBLING_ABSENCE_MS
+    ? "Ready sibling remained absent for 60s"
+    : null;
 }
 
 async function releaseSurgeReadinessLocally(
   opts: StartSurgeReadinessSelfReleaseOptions,
-  sawSibling: boolean,
+  reason: string,
 ): Promise<boolean> {
   try {
     await opts.release();
-    opts.log(
-      sawSibling
-        ? "[surge-handoff] self-released after Ready sibling remained absent for 60s"
-        : "[surge-handoff] self-released without ever observing a Ready sibling",
-    );
+    opts.log(`[surge-handoff] self-released: ${reason}`);
     return true;
   } catch (error) {
     opts.log(`[surge-handoff] marker self-release failed: ${errorMessage(error)}`);
@@ -140,10 +185,13 @@ export function startSurgeReadinessSelfRelease(
   let finished = false;
   let checking = false;
   let cancelCheck: (() => void) | null = null;
+  const startedAt = now();
   const state: SurgeReadinessSelfReleaseState = {
+    startedAt,
     sawSibling: false,
     absenceObservations: 0,
     siblingAbsentSince: null,
+    lastProgressLogAt: startedAt,
   };
 
   const check = async (): Promise<void> => {
@@ -155,12 +203,16 @@ export function startSurgeReadinessSelfRelease(
         return;
       }
       const observation = await opts.observe();
-      if (shouldSelfRelease(state, observation, now, opts.log)) {
-        finished = await releaseSurgeReadinessLocally(opts, state.sawSibling);
+      const reason = selfReleaseReason(state, observation, now(), opts.log);
+      if (reason !== null) {
+        finished = await releaseSurgeReadinessLocally(opts, reason);
       }
     } catch (error) {
       resetAbsence(state);
-      opts.log(`[surge-handoff] self-release check failed: ${errorMessage(error)}`);
+      const message = errorMessage(error);
+      opts.log(`[surge-handoff] self-release check failed: ${message}`);
+      const capped = holdDeadlineReason(state, now(), `probe failing: ${message}`);
+      if (capped) finished = await releaseSurgeReadinessLocally(opts, capped);
     } finally {
       checking = false;
     }

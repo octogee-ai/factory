@@ -7,6 +7,7 @@ import {
   type SurgePod,
 } from "../surge-customer-handoff.js";
 import { decideRollStateMigration } from "../roll-state-migration.js";
+import type { OperationStatus } from "@octogee/shared/types/glm";
 
 const MIGRATE_STATE = decideRollStateMigration({
   sourceOpenclawVersion: "2026.7.2-beta.7",
@@ -61,6 +62,7 @@ function harness(input: {
   releaseErrorAfterCommit?: Error;
   targetVersion?: string;
   sourceMountedCustomers?: string[];
+  ownerOperations?: Record<string, { status: OperationStatus } | null>;
 } = {}) {
   const events: string[] = [];
   let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
@@ -125,6 +127,11 @@ function harness(input: {
       }
       targetReleased = true;
     }),
+    readOwnerOperation: vi.fn(async (id: string) => (
+      input.ownerOperations && id in input.ownerOperations
+        ? input.ownerOperations[id]
+        : { status: "running" as OperationStatus }
+    )),
     log: vi.fn(),
   };
   return {
@@ -677,6 +684,60 @@ describe("surge customer handoff", () => {
       stateMigration: MIGRATE_STATE,
     })).rejects.toThrow(/foreign assignment gate/);
     expect(h.events).toEqual([]);
+  });
+
+  it("reclaims a lease whose owning operation is no longer running", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "placement-f061f700711dbdec1d7f8f2add33d1d3",
+      })],
+      ownerOperations: {
+        "placement-f061f700711dbdec1d7f8f2add33d1d3": { status: "failed" },
+      },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:serving",
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
+      "owner=placement-f061f700711dbdec1d7f8f2add33d1d3: owning operation is failed",
+    ));
+  });
+
+  it("reclaims a lease whose owning operation no longer exists", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "placement-deleted",
+      })],
+      ownerOperations: { "placement-deleted": null },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events[0]).toBe("assignment:u1:serving");
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
+      "owner=placement-deleted: owning operation no longer exists",
+    ));
   });
 
   it("refuses a foreign migration gate", async () => {

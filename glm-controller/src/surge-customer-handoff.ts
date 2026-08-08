@@ -1,4 +1,5 @@
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
+import type { OperationStatus } from "@octogee/shared/types/glm";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import type { RollStateMigrationDecision } from "./roll-state-migration.js";
 
@@ -103,6 +104,7 @@ export interface SurgeCustomerHandoffDeps {
     operationId: string;
     pod: SurgePod;
   }) => Promise<void>;
+  readOwnerOperation: (operationId: string) => Promise<{ status: OperationStatus } | null>;
   log: (message: string) => void;
 }
 
@@ -123,6 +125,30 @@ const SURGE_OPERATION_ID_RE =
 
 function isSurgeOwnerForGateway(owner: string, gatewayId: string): boolean {
   return SURGE_OPERATION_ID_RE.exec(owner)?.[1] === gatewayId;
+}
+
+// A quiescing assignment is a lease. Surge leases name a pod uid, so pod observation
+// decides liveness; every other owner is an operations-collection id, and one that is
+// gone or terminal will never release its own lease.
+async function abandonedLeaseReason(
+  deps: SurgeCustomerHandoffDeps,
+  gatewayId: string,
+  owner: string,
+  context: {
+    liveSurgeOwners: ReadonlySet<string>;
+    reclaimableOwners: ReadonlySet<string>;
+  },
+): Promise<string | null> {
+  if (SURGE_OPERATION_ID_RE.test(owner)) {
+    if (!isSurgeOwnerForGateway(owner, gatewayId)) return null;
+    if (context.reclaimableOwners.has(owner)) return "prior surge target is now the source";
+    return context.liveSurgeOwners.has(owner) ? null : "owning surge pod is gone";
+  }
+  const operation = await deps.readOwnerOperation(owner);
+  if (!operation) return "owning operation no longer exists";
+  return operation.status === "pending" || operation.status === "running"
+    ? null
+    : `owning operation is ${operation.status}`;
 }
 
 function selectTarget(
@@ -206,18 +232,17 @@ async function restoreAbandonedSurgeAssignments(
   const liveSurgeOwners = new Set(observedPodUids.map((uid) => operationId(gatewayId, uid)));
   for (const assignment of assignments) {
     const priorOwner = assignment.updatedByOperationId;
-    if (
-      assignment.state !== "quiescing" ||
-      priorOwner === null ||
-      priorOwner === ownedBy ||
-      !isSurgeOwnerForGateway(priorOwner, gatewayId) ||
-      (liveSurgeOwners.has(priorOwner) && !reclaimableOwners.has(priorOwner))
-    ) {
+    if (assignment.state !== "quiescing" || priorOwner === null || priorOwner === ownedBy) {
       continue;
     }
+    const reason = await abandonedLeaseReason(deps, gatewayId, priorOwner, {
+      liveSurgeOwners,
+      reclaimableOwners,
+    });
+    if (!reason) continue;
     deps.log(
       `[surge-handoff] restoring abandoned assignment ` +
-      `gateway=${gatewayId} uid=${assignment.uid} owner=${priorOwner}`,
+      `gateway=${gatewayId} uid=${assignment.uid} owner=${priorOwner}: ${reason}`,
     );
     const recoveryOwner = ownedBy ?? priorOwner;
     await setAssignmentState(deps, gatewayId, assignment, "serving", recoveryOwner);
