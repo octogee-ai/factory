@@ -330,7 +330,8 @@ async function createMissingCustomerAgents(
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
-  const runtimeScope = ctx.projectCheckoutScope?.(snapshot.slug);
+  const runtimeScope = ctx.projectCheckoutScope?.(snapshot.slug)
+    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
   const projectCheckoutScope =
     runtimeScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE ||
       snapshot.projectCheckoutScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE
@@ -479,11 +480,22 @@ async function restoreImportedProjectCheckouts(
       );
     }
   }
-  const remaining = await listProjectsNeedingClone(ctx, slug);
+  const remaining = snapshot.projects.flatMap((project) => {
+    if (project.provisioningState !== undefined && project.provisioningState !== "active") return [];
+    const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    return projectCheckoutMatchesSource(
+        slug,
+        project.projectSlug,
+        project.giteaRepoName ?? "",
+        repoSource,
+      )
+      ? []
+      : [project.projectSlug];
+  });
   if (remaining.length > 0) {
     throw new Error(
       `[import:${slug}] project checkout restoration incomplete: ` +
-      remaining.map((project) => project.projectSlug).sort().join(", "),
+      [...new Set(remaining)].sort().join(", "),
     );
   }
 }

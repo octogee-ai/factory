@@ -447,6 +447,37 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
   });
 
+  it("keeps the imported customer closed when an active missing project has no clone source", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: null, provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /project checkout restoration incomplete.*roamly/u,
+    );
+
+    expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+  });
+
   it("preserves the activation manifest when imported agent secrets do not materialize", async () => {
     const rpc = {
       channelsStatus: vi.fn(async () => ({
@@ -1822,6 +1853,27 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       rpc: {} as unknown as GatewayRpcClient,
       log: vi.fn(),
       projectCheckoutScope: () => "workspace-only",
+    });
+    adapter.seedUserSnapshotForMigration?.(
+      fullSnapshot({
+        projectCheckoutScope: "workspace-and-projects",
+        projects: [
+          { projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" },
+        ],
+      }),
+    );
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.projectCheckoutScope).toBe("workspace-only");
+    expect(snap?.projects).toEqual([]);
+  });
+
+  it("defaults migration snapshot projection to workspace-only when runtime scope is absent", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
     });
     adapter.seedUserSnapshotForMigration?.(
       fullSnapshot({
