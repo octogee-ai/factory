@@ -1492,6 +1492,56 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
 });
 
 describe("customer OAuth runtime purge", () => {
+  it("keeps a secret-ref repair scoped away from safe runtime siblings", () => {
+    const patch = customerOauthRuntimeConfigPatch(
+      {
+        channels: {
+          mattermost: {
+            baseUrl: "${MM_URL}",
+            interactions: {
+              callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
+              allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
+            },
+            accounts: {
+              "tester-70-coach": {
+                botToken: {
+                  source: "file",
+                  provider: "octogee-mattermost",
+                  id: "/another-account",
+                },
+              },
+            },
+          },
+        },
+        hooks: {
+          transformsDir: null,
+          internal: { handlers: null, load: { extraDirs: null } },
+        },
+        memory: { qmd: { command: null } },
+        security: { installPolicy: { exec: null } },
+      },
+      "tester-70",
+      "platform-openrouter/deepseek/deepseek-v4-pro",
+    ) as any;
+
+    expect(patch.channels).toEqual({
+      mattermost: {
+        accounts: {
+          "tester-70-coach": {
+            botToken: {
+              source: "file",
+              provider: "octogee-mattermost",
+              id: "/tester-70-coach",
+            },
+          },
+        },
+      },
+    });
+    expect(patch).not.toHaveProperty("hooks");
+    expect(patch).not.toHaveProperty("memory");
+    expect(patch).not.toHaveProperty("security");
+  });
+
   it("preserves the env-materialized plugin projection on a running gateway", () => {
     vi.stubEnv("MM_SITE_URL", "https://mattermost-test.octogee.com");
     vi.stubEnv("FLEET_BROKER_URL", "http://127.0.0.1:3003");

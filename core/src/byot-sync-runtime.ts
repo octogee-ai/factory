@@ -932,6 +932,28 @@ function sanitizeSecretValue(
   return { value: changed ? next : value, changed };
 }
 
+function secretRefChildPatch(
+  child: unknown,
+  config: Record<string, unknown>,
+  segments: readonly string[],
+): { changed: boolean; value?: unknown } {
+  if (isSecretRef(child)) {
+    const expected = expectedCustomerSecretRef(config, segments);
+    if (!expected) return { changed: true, value: null };
+    if (JSON.stringify(child) === JSON.stringify(expected)) return { changed: false };
+    return { changed: true, value: exactObjectPatch(child, expected) };
+  }
+  if (Array.isArray(child)) {
+    const sanitized = sanitizeSecretValue(child, config, segments);
+    return sanitized.changed ? { changed: true, value: sanitized.value } : { changed: false };
+  }
+  if (!isRecord(child)) return { changed: false };
+  const nested = secretRefRemovalPatch(child, config, segments);
+  return isRecord(nested) && Object.keys(nested).length > 0
+    ? { changed: true, value: nested }
+    : { changed: false };
+}
+
 function secretRefRemovalPatch(
   value: unknown,
   config: Record<string, unknown>,
@@ -941,12 +963,9 @@ function secretRefRemovalPatch(
   const patch: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (segments.length === 1 && segments[0] === "secrets" && key === "providers") continue;
-    const sanitized = sanitizeSecretValue(child, config, [...segments, key]);
-    if (!sanitized.changed) continue;
-    if (sanitized.remove) patch[key] = null;
-    else if (isRecord(child) && isRecord(sanitized.value)) {
-      patch[key] = exactObjectPatch(child, sanitized.value);
-    } else patch[key] = sanitized.value;
+    const childSegments = [...segments, key];
+    const childPatch = secretRefChildPatch(child, config, childSegments);
+    if (childPatch.changed) patch[key] = childPatch.value;
   }
   return patch;
 }
@@ -1030,6 +1049,35 @@ function customerModelsProjectionPatch(
     : {};
 }
 
+function customerCommandSurfaceRemovalPatch(config: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const hooks = recordChild(config, "hooks");
+  const internalHooks = recordChild(hooks, "internal");
+  const internalLoad = recordChild(internalHooks, "load");
+  const hookPatch: Record<string, unknown> = {};
+  if (hooks.transformsDir !== undefined && hooks.transformsDir !== null) hookPatch.transformsDir = null;
+  if (internalHooks.handlers !== undefined && internalHooks.handlers !== null) {
+    hookPatch.internal = { handlers: null };
+  }
+  if (internalLoad.extraDirs !== undefined && internalLoad.extraDirs !== null) {
+    hookPatch.internal = mergeConfigPatches(
+      isRecord(hookPatch.internal) ? hookPatch.internal : {},
+      { load: { extraDirs: null } },
+    );
+  }
+  if (Object.keys(hookPatch).length > 0) patch.hooks = hookPatch;
+
+  const qmd = recordChild(recordChild(config, "memory"), "qmd");
+  if (qmd.command !== undefined && qmd.command !== null) {
+    patch.memory = { qmd: { command: null } };
+  }
+  const installPolicy = recordChild(recordChild(config, "security"), "installPolicy");
+  if (installPolicy.exec !== undefined && installPolicy.exec !== null) {
+    patch.security = { installPolicy: { exec: null } };
+  }
+  return patch;
+}
+
 function customerSecurityProjectionPatch(current: unknown): Record<string, unknown> {
   const config = isRecord(current) ? current : {};
   const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
@@ -1041,7 +1089,7 @@ function customerSecurityProjectionPatch(current: unknown): Record<string, unkno
   const modelProviders = customerModelProvidersPlan(providerEntries);
   const hookMappings = safeHookMappings(config);
 
-  return mergeConfigPatches(customerSecretRefsPatch(config), {
+  return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), {
     plugins: {
       enabled: true,
       allow: [...CUSTOMER_APPROVED_PLUGINS],
@@ -1050,13 +1098,7 @@ function customerSecurityProjectionPatch(current: unknown): Record<string, unkno
       installs: null,
     },
     secrets: { providers: customerSecretProviderPatch(config) },
-    hooks: {
-      transformsDir: null,
-      internal: { handlers: null, load: { extraDirs: null } },
-      ...(hookMappings ? { mappings: hookMappings } : {}),
-    },
-    memory: { qmd: { command: null } },
-    security: { installPolicy: { exec: null } },
+    ...(hookMappings ? { hooks: { mappings: hookMappings } } : {}),
     cron: {
       webhookToken: null,
       webhookAuth: null,
