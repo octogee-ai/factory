@@ -10,10 +10,12 @@ const h = vi.hoisted(() => ({
   giteaDeleteVerifiedRepo: vi.fn(),
   giteaWriteFile: vi.fn(),
   giteaWriteFiles: vi.fn(),
+  giteaWriteFilesIfAllAbsent: vi.fn(),
   internalFetch: vi.fn(),
   readProject: vi.fn(),
   renderReadmeTemplate: vi.fn(),
   projectPlaybookSeeds: vi.fn(),
+  projectRecipeStarterSeeds: vi.fn(),
   notesWelcomeSeed: vi.fn(),
   readWorkspace: vi.fn(),
   mmApi: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("../lib/gitea.js", () => ({
   giteaDeleteVerifiedRepo: (...args: unknown[]) => h.giteaDeleteVerifiedRepo(...args),
   giteaWriteFile: (...args: unknown[]) => h.giteaWriteFile(...args),
   giteaWriteFiles: (...args: unknown[]) => h.giteaWriteFiles(...args),
+  giteaWriteFilesIfAllAbsent: (...args: unknown[]) => h.giteaWriteFilesIfAllAbsent(...args),
 }));
 
 vi.mock("../lib/internal-fetch.js", () => ({
@@ -62,6 +65,7 @@ vi.mock("@octogee/core/templates/project-readmes", () => ({
 
 vi.mock("@octogee/core/templates/project-seeds", () => ({
   projectPlaybookSeeds: (...args: unknown[]) => h.projectPlaybookSeeds(...args),
+  projectRecipeStarterSeeds: (...args: unknown[]) => h.projectRecipeStarterSeeds(...args),
   notesWelcomeSeed: (...args: unknown[]) => h.notesWelcomeSeed(...args),
 }));
 
@@ -107,6 +111,7 @@ beforeEach(() => {
   h.giteaDeleteVerifiedRepo.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFile.mockReset().mockResolvedValue(undefined);
   h.giteaWriteFiles.mockReset().mockResolvedValue(undefined);
+  h.giteaWriteFilesIfAllAbsent.mockReset().mockResolvedValue(undefined);
   h.internalFetch.mockReset();
   delete process.env.GITEA_TOKEN;
   process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
@@ -116,6 +121,7 @@ beforeEach(() => {
     { relPath: "runbook/how-we-build.md", content: "# How we build Orbit\n" },
     { relPath: "DECISIONS.md", content: "# Decisions — Orbit\n" },
   ]);
+  h.projectRecipeStarterSeeds.mockReset().mockReturnValue([]);
   h.notesWelcomeSeed.mockReset().mockReturnValue({
     relPath: "notes/welcome.md",
     content: "# Welcome to notes\n",
@@ -284,6 +290,11 @@ describe("project provisioning helpers", () => {
   });
 
   it("seeds against the project's own type and resolved recipe, not a flat default", async () => {
+    h.projectRecipeStarterSeeds.mockReturnValueOnce([
+      { relPath: "package.json", content: "{\"name\":\"orbit\"}\n" },
+      { relPath: "package-lock.json", content: "{\"lockfileVersion\":3}\n" },
+    ]);
+
     await ensureProjectGiteaRepo({
       workspaceId: "mira",
       slug: "orbit",
@@ -301,6 +312,19 @@ describe("project provisioning helpers", () => {
       today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     });
     expect(h.notesWelcomeSeed).toHaveBeenCalledWith("Orbit");
+    expect(h.projectRecipeStarterSeeds).toHaveBeenCalledWith({
+      projectSlug: "orbit",
+      recipe: "vite-static",
+    });
+    expect(h.giteaWriteFilesIfAllAbsent).toHaveBeenCalledWith(
+      "mira",
+      "orbit",
+      expect.arrayContaining([
+        { path: "package.json", content: "{\"name\":\"orbit\"}\n" },
+        { path: "package-lock.json", content: "{\"lockfileVersion\":3}\n" },
+      ]),
+      "auto: seed project starter",
+    );
   });
 
   it("fails provisioning when a seed write fails — the playbook is not best-effort", async () => {

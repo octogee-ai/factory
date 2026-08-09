@@ -246,10 +246,33 @@ export async function giteaWriteFiles(
     if (existing === null) absent.push(file);
   }
   if (absent.length === 0) return;
+  await giteaCreateFiles(contentsUrl, absent, commitMessage);
+}
+
+export async function giteaWriteFilesIfAllAbsent(
+  org: string,
+  repoName: string,
+  files: ReadonlyArray<{ path: string; content: string }>,
+  commitMessage: string,
+): Promise<void> {
+  if (files.length === 0) return;
+  const contentsUrl = `${GITEA_URL}/api/v1/repos/${org}/${repoName}/contents`;
+  for (const file of files) {
+    const existing = await giteaAdminFetch("GET", `${contentsUrl}/${file.path}`, undefined, true);
+    if (existing !== null) return;
+  }
+  await giteaCreateFiles(contentsUrl, files, commitMessage);
+}
+
+async function giteaCreateFiles(
+  contentsUrl: string,
+  files: ReadonlyArray<{ path: string; content: string }>,
+  commitMessage: string,
+): Promise<void> {
   await giteaAdminFetch("POST", contentsUrl, {
     message: commitMessage,
     branch: "main",
-    files: absent.map((file) => ({
+    files: files.map((file) => ({
       operation: "create",
       path: file.path,
       content: Buffer.from(file.content, "utf-8").toString("base64"),

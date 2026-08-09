@@ -1,3 +1,4 @@
+import viteStaticPackageLock from "./vite-static-package-lock.json" with { type: "json" };
 const RECIPE_PUBLISH_CONTRACT = {
     "static-site": "the `public/` folder deploys as-is, with no build step",
     "vite-static": "`npm run build` produces `dist/`, and `dist/` is what deploys",
@@ -552,5 +553,38 @@ export function projectPlaybookSeeds(input) {
         { relPath: "runbook/working-with-your-agent.md", content: workingWithYourAgent(input) },
         { relPath: "runbook/shipping-on-gcp.md", content: shippingOnGcp(input) },
         { relPath: "DECISIONS.md", content: decisionsLog(input, doctrine) },
+    ];
+}
+export function projectRecipeStarterSeeds(input) {
+    if (input.recipe !== "vite-static")
+        return [];
+    const manifest = {
+        name: input.projectSlug,
+        version: "1.0.0",
+        private: true,
+        type: "module",
+        scripts: {
+            dev: "vite",
+            build: "vite build",
+            preview: "vite preview",
+        },
+        devDependencies: {
+            vite: "8.2.0",
+        },
+    };
+    const lock = {
+        ...viteStaticPackageLock,
+        name: input.projectSlug,
+        packages: {
+            ...viteStaticPackageLock.packages,
+            "": {
+                ...viteStaticPackageLock.packages[""],
+                name: input.projectSlug,
+            },
+        },
+    };
+    return [
+        { relPath: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
+        { relPath: "package-lock.json", content: `${JSON.stringify(lock, null, 2)}\n` },
     ];
 }

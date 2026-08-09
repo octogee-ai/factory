@@ -161,6 +161,61 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     }
   });
 
+  it("keeps a seed group all-or-none when an existing package file is present", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(200, { path: "package-lock.json" }));
+
+    const { giteaWriteFilesIfAllAbsent } = await import("../lib/gitea.js");
+    await giteaWriteFilesIfAllAbsent(
+      "alice",
+      "my-game",
+      [
+        { path: "package.json", content: "new manifest" },
+        { path: "package-lock.json", content: "new lock" },
+      ],
+      "auto: seed project starter",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.method).toBe("GET");
+    }
+  });
+
+  it("batch-creates an all-absent seed group", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(404))
+      .mockResolvedValueOnce(res(201, {}));
+
+    const { giteaWriteFilesIfAllAbsent } = await import("../lib/gitea.js");
+    await giteaWriteFilesIfAllAbsent(
+      "alice",
+      "my-game",
+      [
+        { path: "package.json", content: "new manifest" },
+        { path: "package-lock.json", content: "new lock" },
+      ],
+      "auto: seed project starter",
+    );
+
+    const [, init] = fetchMock.mock.calls[2];
+    const body = JSON.parse(init.body as string);
+    expect(body.files).toEqual([
+      {
+        operation: "create",
+        path: "package.json",
+        content: Buffer.from("new manifest", "utf-8").toString("base64"),
+      },
+      {
+        operation: "create",
+        path: "package-lock.json",
+        content: Buffer.from("new lock", "utf-8").toString("base64"),
+      },
+    ]);
+  });
+
   it("giteaWriteFiles throws when the batch commit is rejected — seeds are not best-effort", async () => {
     fetchMock
       .mockResolvedValueOnce(res(404))

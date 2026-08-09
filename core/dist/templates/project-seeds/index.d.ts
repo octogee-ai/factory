@@ -9,5 +9,10 @@ export interface ProjectPlaybookSeedInput {
     recipe: ProjectRecipeId;
     today: string;
 }
+export interface ProjectRecipeStarterSeedInput {
+    projectSlug: string;
+    recipe: ProjectRecipeId;
+}
 export declare function notesWelcomeSeed(scopeName: string): PlaybookSeed;
 export declare function projectPlaybookSeeds(input: ProjectPlaybookSeedInput): PlaybookSeed[];
+export declare function projectRecipeStarterSeeds(input: ProjectRecipeStarterSeedInput): PlaybookSeed[];
