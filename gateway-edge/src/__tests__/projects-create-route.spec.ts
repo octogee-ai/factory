@@ -8,10 +8,13 @@ const h = vi.hoisted(() => ({
   user: { username: "mira" } as Record<string, unknown>,
   workspaceSlug: "mira" as string | undefined,
   isAdmin: false,
+  gatewayClass: "builder",
   existingProject: false,
   createProjectForActor: vi.fn(),
   projectSlugAvailability: vi.fn(),
   evaluate: vi.fn(),
+  readConnectorAccessToken: vi.fn(),
+  githubRepoApi: vi.fn(),
   logger: {
     error: vi.fn(),
   },
@@ -27,6 +30,16 @@ vi.mock("../lib/db.js", () => ({
   db: {
     doc: (path: string) => ({
       get: async () => {
+        if (path === "gateways/gw-builder") {
+          return {
+            exists: true,
+            data: () => ({
+              gatewayClass: h.gatewayClass,
+              ownerUid: "owner-1",
+              builderSlug: "mira",
+            }),
+          };
+        }
         if (path !== "workspaces/mira/projects/orbit") {
           throw new Error(`unexpected doc ${path}`);
         }
@@ -41,6 +54,21 @@ vi.mock("../lib/project-create-service.js", () => ({
   createProjectForActor: (...args: unknown[]) => h.createProjectForActor(...args),
   projectSlugAvailability: (slug: string) => h.projectSlugAvailability(slug),
 }));
+
+vi.mock("../lib/connector-tokens.js", async () => {
+  const actual = await vi.importActual<typeof import("../lib/connector-tokens.js")>(
+    "../lib/connector-tokens.js",
+  );
+  return {
+    ...actual,
+    readConnectorAccessToken: (...args: unknown[]) => h.readConnectorAccessToken(...args),
+  };
+});
+
+vi.mock("../lib/github.js", async () => {
+  const actual = await vi.importActual<typeof import("../lib/github.js")>("../lib/github.js");
+  return { ...actual, githubRepoApi: (...args: unknown[]) => h.githubRepoApi(...args) };
+});
 
 vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
@@ -73,9 +101,13 @@ function gatedApp() {
 
 beforeEach(() => {
   h.uid = "owner-1";
-  h.user = { username: "mira" };
+  h.user = {
+    username: "mira",
+    provisioning: { openclaw: { gatewayId: "gw-builder" } },
+  };
   h.workspaceSlug = "mira";
   h.isAdmin = false;
+  h.gatewayClass = "builder";
   h.existingProject = false;
   h.createProjectForActor.mockReset().mockResolvedValue({
     status: 200,
@@ -83,6 +115,8 @@ beforeEach(() => {
   });
   h.projectSlugAvailability.mockReset().mockReturnValue({ ok: true });
   h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
+  h.readConnectorAccessToken.mockReset().mockResolvedValue("gho-token");
+  h.githubRepoApi.mockReset().mockResolvedValue({ full_name: "octogee-ai/seed" });
   h.logger.error.mockReset();
 });
 
@@ -127,12 +161,13 @@ describe("POST /api/projects", () => {
       .expect(200, { success: true, slug: "orbit" });
 
     expect(h.createProjectForActor).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         uid: "owner-1",
-        userData: { username: "mira" },
+        userData: h.user,
         workspaceId: "mira",
+        proveRepoSource: expect.any(Function),
         source: "ui",
-      },
+      }),
       body,
     );
     expect(h.evaluate).not.toHaveBeenCalled();
@@ -153,7 +188,34 @@ describe("POST /api/projects", () => {
       expect.any(String),
     );
     expect(h.createProjectForActor).toHaveBeenCalledWith(
-      expect.objectContaining({ repoSourceAccess: "enabled" }),
+      expect.objectContaining({ repoSourceAccess: "enabled", proveRepoSource: expect.any(Function) }),
+      body,
+    );
+
+    const actor = h.createProjectForActor.mock.calls[0]?.[0] as {
+      proveRepoSource: (source: typeof body.repoSource) => Promise<unknown>;
+    };
+    await expect(actor.proveRepoSource(body.repoSource)).resolves.toBeNull();
+    expect(h.readConnectorAccessToken).toHaveBeenCalledWith("owner-1", "github", {
+      kind: "owner-runtime",
+      builderSlug: "mira",
+    });
+    expect(h.githubRepoApi).toHaveBeenCalledWith("octogee-ai", "seed", "gho-token");
+  });
+
+  it("hands a disabled decision to the service for a Barn workspace without evaluating the flag", async () => {
+    h.gatewayClass = "shared";
+    const body = {
+      name: "Orbit",
+      slug: "orbit",
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "seed" },
+    };
+
+    await request(gatedApp()).post("/api/projects").send(body).expect(200);
+
+    expect(h.evaluate).not.toHaveBeenCalled();
+    expect(h.createProjectForActor).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSourceAccess: "disabled" }),
       body,
     );
   });

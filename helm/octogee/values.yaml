@@ -5,6 +5,11 @@
 global:
   deploymentTargetId: ""
   deploymentProjectId: ""
+  customerHostingProjectId: ""
+  projectRunnerImage:
+    repository: ""
+    tag: latest
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   mattermost:
     # K8s Secret containing admin credentials for Mattermost.
     # This secret MUST exist before `helm upgrade`. Create it via:
@@ -283,6 +288,9 @@ networkPolicy:
   nodeLocalDnsCidr: 169.254.20.10/32
   controlPlaneCidr: ""
   privateServicesCidr: ""
+
+projectRunner:
+  apiServerEgressCidrs: []
 
 # ── llm-broker ───────────────────────────────────────────────────────────────
 # Dedicated, shell-less cluster service that holds the real platform model key

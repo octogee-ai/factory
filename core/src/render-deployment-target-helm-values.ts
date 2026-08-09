@@ -24,6 +24,11 @@ export function renderDeploymentTargetHelmValues(
   return `global:
   deploymentTargetId: ${quoted(settings.targetId)}
   deploymentProjectId: ${quoted(dataProject)}
+  customerHostingProjectId: ${quoted(settings.customerHostingProjectId)}
+  projectRunnerImage:
+    repository: ${quoted(`${registry}/octogee-project-runner`)}
+projectRunner:
+  apiServerEgressCidrs: ${JSON.stringify(settings.projectRunnerApiServerEgressCidrs)}
 networkPolicy:
   enforceDefaultDeny: ${networkBoundary !== undefined}
   controlPlaneCidr: ${quoted(networkBoundary?.controlPlaneCidr ?? "")}

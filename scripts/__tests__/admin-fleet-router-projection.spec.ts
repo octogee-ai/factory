@@ -18,7 +18,7 @@ describe("projectGatewaySummary — gatewayId", () => {
     const summary = projectGatewaySummary(
       gatewayDoc("bender"),
       [],
-      { profile: "operator" },
+      { profile: "builder" },
       now,
     );
     expect(summary.gatewayId).toBe("bender");

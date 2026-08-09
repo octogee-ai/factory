@@ -25,8 +25,9 @@ const BUILT_IMAGES = {
   "glm-controller": digest("3"),
   "octogee-api": digest("4"),
   "octogee-gateway": digest("5"),
-  "octogee-gateway-operator": digest("6"),
+  "octogee-gateway-builder": digest("6"),
   "octogee-ops-agent": digest("7"),
+  "octogee-project-runner": digest("8"),
 };
 
 function tarFile(name: string, contents: string): Uint8Array {
@@ -115,20 +116,26 @@ describe("release digest manifest — generator/authority contract", () => {
     expect(Object.keys(resolved.surfaces.gateway).sort()).toEqual([
       "gateway-edge",
       "octogee-gateway",
-      "octogee-gateway-operator",
+      "octogee-gateway-builder",
     ]);
     expect(Object.keys(resolved.surfaces.platform).sort()).toEqual([
       "artifact-worker",
       "glm-controller",
       "octogee-api",
       "octogee-ops-agent",
+      "octogee-project-runner",
     ]);
   });
 
-  it("accepts the manifest shape published for the releases now serving TEST and PROD", async () => {
+  it("refuses a pre-RC v1 manifest by naming the gateway image it lacks", async () => {
     // Byte-shape of release-digest-manifest:c797802e2… — the manifest behind
-    // the release running in TEST. A contract the live fleet cannot be
-    // re-cut or promoted from is broken by definition.
+    // the release running in TEST. The refusal is about absent bytes, not a
+    // version number: octogee-gateway-builder is the renamed
+    // octogee-gateway-operator, and those images were never pushed under the
+    // new package name, so a v1 manifest cannot supply the digest the gateway
+    // release needs. Everything else about a v1 manifest resolves fine.
+    // Operational consequence: the first PROD promotion after this ships must
+    // come from a release cut of this source, not a carried-over v1 cut.
     serveManifest({
       schemaVersion: 1,
       sourceSha,
@@ -149,8 +156,8 @@ describe("release digest manifest — generator/authority contract", () => {
       },
     });
 
-    await expect(authority().resolveManifest(sourceSha)).resolves.toMatchObject({
-      sourceSha,
-    });
+    await expect(authority().resolveManifest(sourceSha)).rejects.toThrow(
+      "release digest manifest is missing the gateway release images: octogee-gateway-builder",
+    );
   });
 });

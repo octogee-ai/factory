@@ -9,12 +9,14 @@ import {
   buildFleetHealthResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
+  customerEnsureRetryReady,
   cancelRemovedEviction,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   evictLocalCustomer,
   evictLocalCustomerIfStillUndesired,
   gatewayServiceName,
+  finalizeConvergedMount,
   settleConvergence,
   selectStableContentStale,
   getEvictObservedSlugs,
@@ -126,6 +128,64 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
   });
 });
 
+describe("finalizeConvergedMount — the durable mount boundary", () => {
+  it("does not stamp or mark a customer mounted while a project checkout is pending", async () => {
+    const stampMounted = vi.fn(async () => undefined);
+    const writeMountMarker = vi.fn();
+    const hooks = {
+      recordApplied: vi.fn(),
+      rememberRetry: vi.fn(),
+      forgetRetry: vi.fn(),
+    };
+
+    await expect(finalizeConvergedMount({
+      now: 1_000,
+      slug: "alice",
+      uid: "uid-alice",
+      desiredFingerprint: "fp1",
+      prior: undefined,
+      result: { pendingProjectClones: ["camp"] },
+      hooks,
+      stampMounted,
+      writeMountMarker,
+    })).rejects.toThrow(/camp/);
+
+    expect(hooks.rememberRetry).toHaveBeenCalledOnce();
+    expect(stampMounted).not.toHaveBeenCalled();
+    expect(writeMountMarker).not.toHaveBeenCalled();
+  });
+
+  it("settles convergence before stamping and writing the mount marker", async () => {
+    const events: string[] = [];
+    const hooks = {
+      recordApplied: vi.fn(() => events.push("applied")),
+      rememberRetry: vi.fn(),
+      forgetRetry: vi.fn(() => events.push("retry-forgotten")),
+    };
+
+    await finalizeConvergedMount({
+      now: 1_000,
+      slug: "alice",
+      uid: "uid-alice",
+      desiredFingerprint: "fp1",
+      prior: undefined,
+      result: { pendingProjectClones: [] },
+      hooks,
+      stampMounted: vi.fn(async () => {
+        events.push("mounted-stamped");
+      }),
+      writeMountMarker: vi.fn(() => events.push("mount-marker")),
+    });
+
+    expect(events).toEqual([
+      "retry-forgotten",
+      "applied",
+      "mounted-stamped",
+      "mount-marker",
+    ]);
+  });
+});
+
 describe("selectStableContentStale", () => {
   it("coalesces intermediate project provisioning fingerprints into one final re-ensure", () => {
     const pending = new Map<string, string>();
@@ -182,6 +242,40 @@ describe("cloneRetryReady — holds a stranded slug off the hot path between att
   it("converges IMMEDIATELY on genuine drift — a new project must never wait out a backoff earned by an unrelated stranded one", () => {
     const prior = { attempts: 5, nextAt: 9_000_000, fingerprint: "fp1" };
     expect(cloneRetryReady(prior, "fp2", 1_000)).toBe(true);
+  });
+});
+
+describe("customerEnsureRetryReady", () => {
+  const pendingClone = { attempts: 1, nextAt: 5_000, fingerprint: "fp1" };
+
+  it("holds a cold or unmounted customer until its project-clone backoff expires", () => {
+    expect(customerEnsureRetryReady({
+      cloneRetry: pendingClone,
+      desiredFingerprint: "fp1",
+      now: 4_999,
+      permanentConfigPatchRetry: undefined,
+      desiredEnsureFingerprint: "fleet-fp1",
+    })).toBe(false);
+  });
+
+  it("bypasses clone backoff immediately when the desired customer fingerprint changes", () => {
+    expect(customerEnsureRetryReady({
+      cloneRetry: pendingClone,
+      desiredFingerprint: "fp2",
+      now: 1_001,
+      permanentConfigPatchRetry: undefined,
+      desiredEnsureFingerprint: "fleet-fp2",
+    })).toBe(true);
+  });
+
+  it("still holds the ensure lane for an unchanged permanent config-patch failure", () => {
+    expect(customerEnsureRetryReady({
+      cloneRetry: undefined,
+      desiredFingerprint: "fp1",
+      now: 5_000,
+      permanentConfigPatchRetry: { fingerprint: "fleet-fp1" },
+      desiredEnsureFingerprint: "fleet-fp1",
+    })).toBe(false);
   });
 });
 
@@ -673,7 +767,7 @@ describe("resolveFleetCapabilities — observability vs provisioning seam", () =
     ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
   });
 
-  it("brokered operator gateway: provisions local mounts while platformState stays false", () => {
+  it("brokered Builder gateway: provisions local mounts while platformState stays false", () => {
     expect(
       resolveFleetCapabilities({
         platformState: false,

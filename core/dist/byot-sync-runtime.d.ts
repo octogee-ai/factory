@@ -6,7 +6,6 @@ import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
 export declare function applyCoachModelPatch(input: CoachModelInput | null, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
-    isOperatorGateway?: () => boolean;
 }): Promise<boolean>;
 export declare function applyCoachToolsConvergence(slug: string, houseOnly: boolean, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
@@ -52,7 +51,7 @@ export declare function restoreOauthStoreForSlug(slug: string, deps?: {
     logFn?: (m: string) => void;
 }): Promise<OauthStoreRestoreResult>;
 export interface SyncByotForCustomerDeps {
-    isOperatorGateway?: () => boolean;
+    isBuilderGateway?: () => boolean;
     isSharedGateway?: () => boolean;
     usesLlmBrokerToken?: () => boolean;
     logFn?: (m: string) => void;
@@ -65,6 +64,7 @@ export interface SyncByotForCustomerDeps {
     requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
     triggerSecretsReload?: typeof triggerSecretsReload;
     materializePlatformBrokerSurfaces?: (slug: string) => Promise<boolean> | boolean;
+    purgeCustomerOauthRuntime?: typeof purgeCustomerOauthRuntime;
     applyAgentModelOverrides?: typeof applyAgentModelOverrides;
     refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
     hasPendingPlatformCatalogRestart?: () => boolean;
@@ -74,6 +74,23 @@ export interface SyncByotForCustomerDeps {
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
 type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
 export declare function agentIdsForSlug(slug: string, config: unknown): string[];
+export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
+export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {
+    forceSafeAll?: boolean;
+}): Record<string, unknown>;
+type PurgeCustomerOauthRuntimeDeps = {
+    config?: unknown;
+    openclawDir?: string;
+    homeDir?: string;
+    applyConfigPatch?: typeof applyConfigPatch;
+    rpc?: SessionPolicyRpc;
+    logFn?: (message: string) => void;
+    forceSafeAll?: boolean;
+};
+export declare function purgeCustomerOauthRuntime(slug: string, safeModelRef: string, deps?: PurgeCustomerOauthRuntimeDeps): Promise<{
+    changed: boolean;
+    resetCount: number;
+}>;
 type SessionPolicyRpc = Pick<GatewayRpcClient, "sessionsList" | "sessionsReset" | "close">;
 export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
     agentDir?: string;
@@ -83,7 +100,7 @@ export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
     refreshed: boolean;
     resetCount: number;
 }>;
-export declare function gateSharedByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
+export declare function gateCustomerByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
     desired: DesiredByotState;
     suppressed: boolean;
 };

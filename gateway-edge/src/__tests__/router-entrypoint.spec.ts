@@ -11,7 +11,6 @@ describe("gateway-router entrypoint", () => {
       ...process.env,
       NODE_ENV: "production",
       GATEWAY_EDGE_MODE: "router",
-      GATEWAY_ROUTER_PREVIEW_HOST: "preview-test.octogee.com",
       K8S_NAMESPACE: "octogee-test",
       PORT: "0",
     };

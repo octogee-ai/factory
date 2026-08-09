@@ -84,7 +84,7 @@ export const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig = {
   offerVersion: 3,
   durationDays: 7,
   defaultPersonalTier: "personal",
-  defaultBuilderTier: null,
+  defaultBuilderTier: "hobby",
   budgetPolicy: DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
 };
 
@@ -120,15 +120,6 @@ function validConfigEditor(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
-function validTrialBudgetPolicy(
-  raw: Record<string, unknown>,
-  budgetPolicy: SignupOfferBudgetPolicy | null,
-): boolean {
-  if (raw.budgetPolicy !== undefined && budgetPolicy === null) return false;
-  if (budgetPolicy === null) return true;
-  return raw.durationDays === 7 && raw.defaultBuilderTier === null;
-}
-
 export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
@@ -139,7 +130,7 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     !validTrialOfferIdentity(raw) ||
     !validTrialOfferTerms(raw) ||
     !validConfigEditor(raw.updatedBy) ||
-    !validTrialBudgetPolicy(raw, budgetPolicy)
+    (raw.budgetPolicy !== undefined && budgetPolicy === null)
   ) {
     return null;
   }

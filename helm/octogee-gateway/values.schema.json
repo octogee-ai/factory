@@ -20,13 +20,13 @@
     },
     "ownerUid": {
       "type": "string",
-      "description": "Owner-bound disposable builder/operator UID rendered into immutable pod metadata."
+      "description": "Owner-bound disposable Builder UID rendered into immutable pod metadata."
     },
     "builderSlug": {
       "type": "string",
       "pattern": "^(?:|[a-z0-9]+(?:-[a-z0-9]+)*)$",
       "maxLength": 24,
-      "description": "Owner-bound disposable builder/operator slug. Empty on shared gateways; when set, non-shared gateways restore openclaw.json from the builder's system_config repo."
+      "description": "Owner-bound disposable Builder slug. Empty on shared gateways; when set, Builder gateways restore openclaw.json from the builder's system_config repo."
     },
     "imageTag": {
       "type": "string",
@@ -34,17 +34,17 @@
     },
     "profile": {
       "type": "string",
-      "enum": ["", "standard", "operator"],
-      "description": "Legacy image/capability profile. Empty + 'standard' are equivalent standard image behavior; 'operator' selects the operator image. New callers should set gatewayClass + imageProfile."
+      "enum": ["", "standard", "builder"],
+      "description": "Legacy image/capability profile. New callers should set gatewayClass + imageProfile."
     },
     "gatewayClass": {
       "type": "string",
-      "enum": ["", "shared", "builder", "operator"],
-      "description": "Product/security class. Empty derives from legacy profile. shared=multi-builder exec-off, builder=one-builder exec-on with shell feature gate, operator=same runtime trust boundary plus operator image/BYO GCP tooling."
+      "enum": ["", "shared", "builder"],
+      "description": "Product/security class. shared=multi-builder Barn; builder=owner-bound disposable Builder gateway."
     },
     "imageProfile": {
       "type": "string",
-      "enum": ["", "standard", "operator"],
+      "enum": ["", "standard", "builder"],
       "description": "Installed image/tooling profile. Empty derives from gatewayClass/legacy profile."
     },
     "replicas": {
@@ -66,11 +66,10 @@
     "classDefaults": {
       "type": "object",
       "description": "Gateway class → default tier mapping. Used when sizingTier is unset.",
-      "required": ["shared", "builder", "operator"],
+      "required": ["shared", "builder"],
       "properties": {
         "shared": { "type": "string", "enum": ["xs", "s", "m", "l"] },
-        "builder": { "type": "string", "enum": ["xs", "s", "m", "l"] },
-        "operator": { "type": "string", "enum": ["xs", "s", "m", "l"] }
+        "builder": { "type": "string", "enum": ["xs", "s", "m", "l"] }
       },
       "additionalProperties": { "type": "string" }
     },
@@ -80,7 +79,7 @@
       "required": ["standard"],
       "properties": {
         "standard": { "type": "string", "enum": ["xs", "s", "m", "l"] },
-        "operator": { "type": "string", "enum": ["xs", "s", "m", "l"] }
+        "builder": { "type": "string", "enum": ["xs", "s", "m", "l"] }
       },
       "additionalProperties": { "type": "string" }
     },
@@ -124,7 +123,7 @@
       "type": "object",
       "additionalProperties": true
     },
-    "operatorAccess": {
+    "builderAccess": {
       "type": "object",
       "properties": {
         "shellsEnabled": { "type": "boolean" },
@@ -132,7 +131,7 @@
         "platformMetadataEgress": { "type": "boolean", "description": "Platform-builder D7 carve-out: open egress to the GKE metadata server (169.254.169.254) for this gateway's read-only WI GSA. Default off; the fleet-wide gateway-egress policy blocks metadata for every other gateway." },
         "kubeApiServerEgressCidrs": {
           "type": "array",
-          "description": "Operator gateway TokenReview carve-out: explicit Kubernetes API server endpoint /32 CIDR(s) from the default/kubernetes EndpointSlice. Default empty/off.",
+          "description": "Builder gateway TokenReview carve-out: explicit Kubernetes API server endpoint /32 CIDR(s) from the default/kubernetes EndpointSlice. Default empty/off.",
           "items": {
             "type": "string",
             "pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\/32$"

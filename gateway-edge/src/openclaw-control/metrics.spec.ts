@@ -10,7 +10,7 @@ describe("OpenClaw Dashboard metrics", () => {
     const identity = {
       gatewayId: "bender",
       revisionId: "bender-r7",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
     };
     metrics.http(identity, "asset", "ok", 0.01);
     metrics.ws(identity, "open", "ok");

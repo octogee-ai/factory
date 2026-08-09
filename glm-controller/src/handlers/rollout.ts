@@ -153,6 +153,14 @@ async function runReleaseRoll(
 ): Promise<RollOutcome> {
   const recorded = await awaitTargetRelease(deps, target, progress);
   if (!recorded.success) return recorded;
+  if (!recorded.payload.gatewayEdgeImage) {
+    return {
+      success: false,
+      error:
+        `gateway ${target.gatewayId} release ${target.targetRelease} is missing its ` +
+        "immutable gateway-edge image reference",
+    };
+  }
   const stateMigration = decideRollStateMigration({
     sourceOpenclawVersion: await deps.readGatewayOpenclawVersion(target.gatewayId),
     targetOpenclawVersion: openclawVersionFromGatewayImageTag(recorded.payload.imageTag),

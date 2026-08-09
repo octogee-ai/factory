@@ -48,6 +48,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "url";
+import { parseAgentId } from "../shared/dist/types/identity.js";
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so this
 // resolver materializes byok-* keys through the octogee-api broker
@@ -75,13 +76,12 @@ export const KSA_TOKEN_PATH =
 // OpenClaw's exec-provider contract is batch-fatal: any entry in the errors{}
 // response makes it discard the WHOLE resolution batch and cold every owner on
 // this provider. A single transient broker blip therefore costs every agent its
-// credentials, so each id gets one retry — but the whole per-id budget must fit
-// inside the provider's 5000ms timeoutMs, or the gateway kills the resolver
-// mid-retry and loses the batch anyway.
+// credentials, so each id gets one retry and broker fan-out stays bounded.
 export const BROKER_ATTEMPTS = 2;
 export const BROKER_ATTEMPT_TIMEOUT_MS = 2200;
 export const BROKER_RETRY_BACKOFF_MS = 250;
 export const BROKER_TOTAL_BUDGET_MS = 4800;
+export const BROKER_CONCURRENCY = 12;
 
 const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
@@ -118,9 +118,18 @@ function parseByokApiKeyId(id) {
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
-  /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 const AGENT_EMBEDDING_TOKEN_ID_RE =
-  /^agent-embedding-token-openai-(?<agentId>octogee-(?<slug>[a-z0-9][a-z0-9-]{0,62})-coach)$/;
+  /^agent-embedding-token-openai-(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
+
+function parseAgentScopedId(id, pattern) {
+  const match = id.match(pattern);
+  const agentId = match?.groups?.agentId;
+  if (!agentId) return null;
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown") return null;
+  return { match, agentId, slug: parsed.username };
+}
 
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
@@ -128,17 +137,19 @@ const AGENT_EMBEDDING_TOKEN_ID_RE =
  *  new customer becomes visible on the next spawn. No TOCTOU concern
  *  within a single resolver invocation. Same env var as the provisioner's
  *  AGENTS_DIR (scripts/lib/config.ts:18-19). */
-function loadKnownSlugs() {
+function loadKnownAgentRoster() {
   try {
     const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });
     const slugs = new Set();
+    const agentIds = new Set();
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      // Agent dir naming: octogee-{slug}-coach (provisioner contract).
-      const m = e.name.match(/^octogee-(.+)-coach$/);
-      if (m && m[1]) slugs.add(m[1]);
+      const parsed = parseAgentId(e.name);
+      if (parsed.kind === "unknown") continue;
+      slugs.add(parsed.username);
+      agentIds.add(e.name);
     }
-    return slugs;
+    return { slugs, agentIds };
   } catch (err) {
     process.stderr.write(
       `[secret-resolver] could not enumerate AGENTS_DIR (${AGENTS_DIR}): ${err?.message || err}\n`,
@@ -150,11 +161,11 @@ function loadKnownSlugs() {
     // is BYOT keys won't resolve until the deploy is fixed; that's a loud,
     // visible failure (every BYOT call returns "Refused by resolver") which
     // is exactly the signal we want.
-    return new Set();
+    return { slugs: new Set(), agentIds: new Set() };
   }
 }
 
-const KNOWN_SLUGS = loadKnownSlugs();
+const KNOWN_AGENT_ROSTER = loadKnownAgentRoster();
 
 function audit(line) {
   process.stderr.write(`[secret-resolver/audit] ${line}\n`);
@@ -165,26 +176,26 @@ const VALID_ID_GRAMMAR_MESSAGE =
 
 function scopedSlugForId(id) {
   const byok = parseByokApiKeyId(id);
-  if (byok) return byok.slug;
-  const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);
-  if (agentToken?.groups) return agentToken.groups.slug;
-  const embeddingToken = id.match(AGENT_EMBEDDING_TOKEN_ID_RE);
-  if (embeddingToken?.groups) return embeddingToken.groups.slug;
+  if (byok) return { slug: byok.slug };
+  const agentToken = parseAgentScopedId(id, AGENT_MODEL_TOKEN_ID_RE);
+  if (agentToken) return { slug: agentToken.slug, agentId: agentToken.agentId };
+  const embeddingToken = parseAgentScopedId(id, AGENT_EMBEDDING_TOKEN_ID_RE);
+  if (embeddingToken) return { slug: embeddingToken.slug, agentId: embeddingToken.agentId };
   return null;
 }
 
-/** Validate a single id against grammar + known-slug allowlist. Returns
- *  null on success, or an error message string to surface in `errors[id]`.
- *  KNOWN_SLUGS is always a Set — `loadKnownSlugs` returns an empty Set on
- *  read failure (fail-closed), never null, so the slug check always runs. */
+/** Validate a single id against grammar and the gateway's on-disk agent roster. */
 function validateId(id) {
   if (typeof id !== "string" || id.length === 0 || id.length > 256) {
     return `id is not a non-empty string ≤256 chars`;
   }
-  const slug = scopedSlugForId(id);
-  if (!slug) return VALID_ID_GRAMMAR_MESSAGE;
-  if (!KNOWN_SLUGS.has(slug)) {
-    return `slug "${slug}" has no provisioned agent dir`;
+  const scope = scopedSlugForId(id);
+  if (!scope) return VALID_ID_GRAMMAR_MESSAGE;
+  if (!KNOWN_AGENT_ROSTER.slugs.has(scope.slug)) {
+    return `slug "${scope.slug}" has no provisioned agent dir`;
+  }
+  if (scope.agentId && !KNOWN_AGENT_ROSTER.agentIds.has(scope.agentId)) {
+    return `agent "${scope.agentId}" is not provisioned on this gateway`;
   }
   return null;
 }
@@ -309,6 +320,33 @@ export async function resolveOne(id, deps = {}) {
   }
 }
 
+export async function resolveBatch(ids, resolve = resolveOne) {
+  const values = {};
+  const errors = {};
+  let next = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = next++;
+      if (index >= ids.length) return;
+      const id = ids[index];
+      try {
+        values[id] = await resolve(id);
+      } catch (err) {
+        errors[id] = { message: err?.message || String(err) };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(BROKER_CONCURRENCY, ids.length) },
+      () => worker(),
+    ),
+  );
+  return { values, errors };
+}
+
 /** Cap on per-call audit-log lines for rejects. A flood of rejects
  *  (probing for slugs, malformed ids) shouldn't be able to run up the
  *  Cloud Logging bill or hide a single legitimate access in a haystack
@@ -347,16 +385,9 @@ async function main() {
     audit(`reject-summary suppressed=${rejectTotal - MAX_AUDIT_REJECTS_PER_CALL} (cap=${MAX_AUDIT_REJECTS_PER_CALL})`);
   }
 
-  // Resolve concurrently — each ref is an independent API call.
-  await Promise.all(
-    accepted.map(async (id) => {
-      try {
-        values[id] = await resolveOne(id);
-      } catch (err) {
-        errors[id] = { message: err?.message || String(err) };
-      }
-    }),
-  );
+  const resolved = await resolveBatch(accepted);
+  Object.assign(values, resolved.values);
+  Object.assign(errors, resolved.errors);
 
   const response = { protocolVersion: 1, values };
   if (Object.keys(errors).length > 0) response.errors = errors;

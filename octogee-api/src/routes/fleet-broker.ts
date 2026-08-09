@@ -79,6 +79,10 @@ import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
+import {
+  createOwnerWorkspaceTurnVerifier,
+  type OwnerWorkspaceTurnVerifier,
+} from "../lib/openclaw-owner-turn.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -181,6 +185,7 @@ interface FleetBrokerRouteDeps {
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
+  verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   onSignupOfferBudgetInterruption?: (input: {
     uid: string;
@@ -912,6 +917,8 @@ async function requireAssignedAgentWorkspace(
   req: Request,
   res: Response,
 ): Promise<{
+  bound: GatewayBinding;
+  agentId: string;
   uid: string;
   slug: string;
   data: Record<string, unknown>;
@@ -939,7 +946,7 @@ async function requireAssignedAgentWorkspace(
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { uid, slug, data };
+  return { bound, agentId, uid, slug, data };
 }
 
 async function runBrokered(
@@ -1242,12 +1249,37 @@ type ResolvedFleetBrokerRouteDeps = {
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
+  verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier;
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   requestBuilderActivation: (
     input: BuilderRuntimeDemandRequest,
   ) => ReturnType<typeof requestBuilderActivationLease>;
   now: () => number;
 };
+
+function ownerWorkspaceTurnVerifier(
+  opts: { db: Firestore } & FleetBrokerRouteDeps,
+): OwnerWorkspaceTurnVerifier {
+  return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db);
+}
+
+async function verifyOwnerWorkspaceTurnFailClosed(
+  verify: OwnerWorkspaceTurnVerifier,
+  input: Parameters<OwnerWorkspaceTurnVerifier>[0],
+  operation: string,
+): Promise<boolean> {
+  try {
+    return await verify(input);
+  } catch (error) {
+    logger.error("[fleet-broker] owner turn verification failed", {
+      operation,
+      gatewayId: input.gatewayId,
+      agentId: input.agentId,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return false;
+  }
+}
 
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
@@ -1276,6 +1308,7 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
+    verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
       opts.onSignupOfferBudgetInterruption,
@@ -1950,11 +1983,9 @@ function installGatewayOpsRoutes(
   });
 }
 
-// A chat-broker caller is validated in three layers, all lane-uniform:
+// A chat-broker caller is validated in three layers:
 // gateway binding (boundGateway) -> workspace assigned to that gateway ->
-// agent id parses AND belongs to that workspace with a minted PAT
-// (resolveChatIdentity — the secret's existence IS the capability, so a
-// disabled project agent gets a refusal, never a broader token).
+// exact workspace-owner turn proof -> Builder PAT resolution.
 function validChatBrokerSiteUrl(value: unknown): string | null {
   return typeof value === "string" && /^https?:\/\//.test(value) ? value : null;
 }
@@ -1976,6 +2007,24 @@ function respondChatIdentityError(res: Response, error: unknown): boolean {
   if (!forbiddenChatIdentityCode(code)) return false;
   res.status(403).json({ error: "forbidden", code });
   return true;
+}
+
+async function assignedChatOwnerTurnAllowed(input: {
+  deps: ResolvedFleetBrokerRouteDeps;
+  req: Request;
+  gatewayId: string;
+  uid: string;
+  data: Record<string, unknown> | null;
+  agentId: string;
+}): Promise<boolean> {
+  if (!input.data || !agentBelongsToAssignedWorkspace(input.data, input.agentId)) return false;
+  return verifyOwnerWorkspaceTurnFailClosed(input.deps.verifyOwnerWorkspaceTurn, {
+    req: input.req,
+    gatewayId: input.gatewayId,
+    agentId: input.agentId,
+    ownerUid: input.uid,
+    assignedData: input.data,
+  }, "agent-chat");
 }
 
 async function requireAssignedChatIdentity(
@@ -2003,6 +2052,18 @@ async function requireAssignedChatIdentity(
   }
   const uid = await findAssignedUidBySlug(deps.db, bound.gatewayId, slug);
   if (!uid) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  const data = await isAssignedToGateway(deps.db, bound.gatewayId, uid);
+  if (!await assignedChatOwnerTurnAllowed({
+    deps,
+    req,
+    gatewayId: bound.gatewayId,
+    uid,
+    data,
+    agentId,
+  })) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
@@ -2317,6 +2378,16 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   router.post("/agent/set-coach-identity", async (req, res) => {
     const assigned = await requireAssignedAgentWorkspace(db, req, res);
     if (!assigned) return;
+    if (!await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {
+      req,
+      gatewayId: assigned.bound.gatewayId,
+      agentId: assigned.agentId,
+      ownerUid: assigned.uid,
+      assignedData: assigned.data,
+    }, "set-coach-identity")) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
     const body = objectBody(req);
 
     const patch: { name?: string; persona?: string; avatarPng?: Buffer } = {};

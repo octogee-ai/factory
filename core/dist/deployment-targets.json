@@ -14,9 +14,14 @@
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee",
             "hostingProjectId": "octogee",
+            "customerHostingProjectId": "octogee-customer-hosting",
             "region": "us-central1",
             "clusterName": "octogee-gateway",
             "namespace": "octogee",
+            "projectRunnerApiServerEgressCidrs": [
+                "10.128.0.2/32",
+                "34.118.224.1/32"
+            ],
             "artifactRegistry": {
                 "projectId": "octogee",
                 "location": "us-central1",
@@ -63,9 +68,14 @@
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-test",
             "hostingProjectId": "octogee-test",
+            "customerHostingProjectId": "octogee-customer-hosting-test",
             "region": "us-central1",
             "clusterName": "octogee-gateway",
             "namespace": "octogee-test",
+            "projectRunnerApiServerEgressCidrs": [
+                "10.128.0.2/32",
+                "34.118.224.1/32"
+            ],
             "artifactRegistry": {
                 "projectId": "octogee",
                 "location": "us-central1",
@@ -112,9 +122,14 @@
             "clusterProjectId": "octogee",
             "firebaseProjectId": "octogee-build-week",
             "hostingProjectId": "octogee-build-week",
+            "customerHostingProjectId": "octogee-customer-hosting-bw",
             "region": "us-central1",
             "clusterName": "octogee-gateway",
             "namespace": "octogee-build-week",
+            "projectRunnerApiServerEgressCidrs": [
+                "10.128.0.2/32",
+                "34.118.224.1/32"
+            ],
             "artifactRegistry": {
                 "projectId": "octogee",
                 "location": "us-central1",

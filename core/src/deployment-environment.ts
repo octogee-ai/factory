@@ -52,9 +52,11 @@ interface DeploymentTargetDocument {
   clusterProjectId: string;
   firebaseProjectId: string;
   hostingProjectId: string;
+  customerHostingProjectId: string;
   region: string;
   clusterName: string;
   namespace: string;
+  projectRunnerApiServerEgressCidrs: string[];
   artifactRegistry: ArtifactRegistryDocument;
   cloudSql: CloudSqlDocument;
   kms: KmsDocument;
@@ -86,10 +88,12 @@ export interface DeploymentEnvironmentSettings {
   clusterProjectId: string;
   firebaseProjectId: string;
   hostingProjectId: string;
+  customerHostingProjectId: string;
   region: string;
   clusterName: string;
   kubeContext: string;
   namespace: string;
+  projectRunnerApiServerEgressCidrs: string[];
   artifactRegistryProjectId: string;
   artifactRegistryLocation: string;
   artifactRegistryName: string;
@@ -139,6 +143,7 @@ const TARGET_STRING_FIELDS = [
   "clusterProjectId",
   "firebaseProjectId",
   "hostingProjectId",
+  "customerHostingProjectId",
   "region",
   "clusterName",
   "namespace",
@@ -180,6 +185,23 @@ function stringFields(
 ): void {
   for (const field of fields) {
     stringField(value, field, label);
+  }
+}
+
+function apiServerEgressCidrs(value: unknown, label: string): void {
+  const invalid = () => new Error(`${label} must contain unique canonical IPv4 /32 CIDRs`);
+  if (!Array.isArray(value) || value.length === 0 || new Set(value).size !== value.length) {
+    throw invalid();
+  }
+  for (const cidr of value) {
+    if (typeof cidr !== "string") throw invalid();
+    const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/32$/u.exec(cidr);
+    if (!match) throw invalid();
+    const octets = match.slice(1, 5).map(Number);
+    if (octets.some((part) => part > 255) || octets.every((part) => part === 0)) {
+      throw invalid();
+    }
+    if (`${octets.join(".")}/32` !== cidr) throw invalid();
   }
 }
 
@@ -258,6 +280,32 @@ function validateIngressIdentityUniqueness(targets: Record<string, unknown>): vo
   }
 }
 
+function validateCustomerHostingProjects(targets: Record<string, unknown>): void {
+  const reserved = new Set<string>();
+  for (const value of Object.values(targets)) {
+    const target = value as Record<string, unknown>;
+    for (const field of ["firebaseProjectId", "hostingProjectId", "clusterProjectId"] as const) {
+      reserved.add(target[field] as string);
+    }
+  }
+  const owners = new Map<string, string>();
+  for (const [targetId, value] of Object.entries(targets)) {
+    const target = value as Record<string, unknown>;
+    const projectId = target.customerHostingProjectId as string;
+    if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(projectId)) {
+      throw new Error(`deployment target ${targetId}.customerHostingProjectId is invalid`);
+    }
+    if (reserved.has(projectId)) {
+      throw new Error(`deployment target ${targetId}.customerHostingProjectId must be isolated`);
+    }
+    const owner = owners.get(projectId);
+    if (owner) {
+      throw new Error(`deployment target ${targetId}.customerHostingProjectId is already used by ${owner}`);
+    }
+    owners.set(projectId, targetId);
+  }
+}
+
 export function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument {
   const manifest = record(document, "deployment targets manifest");
   if (manifest.schemaVersion !== 1) {
@@ -290,6 +338,10 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
       throw new Error(`deployment target ${targetId}.lifecycle is invalid: ${lifecycle}`);
     }
     stringFields(target, TARGET_STRING_FIELDS, `deployment target ${targetId}`);
+    apiServerEgressCidrs(
+      target.projectRunnerApiServerEgressCidrs,
+      `deployment target ${targetId}.projectRunnerApiServerEgressCidrs`,
+    );
     stringFields(
       record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`),
       ["projectId", "location", "repository"],
@@ -339,6 +391,7 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
 
   validatePromotionSources(targets);
   validateIngressIdentityUniqueness(targets);
+  validateCustomerHostingProjects(targets);
 
   for (const environment of DEPLOYMENT_ENVIRONMENTS) {
     const targetId = activeTargets[environment] as string;
@@ -370,10 +423,12 @@ function settings(
     clusterProjectId: target.clusterProjectId,
     firebaseProjectId: target.firebaseProjectId,
     hostingProjectId: target.hostingProjectId,
+    customerHostingProjectId: target.customerHostingProjectId,
     region: target.region,
     clusterName: target.clusterName,
     kubeContext: `gke_${target.clusterProjectId}_${target.region}_${target.clusterName}`,
     namespace: target.namespace,
+    projectRunnerApiServerEgressCidrs: [...target.projectRunnerApiServerEgressCidrs],
     artifactRegistryProjectId: target.artifactRegistry.projectId,
     artifactRegistryLocation: target.artifactRegistry.location,
     artifactRegistryName: target.artifactRegistry.repository,

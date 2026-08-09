@@ -291,12 +291,12 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
   const sourceSha = "a".repeat(40);
   const manifestDigest = `sha256:${"b".repeat(64)}`;
   const gatewayDigest = `sha256:${"c".repeat(64)}`;
-  const operatorDigest = `sha256:${"d".repeat(64)}`;
+  const builderDigest = `sha256:${"d".repeat(64)}`;
   const edgeDigest = `sha256:${"e".repeat(64)}`;
   const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     sourceSha,
     openclawVersion: "2026.7.1",
     repository,
@@ -304,13 +304,14 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       gateway: {
         "gateway-edge": edgeDigest,
         "octogee-gateway": gatewayDigest,
-        "octogee-gateway-operator": operatorDigest,
+        "octogee-gateway-builder": builderDigest,
       },
       platform: {
         "artifact-worker": `sha256:${"1".repeat(64)}`,
         "glm-controller": `sha256:${"2".repeat(64)}`,
         "octogee-api": `sha256:${"3".repeat(64)}`,
         "octogee-ops-agent": `sha256:${"4".repeat(64)}`,
+        "octogee-project-runner": `sha256:${"5".repeat(64)}`,
       },
     },
   };
@@ -346,9 +347,9 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       manifestDigest,
       surfaces: { gateway: { "octogee-gateway": gatewayDigest } },
     });
-    // 7 images each get a `:<short-sha>` alias; the 3 gateway-surface images
+    // 8 images each get a `:<short-sha>` alias; the 3 gateway-surface images
     // get an additional `:<short-sha>-oc<version>` alias.
-    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(10);
+    expect(authority.aliasesFor({ ...manifest, manifestDigest })).toHaveLength(11);
     await expect(authority.ensureAliases(aliases)).resolves.toEqual([{
       alias: aliases[0].alias,
       status: "already-applied",
@@ -375,23 +376,53 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     });
   });
 
-  it("rejects a manifest whose schema the generator no longer emits", async () => {
-    // A schema-3 manifest is still tagged in Artifact Registry
-    // (…-schema3-backup) and carries an `octogee-project-runner` surface no
-    // build produces. Resolving one would cut a release against images that
-    // cannot exist, so the boundary refuses anything off-contract.
+  it("resolves a manifest an older generator wrote, aliasing only the images it carries", async () => {
     const authority = createCentralReleaseAuthority({
       project: "octogee",
       location: "us-central1",
       repository: "octogee",
     });
-    const offContract = structuredClone(manifest) as typeof manifest & {
+    const older = structuredClone(manifest) as typeof manifest & {
       schemaVersion: number;
       surfaces: { platform: Record<string, string> };
     };
-    offContract.schemaVersion = 3;
-    offContract.surfaces.platform["octogee-project-runner"] = `sha256:${"5".repeat(64)}`;
-    const archive = tarFile("release-digest-manifest.json", JSON.stringify(offContract));
+    older.schemaVersion = 1;
+    delete older.surfaces.platform["octogee-project-runner"];
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify(older));
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}`,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        schemaVersion: 2,
+        layers: [{ digest: `sha256:${"f".repeat(64)}` }],
+      }))
+      .mockResolvedValueOnce(new Response(archive));
+
+    const resolved = await authority.resolveManifest(sourceSha);
+
+    expect(Object.keys(resolved.surfaces.platform).sort()).toEqual([
+      "artifact-worker",
+      "glm-controller",
+      "octogee-api",
+      "octogee-ops-agent",
+    ]);
+    // 3 gateway images take a `:<short-sha>` and a `:<short-sha>-oc<version>`
+    // alias; the 4 platform images this manifest carries take one each.
+    expect(authority.aliasesFor({ ...resolved, manifestDigest })).toHaveLength(10);
+  });
+
+  it("refuses a manifest missing an image the gateway release needs, naming it", async () => {
+    const authority = createCentralReleaseAuthority({
+      project: "octogee",
+      location: "us-central1",
+      repository: "octogee",
+    });
+    const incomplete = structuredClone(manifest) as typeof manifest & {
+      surfaces: { gateway: Record<string, string> };
+    };
+    delete incomplete.surfaces.gateway["octogee-gateway-builder"];
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify(incomplete));
     fetchMock
       .mockResolvedValueOnce(jsonResponse({
         version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}`,
@@ -403,7 +434,7 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
       .mockResolvedValueOnce(new Response(archive));
 
     await expect(authority.resolveManifest(sourceSha)).rejects.toThrow(
-      "release digest manifest schemaVersion must be 1",
+      "octogee-gateway-builder",
     );
   });
 

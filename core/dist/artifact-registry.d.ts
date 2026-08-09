@@ -27,18 +27,14 @@ export declare function ensureKeepTag(opts: PinOpts): Promise<void>;
 /** Release a `keep-<env>-<tag>` pin (image becomes eligible for the time-based
  *  cleanup once no env still pins it). Idempotent — 404 is already-gone. */
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;
-declare const RELEASE_MANIFEST_SURFACE_IMAGES: {
-    readonly gateway: readonly ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"];
-    readonly platform: readonly ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"];
-};
 export interface ReleaseDigestManifest {
     sourceSha: string;
     manifestDigest: string;
     openclawVersion: string;
     repository: string;
     surfaces: {
-        gateway: Record<(typeof RELEASE_MANIFEST_SURFACE_IMAGES.gateway)[number], string>;
-        platform: Record<(typeof RELEASE_MANIFEST_SURFACE_IMAGES.platform)[number], string>;
+        gateway: Record<string, string>;
+        platform: Record<string, string>;
     };
 }
 export interface ReleaseDigestAlias {

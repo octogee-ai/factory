@@ -83,7 +83,7 @@ function resolveSizingForResponse(glmDoc, reservation) {
     };
 }
 function normalizeGatewayProfile(profile) {
-    return profile === "operator" ? "operator" : "standard";
+    return profile === "builder" ? "builder" : "standard";
 }
 function normalizeGatewayClass(doc) {
     return resolveGatewayClass({
@@ -1492,7 +1492,7 @@ function validateSharedGatewayCreate(body, gatewayClass) {
         return {
             status: 400,
             body: {
-                error: "owner-only gateways are created by the disposable lifecycle",
+                error: "Builder gateways are created by the disposable lifecycle",
             },
         };
     }
@@ -2076,9 +2076,9 @@ function centralGatewayReleasePayload(manifest) {
         imageRepository: `${manifest.repository}/octogee-gateway`,
         imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
         profileImages: {
-            operator: {
-                imageRepository: `${manifest.repository}/octogee-gateway-operator`,
-                imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-operator"]}`,
+            builder: {
+                imageRepository: `${manifest.repository}/octogee-gateway-builder`,
+                imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
             },
         },
         gatewayEdgeImage: {
@@ -2179,6 +2179,7 @@ async function readAndUpgradeReleaseArtifact(db, gatewayId, release) {
 }
 function currentArtifactPatch(artifact, patch) {
     return {
+        ...artifact,
         imageRepository: patch.imageRepository ?? artifact.imageRepository,
         imageTag: patch.imageTag ?? artifact.imageTag,
     };
@@ -2539,7 +2540,7 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
     "gatewayContainerSecurityContext",
     "serviceAccountName",
     "serviceAccount",
-    "operatorAccess",
+    "builderAccess",
     "ownerUid",
     "builderSlug",
     "openclawOverrides",
@@ -2638,7 +2639,7 @@ function buildCreateGatewayConfig(args) {
         gatewayContainerSecurityContext: null,
         serviceAccountName: null,
         serviceAccount: null,
-        operatorAccess: null,
+        builderAccess: null,
         ownerUid: null,
         builderSlug: null,
         openclawOverrides: null,
@@ -4018,7 +4019,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (target.root.gatewayClass !== "shared") {
                 res.status(400).json({
-                    error: "owner-only gateway placement is managed by the disposable lifecycle",
+                    error: "Builder gateway placement is managed by the disposable lifecycle",
                     gatewayId: targetGatewayId,
                 });
                 return;
@@ -4046,7 +4047,7 @@ export function addAdminFleetRoutes(router, deps) {
                 profile: target.root.profile ?? undefined,
                 imageProfile: target.root.imageProfile,
                 ownerUid: target.root.ownerUid ?? undefined,
-                operatorAccess: target.root.operatorAccess ?? undefined,
+                builderAccess: target.root.builderAccess ?? undefined,
             }, uid);
             const gatewayProfile = shellState.gatewayProfile;
             // Mirror AND the revision assignment doc commit together
@@ -4735,6 +4736,14 @@ export function addAdminFleetRoutes(router, deps) {
                 imageTag,
                 ...(imageRepository ? { imageRepository } : {}),
             });
+            if (!isReleasePayload(asReleaseArtifactPayload(artifact))) {
+                res.status(409).json({
+                    error: "gateway rollout requires a complete paired release",
+                    code: "gateway-rollout-requires-release-cut",
+                    gatewayId: id,
+                });
+                return;
+            }
             if (sameArtifact(current.artifact, artifact)) {
                 res.status(409).json({
                     error: "gateway already on requested image — no-op rollout",
@@ -5618,7 +5627,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (target.root.gatewayClass !== "shared") {
                 res.status(400).json({
-                    error: "owner-only gateway placement is managed by the disposable lifecycle",
+                    error: "Builder gateway placement is managed by the disposable lifecycle",
                     gatewayId: command.ok.gatewayId,
                 });
                 return;
@@ -5758,7 +5767,7 @@ export function addAdminFleetRoutes(router, deps) {
                                 profile: targetRoot.profile ?? undefined,
                                 imageProfile: targetRoot.imageProfile,
                                 ownerUid: targetRoot.ownerUid ?? undefined,
-                                operatorAccess: targetRoot.operatorAccess ?? undefined,
+                                builderAccess: targetRoot.builderAccess ?? undefined,
                             }, uid);
                             txn.update(userRef, {
                                 "provisioning.openclaw.gatewayId": targetGatewayId,

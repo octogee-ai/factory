@@ -47,12 +47,11 @@ export const TIER_PRESETS = {
 };
 export const PROFILE_DEFAULT_TIER = {
     standard: 'l',
-    operator: 'l',
+    builder: 'xs',
 };
 export const GATEWAY_CLASS_DEFAULT_TIER = {
     shared: 'l',
     builder: 'xs',
-    operator: 'l',
 };
 export const FALLBACK_DEFAULT_TIER = 'l';
 export function resolveSizingTier(input) {

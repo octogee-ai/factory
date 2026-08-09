@@ -187,11 +187,11 @@ function throwIfAborted(signal, uid) {
         throw reason;
     throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
-function operatorGatewayIsReadyForFastAttach(adapter, snapshot, convergeContent) {
+function builderGatewayIsReadyForFastAttach(adapter, snapshot, convergeContent) {
     const { slug } = snapshot;
     return snapshot.status === "complete"
         && !convergeContent
-        && Boolean(adapter.isOperatorGateway?.())
+        && Boolean(adapter.isBuilderGateway?.())
         && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
         && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
         && adapter.hasWorkspaceGitDir(slug)
@@ -209,11 +209,11 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     let snapshot = prepared.snapshot;
     const { ctx, newCustomer } = prepared;
     const { slug } = snapshot;
-    if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
+    if (builderGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
         markStep("ssh-key");
         steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
         throwIfAborted(signal, uid);
-        adapter.log(`[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
+        adapter.log(`[add:${slug}] builder gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
         throwIfAborted(signal, uid);
         markStep(VERIFY_CHANNEL_READY);
         await verifyChannelReady(adapter, slug, verifyTimeoutMs);
@@ -237,6 +237,19 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     markStep("workspace-repo");
     steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
     throwIfAborted(signal, uid);
+    markStep("project-clones");
+    const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+        ? await cloneMissingProjects(adapter, slug)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
+    throwIfAborted(signal, uid);
+    if (projectClones.pending.length > 0) {
+        return {
+            newCustomer,
+            steps,
+            pendingProjectClones: projectClones.pending,
+        };
+    }
     markStep("byos-restore");
     const byos = await restoreByos(adapter, slug);
     steps.push(...byos.steps);
@@ -267,12 +280,6 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     throwIfAborted(signal, uid);
     markStep("blob-sync");
     steps.push(...(await runBlobSync(adapter, slug)));
-    throwIfAborted(signal, uid);
-    markStep("project-clones");
-    const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-        ? await cloneMissingProjects(adapter, slug)
-        : { steps: [], pending: [] };
-    steps.push(...projectClones.steps);
     throwIfAborted(signal, uid);
     markStep("finalize");
     adapter.log(`✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`);
@@ -338,6 +345,11 @@ async function resyncSshKeyIfDrifted(adapter, slug) {
 }
 async function ensureWorkspaceRepo(adapter, uid, snapshot, ctx) {
     await adapter.ensureGiteaOrg(snapshot.slug);
+    // A builder born onto a shared pod never runs the non-shared pre-boot
+    // restore, which is the only other thing that creates this repo. Without it
+    // the migration flush reads a head that does not exist and the move retries
+    // forever (#3196).
+    await adapter.ensureSystemConfigRepo(snapshot.slug);
     return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
 }
 async function convergeWorkspaceCheckout(adapter, uid, snapshot, ctx) {
@@ -346,8 +358,7 @@ async function convergeWorkspaceCheckout(adapter, uid, snapshot, ctx) {
         if (adapter.hasGitRemote(slug))
             return [];
         if (snapshot.repoUrl) {
-            adapter.log(`[add:${slug}] workspace has no origin; restoring canonical Gitea checkout`);
-            await adapter.deleteCustomerDir(slug);
+            adapter.log(`[add:${slug}] workspace Git metadata is incomplete; repairing from canonical Gitea`);
             return cloneExistingWorkspaceRepo(adapter, snapshot, ctx);
         }
         return recoverMissingWorkspaceRemote(adapter, uid, ctx);

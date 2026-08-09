@@ -13,7 +13,7 @@ import {
 
 const dirs: string[] = [];
 const env = {
-  GATEWAY_CLASS: "builder",
+  GATEWAY_CLASS: "shared",
   GATEWAY_ID: "bender",
   API_PUBLIC_URL: "https://api-test.octogee.com",
   GATEWAY_REVISION_ID: "bender-r9",
@@ -40,6 +40,14 @@ function fixture(activeContents: string): { openclawDir: string; repoDir: string
 
 function git(repoDir: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+}
+
+function localGitExec(repoDir: string, args: string[]): string | null {
+  try {
+    return git(repoDir, ...args);
+  } catch {
+    return null;
+  }
 }
 
 function realGitFixture(configContents = validConfig({ accepted: true })) {
@@ -98,7 +106,9 @@ describe("system config accepted-head recovery", () => {
       sourceFinal: true,
       gateway: {
         port: 18789,
-        controlUi: { basePath: "/g/bender/openclaw" },
+        controlUi: {
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
       },
     });
     expect(fs.readFileSync(secretsPath, "utf8"))
@@ -282,6 +292,8 @@ describe("system config accepted-head recovery", () => {
       ...h,
       slug: "ceckert",
       env,
+      gitExec: localGitExec,
+      readCommitBlob: readSystemConfigCommitBlob,
       validateConfig: vi.fn(),
     })).toMatchObject({
       outcome: "recovered",
@@ -340,7 +352,9 @@ describe("system config accepted-head recovery", () => {
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
       gateway: {
         port: 18789,
-        controlUi: { basePath: "/g/bender/openclaw" },
+        controlUi: {
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
       },
     });
     expect(commands.some((command) => command.includes("Octogee-Config-Source: recovery"))).toBe(true);

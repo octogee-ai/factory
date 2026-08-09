@@ -259,6 +259,7 @@ function createChannelsStatusConnection(connection) {
     let ws = null;
     let connecting = null;
     let generation = 0;
+    let connectionGeneration = 0;
     function disconnect(activeWs) {
         if (ws === activeWs)
             ws = null;
@@ -287,6 +288,7 @@ function createChannelsStatusConnection(connection) {
                 throw new OpenclawWireError("connect-failed", "gateway RPC client closed while channels.status was connecting");
             }
             ws = activeWs;
+            connectionGeneration += 1;
             activeWs.once("close", () => {
                 if (ws === activeWs)
                     ws = null;
@@ -321,6 +323,7 @@ function createChannelsStatusConnection(connection) {
                 throw err;
             }
         },
+        connectionGeneration: () => connectionGeneration,
         async close() {
             generation++;
             const activeWs = ws;
@@ -353,6 +356,42 @@ function resolveRpcTraceSettings() {
         slowTraceMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_SLOW_MS ?? "5000", 10),
         failureSampleMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10),
     };
+}
+async function stopChannels(call, params) {
+    const payload = await call("channels.stop", params);
+    if (!payload || typeof payload !== "object" ||
+        payload.stopped !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
+    }
+    return payload;
+}
+async function startChannels(call, params) {
+    const payload = await call("channels.start", params);
+    if (!payload || typeof payload !== "object" ||
+        typeof payload.started !== "boolean") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing boolean `started`");
+    }
+    return payload;
+}
+async function requestGatewayRestart(call, params) {
+    const payload = await call("gateway.restart.request", params);
+    const result = payload;
+    const restart = result?.restart;
+    if (!result ||
+        typeof result !== "object" ||
+        result.ok !== true ||
+        !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
+        !restart ||
+        typeof restart !== "object" ||
+        restart.ok !== true ||
+        !Number.isSafeInteger(restart.pid) ||
+        restart.pid <= 0 ||
+        restart.signal !== "SIGUSR1" ||
+        typeof restart.coalesced !== "boolean" ||
+        (result.status === "coalesced") !== restart.coalesced) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned malformed restart acknowledgement");
+    }
+    return result;
 }
 async function callOkPayload(call, method, params) {
     const payload = await call(method, params);
@@ -441,31 +480,10 @@ export function createGatewayRpc(opts = {}) {
             }, patch, baseHash, opts?.replacePaths);
         },
         channelsStatus: statusConnection.call,
-        async channelsStop(params) {
-            const payload = await call("channels.stop", params);
-            if (!payload ||
-                typeof payload !== "object" ||
-                payload.stopped !== true) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "channels.stop payload missing `stopped: true`");
-            }
-            return payload;
-        },
-        async channelsStart(params) {
-            const payload = await call("channels.start", params);
-            if (!payload ||
-                typeof payload !== "object" ||
-                payload.started !== true) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
-            }
-            return payload;
-        },
-        async gatewayRestartRequest(params) {
-            const payload = await call("gateway.restart.request", params);
-            if (!payload || typeof payload !== "object") {
-                throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned non-object payload");
-            }
-            return payload;
-        },
+        channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
+        channelsStop: (params) => stopChannels(call, params),
+        channelsStart: (params) => startChannels(call, params),
+        gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
         async sessionsList(params) {
             const payload = await call("sessions.list", params);
             if (!payload || typeof payload !== "object") {

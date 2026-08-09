@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
+import { removePersistedRepoSshCommand } from "../lib/git.js";
 
 function customerSshKeyPath(keysDir: string, slug: string): string {
   return path.join(keysDir, slug, "id_ed25519");
@@ -150,7 +151,7 @@ describe("setRepoSshCommand", () => {
     return `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
   }
 
-  it("writes core.sshCommand pointing at the customer key when one exists", async () => {
+  it("removes a persisted core.sshCommand when the customer key exists", async () => {
     generateCustomerSshKey(keysDir, "acme");
     const keyPath = customerSshKeyPath(keysDir, "acme");
 
@@ -160,24 +161,27 @@ if (fs.existsSync(keyPath)) {
       });
     }
 
-    const got = execSync("git config --get core.sshCommand", {
+    removePersistedRepoSshCommand(repoDir);
+    const result = spawnSync("git", ["config", "--get", "core.sshCommand"], {
       cwd: repoDir,
-    }).toString().trim();
-    expect(got).toBe(expectedSshCommand(keyPath));
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
   });
 
-  it("is idempotent — same key path overwrites cleanly", () => {
+  it("is idempotent and removes every persisted SSH command value", () => {
     generateCustomerSshKey(keysDir, "acme");
     const keyPath = customerSshKeyPath(keysDir, "acme");
     const cmd = `git config core.sshCommand "${expectedSshCommand(keyPath)}"`;
     execSync(cmd, { cwd: repoDir });
-    execSync(cmd, { cwd: repoDir });
+    execSync(`git config --add core.sshCommand "${expectedSshCommand(keyPath)}"`, { cwd: repoDir });
+    removePersistedRepoSshCommand(repoDir);
 
-    const got = execSync("git config --get-all core.sshCommand", {
+    const result = spawnSync("git", ["config", "--get-all", "core.sshCommand"], {
       cwd: repoDir,
-    }).toString().trim().split("\n");
-    expect(got).toHaveLength(1);
-    expect(got[0]).toBe(expectedSshCommand(keyPath));
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
   });
 
   it("source enforces it: every init/clone path in git.ts calls setRepoSshCommand", () => {
@@ -197,6 +201,7 @@ describe("pushInitialSkeleton", () => {
   let workDir: string;
   let coachDir: string;
   let originDir: string;
+  let originalGitSsh: string | undefined;
 
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), "init-skeleton-"));
@@ -204,13 +209,22 @@ describe("pushInitialSkeleton", () => {
     originDir = path.join(workDir, "origin.git");
     fs.mkdirSync(coachDir);
     fs.mkdirSync(originDir);
+    originalGitSsh = process.env.GIT_SSH;
+    const testSsh = path.join(workDir, "test-ssh");
+    fs.writeFileSync(testSsh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");
+    fs.chmodSync(testSsh, 0o755);
+    process.env.GIT_SSH = testSsh;
     execSync("git init -q --bare -b main", { cwd: originDir, stdio: "pipe" });
     execSync("git init -q -b main", { cwd: coachDir, stdio: "pipe" });
     execSync(`git config user.email "test@octogee.com"`, { cwd: coachDir });
     execSync(`git config user.name "Test"`, { cwd: coachDir });
-    execSync(`git remote add origin "${originDir}"`, { cwd: coachDir });
+    execSync(`git remote add origin "ssh://git@localhost${originDir}"`, { cwd: coachDir });
   });
-  afterEach(() => fs.rmSync(workDir, { recursive: true, force: true }));
+  afterEach(() => {
+    if (originalGitSsh === undefined) delete process.env.GIT_SSH;
+    else process.env.GIT_SSH = originalGitSsh;
+    fs.rmSync(workDir, { recursive: true, force: true });
+  });
 
   function originHas(ref: string): boolean {
     try {

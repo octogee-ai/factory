@@ -28,6 +28,11 @@ const mocks = vi.hoisted(() => ({
   applyOpenClawActivationManifest: vi.fn(),
   removeActivationManifest: vi.fn(),
 }));
+const gitMocks = vi.hoisted(() => ({
+  cloneProjectRepo: vi.fn(),
+  projectCheckoutMatchesSource: vi.fn(),
+  setRepoSshCommand: vi.fn(),
+}));
 const patchMocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
 }));
@@ -44,6 +49,16 @@ const secretMocks = vi.hoisted(() => ({
   updateMattermostAccountSecrets: vi.fn(async () => undefined),
   materializeActivationManifestSecret: vi.fn(async (_dir: string, manifest: unknown) => manifest),
 }));
+const routingActivationMocks = vi.hoisted(() => ({
+  pending: false,
+  capture: vi.fn(async (_rpc: unknown, accountIds: readonly string[]) =>
+    Object.fromEntries(accountIds.map((accountId) => [accountId, 0]))),
+  activate: vi.fn(async () => undefined),
+  mark: vi.fn(() => {
+    routingActivationMocks.pending = true;
+    return "activation-token";
+  }),
+}));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
@@ -53,6 +68,15 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
     readActivationManifest: mocks.readActivationManifest,
     applyOpenClawActivationManifest: mocks.applyOpenClawActivationManifest,
     removeActivationManifest: mocks.removeActivationManifest,
+  };
+});
+vi.mock("../lib/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/git.js")>();
+  return {
+    ...actual,
+    cloneProjectRepo: gitMocks.cloneProjectRepo,
+    projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
+    setRepoSshCommand: gitMocks.setRepoSshCommand,
   };
 });
 vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
@@ -94,6 +118,12 @@ vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
     materializeActivationManifestSecret: secretMocks.materializeActivationManifestSecret,
   };
 });
+vi.mock("../lib/mattermost-routing-activation.js", () => ({
+  captureMattermostRoutingActivationBaseline: routingActivationMocks.capture,
+  activatePendingMattermostRouting: routingActivationMocks.activate,
+  markMattermostRoutingActivationPending: routingActivationMocks.mark,
+  mattermostRoutingActivationPending: () => routingActivationMocks.pending,
+}));
 
 function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
   return {
@@ -131,6 +161,8 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
 
 function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {
+    gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+    isGatewayUp: vi.fn(async () => true),
     channelsStop: vi.fn(async ({ channel, accountId }) => ({
       channel,
       accountId,
@@ -152,6 +184,7 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
 function rosterRpc(config: unknown = { agents: { entries: {} } }) {
   return {
     configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+    secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
       ok: true as const,
       agentId,
@@ -213,9 +246,16 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
+    gitMocks.cloneProjectRepo.mockReset().mockResolvedValue(true);
+    gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(true);
+    gitMocks.setRepoSshCommand.mockClear();
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
     secretMocks.materializeActivationManifestSecret.mockClear();
+    routingActivationMocks.pending = false;
+    routingActivationMocks.capture.mockClear();
+    routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
+    routingActivationMocks.mark.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     tempStateDir = null;
     mocks.readActivationManifest.mockResolvedValue({
@@ -224,7 +264,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       agentId: "octogee-tester10-coach",
       projectAgents: [],
     });
-    mocks.applyOpenClawActivationManifest.mockResolvedValue({ elapsedMs: 42 });
+    mocks.applyOpenClawActivationManifest.mockResolvedValue({
+      elapsedMs: 42,
+      routingActivationRequired: true,
+    });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
   });
 
@@ -267,12 +310,19 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(vi.mocked(rpc.agentsDelete).mock.calls.map(([params]) => params.agentId)).toEqual([
       "octogee-tester10-proj-residue-coach",
     ]);
+    expect(rpc.agentsDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      routingActivationMocks.capture.mock.invocationCallOrder[0]!,
+    );
+    expect(routingActivationMocks.capture.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
     const client = mkClient();
     const rpc = {
       gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+      isGatewayUp: vi.fn(async () => true),
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
@@ -282,6 +332,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         config: { agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] } },
         hash: "cfg-hash",
       })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client,
@@ -302,13 +353,159 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect.objectContaining({ slug: "tester10", appliedFingerprint: "fp-tester10" }),
       expect.objectContaining({ rpc, signal }),
     );
+    expect(gitMocks.setRepoSshCommand).toHaveBeenCalledWith(
+      expect.stringContaining("/customers/tester10"),
+      "tester10",
+    );
+    expect(gitMocks.setRepoSshCommand.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.removeActivationManifest).toHaveBeenCalledWith(
       expect.stringContaining(".openclaw"),
       "tester10",
     );
-    expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
+    expect(routingActivationMocks.activate).toHaveBeenCalledWith(
+      rpc,
+      expect.stringContaining(".openclaw"),
+      expect.any(Function),
+    );
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.removeActivationManifest.mock.invocationCallOrder[0]!,
+    );
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
+  });
+
+  it("restores an absent shared-gateway project from the trusted snapshot before activation", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    gitMocks.projectCheckoutMatchesSource
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+      appliedFingerprint: "fp-tester10",
+    });
+
+    expect(client.userSnapshot).toHaveBeenCalledWith(snapshot.uid);
+    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith(
+      "tester10",
+      "roamly",
+      "alice-roamly",
+      undefined,
+    );
+    expect(gitMocks.cloneProjectRepo.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("keeps the imported customer closed when a required project clone does not land", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
+    gitMocks.cloneProjectRepo.mockResolvedValue(false);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /project checkout restoration incomplete.*roamly/u,
+    );
+
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+  });
+
+  it("keeps a source-less imported project closed even when stale local metadata appears canonical", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: null, provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /project checkout restoration incomplete.*roamly/u,
+    );
+
+    expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+  });
+
+  it("preserves the activation manifest when imported agent secrets do not materialize", async () => {
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 2 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /secrets\.reload.*2 unresolved references/,
+    );
+
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    expect(rpc.channelsStatus).not.toHaveBeenCalled();
   });
 
   it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
@@ -337,6 +534,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     mocks.readActivationManifest
       .mockRejectedValueOnce(new LegacyActivationManifestFingerprintError("legacy"))
@@ -583,6 +781,10 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       },
       bindings: [
         { agentId: "octogee-ops-eggman" },
+        {
+          agentId: "octogee-ops-eggman",
+          match: { channel: "mattermost", accountId: "alice-coach" },
+        },
         { agentId: "octogee-alice-coach" },
         { agentId: "octogee-alice-proj-old-coach" },
       ],
@@ -790,6 +992,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
+    routingActivationMocks.pending = false;
+    routingActivationMocks.capture.mockClear();
+    routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
+    routingActivationMocks.mark.mockClear();
     vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
     vi.stubEnv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small");
   });
@@ -798,10 +1004,18 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("leaves Mattermost monitor reload to OpenClaw after applying changed channel bindings", async () => {
+  it("activates changed routing bindings before refreshing the secret surface", async () => {
     const events: string[] = [];
-    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
+    routingActivationMocks.activate.mockImplementationOnce(async () => {
+      events.push("routing-activation");
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       events.push("config-patch");
+      args.buildPatch({
+        agents: { list: [] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      });
       return { mode: "rpc" as const, attempts: 1 };
     });
     const rpc = {
@@ -813,7 +1027,16 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("channels-start");
         return { channel: "mattermost", accountId: "alice-coach", started: true };
       }),
+      gatewayRestartRequest: vi.fn(async () => {
+        events.push("gateway-restart");
+        return { status: "requested" };
+      }),
+      isGatewayUp: vi.fn(async () => true),
       ...rosterRpc(),
+      secretsReload: vi.fn(async () => {
+        events.push("secrets-reload");
+        return { ok: true, warningCount: 0 };
+      }),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -844,11 +1067,30 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     expect(rpc.channelsStop).not.toHaveBeenCalled();
     expect(rpc.channelsStart).not.toHaveBeenCalled();
-    expect(events).toEqual(["config-patch"]);
+    expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
+    expect(events).toEqual(["config-patch", "routing-activation", "secrets-reload"]);
   });
 
-  it("waits for the lifecycle config.changed hash without explicitly restarting Mattermost", async () => {
+  it("fails provisioning when the refreshed secret surface remains incomplete", async () => {
+    const rpc = mkGatewayRpc({
+      secretsReload: vi.fn(async () => ({ ok: false, warningCount: 0 })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }),
+    ).rejects.toThrow(/secrets\.reload did not acknowledge success/);
+  });
+
+  it("waits for config persistence before requesting routing activation", async () => {
     const events: string[] = [];
+    routingActivationMocks.capture.mockImplementationOnce(async (_rpc, accountIds) => {
+      events.push("routing-baseline");
+      return Object.fromEntries(accountIds.map((accountId) => [accountId, 0]));
+    });
+    routingActivationMocks.activate.mockImplementationOnce(async () => {
+      events.push("routing-activation");
+    });
     let publishConfigChanged: (() => void) | undefined;
     const configChanged = new Promise<void>((resolve) => {
       publishConfigChanged = resolve;
@@ -864,9 +1106,19 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         events.push("config-changed");
         return { ok: true as const, hash: "persisted-hash" };
       }),
+      gatewayRestartRequest: vi.fn(async () => {
+        events.push("gateway-restart");
+        return { status: "requested" };
+      }),
+      isGatewayUp: vi.fn(async () => true),
       ...rosterRpc(),
     } as unknown as GatewayRpcClient;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
+      _args.buildPatch({
+        agents: { list: [] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      });
       await options.rpc.configPatch({}, "base-hash");
       return { mode: "rpc" as const, attempts: 1 };
     });
@@ -899,12 +1151,17 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       snapshot,
       { _coachPersonalToken: "pat-1" },
     );
-    await vi.waitFor(() => expect(events).toEqual(["config-persisted"]));
+    await vi.waitFor(() => expect(events).toEqual(["routing-baseline", "config-persisted"]));
 
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual(["config-persisted", "config-changed"]);
+    expect(events).toEqual([
+      "routing-baseline",
+      "config-persisted",
+      "config-changed",
+      "routing-activation",
+    ]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
   });
@@ -956,6 +1213,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     const patch = args.buildPatch(current);
     expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-unmatched-route",
       "octogee-mac-default",
       "octogee-alice-coach",
       "octogee-bob-coach",
@@ -1115,6 +1373,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
 
     expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-unmatched-route",
       "octogee-readmitted-coach",
       "octogee-keeper-coach",
       "octogee-fresh-coach",
@@ -1122,6 +1381,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(patch.bindings).toEqual([
       { agentId: "octogee-readmitted-coach" },
       { agentId: "octogee-keeper-coach" },
+      {
+        agentId: "octogee-fresh-coach",
+        match: { channel: "mattermost", accountId: "fresh-coach" },
+      },
     ]);
     expect(patch.channels.mattermost.accounts).toMatchObject({
       "fresh-coach": expect.any(Object),
@@ -1174,7 +1437,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       channels: { mattermost: { accounts: {} } },
     });
 
-    expect(Object.keys(patch.agents.entries)).toEqual(["octogee-fresh-coach"]);
+    expect(Object.keys(patch.agents.entries)).toEqual([
+      "octogee-unmatched-route",
+      "octogee-fresh-coach",
+    ]);
   });
 
   it("deletes the Builder's own retired project agents before patching — 2026.7.2 refuses a roster drop", async () => {
@@ -1207,7 +1473,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
 
     expect(Object.values(patch.agents.entries)).not.toContain(null);
-    expect(Object.keys(patch.agents.entries)).toEqual(["octogee-alice-coach"]);
+    expect(Object.keys(patch.agents.entries)).toEqual([
+      "octogee-unmatched-route",
+      "octogee-alice-coach",
+    ]);
   });
 
   it("creates an agent the roster does not carry yet through agents.create, not the patch alone", async () => {
@@ -1607,6 +1876,28 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     });
     adapter.seedUserSnapshotForMigration?.(
       fullSnapshot({
+        projectCheckoutScope: "workspace-and-projects",
+        projects: [
+          { projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" },
+        ],
+      }),
+    );
+
+    const snap = await adapter.loadUserSnapshot("uid-tester10");
+
+    expect(snap?.projectCheckoutScope).toBe("workspace-only");
+    expect(snap?.projects).toEqual([]);
+  });
+
+  it("defaults migration snapshot projection to workspace-only when runtime scope is absent", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: {} as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    adapter.seedUserSnapshotForMigration?.(
+      fullSnapshot({
+        projectCheckoutScope: "workspace-and-projects",
         projects: [
           { projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" },
         ],
@@ -1725,8 +2016,32 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 });
 
 describe("projectCheckoutScopeForRuntime", () => {
-  it("keeps runtime imports workspace-only", () => {
-    expect(projectCheckoutScopeForRuntime()).toBe("workspace-only");
+  it("restores project checkouts on a shared runtime", () => {
+    expect(projectCheckoutScopeForRuntime("alice", { GATEWAY_CLASS: "shared" })).toBe(
+      "workspace-and-projects",
+    );
+  });
+
+  it("restores project checkouts for the exact configured isolated Builder", () => {
+    expect(projectCheckoutScopeForRuntime("alice", {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "alice",
+    })).toBe("workspace-and-projects");
+  });
+
+  it.each([
+    ["a mismatched isolated Builder", "bob", {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }],
+    ["an isolated Builder with no configured slug", "alice", { GATEWAY_CLASS: "builder" }],
+    ["a runtime with no class", "alice", { GATEWAY_BUILDER_SLUG: "alice" }],
+    ["an unknown runtime class", "alice", {
+      GATEWAY_CLASS: "unknown",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }],
+  ])("keeps %s workspace-only", (_label, slug, env) => {
+    expect(projectCheckoutScopeForRuntime(slug, env)).toBe("workspace-only");
   });
 });
 
@@ -1784,13 +2099,16 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     });
 
     expect(patch.agents.list.map((a) => a.id)).toEqual([
+      "octogee-unmatched-route",
       "octogee-alice-coach",
       "octogee-alice-proj-orbit-coach",
       "octogee-bob-coach",
     ]);
     expect(
       Object.fromEntries(
-        patch.bindings.map((b) => [b.match.peer.id, `${b.agentId}|${b.match.accountId}`]),
+        patch.bindings
+          .filter((b) => "peer" in b.match)
+          .map((b) => [b.match.peer.id, `${b.agentId}|${b.match.accountId}`]),
       ),
     ).toEqual({
       "ws-1": "octogee-alice-coach|alice-coach",

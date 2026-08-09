@@ -140,7 +140,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-cron, octogee-gateway]
+                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-cron, octogee-gateway, octogee-project-publisher]
       ports:
         - protocol: TCP
           port: 3001
@@ -201,6 +201,24 @@ spec:
       ports:
         - protocol: TCP
           port: 3010
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [octogee-project-run-broker, octogee-project-run-controller]
+      ports:
+        - protocol: TCP
+          port: 3002
+        - protocol: TCP
+          port: 3003
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-project-publisher
+      ports:
+        - protocol: TCP
+          port: 3005
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -296,8 +314,6 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
-        - protocol: TCP
-          port: 9080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

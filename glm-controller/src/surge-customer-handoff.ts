@@ -205,6 +205,20 @@ async function setAssignmentState(
   });
 }
 
+async function gateServingAssignments(
+  deps: SurgeCustomerHandoffDeps,
+  gatewayId: string,
+  assignments: readonly SurgeAssignment[],
+  ownedBy: string,
+): Promise<void> {
+  for (const assignment of assignments) {
+    if (assignment.state !== "serving") continue;
+    await setAssignmentState(deps, gatewayId, assignment, "quiescing", ownedBy);
+    assignment.state = "quiescing";
+    assignment.updatedByOperationId = ownedBy;
+  }
+}
+
 async function restoreOwnedAssignments(
   deps: SurgeCustomerHandoffDeps,
   gatewayId: string,
@@ -214,6 +228,8 @@ async function restoreOwnedAssignments(
   for (const assignment of assignments) {
     if (assignment.state === "quiescing" && assignment.updatedByOperationId === ownedBy) {
       await setAssignmentState(deps, gatewayId, assignment, "serving", ownedBy);
+      assignment.state = "serving";
+      assignment.updatedByOperationId = ownedBy;
     }
   }
 }
@@ -257,6 +273,37 @@ function sameDigest(left: SessionDigest, right: SessionDigest): boolean {
     left.sha256 === right.sha256;
 }
 
+async function discardTargetCustomers(
+  deps: SurgeCustomerHandoffDeps,
+  context: {
+    gatewayId: string;
+    operationId: string;
+    targetPod: SurgePod;
+    slugs: readonly string[];
+    cause?: unknown;
+  },
+): Promise<void> {
+  const failures: string[] = [];
+  for (const slug of [...new Set(context.slugs)].reverse()) {
+    try {
+      await deps.discardTargetCustomer({
+        gatewayId: context.gatewayId,
+        slug,
+        operationId: context.operationId,
+        targetPod: context.targetPod,
+      });
+    } catch (error) {
+      failures.push(`${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new SurgeTargetCleanupError(
+      `surge target cleanup failed; admission remains closed: ${failures.join("; ")}`,
+      { cause: context.cause },
+    );
+  }
+}
+
 async function transferAssignments(
   deps: SurgeCustomerHandoffDeps,
   context: {
@@ -267,17 +314,29 @@ async function transferAssignments(
     ownedBy: string;
   },
 ): Promise<void> {
-  const { input, assignments, sourcePod, targetPod, ownedBy } = context;
-  for (const assignment of assignments) {
-    let targetTouched = false;
-    try {
+  const {
+    input,
+    assignments,
+    sourcePod,
+    targetPod,
+    ownedBy,
+  } = context;
+  const touchedSlugs: string[] = [];
+  try {
+    for (const assignment of assignments) {
+      await gateServingAssignments(
+        deps,
+        input.gatewayId,
+        [assignment],
+        ownedBy,
+      );
       await deps.quiesce({
         gatewayId: input.gatewayId,
         slug: assignment.slug,
         operationId: ownedBy,
         sourcePod,
       });
-      targetTouched = true;
+      touchedSlugs.push(assignment.slug);
       await deps.transfer({
         gatewayId: input.gatewayId,
         slug: assignment.slug,
@@ -302,25 +361,16 @@ async function transferAssignments(
       if (!sameDigest(sourceDigest, targetDigest)) {
         throw new Error(`durable session digest mismatch for ${assignment.slug}`);
       }
-    } catch (error) {
-      if (targetTouched) {
-        try {
-          await deps.discardTargetCustomer({
-            gatewayId: input.gatewayId,
-            slug: assignment.slug,
-            operationId: ownedBy,
-            targetPod,
-          });
-        } catch (cleanupError) {
-          throw new SurgeTargetCleanupError(
-            `surge target cleanup failed; admission remains closed: ` +
-            `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-            { cause: error },
-          );
-        }
-      }
-      throw error;
     }
+  } catch (error) {
+    await discardTargetCustomers(deps, {
+      gatewayId: input.gatewayId,
+      operationId: ownedBy,
+      targetPod,
+      slugs: touchedSlugs,
+      cause: error,
+    });
+    throw error;
   }
 }
 
@@ -389,9 +439,15 @@ async function migrateAssignedState(
   },
 ): Promise<void> {
   const { input, assignments, sourcePod, targetPod, ownedBy } = context;
-  const sourceHealth = await deps.readPodHealth(sourcePod);
+  const [sourceHealth, targetHealth] = await Promise.all([
+    deps.readPodHealth(sourcePod),
+    deps.readPodHealth(targetPod),
+  ]);
   if (!sourceHealth) {
-    throw new Error(`source health unavailable after gating assignments on ${input.gatewayId}`);
+    throw new Error(`source health unavailable before handoff on ${input.gatewayId}`);
+  }
+  if (!targetHealth) {
+    throw new Error(`target health unavailable before handoff on ${input.gatewayId}`);
   }
   const assignmentBySlug = new Map(assignments.map((assignment) => [assignment.slug, assignment]));
   const unassignedMount = sourceHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
@@ -406,6 +462,22 @@ async function migrateAssignedState(
         `gateway=${input.gatewayId} uid=${assignment.uid} slug=${assignment.slug}`,
       );
     }
+  }
+  if (targetHealth.mountedCustomers.length > 0) {
+    const staleSlugs = new Set(targetHealth.mountedCustomers);
+    const staleAssignments = assignments.filter((assignment) => staleSlugs.has(assignment.slug));
+    await gateServingAssignments(deps, input.gatewayId, staleAssignments, ownedBy);
+    deps.log(
+      `[surge-handoff] cleaning stale target mounts before transfer ` +
+      `gateway=${input.gatewayId} slugs=${targetHealth.mountedCustomers.join(",")}`,
+    );
+    await discardTargetCustomers(deps, {
+      gatewayId: input.gatewayId,
+      operationId: ownedBy,
+      targetPod,
+      slugs: targetHealth.mountedCustomers,
+    });
+    await restoreOwnedAssignments(deps, input.gatewayId, staleAssignments, ownedBy);
   }
   await transferAssignments(deps, {
     input,
@@ -440,13 +512,6 @@ async function migrateAssignmentsAndReleaseTarget(
   );
   assertAssignmentsAvailable(assignments, ownedBy);
   try {
-    for (const assignment of assignments) {
-      if (assignment.state === "serving") {
-        await setAssignmentState(deps, input.gatewayId, assignment, "quiescing", ownedBy);
-        assignment.state = "quiescing";
-        assignment.updatedByOperationId = ownedBy;
-      }
-    }
     if (input.stateMigration.strategy === "provision-fresh") {
       deps.log(
         `[surge-handoff] skipping state migration; the replacement provisions fresh ` +
@@ -455,6 +520,7 @@ async function migrateAssignmentsAndReleaseTarget(
     } else {
       await migrateAssignedState(deps, { input, assignments, sourcePod, targetPod, ownedBy });
     }
+    await gateServingAssignments(deps, input.gatewayId, assignments, ownedBy);
   } catch (error) {
     if (error instanceof SurgeTargetCleanupError) throw error;
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);

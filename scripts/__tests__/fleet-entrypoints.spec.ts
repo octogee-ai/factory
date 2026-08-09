@@ -54,7 +54,7 @@ describe("fleet-controller entrypoint config", () => {
     });
   });
 
-  it("uses a snapshot fingerprint roster for operator gateways so post-mount project creation reconverges", async () => {
+  it("uses a snapshot fingerprint roster for Builder gateways so post-mount project creation reconverges", async () => {
     const snapshot = {
       uid: "u1",
       slug: "alice",
@@ -176,7 +176,7 @@ describe("fleet-controller entrypoint config", () => {
     const sync = createFleetFlushSystemConfigSync({
       slug: "aug04",
       builderSlug: "",
-      operator: false,
+      builder: false,
       readAcceptedCommit,
     });
 
@@ -188,7 +188,7 @@ describe("fleet-controller entrypoint config", () => {
     expect(() => createFleetFlushSystemConfigSync({
       slug: "aug04",
       builderSlug: "",
-      operator: false,
+      builder: false,
       expectedSystemConfigCommit: "a".repeat(40),
     })).toThrow("no durable system config");
   });
@@ -199,7 +199,7 @@ describe("fleet-controller entrypoint config", () => {
     const sync = createFleetFlushSystemConfigSync({
       slug: "alice",
       builderSlug: "alice",
-      operator: false,
+      builder: false,
       readAcceptedCommit,
     });
 
@@ -217,7 +217,7 @@ describe("fleet-controller entrypoint config", () => {
     const sync = createFleetFlushSystemConfigSync({
       slug: "bender",
       builderSlug: "bender",
-      operator: true,
+      builder: true,
       log: () => {},
       sync: checkpointSync as never,
     });
@@ -482,7 +482,8 @@ describe("assign-customer-gateway args", () => {
 });
 
 describe("assign-customer-gateway root config", () => {
-  function gatewayRoot(profile: "standard" | "operator" = "standard") {
+  function gatewayRoot(profile: "standard" | "builder" = "standard") {
+    const builder = profile === "builder";
     return {
       gatewayId: "default",
       createdAt: 1,
@@ -498,16 +499,16 @@ describe("assign-customer-gateway root config", () => {
       roll: null,
       configSchemaVersion: 1,
       profile,
-      gatewayClass: "shared",
-      imageProfile: "standard",
+      gatewayClass: builder ? "builder" : "shared",
+      imageProfile: builder ? "builder" : "standard",
       sizingTier: null,
       gcpProject: null,
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
-      operatorAccess: null,
-      ownerUid: null,
-      builderSlug: null,
+      builderAccess: null,
+      ownerUid: builder ? "uid-builder" : null,
+      builderSlug: builder ? "builder" : null,
       openclawOverrides: null,
       modelBrokerLimits: null,
       preemption: null,
@@ -527,11 +528,11 @@ describe("assign-customer-gateway root config", () => {
 
   it("reads the profile from a validated durable root only", async () => {
     await expect(
-      readGatewayProfile(db({ "gateways/default": gatewayRoot("operator") }) as never, "default"),
-    ).resolves.toBe("operator");
+      readGatewayProfile(db({ "gateways/default": gatewayRoot("builder") }) as never, "default"),
+    ).resolves.toBe("builder");
     await expect(
       readGatewayProfile(
-        db({ "glmGateways/default": { profile: "operator" } }) as never,
+        db({ "glmGateways/default": { profile: "builder" } }) as never,
         "default",
       ),
     ).resolves.toBeNull();
@@ -559,7 +560,7 @@ describe("fleet force gateway restart", () => {
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
-      operatorAccess: null,
+      builderAccess: null,
       ownerUid: null,
       builderSlug: null,
       openclawOverrides: null,

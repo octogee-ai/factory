@@ -6,7 +6,7 @@ import {
   GATEWAY_ID,
   GATEWAY_PROFILE,
   GIT_SYNC_INTERVAL_MS,
-  isOperatorGateway,
+  isBuilderGateway,
   log,
   OPENCLAW_DIR,
 } from "../lib/config.js";
@@ -111,7 +111,7 @@ export function createFleetSystemConfigVerifyFlush(
 export function createFleetFlushSystemConfigSync(input: {
   slug: string;
   builderSlug: string;
-  operator: boolean;
+  builder: boolean;
   expectedSystemConfigCommit?: string;
   log?: (message: string) => void;
   sync?: typeof syncSystemConfigForSlug;
@@ -125,7 +125,7 @@ export function createFleetFlushSystemConfigSync(input: {
     }
     return undefined;
   }
-  return input.operator
+  return input.builder
     ? createFleetSystemConfigFlush(
         input.slug,
         input.log ?? log,
@@ -213,15 +213,15 @@ async function main(): Promise<void> {
   if (!entrypointConfig.publicKey) {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
-  const operator = isOperatorGateway();
+  const builder = isBuilderGateway();
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
   const adapter = buildBrokeredLifecycleAdapter({
     client: brokerClient,
     rpc,
     log,
     adminMmUserId: process.env.MM_ADMIN_USER_ID,
-    isOperatorGateway,
-    projectCheckoutScope: () => projectCheckoutScopeForRuntime(),
+    isBuilderGateway,
+    projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
   });
   const fleetHandle = await startFleetController({
     rpc,
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     version: entrypointConfig.version,
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
-    platformState: !operator,
+    platformState: !builder,
     localReconcile: true,
     readDesiredFingerprints: createAssignedFingerprintReader(
       brokerClient,
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
         gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
         syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, { strict: true }),
-        syncBlobs: operator
+        syncBlobs: builder
           ? undefined
           : () => blobSyncForSlug(slug, {
               strict: true,
@@ -257,7 +257,7 @@ async function main(): Promise<void> {
         syncSystemConfig: createFleetFlushSystemConfigSync({
           slug,
           builderSlug: entrypointConfig.builderSlug,
-          operator,
+          builder,
           expectedSystemConfigCommit,
           log,
         }),
@@ -291,9 +291,9 @@ async function main(): Promise<void> {
   const autosaveTimer = startWorkspaceAutosaveLoop(
     {
       envValue: process.env.WORKSPACE_AUTOSAVE_ENABLED,
-      isOperatorGateway,
+      isBuilderGateway,
       syncWorkspaces: syncAllWorkspaces,
-      syncBlobs: operator
+      syncBlobs: builder
         ? undefined
         : () => blobSyncAllWithOptions({
             storeForSlug: () => createBrokeredBlobStore(brokerClient!),
@@ -302,7 +302,7 @@ async function main(): Promise<void> {
     },
     GIT_SYNC_INTERVAL_MS,
   );
-  const usageTimer = operator
+  const usageTimer = builder
     ? null
     : startUsageEventTailer({
         agentPrefix: AGENT_PREFIX,

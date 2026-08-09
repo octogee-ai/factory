@@ -41,7 +41,7 @@ describe("buildAnonymousOperationalArchive", () => {
       deletionRequestedAt: Date.UTC(2026, 6, 1),
       environment: "test",
       planTier: "builder",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
       rollup: {
         costUsd: 12.34,
         totalTokens: 987_654,
@@ -63,7 +63,7 @@ describe("buildAnonymousOperationalArchive", () => {
       deletionRequestedMonth: "2026-07",
       environment: "test",
       planTier: "builder",
-      gatewayClass: "operator",
+      gatewayClass: "builder",
       totals: { costUsd: 12.34, totalTokens: 987_654, requestCount: 321 },
       models: [
         { provider: "anthropic", model: "sonnet", costUsd: 2.34, totalTokens: 187_654, requestCount: 21 },

@@ -50,15 +50,15 @@ export const FREE_TIER_COACH_TOOLS = {
         "octogee_google_sheets_write",
         "octogee_obsidian_read",
         "octogee_obsidian_write",
-        "workspace_commit",
-        "preview_start",
-        "preview_stop",
-        "preview_list",
-        "octogee_publish",
-        "octogee_publish_draft",
         "octogee_project_create",
-        "octogee_project_commit",
         "octogee_project_list",
+        "workspace_commit",
+        "octogee_project_commit",
+        "octogee_project_build",
+        "octogee_project_test",
+        "octogee_project_preview",
+        "octogee_project_run_status",
+        "octogee_project_publish",
         "octogee_project_set_recipe",
         "octogee_board_list",
         "octogee_board_card_read",
@@ -68,9 +68,6 @@ export const FREE_TIER_COACH_TOOLS = {
         "octogee_board_card_comment",
     ],
 };
-// Shared gateways run the codex app-server sandboxed. Builder/operator runtime
-// gateways get their broader app-server policy from the gateway class boot
-// policy and this fallback must not downgrade an existing runtime policy.
 export const STANDARD_CODEX_APP_SERVER = {
     sandbox: "workspace-write",
     approvalPolicy: "never",
@@ -239,9 +236,12 @@ export function coachAgentExists(current, agentId) {
     const list = current?.agents?.list;
     return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
 }
-export function coachAgentPatchReplacePaths(current) {
+export function coachAgentPatchReplacePaths(current, agentId) {
     return keyedAgentEntries(current)
-        ? []
+        ? [
+            `agents.entries.${agentId}.model.fallbacks`,
+            `agents.entries.${agentId}.tools.alsoAllow`,
+        ]
         : [
             "agents.list",
             "agents.list[].model.fallbacks",

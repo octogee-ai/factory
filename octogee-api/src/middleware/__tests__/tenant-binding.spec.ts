@@ -60,15 +60,15 @@ function gatewayRoot(serviceAccountName: string | null = null): Record<string, u
     desiredStatus: "running",
     roll: null,
     configSchemaVersion: 1,
-    profile: "operator",
-    gatewayClass: "operator",
-    imageProfile: "operator",
+    profile: "builder",
+    gatewayClass: "builder",
+    imageProfile: "builder",
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: "uid-bender",
     builderSlug: "bender",
     openclawOverrides: null,
@@ -222,7 +222,7 @@ describe("tenant binding middleware", () => {
     await expect(registry.metrics()).resolves.toContain('result="audience_mismatch"');
   });
 
-  it("binds a grandfathered operator gateway service-account token", async () => {
+  it("rejects a retired operator gateway service-account token", async () => {
     const { app, registry } = buildApp({
       docs: { bender: gatewayRoot("octogee-gateway-bender") },
       reviewer: async () => ({
@@ -239,11 +239,8 @@ describe("tenant binding middleware", () => {
       .send({ gatewayId: "bender" });
 
     expect(res.status).toBe(200);
-    expect(res.body.boundTenant).toMatchObject({
-      kind: "gateway",
-      gatewayId: "bender",
-    });
-    await expect(registry.metrics()).resolves.toContain('result="ok_legacy_operator"');
+    expect(res.body.boundTenant).toBeNull();
+    await expect(registry.metrics()).resolves.toContain('result="unknown_sa"');
   });
 
   it("does not let a request body forge the caller gateway", async () => {

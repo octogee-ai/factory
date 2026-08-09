@@ -13,6 +13,10 @@ function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
     imageTag: "cafe123-ocbeta2",
+    gatewayEdgeImage: {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+      imageTag: "cafe123-ocbeta2",
+    },
     profile: null,
     gatewayClass: "shared",
     imageProfile: "standard",
@@ -21,7 +25,7 @@ function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: null,
+    builderAccess: null,
     ownerUid: null,
     builderSlug: null,
     openclawOverrides: null,
@@ -170,6 +174,21 @@ describe("rollout desired release activation", () => {
 });
 
 describe("rollout op — awaits the roll arm's convergence", () => {
+  it("fails before activation when the release omits its paired gateway-edge image", async () => {
+    const deps = mkDeps({
+      readReleasePayload: async () => mkPayload({ gatewayEdgeImage: undefined }),
+    });
+
+    const res = await createRolloutHandler(deps)(
+      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
+      ctx,
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("missing its immutable gateway-edge image reference");
+    expect(deps.activateDesiredRelease).not.toHaveBeenCalled();
+  });
+
   it("supersedes a prior incomplete desired release without waiting for its convergence", async () => {
     let activated = false;
     const activateDesiredRelease = vi.fn(async () => {

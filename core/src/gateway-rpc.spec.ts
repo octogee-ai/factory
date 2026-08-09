@@ -426,7 +426,19 @@ describe("gateway-rpc", () => {
       let captured: any;
       server.setHandler("gateway.restart.request", (params) => {
         captured = params;
-        return { ok: true, payload: { status: "requested" } };
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            status: "scheduled",
+            restart: {
+              ok: true,
+              pid: 123,
+              signal: "SIGUSR1",
+              coalesced: false,
+            },
+          },
+        };
       });
 
       const result = await client.gatewayRestartRequest({
@@ -438,7 +450,30 @@ describe("gateway-rpc", () => {
         reason: "byosub.oauth-runtime",
         skipDeferral: true,
       });
-      expect(result).toEqual({ status: "requested" });
+      expect(result).toEqual({
+        ok: true,
+        status: "scheduled",
+        restart: {
+          ok: true,
+          pid: 123,
+          signal: "SIGUSR1",
+          coalesced: false,
+        },
+      });
+    });
+
+    it("rejects a non-causal restart acknowledgement", async () => {
+      server.setHandler("gateway.restart.request", () => ({
+        ok: true,
+        payload: { status: "requested" },
+      }));
+
+      await expect(
+        client.gatewayRestartRequest({ reason: "routing", skipDeferral: true }),
+      ).rejects.toMatchObject({
+        code: "invalid-response",
+        message: expect.stringContaining("malformed restart acknowledgement"),
+      });
     });
   });
 
@@ -476,6 +511,31 @@ describe("gateway-rpc", () => {
           params: { channel: "mattermost", accountId: "alice-coach" },
         },
       ]);
+    });
+
+    it("accepts a start acknowledgement while the channel is still becoming ready", async () => {
+      server.setHandler("channels.start", () => ({
+        ok: true,
+        payload: { channel: "mattermost", accountId: "alice-coach", started: false },
+      }));
+
+      await expect(
+        client.channelsStart({ channel: "mattermost", accountId: "alice-coach" }),
+      ).resolves.toMatchObject({ started: false });
+    });
+
+    it("rejects a start acknowledgement without a boolean result", async () => {
+      server.setHandler("channels.start", () => ({
+        ok: true,
+        payload: { channel: "mattermost", accountId: "alice-coach", started: "yes" },
+      }));
+
+      await expect(
+        client.channelsStart({ channel: "mattermost", accountId: "alice-coach" }),
+      ).rejects.toMatchObject({
+        code: "invalid-response",
+        message: expect.stringContaining("missing boolean `started`"),
+      });
     });
   });
 
@@ -665,6 +725,7 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(1);
+      expect(client.channelsStatusConnectionGeneration()).toBe(1);
     });
 
     it("reconnects after the health connection drops", async () => {
@@ -679,6 +740,7 @@ describe("gateway-rpc", () => {
 
       expect(server.callCount("channels.status")).toBe(2);
       expect(server.callCount("connect")).toBe(2);
+      expect(client.channelsStatusConnectionGeneration()).toBe(2);
     });
   });
 
@@ -762,7 +824,7 @@ describe("gateway-rpc", () => {
   });
 
   describe("agentsCreate", () => {
-    it("calls `agents.create` with the requested name and workspace and returns the gateway payload", async () => {
+    it("returns on the persisted agents.create acknowledgement without waiting for config.changed", async () => {
       let captured: unknown = "not-called";
       server.setHandler("agents.create", (params) => {
         captured = params;

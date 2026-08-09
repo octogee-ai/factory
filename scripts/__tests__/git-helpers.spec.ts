@@ -12,6 +12,7 @@ vi.mock("../lib/config.js", () => ({
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
+  OPENCLAW_DIR: "/tmp/octogee-test",
   CUSTOMERS_DIR: "/tmp/octogee-test/customers-doesnt-exist",
   CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
   AGENTS_DIR: "/tmp/octogee-test/agents",
@@ -53,6 +54,27 @@ describe("adoptProjectClone", () => {
       expect(fs.existsSync(cloneDir)).toBe(false);
       expect(execFileSync("git", ["status", "--short"], { cwd: dest, encoding: "utf8" }))
         .toBe(" M README.md\n?? index.html\n");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an existing destination symlink without writing outside the project", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "project-clone-adopt-symlink-"));
+    const cloneDir = path.join(root, "clone");
+    const dest = path.join(root, "launchroom");
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(path.join(cloneDir, "docs"), { recursive: true });
+    fs.mkdirSync(path.join(cloneDir, ".git"));
+    fs.writeFileSync(path.join(cloneDir, "docs", "brief.md"), "canonical brief\n");
+    fs.mkdirSync(dest);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(dest, "docs"), "dir");
+
+    try {
+      expect(() => adoptProjectClone(cloneDir, dest)).toThrow(/symbolic link/u);
+      expect(fs.existsSync(path.join(outside, "brief.md"))).toBe(false);
+      expect(fs.existsSync(path.join(dest, ".git"))).toBe(false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

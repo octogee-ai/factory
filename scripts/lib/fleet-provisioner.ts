@@ -125,13 +125,8 @@ function desiredEnsureLaneRosterFingerprint(slugs: readonly string[]): string {
   return JSON.stringify([...new Set(slugs)].sort((a, b) => a.localeCompare(b)));
 }
 
-// Backoff for a project checkout that has not landed. It never abandons — a Gitea repo
-// restored an hour later is still picked up — but it must not retry on the hot path either:
-// selectStale re-flags a stale customer every tick, reconcile-loop has no backoff of its own,
-// and mounts are serial (maxConcurrent: 1). Retrying a checkout that can never land (repo gone
-// upstream, key missing) would re-run that customer's whole converge — blob sync,
-// config-patch RPC, channel verify — every 15s and starve every other customer on the pod.
-// Capped at 15m: ~4 converges/hour instead of 240.
+// The mount lane is serial, so a checkout that cannot land must back off instead of
+// consuming every tick and starving the pod's other cold mounts.
 export const CLONE_RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 300_000, 900_000];
 
 export function cloneRetryDelayMs(attempts: number): number {
@@ -149,6 +144,21 @@ export function cloneRetryReady(
   // backoff earned by an unrelated stranded one.
   if ((desiredFingerprint ?? "") !== prior.fingerprint) return true;
   return now >= prior.nextAt;
+}
+
+export interface CustomerEnsureRetryInput {
+  cloneRetry: CloneRetryState | undefined;
+  desiredFingerprint: string | undefined;
+  now: number;
+  permanentConfigPatchRetry: PermanentConfigPatchRetryState | undefined;
+  desiredEnsureFingerprint: string | undefined;
+}
+
+export function customerEnsureRetryReady(input: CustomerEnsureRetryInput): boolean {
+  return permanentConfigPatchRetryReady(
+    input.permanentConfigPatchRetry,
+    input.desiredEnsureFingerprint,
+  ) && cloneRetryReady(input.cloneRetry, input.desiredFingerprint, input.now);
 }
 
 export interface ConvergenceHooks {
@@ -190,6 +200,26 @@ export function settleConvergence(input: SettleConvergenceInput, hooks: Converge
   throw new Error(
     `project checkout still absent after ${attempts} converge(s): ${result.pendingProjectClones.join(", ")}`,
   );
+}
+
+export interface FinalizeConvergedMountInput extends SettleConvergenceInput {
+  uid: string;
+  hooks: ConvergenceHooks;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  writeMountMarker?: (slug: string) => void;
+}
+
+export async function finalizeConvergedMount(input: FinalizeConvergedMountInput): Promise<void> {
+  const {
+    uid,
+    hooks,
+    stampMounted,
+    writeMountMarker,
+    ...convergence
+  } = input;
+  settleConvergence(convergence, hooks);
+  await stampMounted(uid, true);
+  writeMountMarker?.(input.slug);
 }
 
 export function registerByosubDeviceAuth(
@@ -333,9 +363,6 @@ export interface FleetCapabilities {
   needsStateDeps: boolean;
 }
 
-// Operator gateways report local state but do not receive platform mutation authority:
-// operator gateways can run brokered local reconcile without platformState.
-// Firestore-backed reporting still gates on hasDb; brokered local reconcile does not.
 export function resolveFleetCapabilities(opts: {
   platformState: boolean;
   reportState: boolean;
@@ -901,17 +928,13 @@ function startMaybeReconcileLoop(params: {
   if (!provision || !readDesired) return () => undefined;
 
   const getContentStale = fingerprintSource
-    ? (): string[] => {
-        const now = Date.now();
-        return selectStableContentStale(
+    ? (): string[] =>
+        selectStableContentStale(
           getMountObservedSlugs(wrappedAdapter),
           desiredFp,
           appliedFp,
           pendingContentFp,
-        ).filter(
-          (slug) => cloneRetryReady(cloneRetry.get(slug), desiredFp.get(slug), now),
-        );
-      }
+        )
     : undefined;
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
@@ -931,8 +954,13 @@ function startMaybeReconcileLoop(params: {
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     ...(getContentStale ? { getContentStale } : {}),
     readDesired,
-    shouldEnsureSlug: () =>
-      permanentConfigPatchRetryReady(permanentConfigPatchRetry, desiredEnsureFingerprint),
+    shouldEnsureSlug: (slug) => customerEnsureRetryReady({
+      cloneRetry: cloneRetry.get(slug),
+      desiredFingerprint: desiredFp.get(slug),
+      now: Date.now(),
+      permanentConfigPatchRetry,
+      desiredEnsureFingerprint,
+    }),
     shouldDeferRemainingMounts: isPermanentConfigPatchFailure,
     onPendingEvictionCancelled: cancelPendingEviction,
     ensureSlug: async (
@@ -957,31 +985,26 @@ function startMaybeReconcileLoop(params: {
           readCurrentEvictionBatch,
         ),
       );
-      await stampMounted(uid, true);
-      // LAST step (after add succeeds AND the mounted mirror is stamped): write the on-disk
-      // completion marker so mount-observed now includes this slug. Until it lands, a
-      // coach-wired-but-incomplete mount stays in toMount and is re-ensured.
-      wrappedAdapter.writeMountMarker?.(slug);
-      // Records the fingerprint that is now applied on disk, so this customer is no longer
-      // reported stale until its desired fingerprint next changes — and THROWS instead when a
-      // project checkout is still absent, so the loop's own onEnsureError surfaces it. A
-      // normal return would fire onEnsureSuccess, which clears that very error.
-      settleConvergence({
+      await finalizeConvergedMount({
         now: Date.now(),
         slug,
+        uid,
         desiredFingerprint: desiredFp.get(slug),
         prior: cloneRetry.get(slug),
         result,
-      }, {
-        recordApplied: (s, fp) => {
-          if (!fingerprintSource) return;
-          if (fp !== undefined) {
-            appliedFp.set(s, fp);
-            persistAppliedFp();
-          }
+        hooks: {
+          recordApplied: (s, fp) => {
+            if (!fingerprintSource) return;
+            if (fp !== undefined) {
+              appliedFp.set(s, fp);
+              persistAppliedFp();
+            }
+          },
+          rememberRetry: (s, state) => cloneRetry.set(s, state),
+          forgetRetry: (s) => cloneRetry.delete(s),
         },
-        rememberRetry: (s, state) => cloneRetry.set(s, state),
-        forgetRetry: (s) => cloneRetry.delete(s),
+        stampMounted,
+        writeMountMarker: wrappedAdapter.writeMountMarker,
       });
 
       return result.newCustomer ? "mounted" : "noop";
@@ -1224,9 +1247,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       openclawVersion: opts.openclawVersion,
       startedAt: PROCESS_STARTED_AT_MS,
       customers: getMountObservedSlugs(adapter),
-      // Slugs mid-migration-import — Cowboy's operator poller skips these as eviction
-      // candidates until cutover moves their assignment (the operator path has no in-pod
-      // reconcile to honor the pin).
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
     }));
   });

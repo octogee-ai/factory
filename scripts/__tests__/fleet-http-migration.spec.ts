@@ -2193,7 +2193,7 @@ describe("createPushStateHandler", () => {
     expect(args).toContain(".octogee-migration-activation/chris/activation.json");
   });
 
-  it("operator gateway transfers contain only the movable customer agent", async () => {
+  it("Builder gateway transfers contain only the movable customer agent", async () => {
     const exportOpenClawActivationManifest = vi.fn(async () => ({
       version: 2 as const,
       slug: "eggman",
@@ -2205,7 +2205,7 @@ describe("createPushStateHandler", () => {
       bindings: [{ agentId: "octogee-eggman-coach" }],
     }));
     const adapter = mkAdapter({
-      isOperatorGateway: vi.fn(() => true),
+      isBuilderGateway: vi.fn(() => true),
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-eggman-coach" },
       ]),
@@ -2250,7 +2250,7 @@ describe("createPushStateHandler", () => {
       throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
     });
     const adapter = mkAdapter({
-      isOperatorGateway: vi.fn(() => true),
+      isBuilderGateway: vi.fn(() => true),
       listExportPaths: vi.fn(async () => [{ cwd: "/state", path: "agents/octogee-eggman-coach" }]),
       exportOpenClawActivationManifest,
     });

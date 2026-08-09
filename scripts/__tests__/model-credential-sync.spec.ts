@@ -102,11 +102,13 @@ describe("deriveDesiredModelCredentialState", () => {
 });
 
 describe("syncModelCredentialsForCustomer", () => {
-  it("normalizes canonical OAuth state into the proven runtime materialization path", async () => {
+  it("suppresses customer OAuth state instead of materializing its runtime credential", async () => {
     const applyModelCredentialState = vi.fn(() => true);
     const restoreOauthStoreForSlug = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatch = vi.fn(async () => true);
     const triggerSecretsReload = vi.fn(async () => {});
+    const purgeCustomerOauthRuntime = vi.fn(async () => ({ changed: true, resetCount: 0 }));
+    const requestGatewayRestart = vi.fn(async () => true);
 
     await syncModelCredentialsForCustomer(
       {
@@ -120,28 +122,35 @@ describe("syncModelCredentialsForCustomer", () => {
         },
       },
       {
-        isOperatorGateway: () => false,
         isSharedGateway: () => false,
         usesLlmBrokerToken: () => false,
         applyModelCredentialState,
         restoreOauthStoreForSlug,
         applyCoachModelPatch,
         triggerSecretsReload,
+        purgeCustomerOauthRuntime,
+        requestGatewayRestart,
       },
     );
 
-    const input = {
-      slug: "tester-70",
-      provider: "claude-cli",
-      baseUrl: undefined,
-      model: undefined,
-    };
-    expect(applyModelCredentialState).toHaveBeenCalledWith("tester-70", input);
-    expect(restoreOauthStoreForSlug).toHaveBeenCalledWith("tester-70");
+    expect(applyModelCredentialState).toHaveBeenCalledWith(
+      "tester-70",
+      null,
+      undefined,
+      { preserveAuthProfileStore: false },
+    );
+    expect(purgeCustomerOauthRuntime).toHaveBeenCalledWith(
+      "tester-70",
+      "platform-openrouter/deepseek/deepseek-v4-pro",
+      { forceSafeAll: true },
+    );
+    expect(restoreOauthStoreForSlug).not.toHaveBeenCalled();
     expect(applyCoachModelPatch).toHaveBeenCalledWith({
-      ...input,
-      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      slug: "tester-70",
+      source: "free-tier",
+      model: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
+    expect(requestGatewayRestart).not.toHaveBeenCalled();
     expect(triggerSecretsReload).toHaveBeenCalledTimes(1);
   });
 });

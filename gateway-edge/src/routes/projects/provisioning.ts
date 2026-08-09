@@ -3,11 +3,16 @@ import {
   giteaDeleteVerifiedRepo,
   giteaWriteFile,
   giteaWriteFiles,
+  giteaWriteFilesIfAllAbsent,
 } from "../../lib/gitea.js";
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
-import { notesWelcomeSeed, projectPlaybookSeeds } from "@octogee/core/templates/project-seeds";
+import {
+  notesWelcomeSeed,
+  projectPlaybookSeeds,
+  projectRecipeStarterSeeds,
+} from "@octogee/core/templates/project-seeds";
 import { seedBoardWelcomeIssue } from "../../lib/board-welcome.js";
 import type { ProjectRecipeId } from "@octogee/shared/types/project";
 
@@ -58,7 +63,7 @@ export async function ensureProjectGiteaRepo(input: {
     await giteaWriteFile(org, repoName, "README.md", body, "auto: seed project README");
 
     const today = new Date().toISOString().slice(0, 10);
-    const seeds = [
+    const playbookSeeds = [
       ...projectPlaybookSeeds({
         projectName: input.name,
         projectType: input.projectType,
@@ -70,8 +75,18 @@ export async function ensureProjectGiteaRepo(input: {
     await giteaWriteFiles(
       org,
       repoName,
-      seeds.map((seed) => ({ path: seed.relPath, content: seed.content })),
+      playbookSeeds.map((seed) => ({ path: seed.relPath, content: seed.content })),
       "auto: seed project playbook",
+    );
+    const starterSeeds = projectRecipeStarterSeeds({
+      projectSlug: input.slug,
+      recipe: input.recipe,
+    });
+    await giteaWriteFilesIfAllAbsent(
+      org,
+      repoName,
+      starterSeeds.map((seed) => ({ path: seed.relPath, content: seed.content })),
+      "auto: seed project starter",
     );
   } catch (error) {
     throw new ProjectRepoProvisioningError(errorMessage(error), created);

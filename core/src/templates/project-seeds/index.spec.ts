@@ -3,6 +3,7 @@ import type { ProjectRecipeId } from "@octogee/shared/types/project";
 import {
   notesWelcomeSeed,
   projectPlaybookSeeds,
+  projectRecipeStarterSeeds,
   type ProjectPlaybookSeedInput,
 } from "./index.js";
 
@@ -238,5 +239,47 @@ describe("notesWelcomeSeed", () => {
 
   it("invites deletion — a welcome note is not canon", () => {
     expect(seed().content).toMatch(/delete/i);
+  });
+});
+
+describe("projectRecipeStarterSeeds", () => {
+  it("gives a new Vite project an immutable installable dependency graph", () => {
+    const seeds = projectRecipeStarterSeeds({
+      projectSlug: "wildcard",
+      recipe: "vite-static",
+    });
+
+    expect(seeds.map((seed) => seed.relPath)).toEqual([
+      "package.json",
+      "package-lock.json",
+    ]);
+    const manifest = JSON.parse(seeds[0].content) as {
+      name: string;
+      scripts: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(seeds[1].content) as {
+      name: string;
+      lockfileVersion: number;
+      packages: Record<string, { name?: string; devDependencies?: Record<string, string> }>;
+    };
+    expect(manifest).toMatchObject({
+      name: "wildcard",
+      scripts: { dev: "vite", build: "vite build", preview: "vite preview" },
+    });
+    expect(Object.values(manifest.devDependencies)).not.toContain("latest");
+    expect(lock).toMatchObject({
+      name: "wildcard",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "wildcard", devDependencies: manifest.devDependencies },
+      },
+    });
+  });
+
+  it("does not pretend a dependency graph exists for another recipe", () => {
+    for (const recipe of ["static-site", "astro-static"] as ProjectRecipeId[]) {
+      expect(projectRecipeStarterSeeds({ projectSlug: "wildcard", recipe })).toEqual([]);
+    }
   });
 });

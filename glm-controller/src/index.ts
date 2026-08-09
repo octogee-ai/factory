@@ -11,7 +11,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   isOperatorManaged,
   isOperationAuditRow,
-  operatorGatewayServiceAccountName,
+  builderGatewayServiceAccountName,
   resolveOperationOrigin,
   resolveGatewayClass,
   isGatewayClass,
@@ -30,9 +30,9 @@ import {
 } from "@octogee/shared/types/image-tag";
 import {
   parseHealthResponse,
-  startOperatorHeartbeatPoller,
-  type OperatorHeartbeatPollerDeps,
-} from "./operator-heartbeat-poller.js";
+  startGatewayHeartbeatPoller,
+  type GatewayHeartbeatPollerDeps,
+} from "./gateway-heartbeat-poller.js";
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
@@ -240,6 +240,10 @@ import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connec
 import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
+import {
+  createProjectHostingRetirementClient,
+  retireWorkspaceBeforeLegacyHostingDeletion,
+} from "./project-hosting-retirement-client.js";
 import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
@@ -348,8 +352,8 @@ const GATEWAY_VALUES_FILE = (function () {
 const PIN_ENV = ENVIRONMENT_SETTINGS.pinEnvironment;
 
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
-const OPERATOR_HEARTBEAT_POLL_MS = 15_000;
-const OPERATOR_HEALTH_TIMEOUT_MS = 5_000;
+const GATEWAY_HEARTBEAT_POLL_MS = 15_000;
+const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
 export const ADD_GATEWAY_DEPLOYMENT_READY_TIMEOUT_MS = 30 * 60_000;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 
@@ -611,7 +615,7 @@ async function syncGatewayModelKeySecrets(
       });
       if (
         result.changed &&
-        (gatewayClass === "builder" || gatewayClass === "operator") &&
+        gatewayClass === "builder" &&
         gateway.desiredStatus === "running"
       ) {
         changedBrokerGateways.add(gateway.gatewayId);
@@ -2007,7 +2011,7 @@ function buildHeartbeatPollerCoreDeps(
   log: (msg: string) => void,
   informer: FleetInformer,
   listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
-): Omit<OperatorHeartbeatPollerDeps, "evictSlug"> {
+): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
   const polledHeartbeats = new Map<string, unknown>();
   return {
     listGatewayIds: async () => {
@@ -2019,7 +2023,7 @@ function buildHeartbeatPollerCoreDeps(
     fetchHealth: async (gatewayId) => {
       const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), OPERATOR_HEALTH_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), GATEWAY_HEALTH_TIMEOUT_MS);
       try {
         const res = await fetch(url, { signal: controller.signal });
         if (!res.ok) return null;
@@ -2067,12 +2071,12 @@ function buildHeartbeatPollerCoreDeps(
   };
 }
 
-export function buildOperatorHeartbeatPollerDeps(
+export function buildGatewayHeartbeatPollerDeps(
   db: Firestore,
   log: (msg: string) => void,
   privateKey: string,
   informer: FleetInformer,
-): OperatorHeartbeatPollerDeps {
+): GatewayHeartbeatPollerDeps {
   return {
     ...buildHeartbeatPollerCoreDeps(db, log, informer, async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
@@ -2159,9 +2163,9 @@ function startControllerBackgroundTasks({
   const stopReconciler = startReconciler({ ...deps, informer });
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
-  const stopPoller = startOperatorHeartbeatPoller(
-    buildOperatorHeartbeatPollerDeps(db, log, fleetControllerPrivateKey, informer),
-    OPERATOR_HEARTBEAT_POLL_MS,
+  const stopPoller = startGatewayHeartbeatPoller(
+    buildGatewayHeartbeatPollerDeps(db, log, fleetControllerPrivateKey, informer),
+    GATEWAY_HEARTBEAT_POLL_MS,
   );
   const stopReaper = startOrphanHeartbeatReaper({
     db,
@@ -2709,7 +2713,7 @@ export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<voi
         gatewayContainerSecurityContext: null,
         serviceAccountName: null,
         serviceAccount: null,
-        operatorAccess: null,
+        builderAccess: null,
         ownerUid: null,
         builderSlug: null,
         openclawOverrides: null,
@@ -2845,11 +2849,13 @@ function migrationProjectCheckoutScope(
 ): FleetBrokerProjectCheckoutScope {
   if (!gatewayId) return "workspace-only";
   const root = projectGatewayDesiredRootForGateway(gatewayData, gatewayId);
-  if (!root || root.ownerUid !== uid || root.builderSlug !== slug) {
+  if (!root) return "workspace-only";
+  if (root.gatewayClass === "shared") return "workspace-and-projects";
+  if (root.ownerUid !== uid || root.builderSlug !== slug) {
     return "workspace-only";
   }
   if (
-    (root.gatewayClass === "builder" || root.gatewayClass === "operator") &&
+    root.gatewayClass === "builder" &&
     root.allocation?.kind === "disposable-builder" &&
     root.allocation.claimedByUid === uid
   ) {
@@ -3242,7 +3248,7 @@ async function buildHandlers(
     deleteGatewayServiceAccount: async (gatewayId) =>
       kubeOps.deleteServiceAccount({
         namespace: NAMESPACE,
-        name: operatorGatewayServiceAccountName(gatewayId),
+        name: builderGatewayServiceAccountName(gatewayId),
       }),
     deleteGatewayModelKeyKubeSecret: async (gatewayId) =>
       kubeOps.deleteSecret({ namespace: NAMESPACE, name: gatewayModelKeySecretName(gatewayId) }),
@@ -3835,6 +3841,9 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
     adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
   });
+  const projectHostingRetirement = createProjectHostingRetirementClient({
+    baseUrl: cleanupEnv("PROJECT_HOSTING_RETIREMENT_URL"),
+  });
   return {
     gitea,
     mattermost,
@@ -3861,26 +3870,32 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
     },
     deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
     deleteHostingSites: async (slug: string, projectSlugs: string[]) => {
-      const auth = new GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
-      });
-      const projectId = requireEnv(
-        "GOOGLE_CLOUD_PROJECT",
-        "hosting-site deletion must target this env's Firebase project",
-      );
-      const result = await deleteHostingSitesForCustomer(
-        {
-          projectId,
-          getAccessToken: async () => {
-            const token = await auth.getAccessToken();
-            if (!token) throw new Error("firebase-hosting: no access token from ADC");
-            return token;
-          },
-          log: logFn,
+      const result = await retireWorkspaceBeforeLegacyHostingDeletion({
+        retirement: projectHostingRetirement,
+        workspaceId: slug,
+        deleteLegacy: async () => {
+          const auth = new GoogleAuth({
+            scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
+          });
+          const projectId = requireEnv(
+            "GOOGLE_CLOUD_PROJECT",
+            "hosting-site deletion must target this env's Firebase project",
+          );
+          return deleteHostingSitesForCustomer(
+            {
+              projectId,
+              getAccessToken: async () => {
+                const token = await auth.getAccessToken();
+                if (!token) throw new Error("firebase-hosting: no access token from ADC");
+                return token;
+              },
+              log: logFn,
+            },
+            slug,
+            projectSlugs,
+          );
         },
-        slug,
-        projectSlugs,
-      );
+      });
       return { deleted: result.deleted };
     },
     log: logFn,

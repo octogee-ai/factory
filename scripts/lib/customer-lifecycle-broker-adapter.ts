@@ -67,15 +67,20 @@ import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
   createGiteaUser,
+  customerRepositoryHasCanonicalRemote,
   customerSshKeyPath,
   deleteCustomerSshKey,
   generateCustomerSshKey,
-  gitExec,
   initWorkspaceRepo,
+  projectCheckoutMatchesSource,
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
+  setRepoSshCommand,
 } from "./git.js";
-import { ensureGiteaOrgForWorkspace } from "./gitea-admin-broker-client.js";
+import {
+  ensureGiteaOrgForWorkspace,
+  ensureSystemConfigRepo,
+} from "./gitea-admin-broker-client.js";
 import {
   hasMountedMarker,
   clearMountedMarker,
@@ -94,6 +99,8 @@ import {
   buildMattermostAccounts,
   buildProjectAgentAccounts,
   buildProjectAgents,
+  gatewayAgentRoster,
+  mattermostAccountBindingsNeedingActivation,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
@@ -133,6 +140,12 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import {
+  activatePendingMattermostRouting,
+  captureMattermostRoutingActivationBaseline,
+  markMattermostRoutingActivationPending,
+  mattermostRoutingActivationPending,
+} from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
@@ -182,7 +195,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
   adminMmUserId?: string;
-  isOperatorGateway?: () => boolean;
+  isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
 
@@ -306,9 +319,6 @@ async function createMissingCustomerAgents(
   const current = await currentRosterConfig(ctx);
   const missing = unrosteredAgentSpecs(current, rosterAgentSpecsFromEntries(agentEntries));
   if (missing.length === 0) return;
-  // The project checkouts clone AFTER the mount patch, so a new project agent's
-  // workspace does not exist yet. The directory is ours to own; checkoutProjectRepo
-  // clones into an existing dest via its adopt path.
   await Promise.all(missing.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
   try {
     await createRosterAgents(missing, { rpc: ctx.rpc, log: ctx.log, logPrefix });
@@ -318,9 +328,15 @@ async function createMissingCustomerAgents(
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
-  const projectCheckoutScope = snapshot.projectCheckoutScope
-    ?? ctx.projectCheckoutScope?.(snapshot.slug)
+  const runtimeScope = ctx.projectCheckoutScope?.(snapshot.slug)
     ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+  const projectCheckoutScope =
+    runtimeScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE ||
+      snapshot.projectCheckoutScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE
+      ? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE
+      : snapshot.projectCheckoutScope
+        ?? runtimeScope
+        ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
   const projected = {
     ...snapshot,
     projectCheckoutScope,
@@ -401,22 +417,88 @@ async function listProjectsNeedingClone(
   if (!snapshot) return [];
   return snapshot.projects.flatMap((p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
-    if (fs.existsSync(path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug, ".git"))) {
-      return [];
-    }
     const repoSource = projectRepoSourceFromDoc(p.repoSource);
+    const target = {
+      projectSlug: p.projectSlug,
+      giteaRepoName: p.giteaRepoName,
+      ...(repoSource ? { repoSource } : {}),
+    };
     if (!repoSource && !p.giteaRepoName) {
       ctx.log(
         `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,
       );
+      return [target];
+    }
+    if (projectCheckoutMatchesSource(
+      slug,
+      p.projectSlug,
+      p.giteaRepoName ?? "",
+      repoSource,
+    )) {
       return [];
     }
-    return [{
-      projectSlug: p.projectSlug,
-      giteaRepoName: p.giteaRepoName,
-      ...(repoSource ? { repoSource } : {}),
-    }];
+    return [target];
   });
+}
+
+async function restoreImportedProjectCheckouts(
+  ctx: BrokerCtx,
+  slug: string,
+  scope: FleetBrokerProjectCheckoutScope,
+): Promise<void> {
+  if (scope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) return;
+  const snapshot = await snapshotForSlug(ctx, slug);
+  if (!snapshot) {
+    throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
+  }
+  const missing = await listProjectsNeedingClone(ctx, slug);
+  let githubToken: Promise<string | null> | null = null;
+  for (const project of missing) {
+    const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    if (!repoSource && !project.giteaRepoName) continue;
+    let cloneOptions: ProjectCloneOptions | undefined;
+    if (repoSource?.provider === "github") {
+      githubToken ??= resolveGithubCloneToken(ctx, slug).catch((error) => {
+        ctx.log(`[import:${slug}] GitHub clone credential unavailable: ${String(error)}`);
+        return null;
+      });
+      cloneOptions = { repoSource, githubToken: await githubToken };
+    }
+    try {
+      const cloned = await cloneProjectRepoForTarget(
+        slug,
+        project.projectSlug,
+        project.giteaRepoName,
+        cloneOptions,
+      );
+      if (cloned) {
+        ctx.log(`[import:${slug}/${project.projectSlug}] restored project checkout`);
+      }
+    } catch (error) {
+      ctx.log(
+        `[import:${slug}/${project.projectSlug}] project checkout restore failed: ${String(error)}`,
+      );
+    }
+  }
+  const remaining = snapshot.projects.flatMap((project) => {
+    if (project.provisioningState !== undefined && project.provisioningState !== "active") return [];
+    const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    if (!repoSource && !project.giteaRepoName) return [project.projectSlug];
+    return projectCheckoutMatchesSource(
+        slug,
+        project.projectSlug,
+        project.giteaRepoName ?? "",
+        repoSource,
+      )
+      ? []
+      : [project.projectSlug];
+  });
+  if (remaining.length > 0) {
+    throw new Error(
+      `[import:${slug}] project checkout restoration incomplete: ` +
+      [...new Set(remaining)].sort().join(", "),
+    );
+  }
 }
 
 async function resolveGithubCloneToken(ctx: BrokerCtx, slug: string): Promise<string | null> {
@@ -497,6 +579,31 @@ function platformModelDefaults(
   return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : null;
 }
 
+function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
+  return {
+    ...ctx.rpc,
+    configPatch: (
+      patch: object,
+      baseHash: string,
+      options?: { replacePaths?: readonly string[] },
+    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
+  };
+}
+
+async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
+  const result = await ctx.rpc.secretsReload();
+  const warningCount = result.warningCount ?? 0;
+  if (result.ok !== true) {
+    throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
+  }
+  if (warningCount !== 0) {
+    throw new Error(
+      `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}`,
+    );
+  }
+  ctx.log(`${logPrefix} secrets.reload complete`);
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -546,6 +653,7 @@ async function applyAddCustomerConfigPatch(
       emoji: identity.emoji,
       model: DEFAULT_COACH.model,
     },
+    customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
     default: process.env.GATEWAY_BUILDER_SLUG?.trim() === snapshot.slug,
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
@@ -558,6 +666,7 @@ async function applyAddCustomerConfigPatch(
     agentsDir: AGENTS_DIR,
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
+    ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
   });
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
@@ -581,7 +690,11 @@ async function applyAddCustomerConfigPatch(
     ],
     removePrefixes: evictionSlugs.map((slug) => `${slug}-proj-`),
   });
-  const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents);
+  const projectAccounts = buildProjectAgentAccounts(
+    snapshot.slug,
+    projectAgents,
+    brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
+  );
   const bindings = buildCustomerBindings([
     {
       slug: snapshot.slug,
@@ -589,6 +702,8 @@ async function applyAddCustomerConfigPatch(
       agentProjects: activeAgentProjectIds(projectAgents),
     },
   ]);
+  let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
+  const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
   await deleteSupersededCustomerAgents(ctx, {
     slug: snapshot.slug,
@@ -601,20 +716,26 @@ async function applyAddCustomerConfigPatch(
     customerAgentEntries,
     `[add:${snapshot.slug}]`,
   );
+  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(ctx.rpc, [accountId, ...Object.keys(projectAccounts)]);
   const startedAt = Date.now();
-  const convergedRpc = {
-    ...ctx.rpc,
-    configPatch: (
-      patch: object,
-      baseHash: string,
-      options?: { replacePaths?: readonly string[] },
-    ) => ctx.rpc.configPatchAndWaitForChange(patch, baseHash, options),
-  };
   await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
         const currentBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
+        const missingAccountIds = mattermostAccountBindingsNeedingActivation(
+          currentBindings,
+          bindings,
+        );
+        if (missingAccountIds.length > 0) {
+          markMattermostRoutingActivationPending(
+            OPENCLAW_DIR,
+            routingActivationReason,
+            missingAccountIds,
+            routingActivationBaseline,
+          );
+          routingActivationRequired = true;
+        }
         const nextAgents = replaceCustomerAgentsInFullAgentList(
           current,
           snapshot.slug,
@@ -628,7 +749,7 @@ async function applyAddCustomerConfigPatch(
             ...customerAgentRosterPatch(
               current,
               snapshot.slug,
-              rebindPlatformEmbeddingRefs(nextAgents),
+              rebindPlatformEmbeddingRefs(gatewayAgentRoster(nextAgents)),
             ),
           },
           bindings: mergeCustomerBindings(
@@ -663,12 +784,20 @@ async function applyAddCustomerConfigPatch(
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {
-      rpc: convergedRpc,
+      rpc: convergedConfigRpc(ctx),
       cache: ctx.configCache,
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
       signal: callOpts?.signal,
     },
   );
+  if (routingActivationRequired) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
+  await reloadRuntimeSecrets(ctx, `[add:${snapshot.slug}]`);
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
     elapsedMs: Date.now() - startedAt,
@@ -911,14 +1040,26 @@ async function activateImportedCustomer(
     });
   }
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
+  const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)
+    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+  if (runtimeProjectCheckoutScope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) {
+    const snapshot = await snapshotForSlug(ctx, slug);
+    if (!snapshot) {
+      throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
+    }
+  }
+  const projectCheckoutScope = ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
+    ?? runtimeProjectCheckoutScope;
   await pruneWorkspaceOnlyProjectCheckouts(
     CUSTOMERS_DIR,
     slug,
-    ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
-      ?? ctx.projectCheckoutScope?.(slug)
-      ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
+    projectCheckoutScope,
     ctx.log,
   );
+  await restoreImportedProjectCheckouts(ctx, slug, projectCheckoutScope);
+  setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
+  ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
   // The rsync brings whatever store the source pod had. One openclaw cannot
   // open takes down the whole target gateway the moment activation registers
   // the agent, which then blocks the very account health-check below — so
@@ -935,17 +1076,34 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
+  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(
+    ctx.rpc,
+    [safeManifest.accountId, ...safeManifest.projectAgents.map((agent) => agent.accountId)],
+  );
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
     signal: opts?.signal,
     log: ctx.log,
+    onRoutingActivationRequired: (accountIds) => {
+      markMattermostRoutingActivationPending(
+        OPENCLAW_DIR,
+        routingActivationReason,
+        accountIds,
+        routingActivationBaseline,
+      );
+    },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
+    await activatePendingMattermostRouting(
+      ctx.rpc,
+      OPENCLAW_DIR,
+      ctx.log,
+    );
+  }
+  await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
-  ctx.log(
-    `[import:${slug}] activation relies on config-patch hot-reload; no explicit gateway restart requested`,
-  );
 
   ctx.log(
     `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
@@ -975,8 +1133,18 @@ export async function pruneWorkspaceOnlyProjectCheckouts(
   log(`[import:${slug}] removed project checkouts from workspace-only target`);
 }
 
-export function projectCheckoutScopeForRuntime(): FleetBrokerProjectCheckoutScope {
-  return WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+export function projectCheckoutScopeForRuntime(
+  slug: string,
+  env: NodeJS.ProcessEnv = process.env,
+): FleetBrokerProjectCheckoutScope {
+  const gatewayClass = env.GATEWAY_CLASS?.trim();
+  const includesProjects = gatewayClass === "shared" || (
+    gatewayClass === "builder" &&
+    env.GATEWAY_BUILDER_SLUG?.trim() === slug
+  );
+  return includesProjects
+    ? "workspace-and-projects"
+    : WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
 }
 
 async function removeImportedCustomerBySlug(
@@ -1040,7 +1208,7 @@ export function buildBrokeredLifecycleAdapter(
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
-    isOperatorGateway: opts.isOperatorGateway ?? (() => false),
+    isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     materializeBrokerProfiles: (slug) =>
       materializeCustomerBrokerProfiles([`octogee-${slug}-coach`], slug, opts.log),
     projectCheckoutScope: (slug) =>
@@ -1093,7 +1261,7 @@ export function buildBrokeredLifecycleAdapter(
 
     hasCustomerDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
     hasWorkspaceGitDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug, ".git")),
-    hasGitRemote: (slug) => gitExec(path.join(CUSTOMERS_DIR, slug), ["remote", "get-url", "origin"]) !== null,
+    hasGitRemote: (slug) => customerRepositoryHasCanonicalRemote(path.join(CUSTOMERS_DIR, slug)),
     ensureCustomerDirectories,
     writeCustomerTemplateFiles,
     deleteCustomerDir: (slug) => fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true }),
@@ -1103,6 +1271,7 @@ export function buildBrokeredLifecycleAdapter(
     generateCustomerSshKey,
     createGiteaUser,
     ensureGiteaOrg: ensureGiteaOrgForWorkspace,
+    ensureSystemConfigRepo,
     readLocalCustomerPubKey,
     readGiteaCustomerPubKeys,
     deleteCustomerSshKey,

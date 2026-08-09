@@ -396,6 +396,17 @@ describe("deployment target consumers", () => {
     expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
   });
 
+  it("resolves the project runner API egress allowlist from the live cluster before Helm", () => {
+    const workflow = source(".github/workflows/build-and-deploy.yml");
+
+    expect(workflow).toContain("get endpoints kubernetes");
+    expect(workflow).toContain("get service kubernetes");
+    expect(workflow).toContain("API_SERVER_EGRESS_CIDRS_JSON");
+    expect(workflow).toContain(
+      '--set-json "projectRunner.apiServerEgressCidrs=${API_SERVER_EGRESS_CIDRS_JSON}"',
+    );
+  });
+
   it("reconciles durable PVC snapshot schedules after every platform release", () => {
     const workflow = source(".github/workflows/build-and-deploy.yml");
 

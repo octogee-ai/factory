@@ -61,7 +61,7 @@ export interface CustomerContext {
 export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
     log: (msg: string) => void;
-    isOperatorGateway?: () => boolean;
+    isBuilderGateway?: () => boolean;
     /**
      * Re-run the platform broker-profile materialization for this customer's
      * agents. Only openclaw creates an agent's auth-profile store, so the mount's
@@ -105,9 +105,6 @@ export interface CustomerLifecycleAdapter {
     customerMigratingIn?: (slug: string) => boolean;
     /** Stamp the migrating-in pin (import handler, before activation). */
     markCustomerMigratingIn?: (slug: string) => void;
-    /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's operator
-     *  poller skips them as eviction candidates pre-cutover (the operator path has no in-pod
-     *  reconcile to honor the pin). */
     listMigratingInSlugs?: () => string[];
     loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
     seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
@@ -134,6 +131,7 @@ export interface CustomerLifecycleAdapter {
     generateCustomerSshKey: (slug: string) => string;
     createGiteaUser: (slug: string, pubKey: string) => Promise<void>;
     ensureGiteaOrg: (slug: string) => Promise<void>;
+    ensureSystemConfigRepo: (slug: string) => Promise<void>;
     readLocalCustomerPubKey: (slug: string) => string | null;
     readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
     deleteCustomerSshKey: (slug: string) => Promise<void>;

@@ -42,7 +42,7 @@ function gatewayRootFence(
     latestRelease: release,
     desiredRelease: release,
     liveRelease: release,
-    gatewayClass: "operator",
+    gatewayClass: "builder",
     ownerUid: "uid-alice",
     builderSlug: "alice",
     configHash: gatewayId === "gw-blue" ? "7".repeat(64) : "8".repeat(64),

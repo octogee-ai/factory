@@ -351,8 +351,21 @@ export function customerAgentRosterPatch(current, slug, agentEntries) {
     }
     return { entries };
 }
+function isCustomerMattermostAccountBinding(binding, slug) {
+    if (!isPlainObject(binding))
+        return false;
+    const match = binding.match;
+    if (!isPlainObject(match) || match.channel !== "mattermost")
+        return false;
+    const accountId = match.accountId;
+    return typeof accountId === "string" && (accountId === `${slug}-coach` || accountId.startsWith(`${slug}-proj-`));
+}
 export function filterOutCustomerBindings(bindings, slug) {
-    return bindings.filter((b) => !isCustomerAgentId(b?.agentId, slug));
+    return bindings.filter((binding) => {
+        const agentId = isPlainObject(binding) ? binding.agentId : undefined;
+        return !isCustomerAgentId(agentId, slug) &&
+            !isCustomerMattermostAccountBinding(binding, slug);
+    });
 }
 // Rebuilding bindings as filter-out-then-append reorders the array on every
 // converge, which defeats config.patch's local no-op and buys a full reload

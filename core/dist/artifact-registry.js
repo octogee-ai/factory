@@ -180,18 +180,18 @@ const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
 const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const RELEASE_VERSION_PATTERN = new RegExp(`^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
     `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`);
-// The release workflow's generator
-// (.github/actions/release-digest-manifest/release-digest-manifest.mjs) is the
-// only thing that writes a manifest, so it — not this file — sets the contract.
-// Keep the two in lockstep; scripts/__tests__/release-digest-manifest-contract
-// holds them together. `octogee-project-runner` is deliberately absent: PR #3128
-// was reverted and nothing builds that image, so demanding it here made every
-// cut unsatisfiable against a manifest our own generator had just written.
-const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
-const RELEASE_MANIFEST_SURFACE_IMAGES = {
-    gateway: ["gateway-edge", "octogee-gateway", "octogee-gateway-operator"],
-    platform: ["artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent"],
-};
+// The manifest is a lookup for release invariant 1 — the bytes are already
+// built — not an approval system. A schema version or an unfamiliar surface key
+// says nothing about whether those bytes exist, so gating on either blocks a
+// promotion the images would have satisfied. Read the manifest for what it
+// carries. The one refusal that earns its place is a digest the gateway release
+// genuinely needs and the manifest does not have, named so the operator knows
+// which image to build.
+const RELEASE_GATEWAY_IMAGES_REQUIRED = [
+    "gateway-edge",
+    "octogee-gateway",
+    "octogee-gateway-builder",
+];
 export class ReleaseDigestAliasError extends Error {
     aliasOutcomes;
     constructor(aliasOutcomes, cause) {
@@ -232,12 +232,15 @@ function exactObjectKeys(value, expected, description) {
         throw new Error(`${description} must contain exactly: ${sortedExpected.join(", ")}`);
     }
 }
+function requiredObjectKeys(value, expected, description) {
+    const missing = expected.filter((key) => value[key] === undefined);
+    if (missing.length > 0) {
+        throw new Error(`${description} is missing: ${missing.join(", ")}`);
+    }
+}
 function validateReleaseDigestManifest(input, manifestDigest, expectedRepository) {
     const manifest = plainRecord(input, "release digest manifest");
-    exactObjectKeys(manifest, ["schemaVersion", "sourceSha", "openclawVersion", "repository", "surfaces"], "release digest manifest");
-    if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
-        throw new Error(`release digest manifest schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`);
-    }
+    requiredObjectKeys(manifest, ["sourceSha", "openclawVersion", "repository", "surfaces"], "release digest manifest");
     const sourceSha = typeof manifest.sourceSha === "string"
         ? assertSourceSha(manifest.sourceSha)
         : assertSourceSha("");
@@ -249,28 +252,28 @@ function validateReleaseDigestManifest(input, manifestDigest, expectedRepository
     }
     const surfaces = plainRecord(manifest.surfaces, "release digest manifest surfaces");
     exactObjectKeys(surfaces, ["gateway", "platform"], "release digest manifest surfaces");
-    const parseSurface = (surface, images) => {
+    const parseSurface = (surface) => {
         const entries = plainRecord(surfaces[surface], `release digest manifest ${surface} surface`);
-        exactObjectKeys(entries, images, `release digest manifest ${surface} surface`);
-        return Object.fromEntries(images.map((image) => [
+        return Object.fromEntries(Object.keys(entries).map((image) => [
             image,
             assertDigest(entries[image], `release digest manifest ${image}`),
         ]));
     };
+    const gateway = parseSurface("gateway");
+    const missing = RELEASE_GATEWAY_IMAGES_REQUIRED.filter((image) => gateway[image] === undefined);
+    if (missing.length > 0) {
+        throw new Error(`release digest manifest is missing the gateway release images: ${missing.join(", ")}`);
+    }
     return {
         sourceSha,
         manifestDigest: assertDigest(manifestDigest, "release digest manifest"),
         openclawVersion: manifest.openclawVersion,
         repository: expectedRepository,
-        surfaces: {
-            gateway: parseSurface("gateway", RELEASE_MANIFEST_SURFACE_IMAGES.gateway),
-            platform: parseSurface("platform", RELEASE_MANIFEST_SURFACE_IMAGES.platform),
-        },
+        surfaces: { gateway, platform: parseSurface("platform") },
     };
 }
 function validateResolvedReleaseDigestManifest(manifest, expectedRepository) {
     return validateReleaseDigestManifest({
-        schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
         sourceSha: manifest.sourceSha,
         openclawVersion: manifest.openclawVersion,
         repository: manifest.repository,
@@ -416,8 +419,7 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
             const shortSha = sourceSha.slice(0, 7);
             const aliases = [];
             for (const surface of ["gateway", "platform"]) {
-                for (const image of RELEASE_MANIFEST_SURFACE_IMAGES[surface]) {
-                    const digest = validated.surfaces[surface][image];
+                for (const [image, digest] of Object.entries(validated.surfaces[surface])) {
                     const target = `${repository}/${image}@${digest}`;
                     aliases.push({ alias: `${repository}/${image}:${shortSha}`, intendedTarget: target });
                     if (surface === "gateway") {

@@ -3,20 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import { prepareGatewayRuntimeConfig } from "../gateway-runtime-config.js";
 
-function operatorConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMutableConfig {
+function builderConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMutableConfig {
   return {
     configSchemaVersion: 1,
-    profile: "operator",
-    gatewayClass: "operator",
-    imageProfile: "operator",
+    profile: null,
+    gatewayClass: "builder",
+    imageProfile: "builder",
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: "octogee-gw-bender",
     serviceAccount: { create: true },
-    operatorAccess: { shellsEnabled: true },
-    ownerUid: "uid-operator",
-    builderSlug: null,
+    builderAccess: { shellsEnabled: true },
+    ownerUid: "uid-builder",
+    builderSlug: "builder",
     openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
@@ -25,7 +25,7 @@ function operatorConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayM
 }
 
 describe("prepareGatewayRuntimeConfig", () => {
-  it("injects live API-server CIDRs into operator shell configuration", async () => {
+  it("injects live API-server CIDRs into Builder shell configuration", async () => {
     const resolveApiServerEgressCidrs = vi.fn(async () => [
       "10.128.0.2/32",
       "34.118.224.1/32",
@@ -33,12 +33,12 @@ describe("prepareGatewayRuntimeConfig", () => {
 
     await expect(
       prepareGatewayRuntimeConfig(
-        operatorConfig(),
+        builderConfig(),
         "bender",
         resolveApiServerEgressCidrs,
       ),
     ).resolves.toMatchObject({
-      operatorAccess: {
+      builderAccess: {
         shellsEnabled: true,
         kubeApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
       },
@@ -47,8 +47,8 @@ describe("prepareGatewayRuntimeConfig", () => {
   });
 
   it("preserves the last known CIDRs when live resolution returns empty", async () => {
-    const config = operatorConfig({
-      operatorAccess: {
+    const config = builderConfig({
+      builderAccess: {
         shellsEnabled: true,
         kubeApiServerEgressCidrs: ["10.128.0.2/32"],
       },
@@ -61,13 +61,13 @@ describe("prepareGatewayRuntimeConfig", () => {
 
   it("fails preparation when neither live nor last-known CIDRs are available", async () => {
     await expect(
-      prepareGatewayRuntimeConfig(operatorConfig(), "bender", async () => []),
-    ).rejects.toThrow("operator gateway bender has no API-server egress CIDRs");
+      prepareGatewayRuntimeConfig(builderConfig(), "bender", async () => []),
+    ).rejects.toThrow("builder gateway bender has no API-server egress CIDRs");
   });
 
-  it("does not resolve API-server CIDRs for gateways without operator shells", async () => {
+  it("does not resolve API-server CIDRs for gateways without Builder shells", async () => {
     const resolveApiServerEgressCidrs = vi.fn(async () => ["10.128.0.2/32"]);
-    const config = operatorConfig({ operatorAccess: { shellsEnabled: false } });
+    const config = builderConfig({ builderAccess: { shellsEnabled: false } });
 
     await expect(
       prepareGatewayRuntimeConfig(config, "bender", resolveApiServerEgressCidrs),

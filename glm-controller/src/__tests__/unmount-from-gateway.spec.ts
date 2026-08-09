@@ -63,12 +63,12 @@ describe("createUnmountFromGateway — live pod unmount", () => {
     });
   });
 
-  it("uses the same platform-signed unmount RPC for operator gateways", async () => {
+  it("uses the same platform-signed unmount RPC for Builder gateways", async () => {
     const deps = mkDeps({
       resolveGatewayUnmountTarget: vi.fn(async () => ({
         gatewayId: "bender",
         revisionId: "bender-r7",
-        profile: "operator" as const,
+        profile: "builder" as const,
       })),
     });
     const unmount = createUnmountFromGateway(deps);
@@ -166,12 +166,12 @@ describe("createUnmountFromGateway — connection-error retry", () => {
     expect(deps.wait).not.toHaveBeenCalled();
   });
 
-  it("does not call the unmount RPC when an operator gateway has no live pod", async () => {
+  it("does not call the unmount RPC when a Builder gateway has no live pod", async () => {
     const deps = mkDeps({
       resolveGatewayUnmountTarget: vi.fn(async () => ({
         gatewayId: "bender",
         revisionId: "bender-r7",
-        profile: "operator" as const,
+        profile: "builder" as const,
       })),
       readAvailableReplicas: vi.fn(async () => 0),
     });

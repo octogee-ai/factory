@@ -12,15 +12,15 @@ function validConfig(
 ): GatewayMutableConfig {
   return {
     configSchemaVersion: 1,
-    profile: "operator",
-    gatewayClass: "operator",
-    imageProfile: "operator",
+    profile: "builder",
+    gatewayClass: "builder",
+    imageProfile: "builder",
     sizingTier: "l",
     gcpProject: null,
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    operatorAccess: { shellsEnabled: true },
+    builderAccess: { shellsEnabled: true },
     ownerUid: "uid-owner",
     builderSlug: "owner",
     openclawOverrides: null,
@@ -34,8 +34,41 @@ function validConfig(
 describe("gateway mutable config", () => {
   it("accepts the complete durable root authority shape", () => {
     expect(isGatewayMutableConfig(validConfig({
-      operatorAccess: { shellsEnabled: true, controlUiEnabled: true },
+      builderAccess: { shellsEnabled: true, controlUiEnabled: true },
     }))).toBe(true);
+  });
+
+  it("rejects the retired operator customer gateway class", () => {
+    expect(isGatewayMutableConfig({
+      ...validConfig(),
+      gatewayClass: "operator",
+    })).toBe(false);
+  });
+
+  it("rejects class and runtime profile mismatches", () => {
+    expect(isGatewayMutableConfig(validConfig({
+      gatewayClass: "builder",
+      imageProfile: "standard",
+    }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({
+      profile: "standard",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+    }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({
+      profile: "builder",
+      gatewayClass: "shared",
+      imageProfile: "standard",
+      ownerUid: null,
+      builderSlug: null,
+    }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({
+      profile: null,
+      gatewayClass: "shared",
+      imageProfile: "builder",
+      ownerUid: null,
+      builderSlug: null,
+    }))).toBe(false);
   });
 
   it("accepts a durable root that carries no computeClass at all", () => {
@@ -58,7 +91,7 @@ describe("gateway mutable config", () => {
   it("rejects a non-boolean Control UI capability", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),
-      operatorAccess: { shellsEnabled: true, controlUiEnabled: "yes" },
+      builderAccess: { shellsEnabled: true, controlUiEnabled: "yes" },
     })).toBe(false);
   });
 

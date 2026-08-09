@@ -62,11 +62,6 @@ export interface IssueModelBrokerTokenInput {
   provider: ModelBrokerProvider;
   purpose?: ModelBrokerTokenPurpose;
   secretName: string;
-  // Revocation scope. Defaults to gatewayId (one active token per gateway, for
-  // single-tenant builder/operator pods). A multi-tenant shared pod issues one
-  // owner-scoped token per customer-agent, so it passes `${gatewayId}:${ownerUid}`
-  // to keep each customer's pointer independent — reissuing one customer's token
-  // must not revoke a sibling's.
   pointerKey?: string;
   // Mint a standalone token with NO pointer (no revoke-on-reissue). Per-customer
   // shared tokens are re-minted whenever the secret-resolver re-resolves the keyRef,

@@ -21,6 +21,12 @@ vi.mock("../lib/internal-fetch", () => ({
   internalFetch: (...args: unknown[]) => mockInternalFetch(...args),
 }));
 
+const mockGithubRepoApi = vi.fn();
+vi.mock("../lib/github", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/github.js")>()),
+  githubRepoApi: (...args: unknown[]) => mockGithubRepoApi(...args),
+}));
+
 vi.mock("../lib/gitea", () => ({
   giteaApi: vi.fn(),
   createProjectGiteaRepo: vi.fn(),
@@ -79,7 +85,10 @@ async function ssrReadProject(workspaceSlug: string, projectSlug: string): Promi
 
 const CALLER_UID = "project-owner-uid";
 const USERNAME = "projowner";
+const BUILDER_GATEWAY_ID = "builder-projowner";
 const ORIGINAL_FLEET_BROKER_URL = process.env.FLEET_BROKER_URL;
+const ORIGINAL_CONNECTOR_TOKEN_BROKER_URL = process.env.CONNECTOR_TOKEN_BROKER_URL;
+const ORIGINAL_GATEWAY_ID = process.env.GATEWAY_ID;
 
 async function seedCaller(): Promise<void> {
   await db.collection("workspaces").doc(USERNAME).set({
@@ -101,6 +110,17 @@ async function seedCaller(): Promise<void> {
     .collection("system")
     .doc("config")
     .set({ role: "user" });
+}
+
+async function seedEligibleBuilderGateway(): Promise<void> {
+  await db.doc(`users/${CALLER_UID}`).update({
+    "provisioning.openclaw.gatewayId": BUILDER_GATEWAY_ID,
+  });
+  await db.doc(`gateways/${BUILDER_GATEWAY_ID}`).set({
+    gatewayClass: "builder",
+    ownerUid: CALLER_UID,
+    builderSlug: USERNAME,
+  });
 }
 
 function mockProjectPairMattermost(): void {
@@ -196,8 +216,15 @@ beforeEach(async () => {
   mockMmApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
   mockInternalFetch.mockReset();
-  mockInternalFetch.mockResolvedValue(new Response(JSON.stringify({ created: true }), { status: 200 }));
+  mockGithubRepoApi.mockReset().mockResolvedValue({});
+  mockInternalFetch.mockImplementation(async (url: string) => new Response(JSON.stringify(
+    url.endsWith("/internal/connectors/access-token")
+      ? { accessToken: "github-owner-token" }
+      : { created: true },
+  ), { status: 200 }));
   process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
+  process.env.CONNECTOR_TOKEN_BROKER_URL = "http://octogee-api.test:3001";
+  process.env.GATEWAY_ID = BUILDER_GATEWAY_ID;
   await seedCaller();
   token = await getIdTokenForUid(CALLER_UID);
 });
@@ -205,6 +232,10 @@ beforeEach(async () => {
 afterEach(() => {
   if (ORIGINAL_FLEET_BROKER_URL === undefined) delete process.env.FLEET_BROKER_URL;
   else process.env.FLEET_BROKER_URL = ORIGINAL_FLEET_BROKER_URL;
+  if (ORIGINAL_CONNECTOR_TOKEN_BROKER_URL === undefined) delete process.env.CONNECTOR_TOKEN_BROKER_URL;
+  else process.env.CONNECTOR_TOKEN_BROKER_URL = ORIGINAL_CONNECTOR_TOKEN_BROKER_URL;
+  if (ORIGINAL_GATEWAY_ID === undefined) delete process.env.GATEWAY_ID;
+  else process.env.GATEWAY_ID = ORIGINAL_GATEWAY_ID;
 });
 
 describe("project create ↔ SSR project page read contract", () => {
@@ -273,6 +304,7 @@ describe("github-backed project create", () => {
   const GH_REPO_SOURCE = { provider: "github", owner: "octogee-ai", repo: "octogee" };
 
   async function promoteToAdmin(): Promise<void> {
+    await seedEligibleBuilderGateway();
     await db
       .collection("users")
       .doc(CALLER_UID)
@@ -282,6 +314,7 @@ describe("github-backed project create", () => {
   }
 
   it("rejects a caller without the GitHub project feature with 403 and writes no doc", async () => {
+    await seedEligibleBuilderGateway();
     mockMmContextOk();
     const app = createApp();
 
@@ -316,6 +349,7 @@ describe("github-backed project create", () => {
       expect.objectContaining({ method: "POST" }),
       { requireProjectedToken: true },
     );
+    expect(mockGithubRepoApi).toHaveBeenCalledWith("octogee-ai", "octogee", "github-owner-token");
     expect(mockMmApi).toHaveBeenCalled();
   });
 

@@ -15,14 +15,15 @@
 // gitea-admin-broker-client (PLATFORM-CREDENTIAL-BROKERING). What stays here
 // is local git on the per-customer SSH key — clone/init/commit/push.
 import { execFileSync, execSync } from "child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 import {
   log, dlog, GIT_API_URL, GIT_SSH_HOST,
-  CUSTOMERS_DIR, CUSTOMER_KEYS_DIR,
+  OPENCLAW_DIR, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR,
 } from "./config.js";
 import {
-  workspaceGiteaOrg, workspaceRepoName, projectRepoName,
+  workspaceGiteaOrg, workspaceRepoName, projectRepoName, systemConfigRepoName,
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
@@ -64,11 +65,490 @@ export function customerSshKeyPath(slug: string): string {
   return path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519");
 }
 
-export function setRepoSshCommand(repoDir: string, slug: string): void {
-  const keyPath = customerSshKeyPath(slug);
-  if (!fs.existsSync(keyPath)) return;
-  const sshCmd = `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
-  gitExec(repoDir, ["config", "core.sshCommand", sshCmd]);
+export interface CustomerGitRefreshDeps {
+  fetchCanonical?: (repoDir: string, gitDir: string) => void;
+  repoSource?: ProjectRepoSource | null;
+  giteaRepoName?: string;
+  githubToken?: string | null;
+}
+
+export function setRepoSshCommand(
+  repoDir: string,
+  slug: string,
+  deps: CustomerGitRefreshDeps = {},
+): void {
+  const gitDir = externalizeCustomerGitDir(repoDir, deps);
+  if (gitDir) {
+    const identity = customerGitIdentity(repoDir);
+    if (!identity || identity.slug !== slug || identity.metadataDir !== gitDir) {
+      throw new Error(`[git] customer repository identity does not match ${repoDir}`);
+    }
+    writeCanonicalGitConfig(gitDir, slug, canonicalCustomerGitSource(identity, deps));
+    return;
+  }
+  if (path.resolve(repoDir) === path.resolve(OPENCLAW_DIR, "system_config")) {
+    const systemGitDir = trustedGitDir(repoDir);
+    if (!systemGitDir) throw new Error(`[git] system config repository metadata is missing for ${repoDir}`);
+    writeCanonicalGitConfig(systemGitDir, slug, {
+      kind: "gitea",
+      repoName: systemConfigRepoName(),
+      remoteUrl: sshRemoteUrl(workspaceGiteaOrg(slug), systemConfigRepoName()),
+    });
+    return;
+  }
+  removePersistedRepoSshCommand(repoDir);
+}
+
+const CUSTOMER_GIT_METADATA_ROOT = path.join(OPENCLAW_DIR, "git-metadata");
+const CUSTOMER_GIT_TRUST_RECEIPT_VERSION = "octogee-customer-git-v3";
+const SAFE_GIT_IDENTITY_RE = /^[a-z0-9][a-z0-9-]{0,62}$/u;
+const SAFE_GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
+const SAFE_GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/u;
+const GIT_BINARY = "/usr/bin/git";
+const DISABLED_EXECUTABLE = "/bin/false";
+
+interface CustomerGitIdentity {
+  slug: string;
+  repoName: string;
+  metadataDir: string;
+}
+
+type CanonicalCustomerGitSource =
+  | { kind: "gitea"; repoName: string; remoteUrl: string }
+  | { kind: "github"; owner: string; repo: string; remoteUrl: string };
+
+function customerGitIdentity(repoDir: string): CustomerGitIdentity | null {
+  const relative = path.relative(path.resolve(CUSTOMERS_DIR), path.resolve(repoDir));
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  const parts = relative.split(path.sep);
+  const slug = parts[0] ?? "";
+  if (!SAFE_GIT_IDENTITY_RE.test(slug)) return null;
+  if (parts.length === 1) {
+    return {
+      slug,
+      repoName: workspaceRepoName(),
+      metadataDir: path.join(CUSTOMER_GIT_METADATA_ROOT, slug, "workspace.git"),
+    };
+  }
+  const projectSlug = parts[2] ?? "";
+  if (parts.length === 3 && parts[1] === "projects" && SAFE_GIT_IDENTITY_RE.test(projectSlug)) {
+    return {
+      slug,
+      repoName: projectRepoName(projectSlug),
+      metadataDir: path.join(CUSTOMER_GIT_METADATA_ROOT, slug, "projects", `${projectSlug}.git`),
+    };
+  }
+  return null;
+}
+
+function customerGitMetadataDir(repoDir: string): string | null {
+  return customerGitIdentity(repoDir)?.metadataDir ?? null;
+}
+
+function githubSource(repoSource: ProjectRepoSource): CanonicalCustomerGitSource {
+  if (!SAFE_GITHUB_OWNER_RE.test(repoSource.owner) || !SAFE_GITHUB_REPO_RE.test(repoSource.repo)) {
+    throw new Error("[git] invalid GitHub repository source");
+  }
+  return {
+    kind: "github",
+    owner: repoSource.owner,
+    repo: repoSource.repo,
+    remoteUrl: githubHttpsRemoteUrl(repoSource.owner, repoSource.repo),
+  };
+}
+
+function giteaSource(slug: string, repoName: string): CanonicalCustomerGitSource {
+  if (!SAFE_GIT_IDENTITY_RE.test(repoName)) throw new Error("[git] invalid Gitea repository name");
+  return {
+    kind: "gitea",
+    repoName,
+    remoteUrl: sshRemoteUrl(workspaceGiteaOrg(slug), repoName),
+  };
+}
+
+function canonicalCustomerGitSource(
+  identity: CustomerGitIdentity,
+  deps: CustomerGitRefreshDeps,
+): CanonicalCustomerGitSource {
+  if (deps.repoSource?.provider === "github") return githubSource(deps.repoSource);
+  if (deps.giteaRepoName) return giteaSource(identity.slug, deps.giteaRepoName);
+  return trustedCustomerGitSource(identity) ?? giteaSource(identity.slug, identity.repoName);
+}
+
+function sourceReceiptValue(source: CanonicalCustomerGitSource): string {
+  return source.kind === "github"
+    ? `github:${source.owner}/${source.repo}`
+    : `gitea:${source.repoName}`;
+}
+
+function sourceFromReceipt(
+  identity: CustomerGitIdentity,
+  receipt: string,
+): CanonicalCustomerGitSource | null {
+  const lines = receipt.split("\n");
+  if (lines.length !== 3 || lines[0] !== CUSTOMER_GIT_TRUST_RECEIPT_VERSION || lines[2] !== "") return null;
+  const source = lines[1] ?? "";
+  if (source.startsWith("gitea:")) {
+    const repoName = source.slice("gitea:".length);
+    return SAFE_GIT_IDENTITY_RE.test(repoName) ? giteaSource(identity.slug, repoName) : null;
+  }
+  if (source.startsWith("github:")) {
+    const [owner, repo, extra] = source.slice("github:".length).split("/");
+    if (!owner || !repo || extra) return null;
+    return githubSource({ provider: "github", owner, repo });
+  }
+  return null;
+}
+
+function writeCanonicalGitConfig(
+  gitDir: string,
+  slug: string,
+  source: CanonicalCustomerGitSource,
+): void {
+  const configPath = path.join(gitDir, "config");
+  const configTmp = `${configPath}.octogee.tmp`;
+  const contents = [
+    "[core]",
+    "\trepositoryformatversion = 0",
+    "\tfilemode = true",
+    "\tbare = false",
+    "\tlogallrefupdates = true",
+    "[user]",
+    `\temail = ${slug}@octogee.com`,
+    `\tname = Octo (${slug})`,
+    '[remote "origin"]',
+    `\turl = ${source.remoteUrl}`,
+    "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    "",
+  ].join("\n");
+  fs.writeFileSync(configTmp, contents, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(configTmp, configPath);
+}
+
+function customerGitTrustReceipt(target: string): string {
+  return `${target}.octogee-trusted-v3`;
+}
+
+function customerGitRefreshMarker(target: string): string {
+  return `${target}.octogee-refresh-required`;
+}
+
+function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentity): void {
+  try {
+    fs.lstatSync(source);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const quarantineRoot = path.join(CUSTOMER_GIT_METADATA_ROOT, "quarantine", identity.slug);
+  fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+  const quarantine = path.join(
+    quarantineRoot,
+    `${path.basename(identity.metadataDir)}-${randomUUID()}`,
+  );
+  fs.renameSync(source, quarantine);
+  const stat = fs.lstatSync(quarantine);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    const stack = [quarantine];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      fs.chmodSync(current, 0o700);
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const child = path.join(current, entry.name);
+        const childStat = fs.lstatSync(child);
+        if (childStat.isSymbolicLink()) continue;
+        if (childStat.isDirectory()) stack.push(child);
+        else fs.chmodSync(child, 0o600);
+      }
+    }
+  } else {
+    fs.chmodSync(quarantine, 0o600);
+  }
+}
+
+function customerGitEnvironmentForRefresh(
+  slug: string,
+  githubToken?: string | null,
+  preserveBuilderGithubCredentialConfig = false,
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...githubCloneCredentialEnv(githubToken),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: DISABLED_EXECUTABLE,
+    SSH_ASKPASS: DISABLED_EXECUTABLE,
+    GIT_EDITOR: DISABLED_EXECUTABLE,
+    GIT_SEQUENCE_EDITOR: DISABLED_EXECUTABLE,
+    GIT_PAGER: "cat",
+    GIT_PROTOCOL_FROM_USER: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_SSH_COMMAND: `/usr/bin/ssh -i "${customerSshKeyPath(slug)}" -F /home/node/.ssh/config -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`,
+  };
+}
+
+// eslint-disable-next-line max-params -- explicit repository identity and credential controls prevent ambient Git state
+function runFreshCustomerGit(
+  repoDir: string,
+  gitDir: string,
+  slug: string,
+  argv: string[],
+  githubToken?: string | null,
+  preserveBuilderGithubCredentialConfig = false,
+): string {
+  return execFileSync(
+    GIT_BINARY,
+    [
+      ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
+      ...githubCredentialArgs(githubToken),
+      "--git-dir",
+      gitDir,
+      "--work-tree",
+      repoDir,
+      ...argv,
+    ],
+    {
+      cwd: repoDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: customerGitEnvironmentForRefresh(
+        slug,
+        githubToken,
+        preserveBuilderGithubCredentialConfig,
+      ),
+    },
+  ).trim();
+}
+
+function initializeFreshCustomerGit(
+  repoDir: string,
+  identity: CustomerGitIdentity,
+  deps: CustomerGitRefreshDeps,
+): void {
+  const source = canonicalCustomerGitSource(identity, deps);
+  const preserveBuilderGithubCredentialConfig = source.kind === "github"
+    && !deps.githubToken
+    && process.env.GATEWAY_CLASS === "builder";
+  const staging = `${identity.metadataDir}.octogee-new-${randomUUID()}`;
+  fs.mkdirSync(path.dirname(identity.metadataDir), { recursive: true, mode: 0o700 });
+  try {
+    execFileSync(
+      GIT_BINARY,
+      ["init", "--bare", "--initial-branch=main", staging],
+      {
+        cwd: repoDir,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: customerGitEnvironmentForRefresh(
+          identity.slug,
+          deps.githubToken,
+          preserveBuilderGithubCredentialConfig,
+        ),
+      },
+    );
+    writeCanonicalGitConfig(staging, identity.slug, source);
+    if (deps.fetchCanonical) deps.fetchCanonical(repoDir, staging);
+    else runFreshCustomerGit(repoDir, staging, identity.slug, [
+      "fetch",
+      "--prune",
+      "origin",
+      "+refs/heads/*:refs/remotes/origin/*",
+    ], deps.githubToken, preserveBuilderGithubCredentialConfig);
+    const remoteMain = runFreshCustomerGit(
+      repoDir,
+      staging,
+      identity.slug,
+      ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"],
+      deps.githubToken,
+      preserveBuilderGithubCredentialConfig,
+    );
+    runFreshCustomerGit(
+      repoDir,
+      staging,
+      identity.slug,
+      ["symbolic-ref", "HEAD", "refs/heads/main"],
+      deps.githubToken,
+      preserveBuilderGithubCredentialConfig,
+    );
+    if (remoteMain) {
+      runFreshCustomerGit(
+        repoDir,
+        staging,
+        identity.slug,
+        ["update-ref", "refs/heads/main", remoteMain],
+        deps.githubToken,
+        preserveBuilderGithubCredentialConfig,
+      );
+      runFreshCustomerGit(
+        repoDir,
+        staging,
+        identity.slug,
+        ["read-tree", "refs/heads/main"],
+        deps.githubToken,
+        preserveBuilderGithubCredentialConfig,
+      );
+    } else {
+      runFreshCustomerGit(
+        repoDir,
+        staging,
+        identity.slug,
+        ["read-tree", "--empty"],
+        deps.githubToken,
+        preserveBuilderGithubCredentialConfig,
+      );
+    }
+    fs.renameSync(staging, identity.metadataDir);
+    const receipt = customerGitTrustReceipt(identity.metadataDir);
+    const receiptTmp = `${receipt}.octogee.tmp`;
+    fs.writeFileSync(receiptTmp, `${CUSTOMER_GIT_TRUST_RECEIPT_VERSION}\n${sourceReceiptValue(source)}\n`, { encoding: "utf8", mode: 0o400 });
+    fs.renameSync(receiptTmp, receipt);
+    fs.rmSync(customerGitRefreshMarker(identity.metadataDir), { force: true });
+  } catch (error) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function trustedCustomerGitSource(identity: CustomerGitIdentity): CanonicalCustomerGitSource | null {
+  const receipt = customerGitTrustReceipt(identity.metadataDir);
+  try {
+    const targetStat = fs.lstatSync(identity.metadataDir);
+    const receiptStat = fs.lstatSync(receipt);
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()
+      || !receiptStat.isFile() || receiptStat.isSymbolicLink()) return null;
+    return sourceFromReceipt(identity, fs.readFileSync(receipt, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
+  const identity = customerGitIdentity(repoDir);
+  if (!identity) return false;
+  const source = trustedCustomerGitSource(identity);
+  if (!source) return false;
+  const localGit = path.join(repoDir, ".git");
+  const configPath = path.join(identity.metadataDir, "config");
+  try {
+    const localGitStat = fs.lstatSync(localGit);
+    const configStat = fs.lstatSync(configPath);
+    if (!localGitStat.isFile() || localGitStat.isSymbolicLink()
+      || !configStat.isFile() || configStat.isSymbolicLink()) return false;
+    if (fs.readFileSync(localGit, "utf8") !== `gitdir: ${identity.metadataDir}\n`) return false;
+    const remoteUrl = execFileSync(
+      GIT_BINARY,
+      ["config", "--file", configPath, "--get", "remote.origin.url"],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      },
+    ).trim();
+    return remoteUrl === source.remoteUrl;
+  } catch {
+    return false;
+  }
+}
+
+export function externalizeCustomerGitDir(
+  repoDir: string,
+  deps: CustomerGitRefreshDeps = {},
+): string | null {
+  const identity = customerGitIdentity(repoDir);
+  if (!identity) return null;
+  const target = identity.metadataDir;
+  const localGit = path.join(repoDir, ".git");
+  const expectedSource = canonicalCustomerGitSource(identity, deps);
+  const trustedSource = trustedCustomerGitSource(identity);
+  if (!trustedSource || sourceReceiptValue(trustedSource) !== sourceReceiptValue(expectedSource)) {
+    const refreshMarker = customerGitRefreshMarker(target);
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    const refreshMarkerTmp = `${refreshMarker}.octogee-${randomUUID()}`;
+    fs.writeFileSync(refreshMarkerTmp, `${CUSTOMER_GIT_TRUST_RECEIPT_VERSION}\n`, { encoding: "utf8", mode: 0o400 });
+    fs.renameSync(refreshMarkerTmp, refreshMarker);
+    quarantineCustomerGitEntry(target, identity);
+    quarantineCustomerGitEntry(customerGitTrustReceipt(target), identity);
+    quarantineCustomerGitEntry(localGit, identity);
+    initializeFreshCustomerGit(repoDir, identity, deps);
+  }
+  fs.rmSync(customerGitRefreshMarker(target), { force: true });
+  const pointer = `gitdir: ${target}\n`;
+  const pointerTmp = `${localGit}.octogee.tmp`;
+  fs.writeFileSync(pointerTmp, pointer, { encoding: "utf8", mode: 0o444 });
+  fs.renameSync(pointerTmp, localGit);
+  return target;
+}
+
+function trustedGitDir(cwd: string): string | null {
+  const customerMetadata = customerGitMetadataDir(cwd);
+  if (customerMetadata) return customerMetadata;
+  const localGit = path.join(cwd, ".git");
+  try {
+    const stat = fs.lstatSync(localGit);
+    return stat.isDirectory() && !stat.isSymbolicLink() ? localGit : null;
+  } catch {
+    return null;
+  }
+}
+
+function repositoryMetadataExists(repoDir: string): boolean {
+  const customerMetadata = customerGitMetadataDir(repoDir);
+  const candidates = [
+    customerMetadata,
+    ...(customerMetadata ? [customerGitRefreshMarker(customerMetadata)] : []),
+    path.join(repoDir, ".git"),
+  ]
+    .filter((candidate): candidate is string => candidate !== null);
+  for (const candidate of candidates) {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isSymbolicLink() && (stat.isDirectory() || stat.isFile())) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+export function projectCheckoutMatchesSource(
+  slug: string,
+  projectSlug: string,
+  giteaRepoName: string,
+  repoSource?: ProjectRepoSource | null,
+): boolean {
+  const repoDir = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
+  if (!repositoryMetadataExists(repoDir)) return false;
+  const identity = customerGitIdentity(repoDir);
+  if (!identity) return false;
+  const current = trustedCustomerGitSource(identity);
+  if (!current) return false;
+  const expected = canonicalCustomerGitSource(identity, { giteaRepoName, repoSource });
+  return sourceReceiptValue(current) === sourceReceiptValue(expected);
+}
+
+export function removePersistedRepoSshCommand(repoDir: string): void {
+  const gitDir = trustedGitDir(repoDir);
+  if (!gitDir) return;
+  try {
+    execFileSync(
+      GIT_BINARY,
+      ["config", "--file", path.join(gitDir, "config"), "--unset-all", "core.sshCommand"],
+      { cwd: repoDir, stdio: ["ignore", "ignore", "ignore"] },
+    );
+  } catch (error) {
+    if (execErrCode(error) !== 5) {
+      log(`⚠ [git] failed to remove persisted core.sshCommand in ${repoDir}`);
+    }
+  }
 }
 
 export function generateCustomerSshKey(slug: string): string {
@@ -151,18 +631,54 @@ export function gitExec(
   cwd: string,
   argv: string[],
   sshKeyPath?: string,
-  extraEnv?: Record<string, string>,
+  githubToken?: string | null,
 ): string | null {
   try {
+    const command = argv[0];
+    if (command !== "config" && command !== "init" && command !== "clone") {
+      const unsafeConfigKey = unsafeLocalRepositoryConfigKey(cwd);
+      if (unsafeConfigKey) {
+        log(`⚠ [git] refusing repository with unsafe local config: ${unsafeConfigKey}`);
+        return null;
+      }
+    }
+    const preserveBuilderGithubCredentialConfig = shouldUseBuilderGithubCredentialConfig(
+      cwd,
+      argv,
+      githubToken,
+    );
     const env: Record<string, string | undefined> = {
       ...process.env,
-      ...extraEnv,
+      ...githubCloneCredentialEnv(githubToken),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
       GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: DISABLED_EXECUTABLE,
+      SSH_ASKPASS: DISABLED_EXECUTABLE,
+      GIT_EDITOR: DISABLED_EXECUTABLE,
+      GIT_SEQUENCE_EDITOR: DISABLED_EXECUTABLE,
+      GIT_PAGER: "cat",
+      GIT_PROTOCOL_FROM_USER: "0",
+      GIT_OPTIONAL_LOCKS: "0",
     };
-    if (sshKeyPath) {
-      env.GIT_SSH_COMMAND = `ssh -i "${sshKeyPath}" -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
+    const customerIdentity = customerGitIdentity(cwd);
+    const effectiveSshKeyPath = sshKeyPath ?? (
+      customerIdentity ? customerSshKeyPath(customerIdentity.slug) : undefined
+    );
+    if (effectiveSshKeyPath) {
+      env.GIT_SSH_COMMAND = `ssh -i "${effectiveSshKeyPath}" -F /home/node/.ssh/config -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
     }
-    return execFileSync("/usr/bin/git", argv, {
+    const gitDir = trustedGitDir(cwd);
+    const repositoryArgs = gitDir && !["config", "init", "clone"].includes(command ?? "")
+      ? ["--git-dir", gitDir, "--work-tree", cwd]
+      : [];
+    return execFileSync(GIT_BINARY, [
+      ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
+      ...githubCredentialArgs(githubToken),
+      ...repositoryArgs,
+      ...argv,
+    ], {
       cwd,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -179,6 +695,92 @@ export function gitExec(
   }
 }
 
+const GIT_HARDENING_ARGS = [
+  "-c", "core.fsmonitor=false",
+  "-c", "core.pager=cat",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "credential.helper=",
+  "-c", "commit.gpgSign=false",
+  "-c", "tag.gpgSign=false",
+  "-c", `gpg.program=${DISABLED_EXECUTABLE}`,
+  "-c", "protocol.allow=never",
+  "-c", "protocol.ssh.allow=always",
+  "-c", "protocol.https.allow=always",
+  "-c", "protocol.file.allow=never",
+  "-c", "protocol.ext.allow=never",
+] as const;
+
+function gitHardeningArgs(preserveCredentialHelper: boolean): string[] {
+  if (!preserveCredentialHelper) return [...GIT_HARDENING_ARGS];
+  const args: string[] = [];
+  for (let index = 0; index < GIT_HARDENING_ARGS.length; index += 1) {
+    if (
+      GIT_HARDENING_ARGS[index] === "-c"
+      && GIT_HARDENING_ARGS[index + 1] === "credential.helper="
+    ) {
+      index += 1;
+      continue;
+    }
+    args.push(GIT_HARDENING_ARGS[index]!);
+  }
+  return args;
+}
+
+function shouldUseBuilderGithubCredentialConfig(
+  cwd: string,
+  argv: string[],
+  githubToken: string | null | undefined,
+): boolean {
+  if (githubToken || process.env.GATEWAY_CLASS !== "builder") return false;
+  if (argv.some((value) => value.startsWith("https://github.com/"))) return true;
+  const identity = customerGitIdentity(cwd);
+  return identity ? trustedCustomerGitSource(identity)?.kind === "github" : false;
+}
+
+const UNSAFE_LOCAL_CONFIG_PREFIXES = [
+  "alias.", "credential.", "diff.", "filter.", "http.", "https.",
+  "include.", "includeif.", "merge.", "protocol.", "url.",
+];
+const UNSAFE_LOCAL_CONFIG_KEYS = new Set([
+  "core.askpass", "core.editor", "core.fsmonitor", "core.gitproxy",
+  "core.hookspath", "core.pager", "core.sshcommand", "core.worktree",
+  "extensions.worktreeconfig", "gpg.program", "sequence.editor", "ssh.variant",
+]);
+
+function isUnsafeLocalConfigKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return UNSAFE_LOCAL_CONFIG_KEYS.has(normalized)
+    || UNSAFE_LOCAL_CONFIG_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
+  const gitDir = trustedGitDir(cwd);
+  if (!gitDir) return null;
+  const configPath = path.join(gitDir, "config");
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    const output = execFileSync(
+      GIT_BINARY,
+      ["config", "--file", configPath, "--null", "--name-only", "--list"],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      },
+    );
+    return output.split("\0").find(isUnsafeLocalConfigKey) ?? null;
+  } catch {
+    return "<malformed>";
+  }
+}
+
 // Workspace + project clones run over the per-customer SSH key. The key is
 // registered (createGiteaUser) before any clone in the mount flow, so there is
 // no admin-token HTTP fallback: a missing key is a loud failure the reconcile
@@ -186,9 +788,11 @@ export function gitExec(
 // admin broker (no admin token on this container).
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
-  const gitDir = path.join(dest, ".git");
 
-  if (fs.existsSync(gitDir)) return true;
+  if (repositoryMetadataExists(dest)) {
+    setRepoSshCommand(dest, slug);
+    return true;
+  }
 
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
@@ -229,6 +833,9 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 export interface CloneProjectRepoOptions {
   repoSource?: ProjectRepoSource | null;
   githubToken?: string | null;
+  gitExec?: GitRunner;
+  prepareRepository?: typeof setRepoSshCommand;
+  acquireMutationLease?: typeof acquireWorkspaceMutationLeaseSync;
 }
 
 export async function cloneProjectRepo(
@@ -239,19 +846,219 @@ export async function cloneProjectRepo(
 ): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
 
-  if (fs.existsSync(path.join(dest, ".git"))) return true;
+  if (repositoryMetadataExists(dest)) {
+    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+      return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
+    }
+    setRepoSshCommand(dest, slug, {
+      repoSource: opts.repoSource,
+      giteaRepoName,
+      githubToken: opts.githubToken,
+    });
+    return true;
+  }
 
   if (opts.repoSource?.provider === "github") {
-    return cloneGithubProjectRepo(slug, projectSlug, dest, opts.repoSource, opts.githubToken);
+    return cloneGithubProjectRepo(
+      slug,
+      projectSlug,
+      dest,
+      opts.repoSource,
+      opts.githubToken,
+      opts.gitExec ?? gitExec,
+      opts.prepareRepository ?? setRepoSshCommand,
+    );
   }
-  return cloneGiteaProjectRepo(slug, projectSlug, dest, giteaRepoName);
+  return cloneGiteaProjectRepo(
+    slug,
+    projectSlug,
+    dest,
+    giteaRepoName,
+    opts.gitExec ?? gitExec,
+    opts.prepareRepository ?? setRepoSshCommand,
+  );
 }
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- source switching is a rollback-capable filesystem state machine
+async function replaceProjectRepoCheckout(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  giteaRepoName: string,
+  opts: CloneProjectRepoOptions,
+): Promise<boolean> {
+  const runGit = opts.gitExec ?? gitExec;
+  const source = opts.repoSource?.provider === "github"
+    ? githubSource(opts.repoSource)
+    : giteaSource(slug, giteaRepoName);
+  const sshKey = source.kind === "gitea" ? customerSshKeyPath(slug) : undefined;
+  if (source.kind === "gitea") {
+    if (!fs.existsSync(sshKey!)) {
+      log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — per-customer SSH key missing`);
+      return false;
+    }
+    if (!(await giteaBroker.repoExists(workspaceGiteaOrg(slug), giteaRepoName))) return false;
+  }
+
+  const parent = path.dirname(dest);
+  const staging = fs.mkdtempSync(path.join(parent, `.${projectSlug}-source-`));
+  const clone = runGit(
+    parent,
+    ["clone", source.remoteUrl, staging],
+    sshKey,
+    opts.githubToken,
+  );
+  if (clone === null) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return false;
+  }
+
+  const gitDir = existingProjectGitDir(dest);
+  if (!gitDir) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — git metadata is missing`);
+    return false;
+  }
+  let lease: ReturnType<typeof acquireWorkspaceMutationLeaseSync>;
+  try {
+    lease = acquireProjectSourceSwitchLease(
+      opts.acquireMutationLease ?? acquireWorkspaceMutationLeaseSync,
+      dest,
+      slug,
+      projectSlug,
+    );
+  } catch (error) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    log(`⚠ [git] Cannot lease ${slug}/${projectSlug}: ${errMessage(error)}`);
+    return false;
+  }
+  if (!lease) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return false;
+  }
+  const quarantineRoot = path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug);
+  const quarantine = path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`);
+  const metadataBackupRoot = path.join(
+    OPENCLAW_DIR,
+    "git-metadata-source-switch-backups",
+    slug,
+    `${projectSlug}-${randomUUID()}`,
+  );
+  const identity = customerGitIdentity(dest);
+  const metadataBackups: Array<{ original: string; backup: string }> = [];
+  let previousMoved = false;
+  let replacementInstalled = false;
+  try {
+    fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(metadataBackupRoot, { recursive: true, mode: 0o700 });
+    if (identity) {
+      for (const original of [
+        identity.metadataDir,
+        customerGitTrustReceipt(identity.metadataDir),
+        customerGitRefreshMarker(identity.metadataDir),
+      ]) {
+        if (!fs.existsSync(original)) continue;
+        const backup = path.join(metadataBackupRoot, path.basename(original));
+        fs.renameSync(original, backup);
+        metadataBackups.push({ original, backup });
+      }
+    }
+    fs.renameSync(dest, quarantine);
+    previousMoved = true;
+    fs.renameSync(staging, dest);
+    replacementInstalled = true;
+    (opts.prepareRepository ?? setRepoSshCommand)(dest, slug, {
+      repoSource: opts.repoSource,
+      giteaRepoName,
+      githubToken: opts.githubToken,
+    });
+    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+      throw new Error("replacement repository source was not prepared canonically");
+    }
+    log(`[git] ✅ Switched ${slug}/${projectSlug} to ${sourceReceiptValue(source)}`);
+    return true;
+  } catch (error) {
+    if (replacementInstalled && fs.existsSync(dest)) {
+      try {
+        fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-failed-${randomUUID()}`));
+      } catch (rollbackError) {
+        log(`⚠ [git] Failed to quarantine replacement for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+      }
+    }
+    if (identity) {
+      for (const current of [
+        identity.metadataDir,
+        customerGitTrustReceipt(identity.metadataDir),
+        customerGitRefreshMarker(identity.metadataDir),
+      ]) {
+        try {
+          quarantineCustomerGitEntry(current, identity);
+        } catch (rollbackError) {
+          log(`⚠ [git] Failed to quarantine replacement metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+        }
+      }
+      for (const { original, backup } of metadataBackups) {
+        try {
+          // eslint-disable-next-line max-depth -- each rollback artifact is restored independently after a failed source switch
+          if (fs.existsSync(backup)) fs.renameSync(backup, original);
+        } catch (rollbackError) {
+          log(`⚠ [git] Failed to restore prior metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+        }
+      }
+    }
+    if (previousMoved && !fs.existsSync(dest) && fs.existsSync(quarantine)) {
+      try {
+        fs.renameSync(quarantine, dest);
+      } catch (rollbackError) {
+        log(`⚠ [git] Failed to restore prior checkout for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
+      }
+    }
+    log(`⚠ [git] Failed to switch ${slug}/${projectSlug}: ${errMessage(error)}`);
+    return false;
+  } finally {
+    lease.release();
+  }
+}
+
+function acquireProjectSourceSwitchLease(
+  acquire: typeof acquireWorkspaceMutationLeaseSync,
+  dest: string,
+  slug: string,
+  projectSlug: string,
+): ReturnType<typeof acquireWorkspaceMutationLeaseSync> {
+  const stableGitDir = path.join(
+    OPENCLAW_DIR,
+    "git-source-switch-locks",
+    slug,
+    `${projectSlug}.git`,
+  );
+  fs.mkdirSync(stableGitDir, { recursive: true, mode: 0o700 });
+  return acquire({ workspaceDir: dest, gitDir: stableGitDir });
+}
+
+function existingProjectGitDir(repoDir: string): string | null {
+  const external = customerGitMetadataDir(repoDir);
+  const candidates = [external, path.join(repoDir, ".git")]
+    .filter((candidate): candidate is string => candidate !== null);
+  for (const candidate of candidates) {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGiteaProjectRepo(
   slug: string,
   projectSlug: string,
   dest: string,
   giteaRepoName: string,
+  runGit: GitRunner,
+  prepareRepository: typeof setRepoSshCommand,
 ): Promise<boolean> {
   const org = workspaceGiteaOrg(slug);
   const sshKey = customerSshKeyPath(slug);
@@ -278,11 +1085,12 @@ async function cloneGiteaProjectRepo(
     label: `${slug}/${projectSlug}`,
     remoteUrl: sshRemoteUrl(org, giteaRepoName),
     sshKey,
+    runGit,
   });
   if (!cloned) return false;
 
-  setProjectCommitIdentity(dest, slug);
-  setRepoSshCommand(dest, slug);
+  setProjectCommitIdentity(dest, slug, runGit);
+  prepareRepository(dest, slug, { giteaRepoName });
 
   log(`[git] ✅ Cloned ${org}/${giteaRepoName} → customers/${slug}/projects/${projectSlug}/`);
   return true;
@@ -291,12 +1099,15 @@ async function cloneGiteaProjectRepo(
 // GitHub push credentials are the connector token materialized at boot
 // (github-cli-auth-hydrate → `gh auth setup-git`); with no explicit token the clone
 // rides that same ambient credential helper.
+// eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGithubProjectRepo(
   slug: string,
   projectSlug: string,
   dest: string,
   repoSource: ProjectRepoSource,
   githubToken: string | null | undefined,
+  runGit: GitRunner,
+  prepareRepository: typeof setRepoSshCommand,
 ): Promise<boolean> {
   const remoteUrl = githubHttpsRemoteUrl(repoSource.owner, repoSource.repo);
   const cloned = checkoutProjectRepo({
@@ -304,11 +1115,15 @@ async function cloneGithubProjectRepo(
     projectSlug,
     label: `${slug}/${projectSlug}`,
     remoteUrl,
-    env: githubCloneCredentialEnv(githubToken),
+    githubToken,
+    runGit,
+    replaceExisting: true,
+    quarantineRoot: path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug),
   });
   if (!cloned) return false;
 
-  setProjectCommitIdentity(dest, slug);
+  setProjectCommitIdentity(dest, slug, runGit);
+  prepareRepository(dest, slug, { repoSource, githubToken });
 
   log(
     `[git] ✅ Cloned ${repoSource.owner}/${repoSource.repo} → customers/${slug}/projects/${projectSlug}/`,
@@ -334,9 +1149,17 @@ export function githubCloneCredentialEnv(
   };
 }
 
-function setProjectCommitIdentity(dest: string, slug: string): void {
-  gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
-  gitExec(dest, ["config", "user.name", `Octo (${slug})`]);
+function githubCredentialArgs(token: string | null | undefined): string[] {
+  if (!token) return [];
+  return [
+    "-c",
+    "credential.https://github.com.helper=!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"$OCTOGEE_GITHUB_CLONE_TOKEN\"; }; f",
+  ];
+}
+
+function setProjectCommitIdentity(dest: string, slug: string, runGit: GitRunner): void {
+  runGit(dest, ["config", "user.email", `${slug}@octogee.com`]);
+  runGit(dest, ["config", "user.name", `Octo (${slug})`]);
 }
 
 interface ProjectCheckout {
@@ -345,18 +1168,31 @@ interface ProjectCheckout {
   label: string;
   remoteUrl: string;
   sshKey?: string;
-  env?: Record<string, string>;
+  githubToken?: string | null;
+  runGit: GitRunner;
+  replaceExisting?: boolean;
+  quarantineRoot?: string;
 }
 
 function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
-  const { dest, projectSlug, label, remoteUrl, sshKey, env } = checkout;
+  const {
+    dest,
+    projectSlug,
+    label,
+    remoteUrl,
+    sshKey,
+    githubToken,
+    runGit,
+    replaceExisting,
+    quarantineRoot,
+  } = checkout;
   const parent = path.dirname(dest);
   fs.mkdirSync(parent, { recursive: true });
   const cloneDir = fs.existsSync(dest)
     ? fs.mkdtempSync(path.join(parent, `.${projectSlug}-clone-`))
     : dest;
 
-  const result = gitExec(parent, ["clone", remoteUrl, cloneDir], sshKey, env);
+  const result = runGit(parent, ["clone", remoteUrl, cloneDir], sshKey, githubToken);
   if (result === null) {
     log(`⚠ [git] Clone failed for ${label}`);
     fs.rmSync(cloneDir, { recursive: true, force: true });
@@ -365,7 +1201,24 @@ function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
 
   if (cloneDir !== dest) {
     try {
-      adoptProjectClone(cloneDir, dest);
+      if (replaceExisting) {
+        if (!quarantineRoot) throw new Error("missing project checkout quarantine root");
+        const lease = repositoryMetadataExists(dest)
+          ? acquireWorkspaceMutationLeaseSync({ workspaceDir: dest })
+          : null;
+        if (repositoryMetadataExists(dest) && !lease) {
+          throw new Error("workspace mutation lease unavailable");
+        }
+        try {
+          fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+          fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`));
+          fs.renameSync(cloneDir, dest);
+        } finally {
+          lease?.release();
+        }
+      } else {
+        adoptProjectClone(cloneDir, dest);
+      }
     } catch (err) {
       log(`⚠ [git] Failed to adopt clone for ${label}: ${errMessage(err)}`);
       fs.rmSync(cloneDir, { recursive: true, force: true });
@@ -381,11 +1234,18 @@ function copyMissingCloneTree(source: string, dest: string): void {
     if (entry.name === ".git") continue;
     const sourcePath = path.join(source, entry.name);
     const destPath = path.join(dest, entry.name);
-    if (!fs.existsSync(destPath)) {
+    const destEntry = fs.lstatSync(destPath, { throwIfNoEntry: false });
+    if (!destEntry) {
       fs.cpSync(sourcePath, destPath, { recursive: true, preserveTimestamps: true });
       continue;
     }
-    if (entry.isDirectory() && fs.statSync(destPath).isDirectory()) {
+    if (destEntry.isSymbolicLink()) {
+      throw new Error(`cannot adopt checkout over symbolic link: ${destPath}`);
+    }
+    if (!destEntry.isDirectory() && !destEntry.isFile()) {
+      throw new Error(`cannot adopt checkout over special filesystem entry: ${destPath}`);
+    }
+    if (entry.isDirectory() && destEntry.isDirectory()) {
       copyMissingCloneTree(sourcePath, destPath);
     }
   }
@@ -397,7 +1257,101 @@ export function adoptProjectClone(cloneDir: string, dest: string): void {
   fs.rmSync(cloneDir, { recursive: true, force: true });
 }
 
-export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
+interface InitWorkspaceRepoDeps {
+  ensureWorkspaceRepo: (slug: string) => Promise<void>;
+  prepareRepository: (repoDir: string, slug: string) => void;
+  workspaceRemoteUrl?: (slug: string) => string;
+}
+
+function runWorkspaceBootstrapGit(
+  coachDir: string,
+  gitDir: string,
+  slug: string,
+  argv: string[],
+): string | null {
+  try {
+    return execFileSync(GIT_BINARY, [
+      ...gitHardeningArgs(false),
+      "-c",
+      "protocol.file.allow=always",
+      "--git-dir",
+      gitDir,
+      "--work-tree",
+      coachDir,
+      ...argv,
+    ], {
+      cwd: coachDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: customerGitEnvironmentForRefresh(slug),
+    }).trim();
+  } catch (err: unknown) {
+    const detail =
+      [execErrStderr(err), execErrStdout(err)].filter(Boolean).join(" | ") || errMessage(err);
+    log(`⚠ [git] workspace bootstrap failed: git ${argv.join(" ")} → ${detail}`);
+    return null;
+  }
+}
+
+function pushWorkspaceBootstrap(
+  coachDir: string,
+  slug: string,
+  originUrl: string,
+): boolean {
+  if (!SAFE_GIT_IDENTITY_RE.test(slug)) return false;
+  const bootstrapRoot = path.join(OPENCLAW_DIR, "git-bootstrap");
+  fs.mkdirSync(bootstrapRoot, { recursive: true, mode: 0o700 });
+  const stagingRoot = fs.mkdtempSync(path.join(bootstrapRoot, `${slug}-`));
+  const gitDir = path.join(stagingRoot, "workspace.git");
+  try {
+    execFileSync(GIT_BINARY, ["init", "--bare", "--initial-branch=main", gitDir], {
+      cwd: coachDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: customerGitEnvironmentForRefresh(slug),
+    });
+    const run = (argv: string[]) => runWorkspaceBootstrapGit(coachDir, gitDir, slug, argv);
+    if (run(["config", "user.email", `${slug}@octogee.com`]) === null) return false;
+    if (run(["config", "user.name", `Octo (${slug})`]) === null) return false;
+    if (run(["remote", "add", "origin", originUrl]) === null) return false;
+    const remoteMain = run(["ls-remote", "--heads", "origin", "refs/heads/main"]);
+    if (remoteMain === null) return false;
+    if (remoteMain !== "") {
+      log(`[git] ${slug} canonical workspace already has main`);
+      return true;
+    }
+    if (run(["add", "-A", "--", ".", ":(exclude).git"]) === null) return false;
+    if (run(["commit", "--allow-empty", "-m", "initial workspace skeleton"]) === null) {
+      return false;
+    }
+    if (run(["push", "origin", "HEAD:refs/heads/main"]) === null) return false;
+    log(`[git] ${slug} initial push: OK`);
+    return true;
+  } catch (err: unknown) {
+    log(`⚠ [git] workspace bootstrap initialization failed for ${slug}: ${errMessage(err)}`);
+    return false;
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+function invalidateWorkspaceGitProjection(coachDir: string): void {
+  const identity = customerGitIdentity(coachDir);
+  if (!identity) return;
+  quarantineCustomerGitEntry(identity.metadataDir, identity);
+  quarantineCustomerGitEntry(customerGitTrustReceipt(identity.metadataDir), identity);
+  quarantineCustomerGitEntry(customerGitRefreshMarker(identity.metadataDir), identity);
+  quarantineCustomerGitEntry(path.join(coachDir, ".git"), identity);
+}
+
+export async function initWorkspaceRepo(
+  coachDir: string,
+  slug: string,
+  deps: InitWorkspaceRepoDeps = {
+    ensureWorkspaceRepo: giteaBroker.ensureWorkspaceRepo,
+    prepareRepository: setRepoSshCommand,
+  },
+): Promise<string | null> {
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
@@ -408,36 +1362,21 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
   if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
 
-  log(`[git] Initializing repo in ${coachDir}`);
-  const initResult = gitExec(coachDir, ["init", "-b", "main"]);
-  if (initResult === null) {
-    log(`⚠ [git] git init failed for ${slug} — aborting repo setup`);
-    return null;
-  }
-  log(`[git] init: ${initResult}`);
-  gitExec(coachDir, ["config", "user.email", `${slug}@octogee.com`]);
-  gitExec(coachDir, ["config", "user.name", `Octo (${slug})`]);
-
-  setRepoSshCommand(coachDir, slug);
-
   try {
-    await giteaBroker.ensureWorkspaceRepo(slug);
+    await deps.ensureWorkspaceRepo(slug);
   } catch (err) {
     log(`⚠ [git] Failed to create repo ${org}/${repoName}: ${errMessage(err)}`);
     return null;
   }
 
-  const originUrl = sshRemoteUrl(org, repoName);
-  const remoteResult = gitExec(coachDir, ["remote", "add", "origin", originUrl]);
-  if (remoteResult === null) {
-    log(`⚠ [git] remote add failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
+  const originUrl = deps.workspaceRemoteUrl?.(slug) ?? sshRemoteUrl(org, repoName);
+  log(`[git] Initializing repo in ${coachDir}`);
+  if (!pushWorkspaceBootstrap(coachDir, slug, originUrl)) {
+    log(`⚠ [git] initial workspace push failed for ${slug} — aborting repo setup`);
     return null;
   }
-  log(`[git] remote add: ${remoteResult === "" ? "OK" : remoteResult}`);
-
-  const sshKey = customerSshKeyPath(slug);
-  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
-  pushInitialSkeleton(coachDir, slug, keyArg);
+  invalidateWorkspaceGitProjection(coachDir);
+  deps.prepareRepository(coachDir, slug);
 
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;
@@ -530,7 +1469,7 @@ export async function initProjectRepo(
   }
 
   const originUrl = sshRemoteUrl(org, repoName);
-  gitExec(projectDir, ["remote", "add", "origin", originUrl]);
+  gitExec(projectDir, ["remote", "set-url", "origin", originUrl]);
   const pushResult = gitExec(projectDir, ["push", "-u", "origin", "main"], keyArg);
   log(`[git] project push: ${pushResult !== null ? "OK" : "FAILED"}`);
 
@@ -600,25 +1539,18 @@ export function listOnDiskCustomerSlugs(): string[] {
   });
 }
 
-function getOriginRemoteSilent(coachDir: string): string | null {
-  try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- frozen literal, no input; silent probe (gitExec would log every no-origin as ⚠ at default level)
-    return execSync("git remote get-url origin", {
-      cwd: coachDir,
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return null;
-  }
+type GitRunner = typeof gitExec;
+
+function getOriginRemoteSilent(coachDir: string, runGit: GitRunner): string | null {
+  return runGit(coachDir, ["remote", "get-url", "origin"]);
 }
 
 type RemoteMigration = "migrated" | "not-gitea" | "failed";
-
 function migrateHttpRemoteToSsh(
   repoDir: string,
   slug: string,
   remoteUrl: string,
+  runGit: GitRunner,
 ): RemoteMigration {
   let repoPath: string;
   try {
@@ -632,7 +1564,7 @@ function migrateHttpRemoteToSsh(
   } catch {
     return "not-gitea";
   }
-  const result = gitExec(repoDir, [
+  const result = runGit(repoDir, [
     "remote", "set-url", "origin",
     `git@${GIT_SSH_HOST}:${repoPath}`,
   ]);
@@ -641,18 +1573,23 @@ function migrateHttpRemoteToSsh(
   return "migrated";
 }
 
-function commitLocalChanges(repoDir: string, label: string, strict: boolean): boolean {
-  const status = gitExec(repoDir, ["status", "--porcelain"]);
+function commitLocalChanges(
+  repoDir: string,
+  label: string,
+  strict: boolean,
+  runGit: GitRunner,
+): boolean {
+  const status = runGit(repoDir, ["status", "--porcelain"]);
   if (status === null) {
     if (strict) throw new Error(`${label}: git status failed`);
     return false;
   }
   if (status === "") return false;
-  if (gitExec(repoDir, ["add", "-A"]) === null) {
+  if (runGit(repoDir, ["add", "-A"]) === null) {
     if (strict) throw new Error(`${label}: git add failed`);
     return false;
   }
-  const committed = gitExec(
+  const committed = runGit(
     repoDir,
     ["commit", "-m", `auto: ${new Date().toISOString()}`],
   ) !== null;
@@ -660,15 +1597,27 @@ function commitLocalChanges(repoDir: string, label: string, strict: boolean): bo
   return committed;
 }
 
-function rebaseFromOriginIfPresent(coachDir: string, keyArg: string | undefined): void {
-  const remoteMain = gitExec(coachDir, ["ls-remote", "--heads", "origin", "main"], keyArg);
-  if (remoteMain) {
-    gitExec(coachDir, ["pull", "--rebase", "origin", "main"], keyArg);
+function rebaseFromOriginIfPresent(
+  coachDir: string,
+  keyArg: string | undefined,
+  runGit: GitRunner,
+): void {
+  const remoteMain = runGit(coachDir, ["ls-remote", "--heads", "origin", "main"], keyArg);
+  if (!remoteMain) return;
+  const localHead = runGit(coachDir, ["rev-parse", "HEAD"]);
+  const remoteHead = remoteMain.split(/\s+/u)[0];
+  if (localHead && remoteHead !== localHead) {
+    log(`⚠ [git-sync] remote main changed; refusing automatic checkout/rebase of an untrusted worktree`);
   }
 }
 
-function pushAndLog(repoDir: string, label: string, keyArg: string | undefined): boolean {
-  const pushResult = gitExec(repoDir, ["push", "origin", "main"], keyArg);
+function pushAndLog(
+  repoDir: string,
+  label: string,
+  keyArg: string | undefined,
+  runGit: GitRunner,
+): boolean {
+  const pushResult = runGit(repoDir, ["push", "origin", "main"], keyArg);
   if (pushResult !== null) {
     log(`[git-sync] ${label}: pushed changes`);
     return true;
@@ -696,8 +1645,13 @@ export function runWorkspaceSyncMutation(
   work: () => void,
   opts: WorkspaceSyncMutationOptions = {},
 ): boolean {
-  const acquire = opts.acquire ?? ((workspaceDir) =>
-    acquireWorkspaceMutationLeaseSync({ workspaceDir }));
+  const acquire = opts.acquire ?? ((workspaceDir) => {
+    const gitDir = projectWorkspaceMutationLeaseGitDir(workspaceDir) ?? trustedGitDir(workspaceDir);
+    return acquireWorkspaceMutationLeaseSync({
+      workspaceDir,
+      ...(gitDir ? { gitDir } : {}),
+    });
+  });
   const logFn = opts.log ?? dlog;
   const lease = acquire(coachDir);
   if (!lease) {
@@ -713,27 +1667,42 @@ export function runWorkspaceSyncMutation(
   }
 }
 
+function projectWorkspaceMutationLeaseGitDir(workspaceDir: string): string | null {
+  const relative = path.relative(path.resolve(CUSTOMERS_DIR), path.resolve(workspaceDir));
+  const parts = relative.split(path.sep);
+  if (parts.length !== 3 || parts[1] !== "projects") return null;
+  const [slug, , projectSlug] = parts;
+  if (!slug || !projectSlug || !SAFE_GIT_IDENTITY_RE.test(slug)
+    || !SAFE_GIT_IDENTITY_RE.test(projectSlug)) return null;
+  const lockDir = path.join(OPENCLAW_DIR, "git-source-switch-locks", slug, `${projectSlug}.git`);
+  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  return lockDir;
+}
+
 interface RepositorySyncTarget {
   dir: string;
   label: string;
 }
 
+// eslint-disable-next-line max-params -- sync policy and injected mutation controls are intentionally explicit
 function syncOneRepository(
   slug: string,
   target: RepositorySyncTarget,
   strict: boolean,
+  runGit: GitRunner,
+  prepareRepository: typeof setRepoSshCommand,
+  acquire: WorkspaceSyncLeaseFactory | undefined,
 ): void {
-  if (!fs.existsSync(path.join(target.dir, ".git"))) {
+  if (!repositoryMetadataExists(target.dir)) {
     if (strict) throw new Error(`${target.label}: git metadata is missing`);
     return;
   }
   runWorkspaceSyncMutation(target.dir, target.label, () => {
-    setRepoSshCommand(target.dir, slug);
-
+    prepareRepository(target.dir, slug);
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
-    const remoteCheck = getOriginRemoteSilent(target.dir);
+    const remoteCheck = getOriginRemoteSilent(target.dir, runGit);
     if (remoteCheck === null) {
       if (strict) throw new Error(`${target.label}: git origin is missing`);
       dlog(`[git-sync] ${target.label}: no remote — skipping (lifecycle contract will heal on next restore)`);
@@ -741,20 +1710,20 @@ function syncOneRepository(
     }
 
     if (remoteCheck.startsWith("http")) {
-      const migration = migrateHttpRemoteToSsh(target.dir, slug, remoteCheck);
+      const migration = migrateHttpRemoteToSsh(target.dir, slug, remoteCheck, runGit);
       if (migration === "failed" && strict) {
         throw new Error(`${target.label}: SSH remote migration failed`);
       }
     }
 
-    const committed = commitLocalChanges(target.dir, target.label, strict);
-    rebaseFromOriginIfPresent(target.dir, keyArg);
+    const committed = commitLocalChanges(target.dir, target.label, strict, runGit);
+    rebaseFromOriginIfPresent(target.dir, keyArg, runGit);
 
     if (committed || strict) {
-      const pushed = pushAndLog(target.dir, target.label, keyArg);
+      const pushed = pushAndLog(target.dir, target.label, keyArg, runGit);
       if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
     }
-  }, { strict });
+  }, { strict, acquire });
 }
 
 function workspaceSyncTarget(slug: string): RepositorySyncTarget {
@@ -776,15 +1745,19 @@ function projectSyncTargets(slug: string): RepositorySyncTarget[] {
     }));
 }
 
+// eslint-disable-next-line max-params -- batch sync forwards the same explicit mutation controls to every repository
 async function syncRepositoryTargets(
   slug: string,
   targets: RepositorySyncTarget[],
   strict: boolean,
+  runGit: GitRunner,
+  prepareRepository: typeof setRepoSshCommand,
+  acquire: WorkspaceSyncLeaseFactory | undefined,
 ): Promise<void> {
   const failures: string[] = [];
   for (const target of targets) {
     try {
-      syncOneRepository(slug, target, strict);
+      syncOneRepository(slug, target, strict, runGit, prepareRepository, acquire);
     } catch (err) {
       const failure = errMessage(err);
       log(`⚠ [git-sync] ${failure}`);
@@ -798,6 +1771,9 @@ async function syncRepositoryTargets(
 
 export interface SyncCustomerRepositoriesOptions {
   strict?: boolean;
+  gitExec?: GitRunner;
+  prepareRepository?: typeof setRepoSshCommand;
+  acquireWorkspaceMutationLease?: WorkspaceSyncLeaseFactory;
 }
 
 export async function syncCustomerRepositoriesForSlug(
@@ -808,6 +1784,9 @@ export async function syncCustomerRepositoriesForSlug(
     slug,
     [workspaceSyncTarget(slug), ...projectSyncTargets(slug)],
     opts.strict === true,
+    opts.gitExec ?? gitExec,
+    opts.prepareRepository ?? setRepoSshCommand,
+    opts.acquireWorkspaceMutationLease,
   );
 }
 
@@ -832,13 +1811,23 @@ export async function syncAllCustomerRepositories(
 // the on-disk customers and pushes their local changes.
 export interface SyncAllWorkspacesOptions {
   strict?: boolean;
+  gitExec?: GitRunner;
+  prepareRepository?: typeof setRepoSshCommand;
+  acquireWorkspaceMutationLease?: WorkspaceSyncLeaseFactory;
 }
 
 export async function syncAllWorkspaces(opts: SyncAllWorkspacesOptions = {}): Promise<void> {
   const failures: string[] = [];
   for (const slug of listOnDiskCustomerSlugs()) {
     try {
-      syncOneRepository(slug, workspaceSyncTarget(slug), opts.strict === true);
+      syncOneRepository(
+        slug,
+        workspaceSyncTarget(slug),
+        opts.strict === true,
+        opts.gitExec ?? gitExec,
+        opts.prepareRepository ?? setRepoSshCommand,
+        opts.acquireWorkspaceMutationLease,
+      );
     } catch (err) {
       const failure = errMessage(err);
       log(`⚠ [git-sync] ${failure}`);

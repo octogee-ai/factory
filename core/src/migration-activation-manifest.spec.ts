@@ -35,7 +35,7 @@ function manifest(): MigrationActivationManifest {
     accountId: "alice-coach",
     agent: { id: "octogee-alice-coach", model: "custom-model" },
     mattermostAccount: { botToken: "coach-pat", groupAllowFrom: ["mm-user"] },
-    bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+    bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     projectAgents: [],
   };
 }
@@ -113,8 +113,8 @@ describe("migration activation manifest", () => {
           },
         },
         bindings: [
-          { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
-          { agentId: "octogee-bob-coach", match: { channel: "mattermost" } },
+          { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
+          { agentId: "octogee-bob-coach", match: { channel: "mattermost", accountId: "bob-coach" } },
         ],
       }),
     );
@@ -137,7 +137,7 @@ describe("migration activation manifest", () => {
       JSON.stringify({
         agents: { entries: { "octogee-alice-coach": { model: "custom-model" } } },
         channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
-        bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+        bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
       }),
     );
 
@@ -145,6 +145,49 @@ describe("migration activation manifest", () => {
       appliedFingerprint: APPLIED_FINGERPRINT,
     })).resolves.toMatchObject({
       agent: { id: "octogee-alice-coach", model: "custom-model" },
+    });
+  });
+
+  it("rejects a source agent binding that claims another customer's account", async () => {
+    const dir = await mkTmp();
+    const configPath = path.join(dir, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({
+      agents: { list: [{ id: "octogee-alice-coach", model: "custom-model" }] },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+      bindings: [{
+        agentId: "octogee-alice-coach",
+        match: { channel: "mattermost", accountId: "mike-coach" },
+      }],
+    }));
+
+    await expect(extractOpenClawActivationManifest(configPath, "alice", {
+      appliedFingerprint: APPLIED_FINGERPRINT,
+    })).rejects.toThrow("foreign binding scope");
+  });
+
+  it("adds the stable account route when reading a peer-only customer manifest", async () => {
+    const dir = await mkTmp();
+    const peerOnly = {
+      ...manifest(),
+      bindings: [{
+        agentId: "octogee-alice-coach",
+        match: {
+          channel: "mattermost",
+          accountId: "alice-coach",
+          peer: { kind: "group", id: "alice-general" },
+        },
+      }],
+    };
+    await writeActivationManifest(dir, peerOnly);
+
+    await expect(readActivationManifest(dir, "alice")).resolves.toMatchObject({
+      bindings: [
+        {
+          agentId: "octogee-alice-coach",
+          match: { channel: "mattermost", accountId: "alice-coach" },
+        },
+        peerOnly.bindings[0],
+      ],
     });
   });
 
@@ -273,7 +316,7 @@ describe("migration activation manifest", () => {
     expect(patch.channels.mattermost.accounts).toHaveProperty("alice-coach");
     expect(patch.bindings).toEqual([
       { agentId: "octogee-bob-coach", keep: true },
-      { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
+      { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
     ]);
     // Dropping stale customer entries can shrink customer-scoped arrays — the OC
     // destructive-array guard requires the intent confirmed via replacePaths. (No
@@ -285,6 +328,119 @@ describe("migration activation manifest", () => {
         "agents.list[].tools.alsoAllow",
         "bindings",
       ],
+    });
+  });
+
+  it("does not import a dedicated source coach's default flag into a shared roster", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            list: [
+              { id: "octogee-unmatched-route", default: true },
+              { id: "octogee-bob-coach" },
+            ],
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: { ...manifest().agent, default: true },
+    }, { rpc: rpc as never, log: vi.fn() });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { list: Array<Record<string, unknown>> };
+    };
+    expect(patch.agents.list.filter((agent) => agent.default === true)).toEqual([
+      { id: "octogee-unmatched-route", default: true },
+    ]);
+  });
+
+  it("requests routing activation before patching only when the stable account route is absent", async () => {
+    const accountBinding = {
+      agentId: "octogee-alice-coach",
+      match: { channel: "mattermost", accountId: "alice-coach" },
+    };
+    const activationManifest = {
+      ...manifest(),
+      bindings: [accountBinding],
+    };
+    const applyWith = async (
+      bindings: unknown[],
+      accounts: Record<string, unknown> = {},
+    ) => {
+      const events: string[] = [];
+      const onRoutingActivationRequired = vi.fn((accountIds: readonly string[]) => {
+        events.push(`activation:${accountIds.join(",")}`);
+      });
+      const rpc = {
+        configGet: vi.fn(async () => ({
+          hash: "h1",
+          config: {
+            agents: { list: [{ id: "octogee-bob-coach" }] },
+            channels: { mattermost: { accounts } },
+            bindings,
+          },
+        })),
+        configPatch: vi.fn(async (patch: unknown) => {
+          events.push("configPatch");
+          return { hash: "h2", config: patch };
+        }),
+        close: vi.fn(async () => undefined),
+      };
+
+      const result = await applyOpenClawActivationManifest(activationManifest, {
+        rpc: rpc as never,
+        log: vi.fn(),
+        onRoutingActivationRequired,
+      });
+      return { events, onRoutingActivationRequired, result, rpc };
+    };
+
+    const missing = await applyWith([]);
+    expect(missing.events).toEqual(["activation:alice-coach", "configPatch"]);
+    expect(missing.result.routingActivationRequired).toBe(true);
+
+    const present = await applyWith([accountBinding]);
+    expect(present.events).toEqual(["configPatch"]);
+    expect(present.onRoutingActivationRequired).not.toHaveBeenCalled();
+    expect(present.result.routingActivationRequired).toBe(false);
+
+    const foreignPeer = {
+      agentId: "octogee-bob-coach",
+      match: {
+        channel: "mattermost",
+        accountId: "alice-coach",
+        peer: { kind: "group", id: "alice-general" },
+      },
+    };
+    const conflicted = await applyWith([accountBinding, foreignPeer]);
+    expect(conflicted.events).toEqual(["activation:alice-coach", "configPatch"]);
+    expect(conflicted.result.routingActivationRequired).toBe(true);
+    expect(conflicted.rpc.configPatch.mock.calls[0]?.[0]).toMatchObject({
+      bindings: [accountBinding],
+    });
+
+    const retiredProjectOnForeignAccount = {
+      agentId: "octogee-alice-proj-retired-coach",
+      match: { channel: "mattermost", accountId: "mike-coach" },
+    };
+    const retired = await applyWith(
+      [accountBinding, retiredProjectOnForeignAccount],
+      { "mike-coach": { botToken: "mike-pat" } },
+    );
+    expect(retired.events).toEqual(["activation:mike-coach", "configPatch"]);
+    expect(retired.result.routingActivationRequired).toBe(true);
+    expect(retired.rpc.configPatch.mock.calls[0]?.[0]).toMatchObject({
+      bindings: [accountBinding],
     });
   });
 
@@ -461,7 +617,7 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
     expect(patch.bindings).toEqual([
       { agentId: "octogee-bob-coach", keep: true },
-      { agentId: "octogee-alice-coach", match: { channel: "mattermost" } },
+      { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
     ]);
     expect(configPatch.mock.calls[0][2]).toEqual({ replacePaths: ["bindings"] });
   });
@@ -478,7 +634,7 @@ describe("migration activation manifest", () => {
         }],
       },
       channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
-      bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost" } }],
+      bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     }));
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",

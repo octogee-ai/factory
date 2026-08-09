@@ -77,7 +77,7 @@ export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
   log: (msg: string) => void;
 
-  isOperatorGateway?: () => boolean;
+  isBuilderGateway?: () => boolean;
 
   /**
    * Re-run the platform broker-profile materialization for this customer's
@@ -131,9 +131,6 @@ export interface CustomerLifecycleAdapter {
   /** Stamp the migrating-in pin (import handler, before activation). */
   markCustomerMigratingIn?: (slug: string) => void;
 
-  /** On-disk slugs with a fresh migrating-in pin — reported via /health so Cowboy's operator
-   *  poller skips them as eviction candidates pre-cutover (the operator path has no in-pod
-   *  reconcile to honor the pin). */
   listMigratingInSlugs?: () => string[];
 
   loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
@@ -164,6 +161,8 @@ export interface CustomerLifecycleAdapter {
   createGiteaUser: (slug: string, pubKey: string) => Promise<void>;
 
 ensureGiteaOrg: (slug: string) => Promise<void>;
+
+  ensureSystemConfigRepo: (slug: string) => Promise<void>;
 
 readLocalCustomerPubKey: (slug: string) => string | null;
 
@@ -622,7 +621,7 @@ function throwIfAborted(signal: AbortSignal | undefined, uid: string): void {
   throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
 
-function operatorGatewayIsReadyForFastAttach(
+function builderGatewayIsReadyForFastAttach(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
   convergeContent: boolean | undefined,
@@ -630,7 +629,7 @@ function operatorGatewayIsReadyForFastAttach(
   const { slug } = snapshot;
   return snapshot.status === "complete"
     && !convergeContent
-    && Boolean(adapter.isOperatorGateway?.())
+    && Boolean(adapter.isBuilderGateway?.())
     && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
     && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
     && adapter.hasWorkspaceGitDir(slug)
@@ -663,12 +662,12 @@ async function addCustomerToGatewayInner(
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
 
-  if (operatorGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
+  if (builderGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
     markStep("ssh-key");
     steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
     throwIfAborted(signal, uid);
     adapter.log(
-      `[add:${slug}] operator gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
+      `[add:${slug}] builder gateway, status=complete, coach and durable workspace ready — verifying MM coach only`,
     );
     throwIfAborted(signal, uid);
     markStep(VERIFY_CHANNEL_READY);
@@ -695,6 +694,20 @@ async function addCustomerToGatewayInner(
   markStep("workspace-repo");
   steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
   throwIfAborted(signal, uid);
+
+  markStep("project-clones");
+  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+    ? await cloneMissingProjects(adapter, slug)
+    : { steps: [], pending: [] };
+  steps.push(...projectClones.steps);
+  throwIfAborted(signal, uid);
+  if (projectClones.pending.length > 0) {
+    return {
+      newCustomer,
+      steps,
+      pendingProjectClones: projectClones.pending,
+    };
+  }
 
   markStep("byos-restore");
   const byos = await restoreByos(adapter, slug);
@@ -737,13 +750,6 @@ async function addCustomerToGatewayInner(
 
   markStep("blob-sync");
   steps.push(...(await runBlobSync(adapter, slug)));
-  throwIfAborted(signal, uid);
-
-  markStep("project-clones");
-  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-    ? await cloneMissingProjects(adapter, slug)
-    : { steps: [], pending: [] };
-  steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
   markStep("finalize");
@@ -841,6 +847,11 @@ async function ensureWorkspaceRepo(
   ctx: CustomerContext,
 ): Promise<AddCustomerStep[]> {
   await adapter.ensureGiteaOrg(snapshot.slug);
+  // A builder born onto a shared pod never runs the non-shared pre-boot
+  // restore, which is the only other thing that creates this repo. Without it
+  // the migration flush reads a head that does not exist and the move retries
+  // forever (#3196).
+  await adapter.ensureSystemConfigRepo(snapshot.slug);
   return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
 }
 
@@ -854,8 +865,7 @@ async function convergeWorkspaceCheckout(
   if (adapter.hasWorkspaceGitDir(slug)) {
     if (adapter.hasGitRemote(slug)) return [];
     if (snapshot.repoUrl) {
-      adapter.log(`[add:${slug}] workspace has no origin; restoring canonical Gitea checkout`);
-      await adapter.deleteCustomerDir(slug);
+      adapter.log(`[add:${slug}] workspace Git metadata is incomplete; repairing from canonical Gitea`);
       return cloneExistingWorkspaceRepo(adapter, snapshot, ctx);
     }
     return recoverMissingWorkspaceRemote(adapter, uid, ctx);

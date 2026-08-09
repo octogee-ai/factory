@@ -4,6 +4,7 @@ import { readAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
 import { OpenClawSecretsApplyError, applyOpenClawSecretsPlan, authProfileApiKeyTarget, buildOpenClawSecretsPlan, } from "./openclaw-secrets-apply.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
+import { parseAgentId } from "@octogee/shared/types/identity";
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
 // Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
 // token (the secret-resolver fetches it via POST /internal/byok/agent-model-token);
@@ -17,12 +18,9 @@ const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
 const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
-// Only octogee-<slug>-coach agents have a broker-token resolver grammar
-// (AGENT_MODEL_TOKEN_ID_RE in secret-resolver.mjs). The boot sweep must skip any
-// other agent id rather than write a profile whose keyRef the resolver will refuse
-// — fail closed (the agent surfaces a missing-key error) instead of stranding it
-// with an unresolvable credential.
-const COACH_AGENT_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
+function isBrokerResolvableAgentId(agentId) {
+    return parseAgentId(agentId).kind !== "unknown";
+}
 export function agentModelTokenSecretId(agentId, provider = "anthropic") {
     if (provider === "anthropic")
         return `agent-model-token-${agentId}`;
@@ -320,8 +318,8 @@ export async function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     let deferralReason;
     const deferred = [];
     for (const agentId of agentIds) {
-        if (!COACH_AGENT_RE.test(agentId)) {
-            opts.logFn?.(`[agent-model-token] skipping ${agentId} — only octogee-<slug>-coach agents are broker-token resolvable`);
+        if (!isBrokerResolvableAgentId(agentId)) {
+            opts.logFn?.(`[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`);
             continue;
         }
         try {

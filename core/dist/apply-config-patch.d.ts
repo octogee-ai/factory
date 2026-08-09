@@ -52,9 +52,7 @@ export declare function customerAgentRosterPatch(current: unknown, slug: string,
 } | {
     entries: Record<string, Record<string, unknown>>;
 };
-export declare function filterOutCustomerBindings<T extends {
-    agentId?: unknown;
-}>(bindings: readonly T[], slug: string): T[];
+export declare function filterOutCustomerBindings<T>(bindings: readonly T[], slug: string): T[];
 export declare function mergeCustomerBindings<T extends {
     agentId?: unknown;
 }>(current: readonly T[], slugs: readonly string[], nextCustomerBindings: readonly T[]): readonly T[];

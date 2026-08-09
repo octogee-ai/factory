@@ -149,11 +149,16 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
     }),
   );
 
-  results.push(
-    await runStep("firestore", log, async () => {
-      await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
-    }),
-  );
+  const hostingFailed = results.some((result) => result.key === "hosting" && !result.ok);
+  if (hostingFailed) {
+    results.push({ key: "firestore", ok: true, skipped: true });
+  } else {
+    results.push(
+      await runStep("firestore", log, async () => {
+        await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
+      }),
+    );
+  }
 
 const earlierFailure = results.some((result) => !result.ok && !result.skipped);
 if (ctx.skipAuth || earlierFailure) {

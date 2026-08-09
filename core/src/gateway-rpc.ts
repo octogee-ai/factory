@@ -111,6 +111,15 @@ function parseSecretsApplyPayload(payload: unknown): SecretsApplyRpcResult {
 }
 
 export interface GatewayRestartRequestResult {
+  ok: true;
+  status: "scheduled" | "deferred" | "coalesced";
+  restart: {
+    ok: true;
+    pid: number;
+    signal: "SIGUSR1";
+    coalesced: boolean;
+    [extra: string]: unknown;
+  };
   [extra: string]: unknown;
 }
 
@@ -129,7 +138,7 @@ export interface GatewayChannelStopResult {
 export interface GatewayChannelStartResult {
   channel: string;
   accountId: string;
-  started: true;
+  started: boolean;
   [extra: string]: unknown;
 }
 
@@ -268,6 +277,7 @@ export interface GatewayRpcClient {
     opts?: { replacePaths?: readonly string[] },
   ): Promise<ConfigPatchResult>;
   channelsStatus(): Promise<unknown>;
+  channelsStatusConnectionGeneration(): number;
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
@@ -568,11 +578,13 @@ interface ChannelsStatusConnectionOptions {
 
 function createChannelsStatusConnection(connection: ChannelsStatusConnectionOptions): {
   call: () => Promise<unknown>;
+  connectionGeneration: () => number;
   close: () => Promise<void>;
 } {
   let ws: WebSocket | null = null;
   let connecting: Promise<WebSocket> | null = null;
   let generation = 0;
+  let connectionGeneration = 0;
 
   function disconnect(activeWs: WebSocket): void {
     if (ws === activeWs) ws = null;
@@ -603,6 +615,7 @@ function createChannelsStatusConnection(connection: ChannelsStatusConnectionOpti
         );
       }
       ws = activeWs;
+      connectionGeneration += 1;
       activeWs.once("close", () => {
         if (ws === activeWs) ws = null;
       });
@@ -634,6 +647,7 @@ function createChannelsStatusConnection(connection: ChannelsStatusConnectionOpti
         throw err;
       }
     },
+    connectionGeneration: () => connectionGeneration,
     async close() {
       generation++;
       const activeWs = ws;
@@ -675,7 +689,70 @@ function resolveRpcTraceSettings(): {
   };
 }
 
-type GatewayCall = (method: string, params: object) => Promise<unknown>;
+type GatewayCall = (
+  method: string,
+  params: unknown,
+  requestTimeoutMs?: number,
+) => Promise<unknown>;
+
+async function stopChannels(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["channelsStop"]>[0],
+): Promise<GatewayChannelStopResult> {
+  const payload = await call("channels.stop", params);
+  if (!payload || typeof payload !== "object" ||
+      (payload as { stopped?: unknown }).stopped !== true) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "channels.stop payload missing `stopped: true`",
+    );
+  }
+  return payload as GatewayChannelStopResult;
+}
+
+async function startChannels(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["channelsStart"]>[0],
+): Promise<GatewayChannelStartResult> {
+  const payload = await call("channels.start", params);
+  if (!payload || typeof payload !== "object" ||
+      typeof (payload as { started?: unknown }).started !== "boolean") {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "channels.start payload missing boolean `started`",
+    );
+  }
+  return payload as GatewayChannelStartResult;
+}
+
+async function requestGatewayRestart(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["gatewayRestartRequest"]>[0],
+): Promise<GatewayRestartRequestResult> {
+  const payload = await call("gateway.restart.request", params);
+  const result = payload as Partial<GatewayRestartRequestResult> | undefined;
+  const restart = result?.restart;
+  if (
+    !result ||
+    typeof result !== "object" ||
+    result.ok !== true ||
+    !["scheduled", "deferred", "coalesced"].includes(String(result.status)) ||
+    !restart ||
+    typeof restart !== "object" ||
+    restart.ok !== true ||
+    !Number.isSafeInteger(restart.pid) ||
+    restart.pid <= 0 ||
+    restart.signal !== "SIGUSR1" ||
+    typeof restart.coalesced !== "boolean" ||
+    (result.status === "coalesced") !== restart.coalesced
+  ) {
+    throw new OpenclawWireError(
+      INVALID_RESPONSE,
+      "gateway.restart.request returned malformed restart acknowledgement",
+    );
+  }
+  return result as GatewayRestartRequestResult;
+}
 
 async function callOkPayload(
   call: GatewayCall,
@@ -798,47 +875,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     },
 
     channelsStatus: statusConnection.call,
+    channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
 
-    async channelsStop(params) {
-      const payload = await call("channels.stop", params);
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        (payload as { stopped?: unknown }).stopped !== true
-      ) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "channels.stop payload missing `stopped: true`",
-        );
-      }
-      return payload as GatewayChannelStopResult;
-    },
-
-    async channelsStart(params) {
-      const payload = await call("channels.start", params);
-      if (
-        !payload ||
-        typeof payload !== "object" ||
-        (payload as { started?: unknown }).started !== true
-      ) {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "channels.start payload missing `started: true`",
-        );
-      }
-      return payload as GatewayChannelStartResult;
-    },
-
-    async gatewayRestartRequest(params) {
-      const payload = await call("gateway.restart.request", params);
-      if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError(
-          INVALID_RESPONSE,
-          "gateway.restart.request returned non-object payload",
-        );
-      }
-      return payload as GatewayRestartRequestResult;
-    },
+    channelsStop: (params) => stopChannels(call, params),
+    channelsStart: (params) => startChannels(call, params),
+    gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
 
     async sessionsList(params) {
       const payload = await call("sessions.list", params);

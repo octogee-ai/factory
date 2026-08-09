@@ -112,7 +112,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       record("cloneWorkspaceRepo");
       if (state.cloneShouldFail) return false;
 
-      if (state.disk.customerDir) return false;
+      if (state.disk.customerDir && !state.disk.workspaceGitDir) return false;
       state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
@@ -153,6 +153,9 @@ return "ssh-pubkey";
     },
     ensureGiteaOrg: async () => {
       record("ensureGiteaOrg");
+    },
+    ensureSystemConfigRepo: async () => {
+      record("ensureSystemConfigRepo");
     },
     readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
     readGiteaCustomerPubKeys: async () => {
@@ -396,6 +399,16 @@ expect(result.steps).toEqual([
 
 expect(orgIdx).toBeGreaterThan(-1);
     expect(repoIdx).toBeGreaterThan(orgIdx);
+  });
+
+  it("ensures the durable system_config repo for every customer, not just non-shared pods (#3196)", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const orgIdx = state.calls.indexOf("ensureGiteaOrg");
+    const systemConfigIdx = state.calls.indexOf("ensureSystemConfigRepo");
+
+    expect(systemConfigIdx).toBeGreaterThan(-1);
+    expect(systemConfigIdx).toBeGreaterThan(orgIdx);
   });
 
   it("converges BYOS from the durable ref on mount, BEFORE the config-patch reload (no user-doc signal needed)", async () => {
@@ -847,8 +860,8 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 
 });
 
-describe("addCustomerToGateway — operator gateway short-circuits when status=complete", () => {
-  it("runs full content convergence for a mounted operator when its assigned snapshot changed", async () => {
+describe("addCustomerToGateway — builder gateway short-circuits when status=complete", () => {
+  it("runs full content convergence for a mounted builder when its assigned snapshot changed", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -871,7 +884,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       { projectSlug: "launchroom", giteaRepoName: "launchroom" },
     ];
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test", {
@@ -905,7 +918,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
 
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true; // openclaw.json has the agent
     state.giteaRegisteredPubKey = "ssh-pubkey";
 
@@ -918,7 +931,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(state.calls).not.toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    // The one thing operator-mode MUST keep — MM-side liveness verification
+    // The fast-attach path must keep MM-side liveness verification.
     expect(state.calls).toContain("waitForAccountHealthy");
     // Fleet heartbeat MUST register this customer as mounted, even on the
     // short-circuit path — Copilot review on PR #1182 caught a regression
@@ -946,7 +959,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     state.giteaRegisteredPubKey = "ssh-stale-from-old-pod";
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
@@ -959,12 +972,9 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
   });
 
   it("does not short-circuit for a brand-new customer (status='')", async () => {
-    // Even on an operator gateway, first-time onboarding must run the full
-    // flow — the short-circuit only applies to status=complete (the PVC
-    // already has the durable state we'd otherwise re-create).
     const state = makeState(snap({ status: "" }), emptyDisk());
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
     expect(result.newCustomer).toBe(true);
@@ -973,12 +983,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("config-patch");
   });
 
-  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet (customer-move TO operator)", async () => {
-    // Cowboy moves a customer from a cattle gateway to an operator. Their
-    // Firestore status="complete" (from the cattle mount) but the new
-    // operator's PVC has none of their state. Must run the full flow to
-    // generate SSH key, register with Gitea, clone workspace, register the
-    // agent in openclaw.json, provision MM, and verify.
+  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet on a builder gateway", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -990,7 +995,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       emptyDisk(), // fresh PVC — no SSH key, no workspace, nothing
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
 
     const result = await addCustomerToGateway(adapter, "uid-test");
@@ -1007,7 +1012,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     expect(result.steps).toContain("verify-channel-ready");
   });
 
-  it("restores the canonical workspace when a coach-wired customer has no Git remote", async () => {
+  it("repairs the canonical Git metadata without deleting a coach-wired workspace", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1027,16 +1032,13 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
     );
     state.giteaRegisteredPubKey = "ssh-pubkey";
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
-    expect(state.calls).toContain("deleteCustomerDir");
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
-      state.calls.indexOf("cloneWorkspaceRepo"),
-    );
+    expect(state.calls).not.toContain("deleteCustomerDir");
     expect(state.calls).not.toContain("initWorkspaceRepoFromExistingDir");
     expect(state.disk.sshKey).toBe(true);
     expect(result.steps).toContain("clone-workspace-repo");
@@ -1063,7 +1065,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       },
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
 
     await addCustomerToGateway(adapter, "uid-test");
@@ -1096,7 +1098,7 @@ describe("addCustomerToGateway — operator gateway short-circuits when status=c
       },
     );
     const adapter = makeAdapter(state);
-    adapter.isOperatorGateway = () => true;
+    adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => false; // ← but config.patch never finished
     state.giteaRegisteredPubKey = "ssh-pubkey"; // matches what readLocalCustomerPubKey returns
 
@@ -1454,16 +1456,18 @@ const state = makeState(
     ]);
   });
 
-  it("skips a project with no Gitea repo and no GitHub repoSource, and says so", async () => {
+  it("keeps a project with no checkout source pending and does not activate its agent", async () => {
     const state = makeState(mountedSnapshot(), mountedDisk());
     state.pendingProjects = [
       { projectSlug: "orphan", giteaRepoName: null },
       { projectSlug: "camp", giteaRepoName: "test-camp" },
     ];
 
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(state.cloneProjectCalls.map((c) => c.projectSlug)).toEqual(["camp"]);
+    expect(result.pendingProjectClones).toEqual(["orphan"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
     expect(state.logs).toContainEqual(expect.stringContaining("test/orphan"));
     expect(state.logs.find((l) => l.includes("test/orphan"))).toMatch(
       /no Gitea repo and no GitHub repoSource/,
@@ -1490,7 +1494,7 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
-  it("establishes and verifies the coach before isolated project checkout convergence", async () => {
+  it("converges project checkouts before activating project agents", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1504,11 +1508,8 @@ const state = makeState(
 
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
-    );
-    expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
+    expect(state.calls.indexOf("cloneProjectRepo")).toBeLessThan(
+      state.calls.indexOf("applyAddCustomerConfigPatch"),
     );
   });
 
@@ -1528,6 +1529,8 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
   });
 
   it("surfaces a clone that throws as pending, so the next reconcile retries instead of stranding the checkout", async () => {
@@ -1546,6 +1549,8 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
   });
 
   it("throws when verify times out — restores must NOT silently succeed on a broken mount", async () => {
@@ -1918,7 +1923,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     );
   });
 
-  it("replaces an imported origin-less checkout with the canonical Gitea workspace", async () => {
+  it("repairs imported Git metadata without deleting the imported workspace", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1941,11 +1946,8 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
       state.user!,
     );
 
-    expect(state.calls).toContain("deleteCustomerDir");
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
-      state.calls.indexOf("cloneWorkspaceRepo"),
-    );
+    expect(state.calls).not.toContain("deleteCustomerDir");
     expect(result.steps).toContain("clone-workspace-repo");
   });
 

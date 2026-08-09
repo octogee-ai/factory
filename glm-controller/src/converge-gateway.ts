@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import {
-  operatorGatewayServiceAccountName,
+  builderGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
-  resolveOperatorGatewayAccess,
+  resolveBuilderGatewayAccess,
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
   isOperatorManaged,
   type HelmInstanceValue,
@@ -56,17 +56,13 @@ export function gatewayReleaseAuthorizesChartDrift(
 export function orderGatewaysForConvergence(
   gateways: readonly DurableGateway[],
 ): DurableGateway[] {
-  return [...gateways].sort((left, right) => {
-    const leftRank = resolveGatewayClass(classKnobs(left)) === "operator" ? 0 : 1;
-    const rightRank = resolveGatewayClass(classKnobs(right)) === "operator" ? 0 : 1;
-    return leftRank - rightRank || left.gatewayId.localeCompare(right.gatewayId);
-  });
+  return [...gateways].sort((left, right) => left.gatewayId.localeCompare(right.gatewayId));
 }
 
 function classKnobs(gateway: DurableGateway): {
-  gatewayClass?: "builder" | "operator" | "shared";
-  profile?: "operator" | "standard";
-  imageProfile?: "operator" | "standard";
+  gatewayClass?: "builder" | "shared";
+  profile?: "builder" | "standard";
+  imageProfile?: "builder" | "standard";
 } {
   return {
     gatewayClass: gateway.gatewayClass ?? undefined,
@@ -86,10 +82,10 @@ export function gatewayImageFor(
       imageTag: artifact.imageTag,
     };
   }
-  const image = artifact.profileImages?.operator;
+  const image = artifact.profileImages?.builder;
   if (!image) {
     throw new Error(
-      `gateway ${gateway.gatewayId} release is missing its immutable operator gateway image reference`,
+      `gateway ${gateway.gatewayId} release is missing its immutable Builder gateway image reference`,
     );
   }
   return image;
@@ -213,7 +209,7 @@ export interface GatewayUpsertOpts {
   serviceAccountName?: string;
   serviceAccount?: HelmInstanceValue["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  operatorAccess?: HelmInstanceValue["operatorAccess"];
+  builderAccess?: HelmInstanceValue["builderAccess"];
   chartPath: string;
   valuesFile?: string;
   chartFingerprint?: string;
@@ -354,7 +350,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: gateway.serviceAccount ?? undefined,
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
-    operatorAccess: gatewayOperatorAccess(gateway, gatewayClass),
+    builderAccess: gatewayBuilderAccess(gateway, gatewayClass),
     chartPath: input.chartPath,
     valuesFile: input.valuesFile,
     chartFingerprint: input.chartFingerprint,
@@ -381,15 +377,15 @@ function gatewayServiceAccountName(gateway: DurableGateway): string {
   const configured = gateway.serviceAccountName;
   return configured && configured !== GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME
     ? configured
-    : operatorGatewayServiceAccountName(gateway.gatewayId);
+    : builderGatewayServiceAccountName(gateway.gatewayId);
 }
 
-function gatewayOperatorAccess(
+function gatewayBuilderAccess(
   gateway: DurableGateway,
-  gatewayClass: "shared" | "builder" | "operator",
-): HelmInstanceValue["operatorAccess"] | undefined {
-  if (gatewayClass === "shared") return gateway.operatorAccess ?? undefined;
-  return resolveOperatorGatewayAccess(gateway.ownerUid, gateway.operatorAccess ?? undefined);
+  gatewayClass: "shared" | "builder",
+): HelmInstanceValue["builderAccess"] | undefined {
+  if (gatewayClass === "shared") return gateway.builderAccess ?? undefined;
+  return resolveBuilderGatewayAccess(gateway.ownerUid, gateway.builderAccess ?? undefined);
 }
 
 // The runtime doc the converge arm maintains at glmGateways/{gatewayId}.
@@ -413,7 +409,7 @@ export function provisioningRuntimeDoc(input: {
       deploymentName: `octogee-gateway-${gateway.gatewayId}`,
       gatewayServiceName: `octogee-gateway-${gateway.gatewayId}`,
       gatewayEdgeServiceName: `gateway-edge-${gateway.gatewayId}`,
-      serviceAccountName: operatorGatewayServiceAccountName(gateway.gatewayId),
+      serviceAccountName: builderGatewayServiceAccountName(gateway.gatewayId),
       imageRepository: gatewayImage.imageRepository,
       imageTag: gatewayImage.imageTag,
       replicas: gateway.desiredStatus === "paused" ? 0 : 1,

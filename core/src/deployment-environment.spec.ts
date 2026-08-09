@@ -46,6 +46,7 @@ describe("deployment environment registry", () => {
       lifecycle: "active",
       clusterProjectId: "octogee",
       firebaseProjectId: "octogee",
+      customerHostingProjectId: "octogee-customer-hosting",
       region: "us-central1",
       clusterName: "octogee-gateway",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
@@ -61,6 +62,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip",
       giteaStaticIpName: "gitea-ip",
       previewStaticIpName: "preview-ip",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetSettings("prod-central")).toMatchObject({
@@ -71,6 +73,7 @@ describe("deployment environment registry", () => {
       clusterProjectId: "octogee",
       firebaseProjectId: "octogee",
       hostingProjectId: "octogee",
+      customerHostingProjectId: "octogee-customer-hosting",
       region: "us-central1",
       clusterName: "octogee-gateway",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
@@ -88,6 +91,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip",
       giteaStaticIpName: "gitea-ip",
       previewStaticIpName: "preview-ip",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetSettings("test-central")).toMatchObject({
@@ -96,6 +100,7 @@ describe("deployment environment registry", () => {
       lifecycle: "active",
       namespace: "octogee-test",
       firebaseProjectId: "octogee-test",
+      customerHostingProjectId: "octogee-customer-hosting-test",
       region: "us-central1",
       artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
       cloudSqlMattermostPasswordSecretName: "MM_DB_PASSWORD",
@@ -106,6 +111,7 @@ describe("deployment environment registry", () => {
       mattermostStaticIpName: "mattermost-ip-test",
       giteaStaticIpName: "gitea-ip-test",
       previewStaticIpName: "preview-ip-test",
+      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
 
     expect(deploymentTargetsForEnvironment("prod")).toEqual([
@@ -134,6 +140,32 @@ describe("deployment environment registry", () => {
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
       "deployment target build-week-central ingress identity workspace-api-ip-test is already used",
+    );
+  });
+
+  it("requires a distinct dedicated customer Hosting project for every target", () => {
+    const missing = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    delete missing.targets["test-central"].customerHostingProjectId;
+    expect(() => validateDeploymentTargetsDocument(missing)).toThrow(
+      "deployment target test-central.customerHostingProjectId must be a non-empty string",
+    );
+
+    const appProject = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    appProject.targets["test-central"].customerHostingProjectId = "octogee-test";
+    expect(() => validateDeploymentTargetsDocument(appProject)).toThrow(
+      "deployment target test-central.customerHostingProjectId must be isolated",
+    );
+
+    const foreignAppProject = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    foreignAppProject.targets["test-central"].customerHostingProjectId = "octogee";
+    expect(() => validateDeploymentTargetsDocument(foreignAppProject)).toThrow(
+      "deployment target test-central.customerHostingProjectId must be isolated",
+    );
+
+    const shared = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    shared.targets["test-central"].customerHostingProjectId = "octogee-customer-hosting";
+    expect(() => validateDeploymentTargetsDocument(shared)).toThrow(
+      "deployment target test-central.customerHostingProjectId is already used by prod-central",
     );
   });
 
@@ -189,6 +221,31 @@ describe("deployment environment registry", () => {
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
       "must use either four distinct identities or one shared edge identity",
     );
+  });
+
+  it("accepts only a non-empty unique list of canonical project runner API-server /32s", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as {
+      targets: Record<string, { projectRunnerApiServerEgressCidrs: unknown }>;
+    };
+    candidate.targets["test-central"].projectRunnerApiServerEgressCidrs = [
+      "10.128.0.2/32",
+      "34.118.224.1/32",
+    ];
+    expect(() => validateDeploymentTargetsDocument(candidate)).not.toThrow();
+
+    for (const cidrs of [
+      [],
+      ["34.58.245.121/27"],
+      ["0.0.0.0/32"],
+      ["300.1.1.1/32"],
+      ["10.128.0.2/32", "10.128.0.2/32"],
+      "10.128.0.2/32",
+    ]) {
+      candidate.targets["test-central"].projectRunnerApiServerEgressCidrs = cidrs;
+      expect(() => validateDeploymentTargetsDocument(candidate), JSON.stringify(cidrs)).toThrow(
+        "deployment target test-central.projectRunnerApiServerEgressCidrs must contain unique canonical IPv4 /32 CIDRs",
+      );
+    }
   });
 
   it("freezes Build Week in central and gives it no west candidate", () => {

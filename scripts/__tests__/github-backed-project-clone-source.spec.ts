@@ -8,11 +8,16 @@ process.env.OPENCLAW_DIR = openclawDir;
 
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(async () => true),
+  projectCheckoutMatchesSource: vi.fn(() => false),
 }));
 
 vi.mock("../lib/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/git.js")>();
-  return { ...actual, cloneProjectRepo: gitMocks.cloneProjectRepo };
+  return {
+    ...actual,
+    cloneProjectRepo: gitMocks.cloneProjectRepo,
+    projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
+  };
 });
 
 const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
@@ -61,6 +66,7 @@ function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
 
 beforeEach(() => {
   gitMocks.cloneProjectRepo.mockClear();
+  gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(false);
   fs.rmSync(path.join(CUSTOMERS_DIR), { recursive: true, force: true });
 });
 
@@ -94,13 +100,14 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     ]);
   });
 
-  it("drops a project with neither a Gitea repo nor a github repoSource, and says so", async () => {
+  it("keeps an active project with no checkout source pending, and says so", async () => {
     const { adapter, log } = mkAdapter([
       { projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" },
       { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },
     ]);
 
     await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "orphan", giteaRepoName: null },
       { projectSlug: "camp", giteaRepoName: "alice-camp" },
     ]);
     expect(log).toHaveBeenCalledWith(
@@ -109,6 +116,17 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     expect(log.mock.calls.flat().join("\n")).toMatch(
       /no Gitea repo and no GitHub repoSource/,
     );
+  });
+
+  it("keeps a source-less project pending even when stale local metadata appears canonical", async () => {
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
+    const { adapter } = mkAdapter([
+      { projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "orphan", giteaRepoName: null },
+    ]);
   });
 
   it("ignores a repoSource whose provider is not github", async () => {
@@ -128,6 +146,7 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
 
   it("skips a project whose checkout is already on disk", async () => {
     fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
     const { adapter } = mkAdapter([
       {
         projectSlug: "gh",
@@ -138,6 +157,26 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     ]);
 
     await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
+  });
+
+  it("reconciles a checkout whose trusted source does not match the project source", async () => {
+    fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: "alice-gh",
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      {
+        projectSlug: "gh",
+        giteaRepoName: "alice-gh",
+        repoSource: GITHUB_REPO_SOURCE,
+      },
+    ]);
   });
 
   it("forwards the repoSource to the clone and passes no explicit GitHub token — the clone rides the pod's ambient gh credential helper", async () => {
