@@ -2849,7 +2849,9 @@ function migrationProjectCheckoutScope(
 ): FleetBrokerProjectCheckoutScope {
   if (!gatewayId) return "workspace-only";
   const root = projectGatewayDesiredRootForGateway(gatewayData, gatewayId);
-  if (!root || root.ownerUid !== uid || root.builderSlug !== slug) {
+  if (!root) return "workspace-only";
+  if (root.gatewayClass === "shared") return "workspace-and-projects";
+  if (root.ownerUid !== uid || root.builderSlug !== slug) {
     return "workspace-only";
   }
   if (
