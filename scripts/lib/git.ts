@@ -1265,6 +1265,7 @@ export async function initWorkspaceRepo(
 ): Promise<string | null> {
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
+  const freshRepository = !repositoryMetadataExists(coachDir);
 
   fs.writeFileSync(path.join(coachDir, ".gitignore"), workspaceGitignore(), "utf-8");
 
@@ -1290,10 +1291,14 @@ export async function initWorkspaceRepo(
     return null;
   }
 
-  deps.prepareRepository(coachDir, slug);
-
   const originUrl = sshRemoteUrl(org, repoName);
-  const remoteResult = gitExec(coachDir, ["remote", "set-url", "origin", originUrl]);
+  if (!freshRepository) deps.prepareRepository(coachDir, slug);
+  const remoteResult = gitExec(coachDir, [
+    "remote",
+    freshRepository ? "add" : "set-url",
+    "origin",
+    originUrl,
+  ]);
   if (remoteResult === null) {
     log(`⚠ [git] remote projection failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
     return null;
@@ -1303,6 +1308,7 @@ export async function initWorkspaceRepo(
   const sshKey = customerSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
   pushInitialSkeleton(coachDir, slug, keyArg);
+  if (freshRepository) deps.prepareRepository(coachDir, slug);
 
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;

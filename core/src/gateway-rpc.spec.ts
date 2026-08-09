@@ -824,10 +824,19 @@ describe("gateway-rpc", () => {
   });
 
   describe("agentsCreate", () => {
-    it("calls `agents.create` with the requested name and workspace and returns the gateway payload", async () => {
+    it("waits for the created roster to finish hot-reloading before returning", async () => {
       let captured: unknown = "not-called";
-      server.setHandler("agents.create", (params) => {
+      const events: string[] = [];
+      server.setHandler("agents.create", (params, ws) => {
         captured = params;
+        setTimeout(() => {
+          events.push("config-changed");
+          ws.send(JSON.stringify({
+            type: "event",
+            event: "config.changed",
+            payload: { hash: "agents-create-hash" },
+          }));
+        }, 20);
         return {
           ok: true,
           payload: {
@@ -853,6 +862,7 @@ describe("gateway-rpc", () => {
         agentId: "octogee-alice-coach",
         workspace: "/home/node/.openclaw/customers/alice",
       });
+      expect(events).toEqual(["config-changed"]);
     });
 
     it("throws OpenclawWireError('invalid-response') when the payload is missing `ok: true`", async () => {

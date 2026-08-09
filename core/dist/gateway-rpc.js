@@ -80,6 +80,7 @@ function configChangedHash(data) {
 function trackConfigChange(ws) {
     const changedHashes = new Set();
     const waiters = new Map();
+    const anyWaiters = new Set();
     const onMessage = (data) => {
         const hash = configChangedHash(data);
         if (!hash)
@@ -88,6 +89,9 @@ function trackConfigChange(ws) {
         for (const resolve of waiters.get(hash) ?? [])
             resolve();
         waiters.delete(hash);
+        for (const resolve of anyWaiters)
+            resolve();
+        anyWaiters.clear();
     };
     ws.on("message", onMessage);
     return {
@@ -120,9 +124,37 @@ function trackConfigChange(ws) {
                     accepted();
             });
         },
+        waitForAny(timeoutMs) {
+            if (changedHashes.size > 0)
+                return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new OpenclawWireError("timeout", `config.changed timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+                const onClose = () => {
+                    cleanup();
+                    reject(new OpenclawWireError("connect-failed", "socket closed before config.changed was published"));
+                };
+                const accepted = () => {
+                    cleanup();
+                    resolve();
+                };
+                function cleanup() {
+                    clearTimeout(timer);
+                    ws.removeListener("close", onClose);
+                    anyWaiters.delete(accepted);
+                }
+                anyWaiters.add(accepted);
+                ws.on("close", onClose);
+                if (changedHashes.size > 0)
+                    accepted();
+            });
+        },
         close() {
             ws.removeListener("message", onMessage);
             waiters.clear();
+            anyWaiters.clear();
         },
     };
 }
@@ -245,6 +277,36 @@ async function patchConfigAndWaitForChange(connection, patch, baseHash, replaceP
             throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `hash` required for config.changed correlation");
         }
         await change.waitFor(result.hash, connection.callTimeoutMs);
+        return result;
+    }
+    finally {
+        change.close();
+        try {
+            ws.close();
+        }
+        catch { /* */ }
+    }
+}
+async function createAgentAndWaitForChange(connection, params) {
+    const ws = await openAndConnect({
+        url: connection.url,
+        ...connection.auth,
+        connectTimeoutMs: connection.connectTimeoutMs,
+        identity: connection.identity,
+        scopes: connection.scopes,
+        onConnectTrace: connection.onConnectTrace,
+    });
+    const change = trackConfigChange(ws);
+    const connectedCall = async (method, requestParams) => await sendWsRequest({
+        ws,
+        id: randomUUID(),
+        method,
+        params: requestParams,
+        timeoutMs: connection.callTimeoutMs,
+    });
+    try {
+        const result = await callAgentsCreate(connectedCall, params);
+        await change.waitForAny(connection.callTimeoutMs);
         return result;
     }
     finally {
@@ -519,7 +581,15 @@ export function createGatewayRpc(opts = {}) {
             }
             return payload;
         },
-        agentsCreate: (params) => callAgentsCreate(call, params),
+        agentsCreate: (params) => createAgentAndWaitForChange({
+            url,
+            auth,
+            connectTimeoutMs,
+            callTimeoutMs,
+            identity: resolveIdentity(),
+            scopes,
+            onConnectTrace,
+        }, params),
         agentsDelete: (params) => callAgentsDelete(call, params),
         async secretsReload() {
             return parseSecretsReloadPayload(await call("secrets.reload", {}));

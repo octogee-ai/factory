@@ -134,7 +134,7 @@ describe("workspace .gitignore excludes .ssh/", () => {
 });
 
 describe("initWorkspaceRepo", () => {
-  it("creates the canonical repository before preparing fetch-backed metadata", async () => {
+  it("pushes the initial skeleton before preparing fetch-backed metadata for a new repository", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-init-order-"));
     const coachDir = path.join(root, "aug09");
     fs.mkdirSync(coachDir);
@@ -150,7 +150,11 @@ describe("initWorkspaceRepo", () => {
         prepareRepository: (repoDir) => {
           calls.push("prepare");
           if (!canonicalRepositoryExists) throw new Error("canonical repository is missing");
-          execSync("git remote add origin /dev/null", { cwd: repoDir, stdio: "pipe" });
+          expect(execSync("git log -1 --format=%s", {
+            cwd: repoDir,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          }).trim()).toBe("initial workspace skeleton");
         },
       });
 
