@@ -74,6 +74,31 @@ describe("planEmbeddingRefRepair", () => {
     expect(plan.nextAgentsList).not.toBeNull();
   });
 
+  it("detects and repairs a platform ref in canonical memory.search", () => {
+    const agentId = "octogee-canonical-coach";
+    const plan = planEmbeddingRefRepair(
+      config([{
+        id: agentId,
+        memory: { search: platformOpenAiEmbeddingMemorySearch("octogee-alice-coach") },
+      }]),
+      { agentDirExists: () => true },
+    );
+
+    expect(plan.mismatched).toEqual([{
+      agentId,
+      currentId: platformOpenAiEmbeddingSecretId("octogee-alice-coach"),
+      expectedId: platformOpenAiEmbeddingSecretId(agentId),
+    }]);
+    const repaired = plan.nextAgentsList?.[0] as {
+      memory: { search: { remote: { apiKey: { id: string } } } };
+      memorySearch?: unknown;
+    };
+    expect(repaired.memory.search.remote.apiKey.id).toBe(
+      platformOpenAiEmbeddingSecretId(agentId),
+    );
+    expect(repaired).not.toHaveProperty("memorySearch");
+  });
+
   it("returns a null next list when every ref is already correctly bound", () => {
     const plan = planEmbeddingRefRepair(
       config([coach("octogee-alice-coach", "octogee-alice-coach"), coach("octogee-b-coach")]),

@@ -391,7 +391,7 @@ export function applyMemorySearchSchemaPatch(
       logFn("left legacy agent memorySearch unchanged because memory is not an object");
       continue;
     }
-    const legacySearch = structuredClone(entry.memorySearch);
+    const legacySearch = cloneWithoutUnsafeKeys(entry.memorySearch);
     if (!Reflect.has(memory, "search") || !isPlainObject(memory.search)) {
       memory.search = legacySearch;
     } else {
@@ -403,6 +403,20 @@ export function applyMemorySearchSchemaPatch(
   if (migrated === 0) return false;
   logFn(`migrated legacy memorySearch for ${migrated} agent(s)`);
   return true;
+}
+
+function cloneWithoutUnsafeKeys(source: Record<string, unknown>): Record<string, unknown> {
+  const clone: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (PROTO_POLLUTION_KEYS.has(key)) continue;
+    clone[key] = cloneValueWithoutUnsafeKeys(value);
+  }
+  return clone;
+}
+
+function cloneValueWithoutUnsafeKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneValueWithoutUnsafeKeys);
+  return isPlainObject(value) ? cloneWithoutUnsafeKeys(value) : value;
 }
 
 function mergeMissingInto(

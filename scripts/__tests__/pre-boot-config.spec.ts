@@ -721,6 +721,49 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(false);
   });
 
+  it.each([
+    ["absent", undefined],
+    ["malformed", "malformed"],
+  ])("recursively removes hostile keys when canonical memory.search is %s", (_label, search) => {
+    const legacySearch = JSON.parse(`{
+      "provider": "openai-compatible",
+      "__proto__": { "polluted": "root" },
+      "remote": {
+        "apiKey": {
+          "source": "exec",
+          "provider": "gcp-secret-manager",
+          "id": "agent-embedding-token-openai-octogee-hostile-coach"
+        },
+        "constructor": { "polluted": "nested" },
+        "headers": {
+          "safe": "yes",
+          "prototype": { "polluted": "deep" }
+        }
+      },
+      "sources": [{ "safe": true, "__proto__": { "polluted": "array" } }]
+    }`);
+    const entry: any = {
+      ...(search === undefined ? {} : { memory: { search } }),
+      memorySearch: legacySearch,
+    };
+    const config: any = { agents: { entries: { "octogee-hostile-coach": entry } } };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+
+    const migrated = entry.memory.search;
+    expect(migrated).not.toBe(legacySearch);
+    expect(migrated.remote.apiKey.id).toBe(
+      "agent-embedding-token-openai-octogee-hostile-coach",
+    );
+    expect(migrated.remote.headers.safe).toBe("yes");
+    expect(migrated.sources[0].safe).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(migrated, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.remote, "constructor")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.remote.headers, "prototype")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.sources[0], "__proto__")).toBe(false);
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
   it("does not add memory search SecretRefs unless embeddings are enabled", () => {
     const config: any = {
       tools: { profile: "coding" },
