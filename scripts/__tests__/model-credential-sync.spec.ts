@@ -150,8 +150,7 @@ describe("syncModelCredentialsForCustomer", () => {
       source: "free-tier",
       model: "platform-openrouter/deepseek/deepseek-v4-pro",
     });
-    expect(requestGatewayRestart).toHaveBeenCalledOnce();
-    expect(requestGatewayRestart).toHaveBeenCalledWith("customer-oauth-runtime-purge");
+    expect(requestGatewayRestart).not.toHaveBeenCalled();
     expect(triggerSecretsReload).toHaveBeenCalledTimes(1);
   });
 });

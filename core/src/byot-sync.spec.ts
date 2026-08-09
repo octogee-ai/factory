@@ -2147,11 +2147,13 @@ describe("standard gateway — BYOS materialization", () => {
   });
 
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
-    const applyByotStateFn = vi.fn(() => true);
+    const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
     const applyCoachToolsConvergenceFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => false);
+    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
+    const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
     await syncByotForCustomer(
@@ -2163,12 +2165,13 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyCoachModelPatch: applyCoachModelPatchFn,
         applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
         materializePlatformBrokerSurfaces: materializeFn,
+        requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -2177,13 +2180,14 @@ describe("standard gateway — BYOS materialization", () => {
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
     // anthropic BYOK ships no model patch → the standalone convergence covers
     // the BYOK carve-out (inherited surface) on this path too.
     expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses claude-cli BYOS on a customer gateway and keeps the platform model", async () => {
+  it("suppresses claude-cli BYOS without restarting every customer on the gateway", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const applyCoachModelPatchFn = vi.fn(async () => true);
@@ -2219,7 +2223,7 @@ describe("standard gateway — BYOS materialization", () => {
       "platform-openrouter/deepseek/deepseek-v4-pro",
       { forceSafeAll: true },
     );
-    expect(requestGatewayRestartFn).toHaveBeenCalledWith("customer-oauth-runtime-purge");
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
@@ -2248,7 +2252,7 @@ describe("standard gateway — BYOS materialization", () => {
       "platform-openrouter/deepseek/deepseek-v4-pro",
       { forceSafeAll: false },
     );
-    expect(requestGatewayRestartFn).toHaveBeenCalledWith("customer-oauth-runtime-purge");
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
   });
 
   it("does not restore or allowlist OAuth agent runtimes on a customer gateway", async () => {

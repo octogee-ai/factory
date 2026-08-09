@@ -1662,6 +1662,7 @@ function isBrokerResolvedAnthropic(
 async function clearBrokerResolvedAnthropic(
   slug: string,
   actions: SyncByotActions,
+  customerOauthRuntimeChanged = false,
 ): Promise<void> {
   const changed = actions.applyByotState(slug, null);
   const catalog = await materializePlatformCatalog(slug, actions);
@@ -1674,7 +1675,10 @@ async function clearBrokerResolvedAnthropic(
     undefined,
     catalog.restartPending,
   );
-  if ((changed || catalog.changed || catalog.restartPending) && !restartRequested) {
+  if (
+    (changed || catalog.changed || catalog.restartPending || customerOauthRuntimeChanged) &&
+    !restartRequested
+  ) {
     await actions.triggerSecretsReload();
   }
 }
@@ -1695,7 +1699,7 @@ async function syncStandardByotState(
   slug: string,
   desired: DesiredByotState,
   actions: SyncByotActions,
-  opts?: { purgeAuthProfileStore?: boolean },
+  opts?: { purgeAuthProfileStore?: boolean; customerOauthRuntimeChanged?: boolean },
 ): Promise<void> {
   const changed = opts?.purgeAuthProfileStore
     ? actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
@@ -1714,7 +1718,12 @@ async function syncStandardByotState(
   );
 
   if (
-    (changed || restore.restored || runtimePatched.patched || patched || catalogRestartPending) &&
+    (changed ||
+      restore.restored ||
+      runtimePatched.patched ||
+      patched ||
+      catalogRestartPending ||
+      opts?.customerOauthRuntimeChanged) &&
     !restartRequested
   ) {
     await actions.triggerSecretsReload();
@@ -1776,7 +1785,7 @@ async function syncSharedBrokerByotState(
   slug: string,
   desired: DesiredByotState,
   actions: SyncByotActions,
-  opts?: { purgeAuthProfileStore?: boolean },
+  opts?: { purgeAuthProfileStore?: boolean; customerOauthRuntimeChanged?: boolean },
 ): Promise<void> {
   const provider = desired.input?.provider;
   const isOauth = Boolean(provider && isModelCredentialOauthProvider(provider));
@@ -1809,7 +1818,13 @@ async function syncSharedBrokerByotState(
   );
 
   if (
-    (changed || restore.restored || catalog.changed || catalog.restartPending || runtimePatched.patched || patched) &&
+    (changed ||
+      restore.restored ||
+      catalog.changed ||
+      catalog.restartPending ||
+      runtimePatched.patched ||
+      patched ||
+      opts?.customerOauthRuntimeChanged) &&
     !restartRequested
   ) {
     await actions.triggerSecretsReload();
@@ -1867,15 +1882,6 @@ async function applyCustomerAgentModelOverrides(
   );
 }
 
-async function restartAfterCustomerOauthPurge(
-  changed: boolean,
-  actions: SyncByotActions,
-): Promise<void> {
-  if (!changed) return;
-  const restarted = await actions.requestGatewayRestart("customer-oauth-runtime-purge");
-  if (!restarted) await actions.triggerSecretsReload();
-}
-
 export async function syncByotForCustomer(
   userData: SyncByotUserData,
   deps?: SyncByotForCustomerDeps,
@@ -1909,6 +1915,7 @@ export async function syncByotForCustomer(
     builder,
     usesBrokerToken,
     purgeAuthProfileStore: customerGate.suppressed,
+    customerOauthRuntimeChanged: oauthPurge.changed,
   });
 
   await convergeCoachToolsIfNoModelPatch(slug, effectiveDesired, userData, actions);
@@ -1927,7 +1934,6 @@ export async function syncByotForCustomer(
   );
 
   await refreshProvisionedCoachRuntimeSessions(slug, userData, actions, logFn);
-  await restartAfterCustomerOauthPurge(oauthPurge.changed, actions);
 }
 
 // The operator's Builder Agent default fills in for a coach with no explicit
@@ -2089,17 +2095,19 @@ async function syncByotStateForClass(args: {
   builder: boolean;
   usesBrokerToken: () => boolean;
   purgeAuthProfileStore: boolean;
+  customerOauthRuntimeChanged: boolean;
 }): Promise<void> {
   const { slug, desired, actions } = args;
   if (args.isShared()) {
     await syncSharedBrokerByotState(slug, desired, actions, {
       purgeAuthProfileStore: args.purgeAuthProfileStore,
+      customerOauthRuntimeChanged: args.customerOauthRuntimeChanged,
     });
     return;
   }
 
   if (isBrokerResolvedAnthropic(desired, args.usesBrokerToken())) {
-    await clearBrokerResolvedAnthropic(slug, actions);
+    await clearBrokerResolvedAnthropic(slug, actions, args.customerOauthRuntimeChanged);
     return;
   }
 
@@ -2110,5 +2118,6 @@ async function syncByotStateForClass(args: {
 
   await syncStandardByotState(slug, desired, actions, {
     purgeAuthProfileStore: args.purgeAuthProfileStore,
+    customerOauthRuntimeChanged: args.customerOauthRuntimeChanged,
   });
 }
