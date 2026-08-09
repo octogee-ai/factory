@@ -847,6 +847,9 @@ export async function cloneProjectRepo(
   const dest = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
 
   if (repositoryMetadataExists(dest)) {
+    if (!existingProjectGitDir(dest)) {
+      return restoreMissingProjectGitMetadata(slug, projectSlug, dest, giteaRepoName, opts);
+    }
     if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
       return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
     }
@@ -855,7 +858,8 @@ export async function cloneProjectRepo(
       giteaRepoName,
       githubToken: opts.githubToken,
     });
-    return true;
+    return projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
+      && customerRepositoryHasCanonicalRemote(dest);
   }
 
   if (opts.repoSource?.provider === "github") {
@@ -877,6 +881,34 @@ export async function cloneProjectRepo(
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
   );
+}
+
+function restoreMissingProjectGitMetadata(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  giteaRepoName: string,
+  opts: CloneProjectRepoOptions,
+): boolean {
+  try {
+    (opts.prepareRepository ?? setRepoSshCommand)(dest, slug, {
+      repoSource: opts.repoSource,
+      giteaRepoName,
+      githubToken: opts.githubToken,
+    });
+  } catch (error) {
+    log(`⚠ [git] Cannot restore ${slug}/${projectSlug} metadata: ${errMessage(error)}`);
+    return false;
+  }
+  if (
+    !projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
+    || !customerRepositoryHasCanonicalRemote(dest)
+  ) {
+    log(`⚠ [git] Cannot restore ${slug}/${projectSlug} metadata — canonical source verification failed`);
+    return false;
+  }
+  log(`[git] ✅ Restored ${slug}/${projectSlug} canonical metadata`);
+  return true;
 }
 
 // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- source switching is a rollback-capable filesystem state machine
@@ -972,7 +1004,10 @@ async function replaceProjectRepoCheckout(
       giteaRepoName,
       githubToken: opts.githubToken,
     });
-    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+    if (
+      !projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
+      || !customerRepositoryHasCanonicalRemote(dest)
+    ) {
       throw new Error("replacement repository source was not prepared canonically");
     }
     log(`[git] ✅ Switched ${slug}/${projectSlug} to ${sourceReceiptValue(source)}`);

@@ -8,6 +8,7 @@ process.env.OPENCLAW_DIR = openclawDir;
 
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(async () => true),
+  customerRepositoryHasCanonicalRemote: vi.fn(() => false),
   projectCheckoutMatchesSource: vi.fn(() => false),
 }));
 
@@ -16,6 +17,7 @@ vi.mock("../lib/git.js", async (importOriginal) => {
   return {
     ...actual,
     cloneProjectRepo: gitMocks.cloneProjectRepo,
+    customerRepositoryHasCanonicalRemote: gitMocks.customerRepositoryHasCanonicalRemote,
     projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
   };
 });
@@ -66,6 +68,7 @@ function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
 
 beforeEach(() => {
   gitMocks.cloneProjectRepo.mockClear();
+  gitMocks.customerRepositoryHasCanonicalRemote.mockReset().mockReturnValue(false);
   gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(false);
   fs.rmSync(path.join(CUSTOMERS_DIR), { recursive: true, force: true });
 });
@@ -147,6 +150,7 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
   it("skips a project whose checkout is already on disk", async () => {
     fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
     gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
+    gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(true);
     const { adapter } = mkAdapter([
       {
         projectSlug: "gh",

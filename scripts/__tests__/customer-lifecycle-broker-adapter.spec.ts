@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
 }));
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(),
+  customerRepositoryHasCanonicalRemote: vi.fn(),
   projectCheckoutMatchesSource: vi.fn(),
   setRepoSshCommand: vi.fn(),
 }));
@@ -75,6 +76,7 @@ vi.mock("../lib/git.js", async (importOriginal) => {
   return {
     ...actual,
     cloneProjectRepo: gitMocks.cloneProjectRepo,
+    customerRepositoryHasCanonicalRemote: gitMocks.customerRepositoryHasCanonicalRemote,
     projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
     setRepoSshCommand: gitMocks.setRepoSshCommand,
   };
@@ -247,6 +249,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
     gitMocks.cloneProjectRepo.mockReset().mockResolvedValue(true);
+    gitMocks.customerRepositoryHasCanonicalRemote.mockReset().mockReturnValue(true);
     gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(true);
     gitMocks.setRepoSshCommand.mockClear();
     patchMocks.applyConfigPatch.mockClear();
@@ -453,6 +456,44 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       /project checkout restoration incomplete.*roamly/u,
     );
 
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+  });
+
+  it("keeps the imported customer closed when a raced metadata repair has a valid receipt but a bad canonical remote", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
+    gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(false);
+    gitMocks.cloneProjectRepo.mockResolvedValue(true);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /project checkout restoration incomplete.*roamly/u,
+    );
+
+    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith(
+      "tester10",
+      "roamly",
+      "alice-roamly",
+      undefined,
+    );
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
   });
