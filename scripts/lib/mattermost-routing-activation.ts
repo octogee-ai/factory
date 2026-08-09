@@ -14,6 +14,7 @@ interface PendingActivation {
   token: string;
   reason: string;
   accountIds: string[];
+  baselineLastStartAt: Record<string, number>;
   createdAt: number;
 }
 
@@ -26,6 +27,7 @@ interface PendingActivationBatch {
   claims: PendingActivationClaim[];
   reason: string;
   accountIds: string[];
+  baselineLastStartAt: Map<string, number>;
 }
 
 function markerPath(openclawDir: string): string {
@@ -39,7 +41,12 @@ function readPendingActivationFile(filePath: string): PendingActivation | null {
       typeof value.token !== "string" ||
       typeof value.reason !== "string" ||
       !Array.isArray(value.accountIds) ||
-      !value.accountIds.every((accountId) => typeof accountId === "string" && accountId.length > 0)
+      !value.accountIds.every((accountId) => typeof accountId === "string" && accountId.length > 0) ||
+      !isRecord(value.baselineLastStartAt) ||
+      !value.accountIds.every((accountId) => {
+        const lastStartAt = value.baselineLastStartAt?.[accountId];
+        return typeof lastStartAt === "number" && Number.isFinite(lastStartAt) && lastStartAt >= 0;
+      })
     ) {
       throw new Error("Mattermost routing activation marker is malformed");
     }
@@ -53,6 +60,12 @@ function readPendingActivationFile(filePath: string): PendingActivation | null {
       token: value.token,
       reason: value.reason,
       accountIds: [...new Set(value.accountIds)],
+      baselineLastStartAt: Object.fromEntries(
+        [...new Set(value.accountIds)].map((accountId) => [
+          accountId,
+          value.baselineLastStartAt![accountId] as number,
+        ]),
+      ),
       createdAt: value.createdAt ?? fs.statSync(filePath).mtimeMs,
     };
   } catch (error) {
@@ -87,6 +100,18 @@ function readPendingActivation(openclawDir: string): PendingActivationBatch | nu
     claims,
     reason: claims[0]!.activation.reason,
     accountIds: [...new Set(claims.flatMap((claim) => claim.activation.accountIds))].sort(),
+    baselineLastStartAt: new Map(
+      [...new Set(claims.flatMap((claim) => claim.activation.accountIds))]
+        .sort()
+        .map((accountId) => [
+          accountId,
+          Math.max(...claims.flatMap((claim) =>
+            claim.activation.accountIds.includes(accountId)
+              ? [claim.activation.baselineLastStartAt[accountId] ?? 0]
+              : []
+          )),
+        ]),
+    ),
   };
 }
 
@@ -98,6 +123,7 @@ export function markMattermostRoutingActivationPending(
   openclawDir: string,
   reason: string,
   accountIds: readonly string[],
+  baselineLastStartAt: Readonly<Record<string, number>>,
 ): string {
   const token = randomUUID();
   const existing = readPendingActivation(openclawDir);
@@ -105,6 +131,15 @@ export function markMattermostRoutingActivationPending(
     token,
     reason: existing?.reason ?? reason,
     accountIds: [...new Set(accountIds)].sort(),
+    baselineLastStartAt: Object.fromEntries(
+      [...new Set(accountIds)].sort().map((accountId) => {
+        const lastStartAt = baselineLastStartAt[accountId];
+        if (typeof lastStartAt !== "number" || !Number.isFinite(lastStartAt) || lastStartAt < 0) {
+          throw new Error(`Mattermost routing activation baseline is missing for ${accountId}`);
+        }
+        return [accountId, lastStartAt];
+      }),
+    ),
     createdAt: Date.now(),
   };
   if (pending.accountIds.length === 0) {
@@ -149,6 +184,24 @@ async function mattermostAccountStatuses(
       .filter((entry): entry is MattermostAccountStatus & { accountId: string } =>
         typeof entry.accountId === "string")
       .map((entry) => [entry.accountId, entry]),
+  );
+}
+
+export async function captureMattermostRoutingActivationBaseline(
+  rpc: GatewayRpcClient,
+  accountIds: readonly string[],
+): Promise<Record<string, number>> {
+  const statuses = await mattermostAccountStatuses(rpc);
+  return Object.fromEntries(
+    [...new Set(accountIds)].sort().map((accountId) => {
+      const account = statuses.get(accountId);
+      if (!account) return [accountId, 0];
+      const lastStartAt = account.lastStartAt;
+      if (typeof lastStartAt !== "number" || !Number.isFinite(lastStartAt) || lastStartAt < 0) {
+        throw new Error(`Mattermost account ${accountId} has an invalid lastStartAt`);
+      }
+      return [accountId, lastStartAt];
+    }),
   );
 }
 
@@ -224,21 +277,6 @@ interface RoutingActivationRuntime {
   log: (message: string) => void;
 }
 
-async function observeRoutingBaseline(
-  rpc: GatewayRpcClient,
-  accountIds: readonly string[],
-): Promise<RoutingActivationBaseline> {
-  const before = await mattermostAccountStatuses(rpc);
-  return {
-    accounts: new Map(accountIds.map((accountId) => {
-      const lastStartAt = before.get(accountId)?.lastStartAt;
-      return [accountId, typeof lastStartAt === "number" && Number.isFinite(lastStartAt)
-        ? lastStartAt
-        : 0];
-    })),
-  };
-}
-
 function accountsActivated(
   after: ReadonlyMap<string, MattermostAccountStatus>,
   accountIds: readonly string[],
@@ -247,22 +285,13 @@ function accountsActivated(
   return accountIds.every((accountId) => {
     const account = after.get(accountId);
     if (account?.running !== true || account.connected !== true) return false;
-    if (typeof account.lastStartAt !== "number") return false;
+    if (
+      typeof account.lastStartAt !== "number" ||
+      !Number.isFinite(account.lastStartAt) ||
+      account.lastStartAt < 0
+    ) return false;
     return account.lastStartAt > (baseline.accounts.get(accountId) ?? 0);
   });
-}
-
-async function restartMattermostAccounts(
-  rpc: GatewayRpcClient,
-  pending: PendingActivationBatch,
-  accountIds: readonly string[],
-  log: (message: string) => void,
-): Promise<void> {
-  for (const accountId of accountIds) {
-    await rpc.channelsStop({ channel: "mattermost", accountId });
-    await rpc.channelsStart({ channel: "mattermost", accountId });
-    log(`${pending.reason}; restarted Mattermost account ${accountId} with current bindings`);
-  }
 }
 
 async function confirmRoutingActivation(
@@ -329,9 +358,13 @@ export async function activatePendingMattermostRouting(
       if (clearPendingActivation(openclawDir, pending)) return;
       continue;
     }
-    const baseline = await observeRoutingBaseline(rpc, accountIds);
-    await restartMattermostAccounts(rpc, pending, accountIds, log);
-    await confirmRoutingActivation(rpc, pending, accountIds, baseline, runtime);
+    await confirmRoutingActivation(
+      rpc,
+      pending,
+      accountIds,
+      { accounts: pending.baselineLastStartAt },
+      runtime,
+    );
     if (clearPendingActivation(openclawDir, pending)) return;
   }
 }

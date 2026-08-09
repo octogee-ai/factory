@@ -51,6 +51,8 @@ const secretMocks = vi.hoisted(() => ({
 }));
 const routingActivationMocks = vi.hoisted(() => ({
   pending: false,
+  capture: vi.fn(async (_rpc: unknown, accountIds: readonly string[]) =>
+    Object.fromEntries(accountIds.map((accountId) => [accountId, 0]))),
   activate: vi.fn(async () => undefined),
   mark: vi.fn(() => {
     routingActivationMocks.pending = true;
@@ -117,6 +119,7 @@ vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
   };
 });
 vi.mock("../lib/mattermost-routing-activation.js", () => ({
+  captureMattermostRoutingActivationBaseline: routingActivationMocks.capture,
   activatePendingMattermostRouting: routingActivationMocks.activate,
   markMattermostRoutingActivationPending: routingActivationMocks.mark,
   mattermostRoutingActivationPending: () => routingActivationMocks.pending,
@@ -250,6 +253,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     secretMocks.updateMattermostAccountSecrets.mockClear();
     secretMocks.materializeActivationManifestSecret.mockClear();
     routingActivationMocks.pending = false;
+    routingActivationMocks.capture.mockClear();
     routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
     routingActivationMocks.mark.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
@@ -306,6 +310,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(vi.mocked(rpc.agentsDelete).mock.calls.map(([params]) => params.agentId)).toEqual([
       "octogee-tester10-proj-residue-coach",
     ]);
+    expect(rpc.agentsDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      routingActivationMocks.capture.mock.invocationCallOrder[0]!,
+    );
+    expect(routingActivationMocks.capture.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
@@ -983,6 +993,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     patchMocks.applyConfigPatch.mockClear();
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
     routingActivationMocks.pending = false;
+    routingActivationMocks.capture.mockClear();
     routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
     routingActivationMocks.mark.mockClear();
     vi.stubEnv("OPENAI_EMBEDDINGS_ENABLED", "true");
@@ -1073,6 +1084,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   it("waits for config persistence before requesting routing activation", async () => {
     const events: string[] = [];
+    routingActivationMocks.capture.mockImplementationOnce(async (_rpc, accountIds) => {
+      events.push("routing-baseline");
+      return Object.fromEntries(accountIds.map((accountId) => [accountId, 0]));
+    });
     routingActivationMocks.activate.mockImplementationOnce(async () => {
       events.push("routing-activation");
     });
@@ -1136,12 +1151,17 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       snapshot,
       { _coachPersonalToken: "pat-1" },
     );
-    await vi.waitFor(() => expect(events).toEqual(["config-persisted"]));
+    await vi.waitFor(() => expect(events).toEqual(["routing-baseline", "config-persisted"]));
 
     publishConfigChanged?.();
     await applying;
 
-    expect(events).toEqual(["config-persisted", "config-changed", "routing-activation"]);
+    expect(events).toEqual([
+      "routing-baseline",
+      "config-persisted",
+      "config-changed",
+      "routing-activation",
+    ]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
   });

@@ -122,6 +122,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
         rpc: {
+          channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
           channelsStop: vi.fn(async ({ channel, accountId }) => ({
             channel,
             accountId,
@@ -166,6 +167,14 @@ describe("customer lifecycle config patch agent directories", () => {
         "../lib/customer-lifecycle-broker-adapter.js"
       );
       const workspaces: string[] = [];
+      const channelsStatus = vi.fn(async () => ({ channelAccounts: { mattermost: [] } }));
+      const agentsCreate = vi.fn(
+        async ({ name, workspace }: { name: string; workspace: string }) => {
+          expect(fsSync.existsSync(workspace)).toBe(true);
+          workspaces.push(workspace);
+          return { ok: true as const, agentId: name, name, workspace };
+        },
+      );
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient({
           ...brokerSnapshot,
@@ -174,16 +183,13 @@ describe("customer lifecycle config patch agent directories", () => {
           ],
         }),
         rpc: {
+          channelsStatus,
           configGet: vi.fn(async () => ({ config: { agents: { entries: {} } }, hash: "cfg-hash" })),
           agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
             ok: true as const,
             agentId,
           })),
-          agentsCreate: vi.fn(async ({ name, workspace }: { name: string; workspace: string }) => {
-            expect(fsSync.existsSync(workspace)).toBe(true);
-            workspaces.push(workspace);
-            return { ok: true as const, agentId: name, name, workspace };
-          }),
+          agentsCreate,
           secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
         } as unknown as GatewayRpcClient,
         log: vi.fn(),
@@ -195,6 +201,9 @@ describe("customer lifecycle config patch agent directories", () => {
         path.join(tempRoot, "customers", "alice"),
         path.join(tempRoot, "customers", "alice", "projects", "orbit"),
       ]);
+      expect(agentsCreate.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        channelsStatus.mock.invocationCallOrder[0]!,
+      );
     });
   });
 
@@ -205,7 +214,9 @@ describe("customer lifecycle config patch agent directories", () => {
       );
       const adapter = buildProductionLifecycleAdapter({
         db: {} as Firestore,
-        rpc: {} as GatewayRpcClient,
+        rpc: {
+          channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+        } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
 

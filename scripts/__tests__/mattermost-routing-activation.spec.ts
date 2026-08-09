@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   activatePendingMattermostRouting,
+  captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
 } from "../lib/mattermost-routing-activation.js";
@@ -63,12 +64,28 @@ afterEach(async () => {
 });
 
 describe("Mattermost routing activation", () => {
-  it("restarts only marked Mattermost accounts without restarting the gateway", async () => {
+  it("fails closed when a present account has no valid lastStartAt baseline", async () => {
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => ({
+        channelAccounts: { mattermost: [
+          { accountId: "ceckert-coach", running: true, connected: true },
+        ] },
+      })),
+    );
+
+    await expect(
+      captureMattermostRoutingActivationBaseline(rpc, ["ceckert-coach"]),
+    ).rejects.toThrow("Mattermost account ceckert-coach has an invalid lastStartAt");
+  });
+
+  it("accepts the config hot-reload activation without manually restarting the account", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
       openclawDir,
       "account binding changed",
       ["ceckert-proj-gardyn"],
+      { "ceckert-proj-gardyn": 100 },
     );
     const snapshots = [
       {
@@ -113,16 +130,8 @@ describe("Mattermost routing activation", () => {
       sleep: async () => undefined,
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "ceckert-proj-gardyn",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "ceckert-proj-gardyn",
-    });
-    expect(rpc.channelsStop).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatusConnectionGeneration).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
@@ -134,6 +143,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "new account binding",
       ["ceckert-proj-gardyn"],
+      { "ceckert-proj-gardyn": 0 },
     );
     const snapshots = [
       { channelAccounts: { mattermost: [] } },
@@ -157,8 +167,8 @@ describe("Mattermost routing activation", () => {
       sleep: async () => undefined,
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
@@ -168,6 +178,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "account bindings changed",
       ["ceckert-coach", "ceckert-proj-gardyn"],
+      { "ceckert-coach": 100, "ceckert-proj-gardyn": 200 },
     );
     const snapshots = [
       {
@@ -198,8 +209,8 @@ describe("Mattermost routing activation", () => {
       sleep: async () => undefined,
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledTimes(2);
-    expect(rpc.channelsStart).toHaveBeenCalledTimes(2);
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).toHaveBeenCalledTimes(3);
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
@@ -210,6 +221,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "account binding changed",
       ["ceckert-coach"],
+      { "ceckert-coach": 100 },
     );
     let statusCall = 0;
     const rpc = channelOperationRpc(
@@ -250,6 +262,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "account binding changed",
       ["ceckert-coach"],
+      { "ceckert-coach": 100 },
     );
     let now = 0;
     const rpc = channelOperationRpc(
@@ -277,12 +290,13 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
-  it("preserves the marker when a scoped channel start fails", async () => {
+  it("preserves the marker when config hot reload never advances the account", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
       openclawDir,
       "account binding changed",
       ["ceckert-coach"],
+      { "ceckert-coach": 100 },
     );
     const rpc = channelOperationRpc(
       ["ceckert-coach"],
@@ -292,12 +306,54 @@ describe("Mattermost routing activation", () => {
         ] },
       })),
     );
-    vi.mocked(rpc.channelsStart).mockRejectedValueOnce(new Error("start refused"));
+    await expect(
+      activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+        now: (() => {
+          let now = 0;
+          return () => now += 10;
+        })(),
+        sleep: async () => undefined,
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("Mattermost routing activation was not observed");
+
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
+  });
+
+  it("preserves the marker when a connected account reports an infinite start time", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "account binding changed",
+      ["ceckert-coach"],
+      { "ceckert-coach": 100 },
+    );
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => ({
+        channelAccounts: { mattermost: [
+          {
+            accountId: "ceckert-coach",
+            running: true,
+            connected: true,
+            lastStartAt: Number.POSITIVE_INFINITY,
+          },
+        ] },
+      })),
+    );
 
     await expect(
-      activatePendingMattermostRouting(rpc, openclawDir, vi.fn()),
-    ).rejects.toThrow("start refused");
-
+      activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+        now: (() => {
+          let now = 0;
+          return () => now += 10;
+        })(),
+        sleep: async () => undefined,
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("Mattermost routing activation was not observed");
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
   });
 
@@ -307,6 +363,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "first account binding",
       ["ceckert-coach"],
+      { "ceckert-coach": 100 },
     );
     let statusCall = 0;
     const rpc = channelOperationRpc(
@@ -325,6 +382,7 @@ describe("Mattermost routing activation", () => {
             openclawDir,
             "second account binding",
             ["ceckert-proj-gardyn"],
+            { "ceckert-proj-gardyn": 0 },
           );
           return {
             channelAccounts: { mattermost: [
@@ -363,15 +421,8 @@ describe("Mattermost routing activation", () => {
       sleep: async () => undefined,
     });
 
-    expect(rpc.channelsStop).toHaveBeenNthCalledWith(1, {
-      channel: "mattermost",
-      accountId: "ceckert-coach",
-    });
-    expect(rpc.channelsStop).toHaveBeenNthCalledWith(2, {
-      channel: "mattermost",
-      accountId: "ceckert-proj-gardyn",
-    });
-    expect(rpc.channelsStart).toHaveBeenCalledTimes(2);
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
@@ -382,11 +433,13 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "retired project account",
       ["ceckert-proj-retired"],
+      { "ceckert-proj-retired": 0 },
     );
     markMattermostRoutingActivationPending(
       openclawDir,
       "new project account",
       ["ceckert-proj-new"],
+      { "ceckert-proj-new": 100 },
     );
     const snapshots = [
       {
@@ -420,11 +473,8 @@ describe("Mattermost routing activation", () => {
       accountAbsenceGraceMs: 0,
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledOnce();
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "ceckert-proj-new",
-    });
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
@@ -434,6 +484,7 @@ describe("Mattermost routing activation", () => {
       openclawDir,
       "new account binding",
       ["ceckert-coach"],
+      { "ceckert-coach": 100 },
     );
     const marker = (await fs.readdir(openclawDir)).find((entry) =>
       entry.startsWith(".mattermost-routing-restart-required.json") &&
@@ -469,8 +520,8 @@ describe("Mattermost routing activation", () => {
       sleep: async () => undefined,
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 });

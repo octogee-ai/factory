@@ -142,6 +142,7 @@ import {
 } from "./mattermost-account-secrets.js";
 import {
   activatePendingMattermostRouting,
+  captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
 } from "./mattermost-routing-activation.js";
@@ -715,6 +716,7 @@ async function applyAddCustomerConfigPatch(
     customerAgentEntries,
     `[add:${snapshot.slug}]`,
   );
+  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(ctx.rpc, [accountId, ...Object.keys(projectAccounts)]);
   const startedAt = Date.now();
   await applyConfigPatch(
     {
@@ -730,6 +732,7 @@ async function applyAddCustomerConfigPatch(
             OPENCLAW_DIR,
             routingActivationReason,
             missingAccountIds,
+            routingActivationBaseline,
           );
           routingActivationRequired = true;
         }
@@ -1073,6 +1076,10 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
+  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(
+    ctx.rpc,
+    [safeManifest.accountId, ...safeManifest.projectAgents.map((agent) => agent.accountId)],
+  );
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
@@ -1083,6 +1090,7 @@ async function activateImportedCustomer(
         OPENCLAW_DIR,
         routingActivationReason,
         accountIds,
+        routingActivationBaseline,
       );
     },
   });
