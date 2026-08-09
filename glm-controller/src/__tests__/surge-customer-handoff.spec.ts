@@ -62,6 +62,7 @@ function harness(input: {
   releaseErrorAfterCommit?: Error;
   targetVersion?: string;
   sourceMountedCustomers?: string[];
+  targetMountedCustomers?: string[];
   ownerOperations?: Record<string, { status: OperationStatus } | null>;
 } = {}) {
   const events: string[] = [];
@@ -81,7 +82,7 @@ function harness(input: {
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
       mountedCustomers: pod.uid === targetPod.uid
-        ? []
+        ? input.targetMountedCustomers ?? []
         : input.sourceMountedCustomers ?? assignments.map((item) => item.slug),
     })),
     readAssignments: vi.fn(async () => assignments),
@@ -778,7 +779,7 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("preserves completed target builders when a later transfer fails", async () => {
+  it("discards every target customer touched when a later transfer fails", async () => {
     const h = harness({
       transferError: new Error("bob rsync failed"),
       transferErrorSlug: "bob",
@@ -801,8 +802,63 @@ describe("surge customer handoff", () => {
       "quiesce:bob",
       "transfer:bob",
       "discard:bob",
+      "discard:alice",
       "assignment:u1:serving",
       "assignment:u2:serving",
+    ]);
+  });
+
+  it("cleans stale target mounts before replaying a handoff", async () => {
+    const h = harness({ targetMountedCustomers: ["alice"] });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u2:quiescing",
+      "discard:alice",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "quiesce:bob",
+      "transfer:bob",
+      "digest:old-uid:bob",
+      "digest:target-uid:bob",
+      "release:target-uid",
+    ]);
+  });
+
+  it("keeps admission closed when batch cleanup fails and attempts every touched customer", async () => {
+    const h = harness({
+      transferError: new Error("bob rsync failed"),
+      transferErrorSlug: "bob",
+      discardError: new Error("target cleanup failed"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow(/target cleanup failed/);
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "assignment:u2:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "quiesce:bob",
+      "transfer:bob",
+      "discard:bob",
+      "discard:alice",
     ]);
   });
 

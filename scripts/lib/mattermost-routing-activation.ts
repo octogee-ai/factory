@@ -6,9 +6,9 @@ import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 const MARKER_FILE = ".mattermost-routing-restart-required.json";
-const RESTART_TIMEOUT_MS = 60_000;
+const ACTIVATION_TIMEOUT_MS = 60_000;
 const POLL_MS = 250;
-const ACCOUNT_ABSENCE_GRACE_MS = CONFIG_PATCH_DEADLINE_MS + RESTART_TIMEOUT_MS;
+const ACCOUNT_ABSENCE_GRACE_MS = CONFIG_PATCH_DEADLINE_MS + ACTIVATION_TIMEOUT_MS;
 
 interface PendingActivation {
   token: string;
@@ -213,27 +213,8 @@ async function activePendingAccountIds(
   return batch.accountIds.filter((accountId) => !retiredSet.has(accountId));
 }
 
-function channelsStatusConnectionGeneration(rpc: GatewayRpcClient): number {
-  const generation = rpc.channelsStatusConnectionGeneration();
-  if (!Number.isSafeInteger(generation) || generation <= 0) {
-    throw new Error("Mattermost routing activation could not observe channels.status connection generation");
-  }
-  return generation;
-}
-
-function acceptedRestart(result: Awaited<ReturnType<GatewayRpcClient["gatewayRestartRequest"]>>): boolean {
-  return result.ok === true &&
-    (result.status === "scheduled" || result.status === "coalesced") &&
-    result.restart?.ok === true &&
-    result.restart.signal === "SIGUSR1" &&
-    Number.isSafeInteger(result.restart.pid) &&
-    result.restart.pid > 0 &&
-    result.restart.coalesced === (result.status === "coalesced");
-}
-
 interface RoutingActivationBaseline {
   accounts: Map<string, number>;
-  connectionGeneration: number;
 }
 
 interface RoutingActivationRuntime {
@@ -245,43 +226,20 @@ interface RoutingActivationRuntime {
 
 async function observeRoutingBaseline(
   rpc: GatewayRpcClient,
-  pending: PendingActivationBatch,
   accountIds: readonly string[],
-  runtime: RoutingActivationRuntime,
 ): Promise<RoutingActivationBaseline> {
-  const deadline = runtime.now() + runtime.phaseTimeoutMs;
-  let lastIssue = "";
-  while (runtime.now() < deadline) {
-    try {
-      const before = await mattermostAccountStatuses(rpc);
-      const missing = accountIds.filter((accountId) =>
-        typeof before.get(accountId)?.lastStartAt !== "number");
-      if (missing.length === 0) {
-        return {
-          accounts: new Map(
-            accountIds.map((accountId) => [accountId, before.get(accountId)!.lastStartAt!]),
-          ),
-          connectionGeneration: channelsStatusConnectionGeneration(rpc),
-        };
-      }
-      const issue = `accounts missing lastStartAt: ${missing.join(", ")}`;
-      if (issue !== lastIssue) {
-        runtime.log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
-        lastIssue = issue;
-      }
-    } catch (error) {
-      const issue = error instanceof Error ? error.message : String(error);
-      if (issue !== lastIssue) {
-        runtime.log(`${pending.reason}; waiting for routing activation baseline: ${issue}`);
-        lastIssue = issue;
-      }
-    }
-    await runtime.sleep(POLL_MS);
-  }
-  throw new Error(`${pending.reason}; Mattermost account start baseline was not observed`);
+  const before = await mattermostAccountStatuses(rpc);
+  return {
+    accounts: new Map(accountIds.map((accountId) => {
+      const lastStartAt = before.get(accountId)?.lastStartAt;
+      return [accountId, typeof lastStartAt === "number" && Number.isFinite(lastStartAt)
+        ? lastStartAt
+        : 0];
+    })),
+  };
 }
 
-function accountsRestarted(
+function accountsActivated(
   after: ReadonlyMap<string, MattermostAccountStatus>,
   accountIds: readonly string[],
   baseline: RoutingActivationBaseline,
@@ -294,7 +252,20 @@ function accountsRestarted(
   });
 }
 
-async function confirmRoutingRestart(
+async function restartMattermostAccounts(
+  rpc: GatewayRpcClient,
+  pending: PendingActivationBatch,
+  accountIds: readonly string[],
+  log: (message: string) => void,
+): Promise<void> {
+  for (const accountId of accountIds) {
+    await rpc.channelsStop({ channel: "mattermost", accountId });
+    await rpc.channelsStart({ channel: "mattermost", accountId });
+    log(`${pending.reason}; restarted Mattermost account ${accountId} with current bindings`);
+  }
+}
+
+async function confirmRoutingActivation(
   rpc: GatewayRpcClient,
   pending: PendingActivationBatch,
   accountIds: readonly string[],
@@ -307,9 +278,7 @@ async function confirmRoutingRestart(
     await runtime.sleep(POLL_MS);
     try {
       const after = await mattermostAccountStatuses(rpc);
-      const connectionRestarted = channelsStatusConnectionGeneration(rpc) >
-        baseline.connectionGeneration;
-      if (connectionRestarted && accountsRestarted(after, accountIds, baseline)) return;
+      if (accountsActivated(after, accountIds, baseline)) return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message !== lastPollError) {
@@ -318,7 +287,7 @@ async function confirmRoutingRestart(
       }
     }
   }
-  throw new Error(`${pending.reason}; OpenClaw restart generation was not observed`);
+  throw new Error(`${pending.reason}; Mattermost routing activation was not observed`);
 }
 
 export async function activatePendingMattermostRouting(
@@ -342,7 +311,7 @@ export async function activatePendingMattermostRouting(
   const runtime = {
     now,
     sleep,
-    phaseTimeoutMs: options.timeoutMs ?? RESTART_TIMEOUT_MS,
+    phaseTimeoutMs: options.timeoutMs ?? ACTIVATION_TIMEOUT_MS,
     log,
   };
 
@@ -360,13 +329,9 @@ export async function activatePendingMattermostRouting(
       if (clearPendingActivation(openclawDir, pending)) return;
       continue;
     }
-    const baseline = await observeRoutingBaseline(rpc, pending, accountIds, runtime);
-    const restart = await rpc.gatewayRestartRequest({ reason: pending.reason, skipDeferral: true });
-    if (!acceptedRestart(restart)) {
-      throw new Error(`${pending.reason}; OpenClaw restart was not accepted`);
-    }
-    log(`${pending.reason}; OpenClaw restart accepted`);
-    await confirmRoutingRestart(rpc, pending, accountIds, baseline, runtime);
+    const baseline = await observeRoutingBaseline(rpc, accountIds);
+    await restartMattermostAccounts(rpc, pending, accountIds, log);
+    await confirmRoutingActivation(rpc, pending, accountIds, baseline, runtime);
     if (clearPendingActivation(openclawDir, pending)) return;
   }
 }
