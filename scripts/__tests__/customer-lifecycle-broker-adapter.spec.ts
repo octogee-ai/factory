@@ -174,6 +174,7 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
 function rosterRpc(config: unknown = { agents: { entries: {} } }) {
   return {
     configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+    secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
       ok: true as const,
       agentId,
@@ -312,6 +313,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         config: { agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] } },
         hash: "cfg-hash",
       })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client,
@@ -348,8 +350,32 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect.stringContaining(".openclaw"),
       expect.any(Function),
     );
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.removeActivationManifest.mock.invocationCallOrder[0]!,
+    );
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
+  });
+
+  it("preserves the activation manifest when imported agent secrets do not materialize", async () => {
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 2 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /secrets\.reload.*2 unresolved references/,
+    );
+
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    expect(rpc.channelsStatus).not.toHaveBeenCalled();
   });
 
   it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
@@ -378,6 +404,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     mocks.readActivationManifest
       .mockRejectedValueOnce(new LegacyActivationManifestFingerprintError("legacy"))
@@ -846,7 +873,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("restarts the gateway after changing non-hot-reloadable routing bindings", async () => {
+  it("activates changed routing bindings before refreshing the secret surface", async () => {
     const events: string[] = [];
     routingActivationMocks.activate.mockImplementationOnce(async () => {
       events.push("routing-activation");
@@ -875,6 +902,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       }),
       isGatewayUp: vi.fn(async () => true),
       ...rosterRpc(),
+      secretsReload: vi.fn(async () => {
+        events.push("secrets-reload");
+        return { ok: true, warningCount: 0 };
+      }),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -906,7 +937,18 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rpc.channelsStop).not.toHaveBeenCalled();
     expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
-    expect(events).toEqual(["config-patch", "routing-activation"]);
+    expect(events).toEqual(["config-patch", "routing-activation", "secrets-reload"]);
+  });
+
+  it("fails provisioning when the refreshed secret surface remains incomplete", async () => {
+    const rpc = mkGatewayRpc({
+      secretsReload: vi.fn(async () => ({ ok: false, warningCount: 0 })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }),
+    ).rejects.toThrow(/secrets\.reload did not acknowledge success/);
   });
 
   it("waits for config persistence before requesting routing activation", async () => {

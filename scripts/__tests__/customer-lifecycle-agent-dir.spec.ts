@@ -146,6 +146,7 @@ describe("customer lifecycle config patch agent directories", () => {
             name,
             workspace,
           })),
+          secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
         } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
@@ -183,6 +184,7 @@ describe("customer lifecycle config patch agent directories", () => {
             workspaces.push(workspace);
             return { ok: true as const, agentId: name, name, workspace };
           }),
+          secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
         } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });

@@ -525,6 +525,20 @@ function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
   };
 }
 
+async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
+  const result = await ctx.rpc.secretsReload();
+  const warningCount = result.warningCount ?? 0;
+  if (result.ok !== true) {
+    throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
+  }
+  if (warningCount !== 0) {
+    throw new Error(
+      `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}`,
+    );
+  }
+  ctx.log(`${logPrefix} secrets.reload complete`);
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -716,6 +730,7 @@ async function applyAddCustomerConfigPatch(
       ctx.log,
     );
   }
+  await reloadRuntimeSecrets(ctx, `[add:${snapshot.slug}]`);
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
     elapsedMs: Date.now() - startedAt,
@@ -1006,6 +1021,7 @@ async function activateImportedCustomer(
       ctx.log,
     );
   }
+  await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
 
   ctx.log(
