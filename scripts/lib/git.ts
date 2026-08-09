@@ -1253,6 +1253,88 @@ export function adoptProjectClone(cloneDir: string, dest: string): void {
 interface InitWorkspaceRepoDeps {
   ensureWorkspaceRepo: (slug: string) => Promise<void>;
   prepareRepository: (repoDir: string, slug: string) => void;
+  workspaceRemoteUrl?: (slug: string) => string;
+}
+
+function runWorkspaceBootstrapGit(
+  coachDir: string,
+  gitDir: string,
+  slug: string,
+  argv: string[],
+): string | null {
+  try {
+    return execFileSync(GIT_BINARY, [
+      ...gitHardeningArgs(false),
+      "-c",
+      "protocol.file.allow=always",
+      "--git-dir",
+      gitDir,
+      "--work-tree",
+      coachDir,
+      ...argv,
+    ], {
+      cwd: coachDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: customerGitEnvironmentForRefresh(slug),
+    }).trim();
+  } catch (err: unknown) {
+    const detail =
+      [execErrStderr(err), execErrStdout(err)].filter(Boolean).join(" | ") || errMessage(err);
+    log(`⚠ [git] workspace bootstrap failed: git ${argv.join(" ")} → ${detail}`);
+    return null;
+  }
+}
+
+function pushWorkspaceBootstrap(
+  coachDir: string,
+  slug: string,
+  originUrl: string,
+): boolean {
+  if (!SAFE_GIT_IDENTITY_RE.test(slug)) return false;
+  const bootstrapRoot = path.join(OPENCLAW_DIR, "git-bootstrap");
+  fs.mkdirSync(bootstrapRoot, { recursive: true, mode: 0o700 });
+  const stagingRoot = fs.mkdtempSync(path.join(bootstrapRoot, `${slug}-`));
+  const gitDir = path.join(stagingRoot, "workspace.git");
+  try {
+    execFileSync(GIT_BINARY, ["init", "--bare", "--initial-branch=main", gitDir], {
+      cwd: coachDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: customerGitEnvironmentForRefresh(slug),
+    });
+    const run = (argv: string[]) => runWorkspaceBootstrapGit(coachDir, gitDir, slug, argv);
+    if (run(["config", "user.email", `${slug}@octogee.com`]) === null) return false;
+    if (run(["config", "user.name", `Octo (${slug})`]) === null) return false;
+    if (run(["remote", "add", "origin", originUrl]) === null) return false;
+    const remoteMain = run(["ls-remote", "--heads", "origin", "refs/heads/main"]);
+    if (remoteMain === null) return false;
+    if (remoteMain !== "") {
+      log(`[git] ${slug} canonical workspace already has main`);
+      return true;
+    }
+    if (run(["add", "-A", "--", ".", ":(exclude).git"]) === null) return false;
+    if (run(["commit", "--allow-empty", "-m", "initial workspace skeleton"]) === null) {
+      return false;
+    }
+    if (run(["push", "origin", "HEAD:refs/heads/main"]) === null) return false;
+    log(`[git] ${slug} initial push: OK`);
+    return true;
+  } catch (err: unknown) {
+    log(`⚠ [git] workspace bootstrap initialization failed for ${slug}: ${errMessage(err)}`);
+    return false;
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+}
+
+function invalidateWorkspaceGitProjection(coachDir: string): void {
+  const identity = customerGitIdentity(coachDir);
+  if (!identity) return;
+  quarantineCustomerGitEntry(identity.metadataDir, identity);
+  quarantineCustomerGitEntry(customerGitTrustReceipt(identity.metadataDir), identity);
+  quarantineCustomerGitEntry(customerGitRefreshMarker(identity.metadataDir), identity);
+  quarantineCustomerGitEntry(path.join(coachDir, ".git"), identity);
 }
 
 export async function initWorkspaceRepo(
@@ -1265,7 +1347,6 @@ export async function initWorkspaceRepo(
 ): Promise<string | null> {
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
-  const freshRepository = !repositoryMetadataExists(coachDir);
 
   fs.writeFileSync(path.join(coachDir, ".gitignore"), workspaceGitignore(), "utf-8");
 
@@ -1274,16 +1355,6 @@ export async function initWorkspaceRepo(
   fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
   if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
 
-  log(`[git] Initializing repo in ${coachDir}`);
-  const initResult = gitExec(coachDir, ["init", "-b", "main"]);
-  if (initResult === null) {
-    log(`⚠ [git] git init failed for ${slug} — aborting repo setup`);
-    return null;
-  }
-  log(`[git] init: ${initResult}`);
-  gitExec(coachDir, ["config", "user.email", `${slug}@octogee.com`]);
-  gitExec(coachDir, ["config", "user.name", `Octo (${slug})`]);
-
   try {
     await deps.ensureWorkspaceRepo(slug);
   } catch (err) {
@@ -1291,24 +1362,14 @@ export async function initWorkspaceRepo(
     return null;
   }
 
-  const originUrl = sshRemoteUrl(org, repoName);
-  if (!freshRepository) deps.prepareRepository(coachDir, slug);
-  const remoteResult = gitExec(coachDir, [
-    "remote",
-    freshRepository ? "add" : "set-url",
-    "origin",
-    originUrl,
-  ]);
-  if (remoteResult === null) {
-    log(`⚠ [git] remote projection failed for ${slug} — aborting (would leak orphan Firestore repoUrl)`);
+  const originUrl = deps.workspaceRemoteUrl?.(slug) ?? sshRemoteUrl(org, repoName);
+  log(`[git] Initializing repo in ${coachDir}`);
+  if (!pushWorkspaceBootstrap(coachDir, slug, originUrl)) {
+    log(`⚠ [git] initial workspace push failed for ${slug} — aborting repo setup`);
     return null;
   }
-  log(`[git] remote projection: ${remoteResult === "" ? "OK" : remoteResult}`);
-
-  const sshKey = customerSshKeyPath(slug);
-  const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
-  pushInitialSkeleton(coachDir, slug, keyArg);
-  if (freshRepository) deps.prepareRepository(coachDir, slug);
+  invalidateWorkspaceGitProjection(coachDir);
+  deps.prepareRepository(coachDir, slug);
 
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;
