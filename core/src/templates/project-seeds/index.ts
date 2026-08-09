@@ -1,4 +1,5 @@
 import type { ProjectRecipeId } from "@octogee/shared/types/project";
+import viteStaticPackage from "./vite-static/package.json" with { type: "json" };
 import viteStaticPackageLock from "./vite-static/package-lock.json" with { type: "json" };
 
 export interface PlaybookSeed {
@@ -604,20 +605,7 @@ export function projectPlaybookSeeds(input: ProjectPlaybookSeedInput): PlaybookS
 
 export function projectRecipeStarterSeeds(input: ProjectRecipeStarterSeedInput): PlaybookSeed[] {
   if (input.recipe !== "vite-static") return [];
-  const manifest = {
-    name: input.projectSlug,
-    version: "1.0.0",
-    private: true,
-    type: "module",
-    scripts: {
-      dev: "vite",
-      build: "vite build",
-      preview: "vite preview",
-    },
-    devDependencies: {
-      vite: "8.2.0",
-    },
-  };
+  const manifest = { ...viteStaticPackage, name: input.projectSlug };
   const lock = {
     ...viteStaticPackageLock,
     name: input.projectSlug,

@@ -1,3 +1,4 @@
+import viteStaticPackage from "./vite-static/package.json" with { type: "json" };
 import viteStaticPackageLock from "./vite-static/package-lock.json" with { type: "json" };
 const RECIPE_PUBLISH_CONTRACT = {
     "static-site": "the `public/` folder deploys as-is, with no build step",
@@ -558,20 +559,7 @@ export function projectPlaybookSeeds(input) {
 export function projectRecipeStarterSeeds(input) {
     if (input.recipe !== "vite-static")
         return [];
-    const manifest = {
-        name: input.projectSlug,
-        version: "1.0.0",
-        private: true,
-        type: "module",
-        scripts: {
-            dev: "vite",
-            build: "vite build",
-            preview: "vite preview",
-        },
-        devDependencies: {
-            vite: "8.2.0",
-        },
-    };
+    const manifest = { ...viteStaticPackage, name: input.projectSlug };
     const lock = {
         ...viteStaticPackageLock,
         name: input.projectSlug,
