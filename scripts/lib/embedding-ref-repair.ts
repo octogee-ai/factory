@@ -31,7 +31,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function platformRefId(entry: unknown): { agentId: string; refId: string } | null {
   if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return null;
-  const memorySearch = entry.memorySearch;
+  const memory = entry.memory;
+  let memorySearch = entry.memorySearch;
+  if (!isRecord(memorySearch) && isRecord(memory) && isRecord(memory.search)) {
+    memorySearch = memory.search;
+  }
   if (!isRecord(memorySearch)) return null;
   const remote = memorySearch.remote;
   if (!isRecord(remote)) return null;

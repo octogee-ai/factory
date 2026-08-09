@@ -10,6 +10,7 @@ import {
   applyGatewayOverrides,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
+  applyMemorySearchSchemaPatch,
   applySharedMattermostRoutingSafetyPatch,
   buildGitconfigContent,
   hydrateGitIdentity,
@@ -586,6 +587,183 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
 });
 
 describe("applyPreBootPatches — memory search embeddings", () => {
+  it("moves legacy memorySearch into memory.search for stable and keyed rosters", () => {
+    const stableSearch = { provider: "stable" };
+    const keyedSearch = { provider: "keyed" };
+    const config: any = {
+      agents: {
+        list: [{
+          id: "octogee-stable-coach",
+          memory: { citations: "auto" },
+          memorySearch: stableSearch,
+        }],
+        entries: {
+          "octogee-keyed-coach": {
+            memorySearch: keyedSearch,
+          },
+        },
+      },
+    };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+    expect(config.agents.list[0]).toEqual({
+      id: "octogee-stable-coach",
+      memory: { citations: "auto", search: stableSearch },
+    });
+    expect(config.agents.entries["octogee-keyed-coach"]).toEqual({
+      memory: { search: keyedSearch },
+    });
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(false);
+  });
+
+  it("keeps canonical memory.search on collisions and ignores malformed legacy fields", () => {
+    const legacySecretRef = {
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: "agent-embedding-token-openai-octogee-collision-coach",
+    };
+    const config: any = {
+      agents: {
+        list: [
+          {
+            id: "octogee-collision-coach",
+            memory: {
+              search: {
+                provider: "canonical",
+                remote: {
+                  baseUrl: "https://canonical.example/v1",
+                  headers: { canonical: "yes" },
+                },
+              },
+              citations: "auto",
+            },
+            memorySearch: {
+              provider: "legacy",
+              model: "legacy-model",
+              remote: {
+                baseUrl: "https://legacy.example/v1",
+                apiKey: legacySecretRef,
+                headers: { canonical: "no", legacy: "yes" },
+              },
+            },
+          },
+          {
+            id: "octogee-malformed-legacy-coach",
+            memorySearch: "legacy-string",
+          },
+          {
+            id: "octogee-malformed-memory-coach",
+            memory: "legacy-string",
+            memorySearch: { provider: "legacy" },
+          },
+          null,
+        ],
+        entries: {
+          malformed: "legacy-entry",
+        },
+      },
+    };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+    expect(config.agents.list[0]).toEqual({
+      id: "octogee-collision-coach",
+      memory: {
+        search: {
+          provider: "canonical",
+          model: "legacy-model",
+          remote: {
+            baseUrl: "https://canonical.example/v1",
+            apiKey: legacySecretRef,
+            headers: { canonical: "yes", legacy: "yes" },
+          },
+        },
+        citations: "auto",
+      },
+    });
+    expect(config.agents.list[1].memorySearch).toBe("legacy-string");
+    expect(config.agents.list[2]).toEqual({
+      id: "octogee-malformed-memory-coach",
+      memory: "legacy-string",
+      memorySearch: { provider: "legacy" },
+    });
+    expect(config.agents.list[3]).toBeNull();
+    expect(config.agents.entries.malformed).toBe("legacy-entry");
+  });
+
+  it("replaces malformed canonical memory.search with a clone of valid legacy config", () => {
+    const legacySearch = {
+      provider: "openai-compatible",
+      remote: {
+        apiKey: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "agent-embedding-token-openai-octogee-malformed-coach",
+        },
+      },
+    };
+    const config: any = {
+      agents: {
+        entries: {
+          "octogee-malformed-coach": {
+            memory: { search: "malformed", citations: "auto" },
+            memorySearch: legacySearch,
+          },
+        },
+      },
+    };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+    const entry = config.agents.entries["octogee-malformed-coach"];
+    expect(entry).toEqual({
+      memory: { search: legacySearch, citations: "auto" },
+    });
+    expect(entry.memory.search).not.toBe(legacySearch);
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(false);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["malformed", "malformed"],
+  ])("recursively removes hostile keys when canonical memory.search is %s", (_label, search) => {
+    const legacySearch = JSON.parse(`{
+      "provider": "openai-compatible",
+      "__proto__": { "polluted": "root" },
+      "remote": {
+        "apiKey": {
+          "source": "exec",
+          "provider": "gcp-secret-manager",
+          "id": "agent-embedding-token-openai-octogee-hostile-coach"
+        },
+        "constructor": { "polluted": "nested" },
+        "headers": {
+          "safe": "yes",
+          "prototype": { "polluted": "deep" }
+        }
+      },
+      "sources": [{ "safe": true, "__proto__": { "polluted": "array" } }]
+    }`);
+    const entry: any = {
+      ...(search === undefined ? {} : { memory: { search } }),
+      memorySearch: legacySearch,
+    };
+    const config: any = { agents: { entries: { "octogee-hostile-coach": entry } } };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+
+    const migrated = entry.memory.search;
+    expect(migrated).not.toBe(legacySearch);
+    expect(migrated.remote.apiKey.id).toBe(
+      "agent-embedding-token-openai-octogee-hostile-coach",
+    );
+    expect(migrated.remote.headers.safe).toBe("yes");
+    expect(migrated.sources[0].safe).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(migrated, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.remote, "constructor")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.remote.headers, "prototype")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(migrated.sources[0], "__proto__")).toBe(false);
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
   it("does not add memory search SecretRefs unless embeddings are enabled", () => {
     const config: any = {
       tools: { profile: "coding" },
@@ -598,6 +776,28 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       (agent: any) => agent.id === "octogee-tester20-coach",
     );
     expect(coach.memorySearch).toBeUndefined();
+    expect(coach.memory).toBeUndefined();
+  });
+
+  it("configures a keyed coach entry without reviving legacy memorySearch", () => {
+    const config: any = {
+      tools: { profile: "coding" },
+      agents: {
+        entries: {
+          "octogee-keyed-coach": { name: "Keyed" },
+        },
+      },
+    };
+
+    expect(applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
+      OPENAI_EMBEDDINGS_ENABLED: "true",
+    })).toBe(true);
+    expect(config.agents.entries["octogee-keyed-coach"].memory.search).toMatchObject({
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+    });
+    expect(config.agents.entries["octogee-keyed-coach"].memorySearch).toBeUndefined();
   });
 
   it("configures coach agents with a platform OpenAI-compatible embedding SecretRef", () => {
@@ -621,7 +821,7 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     });
 
     expect(changed).toBe(true);
-    expect(config.agents.list[0].memorySearch).toEqual({
+    expect(config.agents.list[0].memory.search).toEqual({
       provider: "openai-compatible",
       remote: {
         baseUrl: "http://llm-broker:3010/v1",
@@ -634,7 +834,8 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       model: "text-embedding-3-small",
     });
     expect(config.agents.list[1].memorySearch).toBeUndefined();
-    expect(config.agents.list[2].memorySearch).toEqual({ enabled: false });
+    expect(config.agents.list[2]).toMatchObject({ memory: { search: { enabled: false } } });
+    expect(config.agents.list[2].memorySearch).toBeUndefined();
   });
 
   it("uses operator-selected embedding endpoint and model when provided", () => {
@@ -650,10 +851,10 @@ describe("applyPreBootPatches — memory search embeddings", () => {
       OPENAI_EMBEDDINGS_MODEL: "custom-embed-v1",
     });
 
-    expect(config.agents.list[0].memorySearch.remote.baseUrl).toBe(
+    expect(config.agents.list[0].memory.search.remote.baseUrl).toBe(
       "https://llm-broker.internal.example/v1",
     );
-    expect(config.agents.list[0].memorySearch.model).toBe("custom-embed-v1");
+    expect(config.agents.list[0].memory.search.model).toBe("custom-embed-v1");
   });
 });
 

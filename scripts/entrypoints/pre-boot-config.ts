@@ -347,16 +347,93 @@ export function applyMemorySearchPlatformEmbeddingsPatch(
   }
   const agents = objectProperty(config, "agents");
   const list = Array.isArray(agents?.list) ? agents.list : [];
-  const patched = list
-    .filter(isCoachAgentEntry)
-    .filter((agent) => agent.memorySearch === undefined)
-    .map((agent) => {
-      agent.memorySearch = platformOpenAiEmbeddingMemorySearch(agent.id, env);
-      return agent.id;
-    });
+  const entries = objectProperty(agents, "entries");
+  const candidates = [
+    ...list
+      .filter(isCoachAgentEntry)
+      .map((entry) => ({ id: entry.id, entry })),
+    ...Object.entries(entries ?? {})
+      .filter(([id, entry]) => COACH_AGENT_ID_RE.test(id) && isPlainObject(entry))
+      .map(([id, entry]) => ({ id, entry: entry as Record<string, unknown> })),
+  ];
+  const patched = candidates.flatMap(({ id, entry }) => {
+    if (entry.memorySearch !== undefined) return [];
+    const memory = ensureNullishObjectProperty(entry, "memory");
+    if (!memory || Reflect.has(memory, "search")) return [];
+    memory.search = platformOpenAiEmbeddingMemorySearch(id, env);
+    return [id];
+  });
   if (patched.length === 0) return false;
   logFn(`memory search embeddings configured for ${patched.length} coach agent(s)`);
   return true;
+}
+
+export function applyMemorySearchSchemaPatch(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
+): boolean {
+  const agents = objectProperty(config, "agents");
+  if (!agents) return false;
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  const entries = objectProperty(agents, "entries");
+  const candidates = [
+    ...list.filter(isPlainObject),
+    ...Object.values(entries ?? {}).filter(isPlainObject),
+  ];
+  let migrated = 0;
+  for (const entry of candidates) {
+    if (!Object.prototype.hasOwnProperty.call(entry, "memorySearch") ||
+        !isPlainObject(entry.memorySearch)) {
+      continue;
+    }
+    const memory = ensureNullishObjectProperty(entry, "memory");
+    if (!memory) {
+      logFn("left legacy agent memorySearch unchanged because memory is not an object");
+      continue;
+    }
+    const legacySearch = cloneWithoutUnsafeKeys(entry.memorySearch);
+    if (!Reflect.has(memory, "search") || !isPlainObject(memory.search)) {
+      memory.search = legacySearch;
+    } else {
+      mergeMissingInto(memory.search, legacySearch);
+    }
+    Reflect.deleteProperty(entry, "memorySearch");
+    migrated += 1;
+  }
+  if (migrated === 0) return false;
+  logFn(`migrated legacy memorySearch for ${migrated} agent(s)`);
+  return true;
+}
+
+function cloneWithoutUnsafeKeys(source: Record<string, unknown>): Record<string, unknown> {
+  const clone: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (PROTO_POLLUTION_KEYS.has(key)) continue;
+    clone[key] = cloneValueWithoutUnsafeKeys(value);
+  }
+  return clone;
+}
+
+function cloneValueWithoutUnsafeKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneValueWithoutUnsafeKeys);
+  return isPlainObject(value) ? cloneWithoutUnsafeKeys(value) : value;
+}
+
+function mergeMissingInto(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): void {
+  for (const [key, sourceValue] of Object.entries(source)) {
+    if (sourceValue === undefined || PROTO_POLLUTION_KEYS.has(key)) continue;
+    const targetValue = target[key];
+    if (targetValue === undefined) {
+      target[key] = sourceValue;
+      continue;
+    }
+    if (isPlainObject(targetValue) && isPlainObject(sourceValue)) {
+      mergeMissingInto(targetValue, sourceValue);
+    }
+  }
 }
 
 function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -448,6 +525,7 @@ export function applyPreBootPatches(
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
+    applyMemorySearchSchemaPatch(config, logFn),
   ].some(Boolean);
 }
 
