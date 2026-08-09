@@ -21,6 +21,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   isOperatorManaged,
   resolveUserGatewayShellState,
+  type OperationAttemptRecord,
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
@@ -58,7 +59,13 @@ import {
   readBuilderActivityFirestore,
   readShellsAtRiskFirestore,
 } from "./disposable-gateway-lifecycle.js";
+import {
+  automaticBuilderOperationFenceReason,
+  automaticGatewayOperationFenceReason,
+  MIGRATE_CUSTOMER_KIND,
+} from "./automatic-operation-fence.js";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
+import { MAX_OPERATION_ATTEMPT_HISTORY } from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
@@ -2372,7 +2379,7 @@ function placementMigrationSource(
 
 function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration | null {
   const data = doc.data() as Record<string, unknown>;
-  if (data.kind !== "migrate-customer") return null;
+  if (data.kind !== MIGRATE_CUSTOMER_KIND) return null;
   const input = record(data.input);
   if (!input) return null;
   const uid = nonEmptyString(input.uid) ?? nonEmptyString(data.inputUid);
@@ -2743,14 +2750,143 @@ async function assignInitialPlacementFirestore(
   }
 }
 
-async function enqueuePlacementMigration(
+function automaticPlacementOperatorFenceReasons(
+  request: EnqueuePlacementMigrationInput,
+): ReadonlySet<string> {
+  return new Set([
+    automaticGatewayOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.fromGatewayId),
+    automaticGatewayOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.toGatewayId),
+    automaticBuilderOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.uid),
+  ]);
+}
+
+function operatorFenceAttemptMatches(
+  attempt: Record<string, unknown>,
+  error: string,
+  reasons: ReadonlySet<string>,
+): boolean {
+  return reasons.has(error) &&
+    attempt.classification === "terminal" &&
+    Array.isArray(attempt.steps) &&
+    attempt.steps.length === 0;
+}
+
+function operatorFenceAttempt(
+  value: unknown,
+  reasons: ReadonlySet<string>,
+): OperationAttemptRecord | null {
+  const attempt = record(value);
+  const attemptNumber = positiveInteger(attempt?.attempt);
+  const startedAt = millis(attempt?.startedAt);
+  const completedAt = millis(attempt?.completedAt);
+  const error = typeof attempt?.error === "string" ? attempt.error : null;
+  if (
+    !attempt ||
+    attemptNumber === null ||
+    startedAt === null ||
+    completedAt === null ||
+    error === null ||
+    !operatorFenceAttemptMatches(attempt, error, reasons)
+  ) {
+    return null;
+  }
+  return {
+    attempt: attemptNumber,
+    startedAt,
+    completedAt,
+    error,
+    classification: "terminal",
+    steps: [],
+  };
+}
+
+function operatorFenceAttemptHistory(
+  value: unknown,
+  reasons: ReadonlySet<string>,
+): OperationAttemptRecord[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const history = value.map((entry) => operatorFenceAttempt(entry, reasons));
+  return history.every((attempt): attempt is OperationAttemptRecord => attempt !== null)
+    ? history
+    : null;
+}
+
+function operatorFenceHistoryIsContiguous(
+  history: readonly OperationAttemptRecord[],
+  attempts: number,
+): boolean {
+  if (history.length === 0) return attempts === 0;
+  return history.at(-1)?.attempt === attempts && history.every(
+    (attempt, index) => index === 0 || attempt.attempt === history[index - 1]!.attempt + 1,
+  );
+}
+
+function automaticPlacementFenceError(
+  data: Record<string, unknown>,
+  reasons: ReadonlySet<string>,
+): string | null {
+  const error = typeof data.error === "string" ? data.error : null;
+  return data.status === "failed" &&
+      data.origin === "automatic" &&
+      data.createdBy === PLACEMENT_POLICY_ACTOR &&
+      error !== null &&
+      reasons.has(error)
+    ? error
+    : null;
+}
+
+function operatorFenceHasNoExecutionEvidence(data: Record<string, unknown>): boolean {
+  return Array.isArray(data.steps) &&
+    data.steps.length === 0 &&
+    data.customerMigrationV2 === undefined &&
+    data.output === undefined &&
+    data.rolledBack !== true;
+}
+
+function operatorFenceRearm(
+  data: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): { attempts: number; attemptHistory: OperationAttemptRecord[] } | null {
+  const reasons = automaticPlacementOperatorFenceReasons(request);
+  const history = operatorFenceAttemptHistory(data.attemptHistory, reasons);
+  const attempts = nonNegativeInteger(data.attempts ?? 0);
+  const completedAt = millis(data.completedAt);
+  const startedAt = data.startedAt === null ? completedAt : millis(data.startedAt);
+  const error = automaticPlacementFenceError(data, reasons);
+  if (
+    completedAt === null ||
+    startedAt === null ||
+    error === null ||
+    attempts === null ||
+    history === null ||
+    !operatorFenceHistoryIsContiguous(history, attempts) ||
+    !operatorFenceHasNoExecutionEvidence(data)
+  ) {
+    return null;
+  }
+  const nextAttempt = attempts + 1;
+  return {
+    attempts: nextAttempt,
+    attemptHistory: [...history, {
+      attempt: nextAttempt,
+      startedAt,
+      completedAt,
+      error,
+      classification: "terminal" as const,
+      steps: [],
+    }].slice(-MAX_OPERATION_ATTEMPT_HISTORY),
+  };
+}
+
+export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
 ): Promise<string> {
   const ref = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId);
   const now = input.now();
   const operation = {
-    kind: "migrate-customer",
+    kind: MIGRATE_CUSTOMER_KIND,
     status: "pending",
     origin: "automatic",
     createdBy: PLACEMENT_POLICY_ACTOR,
@@ -2774,7 +2910,7 @@ async function enqueuePlacementMigration(
       const data = existing.data() as Record<string, unknown>;
       const operationInput = record(data.input);
       if (
-        data.kind !== "migrate-customer" ||
+        data.kind !== MIGRATE_CUSTOMER_KIND ||
         operationInput?.uid !== request.uid ||
         operationInput.builderSlug !== request.builderSlug ||
         operationInput.fromGatewayId !== request.fromGatewayId ||
@@ -2788,6 +2924,31 @@ async function enqueuePlacementMigration(
         data.status !== "running" &&
         data.status !== "succeeded"
       ) {
+        const rearm = operatorFenceRearm(data, request);
+        if (rearm) {
+          await assertAutomaticPlacementMutationAllowed({
+            db: input.db,
+            transaction,
+            uid: request.uid,
+            gatewayIds: [request.fromGatewayId, request.toGatewayId],
+            action: `migration ${ref.id}`,
+          });
+          transaction.update(ref, {
+            status: "pending",
+            startedAt: null,
+            completedAt: null,
+            steps: [],
+            attempts: rearm.attempts,
+            attemptHistory: rearm.attemptHistory,
+            error: FieldValue.delete(),
+            expireAt: FieldValue.delete(),
+            rolledBack: FieldValue.delete(),
+            lastProgressAt: FieldValue.delete(),
+            waitingOn: FieldValue.delete(),
+            nextAttemptAt: FieldValue.delete(),
+          });
+          return;
+        }
         throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
       }
       return;

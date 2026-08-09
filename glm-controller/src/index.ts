@@ -49,6 +49,11 @@ import {
   defaultRandomTokenHex,
   type AuthSecretEnsurer,
 } from "./auth-secret-ensurer.js";
+import {
+  automaticBuilderOperationFenceReason,
+  automaticGatewayOperationFenceReason,
+  MIGRATE_CUSTOMER_KIND,
+} from "./automatic-operation-fence.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import {
@@ -317,7 +322,6 @@ const logger = createLogger({
 });
 const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;
-const MIGRATE_CUSTOMER_KIND = "migrate-customer";
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const SHARED_GATEWAY_POOL_RECONCILE_MS = 30_000;
 const SHARED_GATEWAY_AUTOSCALER_MS = parseNonNegativeInt(
@@ -1626,7 +1630,7 @@ async function automaticOperationFenceReason(
   for (let index = 0; index < gatewayIds.length; index += 1) {
     const snapshot = snapshots[index];
     if (snapshot.exists && isOperatorManaged(snapshot.data()?.managedBy)) {
-      return `automatic ${op.kind} operation fenced: gateway ${gatewayIds[index]} is operator-managed`;
+      return automaticGatewayOperationFenceReason(op.kind, gatewayIds[index]!);
     }
   }
   if (uid) {
@@ -1635,7 +1639,7 @@ async function automaticOperationFenceReason(
       user?.exists ? user.data() as Record<string, unknown> : undefined,
       "provisioning.openclaw.managedBy",
     ))) {
-      return `automatic ${op.kind} operation fenced: builder ${uid} is operator-managed`;
+      return automaticBuilderOperationFenceReason(op.kind, uid);
     }
   }
   return null;
