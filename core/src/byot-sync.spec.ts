@@ -1025,7 +1025,10 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
     const current = {
       agents: {
         entries: {
-          [id]: { model: "picked/model", tools: { fs: { workspaceOnly: true } } },
+          [id]: {
+            model: "picked/model",
+            tools: { fs: { workspaceOnly: true }, alsoAllow: ["stale-tool"] },
+          },
           "octogee-zed-coach": { model: "z/y" },
         },
       },
@@ -1039,7 +1042,10 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
       },
     })).resolves.toBe(true);
 
-    expect(paths).toEqual([[]]);
+    expect(paths).toEqual([[
+      `agents.entries.${id}.model.fallbacks`,
+      `agents.entries.${id}.tools.alsoAllow`,
+    ]]);
     expect(calls).toEqual([
       {
         agents: {
@@ -1151,7 +1157,10 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       },
     )).resolves.toBe(true);
 
-    expect(paths).toEqual([[]]);
+    expect(paths).toEqual([[
+      "agents.entries.octogee-tester-70-coach.model.fallbacks",
+      "agents.entries.octogee-tester-70-coach.tools.alsoAllow",
+    ]]);
     expect(calls).toEqual([
       {
         agents: {
@@ -3066,7 +3075,10 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
       },
     )).resolves.toBe(true);
 
-    expect(paths).toEqual([[]]);
+    expect(paths).toEqual([[
+      "agents.entries.octogee-tester-70-proj-web-coach.model.fallbacks",
+      "agents.entries.octogee-tester-70-proj-web-coach.tools.alsoAllow",
+    ]]);
     expect(calls).toEqual([
       {
         agents: {

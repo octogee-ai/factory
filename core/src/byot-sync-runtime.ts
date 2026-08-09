@@ -137,7 +137,7 @@ export async function applyCoachModelPatch(
     await applyConfigPatchFn(
       {
         buildPatch,
-        buildReplacePaths: coachAgentPatchReplacePaths,
+        buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
         logPrefix: `[byot-sync:${input.slug}]`,
       },
       { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
@@ -189,7 +189,7 @@ export async function applyCoachToolsConvergence(
     await applyConfigPatchFn(
       {
         buildPatch,
-        buildReplacePaths: coachAgentPatchReplacePaths,
+        buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
         logPrefix: `[coach-tools:${slug}]`,
         skipIfAlreadyApplied: true,
       },
@@ -260,7 +260,7 @@ export async function applyAgentModelOverrides(
       await applyConfigPatchFn(
         {
           buildPatch,
-          buildReplacePaths: coachAgentPatchReplacePaths,
+          buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
           logPrefix: `[agent-models:${slug}]`,
           skipIfAlreadyApplied: true,
         },

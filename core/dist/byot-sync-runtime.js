@@ -60,7 +60,7 @@ export async function applyCoachModelPatch(input, deps) {
     try {
         await applyConfigPatchFn({
             buildPatch,
-            buildReplacePaths: coachAgentPatchReplacePaths,
+            buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
             logPrefix: `[byot-sync:${input.slug}]`,
         }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
         logFn(`[byot-sync] ${input.slug}: coach model → ${modelPrimary}${modelFallbacks.length ? ` (fallback ${modelFallbacks.join(", ")})` : ""}`);
@@ -94,7 +94,7 @@ export async function applyCoachToolsConvergence(slug, houseOnly, deps) {
     try {
         await applyConfigPatchFn({
             buildPatch,
-            buildReplacePaths: coachAgentPatchReplacePaths,
+            buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
             logPrefix: `[coach-tools:${slug}]`,
             skipIfAlreadyApplied: true,
         }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
@@ -149,7 +149,7 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
         try {
             await applyConfigPatchFn({
                 buildPatch,
-                buildReplacePaths: coachAgentPatchReplacePaths,
+                buildReplacePaths: (current) => coachAgentPatchReplacePaths(current, agentId),
                 logPrefix: `[agent-models:${slug}]`,
                 skipIfAlreadyApplied: true,
             }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });

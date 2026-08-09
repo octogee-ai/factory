@@ -51,7 +51,7 @@ export type CoachAgentPatch = {
 };
 export declare function coachAgentPatch(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): CoachAgentPatch;
 export declare function coachAgentExists(current: unknown, agentId: string): boolean;
-export declare function coachAgentPatchReplacePaths(current: unknown): string[];
+export declare function coachAgentPatchReplacePaths(current: unknown, agentId: string): string[];
 export declare function deriveDesiredByotState(userData: {
     byotActive?: boolean;
     username?: string;

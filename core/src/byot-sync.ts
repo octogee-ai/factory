@@ -337,9 +337,12 @@ export function coachAgentExists(current: unknown, agentId: string): boolean {
   return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
 }
 
-export function coachAgentPatchReplacePaths(current: unknown): string[] {
+export function coachAgentPatchReplacePaths(current: unknown, agentId: string): string[] {
   return keyedAgentEntries(current)
-    ? []
+    ? [
+        `agents.entries.${agentId}.model.fallbacks`,
+        `agents.entries.${agentId}.tools.alsoAllow`,
+      ]
     : [
         "agents.list",
         "agents.list[].model.fallbacks",

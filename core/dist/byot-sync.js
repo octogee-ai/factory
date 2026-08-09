@@ -236,9 +236,12 @@ export function coachAgentExists(current, agentId) {
     const list = current?.agents?.list;
     return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
 }
-export function coachAgentPatchReplacePaths(current) {
+export function coachAgentPatchReplacePaths(current, agentId) {
     return keyedAgentEntries(current)
-        ? []
+        ? [
+            `agents.entries.${agentId}.model.fallbacks`,
+            `agents.entries.${agentId}.tools.alsoAllow`,
+        ]
         : [
             "agents.list",
             "agents.list[].model.fallbacks",

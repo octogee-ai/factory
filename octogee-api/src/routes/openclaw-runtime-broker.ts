@@ -577,11 +577,19 @@ function isExactDispatchLane(
 
 async function resolveGroupDispatchContext(
   input: DispatchContextInput,
+  identity: AgentIdentity,
   parsed: KnownAgentId,
 ): Promise<DispatchContextLookup> {
   const channel = await resolveSessionChannel(input.db, input.conversationId);
   if (channel === "forbidden") return channel;
   if (!channel) return null;
+  if (channel.binding.channelName === "coach-dm") {
+    if (
+      channel.binding.lane !== "workspace"
+      || channel.binding.workspaceSlug !== parsed.username
+    ) return "forbidden";
+    return resolveDirectDispatchContext(input, identity, parsed);
+  }
   if (!isExactDispatchLane(channel.binding, parsed)) return "forbidden";
   if (!(await sessionOwnerIsActive(input.db, channel.binding))) return null;
   return authorizedChannelContext(channel.data, channel.binding)
@@ -608,7 +616,7 @@ async function resolveDispatchContext(
   if (route.kind === "direct") {
     return resolveDirectDispatchContext(input, identity, parsed);
   }
-  return resolveGroupDispatchContext(input, parsed);
+  return resolveGroupDispatchContext(input, identity, parsed);
 }
 
 function runLivePathIdentity(path: string): {
