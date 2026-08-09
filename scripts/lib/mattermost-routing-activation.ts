@@ -6,7 +6,7 @@ import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 const MARKER_FILE = ".mattermost-routing-restart-required.json";
-const ACTIVATION_TIMEOUT_MS = 60_000;
+const ACTIVATION_TIMEOUT_MS = CONFIG_PATCH_DEADLINE_MS + 30_000;
 const POLL_MS = 250;
 const ACCOUNT_ABSENCE_GRACE_MS = CONFIG_PATCH_DEADLINE_MS + ACTIVATION_TIMEOUT_MS;
 

@@ -244,6 +244,39 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
   });
 
+  it("allows a scoped activation to settle after the config patch deadline", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "account binding changed",
+      ["ceckert-coach"],
+    );
+    let now = 0;
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => ({
+        channelAccounts: { mattermost: [
+          {
+            accountId: "ceckert-coach",
+            running: true,
+            connected: true,
+            lastStartAt: now > 60_000 ? 101 : 100,
+          },
+        ] },
+      })),
+    );
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      now: () => now,
+      sleep: async () => {
+        now += 10_000;
+      },
+    });
+
+    expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
   it("preserves the marker when a scoped channel start fails", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
