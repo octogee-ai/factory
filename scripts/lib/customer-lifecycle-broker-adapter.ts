@@ -429,12 +429,17 @@ async function listProjectsNeedingClone(
       );
       return [target];
     }
-    if (projectCheckoutMatchesSource(
-      slug,
-      p.projectSlug,
-      p.giteaRepoName ?? "",
-      repoSource,
-    )) {
+    if (
+      projectCheckoutMatchesSource(
+        slug,
+        p.projectSlug,
+        p.giteaRepoName ?? "",
+        repoSource,
+      )
+      && customerRepositoryHasCanonicalRemote(
+        path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug),
+      )
+    ) {
       return [];
     }
     return [target];
@@ -485,11 +490,13 @@ async function restoreImportedProjectCheckouts(
     const repoSource = projectRepoSourceFromDoc(project.repoSource);
     if (!repoSource && !project.giteaRepoName) return [project.projectSlug];
     return projectCheckoutMatchesSource(
-        slug,
-        project.projectSlug,
-        project.giteaRepoName ?? "",
-        repoSource,
-      )
+      slug,
+      project.projectSlug,
+      project.giteaRepoName ?? "",
+      repoSource,
+    ) && customerRepositoryHasCanonicalRemote(
+      path.join(CUSTOMERS_DIR, slug, "projects", project.projectSlug),
+    )
       ? []
       : [project.projectSlug];
   });

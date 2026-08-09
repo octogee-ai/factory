@@ -30,8 +30,12 @@ vi.mock("../lib/gitea-admin-broker-client.js", () => ({
   archiveRepo: vi.fn(async () => {}),
 }));
 
-const { cloneProjectRepo, githubCloneCredentialEnv, syncCustomerRepositoriesForSlug } =
-  await import("../lib/git.js");
+const {
+  cloneProjectRepo,
+  externalizeCustomerGitDir,
+  githubCloneCredentialEnv,
+  syncCustomerRepositoriesForSlug,
+} = await import("../lib/git.js");
 
 const SLUG = "alice";
 const GITHUB_REMOTE = "https://github.com/octogee-ai/demo.git";
@@ -40,6 +44,7 @@ const GITEA_SSH_REMOTE = `git@gitea:${SLUG}/demo.git`;
 const MATERIALIZED_TOKEN = "ghs_materialized_token_must_not_touch_disk";
 
 const savedEnv: Record<string, string | undefined> = {};
+let canonicalOrigin: string;
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -116,6 +121,27 @@ function seedBareOrigin(): string {
   return origin;
 }
 
+function rebuildTransferredGithubMetadata(
+  repoDir: string,
+  _slug: string,
+  deps: { repoSource?: { provider: "github"; owner: string; repo: string } | null },
+): void {
+  externalizeCustomerGitDir(repoDir, {
+    repoSource: deps.repoSource,
+    fetchCanonical: (worktree, gitDir) => {
+      execFileSync("git", [
+        "--git-dir",
+        gitDir,
+        "--work-tree",
+        worktree,
+        "fetch",
+        canonicalOrigin,
+        "+refs/heads/*:refs/remotes/origin/*",
+      ]);
+    },
+  });
+}
+
 function initRepoWithOrigin(repo: string, remoteUrl: string): void {
   fs.mkdirSync(repo, { recursive: true });
   git(repo, ["init", "-q", "-b", "main"]);
@@ -133,6 +159,7 @@ beforeEach(() => {
     fs.mkdirSync(dir, { recursive: true });
   }
   const origin = seedBareOrigin();
+  canonicalOrigin = origin;
   const globalConfig = path.join(paths.scratch, "gitconfig");
   fs.writeFileSync(
     globalConfig,
@@ -214,6 +241,48 @@ describe("workspace autosync remote migration", () => {
 });
 
 describe("cloneProjectRepo for a GitHub-backed project", () => {
+  it("rebuilds a transferred checkout's missing metadata without replacing local files", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
+    fs.writeFileSync(path.join(dest, "README.md"), "from github\n");
+    fs.writeFileSync(path.join(dest, "local-only.md"), "preserve me\n");
+
+    const ok = await cloneProjectRepo(SLUG, "demo", "", {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+      gitExec: () => { throw new Error("replacement clone must not run"); },
+      prepareRepository: rebuildTransferredGithubMetadata,
+    });
+
+    expect(ok).toBe(true);
+    expect(fs.readFileSync(path.join(dest, "local-only.md"), "utf8")).toBe("preserve me\n");
+    expect(git(dest, ["status", "--porcelain"])).toBe("?? local-only.md");
+    expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
+    expect(fs.existsSync(metadata)).toBe(true);
+    expect(fs.existsSync(path.join(paths.openclaw, "git-worktree-quarantine", SLUG))).toBe(false);
+  });
+
+  it("fails closed when rebuilt transferred metadata does not verify", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
+    fs.writeFileSync(path.join(dest, "local-only.md"), "preserve me\n");
+    const prepareRepository = vi.fn();
+
+    const ok = await cloneProjectRepo(SLUG, "demo", "", {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+      gitExec: () => { throw new Error("replacement clone must not run"); },
+      prepareRepository,
+    });
+
+    expect(ok).toBe(false);
+    expect(prepareRepository).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(dest, "local-only.md"), "utf8")).toBe("preserve me\n");
+    expect(fs.readFileSync(path.join(dest, ".git"), "utf8")).toBe(`gitdir: ${metadata}\n`);
+  });
+
   it("checks the GitHub repo out at the shared project path with the workspace commit identity", async () => {
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
 
