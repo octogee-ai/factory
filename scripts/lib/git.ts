@@ -1215,7 +1215,19 @@ export function adoptProjectClone(cloneDir: string, dest: string): void {
   fs.rmSync(cloneDir, { recursive: true, force: true });
 }
 
-export async function initWorkspaceRepo(coachDir: string, slug: string): Promise<string | null> {
+interface InitWorkspaceRepoDeps {
+  ensureWorkspaceRepo: (slug: string) => Promise<void>;
+  prepareRepository: (repoDir: string, slug: string) => void;
+}
+
+export async function initWorkspaceRepo(
+  coachDir: string,
+  slug: string,
+  deps: InitWorkspaceRepoDeps = {
+    ensureWorkspaceRepo: giteaBroker.ensureWorkspaceRepo,
+    prepareRepository: setRepoSshCommand,
+  },
+): Promise<string | null> {
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
@@ -1236,14 +1248,14 @@ export async function initWorkspaceRepo(coachDir: string, slug: string): Promise
   gitExec(coachDir, ["config", "user.email", `${slug}@octogee.com`]);
   gitExec(coachDir, ["config", "user.name", `Octo (${slug})`]);
 
-  setRepoSshCommand(coachDir, slug);
-
   try {
-    await giteaBroker.ensureWorkspaceRepo(slug);
+    await deps.ensureWorkspaceRepo(slug);
   } catch (err) {
     log(`⚠ [git] Failed to create repo ${org}/${repoName}: ${errMessage(err)}`);
     return null;
   }
+
+  deps.prepareRepository(coachDir, slug);
 
   const originUrl = sshRemoteUrl(org, repoName);
   const remoteResult = gitExec(coachDir, ["remote", "set-url", "origin", originUrl]);

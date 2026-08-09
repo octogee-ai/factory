@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync, spawnSync } from "child_process";
-import { removePersistedRepoSshCommand } from "../lib/git.js";
+import { initWorkspaceRepo, removePersistedRepoSshCommand } from "../lib/git.js";
 
 function customerSshKeyPath(keysDir: string, slug: string): string {
   return path.join(keysDir, slug, "id_ed25519");
@@ -130,6 +130,35 @@ describe("workspace .gitignore excludes .ssh/", () => {
     expect(gitTs).not.toContain('"AGENTS.md",');
     expect(gitTs).not.toContain('"TOOLS.md",');
     expect(gitTs).toContain("# AGENTS.md, TOOLS.md");
+  });
+});
+
+describe("initWorkspaceRepo", () => {
+  it("creates the canonical repository before preparing fetch-backed metadata", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-init-order-"));
+    const coachDir = path.join(root, "aug09");
+    fs.mkdirSync(coachDir);
+    const calls: string[] = [];
+    let canonicalRepositoryExists = false;
+
+    try {
+      const result = await initWorkspaceRepo(coachDir, "aug09", {
+        ensureWorkspaceRepo: async () => {
+          calls.push("ensure");
+          canonicalRepositoryExists = true;
+        },
+        prepareRepository: (repoDir) => {
+          calls.push("prepare");
+          if (!canonicalRepositoryExists) throw new Error("canonical repository is missing");
+          execSync("git remote add origin /dev/null", { cwd: repoDir, stdio: "pipe" });
+        },
+      });
+
+      expect(result).not.toBeNull();
+      expect(calls).toEqual(["ensure", "prepare"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
