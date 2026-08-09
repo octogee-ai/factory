@@ -581,6 +581,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // entitlements are enforced by the same service the UI create uses.
   app.use("/internal/agent-projects", createAgentProjectRoutes({
     db,
+    actionBaseUrl: appOrigin,
     onProjectCreated: (uid) => recordProductEvent(product, uid, {
       name: "project_created",
       properties: { source: "agent" },
@@ -607,8 +608,15 @@ export function createApp(opts: CreateAppOptions = {}) {
     actionBaseUrl: appOrigin,
   }));
   app.use("/internal/agent-board", createAgentBoardRoutes({ db }));
-  app.use("/internal/agent-productivity", createAgentProductivityRoutes({ db }));
-  app.use("/internal/agent-productivity", createAgentObsidianRoutes({ db, featurePolicy }));
+  app.use("/internal/agent-productivity", createAgentProductivityRoutes({
+    db,
+    actionBaseUrl: appOrigin,
+  }));
+  app.use("/internal/agent-productivity", createAgentObsidianRoutes({
+    db,
+    featurePolicy,
+    actionBaseUrl: appOrigin,
+  }));
   app.use(
     "/internal/agent-support",
     createAgentSupportRoutes({
@@ -629,7 +637,7 @@ export function createApp(opts: CreateAppOptions = {}) {
       logError: (message, fields) => logger.error(message, fields),
     }),
   );
-  app.use("/internal/agent-access", createAgentAccessRoutes({ db }));
+  app.use("/internal/agent-access", createAgentAccessRoutes({ db, actionBaseUrl: appOrigin }));
   app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
   app.use(
