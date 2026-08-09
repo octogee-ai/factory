@@ -548,6 +548,20 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     "octogee-workspace-tools": { enabled: true, config: {} },
     parallel: { enabled: true },
 };
+function materializeCustomerPluginValue(value) {
+    if (typeof value === "string") {
+        const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(value);
+        return match ? process.env[match[1]] ?? value : value;
+    }
+    if (Array.isArray(value))
+        return value.map(materializeCustomerPluginValue);
+    if (!isRecord(value))
+        return value;
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, materializeCustomerPluginValue(child)]));
+}
+function customerPluginEntries() {
+    return materializeCustomerPluginValue(CUSTOMER_PLUGIN_ENTRIES);
+}
 const CUSTOMER_SECRET_PROVIDERS = {
     "gcp-secret-manager": {
         source: "exec",
@@ -763,7 +777,7 @@ function customerModelsProjectionPatch(providerEntries, modelProviders) {
 function customerSecurityProjectionPatch(current) {
     const config = isRecord(current) ? current : {};
     const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
-    const pluginEntryPatch = exactObjectPatch(pluginEntries, CUSTOMER_PLUGIN_ENTRIES);
+    const pluginEntryPatch = exactObjectPatch(pluginEntries, customerPluginEntries());
     const providerEntries = recordChild(recordChild(config, "models"), "providers");
     const modelProviders = customerModelProvidersPlan(providerEntries);
     const hookMappings = safeHookMappings(config);

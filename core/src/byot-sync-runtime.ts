@@ -776,6 +776,22 @@ const CUSTOMER_PLUGIN_ENTRIES = {
   parallel: { enabled: true },
 } as const;
 
+function materializeCustomerPluginValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(value);
+    return match ? process.env[match[1]!] ?? value : value;
+  }
+  if (Array.isArray(value)) return value.map(materializeCustomerPluginValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, materializeCustomerPluginValue(child)]),
+  );
+}
+
+function customerPluginEntries(): Record<string, unknown> {
+  return materializeCustomerPluginValue(CUSTOMER_PLUGIN_ENTRIES) as Record<string, unknown>;
+}
+
 const CUSTOMER_SECRET_PROVIDERS = {
   "gcp-secret-manager": {
     source: "exec",
@@ -1019,7 +1035,7 @@ function customerSecurityProjectionPatch(current: unknown): Record<string, unkno
   const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
   const pluginEntryPatch = exactObjectPatch(
     pluginEntries,
-    CUSTOMER_PLUGIN_ENTRIES as unknown as Record<string, unknown>,
+    customerPluginEntries(),
   );
   const providerEntries = recordChild(recordChild(config, "models"), "providers");
   const modelProviders = customerModelProvidersPlan(providerEntries);
