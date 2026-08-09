@@ -70,7 +70,7 @@ export interface GatewayChannelStopResult {
 export interface GatewayChannelStartResult {
     channel: string;
     accountId: string;
-    started: true;
+    started: boolean;
     [extra: string]: unknown;
 }
 export interface GatewaySessionSummary {

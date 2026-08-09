@@ -368,8 +368,8 @@ async function stopChannels(call, params) {
 async function startChannels(call, params) {
     const payload = await call("channels.start", params);
     if (!payload || typeof payload !== "object" ||
-        payload.started !== true) {
-        throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing `started: true`");
+        typeof payload.started !== "boolean") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "channels.start payload missing boolean `started`");
     }
     return payload;
 }

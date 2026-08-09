@@ -138,7 +138,7 @@ export interface GatewayChannelStopResult {
 export interface GatewayChannelStartResult {
   channel: string;
   accountId: string;
-  started: true;
+  started: boolean;
   [extra: string]: unknown;
 }
 
@@ -716,10 +716,10 @@ async function startChannels(
 ): Promise<GatewayChannelStartResult> {
   const payload = await call("channels.start", params);
   if (!payload || typeof payload !== "object" ||
-      (payload as { started?: unknown }).started !== true) {
+      typeof (payload as { started?: unknown }).started !== "boolean") {
     throw new OpenclawWireError(
       INVALID_RESPONSE,
-      "channels.start payload missing `started: true`",
+      "channels.start payload missing boolean `started`",
     );
   }
   return payload as GatewayChannelStartResult;

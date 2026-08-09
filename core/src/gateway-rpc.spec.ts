@@ -512,6 +512,31 @@ describe("gateway-rpc", () => {
         },
       ]);
     });
+
+    it("accepts a start acknowledgement while the channel is still becoming ready", async () => {
+      server.setHandler("channels.start", () => ({
+        ok: true,
+        payload: { channel: "mattermost", accountId: "alice-coach", started: false },
+      }));
+
+      await expect(
+        client.channelsStart({ channel: "mattermost", accountId: "alice-coach" }),
+      ).resolves.toMatchObject({ started: false });
+    });
+
+    it("rejects a start acknowledgement without a boolean result", async () => {
+      server.setHandler("channels.start", () => ({
+        ok: true,
+        payload: { channel: "mattermost", accountId: "alice-coach", started: "yes" },
+      }));
+
+      await expect(
+        client.channelsStart({ channel: "mattermost", accountId: "alice-coach" }),
+      ).rejects.toMatchObject({
+        code: "invalid-response",
+        message: expect.stringContaining("missing boolean `started`"),
+      });
+    });
   });
 
   describe("configGet", () => {
