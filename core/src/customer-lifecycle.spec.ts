@@ -1492,7 +1492,7 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
-  it("establishes and verifies the coach before isolated project checkout convergence", async () => {
+  it("converges project checkouts before activating project agents", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1506,11 +1506,8 @@ const state = makeState(
 
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
-    );
-    expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
+    expect(state.calls.indexOf("cloneProjectRepo")).toBeLessThan(
+      state.calls.indexOf("applyAddCustomerConfigPatch"),
     );
   });
 
@@ -1530,6 +1527,8 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
   });
 
   it("surfaces a clone that throws as pending, so the next reconcile retries instead of stranding the checkout", async () => {
@@ -1548,6 +1547,8 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
   });
 
   it("throws when verify times out — restores must NOT silently succeed on a broken mount", async () => {

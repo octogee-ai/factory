@@ -695,6 +695,20 @@ async function addCustomerToGatewayInner(
   steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
   throwIfAborted(signal, uid);
 
+  markStep("project-clones");
+  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+    ? await cloneMissingProjects(adapter, slug)
+    : { steps: [], pending: [] };
+  steps.push(...projectClones.steps);
+  throwIfAborted(signal, uid);
+  if (projectClones.pending.length > 0) {
+    return {
+      newCustomer,
+      steps,
+      pendingProjectClones: projectClones.pending,
+    };
+  }
+
   markStep("byos-restore");
   const byos = await restoreByos(adapter, slug);
   steps.push(...byos.steps);
@@ -736,13 +750,6 @@ async function addCustomerToGatewayInner(
 
   markStep("blob-sync");
   steps.push(...(await runBlobSync(adapter, slug)));
-  throwIfAborted(signal, uid);
-
-  markStep("project-clones");
-  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-    ? await cloneMissingProjects(adapter, slug)
-    : { steps: [], pending: [] };
-  steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
 
   markStep("finalize");
