@@ -1,5 +1,5 @@
 import type { ProjectRecipeId } from "@octogee/shared/types/project";
-import viteStaticPackageLock from "./vite-static-package-lock.json" with { type: "json" };
+import viteStaticPackageLock from "./vite-static/package-lock.json" with { type: "json" };
 
 export interface PlaybookSeed {
   relPath: string;

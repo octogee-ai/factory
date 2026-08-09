@@ -1,4 +1,4 @@
-import viteStaticPackageLock from "./vite-static-package-lock.json" with { type: "json" };
+import viteStaticPackageLock from "./vite-static/package-lock.json" with { type: "json" };
 const RECIPE_PUBLISH_CONTRACT = {
     "static-site": "the `public/` folder deploys as-is, with no build step",
     "vite-static": "`npm run build` produces `dist/`, and `dist/` is what deploys",
