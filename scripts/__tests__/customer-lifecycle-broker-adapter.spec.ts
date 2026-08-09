@@ -457,7 +457,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
   });
 
-  it("keeps the imported customer closed when an active missing project has no clone source", async () => {
+  it("keeps a source-less imported project closed even when stale local metadata appears canonical", async () => {
     const snapshot = aliceSnapshot({
       uid: "uid-tester10",
       slug: "tester10",
@@ -471,7 +471,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       uidForSlug: vi.fn(async () => snapshot.uid),
       userSnapshot: vi.fn(async () => snapshot),
     });
-    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
     const adapter = buildBrokeredLifecycleAdapter({
       client,
       rpc: {} as GatewayRpcClient,

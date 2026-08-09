@@ -483,6 +483,7 @@ async function restoreImportedProjectCheckouts(
   const remaining = snapshot.projects.flatMap((project) => {
     if (project.provisioningState !== undefined && project.provisioningState !== "active") return [];
     const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    if (!repoSource && !project.giteaRepoName) return [project.projectSlug];
     return projectCheckoutMatchesSource(
         slug,
         project.projectSlug,
