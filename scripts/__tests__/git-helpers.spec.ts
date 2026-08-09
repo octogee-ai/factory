@@ -58,6 +58,27 @@ describe("adoptProjectClone", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects an existing destination symlink without writing outside the project", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "project-clone-adopt-symlink-"));
+    const cloneDir = path.join(root, "clone");
+    const dest = path.join(root, "launchroom");
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(path.join(cloneDir, "docs"), { recursive: true });
+    fs.mkdirSync(path.join(cloneDir, ".git"));
+    fs.writeFileSync(path.join(cloneDir, "docs", "brief.md"), "canonical brief\n");
+    fs.mkdirSync(dest);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(dest, "docs"), "dir");
+
+    try {
+      expect(() => adoptProjectClone(cloneDir, dest)).toThrow(/symbolic link/u);
+      expect(fs.existsSync(path.join(outside, "brief.md"))).toBe(false);
+      expect(fs.existsSync(path.join(dest, ".git"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("errMessage", () => {

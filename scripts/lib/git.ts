@@ -1234,11 +1234,18 @@ function copyMissingCloneTree(source: string, dest: string): void {
     if (entry.name === ".git") continue;
     const sourcePath = path.join(source, entry.name);
     const destPath = path.join(dest, entry.name);
-    if (!fs.existsSync(destPath)) {
+    const destEntry = fs.lstatSync(destPath, { throwIfNoEntry: false });
+    if (!destEntry) {
       fs.cpSync(sourcePath, destPath, { recursive: true, preserveTimestamps: true });
       continue;
     }
-    if (entry.isDirectory() && fs.statSync(destPath).isDirectory()) {
+    if (destEntry.isSymbolicLink()) {
+      throw new Error(`cannot adopt checkout over symbolic link: ${destPath}`);
+    }
+    if (!destEntry.isDirectory() && !destEntry.isFile()) {
+      throw new Error(`cannot adopt checkout over special filesystem entry: ${destPath}`);
+    }
+    if (entry.isDirectory() && destEntry.isDirectory()) {
       copyMissingCloneTree(sourcePath, destPath);
     }
   }

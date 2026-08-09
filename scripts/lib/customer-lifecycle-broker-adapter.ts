@@ -319,9 +319,6 @@ async function createMissingCustomerAgents(
   const current = await currentRosterConfig(ctx);
   const missing = unrosteredAgentSpecs(current, rosterAgentSpecsFromEntries(agentEntries));
   if (missing.length === 0) return;
-  // The project checkouts clone AFTER the mount patch, so a new project agent's
-  // workspace does not exist yet. The directory is ours to own; checkoutProjectRepo
-  // clones into an existing dest via its adopt path.
   await Promise.all(missing.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
   try {
     await createRosterAgents(missing, { rpc: ctx.rpc, log: ctx.log, logPrefix });
@@ -421,6 +418,17 @@ async function listProjectsNeedingClone(
   return snapshot.projects.flatMap((p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
     const repoSource = projectRepoSourceFromDoc(p.repoSource);
+    const target = {
+      projectSlug: p.projectSlug,
+      giteaRepoName: p.giteaRepoName,
+      ...(repoSource ? { repoSource } : {}),
+    };
+    if (!repoSource && !p.giteaRepoName) {
+      ctx.log(
+        `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,
+      );
+      return [target];
+    }
     if (projectCheckoutMatchesSource(
       slug,
       p.projectSlug,
@@ -429,17 +437,7 @@ async function listProjectsNeedingClone(
     )) {
       return [];
     }
-    if (!repoSource && !p.giteaRepoName) {
-      ctx.log(
-        `[add:${slug}/${p.projectSlug}] ✖ no checkout source — the project has no Gitea repo and no GitHub repoSource`,
-      );
-      return [];
-    }
-    return [{
-      projectSlug: p.projectSlug,
-      giteaRepoName: p.giteaRepoName,
-      ...(repoSource ? { repoSource } : {}),
-    }];
+    return [target];
   });
 }
 
@@ -457,6 +455,7 @@ async function restoreImportedProjectCheckouts(
   let githubToken: Promise<string | null> | null = null;
   for (const project of missing) {
     const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    if (!repoSource && !project.giteaRepoName) continue;
     let cloneOptions: ProjectCloneOptions | undefined;
     if (repoSource?.provider === "github") {
       githubToken ??= resolveGithubCloneToken(ctx, slug).catch((error) => {

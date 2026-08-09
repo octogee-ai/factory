@@ -1456,16 +1456,18 @@ const state = makeState(
     ]);
   });
 
-  it("skips a project with no Gitea repo and no GitHub repoSource, and says so", async () => {
+  it("keeps a project with no checkout source pending and does not activate its agent", async () => {
     const state = makeState(mountedSnapshot(), mountedDisk());
     state.pendingProjects = [
       { projectSlug: "orphan", giteaRepoName: null },
       { projectSlug: "camp", giteaRepoName: "test-camp" },
     ];
 
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(state.cloneProjectCalls.map((c) => c.projectSlug)).toEqual(["camp"]);
+    expect(result.pendingProjectClones).toEqual(["orphan"]);
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
     expect(state.logs).toContainEqual(expect.stringContaining("test/orphan"));
     expect(state.logs.find((l) => l.includes("test/orphan"))).toMatch(
       /no Gitea repo and no GitHub repoSource/,

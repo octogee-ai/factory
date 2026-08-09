@@ -100,13 +100,14 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     ]);
   });
 
-  it("drops a project with neither a Gitea repo nor a github repoSource, and says so", async () => {
+  it("keeps an active project with no checkout source pending, and says so", async () => {
     const { adapter, log } = mkAdapter([
       { projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" },
       { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },
     ]);
 
     await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "orphan", giteaRepoName: null },
       { projectSlug: "camp", giteaRepoName: "alice-camp" },
     ]);
     expect(log).toHaveBeenCalledWith(
@@ -115,6 +116,17 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     expect(log.mock.calls.flat().join("\n")).toMatch(
       /no Gitea repo and no GitHub repoSource/,
     );
+  });
+
+  it("keeps a source-less project pending even when stale local metadata appears canonical", async () => {
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
+    const { adapter } = mkAdapter([
+      { projectSlug: "orphan", giteaRepoName: null, provisioningState: "active" },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "orphan", giteaRepoName: null },
+    ]);
   });
 
   it("ignores a repoSource whose provider is not github", async () => {
