@@ -221,7 +221,7 @@ async function main(): Promise<void> {
     log,
     adminMmUserId: process.env.MM_ADMIN_USER_ID,
     isBuilderGateway,
-    projectCheckoutScope: () => projectCheckoutScopeForRuntime(),
+    projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
   });
   const fleetHandle = await startFleetController({
     rpc,

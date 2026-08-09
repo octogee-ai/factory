@@ -229,7 +229,7 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("gates every assignment, transfers serially, verifies sessions, then releases target", async () => {
+  it("gates each assignment only when its serial transfer begins", async () => {
     const h = harness();
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -241,11 +241,11 @@ describe("surge customer handoff", () => {
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
-      "assignment:u2:quiescing",
       "quiesce:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
+      "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
       "digest:old-uid:bob",
@@ -322,11 +322,11 @@ describe("surge customer handoff", () => {
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
-      "assignment:u2:quiescing",
       "quiesce:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
+      "assignment:u2:quiescing",
       "release:target-uid",
     ]);
 
@@ -356,10 +356,7 @@ describe("surge customer handoff", () => {
       stateMigration: MIGRATE_STATE,
     })).rejects.toThrow("source mounted customer orphan has no assignment");
 
-    expect(h.events).toEqual([
-      "assignment:u1:quiescing",
-      "assignment:u1:serving",
-    ]);
+    expect(h.events).toEqual([]);
   });
 
   it("restores owned assignments only after Kubernetes removes the old pod", async () => {
@@ -794,11 +791,11 @@ describe("surge customer handoff", () => {
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
-      "assignment:u2:quiescing",
       "quiesce:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
+      "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
       "discard:bob",
@@ -820,18 +817,40 @@ describe("surge customer handoff", () => {
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
-      "assignment:u2:quiescing",
       "discard:alice",
+      "assignment:u1:serving",
+      "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
+      "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
       "digest:old-uid:bob",
       "digest:target-uid:bob",
       "release:target-uid",
     ]);
+  });
+
+  it("gates only the stale target customer when retry cleanup fails", async () => {
+    const h = harness({
+      targetMountedCustomers: ["alice"],
+      discardError: new Error("stale target cleanup failed"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("stale target cleanup failed");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "discard:alice",
+    ]);
+    expect(h.assignments().find((item) => item.uid === "u2")?.state).toBe("serving");
   });
 
   it("keeps admission closed when batch cleanup fails and attempts every touched customer", async () => {
@@ -850,11 +869,11 @@ describe("surge customer handoff", () => {
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
-      "assignment:u2:quiescing",
       "quiesce:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
+      "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
       "discard:bob",
@@ -873,7 +892,12 @@ describe("surge customer handoff", () => {
     })).rejects.toThrow("assignment write failed");
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
+      "quiesce:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
       "assignment:u2:quiescing",
+      "discard:alice",
       "assignment:u1:serving",
     ]);
   });

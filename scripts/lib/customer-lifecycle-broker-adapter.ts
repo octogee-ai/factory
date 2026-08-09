@@ -330,9 +330,14 @@ async function createMissingCustomerAgents(
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
-  const projectCheckoutScope = snapshot.projectCheckoutScope
-    ?? ctx.projectCheckoutScope?.(snapshot.slug)
-    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+  const runtimeScope = ctx.projectCheckoutScope?.(snapshot.slug);
+  const projectCheckoutScope =
+    runtimeScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE ||
+      snapshot.projectCheckoutScope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE
+      ? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE
+      : snapshot.projectCheckoutScope
+        ?? runtimeScope
+        ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
   const projected = {
     ...snapshot,
     projectCheckoutScope,
@@ -434,6 +439,53 @@ async function listProjectsNeedingClone(
       ...(repoSource ? { repoSource } : {}),
     }];
   });
+}
+
+async function restoreImportedProjectCheckouts(
+  ctx: BrokerCtx,
+  slug: string,
+  scope: FleetBrokerProjectCheckoutScope,
+): Promise<void> {
+  if (scope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) return;
+  const snapshot = await snapshotForSlug(ctx, slug);
+  if (!snapshot) {
+    throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
+  }
+  const missing = await listProjectsNeedingClone(ctx, slug);
+  let githubToken: Promise<string | null> | null = null;
+  for (const project of missing) {
+    const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    let cloneOptions: ProjectCloneOptions | undefined;
+    if (repoSource?.provider === "github") {
+      githubToken ??= resolveGithubCloneToken(ctx, slug).catch((error) => {
+        ctx.log(`[import:${slug}] GitHub clone credential unavailable: ${String(error)}`);
+        return null;
+      });
+      cloneOptions = { repoSource, githubToken: await githubToken };
+    }
+    try {
+      const cloned = await cloneProjectRepoForTarget(
+        slug,
+        project.projectSlug,
+        project.giteaRepoName,
+        cloneOptions,
+      );
+      if (cloned) {
+        ctx.log(`[import:${slug}/${project.projectSlug}] restored project checkout`);
+      }
+    } catch (error) {
+      ctx.log(
+        `[import:${slug}/${project.projectSlug}] project checkout restore failed: ${String(error)}`,
+      );
+    }
+  }
+  const remaining = await listProjectsNeedingClone(ctx, slug);
+  if (remaining.length > 0) {
+    throw new Error(
+      `[import:${slug}] project checkout restoration incomplete: ` +
+      remaining.map((project) => project.projectSlug).sort().join(", "),
+    );
+  }
 }
 
 async function resolveGithubCloneToken(ctx: BrokerCtx, slug: string): Promise<string | null> {
@@ -974,14 +1026,23 @@ async function activateImportedCustomer(
   }
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
+  const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)
+    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+  if (runtimeProjectCheckoutScope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) {
+    const snapshot = await snapshotForSlug(ctx, slug);
+    if (!snapshot) {
+      throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
+    }
+  }
+  const projectCheckoutScope = ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
+    ?? runtimeProjectCheckoutScope;
   await pruneWorkspaceOnlyProjectCheckouts(
     CUSTOMERS_DIR,
     slug,
-    ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
-      ?? ctx.projectCheckoutScope?.(slug)
-      ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
+    projectCheckoutScope,
     ctx.log,
   );
+  await restoreImportedProjectCheckouts(ctx, slug, projectCheckoutScope);
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
   // The rsync brings whatever store the source pod had. One openclaw cannot
@@ -1052,8 +1113,18 @@ export async function pruneWorkspaceOnlyProjectCheckouts(
   log(`[import:${slug}] removed project checkouts from workspace-only target`);
 }
 
-export function projectCheckoutScopeForRuntime(): FleetBrokerProjectCheckoutScope {
-  return WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
+export function projectCheckoutScopeForRuntime(
+  slug: string,
+  env: NodeJS.ProcessEnv = process.env,
+): FleetBrokerProjectCheckoutScope {
+  const gatewayClass = env.GATEWAY_CLASS?.trim();
+  const includesProjects = gatewayClass === "shared" || (
+    gatewayClass === "builder" &&
+    env.GATEWAY_BUILDER_SLUG?.trim() === slug
+  );
+  return includesProjects
+    ? "workspace-and-projects"
+    : WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
 }
 
 async function removeImportedCustomerBySlug(

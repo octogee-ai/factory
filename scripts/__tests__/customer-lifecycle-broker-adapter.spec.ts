@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   removeActivationManifest: vi.fn(),
 }));
 const gitMocks = vi.hoisted(() => ({
+  cloneProjectRepo: vi.fn(),
+  projectCheckoutMatchesSource: vi.fn(),
   setRepoSshCommand: vi.fn(),
 }));
 const patchMocks = vi.hoisted(() => ({
@@ -68,7 +70,12 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
 });
 vi.mock("../lib/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/git.js")>();
-  return { ...actual, setRepoSshCommand: gitMocks.setRepoSshCommand };
+  return {
+    ...actual,
+    cloneProjectRepo: gitMocks.cloneProjectRepo,
+    projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
+    setRepoSshCommand: gitMocks.setRepoSshCommand,
+  };
 });
 vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/apply-config-patch.js")>();
@@ -236,6 +243,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
+    gitMocks.cloneProjectRepo.mockReset().mockResolvedValue(true);
+    gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(true);
     gitMocks.setRepoSshCommand.mockClear();
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
@@ -356,6 +365,86 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
     expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
+  });
+
+  it("restores an absent shared-gateway project from the trusted snapshot before activation", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    gitMocks.projectCheckoutMatchesSource
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+      appliedFingerprint: "fp-tester10",
+    });
+
+    expect(client.userSnapshot).toHaveBeenCalledWith(snapshot.uid);
+    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith(
+      "tester10",
+      "roamly",
+      "alice-roamly",
+      undefined,
+    );
+    expect(gitMocks.cloneProjectRepo.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("keeps the imported customer closed when a required project clone does not land", async () => {
+    const snapshot = aliceSnapshot({
+      uid: "uid-tester10",
+      slug: "tester10",
+      status: "complete",
+      projectCheckoutScope: "workspace-and-projects",
+      projects: [
+        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
+      ],
+    });
+    const client = mkClient({
+      uidForSlug: vi.fn(async () => snapshot.uid),
+      userSnapshot: vi.fn(async () => snapshot),
+    });
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
+    gitMocks.cloneProjectRepo.mockResolvedValue(false);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+      projectCheckoutScope: () => "workspace-and-projects",
+    });
+
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
+      /project checkout restoration incomplete.*roamly/u,
+    );
+
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
   });
 
   it("preserves the activation manifest when imported agent secrets do not materialize", async () => {
@@ -1736,6 +1825,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     });
     adapter.seedUserSnapshotForMigration?.(
       fullSnapshot({
+        projectCheckoutScope: "workspace-and-projects",
         projects: [
           { projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" },
         ],
@@ -1854,8 +1944,32 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 });
 
 describe("projectCheckoutScopeForRuntime", () => {
-  it("keeps runtime imports workspace-only", () => {
-    expect(projectCheckoutScopeForRuntime()).toBe("workspace-only");
+  it("restores project checkouts on a shared runtime", () => {
+    expect(projectCheckoutScopeForRuntime("alice", { GATEWAY_CLASS: "shared" })).toBe(
+      "workspace-and-projects",
+    );
+  });
+
+  it("restores project checkouts for the exact configured isolated Builder", () => {
+    expect(projectCheckoutScopeForRuntime("alice", {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "alice",
+    })).toBe("workspace-and-projects");
+  });
+
+  it.each([
+    ["a mismatched isolated Builder", "bob", {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }],
+    ["an isolated Builder with no configured slug", "alice", { GATEWAY_CLASS: "builder" }],
+    ["a runtime with no class", "alice", { GATEWAY_BUILDER_SLUG: "alice" }],
+    ["an unknown runtime class", "alice", {
+      GATEWAY_CLASS: "unknown",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }],
+  ])("keeps %s workspace-only", (_label, slug, env) => {
+    expect(projectCheckoutScopeForRuntime(slug, env)).toBe("workspace-only");
   });
 });
 
