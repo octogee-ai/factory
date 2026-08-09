@@ -3331,6 +3331,7 @@ function currentArtifactPatch(
   patch: ArtifactPatchInput,
 ): GatewayArtifact {
   return {
+    ...artifact,
     imageRepository: patch.imageRepository ?? artifact.imageRepository,
     imageTag: patch.imageTag ?? artifact.imageTag,
   };
@@ -6478,6 +6479,14 @@ router.post(
           imageTag,
           ...(imageRepository ? { imageRepository } : {}),
         });
+        if (!isReleasePayload(asReleaseArtifactPayload(artifact))) {
+          res.status(409).json({
+            error: "gateway rollout requires a complete paired release",
+            code: "gateway-rollout-requires-release-cut",
+            gatewayId: id,
+          });
+          return;
+        }
         if (sameArtifact(current.artifact, artifact)) {
           res.status(409).json({
             error: "gateway already on requested image — no-op rollout",

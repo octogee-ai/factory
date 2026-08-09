@@ -2261,6 +2261,63 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
     ).toBe("deadbee");
   });
 
+  it("preserves the paired edge and Builder images when changing only the gateway image", async () => {
+    const payload = sharedPayload({
+      imageTag: `abc1234@sha256:${"a".repeat(64)}`,
+      profileImages: {
+        builder: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          imageTag: `abc1234@sha256:${"b".repeat(64)}`,
+        },
+      },
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `abc1234@sha256:${"c".repeat(64)}`,
+      },
+    });
+    const { app, store } = mkApp(seedNewSchemaGateway("epsilon", payload));
+
+    await request(app)
+      .post("/gateways/epsilon/rollout")
+      .send({ imageTag: `abc1234@sha256:${"d".repeat(64)}` })
+      .expect(202);
+
+    expect(store.get(`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)?.payload).toEqual({
+      ...payload,
+      imageTag: `abc1234@sha256:${"d".repeat(64)}`,
+    });
+  });
+
+  it("rejects a partial image change that would detach the paired Builder image", async () => {
+    const payload = sharedPayload({
+      imageTag: `abc1234@sha256:${"a".repeat(64)}`,
+      profileImages: {
+        builder: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          imageTag: `abc1234@sha256:${"b".repeat(64)}`,
+        },
+      },
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `abc1234@sha256:${"c".repeat(64)}`,
+      },
+    });
+    const { app, store } = mkApp(seedNewSchemaGateway("epsilon", payload));
+
+    const response = await request(app)
+      .post("/gateways/epsilon/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: "gateway rollout requires a complete paired release",
+      code: "gateway-rollout-requires-release-cut",
+      gatewayId: "epsilon",
+    });
+    expect(store.has(`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBe(false);
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("cuts a release when the durable gateway has no legacy glm desired doc", async () => {
     const seed = seedNewSchemaGateway("epsilon", sharedPayload());
     delete seed[`${GLM_GATEWAYS_COLLECTION}/epsilon`];
