@@ -76,13 +76,12 @@ export const KSA_TOKEN_PATH =
 // OpenClaw's exec-provider contract is batch-fatal: any entry in the errors{}
 // response makes it discard the WHOLE resolution batch and cold every owner on
 // this provider. A single transient broker blip therefore costs every agent its
-// credentials, so each id gets one retry — but the whole per-id budget must fit
-// inside the provider's 5000ms timeoutMs, or the gateway kills the resolver
-// mid-retry and loses the batch anyway.
+// credentials, so each id gets one retry and broker fan-out stays bounded.
 export const BROKER_ATTEMPTS = 2;
 export const BROKER_ATTEMPT_TIMEOUT_MS = 2200;
 export const BROKER_RETRY_BACKOFF_MS = 250;
 export const BROKER_TOTAL_BUDGET_MS = 4800;
+export const BROKER_CONCURRENCY = 12;
 
 const AGENTS_DIR =
   process.env.OPENCLAW_AGENTS_DIR ||
@@ -321,6 +320,33 @@ export async function resolveOne(id, deps = {}) {
   }
 }
 
+export async function resolveBatch(ids, resolve = resolveOne) {
+  const values = {};
+  const errors = {};
+  let next = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = next++;
+      if (index >= ids.length) return;
+      const id = ids[index];
+      try {
+        values[id] = await resolve(id);
+      } catch (err) {
+        errors[id] = { message: err?.message || String(err) };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(BROKER_CONCURRENCY, ids.length) },
+      () => worker(),
+    ),
+  );
+  return { values, errors };
+}
+
 /** Cap on per-call audit-log lines for rejects. A flood of rejects
  *  (probing for slugs, malformed ids) shouldn't be able to run up the
  *  Cloud Logging bill or hide a single legitimate access in a haystack
@@ -359,16 +385,9 @@ async function main() {
     audit(`reject-summary suppressed=${rejectTotal - MAX_AUDIT_REJECTS_PER_CALL} (cap=${MAX_AUDIT_REJECTS_PER_CALL})`);
   }
 
-  // Resolve concurrently — each ref is an independent API call.
-  await Promise.all(
-    accepted.map(async (id) => {
-      try {
-        values[id] = await resolveOne(id);
-      } catch (err) {
-        errors[id] = { message: err?.message || String(err) };
-      }
-    }),
-  );
+  const resolved = await resolveBatch(accepted);
+  Object.assign(values, resolved.values);
+  Object.assign(errors, resolved.errors);
 
   const response = { protocolVersion: 1, values };
   if (Object.keys(errors).length > 0) response.errors = errors;

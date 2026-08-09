@@ -1902,7 +1902,7 @@ describe("customer OAuth runtime purge", () => {
         "HOME",
       ],
       jsonOnly: true,
-      timeoutMs: 5000,
+      timeoutMs: 45000,
       source: "exec",
     });
     expect(patch.secrets.staleRef).toBeNull();

@@ -7,14 +7,23 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // resolveOne is exported for in-process unit coverage of the broker call; the
 // resolver's main() is import-guarded, so this import is inert.
 import {
+  resolveBatch as resolveBatchRaw,
   resolveOne as resolveOneRaw,
   BROKER_ATTEMPTS,
   BROKER_ATTEMPT_TIMEOUT_MS,
   BROKER_BASE_URL,
+  BROKER_CONCURRENCY,
   BROKER_RETRY_BACKOFF_MS,
   BROKER_TOTAL_BUDGET_MS,
   KSA_TOKEN_PATH,
 } from "../secret-resolver.mjs";
+const resolveBatch = resolveBatchRaw as (
+  ids: string[],
+  resolve?: (id: string) => Promise<string>,
+) => Promise<{
+  values: Record<string, string>;
+  errors: Record<string, { message: string }>;
+}>;
 const resolveOne = resolveOneRaw as (
   id: string,
   deps?: {
@@ -284,6 +293,25 @@ describe("secret-resolver — defense-in-depth", () => {
 });
 
 describe("resolveOne — brokered byok materialization (unit, injected deps)", () => {
+  it("bounds broker fan-out without dropping a large shared-gateway batch", async () => {
+    const ids = Array.from({ length: 84 }, (_, index) => `id-${index}`);
+    let active = 0;
+    let peak = 0;
+
+    const result = await resolveBatch(ids, async (id) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active--;
+      if (id === "id-83") throw new Error("broker refused final id");
+      return `value-${id}`;
+    });
+
+    expect(peak).toBe(BROKER_CONCURRENCY);
+    expect(Object.keys(result.values)).toHaveLength(ids.length - 1);
+    expect(result.errors).toEqual({ "id-83": { message: "broker refused final id" } });
+  });
+
   it("POSTs { id } to /internal/byok/api-key with the KSA token and returns the value", async () => {
     let seen:
       | {
@@ -464,11 +492,7 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
       expect(BROKER_TOTAL_BUDGET_MS).toBeLessThan(providerTimeoutMs!);
     });
 
-    // The provider timeout covers the whole batch — a node spawn plus one
-    // concurrent broker call per id — not a single id. At 5000ms it had no
-    // headroom over the 4800ms per-id budget, so a routine sweep of a dozen
-    // agents timed out the batch and left every profile deferred.
-    it("leaves the batch room for a spawn and a fan-out beyond one id's budget", () => {
+    it("keeps an 84-ref shared roster inside the provider timeout", () => {
       const template = JSON.parse(
         fs.readFileSync(
           path.join(__dirname, "../../infra/gateway/openclaw.template.json"),
@@ -477,7 +501,9 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
       ) as { secrets: { providers: Record<string, { timeoutMs?: number }> } };
       const providerTimeoutMs = template.secrets.providers["gcp-secret-manager"]!.timeoutMs!;
 
-      expect(providerTimeoutMs - BROKER_TOTAL_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
+      const worstCaseBrokerBudget =
+        Math.ceil(84 / BROKER_CONCURRENCY) * BROKER_TOTAL_BUDGET_MS;
+      expect(worstCaseBrokerBudget).toBeLessThan(providerTimeoutMs);
     });
 
     it("retries a 5xx once and returns the second attempt's value", async () => {

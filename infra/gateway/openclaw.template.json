@@ -33,7 +33,7 @@
           "HOME"
         ],
         "jsonOnly": true,
-        "timeoutMs": 20000
+        "timeoutMs": 45000
       },
       "octogee-mattermost": {
         "source": "file",

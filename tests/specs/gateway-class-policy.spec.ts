@@ -1152,7 +1152,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           "HOME",
         ],
         jsonOnly: true,
-        timeoutMs: 5000,
+        timeoutMs: 45000,
       },
       "octogee-mattermost": {
         source: "file",
