@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   applyOpenClawActivationManifest: vi.fn(),
   removeActivationManifest: vi.fn(),
 }));
+const gitMocks = vi.hoisted(() => ({
+  setRepoSshCommand: vi.fn(),
+}));
 const patchMocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
 }));
@@ -62,6 +65,10 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
     applyOpenClawActivationManifest: mocks.applyOpenClawActivationManifest,
     removeActivationManifest: mocks.removeActivationManifest,
   };
+});
+vi.mock("../lib/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/git.js")>();
+  return { ...actual, setRepoSshCommand: gitMocks.setRepoSshCommand };
 });
 vi.mock("../lib/apply-config-patch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/apply-config-patch.js")>();
@@ -228,6 +235,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
+    gitMocks.setRepoSshCommand.mockClear();
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
     secretMocks.materializeActivationManifestSecret.mockClear();
@@ -323,6 +331,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledWith(
       expect.objectContaining({ slug: "tester10", appliedFingerprint: "fp-tester10" }),
       expect.objectContaining({ rpc, signal }),
+    );
+    expect(gitMocks.setRepoSshCommand).toHaveBeenCalledWith(
+      expect.stringContaining("/customers/tester10"),
+      "tester10",
+    );
+    expect(gitMocks.setRepoSshCommand.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
     );
     expect(mocks.removeActivationManifest).toHaveBeenCalledWith(
       expect.stringContaining(".openclaw"),

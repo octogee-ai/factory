@@ -351,8 +351,7 @@ async function convergeWorkspaceCheckout(adapter, uid, snapshot, ctx) {
         if (adapter.hasGitRemote(slug))
             return [];
         if (snapshot.repoUrl) {
-            adapter.log(`[add:${slug}] workspace has no origin; restoring canonical Gitea checkout`);
-            await adapter.deleteCustomerDir(slug);
+            adapter.log(`[add:${slug}] workspace Git metadata is incomplete; repairing from canonical Gitea`);
             return cloneExistingWorkspaceRepo(adapter, snapshot, ctx);
         }
         return recoverMissingWorkspaceRemote(adapter, uid, ctx);

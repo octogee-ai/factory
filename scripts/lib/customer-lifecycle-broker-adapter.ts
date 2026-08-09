@@ -67,14 +67,15 @@ import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
   createGiteaUser,
+  customerRepositoryHasCanonicalRemote,
   customerSshKeyPath,
   deleteCustomerSshKey,
   generateCustomerSshKey,
-  gitExec,
   initWorkspaceRepo,
   projectCheckoutMatchesSource,
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
+  setRepoSshCommand,
 } from "./git.js";
 import {
   ensureGiteaOrgForWorkspace,
@@ -966,6 +967,8 @@ async function activateImportedCustomer(
       ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE,
     ctx.log,
   );
+  setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
+  ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
   // The rsync brings whatever store the source pod had. One openclaw cannot
   // open takes down the whole target gateway the moment activation registers
   // the agent, which then blocks the very account health-check below — so
@@ -1151,7 +1154,7 @@ export function buildBrokeredLifecycleAdapter(
 
     hasCustomerDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
     hasWorkspaceGitDir: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug, ".git")),
-    hasGitRemote: (slug) => gitExec(path.join(CUSTOMERS_DIR, slug), ["remote", "get-url", "origin"]) !== null,
+    hasGitRemote: (slug) => customerRepositoryHasCanonicalRemote(path.join(CUSTOMERS_DIR, slug)),
     ensureCustomerDirectories,
     writeCustomerTemplateFiles,
     deleteCustomerDir: (slug) => fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true }),

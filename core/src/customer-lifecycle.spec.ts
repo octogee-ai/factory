@@ -112,7 +112,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       record("cloneWorkspaceRepo");
       if (state.cloneShouldFail) return false;
 
-      if (state.disk.customerDir) return false;
+      if (state.disk.customerDir && !state.disk.workspaceGitDir) return false;
       state.disk.customerDir = true;
       state.disk.workspaceGitDir = true;
       state.disk.gitRemote = true;
@@ -1012,7 +1012,7 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     expect(result.steps).toContain("verify-channel-ready");
   });
 
-  it("restores the canonical workspace when a coach-wired customer has no Git remote", async () => {
+  it("repairs the canonical Git metadata without deleting a coach-wired workspace", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1037,11 +1037,8 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
-    expect(state.calls).toContain("deleteCustomerDir");
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
-      state.calls.indexOf("cloneWorkspaceRepo"),
-    );
+    expect(state.calls).not.toContain("deleteCustomerDir");
     expect(state.calls).not.toContain("initWorkspaceRepoFromExistingDir");
     expect(state.disk.sshKey).toBe(true);
     expect(result.steps).toContain("clone-workspace-repo");
@@ -1923,7 +1920,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     );
   });
 
-  it("replaces an imported origin-less checkout with the canonical Gitea workspace", async () => {
+  it("repairs imported Git metadata without deleting the imported workspace", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1946,11 +1943,8 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
       state.user!,
     );
 
-    expect(state.calls).toContain("deleteCustomerDir");
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
-      state.calls.indexOf("cloneWorkspaceRepo"),
-    );
+    expect(state.calls).not.toContain("deleteCustomerDir");
     expect(result.steps).toContain("clone-workspace-repo");
   });
 

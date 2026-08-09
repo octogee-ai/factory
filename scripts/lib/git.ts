@@ -424,6 +424,41 @@ function trustedCustomerGitSource(identity: CustomerGitIdentity): CanonicalCusto
   }
 }
 
+export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
+  const identity = customerGitIdentity(repoDir);
+  if (!identity) return false;
+  const source = trustedCustomerGitSource(identity);
+  if (!source) return false;
+  const localGit = path.join(repoDir, ".git");
+  const configPath = path.join(identity.metadataDir, "config");
+  try {
+    const localGitStat = fs.lstatSync(localGit);
+    const configStat = fs.lstatSync(configPath);
+    if (!localGitStat.isFile() || localGitStat.isSymbolicLink()
+      || !configStat.isFile() || configStat.isSymbolicLink()) return false;
+    if (fs.readFileSync(localGit, "utf8") !== `gitdir: ${identity.metadataDir}\n`) return false;
+    const remoteUrl = execFileSync(
+      GIT_BINARY,
+      ["config", "--file", configPath, "--get", "remote.origin.url"],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      },
+    ).trim();
+    return remoteUrl === source.remoteUrl;
+  } catch {
+    return false;
+  }
+}
+
 export function externalizeCustomerGitDir(
   repoDir: string,
   deps: CustomerGitRefreshDeps = {},

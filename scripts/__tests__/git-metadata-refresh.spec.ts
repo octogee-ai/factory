@@ -15,7 +15,8 @@ vi.mock("../lib/config.js", () => ({
   AGENTS_DIR: "/tmp/octogee-git-metadata-adversarial/agents",
 }));
 
-const { externalizeCustomerGitDir, gitExec } = await import("../lib/git.js");
+const { customerRepositoryHasCanonicalRemote, externalizeCustomerGitDir, gitExec } =
+  await import("../lib/git.js");
 
 const TEST_ROOT = "/tmp/octogee-git-metadata-adversarial";
 const CUSTOMERS_DIR = path.join(TEST_ROOT, "customers");
@@ -388,6 +389,7 @@ describe("customer Git metadata refresh", () => {
     expect(externalizeCustomerGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
     })).toBe(metadataDir);
+    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(true);
     expect(fetches).toBe(1);
     expect(fs.readFileSync(receipt, "utf8")).toBe(
       "octogee-customer-git-v3\ngitea:workspace\n",
@@ -407,6 +409,7 @@ describe("customer Git metadata refresh", () => {
 
     fs.chmodSync(receipt, 0o600);
     fs.writeFileSync(receipt, "attacker receipt\n");
+    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(false);
     expect(externalizeCustomerGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
     })).toBe(metadataDir);
@@ -414,6 +417,19 @@ describe("customer Git metadata refresh", () => {
     expect(fs.readFileSync(receipt, "utf8")).toBe(
       "octogee-customer-git-v3\ngitea:workspace\n",
     );
+    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(true);
     expect(gitExec(repoDir, ["rev-parse", "HEAD"])).toBe(canonical.head);
+  });
+
+  it("treats a transferred workspace with a dangling external metadata pointer as unready", () => {
+    const repoDir = path.join(CUSTOMERS_DIR, "transferred");
+    const metadataDir = path.join(METADATA_ROOT, "transferred", "workspace.git");
+    writeWorktree(repoDir, {
+      ".git": `gitdir: ${metadataDir}\n`,
+      "local-only.txt": "preserve me\n",
+    });
+
+    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(false);
+    expect(fs.readFileSync(path.join(repoDir, "local-only.txt"), "utf8")).toBe("preserve me\n");
   });
 });
