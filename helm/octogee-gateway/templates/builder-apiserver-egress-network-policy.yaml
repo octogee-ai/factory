@@ -12,7 +12,8 @@ This policy is deliberately:
   - Builder class only;
   - per-gateway, via gateway-instance;
   - explicit-CIDR only, supplied from live `kubernetes` EndpointSlice data;
-  - independent from the metadata-server carve-out.
+  - limited to TokenReview traffic on :443; it does not grant metadata-server
+    access or attach a GCP identity to the gateway.
 
 Populate `builderAccess.kubeApiServerEgressCidrs` with `/32` endpoint CIDRs
 from:
@@ -47,6 +48,9 @@ spec:
         {{- range $cidr := $apiCidrs }}
         {{- if not (hasSuffix "/32" $cidr) }}
         {{- fail (printf "builderAccess.kubeApiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}
+        {{- end }}
+        {{- if hasPrefix "169.254." $cidr }}
+        {{- fail (printf "builderAccess.kubeApiServerEgressCidrs must not contain link-local CIDRs (got %q)" $cidr) }}
         {{- end }}
         - ipBlock:
             cidr: {{ $cidr | quote }}

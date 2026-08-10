@@ -1530,60 +1530,24 @@ describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist",
   });
 });
 
-describe("helm/octogee-gateway/ - Builder platform metadata egress NetworkPolicy", () => {
+describe("helm/octogee-gateway/ - personal gateway metadata boundary", () => {
   const policyName = "octogee-gateway-metadata-egress-bender";
 
-  it("is NOT rendered by default for locked Builder gateways", () => {
+  it("rejects the retired mutable Builder access flag", () => {
+    expect(() => helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "builder",
+      "builderAccess.platformMetadataEgress": "true",
+    })).toThrow(/platformMetadataEgress/u);
+  });
+
+  it("never exposes metadata to a personal Builder gateway", () => {
     const out = helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       profile: "builder",
     });
     expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
-  });
-
-  it("is NOT rendered for standard-profile gateways even when the carve-out flag is set", () => {
-    const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "bender",
-      "builderAccess.platformMetadataEgress": "true",
-    });
-    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
-  });
-
-  it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
-    const out = helmTemplate("octogee-gw-bender", {
-      gatewayId: "bender",
-      profile: "builder",
-      "builderAccess.platformMetadataEgress": "true",
-      "networkPolicy.enabled": "false",
-    });
-    expect(findDoc(out, "NetworkPolicy", policyName)).toBeNull();
-  });
-
-  it("renders only the bender pod GKE metadata-server egress paths when enabled", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-bender", {
-        gatewayId: "bender",
-        profile: "builder",
-        "builderAccess.platformMetadataEgress": "true",
-      }),
-      "NetworkPolicy",
-      policyName,
-    );
-    expect(np).not.toBeNull();
-    expect(np).toMatch(/policyTypes:\s*\n\s*-\s*Egress/);
-    expect(np).toMatch(/podSelector:[\s\S]*?app:\s*octogee-gateway/);
-    expect(np).toMatch(/podSelector:[\s\S]*?gateway-instance:\s*bender/);
-    expect(np).toMatch(/namespaceSelector:[\s\S]*?kubernetes\.io\/metadata\.name:\s*kube-system/);
-    expect(np).toMatch(/podSelector:[\s\S]*?k8s-app:\s*gke-metadata-server/);
-    expect(np).toMatch(/cidr:\s*169\.254\.169\.252\/32/);
-    expect(np).toMatch(/cidr:\s*169\.254\.169\.254\/32/);
-    expect(np).toMatch(/protocol:\s*TCP/);
-    expect(np).toMatch(/port:\s*987/);
-    expect(np).toMatch(/port:\s*988/);
-    expect(np).toMatch(/port:\s*80/);
-    expect(np).toMatch(/port:\s*8080/);
-    expect(np).not.toMatch(/0\.0\.0\.0\/0/);
-    expect(np).not.toMatch(/port:\s*443/);
+    expect(out).not.toContain("169.254.169.254");
   });
 });
 
@@ -1642,6 +1606,14 @@ describe("helm/octogee-gateway/ - Builder Kubernetes API-server egress NetworkPo
     expect(np).not.toMatch(/0\.0\.0\.0\/0/);
     expect(np).not.toMatch(/169\.254\.169\.254\/32/);
     expect(np).not.toMatch(/port:\s*80/);
+  });
+
+  it("rejects link-local CIDRs so the API-server path cannot reopen metadata", () => {
+    expect(() => helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "builder",
+      "builderAccess.kubeApiServerEgressCidrs[0]": "169.254.169.254/32",
+    })).toThrow(/must not contain link-local CIDRs/u);
   });
 });
 

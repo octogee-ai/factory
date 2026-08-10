@@ -17,6 +17,7 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
+import { withoutGatewayWorkloadIdentity } from "./gateway-service-account-policy.js";
 import type { W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
 import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
 
@@ -348,7 +349,7 @@ export function gatewayUpsertOptsFromRelease(input: {
       experiment.gatewayEdgeImageTag ?? artifact.gatewayEdgeImage.imageTag,
     ...experiment,
     serviceAccountName: gatewayServiceAccountName(gateway),
-    serviceAccount: gateway.serviceAccount ?? undefined,
+    serviceAccount: withoutGatewayWorkloadIdentity(gateway.serviceAccount),
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
     builderAccess: gatewayBuilderAccess(gateway, gatewayClass),
     chartPath: input.chartPath,

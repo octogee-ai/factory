@@ -11,14 +11,12 @@ import {
 } from "@octogee/shared/types/glm";
 import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import { isSizingTier } from "@octogee/shared/types/sizing";
-import { isDedicatedGatewayServiceAccount } from "./gateway-workload-identity-config.js";
+import { withoutGatewayWorkloadIdentity } from "./gateway-service-account-policy.js";
 
 export type ReconcileChange =
   | { kind: "create"; gatewayId: string; to: HelmInstanceValue }
   | { kind: "update"; gatewayId: string; from: HelmInstanceValue; to: HelmInstanceValue }
   | { kind: "drift"; gatewayId: string; current: HelmInstanceValue };
-
-const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
 
 export function buildInstancesMap(
   desired: GatewayDesiredState[],
@@ -69,7 +67,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
 > {
   const gatewayClass = resolveGatewayClass(d);
   let serviceAccountName = d.serviceAccountName;
-  let serviceAccount = d.serviceAccount;
+  let serviceAccount = withoutGatewayWorkloadIdentity(d.serviceAccount);
   const generatedGatewayServiceAccountName = builderGatewayServiceAccountName(d.gatewayId);
   if (
     (!serviceAccountName || serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME)
@@ -109,32 +107,6 @@ function injectApiServerEgress(
     return builderAccess;
   }
   return { ...builderAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };
-}
-
-function generatedServiceAccountHasDedicatedWorkloadIdentity(
-  d: GatewayDesiredState,
-  serviceAccountName: string | undefined,
-  serviceAccount: HelmInstanceValue["serviceAccount"],
-): boolean {
-  return (
-    serviceAccountName === builderGatewayServiceAccountName(d.gatewayId) &&
-    serviceAccount?.create === true &&
-    typeof serviceAccount.annotations?.[WORKLOAD_IDENTITY_ANNOTATION] === "string" &&
-    isDedicatedGatewayServiceAccount(
-      serviceAccountName,
-      serviceAccount.annotations[WORKLOAD_IDENTITY_ANNOTATION],
-    )
-  );
-}
-
-function injectPlatformMetadataEgress(
-  builderAccess: HelmInstanceValue["builderAccess"],
-  enabled: boolean,
-): HelmInstanceValue["builderAccess"] {
-  if (!enabled || !builderAccess || builderAccess.platformMetadataEgress !== undefined) {
-    return builderAccess;
-  }
-  return { ...builderAccess, platformMetadataEgress: true };
 }
 
 interface OptionalHelmFields {
@@ -185,22 +157,7 @@ function buildHelmInstanceValue(
     serviceAccount: resolvedServiceAccount,
     builderAccess: baseAccess,
   } = resolveGatewayHelmKnobs(d);
-  const dedicatedWorkloadIdentity =
-    gatewayClass === "builder" &&
-    generatedServiceAccountHasDedicatedWorkloadIdentity(
-      d,
-      serviceAccountName,
-      resolvedServiceAccount,
-    );
-  if (gatewayClass === "builder" && baseAccess?.platformMetadataEgress === true && !dedicatedWorkloadIdentity) {
-    throw new Error(
-      `builder metadata egress requires a dedicated Workload Identity GSA matching ${serviceAccountName}`,
-    );
-  }
-  const builderAccess = injectPlatformMetadataEgress(
-    injectApiServerEgress(baseAccess, apiServerEgressCidrs),
-    dedicatedWorkloadIdentity,
-  );
+  const builderAccess = injectApiServerEgress(baseAccess, apiServerEgressCidrs);
   return withOptionalHelmFields(
     {
       enabled: true,

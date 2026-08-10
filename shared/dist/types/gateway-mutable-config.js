@@ -47,10 +47,20 @@ function isNullableBuilderAccess(value) {
         return true;
     if (!isRecord(value))
         return false;
+    const fields = new Set([
+        "shellsEnabled",
+        "controlUiEnabled",
+        "kubeApiServerEgressCidrs",
+        "reason",
+        "verifiedAt",
+        "verifiedBy",
+    ]);
+    if (!Object.keys(value).every((field) => fields.has(field)))
+        return false;
     const validPowerAccess = isOptionalBoolean(value.shellsEnabled) &&
         isOptionalBoolean(value.controlUiEnabled);
-    const validNetworkAccess = isOptionalBoolean(value.platformMetadataEgress) &&
-        (value.kubeApiServerEgressCidrs === undefined || isStringArray(value.kubeApiServerEgressCidrs));
+    const validNetworkAccess = value.kubeApiServerEgressCidrs === undefined ||
+        isStringArray(value.kubeApiServerEgressCidrs);
     const validVerification = isOptionalString(value.reason) &&
         (value.verifiedAt === undefined ||
             (typeof value.verifiedAt === "number" && Number.isFinite(value.verifiedAt))) &&

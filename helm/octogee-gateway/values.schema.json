@@ -128,7 +128,6 @@
       "properties": {
         "shellsEnabled": { "type": "boolean" },
         "controlUiEnabled": { "type": "boolean" },
-        "platformMetadataEgress": { "type": "boolean", "description": "Platform-builder D7 carve-out: open egress to the GKE metadata server (169.254.169.254) for this gateway's read-only WI GSA. Default off; the fleet-wide gateway-egress policy blocks metadata for every other gateway." },
         "kubeApiServerEgressCidrs": {
           "type": "array",
           "description": "Builder gateway TokenReview carve-out: explicit Kubernetes API server endpoint /32 CIDR(s) from the default/kubernetes EndpointSlice. Default empty/off.",
@@ -141,7 +140,7 @@
         "verifiedAt": { "type": "number" },
         "verifiedBy": { "type": "string" }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "gatewayContainerSecurityContext": {
       "type": "object"

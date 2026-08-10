@@ -88,7 +88,6 @@ export interface GatewayServiceAccountSpec {
 export interface BuilderGatewayAccessSpec {
   shellsEnabled?: boolean;
   controlUiEnabled?: boolean;
-  platformMetadataEgress?: boolean;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
   verifiedAt?: number;
