@@ -1408,7 +1408,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", manifest });
   });
 
-  it("createActivateImportHandler activates and marks the imported customer mounted", async () => {
+  it("createActivateImportHandler defers project hydration until cutover", async () => {
     const markCustomerMigratingIn = vi.fn();
     const onMounted = vi.fn();
     const recordAppliedFingerprint = vi.fn();
@@ -1443,7 +1443,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
     );
-    expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
+    expect(recordAppliedFingerprint).not.toHaveBeenCalled();
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
   });
@@ -1642,10 +1642,12 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("createFinishRsyncImportHandler copies staged bytes and activates the customer", async () => {
+    const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       markCustomerMigratingIn: vi.fn(),
+      recordAppliedFingerprint,
       onMounted: vi.fn(),
     });
     const daemon = mkFakeChild();
@@ -1706,6 +1708,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.any(Object));
     expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
     expect(deps.resumeSystemConfigWatch).not.toHaveBeenCalled();
+    expect(recordAppliedFingerprint).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];

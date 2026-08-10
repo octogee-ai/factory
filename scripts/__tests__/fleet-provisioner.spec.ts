@@ -187,6 +187,24 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
 });
 
 describe("selectStableContentStale", () => {
+  it("re-ensures a migrated target after cutover when its fingerprint was intentionally withheld", () => {
+    const pending = new Map<string, string>();
+    const desired = new Map([["august", "projects-ready"]]);
+    const applied = new Map<string, string>();
+    expect(selectStableContentStale(
+      ["august"],
+      desired,
+      applied,
+      pending,
+    )).toEqual([]);
+    expect(selectStableContentStale(
+      ["august"],
+      desired,
+      applied,
+      pending,
+    )).toEqual(["august"]);
+  });
+
   it("coalesces intermediate project provisioning fingerprints into one final re-ensure", () => {
     const pending = new Map<string, string>();
     const applied = new Map([["alice", "before-project"]]);
