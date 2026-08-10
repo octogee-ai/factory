@@ -172,10 +172,12 @@ async function activateImportedCustomerForMigration(input: {
   const { deps, slug, mode, signal } = input;
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
-  const activation = signal
-    ? await deps.adapter.activateImportedCustomer(slug, { signal })
-    : await deps.adapter.activateImportedCustomer(slug);
-  deps.adapter.recordAppliedFingerprint?.(slug, activation.appliedFingerprint);
+  if (signal) {
+    await deps.adapter.activateImportedCustomer(slug, { signal });
+  } else {
+    await deps.adapter.activateImportedCustomer(slug);
+  }
+  deps.log?.(`[migration-http] project hydration deferred until cutover slug=${slug}`);
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }

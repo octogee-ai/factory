@@ -380,20 +380,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
 
-  it("restores an absent shared-gateway project from the trusted snapshot before activation", async () => {
-    const snapshot = aliceSnapshot({
-      uid: "uid-tester10",
-      slug: "tester10",
-      status: "complete",
-      projectCheckoutScope: "workspace-and-projects",
-      projects: [
-        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
-      ],
-    });
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => snapshot.uid),
-      userSnapshot: vi.fn(async () => snapshot),
-    });
+  it("activates a shared-gateway import before project hydration", async () => {
+    const client = mkClient();
+    const log = vi.fn();
     const rpc = {
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
@@ -403,13 +392,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
-    gitMocks.projectCheckoutMatchesSource
-      .mockReturnValueOnce(false)
-      .mockReturnValue(true);
     const adapter = buildBrokeredLifecycleAdapter({
       client,
       rpc,
-      log: vi.fn(),
+      log,
       projectCheckoutScope: () => "workspace-and-projects",
     });
 
@@ -417,116 +403,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       appliedFingerprint: "fp-tester10",
     });
 
-    expect(client.userSnapshot).toHaveBeenCalledWith(snapshot.uid);
-    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith(
-      "tester10",
-      "roamly",
-      "alice-roamly",
-      undefined,
-    );
-    expect(gitMocks.cloneProjectRepo.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
-    );
-  });
-
-  it("keeps the imported customer closed when a required project clone does not land", async () => {
-    const snapshot = aliceSnapshot({
-      uid: "uid-tester10",
-      slug: "tester10",
-      status: "complete",
-      projectCheckoutScope: "workspace-and-projects",
-      projects: [
-        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
-      ],
-    });
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => snapshot.uid),
-      userSnapshot: vi.fn(async () => snapshot),
-    });
-    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
-    gitMocks.cloneProjectRepo.mockResolvedValue(false);
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as GatewayRpcClient,
-      log: vi.fn(),
-      projectCheckoutScope: () => "workspace-and-projects",
-    });
-
-    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
-      /project checkout restoration incomplete.*roamly/u,
-    );
-
-    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
-    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
-  });
-
-  it("keeps the imported customer closed when a raced metadata repair has a valid receipt but a bad canonical remote", async () => {
-    const snapshot = aliceSnapshot({
-      uid: "uid-tester10",
-      slug: "tester10",
-      status: "complete",
-      projectCheckoutScope: "workspace-and-projects",
-      projects: [
-        { projectSlug: "roamly", giteaRepoName: "alice-roamly", provisioningState: "active" },
-      ],
-    });
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => snapshot.uid),
-      userSnapshot: vi.fn(async () => snapshot),
-    });
-    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
-    gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(false);
-    gitMocks.cloneProjectRepo.mockResolvedValue(true);
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as GatewayRpcClient,
-      log: vi.fn(),
-      projectCheckoutScope: () => "workspace-and-projects",
-    });
-
-    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
-      /project checkout restoration incomplete.*roamly/u,
-    );
-
-    expect(gitMocks.cloneProjectRepo).toHaveBeenCalledWith(
-      "tester10",
-      "roamly",
-      "alice-roamly",
-      undefined,
-    );
-    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
-    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
-  });
-
-  it("keeps a source-less imported project closed even when stale local metadata appears canonical", async () => {
-    const snapshot = aliceSnapshot({
-      uid: "uid-tester10",
-      slug: "tester10",
-      status: "complete",
-      projectCheckoutScope: "workspace-and-projects",
-      projects: [
-        { projectSlug: "roamly", giteaRepoName: null, provisioningState: "active" },
-      ],
-    });
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => snapshot.uid),
-      userSnapshot: vi.fn(async () => snapshot),
-    });
-    gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as GatewayRpcClient,
-      log: vi.fn(),
-      projectCheckoutScope: () => "workspace-and-projects",
-    });
-
-    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
-      /project checkout restoration incomplete.*roamly/u,
-    );
-
+    expect(client.uidForSlug).not.toHaveBeenCalled();
+    expect(client.userSnapshot).not.toHaveBeenCalled();
     expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
-    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
-    expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      "[import:tester10] project hydration deferred until target serves the customer",
+    );
   });
 
   it("preserves the activation manifest when imported agent secrets do not materialize", async () => {

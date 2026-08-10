@@ -446,68 +446,6 @@ async function listProjectsNeedingClone(
   });
 }
 
-async function restoreImportedProjectCheckouts(
-  ctx: BrokerCtx,
-  slug: string,
-  scope: FleetBrokerProjectCheckoutScope,
-): Promise<void> {
-  if (scope === WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) return;
-  const snapshot = await snapshotForSlug(ctx, slug);
-  if (!snapshot) {
-    throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
-  }
-  const missing = await listProjectsNeedingClone(ctx, slug);
-  let githubToken: Promise<string | null> | null = null;
-  for (const project of missing) {
-    const repoSource = projectRepoSourceFromDoc(project.repoSource);
-    if (!repoSource && !project.giteaRepoName) continue;
-    let cloneOptions: ProjectCloneOptions | undefined;
-    if (repoSource?.provider === "github") {
-      githubToken ??= resolveGithubCloneToken(ctx, slug).catch((error) => {
-        ctx.log(`[import:${slug}] GitHub clone credential unavailable: ${String(error)}`);
-        return null;
-      });
-      cloneOptions = { repoSource, githubToken: await githubToken };
-    }
-    try {
-      const cloned = await cloneProjectRepoForTarget(
-        slug,
-        project.projectSlug,
-        project.giteaRepoName,
-        cloneOptions,
-      );
-      if (cloned) {
-        ctx.log(`[import:${slug}/${project.projectSlug}] restored project checkout`);
-      }
-    } catch (error) {
-      ctx.log(
-        `[import:${slug}/${project.projectSlug}] project checkout restore failed: ${String(error)}`,
-      );
-    }
-  }
-  const remaining = snapshot.projects.flatMap((project) => {
-    if (project.provisioningState !== undefined && project.provisioningState !== "active") return [];
-    const repoSource = projectRepoSourceFromDoc(project.repoSource);
-    if (!repoSource && !project.giteaRepoName) return [project.projectSlug];
-    return projectCheckoutMatchesSource(
-      slug,
-      project.projectSlug,
-      project.giteaRepoName ?? "",
-      repoSource,
-    ) && customerRepositoryHasCanonicalRemote(
-      path.join(CUSTOMERS_DIR, slug, "projects", project.projectSlug),
-    )
-      ? []
-      : [project.projectSlug];
-  });
-  if (remaining.length > 0) {
-    throw new Error(
-      `[import:${slug}] project checkout restoration incomplete: ` +
-      [...new Set(remaining)].sort().join(", "),
-    );
-  }
-}
-
 async function resolveGithubCloneToken(ctx: BrokerCtx, slug: string): Promise<string | null> {
   const snapshot = await snapshotForSlug(ctx, slug);
   const uid = snapshot?.uid ?? await ctx.client.uidForSlug(slug);
@@ -1050,12 +988,6 @@ async function activateImportedCustomer(
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)
     ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
-  if (runtimeProjectCheckoutScope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) {
-    const snapshot = await snapshotForSlug(ctx, slug);
-    if (!snapshot) {
-      throw new Error(`[import:${slug}] trusted snapshot unavailable for project checkout restoration`);
-    }
-  }
   const projectCheckoutScope = ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
     ?? runtimeProjectCheckoutScope;
   await pruneWorkspaceOnlyProjectCheckouts(
@@ -1064,9 +996,11 @@ async function activateImportedCustomer(
     projectCheckoutScope,
     ctx.log,
   );
-  await restoreImportedProjectCheckouts(ctx, slug, projectCheckoutScope);
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
+  if (projectCheckoutScope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) {
+    ctx.log(`[import:${slug}] project hydration deferred until target serves the customer`);
+  }
   // The rsync brings whatever store the source pod had. One openclaw cannot
   // open takes down the whole target gateway the moment activation registers
   // the agent, which then blocks the very account health-check below — so

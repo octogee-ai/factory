@@ -67,6 +67,34 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(d.evicted).toEqual(["d"]);
   });
 
+  it("retries deferred project hydration after cutover without evicting the builder", async () => {
+    let hydrateAttempt = 0;
+    const d = mkDeps({
+      ...observed(["august"]),
+      readDesired: async () => ["august"],
+      getContentStale: () => ["august"],
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        hydrateAttempt += 1;
+        if (hydrateAttempt === 1) {
+          throw new Error("project checkout still absent: roamly");
+        }
+        return "noop";
+      },
+    });
+
+    await reconcileFleet(d);
+
+    expect(d.ensured).toEqual(["august"]);
+    expect(d.evicted).toEqual([]);
+    expect(d.logs.some((line) => line.includes("ensure failed for august"))).toBe(true);
+
+    await reconcileFleet(d);
+
+    expect(d.ensured).toEqual(["august", "august"]);
+    expect(d.evicted).toEqual([]);
+  });
+
   it("admits the assigned roster before detached stale-state cleanup completes", async () => {
     const actions: string[] = [];
     const eviction = deferred();
