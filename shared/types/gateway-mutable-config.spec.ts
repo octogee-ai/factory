@@ -95,6 +95,16 @@ describe("gateway mutable config", () => {
     })).toBe(false);
   });
 
+  it("rejects network authority embedded in mutable Builder access", () => {
+    expect(isGatewayMutableConfig({
+      ...validConfig(),
+      builderAccess: {
+        shellsEnabled: true,
+        platformMetadataEgress: true,
+      },
+    })).toBe(false);
+  });
+
   it("rejects a credential-bearing or malformed root config", () => {
     expect(isGatewayMutableConfig({ ...validConfig(), byosub: {} })).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null }))).toBe(false);

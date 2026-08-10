@@ -44,19 +44,13 @@ serviceAccountName: ""
 serviceAccount:
   create: false
   annotations: {}
+
 builderAccess:
   # Locked by default. Cowboy may enable this only after a customer has a
-  # tenant-owned disposable Builder runtime (activation lifecycle + scoped
-  # platform credentials) and the app/user mirror has been updated.
+  # tenant-owned disposable Builder runtime and the app/user mirror has been
+  # updated.
   shellsEnabled: false
   controlUiEnabled: false
-  # Builder gateway only.
-  # Opens egress to the GKE metadata server (169.254.169.254) so this gateway's
-  # read-only Workload-Identity GSA can mint tokens. The fleet-wide
-  # gateway-egress policy blocks metadata for everyone; this carves an exception
-  # for THIS pod only. Enable ONLY when the bound GSA is least-privilege +
-  # read-only (so a token grab is read-only blast radius). Default off.
-  platformMetadataEgress: false
   # Builder gateway TokenReview path. BuilderShell and broker identity checks
   # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
   # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)

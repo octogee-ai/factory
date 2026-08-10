@@ -252,6 +252,35 @@ describe("orderGatewaysForConvergence", () => {
 });
 
 describe("gatewayUpsertOptsFromRelease", () => {
+  it("strips Workload Identity from a personal gateway before Helm convergence", () => {
+    const opts = gatewayUpsertOptsFromRelease({
+      namespace: "octogee",
+      gateway: gateway({
+        gatewayClass: "builder",
+        imageProfile: "builder",
+        ownerUid: "uid-owner",
+        builderSlug: "owner",
+        serviceAccountName: "octogee-gw-bender",
+        serviceAccount: {
+          create: true,
+          annotations: {
+            "iam.gke.io/gcp-service-account":
+              "octogee-gw-bender@octogee.iam.gserviceaccount.com",
+            "octogee.ai/purpose": "personal-gateway",
+          },
+        },
+      }),
+      artifact: artifact(),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+
+    expect(opts.serviceAccount).toEqual({
+      create: true,
+      annotations: { "octogee.ai/purpose": "personal-gateway" },
+    });
+  });
+
   it("never sends the standard gateway digest to the Builder repository", () => {
     const standardDigest = `sha256:${"a".repeat(64)}`;
     const builderDigest = `sha256:${"b".repeat(64)}`;

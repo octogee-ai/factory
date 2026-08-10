@@ -1,7 +1,5 @@
 import type { GatewayMutableConfig } from "@octogee/core/gateway-live-release";
 
-import { prepareGatewayConfigWithWorkloadIdentity } from "./gateway-workload-identity-config.js";
-
 export type ApiServerEgressResolver = () => Promise<string[]>;
 
 export async function prepareGatewayRuntimeConfig<T extends GatewayMutableConfig>(
@@ -9,24 +7,23 @@ export async function prepareGatewayRuntimeConfig<T extends GatewayMutableConfig
   gatewayId: string,
   resolveApiServerEgressCidrs: ApiServerEgressResolver,
 ): Promise<T> {
-  const prepared = await prepareGatewayConfigWithWorkloadIdentity(config, gatewayId);
   if (
-    prepared.gatewayClass !== "builder" ||
-    prepared.builderAccess?.shellsEnabled !== true
+    config.gatewayClass !== "builder" ||
+    config.builderAccess?.shellsEnabled !== true
   ) {
-    return prepared;
+    return config;
   }
   const kubeApiServerEgressCidrs = await resolveApiServerEgressCidrs();
   if (kubeApiServerEgressCidrs.length === 0) {
-    if ((prepared.builderAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
-      return prepared;
+    if ((config.builderAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
+      return config;
     }
     throw new Error(`builder gateway ${gatewayId} has no API-server egress CIDRs`);
   }
   return {
-    ...prepared,
+    ...config,
     builderAccess: {
-      ...prepared.builderAccess,
+      ...config.builderAccess,
       kubeApiServerEgressCidrs,
     },
   } as T;

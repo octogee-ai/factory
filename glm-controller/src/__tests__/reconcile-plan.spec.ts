@@ -11,7 +11,6 @@ import type { GatewayDesiredState, HelmInstancesMap } from "@octogee/shared/type
 import type { SizingTier } from "@octogee/shared/types/sizing";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const WORKLOAD_IDENTITY_ANNOTATION = "iam.gke.io/gcp-service-account";
 
 function mkDesired(overrides: Partial<GatewayDesiredState>): GatewayDesiredState {
   return {
@@ -207,7 +206,6 @@ describe("buildInstancesMap", () => {
     });
     expect(map.jack.serviceAccountName).toBe("octogee-gw-jack");
     expect(map.jack.serviceAccount).toEqual({ create: true });
-    expect(map.jack.builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
   it("injects resolved apiserver egress CIDRs into an owned Builder gateway with shells", () => {
@@ -255,7 +253,6 @@ describe("buildInstancesMap", () => {
     ]);
     expect(map.bender.serviceAccountName).toBe("octogee-gw-bender");
     expect(map.bender.serviceAccount).toEqual({ create: true });
-    expect(map.bender.builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
   it("leaves a generated Builder ServiceAccount GSA-less", () => {
@@ -273,7 +270,6 @@ describe("buildInstancesMap", () => {
     expect(map["bender-canary-2026"].builderAccess).toMatchObject({
       shellsEnabled: true,
     });
-    expect(map["bender-canary-2026"].builderAccess?.platformMetadataEgress).toBeUndefined();
   });
 
   it("does not require a platform gateway GSA for a generated Builder ServiceAccount", () => {
@@ -289,30 +285,7 @@ describe("buildInstancesMap", () => {
     expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
   });
 
-  it("enables metadata egress only for a dedicated Workload-Identity-backed generated ServiceAccount", () => {
-    const map = buildInstancesMap([
-      mkDesired({
-        gatewayId: "bender-canary-2026",
-        gatewayClass: "builder",
-        imageProfile: "builder",
-        ownerUid: "uid-chris",
-        serviceAccountName: "octogee-gw-bender-canary-2026",
-        serviceAccount: {
-          create: true,
-          annotations: {
-            "iam.gke.io/gcp-service-account":
-              "octogee-gw-bender-canary-2026@octogee.iam.gserviceaccount.com",
-          },
-        },
-      }),
-    ]);
-    expect(map["bender-canary-2026"].builderAccess).toMatchObject({
-      shellsEnabled: true,
-      platformMetadataEgress: true,
-    });
-  });
-
-  it("preserves an explicit generated ServiceAccount Workload Identity annotation", () => {
+  it("strips Workload Identity from an explicit generated ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
@@ -327,31 +300,7 @@ describe("buildInstancesMap", () => {
         },
       }),
     ]);
-    expect(map.bender.serviceAccount?.annotations).toEqual({
-      "iam.gke.io/gcp-service-account": "custom@octogee.iam.gserviceaccount.com",
-    });
-    expect(map.bender.builderAccess?.platformMetadataEgress).toBeUndefined();
-  });
-
-  it.each([
-    "octogee-gateway@octogee.iam.gserviceaccount.com",
-    "external@other-project.iam.gserviceaccount.com",
-  ])("rejects metadata egress for a non-dedicated Builder GSA (%s)", (serviceAccount) => {
-    expect(() =>
-      buildInstancesMap([
-        mkDesired({
-          gatewayId: "bender",
-          gatewayClass: "builder",
-          imageProfile: "builder",
-          serviceAccountName: "octogee-gw-bender",
-          serviceAccount: {
-            create: true,
-            annotations: { [WORKLOAD_IDENTITY_ANNOTATION]: serviceAccount },
-          },
-          builderAccess: { shellsEnabled: true, platformMetadataEgress: true },
-        }),
-      ]),
-    ).toThrow(/dedicated Workload Identity GSA/u);
+    expect(map.bender.serviceAccount).toEqual({ create: true });
   });
 
   it("preserves an explicit custom Builder ServiceAccount name", () => {
