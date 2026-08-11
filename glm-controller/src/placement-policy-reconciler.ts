@@ -3597,22 +3597,54 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   };
 }
 
+export const PLACEMENT_POLICY_PASS_DEADLINE_MS = 5 * 60_000;
+
+interface PlacementPolicyPass {
+  id: number;
+  startedAt: number;
+  abandoned: boolean;
+}
+
 export function startPlacementPolicyReconciler(
   deps: PlacementPolicyReconcilerDeps,
   intervalMs = PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
+  options?: {
+    passDeadlineMs?: number;
+    runPass?: (deps: PlacementPolicyReconcilerDeps) => Promise<unknown>;
+  },
 ): () => void {
   if (intervalMs <= 0) return () => undefined;
+  const passDeadlineMs = options?.passDeadlineMs ?? PLACEMENT_POLICY_PASS_DEADLINE_MS;
+  const runPass = options?.runPass ?? reconcilePlacementPolicyOnce;
   let stopped = false;
-  let inFlight = false;
+  let running: PlacementPolicyPass | null = null;
+  let nextPassId = 1;
   const tick = async () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
+    if (stopped) return;
+    if (running) {
+      const heldMs = deps.now() - running.startedAt;
+      if (heldMs < passDeadlineMs) return;
+      running.abandoned = true;
+      running = null;
+      deps.log(
+        `[placement-policy] ⚠ pass exceeded its ${passDeadlineMs}ms deadline (held ${heldMs}ms) — ` +
+          `releasing the tick gate; Firestore fences own correctness if the stuck pass ever resumes`,
+      );
+    }
+    const pass: PlacementPolicyPass = { id: nextPassId, startedAt: deps.now(), abandoned: false };
+    nextPassId += 1;
+    running = pass;
     try {
-      await reconcilePlacementPolicyOnce(deps);
+      await runPass(deps);
     } catch (error) {
       deps.log(`[placement-policy] ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      inFlight = false;
+      if (pass.abandoned) {
+        deps.log(
+          `[placement-policy] abandoned pass settled after ${deps.now() - pass.startedAt}ms`,
+        );
+      }
+      if (running === pass) running = null;
     }
   };
   const timer = setInterval(() => void tick(), intervalMs);
