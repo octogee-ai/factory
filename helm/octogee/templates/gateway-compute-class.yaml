@@ -10,14 +10,14 @@ spec:
   autopilot:
     enabled: true
   priorities:
-    - podFamily: general-purpose
-      spot: true
+    # podFamily is only honored in built-in Autopilot classes; in a custom
+    # ComputeClass it satisfies no rule and DoNotScaleUp then never provisions.
+    - spot: true
       location:
         zones:
           {{- toYaml $zones | nindent 10 }}
         locationPolicy: ANY
-    - podFamily: general-purpose
-      spot: false
+    - spot: false
       location:
         zones:
           {{- toYaml $zones | nindent 10 }}
