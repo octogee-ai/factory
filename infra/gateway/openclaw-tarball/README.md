@@ -189,6 +189,13 @@ audit table, feature-hoist sweep, or decision ledger.
 
 ### Step 6 — Build OpenClaw
 
+Use the newest released Node version on the target tree's supported production
+line. Check `package.json#engines.node`, upstream's Docker/CI target, and the
+installed dependency engine ranges together. Do not default to the minimum
+accepted version or jump to an odd-numbered current release merely because the
+root range admits it. When the newest Node major is outside the declared range,
+use the newest patch on the current supported LTS/ship-target major.
+
 ▸
 ```bash
 pnpm install --frozen-lockfile
@@ -570,15 +577,18 @@ this repository.
 
 The stack currently exists to provide these product behaviors:
 
-- tenant-scoped Mattermost reloads instead of reconnecting every tenant;
-- trusted local `config.patch` writes without the untrusted-client rate cap;
-- post-write config hashes so callers can skip no-op patches;
+- sidecar-visible agent events and a bounded, environment-gated diagnostic
+  event feed;
+- durable Mattermost admission, activity publication, live snapshots, and
+  ingress control RPCs;
+- channel-scoped Mattermost sessions with native thread delivery, correct
+  native conversation identity, and SecretRef-safe route inspection;
+- warm terminal fallback that finalizes an existing preview when possible;
+- local-backend device pairing that persists a device token instead of
+  treating shared-token auth as a permanent pairing substitute;
 - reuse of successfully resolved, unchanged exec-backed SecretRefs during
   automatic config writes and refreshes;
-- per-group Mattermost inbound disablement without removing read visibility;
-- sidecar-visible Agent activity and session-correlated diagnostics;
-- durable activity capture and warm terminal fallback; and
-- device-token self-pairing restrictions.
+- an authenticated in-process `secrets.apply` gateway RPC.
 
 The current fork diff and tests own the implementation detail. During a roll,
 drop any patch already provided upstream and keep new hooks as small as
