@@ -416,7 +416,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
-      threadDirectMessages: true,
+      replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
     });
   });
@@ -430,9 +430,30 @@ describe("applyPreBootPatches — conversation experiment", () => {
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
-      threadDirectMessages: true,
+      replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
     });
+  });
+
+  it("migrates direct threading without replacing other chat-type reply modes", () => {
+    const config: any = {
+      channels: {
+        mattermost: {
+          threadDirectMessages: true,
+          replyToModeByChatType: { direct: "off", group: "first" },
+        },
+      },
+    };
+
+    applyPreBootPatches(config, {
+      OCTOGEE_ACTIVITY_BRIDGE_MODE: "broad",
+    });
+
+    expect(config.channels.mattermost.replyToModeByChatType).toEqual({
+      direct: "all",
+      group: "first",
+    });
+    expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
   });
 
   it("keeps Mattermost delivery native while enabling the external publisher", () => {
@@ -444,6 +465,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
             default: {
               agentActivity: true,
               replyToMode: "all",
+              replyToModeByChatType: { direct: "all" },
               threadDirectMessages: true,
               threadSessionScope: "channel",
             },
@@ -459,10 +481,11 @@ describe("applyPreBootPatches — conversation experiment", () => {
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
-      threadDirectMessages: true,
+      replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
@@ -864,7 +887,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
       channels: {
         mattermost: {
           replyToMode: "all",
-          threadDirectMessages: true,
+          replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
           baseUrl: "${MM_URL}",
           commands: "legacy-commands",
@@ -982,7 +1005,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       channels: {
         mattermost: {
           replyToMode: "all",
-          threadDirectMessages: true,
+          replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
           baseUrl: "${MM_URL}",
           commands: { native: false },
