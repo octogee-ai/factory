@@ -36,11 +36,14 @@ describe("Firestore model broker token store", () => {
     });
 
     await expect(store.lookupToken(first.token, 1_001)).resolves.toMatchObject({
-      gatewayId: "jack",
-      ownerUid: "uid-jack",
-      provider: "anthropic",
-      capped: true,
-      revoked: false,
+      outcome: "valid",
+      record: {
+        gatewayId: "jack",
+        ownerUid: "uid-jack",
+        provider: "anthropic",
+        capped: true,
+        revoked: false,
+      },
     });
 
     const second = await store.issueToken({
@@ -50,10 +53,10 @@ describe("Firestore model broker token store", () => {
     });
 
     expect(second.token).not.toBe(first.token);
-    await expect(store.lookupToken(first.token, 2_001)).resolves.toBeNull();
+    await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({ outcome: "revoked" });
     await expect(store.lookupToken(second.token, 2_001)).resolves.toMatchObject({
-      gatewayId: "jack",
-      revoked: false,
+      outcome: "valid",
+      record: { gatewayId: "jack", revoked: false },
     });
 
     const pointer = await db
@@ -69,7 +72,7 @@ describe("Firestore model broker token store", () => {
     await expect(
       store.revokeGatewayToken({ ...gatewayTokenInput, now: 3_000 }),
     ).resolves.toEqual({ revoked: true });
-    await expect(store.lookupToken(second.token, 3_001)).resolves.toBeNull();
+    await expect(store.lookupToken(second.token, 3_001)).resolves.toMatchObject({ outcome: "revoked" });
     const deletedPointer = await db
       .collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION)
       .doc("jack")
@@ -98,21 +101,24 @@ describe("Firestore model broker token store", () => {
 
     // meter-only: no caps stamped
     await expect(store.lookupToken(alice.token, 1_001)).resolves.toMatchObject({
-      ownerUid: "uid-alice",
-      revoked: false,
-      limits: { spendWindowUsd: null, requestsPerMinute: null },
+      outcome: "valid",
+      record: {
+        ownerUid: "uid-alice",
+        revoked: false,
+        limits: { spendWindowUsd: null, requestsPerMinute: null },
+      },
     });
     // issuing bob did NOT revoke alice (same gateway, different pointerKey)
     await expect(store.lookupToken(bob.token, 1_001)).resolves.toMatchObject({
-      ownerUid: "uid-bob",
-      revoked: false,
+      outcome: "valid",
+      record: { ownerUid: "uid-bob", revoked: false },
     });
 
     // reissuing alice revokes only alice's previous token, never bob's
     const alice2 = await perCustomer("uid-alice", 12, 2_000);
-    await expect(store.lookupToken(alice.token, 2_001)).resolves.toBeNull();
-    await expect(store.lookupToken(alice2.token, 2_001)).resolves.toMatchObject({ revoked: false });
-    await expect(store.lookupToken(bob.token, 2_001)).resolves.toMatchObject({ revoked: false });
+    await expect(store.lookupToken(alice.token, 2_001)).resolves.toMatchObject({ outcome: "revoked" });
+    await expect(store.lookupToken(alice2.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
+    await expect(store.lookupToken(bob.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
   });
 
   it("skipPointer mints a standalone TTL-bounded token — a re-mint never revokes the in-flight one", async () => {
@@ -141,15 +147,17 @@ describe("Firestore model broker token store", () => {
     const second = await mint(21, 2_000);
 
     // the re-mint did NOT revoke the first (still-in-flight) token
-    await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({ revoked: false });
+    await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
     await expect(store.lookupToken(first.token, 2_001)).resolves.toMatchObject({
-      trace: {
-        source: "shared_agent_model_token",
-        ownerSlug: "alice",
-        agentId: "octogee-alice-coach",
+      record: {
+        trace: {
+          source: "shared_agent_model_token",
+          ownerSlug: "alice",
+          agentId: "octogee-alice-coach",
+        },
       },
     });
-    await expect(store.lookupToken(second.token, 2_001)).resolves.toMatchObject({ revoked: false });
+    await expect(store.lookupToken(second.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
     expect(first.record.expiresAt).toBe(1_000 + 3_600 * 1000);
     // no pointer doc is written for standalone tokens
     const pointer = await db
@@ -158,7 +166,7 @@ describe("Firestore model broker token store", () => {
       .get();
     expect(pointer.exists).toBe(false);
     // and the stale token expires by TTL rather than being yanked
-    await expect(store.lookupToken(first.token, 1_000 + 3_600 * 1000 + 1)).resolves.toBeNull();
+    await expect(store.lookupToken(first.token, 1_000 + 3_600 * 1000 + 1)).resolves.toMatchObject({ outcome: "expired" });
   });
 
   it("fails closed for malformed token records", async () => {
@@ -177,7 +185,7 @@ describe("Firestore model broker token store", () => {
       revoked: false,
     });
 
-    await expect(store.lookupToken(token, 1_001)).resolves.toBeNull();
+    await expect(store.lookupToken(token, 1_001)).resolves.toEqual({ outcome: "unknown" });
   });
 
   it("does not create revoked-only tombstone docs for stale reissue pointers", async () => {

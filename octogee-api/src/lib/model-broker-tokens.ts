@@ -85,13 +85,19 @@ export interface RevokeModelBrokerTokenInput {
   now?: number;
 }
 
+export type ModelBrokerTokenLookup =
+  | { outcome: "valid"; record: ModelBrokerTokenRecord }
+  | { outcome: "expired"; record: ModelBrokerTokenRecord }
+  | { outcome: "revoked"; record: ModelBrokerTokenRecord }
+  | { outcome: "unknown" };
+
 export interface ModelBrokerTokenStore {
   issueToken(input: IssueModelBrokerTokenInput): Promise<{
     token: string;
     record: ModelBrokerTokenRecord;
   }>;
   revokeGatewayToken(input: RevokeModelBrokerTokenInput): Promise<{ revoked: boolean }>;
-  lookupToken(token: string, now?: number): Promise<ModelBrokerTokenRecord | null>;
+  lookupToken(token: string, now?: number): Promise<ModelBrokerTokenLookup>;
 }
 
 export function hashModelBrokerToken(token: string): string {
@@ -270,11 +276,12 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
     return { revoked: true };
   }
 
-  async lookupToken(token: string, now = Date.now()): Promise<ModelBrokerTokenRecord | null> {
+  async lookupToken(token: string, now = Date.now()): Promise<ModelBrokerTokenLookup> {
     const record = this.tokens.get(hashModelBrokerToken(token));
-    if (!record || record.revoked) return null;
-    if (record.expiresAt !== null && record.expiresAt <= now) return null;
-    return record;
+    if (!record) return { outcome: "unknown" };
+    if (record.revoked) return { outcome: "revoked", record };
+    if (record.expiresAt !== null && record.expiresAt <= now) return { outcome: "expired", record };
+    return { outcome: "valid", record };
   }
 }
 
@@ -360,11 +367,12 @@ export function createFirestoreModelBrokerTokenStore(
 
     async lookupToken(token, now = Date.now()) {
       const snap = await tokens.doc(hashModelBrokerToken(token)).get();
-      if (!snap.exists) return null;
+      if (!snap.exists) return { outcome: "unknown" };
       const record = parseRecord(snap.data() as Record<string, unknown> | undefined);
-      if (!record || record.revoked) return null;
-      if (record.expiresAt !== null && record.expiresAt <= now) return null;
-      return record;
+      if (!record) return { outcome: "unknown" };
+      if (record.revoked) return { outcome: "revoked", record };
+      if (record.expiresAt !== null && record.expiresAt <= now) return { outcome: "expired", record };
+      return { outcome: "valid", record };
     },
   };
 }

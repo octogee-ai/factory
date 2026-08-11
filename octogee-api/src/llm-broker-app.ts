@@ -1461,11 +1461,32 @@ async function resolveBrokerRequest(
     res.status(404).json({ error: "unsupported LLM broker endpoint" });
     return null;
   }
-  const record = await deps.store.lookupToken(authToken(req), now());
-  if (!record || record.capped !== true) {
-    res.status(401).json({ error: "invalid broker token" });
+  const lookup = await deps.store.lookupToken(authToken(req), now());
+  if (lookup.outcome !== "valid" || lookup.record.capped !== true) {
+    const rejection = lookup.outcome === "valid" ? "uncapped" : lookup.outcome;
+    deps.log?.(
+      `broker token rejected: ${rejection}`,
+      lookup.outcome === "unknown"
+        ? { path: url.pathname }
+        : {
+            path: url.pathname,
+            gatewayId: lookup.record.gatewayId,
+            ownerUid: lookup.record.ownerUid,
+            provider: lookup.record.provider,
+            expiresAt: lookup.record.expiresAt,
+          },
+    );
+    res.status(401).json({
+      error:
+        lookup.outcome === "expired"
+          ? "broker token expired"
+          : lookup.outcome === "revoked"
+            ? "broker token revoked"
+            : "invalid broker token",
+    });
     return null;
   }
+  const record = lookup.record;
   if (!(await ownerAllowsBrokerRequest(deps, record, res))) return null;
   if (!providerAllowedEndpoint(record, req, url)) {
     res.status(404).json({ error: "unsupported LLM broker endpoint" });
