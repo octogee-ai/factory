@@ -519,7 +519,7 @@ export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb): Artifa
           .get(),
       ]);
       const ids = [...queued.docs, ...expired.docs].map((doc) => {
-        const job = firestoreJob({ exists: true, data: doc.data });
+        const job = firestoreJob({ exists: true, data: () => doc.data() });
         if (!job) throw new Error("artifact query returned an empty document");
         return job.artifactId;
       });

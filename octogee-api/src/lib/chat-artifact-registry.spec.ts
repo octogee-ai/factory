@@ -241,77 +241,135 @@ describe("ArtifactRegistry", () => {
   });
 });
 
+class FakeQueryDocumentSnapshot {
+  constructor(private readonly fieldsProto: Record<string, unknown>) {}
+
+  data(): Record<string, unknown> {
+    const fields = (this as unknown as { fieldsProto?: Record<string, unknown> }).fieldsProto;
+    if (fields === undefined) {
+      throw new Error("The data in a QueryDocumentSnapshot should always exist.");
+    }
+    return structuredClone(fields);
+  }
+}
+
+function fieldValue(data: Record<string, unknown>, field: string): unknown {
+  return field.split(".").reduce<unknown>(
+    (value, key) => (value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined),
+    data,
+  );
+}
+
+interface FakeQueryFilter {
+  field: string;
+  op: "==" | "<=";
+  value: unknown;
+}
+
+interface FakeQuery {
+  where(field: string, op: "==" | "<=", value: unknown): FakeQuery;
+  limit(count: number): { get(): Promise<{ docs: FakeQueryDocumentSnapshot[] }> };
+}
+
+function firestoreHarness() {
+  const documents = new Map<string, Record<string, unknown>>();
+  documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
+  let now = new Date("2026-07-13T12:00:00.000Z");
+  const snapshot = (path: string) => ({
+    exists: documents.has(path),
+    data: () => documents.get(path),
+  });
+  const collection = (collectionPath: string) => {
+    const query = (filters: FakeQueryFilter[]): FakeQuery => ({
+      where(field: string, op: "==" | "<=", value: unknown) {
+        return query([...filters, { field, op, value }]);
+      },
+      limit: (count: number) => ({
+        get: async () => ({
+          docs: [...documents.entries()]
+            .filter(([path]) => path.startsWith(`${collectionPath}/`))
+            .map(([, data]) => data)
+            .filter((data) => filters.every(({ field, op, value }) => {
+              const actual = fieldValue(data, field);
+              if (op === "==") return actual === value;
+              return typeof actual === "string" && typeof value === "string" && actual <= value;
+            }))
+            .slice(0, count)
+            .map((data) => new FakeQueryDocumentSnapshot(structuredClone(data))),
+        }),
+      }),
+    });
+    return query([]);
+  };
+  const db = {
+    doc: (path: string) => ({ path, get: async () => snapshot(path) }),
+    collection,
+    runTransaction: async <T>(run: (tx: {
+      get(ref: { path: string }): Promise<ReturnType<typeof snapshot>>;
+      set(ref: { path: string }, value: Record<string, unknown>): void;
+    }) => Promise<T>) => run({
+      get: async (ref) => snapshot(ref.path),
+      set: (ref, value) => { documents.set(ref.path, structuredClone(value)); },
+    }),
+  };
+  const store = createFirestoreArtifactJobStore(db);
+  const registry = new ArtifactRegistry(store, {
+    now: () => now,
+    leaseToken: () => `lease-${"x".repeat(32)}`,
+  });
+  return {
+    documents,
+    store,
+    registry,
+    setNow(value: Date) {
+      now = value;
+    },
+  };
+}
+
 describe("Firestore artifact job store", () => {
   it("creates atomically and refuses a corrupt stored idempotency key", async () => {
-    const documents = new Map<string, Record<string, unknown>>();
-    documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
-    const snapshot = (path: string) => ({
-      exists: documents.has(path),
-      data: () => documents.get(path),
-    });
-    const emptyQuery = {
-      where: () => emptyQuery,
-      limit: () => ({ get: async () => ({ docs: [] }) }),
-    };
-    const db = {
-      doc: (path: string) => ({ path, get: async () => snapshot(path) }),
-      runTransaction: async <T>(run: (tx: {
-        get(ref: { path: string }): Promise<ReturnType<typeof snapshot>>;
-        set(ref: { path: string }, value: Record<string, unknown>): void;
-      }) => Promise<T>) => run({
-        get: async (ref) => snapshot(ref.path),
-        set: (ref, value) => { documents.set(ref.path, structuredClone(value)); },
-      }),
-      collection: () => emptyQuery,
-    };
-    const store = createFirestoreArtifactJobStore(db);
-    const firestoreRegistry = new ArtifactRegistry(store, {
-      now: () => new Date("2026-07-13T12:00:00.000Z"),
-      leaseToken: () => `lease-${"x".repeat(32)}`,
-    });
-    const created = await firestoreRegistry.enqueue(REQUEST, OWNERSHIP);
-    expect((await store.get(created.artifactId))?.status).toBe("queued");
+    const harness = firestoreHarness();
+    const created = await harness.registry.enqueue(REQUEST, OWNERSHIP);
+    expect((await harness.store.get(created.artifactId))?.status).toBe("queued");
     const path = `chatArtifactJobs/${created.artifactId}`;
-    documents.set(path, { ...documents.get(path), artifactId: "0".repeat(64) });
-    await expect(store.get(created.artifactId)).rejects.toThrow("idempotency");
+    harness.documents.set(path, { ...harness.documents.get(path), artifactId: "0".repeat(64) });
+    await expect(harness.store.get(created.artifactId)).rejects.toThrow("idempotency");
+  });
+
+  it("claims queued work through query snapshots whose data() resolves against the snapshot receiver", async () => {
+    const harness = firestoreHarness();
+    const created = await harness.registry.enqueue(REQUEST, OWNERSHIP);
+
+    const claim = await harness.registry.claimNext("pdf-worker-1");
+    expect(claim?.job.artifactId).toBe(created.artifactId);
+    expect(claim?.job.status).toBe("processing");
+    await expect(harness.registry.claimNext("pdf-worker-2")).resolves.toBeNull();
+  });
+
+  it("reclaims lease-expired processing work through an independent query", async () => {
+    const harness = firestoreHarness();
+    const created = await harness.registry.enqueue(REQUEST, OWNERSHIP);
+    await harness.registry.claimNext("pdf-worker-1");
+    harness.setNow(new Date("2026-07-13T12:05:01.000Z"));
+
+    const claim = await harness.registry.claimNext("pdf-worker-2");
+    expect(claim?.job.artifactId).toBe(created.artifactId);
+    expect(claim?.job.attempt).toBe(2);
+    expect(claim?.job.lease?.workerId).toBe("pdf-worker-2");
   });
 
   it("hides existing jobs and rejects worker transactions after the workspace owner is suspended", async () => {
-    const documents = new Map<string, Record<string, unknown>>();
-    documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
-    const snapshot = (path: string) => ({
-      exists: documents.has(path),
-      data: () => documents.get(path),
-    });
-    const emptyQuery = {
-      where: () => emptyQuery,
-      limit: () => ({ get: async () => ({ docs: [] }) }),
-    };
-    const db = {
-      doc: (path: string) => ({ path, get: async () => snapshot(path) }),
-      runTransaction: async <T>(run: (tx: {
-        get(ref: { path: string }): Promise<ReturnType<typeof snapshot>>;
-        set(ref: { path: string }, value: Record<string, unknown>): void;
-      }) => Promise<T>) => run({
-        get: async (ref) => snapshot(ref.path),
-        set: (ref, value) => { documents.set(ref.path, structuredClone(value)); },
-      }),
-      collection: () => emptyQuery,
-    };
-    const store = createFirestoreArtifactJobStore(db);
-    const firestoreRegistry = new ArtifactRegistry(store, {
-      now: () => new Date("2026-07-13T12:00:00.000Z"),
-      leaseToken: () => `lease-${"x".repeat(32)}`,
-    });
-    const created = await firestoreRegistry.enqueue(REQUEST, OWNERSHIP);
+    const harness = firestoreHarness();
+    const created = await harness.registry.enqueue(REQUEST, OWNERSHIP);
 
-    documents.set("users/uid-alice", {
+    harness.documents.set("users/uid-alice", {
       accountLifecycle: { status: "deletion_scheduled" },
     });
 
-    await expect(store.get(created.artifactId)).resolves.toBeNull();
+    await expect(harness.store.get(created.artifactId)).resolves.toBeNull();
     await expect(
-      store.transact(created.artifactId, (job) => ({ ...job!, status: "failed" })),
+      harness.store.transact(created.artifactId, (job) => ({ ...job!, status: "failed" })),
     ).rejects.toThrow("workspace owner is not active");
   });
 });
