@@ -10,8 +10,6 @@ spec:
   autopilot:
     enabled: true
   priorities:
-    # podFamily is only honored in built-in Autopilot classes; in a custom
-    # ComputeClass it satisfies no rule and DoNotScaleUp then never provisions.
     - spot: true
       location:
         zones:
