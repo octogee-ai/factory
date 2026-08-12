@@ -10,6 +10,7 @@ export type BoundTenant =
       kind: "gateway";
       gatewayId: string;
       ownerUid?: string;
+      saName?: string;
       podName?: string;
       podUid?: string;
     }

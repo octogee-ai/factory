@@ -29,6 +29,8 @@ function exactPodMatch(
   return Boolean(
     bound.podName
     && bound.podUid
+    && bound.saName
+    && review.saName === bound.saName
     && review.podName === bound.podName
     && review.podUid === bound.podUid,
   );

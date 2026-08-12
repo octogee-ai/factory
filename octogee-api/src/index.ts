@@ -149,6 +149,7 @@ const TENANT_BOUND_API_ROUTES = new Set([
   "/api/notifications/ingest",
 ]);
 export const GATEWAY_CREDENTIAL_ROUTES = new Set([
+  "/internal/connectors/access-token",
   "/internal/openclaw/activity/agent-identity",
   "/internal/fleet/assigned-users",
   "/internal/fleet/configured-builder-bootstrap",

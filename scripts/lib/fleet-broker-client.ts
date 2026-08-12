@@ -133,6 +133,7 @@ export function createFleetBrokerClient(
         const data = await postJson<{ accessToken?: unknown }>(
           "/internal/connectors/access-token",
           { gatewayId, uid, connectorId: "github" },
+          await gatewayCredentialHeaders(),
         );
         return typeof data.accessToken === "string" && data.accessToken ? data.accessToken : null;
       } catch (err) {

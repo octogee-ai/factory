@@ -14,6 +14,7 @@ const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const BOUND: BoundTenant = {
   kind: "gateway",
   gatewayId: "shared-blue",
+  saName: "octogee-gw-shared-blue",
   podName: "octogee-gateway-shared-blue-abc123",
   podUid: "pod-uid-1",
 };
@@ -70,6 +71,7 @@ describe("gateway credential capability", () => {
 
   it.each([
     ["different audience", { ...validReview(), audiences: ["octogee-api"] }],
+    ["different service account", { ...validReview(), saName: "octogee-gw-shared-blue-alt" }],
     ["different pod", { ...validReview(), podUid: "pod-uid-attacker" }],
     ["missing pod binding", { ...validReview(), podName: undefined, podUid: undefined }],
   ])("rejects a token with %s", async (_label, reviewed) => {
