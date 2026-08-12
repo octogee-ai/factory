@@ -146,7 +146,7 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
         if (reattachTimers.has(name)) return;
         const timer = setTimeout(() => {
           reattachTimers.delete(name);
-          log(`[fleet-informer] re-attaching the ${name} listener`);
+          log(`[fleet-informer] re-attaching the ${name} listener after error: ${error.message}`);
           attach(name, mirror, subscribe);
         }, reattachMs);
         reattachTimers.set(name, timer);

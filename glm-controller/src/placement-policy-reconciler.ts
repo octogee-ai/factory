@@ -3597,22 +3597,93 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   };
 }
 
+export const PLACEMENT_POLICY_PASS_DEADLINE_MS = 5 * 60_000;
+export const PLACEMENT_POLICY_MAX_ABANDONED_PASSES = 3;
+
+interface PlacementPolicyAttempt {
+  startedAt: number;
+  abandoned: boolean;
+}
+
+function attemptFencedDeps(
+  deps: PlacementPolicyReconcilerDeps,
+  attempt: PlacementPolicyAttempt,
+): PlacementPolicyReconcilerDeps {
+  return {
+    ...deps,
+    publishIdleSleep: async (input) => {
+      if (attempt.abandoned) {
+        deps.log(`[placement-policy] dropped idle-sleep publish from an abandoned pass uid=${input.uid}`);
+        return;
+      }
+      await deps.publishIdleSleep(input);
+    },
+    sendRuntimeSleepWarning: async (input) => {
+      if (attempt.abandoned) {
+        deps.log(`[placement-policy] dropped sleep warning from an abandoned pass uid=${input.uid}`);
+        return;
+      }
+      await deps.sendRuntimeSleepWarning(input);
+    },
+  };
+}
+
 export function startPlacementPolicyReconciler(
   deps: PlacementPolicyReconcilerDeps,
   intervalMs = PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
+  options?: {
+    passDeadlineMs?: number;
+    maxAbandonedPasses?: number;
+    runPass?: (deps: PlacementPolicyReconcilerDeps) => Promise<unknown>;
+  },
 ): () => void {
   if (intervalMs <= 0) return () => undefined;
+  const passDeadlineMs = options?.passDeadlineMs ?? PLACEMENT_POLICY_PASS_DEADLINE_MS;
+  const maxAbandonedPasses = options?.maxAbandonedPasses ?? PLACEMENT_POLICY_MAX_ABANDONED_PASSES;
+  const runPass = options?.runPass ?? reconcilePlacementPolicyOnce;
   let stopped = false;
-  let inFlight = false;
+  let current: PlacementPolicyAttempt | null = null;
+  let abandonedOutstanding = 0;
+  let haltLogged = false;
   const tick = async () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
+    if (stopped) return;
+    if (current) {
+      const heldMs = deps.now() - current.startedAt;
+      if (heldMs < passDeadlineMs) return;
+      current.abandoned = true;
+      current = null;
+      abandonedOutstanding += 1;
+      deps.log(
+        `[placement-policy] ⚠ pass exceeded its ${passDeadlineMs}ms deadline (held ${heldMs}ms) — ` +
+          `releasing the tick gate (${abandonedOutstanding} abandoned outstanding)`,
+      );
+    }
+    if (abandonedOutstanding >= maxAbandonedPasses) {
+      if (!haltLogged) {
+        haltLogged = true;
+        deps.log(
+          `[placement-policy] ⚠ halted: ${abandonedOutstanding} abandoned passes outstanding — ` +
+            `no new passes until one settles`,
+        );
+      }
+      return;
+    }
+    const attempt: PlacementPolicyAttempt = { startedAt: deps.now(), abandoned: false };
+    current = attempt;
     try {
-      await reconcilePlacementPolicyOnce(deps);
+      await runPass(attemptFencedDeps(deps, attempt));
     } catch (error) {
       deps.log(`[placement-policy] ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      inFlight = false;
+      if (attempt.abandoned) {
+        abandonedOutstanding -= 1;
+        haltLogged = false;
+        deps.log(
+          `[placement-policy] abandoned pass settled after ${deps.now() - attempt.startedAt}ms ` +
+            `(${abandonedOutstanding} still outstanding)`,
+        );
+      }
+      if (current === attempt) current = null;
     }
   };
   const timer = setInterval(() => void tick(), intervalMs);

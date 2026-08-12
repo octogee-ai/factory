@@ -96,6 +96,18 @@ describe("middleware/logging — Error serialization in meta", () => {
     expect((out.err as Record<string, unknown>).code).toBe("auth/user-not-found");
   });
 
+  it("redacts credentials from Error diagnostics and own fields", () => {
+    const secret = "topsecret1234567890";
+    const err = new Error(`Authorization: Bearer ${secret}`) as Error & { credential?: string };
+    err.credential = secret;
+    logger.error("op failed", { err });
+    const serialized = parseLastError().err as Record<string, unknown>;
+    expect(serialized.message).toBe("Authorization: Bearer [redacted]");
+    expect(serialized.stack).toContain("Authorization: Bearer [redacted]");
+    expect(serialized.credential).toBe("[redacted]");
+    expect(JSON.stringify(serialized)).not.toContain(secret);
+  });
+
   it("serializes a nested Error inside an object", () => {
     const err = new Error("inner");
     logger.error("op failed", { context: { cause: err } });
