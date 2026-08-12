@@ -108,7 +108,7 @@ export class FeaturePolicy implements FeaturePolicyContract {
       this.options.logger?.error("Feature flag evaluation failed", {
         context,
         reason,
-        errorClass: error instanceof Error ? error.name : typeof error,
+        err: error,
       });
       return Object.fromEntries([...adminDecisions, ...remaining.map((key) => {
         this.options.metrics?.evaluation(key, "unavailable");
