@@ -670,16 +670,7 @@ async function initializeProvisionFreshV2(
     op.input.toGatewayId !== state.targetGatewayId,
     declaredSourceGatewayId !== null && declaredSourceGatewayId !== state.sourceGatewayId,
   ].some(Boolean);
-  if (scopeChanged && state.phase !== "cutover" && state.phase !== "sourceRetired") {
-    return failure("durable provision-fresh migration input changed", false);
-  }
-  if (state.phase === "initialized") {
-    deps.log(
-      `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
-      "provision-fresh (durable fenced cutover)",
-    );
-  }
-  return {
+  const execution: ProvisionFreshV2Execution = {
     input,
     state,
     sourceAssignment: {
@@ -692,6 +683,19 @@ async function initializeProvisionFreshV2(
       state: "quiescing",
     },
   };
+  if (scopeChanged && state.phase !== "cutover" && state.phase !== "sourceRetired") {
+    return abortProvisionFreshV2(
+      execution,
+      new Error("durable provision-fresh migration input changed"),
+    );
+  }
+  if (state.phase === "initialized") {
+    deps.log(
+      `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
+      "provision-fresh (durable fenced cutover)",
+    );
+  }
+  return execution;
 }
 
 async function persistProvisionFreshV2Phase(
