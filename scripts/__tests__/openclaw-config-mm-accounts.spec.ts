@@ -74,6 +74,13 @@ describe("buildCustomerAgent", () => {
     );
   });
 
+  it("gives project agents workspace-scoped discovery without a shell", () => {
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(
+      expect.arrayContaining(["read", "grep", "find", "ls"]),
+    );
+    expect(PROJECT_AGENT_DENIED_TOOLS).toEqual(expect.arrayContaining(["exec", "process"]));
+  });
+
   it("exposes isolated build, test, and exact-run status only through customer project lanes", () => {
     const coach = buildCustomerAgent({
       uid: "uid-chris",

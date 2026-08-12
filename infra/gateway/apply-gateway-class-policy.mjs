@@ -86,6 +86,9 @@ const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
+  "grep",
+  "find",
+  "ls",
   "write",
   "edit",
   "apply_patch",

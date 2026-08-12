@@ -81,6 +81,15 @@ describe("gateway base image", () => {
     expect(installed.has("chromium")).toBe(true);
   });
 
+  it("ships discovery binaries and disables runtime tool downloads", () => {
+    const installed = installedAptPackages("infra/gateway/Dockerfile.base");
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+
+    expect(installed.has("ripgrep")).toBe(true);
+    expect(installed.has("fd-find")).toBe(true);
+    expect(dockerfile).toContain("ENV OPENCLAW_OFFLINE=1");
+  });
+
   it("upgrades the shipped npm only after OpenClaw stages its plugins", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
     const pluginInstall = dockerfile.indexOf("openclaw plugins install");

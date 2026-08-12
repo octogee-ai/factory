@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # PTY sessions when the runtime-shell feature is enabled.
     bash-completion git vim less tmux \
     # Code search & analysis
-    ripgrep tree cloc \
+    ripgrep fd-find tree cloc \
     # Build tools
     make build-essential \
     # Archive & file utilities
