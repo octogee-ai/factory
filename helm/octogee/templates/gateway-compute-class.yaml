@@ -12,13 +12,16 @@ spec:
   priorities:
     - podFamily: general-purpose
       spot: true
+      location:
+        zones:
+          {{- toYaml $zones | nindent 10 }}
+        locationPolicy: ANY
     - podFamily: general-purpose
       spot: false
-  priorityDefaults:
-    location:
-      zones:
-        {{- toYaml $zones | nindent 8 }}
-      locationPolicy: ANY
+      location:
+        zones:
+          {{- toYaml $zones | nindent 10 }}
+        locationPolicy: ANY
   activeMigration:
     optimizeRulePriority: true
   nodePoolAutoCreation:
