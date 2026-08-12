@@ -103,6 +103,8 @@ import {
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
+import { createGatewayCredentialAuth } from "./middleware/gateway-credential-auth.js";
+import { GATEWAY_CREDENTIAL_TOKEN_AUDIENCE } from "@octogee/core/internal-fetch";
 import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
 import {
   createOpsAgentHttpClient,
@@ -146,9 +148,17 @@ const TENANT_BOUND_API_ROUTES = new Set([
   "/api/model-credentials/subscription/sync-back",
   "/api/notifications/ingest",
 ]);
+export const GATEWAY_CREDENTIAL_ROUTES = new Set([
+  "/internal/openclaw/activity/agent-identity",
+  "/internal/fleet/assigned-users",
+  "/internal/fleet/configured-builder-bootstrap",
+  "/internal/fleet/user-snapshot",
+  "/internal/fleet/provision-mattermost",
+]);
 
 export interface CreateAppOptions {
   tenantBindingReviewer?: Parameters<typeof createTenantBindingMiddleware>[0]["reviewer"];
+  gatewayCredentialReviewer?: Parameters<typeof createGatewayCredentialAuth>[0]["reviewer"];
   tenantBindingSelfCheck?: {
     inCluster?: boolean;
     tokenPath?: string;
@@ -467,6 +477,16 @@ export function createApp(opts: CreateAppOptions = {}) {
     metrics: tenantBindingMetrics,
   });
   const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db });
+  const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createKubernetesTokenReviewer({
+    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
+    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
+    audience: GATEWAY_CREDENTIAL_TOKEN_AUDIENCE,
+  });
+  const gatewayCredentialAuth = createGatewayCredentialAuth({
+    reviewer: gatewayCredentialReviewer,
+    db,
+    namespace,
+  });
   startTenantBindingSelfCheck(tenantBindingHealth, {
     reviewer: tenantBindingReviewer,
     ...opts.tenantBindingSelfCheck,
@@ -532,6 +552,13 @@ export function createApp(opts: CreateAppOptions = {}) {
       return;
     }
     tenantEnforcementMiddleware(req, res, next);
+  });
+  app.use((req, res, next) => {
+    if (!GATEWAY_CREDENTIAL_ROUTES.has(normalizeTenantPolicyPath(req.path))) {
+      next();
+      return;
+    }
+    gatewayCredentialAuth(req, res, next);
   });
   mountClusterRoutes(app, clusterRouteOverrides(featurePolicy));
   const chatArtifacts = defaultChatArtifactRoutes();

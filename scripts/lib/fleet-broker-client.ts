@@ -9,6 +9,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
+import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
 import type { SystemConfigObservedStatus } from "./system-config-status.js";
 
 function baseUrl(): string {
@@ -17,10 +18,14 @@ function baseUrl(): string {
   return process.env.OCTOGEE_API_URL || "http://octogee-api.octogee.svc.cluster.local:3001";
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function postJson<T>(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
   const resp = await internalFetch(`${baseUrl()}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -80,15 +85,26 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBlobSignedUrl>;
 }
 
+export interface FleetBrokerClientOptions {
+  gatewayCredentialHeaders?: () => Promise<Record<string, string>>;
+}
+
 // The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
 // stable pod per gateway); the broker cross-checks it against the pod name it
 // authenticated (revisionIdFromGatewayPodName).
-export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayId): FleetBrokerClient {
+export function createFleetBrokerClient(
+  gatewayId: string,
+  revisionId = gatewayId,
+  opts: FleetBrokerClientOptions = {},
+): FleetBrokerClient {
+  const gatewayCredentialHeaders = opts.gatewayCredentialHeaders
+    ?? defaultGatewayCredentialHeaders;
   return {
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",
         { gatewayId, revisionId, completeOnly: opts.completeOnly === true },
+        await gatewayCredentialHeaders(),
       );
       return data.users;
     },
@@ -96,6 +112,7 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayI
       const data = await postJson<{ bootstrap: FleetBrokerConfiguredBuilderBootstrap }>(
         "/internal/fleet/configured-builder-bootstrap",
         { gatewayId, revisionId, slug },
+        await gatewayCredentialHeaders(),
       );
       return data.bootstrap;
     },
@@ -133,6 +150,7 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayI
         const data = await postJson<{ user: FleetBrokerUserSnapshot }>(
           "/internal/fleet/user-snapshot",
           { gatewayId, uid },
+          await gatewayCredentialHeaders(),
         );
         return data.user;
       } catch (err) {
@@ -159,6 +177,7 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayI
       const data = await postJson<{ mmUpdate: FleetBrokerMattermostUpdate }>(
         "/internal/fleet/provision-mattermost",
         { gatewayId, uid },
+        await gatewayCredentialHeaders(),
       );
       return data.mmUpdate;
     },
