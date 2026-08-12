@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { redactSecrets, redactStructuredSecrets } from "@octogee/shared/types/secret-redaction";
 
 // Mirrors scripts/lib/config.ts's logLevel() so the same LOG_LEVEL
 // env knob steers verbosity across every process in the gateway pod.
@@ -37,11 +38,14 @@ function serializeMeta(_key: string, value: unknown): unknown {
   if (value instanceof Error) {
     const out: Record<string, unknown> = {
       name: value.name,
-      message: value.message,
-      stack: value.stack,
+      message: redactSecrets(value.message),
+      stack: typeof value.stack === "string" ? redactSecrets(value.stack) : value.stack,
     };
     for (const k of Object.keys(value)) {
-      out[k] = (value as unknown as Record<string, unknown>)[k];
+      const field = (value as unknown as Record<string, unknown>)[k];
+      out[k] = field instanceof Error
+        ? field
+        : (redactStructuredSecrets({ [k]: field }) as Record<string, unknown>)[k];
     }
     return out;
   }

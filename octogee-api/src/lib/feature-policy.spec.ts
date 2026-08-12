@@ -74,4 +74,19 @@ describe("FeaturePolicy", () => {
     await expect(providerError.evaluate("release-openclaw-dashboard", subject, "openclaw-dashboard"))
       .resolves.toEqual({ state: "unavailable", value: false, reason: "provider_error" });
   });
+
+  it("logs the provider failure diagnostics alongside the coarse reason", async () => {
+    const error = vi.fn();
+    const policy = new FeaturePolicy(
+      { evaluate: async () => { throw new Error("network unavailable"); } },
+      { logger: { error } },
+    );
+
+    await policy.evaluate("release-openclaw-dashboard", subject, "openclaw-dashboard");
+
+    expect(error).toHaveBeenCalledWith("Feature flag evaluation failed", expect.objectContaining({
+      reason: "provider_error",
+      err: expect.objectContaining({ message: "network unavailable" }),
+    }));
+  });
 });

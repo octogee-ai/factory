@@ -1275,7 +1275,7 @@ async function verifyOwnerWorkspaceTurnFailClosed(
       operation,
       gatewayId: input.gatewayId,
       agentId: input.agentId,
-      errorType: error instanceof Error ? error.name : typeof error,
+      err: error,
     });
     return false;
   }
