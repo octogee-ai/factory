@@ -347,10 +347,12 @@ describe("internal gitea-admin route", () => {
   });
 
   it.each([
+    { desiredStatus: "paused" },
+    { desiredStatus: "draining" },
     { desiredStatus: "retired" },
     { retireAfter: 10 },
     { retirementClaim: { operationId: "retire-1", version: 1 } },
-  ])("keeps configured-builder bootstrap identity-pure across lifecycle state: %o", async (override) => {
+  ])("denies configured-builder bootstrap after lifecycle revocation: %o", async (override) => {
     vi.mocked(readAssignedSlugsForGateway).mockResolvedValueOnce([]);
     mocks.state.gateways.set("bender", isolatedGateway(override));
 
@@ -358,12 +360,8 @@ describe("internal gitea-admin route", () => {
       .post("/internal/gitea/ensure-user")
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
-    expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
-      "acme",
-      "ssh-ed25519 AAA",
-      BENDER_KEY_OWNER,
-    );
+    expect(res.status).toBe(403);
+    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
   });
 
   it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {
