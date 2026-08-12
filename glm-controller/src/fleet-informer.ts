@@ -1,20 +1,6 @@
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 
-/** Fields of a user document that the placement snapshot and roster resolution read.
- *  Sub-tree granularity (`provisioning`, not `provisioning.openclaw.gatewayId`) so a
- *  new consumer inside an already-projected subtree cannot silently read undefined. */
-export const INFORMER_USER_FIELD_PATHS = [
-  "provisioning",
-  "accountLifecycle",
-  "builderSubscription",
-  "trialGrant",
-  "signupOfferConvertedAt",
-  "onboardingStep",
-  "username",
-  "usage.lastUpdated",
-] as const;
-
 export const FLEET_INFORMER_REATTACH_MS_DEFAULT = 60_000;
 
 export interface MirrorDocChange {
@@ -156,10 +142,7 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
   };
 
   attach("users", users, (onNext, onError) =>
-    db
-      .collection("users")
-      .select(...INFORMER_USER_FIELD_PATHS)
-      .onSnapshot(onNext, onError));
+    db.collection("users").onSnapshot(onNext, onError));
   attach("assignments", assignments, (onNext, onError) =>
     db.collectionGroup("assignments").onSnapshot(onNext, onError));
 

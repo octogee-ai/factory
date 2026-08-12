@@ -37,6 +37,8 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /system config mutation unavailable: writer-lock-busy/i,
   /fleet will retry/i,
   /gateway .* is not migration-ready/i,
+  /\[migration-http\] local SSH public key is missing for /i,
+  /\[migration-activation:[^\]]+\] source has no applied fingerprint; converge it before migration/i,
 ];
 
 export function classifyOperationFailure(

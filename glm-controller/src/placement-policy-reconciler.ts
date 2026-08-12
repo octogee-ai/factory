@@ -65,7 +65,10 @@ import {
   MIGRATE_CUSTOMER_KIND,
 } from "./automatic-operation-fence.js";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
-import { MAX_OPERATION_ATTEMPT_HISTORY } from "./operation-retry.js";
+import {
+  classifyOperationFailure,
+  MAX_OPERATION_ATTEMPT_HISTORY,
+} from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
@@ -2879,6 +2882,35 @@ function operatorFenceRearm(
   };
 }
 
+function isAutomaticRolledBackPlacement(
+  data: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): boolean {
+  return request.source === CONTINUOUS_PLACEMENT_POLICY_SOURCE
+    && data.status === "failed"
+    && data.origin === "automatic"
+    && data.createdBy === PLACEMENT_POLICY_ACTOR
+    && data.rolledBack === true
+    && data.customerMigrationV2 === undefined
+    && millis(data.completedAt) !== null;
+}
+
+function rolledBackTransientPlacementCanRearm(
+  data: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): boolean {
+  if (!isAutomaticRolledBackPlacement(data, request)) return false;
+  const error = typeof data.error === "string" ? data.error : null;
+  const attempts = positiveInteger(data.attempts);
+  const history = Array.isArray(data.attemptHistory) ? data.attemptHistory : null;
+  const lastAttempt = record(history?.at(-1));
+  return error !== null &&
+    classifyOperationFailure(error) === "transient" &&
+    attempts !== null &&
+    positiveInteger(lastAttempt?.attempt) === attempts &&
+    lastAttempt?.error === error;
+}
+
 export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
@@ -2924,8 +2956,9 @@ export async function enqueuePlacementMigration(
         data.status !== "running" &&
         data.status !== "succeeded"
       ) {
-        const rearm = operatorFenceRearm(data, request);
-        if (rearm) {
+        const operatorFence = operatorFenceRearm(data, request);
+        const rolledBackTransient = rolledBackTransientPlacementCanRearm(data, request);
+        if (operatorFence || rolledBackTransient) {
           await assertAutomaticPlacementMutationAllowed({
             db: input.db,
             transaction,
@@ -2938,14 +2971,14 @@ export async function enqueuePlacementMigration(
             startedAt: null,
             completedAt: null,
             steps: [],
-            attempts: rearm.attempts,
-            attemptHistory: rearm.attemptHistory,
             error: FieldValue.delete(),
             expireAt: FieldValue.delete(),
             rolledBack: FieldValue.delete(),
+            output: FieldValue.delete(),
             lastProgressAt: FieldValue.delete(),
             waitingOn: FieldValue.delete(),
             nextAttemptAt: FieldValue.delete(),
+            ...(operatorFence ?? {}),
           });
           return;
         }

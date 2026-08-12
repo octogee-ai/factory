@@ -393,7 +393,7 @@ describe("createRsyncMigrationTransfer", () => {
     ]);
   });
 
-  it("runs prepare → source direct rsync push → finish and makes succeeded retry a no-op", async () => {
+  it("re-runs a succeeded transfer because rollback can remove the target copy", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];
     const commandCalls: Array<{ command: string; args: string[] }> = [];
@@ -442,8 +442,9 @@ describe("createRsyncMigrationTransfer", () => {
       includeActivationManifest: true,
     });
 
-    expect(fetchCalls).toHaveLength(3);
-    expect(commandCalls.filter((c) => c.command === "kubectl")).toHaveLength(2);
+    expect(store["mig-1__pre"]).toMatchObject({ status: "succeeded", attempt: 2 });
+    expect(fetchCalls).toHaveLength(6);
+    expect(commandCalls.filter((c) => c.command === "kubectl")).toHaveLength(4);
   });
 
   it("marks a failed direct push task failed, aborts target import, and retries it with the next attempt", async () => {
