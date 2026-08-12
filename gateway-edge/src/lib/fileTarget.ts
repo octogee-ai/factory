@@ -25,6 +25,7 @@ export interface FileTarget {
   // workspace members (brokered as the owner) and all GitHub targets; false for the
   // owner / project collaborators who get unrestricted write.
   brokered?: boolean;
+  workspaceMemberBrokered?: boolean;
   canvasFile?: string;
 }
 
@@ -153,22 +154,23 @@ async function resolveGithubProjectTarget(args: {
   if (!resolveGithubToken) {
     return { ok: true, target: githubTarget };
   }
-  const githubToken = await readConnectorAccessToken(project.ownerUid, "github", {
+  const githubToken = await readConnectorAccessToken(callerUid!, "github", {
     kind: "project",
     requestingUid: callerUid!,
     workspaceSlug: slug,
     projectSlug,
   });
   if (!githubToken) {
+    const isOwner = callerUid === project.ownerUid;
     return {
       ok: false,
       status: 422,
-      error: "GitHub files unavailable",
-      reason: "owner_github_not_connected",
+      error: isOwner ? "GitHub files unavailable" : "Connect GitHub to access this project",
+      reason: isOwner ? "owner_github_not_connected" : "caller_github_not_connected",
     };
   }
   logger.info(
-    `[fileTarget] owner-brokered github token repo=${github.owner}/${github.repo} caller=${callerUid} tokenOwner=${project.ownerUid}`,
+    `[fileTarget] caller-bound github token repo=${github.owner}/${github.repo} caller=${callerUid}`,
   );
   return { ok: true, target: { ...githubTarget, githubToken, brokered: true } };
 }
@@ -218,7 +220,10 @@ async function resolveWorkspaceMemberTarget(
     return { ok: false, status: 403, error: "Forbidden" };
   }
   logger.info(`[fileTarget] brokered gitea sudo workspace=${slug} caller=${callerUid} as=ws-${slug}`);
-  return { ok: true, target: { ...workspaceTarget, brokered: true } };
+  return {
+    ok: true,
+    target: { ...workspaceTarget, brokered: true, workspaceMemberBrokered: true },
+  };
 }
 
 function readTargetInput(req: Request): { slug: string | null; projectSlug: string | null } {

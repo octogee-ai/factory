@@ -4,6 +4,7 @@ import {
   clearWorkspaceFileResponseCache,
   invalidateWorkspaceFileResponseCache,
   workspaceFileCacheKey,
+  workspaceFileTargetCacheKey,
 } from "../routes/workspace/file-response-cache.js";
 import type { FileTarget } from "../lib/fileTarget.js";
 
@@ -23,6 +24,14 @@ const key = workspaceFileCacheKey("list", target, "");
 beforeEach(() => clearWorkspaceFileResponseCache());
 
 describe("cachedWorkspaceFileResponse", () => {
+  it("separates full owner responses from brokered workspace-member responses", () => {
+    expect(workspaceFileTargetCacheKey(target)).not.toBe(workspaceFileTargetCacheKey({
+      ...target,
+      brokered: true,
+      workspaceMemberBrokered: true,
+    }));
+  });
+
   it("caches the loaded value and reuses it on subsequent reads", async () => {
     const load = vi.fn().mockResolvedValue("v1");
     expect(await cachedWorkspaceFileResponse(key, 1000, load)).toBe("v1");

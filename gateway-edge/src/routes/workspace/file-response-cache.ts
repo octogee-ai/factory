@@ -32,6 +32,7 @@ export function workspaceFileTargetCacheKey(target: FileTarget): string {
     target.projectSlug ?? "",
     target.org,
     target.repoName,
+    target.workspaceMemberBrokered ? "knowledge" : "full",
   ].join("|");
 }
 
