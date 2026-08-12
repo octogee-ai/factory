@@ -10,12 +10,12 @@
 #   - OpenClaw npm install
 #   - All apt packages (curl, jq, python3, git, ripgrep, ffmpeg, gh, etc.)
 # ─────────────────────────────────────────────────────────────────────────────
-# Node 24 matches OpenClaw upstream's publishing + CI target image
-# (node:24-bookworm-slim, per their Dockerfile). OpenClaw 2026.4.20's
-# `engines.node` declares `>=22.14.0` as the hard floor, but the CI
-# matrix runs primarily on 24.x with only partial 22.18 compat. Staying
-# in lockstep with their ship target avoids "works on their CI, not on
-# our pod" surprises and keeps us on the current LTS line. Unrelated
+# Node 24 matches OpenClaw upstream's publishing + Docker target image
+# (node:24-bookworm-slim, per their Dockerfile) and tracks the newest patch on
+# the current supported LTS line. OpenClaw 2026.8.1 excludes Node 26; its root
+# range admits Node 25, but a production dependency does not. Staying in
+# lockstep with their ship target avoids "works on their CI, not on our pod"
+# surprises without dropping to the Node 22 compatibility floor. Unrelated
 # services (`gateway-edge` on GKE, `functions` on Firebase) stay on
 # Node 22 — they're separate deploy surfaces with their own runtime
 # constraints (Firebase Functions Node 24 support lags the runtime).
@@ -178,7 +178,7 @@ RUN set -e; \
         echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
         openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","threadDirectMessages":true,"threadSessionScope":"channel"}}}' \
+        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","replyToModeByChatType":{"direct":"all"},"threadSessionScope":"channel"}}}' \
           | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost rejected durable run threads"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
         openclaw config validate > /tmp/oc-plugin.log 2>&1 \
