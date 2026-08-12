@@ -970,7 +970,7 @@ async function collectChannelBindings(
   slug: string,
 ): Promise<{
   bindings: FleetBrokerChannelBinding[];
-  projectMembershipChannelIds: string[];
+  projectMemberships: Array<{ projectId: string; channelIds: string[] }>;
 }> {
   const workspaceRef = db.collection("workspaces").doc(slug);
   const [wsChannels, projects] = await Promise.all([
@@ -979,13 +979,14 @@ async function collectChannelBindings(
   ]);
 
   const bindings: FleetBrokerChannelBinding[] = [];
-  const projectMembershipChannelIds: string[] = [];
+  const projectMemberships: Array<{ projectId: string; channelIds: string[] }> = [];
   for (const ch of wsChannels.docs) {
     const b = mapWorkspaceChannelDoc(ch.data());
     if (b) bindings.push(b);
   }
   for (const p of projects.docs) {
     const projChannels = await p.ref.collection("channels").get();
+    const channelIds: string[] = [];
     for (const ch of projChannels.docs) {
       const data = ch.data();
       const b = mapProjectChannelDoc(p.id, data);
@@ -996,12 +997,13 @@ async function collectChannelBindings(
       } | undefined;
       for (const channelId of [mattermost?.channelId, mattermost?.activityChannelId]) {
         if (typeof channelId === "string" && channelId) {
-          projectMembershipChannelIds.push(channelId);
+          channelIds.push(channelId);
         }
       }
     }
+    if (channelIds.length > 0) projectMemberships.push({ projectId: p.id, channelIds });
   }
-  return { bindings, projectMembershipChannelIds };
+  return { bindings, projectMemberships };
 }
 
 async function collectProjects(
@@ -1508,16 +1510,26 @@ function installSnapshotRoutes(
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const [collectedChannels, coachSecret] = await Promise.all([
+    const [collectedChannels, coachSecret, projectAgents] = await Promise.all([
       collectChannelBindings(db, slug),
       db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+      collectProjectAgentStates(db, uid, slug),
     ]);
     const coach = snapshotCoachFields(
       coachSecret.data() as Record<string, unknown> | undefined,
     );
+    const agentByProject = new Map(projectAgents.map((agent) => [agent.projectId, agent]));
     await deps.reconcileCoachProjectMembership({
       coachMmUserId: coach.coachMmUserId,
-      projectChannelIds: collectedChannels.projectMembershipChannelIds,
+      projects: collectedChannels.projectMemberships.map(({ projectId, channelIds }) => {
+        const agent = agentByProject.get(projectId);
+        return {
+          projectId,
+          projectAgentEnabled: agent?.enabled === true,
+          projectAgentMmUserId: agent?.mmUserId ?? null,
+          channelIds,
+        };
+      }),
     });
     res.status(204).end();
   });
