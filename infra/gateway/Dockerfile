@@ -49,7 +49,12 @@ COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
-RUN chown root:root /octogee/scripts \
+RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
+      --bundle --platform=node --format=esm \
+      --outfile=/tmp/octogee-secret-resolver.mjs \
+    && cp /tmp/octogee-secret-resolver.mjs /octogee/scripts/secret-resolver.mjs \
+    && rm /tmp/octogee-secret-resolver.mjs \
+    && chown root:root /octogee/scripts \
     && chmod 755 /octogee/scripts \
     && chmod 555 /octogee/scripts/secret-resolver.mjs
 

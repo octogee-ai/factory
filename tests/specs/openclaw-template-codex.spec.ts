@@ -62,6 +62,10 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     expect(dockerfile).toContain(
       "COPY --chown=root:root scripts/secret-resolver.mjs /octogee/scripts/",
     );
+    expect(dockerfile).toContain(
+      "/octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs",
+    );
+    expect(dockerfile).toContain("--bundle --platform=node --format=esm");
     expect(dockerfile).toContain("chown root:root /octogee/scripts");
     expect(dockerfile).toContain("chmod 755 /octogee/scripts");
     expect(dockerfile).toContain("chmod 555 /octogee/scripts/secret-resolver.mjs");
