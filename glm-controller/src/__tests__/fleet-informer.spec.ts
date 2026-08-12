@@ -5,7 +5,6 @@ import {
   assignedSlugsFromUserMirror,
   createFleetInformer,
   FLEET_INFORMER_REATTACH_MS_DEFAULT,
-  INFORMER_USER_FIELD_PATHS,
   type FleetInformer,
 } from "../fleet-informer.js";
 
@@ -41,6 +40,7 @@ function fakeOwnedListenerDb() {
     collection: (name: string) => {
       if (name !== "users") throw new Error(`unexpected collection ${name}`);
       return {
+        onSnapshot: attach(users),
         select: (...fields: string[]) => {
           selects.push(fields);
           return { onSnapshot: attach(users) };
@@ -69,12 +69,12 @@ describe("fleet informer — owned listeners (users + assignments)", () => {
     vi.useRealTimers();
   });
 
-  it("attaches a users listener projected to exactly the consumed field paths", () => {
+  it("attaches a users listener without a Firestore projection", () => {
     const { db, selects, users } = fakeOwnedListenerDb();
     const informer = createFleetInformer({ db, log: vi.fn() });
 
     expect(users).toHaveLength(1);
-    expect([...(selects[0] ?? [])].sort()).toEqual([...INFORMER_USER_FIELD_PATHS].sort());
+    expect(selects).toEqual([]);
     informer.stop();
   });
 

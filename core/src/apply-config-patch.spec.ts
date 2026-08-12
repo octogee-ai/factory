@@ -212,19 +212,23 @@ describe("applyConfigPatch — hash-mismatch", () => {
     expect(configPatch.mock.calls[1][1]).toBe("fresh");
   });
 
-  it("hash-mismatch retries do NOT consume any backoff sleep (retry immediately)", async () => {
+  it("retries the first hash mismatch immediately and backs off a repeated race", async () => {
     const configPatch = vi
       .fn()
       .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "stale 1"))
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "stale 2"))
       .mockResolvedValueOnce({ ok: true as const });
     const sleep = vi.fn(async () => {});
 
     await applyConfigPatch(
       { buildPatch: () => ({}) },
-      { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configPatch }) },
+      {
+        ...baseOpts({ sleep, retryBackoffInitialMs: 250 }),
+        rpc: makeFakeRpc({ configPatch }),
+      },
     );
 
-    expect(sleep).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(250);
   });
 
   it("throws hash-mismatch when maxRetries is exhausted", async () => {

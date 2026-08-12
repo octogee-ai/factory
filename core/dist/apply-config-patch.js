@@ -95,7 +95,7 @@ async function readConfigForPatch(rpc, cache, now) {
     seedCacheFromFetch(cache, fetched.config, fetched.hash);
     return { config: fetched.config, hash: fetched.hash, getMs: now() - getStart };
 }
-function handleHashMismatch(err, ctx) {
+async function handleHashMismatch(err, ctx) {
     if (ctx.attempts >= ctx.maxRetries) {
         ctx.log(`⚠ ${ctx.prefix}config.patch hash-mismatch exhausted after attempts=${ctx.attempts} — bubbling`);
         throw err;
@@ -104,7 +104,15 @@ function handleHashMismatch(err, ctx) {
         throw new Error(`${ctx.prefix}config.patch totalDeadlineMs=${ctx.totalDeadlineMs}ms exceeded after attempts=${ctx.attempts} (last error: hash-mismatch)`);
     }
     invalidateCacheForHashMismatch(ctx.cache);
-    ctx.log(`${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`);
+    if (ctx.attempts === 1) {
+        ctx.log(`${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`);
+        return ctx.currentBackoff;
+    }
+    const delayMs = Math.min(ctx.currentBackoff, ctx.remainingMs());
+    ctx.log(`${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying in ${delayMs}ms`);
+    await ctx.sleep(delayMs);
+    ctx.throwIfAborted();
+    return Math.min(ctx.currentBackoff * 2, ctx.maxBackoff);
 }
 async function runConfigPatchAttempt(args, ctx) {
     const { config, hash, getMs } = await readConfigForPatch(ctx.rpc, ctx.cache, ctx.now);
@@ -179,8 +187,7 @@ async function handleConfigPatchFailure(err, ctx) {
     const elapsed = ctx.now() - ctx.attemptStartedAt;
     throwIfPermanentConfigPatchFailure(err, { elapsed, log: ctx.log, prefix: ctx.prefix });
     if (err.code === "hash-mismatch") {
-        handleHashMismatch(err, { ...ctx, elapsed });
-        return ctx.currentBackoff;
+        return handleHashMismatch(err, { ...ctx, elapsed });
     }
     throwIfConfigPatchRetryUnavailable(err, ctx);
     const retryPlan = configPatchRetryPlan(err, ctx.currentBackoff, ctx.remainingMs());

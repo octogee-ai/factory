@@ -202,8 +202,7 @@ async function claimTask(
   deps: Required<Pick<RSyncMigrationTransferDeps, "db" | "now" | "workerId" | "leaseMs">>,
   input: Parameters<MigrationClient["transferState"]>[0],
 ): Promise<
-  | { kind: "already-succeeded"; taskId: string }
-  | { kind: "claimed"; taskId: string; ref: DocumentReference; attempt: number }
+  { kind: "claimed"; taskId: string; ref: DocumentReference; attempt: number }
 > {
   const taskId = migrationTransferTaskId(input);
   const ref = deps.db
@@ -217,9 +216,6 @@ async function claimTask(
       ? (snap.data() as Partial<MigrationTransferTaskDoc> | undefined)
       : undefined;
 
-    if (existing?.status === "succeeded") {
-      return { kind: "already-succeeded", taskId } as const;
-    }
     if (
       existing?.status === "running" &&
       typeof existing.leaseExpiresAt === "number" &&
@@ -381,12 +377,6 @@ export function createRsyncMigrationTransfer(
       },
       { ...input, mode },
     );
-    if (claimed.kind === "already-succeeded") {
-      log(
-        `[migration-rsync] task=${claimed.taskId} already succeeded mode=${mode} migrationId=${input.migrationId} slug=${input.slug}`,
-      );
-      return { migrationId: input.migrationId, slug: input.slug, imported: true };
-    }
 
     let targetPrepareAttempted = false;
     let targetPod: { name: string; podIP: string } | undefined;

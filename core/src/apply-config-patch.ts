@@ -164,10 +164,12 @@ async function readConfigForPatch(
   return { config: fetched.config, hash: fetched.hash, getMs: now() - getStart };
 }
 
-function handleHashMismatch(
+async function handleHashMismatch(
   err: OpenclawWireError,
   ctx: {
     attempts: number;
+    currentBackoff: number;
+    maxBackoff: number;
     maxRetries: number;
     remainingMs: () => number;
     totalDeadlineMs: number;
@@ -175,8 +177,10 @@ function handleHashMismatch(
     cache: ConfigCache | undefined;
     log: (msg: string) => void;
     prefix: string;
+    sleep: (ms: number) => Promise<void>;
+    throwIfAborted: () => void;
   },
-): void {
+): Promise<number> {
   if (ctx.attempts >= ctx.maxRetries) {
     ctx.log(
       `⚠ ${ctx.prefix}config.patch hash-mismatch exhausted after attempts=${ctx.attempts} — bubbling`,
@@ -189,9 +193,19 @@ function handleHashMismatch(
     );
   }
   invalidateCacheForHashMismatch(ctx.cache);
+  if (ctx.attempts === 1) {
+    ctx.log(
+      `${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`,
+    );
+    return ctx.currentBackoff;
+  }
+  const delayMs = Math.min(ctx.currentBackoff, ctx.remainingMs());
   ctx.log(
-    `${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying immediately`,
+    `${ctx.prefix}config.patch attempt=${ctx.attempts} hash-mismatch after ${ctx.elapsed}ms — re-fetching hash and retrying in ${delayMs}ms`,
   );
+  await ctx.sleep(delayMs);
+  ctx.throwIfAborted();
+  return Math.min(ctx.currentBackoff * 2, ctx.maxBackoff);
 }
 
 async function runConfigPatchAttempt(
@@ -347,8 +361,7 @@ async function handleConfigPatchFailure(
   throwIfPermanentConfigPatchFailure(err, { elapsed, log: ctx.log, prefix: ctx.prefix });
 
   if (err.code === "hash-mismatch") {
-    handleHashMismatch(err, { ...ctx, elapsed });
-    return ctx.currentBackoff;
+    return handleHashMismatch(err, { ...ctx, elapsed });
   }
 
   throwIfConfigPatchRetryUnavailable(err, ctx);

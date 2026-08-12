@@ -114,6 +114,16 @@ describe("classifyOperationFailure", () => {
           "requires running with a converged release",
       ),
     ).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        "[migration-http] local SSH public key is missing for alice",
+      ),
+    ).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        "[migration-activation:alice] source has no applied fingerprint; converge it before migration",
+      ),
+    ).toBe("transient");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
