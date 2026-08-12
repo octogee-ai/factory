@@ -9,6 +9,7 @@ import type {
 } from "./lib/model-broker-provider-keys.js";
 import type {
   ModelBrokerProvider,
+  ModelBrokerTokenLookup,
   ModelBrokerTokenRecord,
   ModelBrokerTokenStore,
 } from "./lib/model-broker-tokens.js";
@@ -1397,6 +1398,35 @@ function reportBrokerResolutionError(deps: LlmBrokerAppDeps, error: unknown): vo
   deps.onMeteringError?.(error);
 }
 
+const BROKER_TOKEN_REJECTION_BODY: Partial<Record<ModelBrokerTokenLookup["outcome"], string>> = {
+  expired: "broker token expired",
+  revoked: "broker token revoked",
+};
+
+function rejectBrokerToken(
+  deps: LlmBrokerAppDeps,
+  res: ExpressResponse,
+  url: URL,
+  lookup: ModelBrokerTokenLookup,
+): void {
+  const rejection = lookup.outcome === "valid" ? "uncapped" : lookup.outcome;
+  deps.log?.(
+    `broker token rejected: ${rejection}`,
+    lookup.outcome === "unknown"
+      ? { path: url.pathname }
+      : {
+          path: url.pathname,
+          gatewayId: lookup.record.gatewayId,
+          ownerUid: lookup.record.ownerUid,
+          provider: lookup.record.provider,
+          expiresAt: lookup.record.expiresAt,
+        },
+  );
+  res.status(401).json({
+    error: BROKER_TOKEN_REJECTION_BODY[lookup.outcome] ?? "invalid broker token",
+  });
+}
+
 async function ownerAllowsBrokerRequest(
   deps: LlmBrokerAppDeps,
   record: ModelBrokerTokenRecord,
@@ -1461,11 +1491,12 @@ async function resolveBrokerRequest(
     res.status(404).json({ error: "unsupported LLM broker endpoint" });
     return null;
   }
-  const record = await deps.store.lookupToken(authToken(req), now());
-  if (!record || record.capped !== true) {
-    res.status(401).json({ error: "invalid broker token" });
+  const lookup = await deps.store.lookupToken(authToken(req), now());
+  if (lookup.outcome !== "valid" || lookup.record.capped !== true) {
+    rejectBrokerToken(deps, res, url, lookup);
     return null;
   }
+  const record = lookup.record;
   if (!(await ownerAllowsBrokerRequest(deps, record, res))) return null;
   if (!providerAllowedEndpoint(record, req, url)) {
     res.status(404).json({ error: "unsupported LLM broker endpoint" });

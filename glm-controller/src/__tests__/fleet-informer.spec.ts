@@ -140,6 +140,18 @@ describe("fleet informer — owned listeners (users + assignments)", () => {
     informer.stop();
   });
 
+  it("logs the listener error even when the mirror was never fresh", () => {
+    const { db, users } = fakeOwnedListenerDb();
+    const log = vi.fn();
+    const informer = createFleetInformer({ db, log });
+
+    lastListener(users).onError(new Error("PERMISSION_DENIED: listen rejected"));
+    vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("PERMISSION_DENIED"));
+    informer.stop();
+  });
+
   it("schedules exactly one re-attach no matter how many errors a dead listener reports", () => {
     const { db, users } = fakeOwnedListenerDb();
     const informer = createFleetInformer({ db, log: vi.fn() });
