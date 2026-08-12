@@ -152,8 +152,6 @@ describe("placement policy tick watchdog", () => {
     expect(runPass).toHaveBeenCalledTimes(2);
     releaseFirst();
     await vi.advanceTimersByTimeAsync(PLACEMENT_POLICY_RECONCILE_MS_DEFAULT);
-    // Pass 2 is under its own deadline and still running — the settled pass 1
-    // must not have re-opened the gate for pass 3.
     expect(runPass).toHaveBeenCalledTimes(2);
     stop();
   });
