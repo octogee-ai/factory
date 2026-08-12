@@ -260,19 +260,29 @@ function fieldValue(data: Record<string, unknown>, field: string): unknown {
   );
 }
 
+interface FakeQueryFilter {
+  field: string;
+  op: "==" | "<=";
+  value: unknown;
+}
+
+interface FakeQuery {
+  where(field: string, op: "==" | "<=", value: unknown): FakeQuery;
+  limit(count: number): { get(): Promise<{ docs: FakeQueryDocumentSnapshot[] }> };
+}
+
 function firestoreHarness() {
   const documents = new Map<string, Record<string, unknown>>();
   documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
+  let now = new Date("2026-07-13T12:00:00.000Z");
   const snapshot = (path: string) => ({
     exists: documents.has(path),
     data: () => documents.get(path),
   });
   const collection = (collectionPath: string) => {
-    const filters: Array<{ field: string; op: "==" | "<="; value: unknown }> = [];
-    const query = {
+    const query = (filters: FakeQueryFilter[]): FakeQuery => ({
       where(field: string, op: "==" | "<=", value: unknown) {
-        filters.push({ field, op, value });
-        return query;
+        return query([...filters, { field, op, value }]);
       },
       limit: (count: number) => ({
         get: async () => ({
@@ -288,8 +298,8 @@ function firestoreHarness() {
             .map((data) => new FakeQueryDocumentSnapshot(structuredClone(data))),
         }),
       }),
-    };
-    return query;
+    });
+    return query([]);
   };
   const db = {
     doc: (path: string) => ({ path, get: async () => snapshot(path) }),
@@ -304,10 +314,17 @@ function firestoreHarness() {
   };
   const store = createFirestoreArtifactJobStore(db);
   const registry = new ArtifactRegistry(store, {
-    now: () => new Date("2026-07-13T12:00:00.000Z"),
+    now: () => now,
     leaseToken: () => `lease-${"x".repeat(32)}`,
   });
-  return { documents, store, registry };
+  return {
+    documents,
+    store,
+    registry,
+    setNow(value: Date) {
+      now = value;
+    },
+  };
 }
 
 describe("Firestore artifact job store", () => {
@@ -328,6 +345,18 @@ describe("Firestore artifact job store", () => {
     expect(claim?.job.artifactId).toBe(created.artifactId);
     expect(claim?.job.status).toBe("processing");
     await expect(harness.registry.claimNext("pdf-worker-2")).resolves.toBeNull();
+  });
+
+  it("reclaims lease-expired processing work through an independent query", async () => {
+    const harness = firestoreHarness();
+    const created = await harness.registry.enqueue(REQUEST, OWNERSHIP);
+    await harness.registry.claimNext("pdf-worker-1");
+    harness.setNow(new Date("2026-07-13T12:05:01.000Z"));
+
+    const claim = await harness.registry.claimNext("pdf-worker-2");
+    expect(claim?.job.artifactId).toBe(created.artifactId);
+    expect(claim?.job.attempt).toBe(2);
+    expect(claim?.job.lease?.workerId).toBe("pdf-worker-2");
   });
 
   it("hides existing jobs and rejects worker transactions after the workspace owner is suspended", async () => {
