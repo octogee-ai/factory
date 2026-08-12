@@ -51,6 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     htop strace dnsutils net-tools \
     # Fuzzy finder
     fzf \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
 # ── OpenClaw from private fork tarball ──────────────────────────────────────

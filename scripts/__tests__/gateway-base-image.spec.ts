@@ -87,6 +87,9 @@ describe("gateway base image", () => {
 
     expect(installed.has("ripgrep")).toBe(true);
     expect(installed.has("fd-find")).toBe(true);
+    expect(readRepoFile("infra/gateway/Dockerfile.base")).toContain(
+      "ln -s /usr/bin/fdfind /usr/local/bin/fd",
+    );
     expect(dockerfile).toContain("ENV OPENCLAW_OFFLINE=1");
   });
 
