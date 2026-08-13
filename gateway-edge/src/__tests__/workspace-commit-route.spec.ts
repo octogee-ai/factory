@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   resolveCommitAuthor: vi.fn(),
   warn: vi.fn(),
   info: vi.fn(),
+  verifyWorkspaceCommitProof: vi.fn(),
 }));
 
 vi.mock("../lib/workspace-git.js", () => ({
@@ -25,6 +26,10 @@ vi.mock("../routes/workspace/helpers.js", () => ({
 
 vi.mock("../middleware/logging.js", () => ({
   logger: { warn: h.warn, info: h.info },
+}));
+
+vi.mock("../lib/workspace-commit-proof.js", () => ({
+  verifyWorkspaceCommitProof: h.verifyWorkspaceCommitProof,
 }));
 
 import workspaceCommitRouter from "../routes/internal/workspace-commit.js";
@@ -47,6 +52,7 @@ beforeEach(() => {
     ok: true,
     result: { committed: true, pushed: true, nothingToCommit: false },
   });
+  h.verifyWorkspaceCommitProof.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -59,13 +65,13 @@ afterEach(() => {
 
 describe("internal workspace commit route", () => {
   it("rejects invalid slugs and oversized commit messages before touching the workspace", async () => {
-    await request(app()).post("/internal/workspace/commit").send({ slug: "not valid" }).expect(400, {
+    await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "not valid" }).expect(400, {
       error: "Invalid slug",
       code: "BAD_SLUG",
     });
     await request(app())
       .post("/internal/workspace/commit")
-      .send({ slug: "acme", message: "x".repeat(5_001) })
+      .send({ agentId: "octogee-acme-coach", slug: "acme", message: "x".repeat(5_001) })
       .expect(400, {
         error: "Commit message too long",
         code: "MESSAGE_TOO_LONG",
@@ -75,10 +81,39 @@ describe("internal workspace commit route", () => {
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
   });
 
+  it("rejects missing or invalid agent proof before touching the workspace", async () => {
+    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(400, {
+      error: "Invalid agent identity",
+      code: "BAD_AGENT",
+    });
+
+    h.verifyWorkspaceCommitProof.mockResolvedValue(false);
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(403, { error: "Agent identity proof rejected.", code: "PROOF_REJECTED" });
+
+    expect(h.resolveCustomerDir).not.toHaveBeenCalled();
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and reports a retryable error when proof lookup is unavailable", async () => {
+    h.verifyWorkspaceCommitProof.mockRejectedValue(new Error("firestore unavailable"));
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(503, {
+        error: "Agent identity verification temporarily unavailable.",
+        code: "PROOF_UNAVAILABLE",
+      });
+    expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("identity proof lookup failed slug=acme"));
+    expect(h.resolveCustomerDir).not.toHaveBeenCalled();
+  });
+
   it("returns a retryable 503 when the customer working tree is unavailable", async () => {
     h.resolveCustomerDir.mockResolvedValue(null);
 
-    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(503, {
+    await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(503, {
       error: "Working tree temporarily unavailable; retry shortly.",
       code: "CUSTOMER_DIR_MISSING",
     });
@@ -90,7 +125,7 @@ describe("internal workspace commit route", () => {
   it("commits with a trimmed message and resolved agent author", async () => {
     const res = await request(app())
       .post("/internal/workspace/commit")
-      .send({ slug: "acme", message: "  checkpoint work  " })
+      .send({ agentId: "octogee-acme-coach", slug: "acme", message: "  checkpoint work  " })
       .expect(200);
 
     expect(h.resolveCustomerDir).toHaveBeenCalledWith("/home/node/.openclaw/customers", "acme");
@@ -107,7 +142,7 @@ describe("internal workspace commit route", () => {
   it("uses the default commit message and custom customer root when no message is provided", async () => {
     process.env.CUSTOMERS_DIR = "/custom/customers";
 
-    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(200);
+    await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(200);
 
     expect(h.resolveCustomerDir).toHaveBeenCalledWith("/custom/customers", "acme");
     expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", expect.objectContaining({
@@ -120,7 +155,7 @@ describe("internal workspace commit route", () => {
   it("returns git command failures and makes push-only failures explicit", async () => {
     h.commitAndPushWorkspace.mockResolvedValueOnce({ ok: false, error: { code: "COMMIT_FAILED" } });
 
-    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(500, {
+    await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(500, {
       error: "git command failed",
       code: "COMMIT_FAILED",
     });
@@ -130,7 +165,7 @@ describe("internal workspace commit route", () => {
       ok: true,
       result: { committed: true, pushed: false, nothingToCommit: false, pushError: "rejected" },
     });
-    await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(502, {
+    await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(502, {
       error: "Commit was created locally, but the remote rejected the push. Do not build or publish until a later commit succeeds.",
       code: "PUSH_FAILED",
       committed: true,
@@ -146,7 +181,7 @@ describe("internal workspace commit route", () => {
       error: { code: "WORKSPACE_BUSY", cwd: "/customers/acme" },
     });
 
-    const response = await request(app()).post("/internal/workspace/commit").send({ slug: "acme" }).expect(409, {
+    const response = await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(409, {
       error: "Workspace is busy; retry shortly.",
       code: "WORKSPACE_BUSY",
     });
@@ -161,7 +196,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
     await request(app())
       .post("/internal/workspace/commit")
-      .send({ slug: "acme", project: "orbit", message: "checkpoint" })
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit", message: "checkpoint" })
       .expect(200);
 
     expect(h.resolveProjectDir).toHaveBeenCalledWith(process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers", "acme", "orbit");
@@ -176,7 +211,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
   it("rejects malformed project ids before touching the tree", async () => {
     await request(app())
       .post("/internal/workspace/commit")
-      .send({ slug: "acme", project: "Not-Valid!" })
+      .send({ agentId: "octogee-acme-coach", slug: "acme", project: "Not-Valid!" })
       .expect(400, { error: "Invalid project", code: "BAD_PROJECT" });
 
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
@@ -187,7 +222,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
     await request(app())
       .post("/internal/workspace/commit")
-      .send({ slug: "acme", project: "orbit" })
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" })
       .expect(503);
 
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
