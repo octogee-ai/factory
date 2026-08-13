@@ -353,9 +353,78 @@ function digestFromImageReference(reference, expectedRepository) {
         throw new Error("release alias target must be digest-bound");
     return assertDigest(reference.slice(at + 1), "release alias target");
 }
+function releaseRecordObjectName(version) {
+    return `test-${assertReleaseVersion(version)}.json`;
+}
+function releaseRecordMediaUrl(bucket, objectName) {
+    return `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}` +
+        `/o/${encodeURIComponent(objectName)}?alt=media`;
+}
+function releaseRecordUploadUrl(bucket, objectName) {
+    const params = new URLSearchParams({
+        uploadType: "media",
+        name: objectName,
+        ifGenerationMatch: "0",
+    });
+    return `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucket)}` +
+        `/o?${params.toString()}`;
+}
+function releaseRecordDigest(input, description) {
+    const record = plainRecord(input, description);
+    exactObjectKeys(record, ["manifestDigest"], description);
+    return assertDigest(record.manifestDigest, `${description} manifestDigest`);
+}
+async function readReleaseRecord(bucket, objectName, token) {
+    const response = await fetch(releaseRecordMediaUrl(bucket, objectName), {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404)
+        return null;
+    return releaseRecordDigest(await requireJson(response, `release record ${objectName}`), `release record ${objectName}`);
+}
+async function ensureReleaseRecord(input) {
+    const prefix = `gs://${input.bucket}/`;
+    if (!input.alias.alias.startsWith(prefix))
+        throw new Error("release record is outside its authority bucket");
+    const objectName = input.alias.alias.slice(prefix.length);
+    const version = objectName.startsWith("test-") && objectName.endsWith(".json")
+        ? objectName.slice("test-".length, -".json".length)
+        : "";
+    if (releaseRecordObjectName(version) !== objectName) {
+        throw new Error("release record object name is invalid");
+    }
+    const intendedDigest = digestFromImageReference(input.alias.intendedTarget, input.repository);
+    const existing = await readReleaseRecord(input.bucket, objectName, input.token);
+    if (existing !== null) {
+        if (existing !== intendedDigest)
+            throw new Error(`${input.alias.alias} already points at a different digest`);
+        return { alias: input.alias.alias, status: "already-applied", observedTarget: input.alias.intendedTarget };
+    }
+    const createResponse = await fetch(releaseRecordUploadUrl(input.bucket, objectName), {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${input.token}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ manifestDigest: intendedDigest }),
+    });
+    if (!createResponse.ok && createResponse.status !== 409 && createResponse.status !== 412) {
+        const detail = await createResponse.text().catch(() => "");
+        throw new Error(`release record create ${input.alias.alias} failed: ${createResponse.status} ${detail.slice(0, 200)}`);
+    }
+    const observed = await readReleaseRecord(input.bucket, objectName, input.token);
+    if (observed !== intendedDigest)
+        throw new Error(`${input.alias.alias} already points at a different digest`);
+    return {
+        alias: input.alias.alias,
+        status: createResponse.ok ? "applied" : "already-applied",
+        observedTarget: input.alias.intendedTarget,
+    };
+}
 export function createCentralReleaseAuthority(coordinates, deps = {}) {
     const repository = dockerRepository(coordinates);
     const packages = packagesBaseForCoordinates(coordinates);
+    const releaseRecordBucket = coordinates.releaseRecordBucket ?? `${coordinates.project}-release-records`;
     const accessToken = deps.getAccessToken ?? getAccessToken;
     async function resolveTagDigest(packageName, tag, token) {
         const response = await arFetch(`${packages}/${packageName}/tags/${encodeURIComponent(tag)}`, "GET", token);
@@ -364,11 +433,7 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
         const tagBody = await requireJson(response, `artifact-registry resolve ${packageName}:${tag}`);
         return digestFromVersion(tagBody.version, `artifact-registry ${packageName}:${tag}`);
     }
-    async function resolveManifestFromTag(tag) {
-        const token = await accessToken();
-        const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
-        if (!manifestDigest)
-            throw new Error(`release digest manifest ${tag} does not exist`);
+    async function resolveManifestFromDigest(manifestDigest, token) {
         const manifestResponse = await fetch(`https://${coordinates.location}-docker.pkg.dev/v2/${coordinates.project}/${coordinates.repository}` +
             `/release-digest-manifest/manifests/${manifestDigest}`, {
             headers: {
@@ -401,6 +466,13 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
         }
         return validateReleaseDigestManifest(parsed, manifestDigest, repository);
     }
+    async function resolveManifestFromTag(tag) {
+        const token = await accessToken();
+        const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
+        if (!manifestDigest)
+            throw new Error(`release digest manifest ${tag} does not exist`);
+        return resolveManifestFromDigest(manifestDigest, token);
+    }
     return {
         async resolveManifest(sourceSha) {
             const expectedSourceSha = assertSourceSha(sourceSha);
@@ -411,7 +483,12 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
             return manifest;
         },
         async resolveTestManifest(version) {
-            return resolveManifestFromTag(`test-${assertReleaseVersion(version)}`);
+            const token = await accessToken();
+            const objectName = releaseRecordObjectName(version);
+            const manifestDigest = await readReleaseRecord(releaseRecordBucket, objectName, token);
+            if (!manifestDigest)
+                throw new Error(`release record ${objectName} does not exist`);
+            return resolveManifestFromDigest(manifestDigest, token);
         },
         aliasesFor(manifest) {
             const sourceSha = assertSourceSha(manifest.sourceSha);
@@ -435,7 +512,7 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
         testRecordAlias(version, manifest) {
             const validated = validateResolvedReleaseDigestManifest(manifest, repository);
             return {
-                alias: `${repository}/release-digest-manifest:test-${assertReleaseVersion(version)}`,
+                alias: `gs://${releaseRecordBucket}/${releaseRecordObjectName(version)}`,
                 intendedTarget: `${repository}/release-digest-manifest@${validated.manifestDigest}`,
             };
         },
@@ -444,6 +521,15 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
             const outcomes = [];
             for (const alias of aliases) {
                 try {
+                    if (alias.alias.startsWith("gs://")) {
+                        outcomes.push(await ensureReleaseRecord({
+                            alias,
+                            bucket: releaseRecordBucket,
+                            repository,
+                            token,
+                        }));
+                        continue;
+                    }
                     const parsed = parseReleaseAlias(alias.alias, repository);
                     const intendedDigest = digestFromImageReference(alias.intendedTarget, repository);
                     const existing = await resolveTagDigest(parsed.packageName, parsed.tag, token);

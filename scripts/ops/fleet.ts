@@ -36,6 +36,7 @@ import {
   rollbackPlan,
   describeStep,
 } from "../lib/fleet-migration.js";
+import { firebaseCredentialFromAccessToken } from "../lib/firebase-access-token-credential.js";
 import {
   enqueueOperation,
   awaitOperation,
@@ -154,7 +155,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
     args: "<version> [--sha=<sha>] [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
     description:
-      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the selected shared or all-gateway desired releases, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, cuts the selected shared or all-gateway desired releases, records the immutable TEST authorization, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test release cut v0.4.0",
       "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
@@ -1215,6 +1216,9 @@ function initializeFleetCli(argv: string[]): void {
   }
 
   const credentialMode = resolveFleetCredentialMode(args);
+  const accessTokenCredential = firebaseCredentialFromAccessToken(
+    process.env.GOOGLE_OAUTH_ACCESS_TOKEN,
+  );
   const target = resolveFleetDeploymentTarget(args.env);
   const projectId = target.projectId;
   const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
@@ -1223,16 +1227,16 @@ function initializeFleetCli(argv: string[]): void {
     `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
   );
   const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || saPath;
-  if (credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
+  if (!accessTokenCredential && credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
     console.error(red(`${CROSS} SA key not found at ${saPath}`));
     console.error(dim(`  Set GOOGLE_APPLICATION_CREDENTIALS or provide the local key used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
     process.exit(1);
   }
   initializeApp({
-    credential:
-      credentialMode === "application-default"
+    credential: accessTokenCredential ??
+      (credentialMode === "application-default"
         ? applicationDefault()
-        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
+        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8")))),
     projectId,
   });
   if (credentialMode === "application-default") {
