@@ -68,9 +68,15 @@ describe("releasev2 digest manifest", () => {
     );
     expect(platformBuild).toContain("Publish full-SHA platform provenance tags");
     expect(platformBuild).toContain("artifact-worker glm-controller octogee-api octogee-ops-agent octogee-project-runner");
+    expect(platformBuild).toContain(
+      'bash scripts/lib/publish-full-sha-image-tag.sh "$image"',
+    );
     expect(gatewayBuild).toContain("publish-full-sha-provenance:");
     expect(gatewayBuild).toContain("needs: [matrix-setup, build, operator-image]");
     expect(gatewayBuild).toContain("gateway-edge octogee-gateway octogee-gateway-builder");
+    expect(gatewayBuild).toContain(
+      'bash scripts/lib/publish-full-sha-image-tag.sh "$image"',
+    );
   });
 
   it("removes the GitHub run-history walk from release promotion", () => {
