@@ -102,6 +102,7 @@ export interface CutoverCommitParams {
     updatedByOperationId: string | null;
   } | null;
   customerMigrationV2Fence?: {
+    strategy: "migrate-state" | "provision-fresh";
     operationId: string;
     migrationId: string;
     uid: string;
@@ -130,9 +131,14 @@ function customerMigrationV2FenceIsExact(
   const state = recordOrEmpty(operation?.customerMigrationV2);
   const sourceRootFence = state.sourceRootFence as CustomerMigrationV2GatewayRootFence;
   const targetRootFence = state.targetRootFence as CustomerMigrationV2GatewayRootFence;
+  const stateStrategy = state.strategy ?? "migrate-state";
+  const cutoverReady = fence.strategy === "provision-fresh"
+    ? state.phase === "freshCutoverReady"
+    : state.phase === "targetVerified";
   return [
     operation?.status === "running",
-    state.phase === "targetVerified",
+    cutoverReady,
+    stateStrategy === fence.strategy,
     state.operationId === fence.operationId,
     state.migrationId === fence.migrationId,
     state.uid === fence.uid,
@@ -351,7 +357,7 @@ function assertCustomerMigrationV2ProofsExact(input: {
 }): void {
   const { fence, operation, targetRoot, sourceRoot } = input;
   if (!customerMigrationV2FenceIsExact(operation, fence)) {
-    throw new Error("customer migration V2 is not durably target-verified at cutover");
+    throw new Error("customer migration V2 is not durably cutover-ready");
   }
   if (!customerMigrationV2GatewayRootFenceMatches(targetRoot, fence.targetRootFence)) {
     throw new Error("customer migration V2 target root changed before cutover");

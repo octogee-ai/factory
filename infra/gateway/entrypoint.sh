@@ -264,11 +264,6 @@ else
 fi
 # ── End gateway auth token publish ──────────────────────────────────────────
 
-BUILDER_CODEX=/octogee/infra/gateway/apply-builder-codex-sandbox.mjs
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ -f "$BUILDER_CODEX" ]; then
-  node "$BUILDER_CODEX" || log "apply-builder-codex-sandbox: non-fatal failure"
-fi
-
 # ── Harden file permissions ─────────────────────────────────────────────────
 # The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
 chmod 700 "$OPENCLAW_DIR" 2>/dev/null || true

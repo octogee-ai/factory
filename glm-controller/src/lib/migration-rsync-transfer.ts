@@ -400,6 +400,7 @@ export function createRsyncMigrationTransfer(
       const prepareBody: PrepareRsyncImportRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
+        rpcPhase: "prepare-rsync-import",
         mode,
         transferUser: MIGRATION_TRANSFER_USER,
         transferKey,
@@ -420,6 +421,7 @@ export function createRsyncMigrationTransfer(
       const pushBody: PushRsyncStateRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
+        rpcPhase: "push-rsync-state",
         mode,
         targetHost: targetPod.podIP,
         targetPort: prepared.port,
@@ -437,6 +439,7 @@ export function createRsyncMigrationTransfer(
       const finishBody: FinishRsyncImportRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
+        rpcPhase: "finish-rsync-import",
         mode,
       };
       await control<ImportResponse>({
@@ -459,7 +462,12 @@ export function createRsyncMigrationTransfer(
           gatewayId: input.toGatewayId,
           pathSuffix: "/abort-rsync-import",
           migrationId: input.migrationId,
-          body: { migrationId: input.migrationId, slug: input.slug, mode },
+          body: {
+            migrationId: input.migrationId,
+            slug: input.slug,
+            rpcPhase: "abort-rsync-import",
+            mode,
+          },
           baseUrl: podBaseUrl(targetPod.podIP, deps.fleetControllerPort),
         }).catch((abortErr) => {
           log(

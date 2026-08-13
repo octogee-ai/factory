@@ -86,6 +86,9 @@ const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
+  "grep",
+  "find",
+  "ls",
   "write",
   "edit",
   "apply_patch",
@@ -403,10 +406,6 @@ function enableConnectorTools(config) {
   delete config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval;
 }
 
-function removeConnectorNativeApproval(config) {
-  delete config.plugins?.entries?.[CONNECTOR_TOOLS_PLUGIN]?.config?.requireWriteApproval;
-}
-
 // Preserved/restored configs predate the plugin; converge it at boot so both
 // shared and builder classes gain project CRUD without waiting for a fresh
 // template render. The client resolves brokerUrl/tokenPath from env when the
@@ -443,7 +442,7 @@ function disableCodex(config) {
   config.plugins ??= {};
   config.plugins.allow = [...CUSTOMER_APPROVED_PLUGINS];
   config.plugins.entries ??= {};
-  delete config.plugins.entries.codex;
+  config.plugins.entries.codex = { enabled: false };
 }
 
 function setTerminal(config, enabled) {
@@ -525,25 +524,6 @@ function forceCustomerWorkspaceOnly(config) {
   for (const [agentId, rawEntry] of Object.entries(entries)) {
     const entry = objectValue(rawEntry);
     if (entry) projectCustomerAgentTools(config, entry, agentId);
-  }
-}
-
-function forceProjectAgentPolicy(config) {
-  if (Array.isArray(config.agents?.list)) {
-    for (const rawEntry of config.agents.list) {
-      const entry = objectValue(rawEntry);
-      if (entry && customerAgentLane(entry.id) === "project") {
-        projectCustomerAgentTools(config, entry, entry.id);
-      }
-    }
-  }
-  const entries = objectValue(config.agents?.entries);
-  if (!entries) return;
-  for (const [agentId, rawEntry] of Object.entries(entries)) {
-    const entry = objectValue(rawEntry);
-    if (entry && customerAgentLane(agentId) === "project") {
-      projectCustomerAgentTools(config, entry, agentId);
-    }
   }
 }
 
@@ -1289,24 +1269,35 @@ function scrubUnsafePersistedSessions(openclawDir, agentId, directRuntimeModelRe
   return legacyChanged || sqliteChanged;
 }
 
-function scrubCustomerOauthDisk(configPath, config, env, resetAgentIds, directRuntimeModelRefs) {
+function scrubCustomerOauthDisk(
+  configPath,
+  config,
+  env,
+  {
+    resetAgentIds,
+    directRuntimeModelRefs,
+    preserveBuilderShellCredentials = false,
+  },
+) {
   const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
   const homeDir = env.HOME ?? "/home/node";
   const nativeCredential = path.join(homeDir, ".claude", ".credentials.json");
-  const nativeRemoved = [nativeCredential, `${nativeCredential}.tmp`]
-    .map(removeFile)
-    .some(Boolean);
+  const nativeRemoved = preserveBuilderShellCredentials
+    ? false
+    : [nativeCredential, `${nativeCredential}.tmp`].map(removeFile).some(Boolean);
   const agentIds = configuredCustomerAgentIds(config);
   const modelProviders = customerDiskModelProviders(env);
   if (nativeRemoved) agentIds.forEach((agentId) => resetAgentIds.add(agentId));
   for (const agentId of agentIds) {
     const agentDir = path.join(openclawDir, "agents", agentId, "agent");
     const authJson = path.join(agentDir, "codex-home", "auth.json");
-    const authRemoved = [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]
-      .map(removeFile)
-      .some(Boolean);
+    const authRemoved = preserveBuilderShellCredentials
+      ? false
+      : [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]
+        .map(removeFile)
+        .some(Boolean);
     const staging = path.join(agentDir, "codex-home.staging");
-    const stagingRemoved = fs.existsSync(staging);
+    const stagingRemoved = !preserveBuilderShellCredentials && fs.existsSync(staging);
     if (stagingRemoved) fs.rmSync(staging, { recursive: true, force: true });
     const profilesScrubbed = scrubAgentOauthProfiles(agentDir, agentId);
     const modelsScrubbed = projectAgentModelsJson(agentDir, modelProviders);
@@ -1323,8 +1314,10 @@ function scrubCustomerOauthDisk(configPath, config, env, resetAgentIds, directRu
   for (const agentId of resetAgentIds) resetAgentSessionStore(openclawDir, agentId);
 }
 
-function applySharedPolicy(config) {
+function applyCustomerPolicy(config) {
   config.tools ??= {};
+  config.tools.elevated ??= {};
+  config.tools.elevated.enabled = false;
   config.tools.deny = addTools(
     removeTools(config.tools.deny, CUSTOMER_STRUCTURED_AVAILABLE_TOOLS),
     CUSTOMER_CODE_DENIED_TOOLS,
@@ -1351,12 +1344,6 @@ function applySharedPolicy(config) {
   enableConnectorTools(config);
   removePolicyCodexAuthPlaceholder(config);
   disableCodex(config);
-}
-
-function applyBuilderPolicy(config) {
-  removeConnectorNativeApproval(config);
-  forceProjectAgentPolicy(config);
-  enableBoardTools(config);
 }
 
 function resolveGatewayClass(env) {
@@ -1402,9 +1389,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
   }
   const gatewayClass = resolveGatewayClass(env);
   const before = JSON.stringify(config);
-  if (gatewayClass === "builder") {
-    applyBuilderPolicy(config);
-  } else if (gatewayClass === "shared") {
+  if (gatewayClass === "builder" || gatewayClass === "shared") {
     const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
     projectCustomerPlugins(config);
     projectCustomerSecretProviders(config, openclawDir);
@@ -1414,10 +1399,13 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
       configPath,
       config,
       env,
-      scrub.resetAgentIds,
-      scrub.directRuntimeModelRefs,
+      {
+        resetAgentIds: scrub.resetAgentIds,
+        directRuntimeModelRefs: scrub.directRuntimeModelRefs,
+        preserveBuilderShellCredentials: gatewayClass === "builder",
+      },
     );
-    applySharedPolicy(config);
+    applyCustomerPolicy(config);
   }
   if (JSON.stringify(config) === before) {
     return { applied: false, reason: "already-set", gatewayClass };

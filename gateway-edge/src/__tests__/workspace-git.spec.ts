@@ -299,6 +299,44 @@ describe("platform-owned customer Git metadata", () => {
     }
   });
 
+  it("isolates an explicit caller GitHub credential from the Builder's ambient credential", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousGatewayClass = process.env.GATEWAY_CLASS;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-caller-github-"));
+    const customersRoot = path.join(root, "customers");
+    const projectDir = path.join(customersRoot, "alice", "projects", "orbit");
+    const metadataDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.GATEWAY_CLASS = "builder";
+    try {
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.mkdir(metadataDir, { recursive: true });
+      await fs.writeFile(
+        `${metadataDir}.octogee-trusted-v3`,
+        "octogee-customer-git-v3\ngithub:octogee-ai/orbit\n",
+      );
+
+      const args = workspaceGitCommandArgs(projectDir, ["push"], true);
+      const env = workspaceGitEnvironment(
+        { GATEWAY_CLASS: "builder", GIT_CONFIG_GLOBAL: "/home/node/.gitconfig" },
+        projectDir,
+        "gh-member-token",
+      );
+
+      expect(args).toContain("credential.helper=");
+      expect(args.join(" ")).toContain("OCTOGEE_GITHUB_TOKEN");
+      expect(args.join(" ")).not.toContain("gh-member-token");
+      expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+      expect(env.OCTOGEE_GITHUB_TOKEN).toBe("gh-member-token");
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousGatewayClass === undefined) delete process.env.GATEWAY_CLASS;
+      else process.env.GATEWAY_CLASS = previousGatewayClass;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("pins workspace and project SSH to the owning customer's platform key", () => {
     const previousCustomersDir = process.env.CUSTOMERS_DIR;
     process.env.CUSTOMERS_DIR = "/srv/openclaw/customers";

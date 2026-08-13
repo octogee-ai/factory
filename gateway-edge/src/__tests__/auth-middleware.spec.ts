@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 const { mockDocs, reads, verifyIdToken } = vi.hoisted(() => ({
@@ -37,7 +37,11 @@ import {
   requireAuth,
   requireAuthAllowUnregistered,
   requireAuthenticatedUid,
+  requireRecentAuthentication,
+  RECENT_AUTH_MAX_AGE_SECONDS,
 } from '../middleware/auth.js';
+
+afterEach(() => vi.useRealTimers());
 
 function runAuth(
   middleware: typeof requireAuth = requireAuth,
@@ -110,6 +114,49 @@ describe('requireAuthenticatedUid', () => {
     expect(verifyIdToken).toHaveBeenCalledWith('fake');
     expect(reads).toEqual([]);
     expect(req.user).toBeUndefined();
+  });
+
+  it('retains the Firebase authentication time for sensitive-route authorization', async () => {
+    verifyIdToken.mockResolvedValue({ uid: 'u1', auth_time: 1_700_000_000 });
+    const { req, nextCalled } = await runAuth(requireAuthenticatedUid);
+
+    expect(nextCalled).toBe(true);
+    expect(req.authTime).toBe(1_700_000_000);
+  });
+});
+
+describe('requireRecentAuthentication', () => {
+  it('allows a token inside the recent-login window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const now = Math.floor(Date.now() / 1000);
+    const req = { authTime: now - RECENT_AUTH_MAX_AGE_SECONDS } as Request;
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as unknown as Response;
+    const next = vi.fn();
+
+    requireRecentAuthentication(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects a valid token whose original authentication is stale', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const now = Math.floor(Date.now() / 1000);
+    const req = { authTime: now - RECENT_AUTH_MAX_AGE_SECONDS - 1 } as Request;
+    const json = vi.fn();
+    const res = { status: vi.fn().mockReturnThis(), json } as unknown as Response;
+    const next = vi.fn();
+
+    requireRecentAuthentication(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({
+      error: 'auth/requires-recent-login',
+      message: 'Recent authentication required',
+    });
   });
 });
 

@@ -20,6 +20,13 @@ vi.mock("../routes/workspace/helpers", () => ({
   HIDDEN: new Set([".git"]),
   giteaSudoUser: vi.fn(() => "ws-alice"),
   isCanvasDashboardDocumentPath: vi.fn((path: string) => path === ".octogee/canvas.json"),
+  isTargetDirectoryEntryReadable: vi.fn((target: FileTarget, path: string, type: "dir" | "file") =>
+    !target.workspaceMemberBrokered
+    || (type === "dir" ? path === "notes" : path === "README.md" || /^notes\/[^/]+\.md$/.test(path))),
+  isTargetDirectoryReadable: vi.fn((target: FileTarget, path: string) =>
+    !target.workspaceMemberBrokered || path === "" || path === "notes"),
+  isTargetPathReadable: vi.fn((target: FileTarget, path: string) =>
+    !target.workspaceMemberBrokered || path === "README.md" || /^notes\/[^/]+\.md$/.test(path)),
   isTargetPathWritable: vi.fn(),
   pathHasReservedOrHiddenSegment: vi.fn((path: string) => path.startsWith(".") ? "Access denied" : null),
   repoContentsApi: vi.fn(),
@@ -161,6 +168,30 @@ describe("workspace file list helpers", () => {
     expect(repoContentsApi).toHaveBeenCalledTimes(1);
   });
 
+  it("filters a brokered workspace member's listing to notes and canvas files", async () => {
+    const memberTarget: FileTarget = {
+      ...giteaTarget,
+      brokered: true,
+      workspaceMemberBrokered: true,
+      canvasFile: "README.md",
+    };
+    vi.mocked(repoContentsApi).mockResolvedValue([
+      { name: "README.md", path: "README.md", type: "file", size: 12 },
+      { name: "notes", path: "notes", type: "dir" },
+      { name: "src", path: "src", type: "dir" },
+      { name: "secret.txt", path: "secret.txt", type: "file", size: 4 },
+    ]);
+    vi.mocked(getManifest).mockResolvedValue({});
+
+    await expect(workspaceFilesResponse(memberTarget, "", false)).resolves.toEqual({
+      files: [
+        { name: "notes", path: "notes", type: "dir", size: 0, source: "git" },
+        { name: "README.md", path: "README.md", type: "file", size: 12, source: "git" },
+      ],
+      readOnly: false,
+    });
+  });
+
   it("coalesces concurrent directory listing requests for the same repo path", async () => {
     let resolveListing: (value: unknown) => void = () => {};
     vi.mocked(repoContentsApi).mockReturnValue(new Promise((resolve) => {
@@ -216,6 +247,29 @@ describe("workspace file list helpers", () => {
         { path: "src/index.ts", source: "git" },
       ],
       paths: ["assets/git-backed.png", "assets/logo.png", "README.md", "src/index.ts"],
+      truncated: false,
+    });
+  });
+
+  it("filters a brokered workspace member's global index", async () => {
+    const memberTarget: FileTarget = {
+      ...giteaTarget,
+      brokered: true,
+      workspaceMemberBrokered: true,
+      canvasFile: "README.md",
+    };
+    vi.mocked(repoTreeApi).mockResolvedValueOnce({
+      paths: ["README.md", "notes/idea.md", "src/index.ts", "owner-secret.txt"],
+      truncated: false,
+    });
+    vi.mocked(getManifest).mockResolvedValueOnce({});
+
+    await expect(workspaceFileIndexResponse(memberTarget, "main", false)).resolves.toEqual({
+      files: [
+        { path: "notes/idea.md", source: "git" },
+        { path: "README.md", source: "git" },
+      ],
+      paths: ["notes/idea.md", "README.md"],
       truncated: false,
     });
   });

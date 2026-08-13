@@ -75,6 +75,9 @@ export const WORKSPACE_COACH_ALLOWED_TOOLS = [
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
+  "grep",
+  "find",
+  "ls",
   "write",
   "edit",
   "apply_patch",
@@ -372,30 +375,27 @@ export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
   adminMmUserId?: string | null,
-  _warn?: (msg: string) => void,
+  warn: (msg: string) => void = () => {},
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
-    // Group channels: the coach answers any member of the channels it has been
-    // added to. Mattermost channel membership IS the access boundary (auditable
-    // + revocable in MM, and the coach is only ever added to channels its owner
-    // controls). The prior owner+admin `allowlist` duplicated that boundary and
-    // silently dropped invited guests — breaking shared channels, the headline
-    // feature. `groupAllowFrom` is retained as an advisory seed (ignored under
-    // "open") for a possible future "synced allowlist" mode. See PR.
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
+    if (groupAllowFrom.length === 0) {
+      warn(`Skipping ${c.slug}-coach Mattermost account: sender allowlist is empty`);
+      continue;
+    }
     // Per-channel mutes are not expressible: the mattermost plugin builds its
     // group entry as buildGroupEntrySchema().omit({ skills, enabled, allowFrom,
     // systemPrompt }), so `enabled` is rejected outright and config.patch fails
     // the whole document — taking the mount, and every customer queued behind
     // it in the same reconcile batch, down with it. Clearing the key is also
     // the repair path for configs a prior release already wrote.
-    // Project channels still reach the right agent: buildCustomerBindings binds
-    // them to the project agent's OWN account, not the workspace coach's.
+    // Project channels reach the project agent through its own account and MM
+    // membership; the workspace coach is deliberately not a channel member.
     const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
     const groupsPatch: Pick<MattermostAccountEntry, "groups"> = managesGroups
       ? { groups: null }
@@ -408,8 +408,8 @@ export function buildMattermostAccounts(
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
       allowFrom: ownerAllowFrom,
-      groupPolicy: "open",
-      ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+      groupPolicy: "allowlist",
+      groupAllowFrom,
       ...groupsPatch,
       commands: { native: false },
     };

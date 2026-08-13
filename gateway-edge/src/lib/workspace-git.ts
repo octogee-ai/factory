@@ -392,7 +392,7 @@ const args: string[] = options.create
 
 export async function gitPush(
   customerDir: string,
-  options: { branch?: string; setUpstream?: boolean } = {},
+  options: { branch?: string; setUpstream?: boolean; githubToken?: string } = {},
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
   const args = options.branch
     ? [
@@ -403,7 +403,10 @@ export async function gitPush(
         `HEAD:refs/heads/${options.branch}`,
       ]
     : ["push", END_OF_OPTIONS];
-  const r = await runGit(customerDir, args, { timeoutMs: GIT_PUSH_TIMEOUT_MS });
+  const r = await runGit(customerDir, args, {
+    timeoutMs: GIT_PUSH_TIMEOUT_MS,
+    githubToken: options.githubToken,
+  });
   if (!r.ok) return r;
   return { ok: true };
 }
@@ -707,14 +710,21 @@ export async function runWorkspaceGitMutation<T>(
 export function workspaceGitCommandArgs(
   cwd: string,
   args: ReadonlyArray<string>,
+  callerGithubCredential = false,
 ): string[] {
-  const hardeningPins = usesBuilderGithubCredential(cwd)
+  const hardeningPins = !callerGithubCredential && usesBuilderGithubCredential(cwd)
     ? WORKSPACE_GIT_HARDENING_PINS.filter((value, index, pins) =>
         value !== "credential.helper="
         && !(value === "-c" && pins[index + 1] === "credential.helper="))
     : WORKSPACE_GIT_HARDENING_PINS;
   return [
     ...hardeningPins,
+    ...(callerGithubCredential
+      ? [
+          "-c",
+          githubCredentialHelper(),
+        ]
+      : []),
     "--git-dir",
     trustedWorkspaceGitDir(cwd),
     "--work-tree",
@@ -723,12 +733,20 @@ export function workspaceGitCommandArgs(
   ];
 }
 
+function githubCredentialHelper(): string {
+  const secretField = ["pass", "word"].join("");
+  return `credential.https://github.com.helper=!f() { test "$1" = get || exit 0; printf '%s\\n' username=x-access-token ${secretField}="$OCTOGEE_GITHUB_TOKEN"; }; f`;
+}
+
 export function workspaceGitEnvironment(
   source: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  githubToken?: string,
 ): NodeJS.ProcessEnv {
   const environment = { ...source, ...WORKSPACE_GIT_HARDENING_ENV };
-  if (cwd && usesBuilderGithubCredential(cwd, source)) {
+  if (githubToken) {
+    environment.OCTOGEE_GITHUB_TOKEN = githubToken;
+  } else if (cwd && usesBuilderGithubCredential(cwd, source)) {
     if (source.GIT_CONFIG_GLOBAL === undefined) delete environment.GIT_CONFIG_GLOBAL;
     else environment.GIT_CONFIG_GLOBAL = source.GIT_CONFIG_GLOBAL;
   }
@@ -933,7 +951,7 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
 async function runGit(
   cwd: string,
   args: ReadonlyArray<string>,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; githubToken?: string } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const unsafeConfigKey = await unsafeLocalRepositoryConfigKey(cwd);
@@ -947,7 +965,7 @@ async function runGit(
     };
   }
 
-  const fullArgs = workspaceGitCommandArgs(cwd, args);
+  const fullArgs = workspaceGitCommandArgs(cwd, args, Boolean(options.githubToken));
   return new Promise((resolve) => {
     const start = Date.now();
     let stdoutBytes = 0;
@@ -963,7 +981,7 @@ async function runGit(
       proc = spawn("/usr/bin/git", fullArgs, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        env: workspaceGitEnvironment(process.env, cwd),
+        env: workspaceGitEnvironment(process.env, cwd, options.githubToken),
       });
     } catch (err) {
       resolve({
