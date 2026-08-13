@@ -226,7 +226,6 @@ describe("infra/gateway/entrypoint.sh — locked Builder platform provisioner bo
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
       "builder-shell",
-      "github-cli-auth-convergence",
       "fleet-controller",
       "byosub-syncback",
       "system-config-watch",

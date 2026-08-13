@@ -5,7 +5,10 @@ import {
   log,
 } from "../lib/config.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
-import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import {
+  createFleetBrokerClient,
+  resolveGithubTokenForSlug,
+} from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   listLocalCustomerPubKeys,
@@ -139,8 +142,14 @@ async function main(): Promise<void> {
     gatewayClass,
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
     syncWorkspaces: builderSlug
-      ? () => syncCustomerRepositoriesForSlug(builderSlug, { strict: true })
-      : () => syncAllCustomerRepositories({ strict: true }),
+      ? () => syncCustomerRepositoriesForSlug(builderSlug, {
+          strict: true,
+          resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
+        })
+      : () => syncAllCustomerRepositories({
+          strict: true,
+          resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
+        }),
     syncBlobs: builderSlug
       ? () => blobSyncForSlug(builderSlug, {
           strict: true,

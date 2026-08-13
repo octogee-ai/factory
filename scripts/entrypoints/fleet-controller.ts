@@ -19,7 +19,10 @@ import {
 } from "../lib/customer-lifecycle-broker-adapter.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
-import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import {
+  createFleetBrokerClient,
+  resolveGithubTokenForSlug,
+} from "../lib/fleet-broker-client.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
@@ -247,7 +250,13 @@ async function main(): Promise<void> {
       return runGatewayPreStopFlush({
         gatewayId: entrypointConfig.gatewayId,
         gatewayClass: GATEWAY_CLASS,
-        syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, { strict: true }),
+        syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, {
+          strict: true,
+          resolveGithubToken: (customerSlug) => resolveGithubTokenForSlug(
+            brokerClient,
+            customerSlug,
+          ),
+        }),
         syncBlobs: builder
           ? undefined
           : () => blobSyncForSlug(slug, {

@@ -80,6 +80,14 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBlobSignedUrl>;
 }
 
+export async function resolveGithubTokenForSlug(
+  client: Pick<FleetBrokerClient, "uidForSlug" | "githubCloneToken">,
+  slug: string,
+): Promise<string | null> {
+  const uid = await client.uidForSlug(slug);
+  return uid ? client.githubCloneToken(uid) : null;
+}
+
 // The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
 // stable pod per gateway); the broker cross-checks it against the pod name it
 // authenticated (revisionIdFromGatewayPodName).

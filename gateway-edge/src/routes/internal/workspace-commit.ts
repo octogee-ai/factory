@@ -3,8 +3,10 @@ import {
   resolveCustomerDir,
   resolveProjectDir,
   commitAndPushWorkspace,
+  isTrustedGithubCustomerCheckout,
   isSafeSlug,
 } from "../../lib/workspace-git.js";
+import { readOwnerRuntimeConnectorAccessToken } from "../../lib/connector-tokens.js";
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
@@ -13,6 +15,31 @@ const router = Router();
 
 const DEFAULT_MESSAGE = "agent: workspace commit";
 const MAX_MESSAGE_LEN = 5_000;
+
+async function onDemandGithubToken(
+  dir: string,
+  res: Response,
+): Promise<string | undefined | null> {
+  if (!isTrustedGithubCustomerCheckout(dir)) return undefined;
+  try {
+    const token = await readOwnerRuntimeConnectorAccessToken("github");
+    if (token) return token;
+    res.status(422).json({
+      error: "Connect GitHub before saving this project.",
+      code: "GITHUB_NOT_CONNECTED",
+    });
+    return null;
+  } catch (err) {
+    logger.error("internal/workspace/commit: GitHub credential broker failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(503).json({
+      error: "GitHub authentication is temporarily unavailable; retry shortly.",
+      code: "GITHUB_AUTH_UNAVAILABLE",
+    });
+    return null;
+  }
+}
 
 function customersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
@@ -80,6 +107,8 @@ router.post("/commit", async (req: Request, res: Response) => {
   }
 
   const author = resolveCommitAuthor(undefined, slug);
+  const githubToken = await onDemandGithubToken(dir, res);
+  if (githubToken === null) return;
   // Workspace-lane commits must never sweep the nested project clones — each
   // project repo has its own commit path (octogee_project_commit). The
   // exclusion is enforced here, not just .gitignore, so workspaces seeded
@@ -88,6 +117,7 @@ router.post("/commit", async (req: Request, res: Response) => {
     message,
     author,
     ...(project ? {} : { excludePathspecs: ["projects"] }),
+    ...(githubToken ? { githubToken } : {}),
   });
   if (!r.ok) {
     logger.warn(`internal/workspace/commit: git error slug=${slug} code=${r.error.code}`);
