@@ -20,6 +20,11 @@ spec:
 {{- end }}
 
 {{- if .Values.gatewayFleet.networkPolicy.enabled }}
+{{- $apiServerCidrs := required "projectRunner.apiServerEgressCidrs is required" .Values.projectRunner.apiServerEgressCidrs -}}
+{{- range $cidr := $apiServerCidrs }}
+{{- if not (hasSuffix "/32" $cidr) }}{{ fail (printf "projectRunner.apiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}{{ end -}}
+{{- if hasPrefix "169.254." $cidr }}{{ fail (printf "projectRunner.apiServerEgressCidrs must not contain link-local CIDRs (got %q)" $cidr) }}{{ end -}}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -77,6 +82,14 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    - to:
+        {{- range $cidr := $apiServerCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
     - to:
         - podSelector:
             matchLabels:
