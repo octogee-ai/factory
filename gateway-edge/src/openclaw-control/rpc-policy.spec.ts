@@ -491,13 +491,13 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide([{ id: "main", name: "Primary", model: "openai/gpt-5.1" }]))
       .toMatchObject({ allowed: true });
     expect(decide([{ id: "helper", name: "Helper", model: "openai/gpt-5.1" }]))
-      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+      .toMatchObject({ allowed: false, reason: "platform-invariant" });
     expect(decide([{ id: "main", default: false }]))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([
       { id: "main" },
       { id: "helper", name: "Helper", model: "openai/gpt-5.1" },
-    ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+    ])).toMatchObject({ allowed: false, reason: "platform-invariant" });
   });
 
   it("lets helpers edit keyed roster labels and models but never roster membership", () => {
@@ -535,7 +535,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide({ "octogee-ceckert-coach": { default: false } }))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide({ "octogee-helper-coach": { name: "Helper", model: "openai/gpt-5.1" } }))
-      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
+      .toMatchObject({ allowed: false, reason: "platform-invariant" });
     expect(decide({ "octogee-aug04-coach": null }))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide({ "octogee-ceckert-coach": [{ name: "Smuggled" }] }))

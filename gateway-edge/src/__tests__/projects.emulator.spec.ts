@@ -528,7 +528,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       "POST",
       { user_id: "mock-mm-user" },
     );
-    expect(mockMmApi).toHaveBeenCalledWith(
+    expect(mockMmApi).not.toHaveBeenCalledWith(
       "/channels/ch-new-123/members",
       "POST",
       { user_id: "mock-mm-coach" },
@@ -605,7 +605,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     });
   });
 
-  it("returns 502 + marks failed when callerCtx.coachUserId is null (agent not provisioned)", async () => {
+  it("succeeds without a workspace coach Mattermost user", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
       ownerUid: CALLER_UID,
       slug: "alice",
@@ -617,12 +617,9 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
-      if (method === "POST" && path === "/channels") return { id: "ch-noagent-1" };
-      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
-        return { user_id: "ok" };
-      }
-      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    mockProjectPairMattermost({
+      primaryId: "ch-no-coach-1",
+      primaryName: "alice-proj-mygame-general",
     });
 
     const app = createApp();
@@ -631,11 +628,14 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       .set(await authHeader())
       .send({ name: "My Game", slug: "mygame", visibility: "public" });
 
-    expect(res.status).toBe(502);
-    expect(res.body.error).toMatch(/channel members/i);
+    expect(res.status).toBe(200);
     const doc = await getProject("alice", "mygame");
-    expect(doc?.provisioningState).toBe("failed");
-    expect(String(doc?.provisioningError)).toMatch(/agent has no Mattermost userId/i);
+    expect(doc?.provisioningState).toBe("active");
+    expect(mockMmApi).not.toHaveBeenCalledWith(
+      "/channels/ch-no-coach-1/members",
+      "POST",
+      { user_id: "mock-mm-coach" },
+    );
   });
 
   it("returns 502 + marks failed when membership POST throws", async () => {
@@ -897,7 +897,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       "POST",
       { user_id: "mock-mm-user" },
     );
-    expect(mockMmApi).toHaveBeenCalledWith(
+    expect(mockMmApi).not.toHaveBeenCalledWith(
       "/channels/ch-existing-999/members",
       "POST",
       { user_id: "mock-mm-coach" },
@@ -1039,7 +1039,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
   });
 
-  it("returns 502 + keeps state as failed when callerCtx.coachUserId is null on retry", async () => {
+  it("retries successfully without a workspace coach Mattermost user", async () => {
     await seedProject("alice", "mygame", {
       id: "mygame",
       ownerUid: CALLER_UID,
@@ -1061,14 +1061,10 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockMmApi.mockImplementation(async (path: string, method?: string) => {
-      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-abc/channels/name/")) {
-        return { id: "ch-active-1", type: "P" };
-      }
-      if (method === "POST" && /^\/channels\/[^/]+\/members$/.test(path)) {
-        return { user_id: "ok" };
-      }
-      throw new Error(`Unexpected MM call: ${method} ${path}`);
+    mockProjectPairMattermost({
+      primaryId: "ch-active-1",
+      primaryName: "alice-proj-mygame-general",
+      existingPrimary: true,
     });
 
     const app = createApp();
@@ -1077,11 +1073,14 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       .set(await authHeader())
       .send({});
 
-    expect(res.status).toBe(502);
-    expect(res.body.error).toMatch(/channel members/i);
+    expect(res.status).toBe(200);
     const doc = await getProject("alice", "mygame");
-    expect(doc?.provisioningState).toBe("failed");
-    expect(String(doc?.provisioningError)).toMatch(/agent has no Mattermost userId/i);
+    expect(doc?.provisioningState).toBe("active");
+    expect(mockMmApi).not.toHaveBeenCalledWith(
+      "/channels/ch-active-1/members",
+      "POST",
+      { user_id: "mock-mm-coach" },
+    );
   });
 
   it("repairs an active project missing the channels/general subdoc (the existing TEST data shape)", async () => {

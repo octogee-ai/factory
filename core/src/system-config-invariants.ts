@@ -276,6 +276,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
 
 function customerToolInvariants(): PlatformInvariant[] {
   return [
+    { kind: "exact", path: "tools.elevated.enabled", value: false },
     {
       kind: REQUIRED_ARRAY,
       path: "tools.deny",
@@ -335,38 +336,6 @@ function customerToolInvariants(): PlatformInvariant[] {
     },
     { kind: "customer-agent-tool-policy", path: "agents.list[].tools" },
     { kind: "customer-agent-tool-policy", path: "agents.entries.*.tools" },
-  ];
-}
-
-function builderToolInvariants(): PlatformInvariant[] {
-  return [
-    { kind: "exact", path: "tools.elevated.enabled", value: false },
-    {
-      kind: FORBIDDEN_ARRAY,
-      path: "tools.deny",
-      values: CUSTOMER_CODE_DENIED_TOOLS,
-    },
-    { kind: "exact", path: "tools.exec", value: ABSENT },
-    {
-      kind: FORBIDDEN_ARRAY,
-      path: "tools.subagents.tools.deny",
-      values: ["exec", "process"],
-    },
-    { kind: "exact", path: "gateway.terminal.enabled", value: true },
-    { kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["codex"] },
-    { kind: "exact", path: "plugins.entries.codex.enabled", value: true },
-    {
-      kind: "exact",
-      path: "plugins.entries.codex.config.appServer.sandbox",
-      value: "danger-full-access",
-    },
-    {
-      kind: "exact",
-      path: "plugins.entries.codex.config.appServer.approvalPolicy",
-      value: "never",
-    },
-    { kind: "project-agent-tool-policy", path: "agents.list[].tools" },
-    { kind: "project-agent-tool-policy", path: "agents.entries.*.tools" },
   ];
 }
 
@@ -451,7 +420,7 @@ export function platformInvariantTable(
       value,
     })),
   ];
-  return [...base, ...(context.gatewayClass === "shared" ? customerToolInvariants() : builderToolInvariants())];
+  return [...base, ...customerToolInvariants()];
 }
 
 function asObject(value: unknown): JsonObject | null {

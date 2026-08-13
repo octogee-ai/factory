@@ -88,7 +88,6 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     const copied = dockerInfraGatewayFiles();
     const missing = scripts.filter((p) => !existsSync(path.join(repoRoot, p)));
     const builderBaseScripts = new Set([
-      "infra/gateway/apply-builder-codex-sandbox.mjs",
       "infra/gateway/stamp-claude-first-run.mjs",
     ]);
     const uncopied = scripts.filter((p) => !builderBaseScripts.has(p) && !copied.has(p));

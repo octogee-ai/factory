@@ -47,6 +47,7 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     assignedUsers: vi.fn(async () => []),
     uidForSlug: vi.fn(async () => snapshot.uid),
     userSnapshot: vi.fn(async () => snapshot),
+    reconcileProjectCoachMembership: vi.fn(async () => undefined),
     setProvisioningStatus: vi.fn(async () => undefined),
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
