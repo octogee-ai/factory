@@ -6,7 +6,10 @@ import {
   isTrustedGithubCustomerCheckout,
   isSafeSlug,
 } from "../../lib/workspace-git.js";
-import { readOwnerRuntimeConnectorAccessToken } from "../../lib/connector-tokens.js";
+import {
+  ConnectorTokenReadError,
+  readOwnerRuntimeConnectorAccessToken,
+} from "../../lib/connector-tokens.js";
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
@@ -30,6 +33,13 @@ async function onDemandGithubToken(
     });
     return null;
   } catch (err) {
+    if (err instanceof ConnectorTokenReadError && err.errorCode === "reauth_required") {
+      res.status(422).json({
+        error: "Reconnect GitHub before saving this project.",
+        code: "GITHUB_REAUTH_REQUIRED",
+      });
+      return null;
+    }
     logger.error("internal/workspace/commit: GitHub credential broker failed", {
       error: err instanceof Error ? err.message : String(err),
     });

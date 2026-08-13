@@ -1782,14 +1782,22 @@ async function syncRepositoryTargets(
     const identity = customerGitIdentity(target.dir);
     return identity ? trustedCustomerGitSource(identity)?.kind === "github" : false;
   }).map((target) => target.dir));
-  const githubToken = githubTargets.size > 0
-    ? await resolveGithubToken?.(slug) ?? null
-    : undefined;
+  let githubToken: string | null | undefined;
+  let githubTokenError: string | null = null;
+  if (githubTargets.size > 0) {
+    try {
+      githubToken = await resolveGithubToken?.(slug) ?? null;
+    } catch (err) {
+      githubToken = null;
+      githubTokenError = errMessage(err);
+    }
+  }
   for (const target of targets) {
     try {
       const needsGithubToken = githubTargets.has(target.dir);
       if (needsGithubToken && !githubToken) {
-        throw new Error(`${target.label}: GitHub credential unavailable`);
+        const detail = githubTokenError ? `: ${githubTokenError}` : "";
+        throw new Error(`${target.label}: GitHub credential unavailable${detail}`);
       }
       syncOneRepository(
         slug,

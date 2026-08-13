@@ -2,18 +2,29 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({
-  resolveCustomerDir: vi.fn(),
-  resolveProjectDir: vi.fn(),
-  commitAndPushWorkspace: vi.fn(),
-  isSafeSlug: vi.fn(),
-  isTrustedGithubCustomerCheckout: vi.fn(),
-  readOwnerRuntimeConnectorAccessToken: vi.fn(),
-  resolveCommitAuthor: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  info: vi.fn(),
-}));
+const h = vi.hoisted(() => {
+  class MockConnectorTokenReadError extends Error {
+    constructor(
+      readonly status: number,
+      readonly errorCode: string,
+    ) {
+      super(errorCode);
+    }
+  }
+  return {
+    ConnectorTokenReadError: MockConnectorTokenReadError,
+    resolveCustomerDir: vi.fn(),
+    resolveProjectDir: vi.fn(),
+    commitAndPushWorkspace: vi.fn(),
+    isSafeSlug: vi.fn(),
+    isTrustedGithubCustomerCheckout: vi.fn(),
+    readOwnerRuntimeConnectorAccessToken: vi.fn(),
+    resolveCommitAuthor: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  };
+});
 
 vi.mock("../lib/workspace-git.js", () => ({
   resolveCustomerDir: h.resolveCustomerDir,
@@ -24,6 +35,7 @@ vi.mock("../lib/workspace-git.js", () => ({
 }));
 
 vi.mock("../lib/connector-tokens.js", () => ({
+  ConnectorTokenReadError: h.ConnectorTokenReadError,
   readOwnerRuntimeConnectorAccessToken: h.readOwnerRuntimeConnectorAccessToken,
 }));
 
@@ -233,6 +245,25 @@ describe("internal workspace commit route — Vegas project lane", () => {
       { error: "broker down" },
     );
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("directs the user to reconnect before committing when GitHub requires reauthorization", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.readOwnerRuntimeConnectorAccessToken.mockRejectedValue(
+      new h.ConnectorTokenReadError(409, "reauth_required"),
+    );
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ slug: "acme", project: "orbit" })
+      .expect(422, {
+        error: "Reconnect GitHub before saving this project.",
+        code: "GITHUB_REAUTH_REQUIRED",
+      });
+
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+    expect(h.error).not.toHaveBeenCalled();
   });
 
   it("rejects malformed project ids before touching the tree", async () => {

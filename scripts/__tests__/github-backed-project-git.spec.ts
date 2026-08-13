@@ -259,6 +259,30 @@ describe("workspace autosync remote migration", () => {
       ]));
   });
 
+  it("still flushes Gitea repositories when the GitHub token broker is unavailable", async () => {
+    const workspace = path.join(paths.customers, SLUG);
+    execFileSync("git", ["clone", "-q", canonicalOrigin, workspace]);
+    git(workspace, ["config", "user.email", "test@octogee.test"]);
+    git(workspace, ["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(workspace, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(workspace, "workspace.md"), "durable\n");
+    const project = path.join(workspace, "projects", "demo");
+    initRepoWithOrigin(project, GITHUB_REMOTE);
+    rebuildTransferredGithubMetadata(project, SLUG, {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    });
+
+    await expect(syncCustomerRepositoriesForSlug(SLUG, {
+      strict: true,
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+      resolveGithubToken: async () => { throw new Error("broker down"); },
+    })).rejects.toThrow(/GitHub credential unavailable: broker down/u);
+
+    expect(git(canonicalOrigin, ["show", "main:workspace.md"])).toBe("durable");
+  });
+
   it("still migrates a legacy Gitea HTTP origin onto the SSH host", async () => {
     const project = path.join(paths.customers, SLUG, "projects", "legacy");
     initRepoWithOrigin(
