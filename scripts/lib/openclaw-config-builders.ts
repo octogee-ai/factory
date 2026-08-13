@@ -521,6 +521,7 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
     id: SAFE_DEFAULT_AGENT_ID,
     name: "Unmatched Mattermost route",
     default: true,
+    heartbeat: { every: "0m" },
     tools: {
       profile: "minimal",
       alsoAllow: [],

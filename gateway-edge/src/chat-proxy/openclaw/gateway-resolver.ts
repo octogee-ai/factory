@@ -37,6 +37,8 @@ export interface ResolvedGateway {
   userData: Record<string, unknown>;
 }
 
+export type ResolvedGatewayAssignment = Omit<ResolvedGateway, "url">;
+
 function isDurableGatewayRoot(
   data: unknown,
   gatewayId: string,
@@ -116,6 +118,7 @@ async function assertResolvableGateway(
   db: Firestore,
   gatewayId: string,
   uid: string,
+  requireServingAssignment = false,
 ): Promise<{ requireRuntimeDoc: boolean }> {
   const gwSnap = await db.doc(`gateways/${gatewayId}`).get();
   if (!gwSnap.exists) {
@@ -132,18 +135,30 @@ async function assertResolvableGateway(
     unresolvedGatewayUrl(gatewayId, "is not running");
   }
   const assignmentSnap = await db.doc(`gateways/${gatewayId}/assignments/${uid}`).get();
-  if (assignmentSnap.exists) {
-    const assignment = parseAssignmentDoc(uid, assignmentSnap.data());
-    if (
-      !assignment ||
-      assignment.state !== "serving" ||
-      (assignmentSnap.data()?.state !== undefined && assignmentSnap.data()?.state !== "serving") ||
-      assignment.gatewayId !== gatewayId
-    ) {
-      unresolvedGatewayUrl(gatewayId, `has a non-serving assignment for ${uid}`);
+  if (!assignmentSnap.exists) {
+    if (requireServingAssignment) {
+      unresolvedGatewayUrl(gatewayId, `has no serving assignment for ${uid}`);
     }
+    return { requireRuntimeDoc: true };
+  }
+  const assignment = parseAssignmentDoc(uid, assignmentSnap.data());
+  if (
+    !assignment ||
+    assignment.state !== "serving" ||
+    (assignmentSnap.data()?.state !== undefined && assignmentSnap.data()?.state !== "serving") ||
+    assignment.gatewayId !== gatewayId
+  ) {
+    unresolvedGatewayUrl(gatewayId, `has a non-serving assignment for ${uid}`);
   }
   return { requireRuntimeDoc: true };
+}
+
+export async function resolveGatewayAssignment(
+  opts: Pick<ResolveGatewayOptions, "db" | "uid">,
+): Promise<ResolvedGatewayAssignment> {
+  const { gatewayId, userData } = await readProvisionedUser(opts.db, opts.uid);
+  await assertResolvableGateway(opts.db, gatewayId, opts.uid, true);
+  return { gatewayId, userData };
 }
 
 export async function resolveGatewayUrl(
