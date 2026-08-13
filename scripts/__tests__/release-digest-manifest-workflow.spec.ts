@@ -35,6 +35,38 @@ describe("releasev2 digest manifest", () => {
     expect(writer).not.toContain("needs.gateway.result == 'success' || needs.gateway.result == 'skipped'");
   });
 
+  it("deploys the site only after one successful immutable manifest promotion path", () => {
+    const site = workflow.slice(workflow.indexOf("  site:"));
+
+    expect(workflow).toContain("site-release-authority:");
+    expect(workflow).toContain("site-deployment-authority.mjs");
+    expect(site).toContain("site-release-authority");
+    expect(site).toContain("needs.site-release-authority.outputs.authorized == 'true'");
+  });
+
+  it("authors manifests only from full-SHA provenance tags", () => {
+    const writer = workflow.slice(
+      workflow.indexOf("  write-release-digest-manifest:"),
+      workflow.indexOf("  site:"),
+    );
+
+    expect(writer).toContain('ref = f"{os.environ[\'AR_REPO\']}/{image}:{os.environ[\'SOURCE_SHA\']}"');
+    expect(writer).not.toContain("SOURCE_SHA'][:7]");
+    const platformBuild = readFileSync(
+      resolve(import.meta.dirname, "../../.github/workflows/build-and-deploy.yml"),
+      "utf8",
+    );
+    const gatewayBuild = readFileSync(
+      resolve(import.meta.dirname, "../../.github/workflows/gateway-build-operator-base.yml"),
+      "utf8",
+    );
+    expect(platformBuild).toContain("Publish full-SHA platform provenance tags");
+    expect(platformBuild).toContain("artifact-worker glm-controller octogee-api octogee-ops-agent octogee-project-runner");
+    expect(gatewayBuild).toContain("publish-full-sha-provenance:");
+    expect(gatewayBuild).toContain("needs: [matrix-setup, build, operator-image]");
+    expect(gatewayBuild).toContain("gateway-edge octogee-gateway octogee-gateway-builder");
+  });
+
   it("removes the GitHub run-history walk from release promotion", () => {
     const promotion = workflow.slice(
       workflow.indexOf("  promote-main-digests:"),
