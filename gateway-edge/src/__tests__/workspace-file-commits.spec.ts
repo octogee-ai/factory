@@ -10,6 +10,8 @@ vi.mock("../middleware/logging", () => ({
 vi.mock("../routes/workspace/helpers", () => ({
   HIDDEN: new Set([".git"]),
   giteaSudoUser: vi.fn(() => "ws-alice"),
+  isTargetDirectoryEntryReadable: vi.fn(() => true),
+  isTargetPathReadable: vi.fn(() => true),
   isTargetPathWritable: vi.fn(),
   pathHasReservedOrHiddenSegment: vi.fn(),
   repoContentsApi: vi.fn(),
