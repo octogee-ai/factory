@@ -10,12 +10,29 @@ const workflow = readFileSync(
 describe("releasev2 digest manifest", () => {
   it("writes a full-SHA manifest after a main build and promotes only its recorded digests", () => {
     expect(workflow).toMatch(
-      /write-release-digest-manifest:\n\s+needs: \[resolve, detect-release-scope, gateway-artifacts, platform, gateway\]/,
+      /write-release-digest-manifest:\n\s+needs: \[resolve, detect-release-scope, resolve-release-digest-manifest, gateway-artifacts, platform, gateway\]/,
     );
     expect(workflow).toContain("release-digest-manifest:${SOURCE_SHA}");
     expect(workflow).toContain("release-digest-manifest:${RELEASE_SHA}");
     expect(workflow).toContain("release-digest-manifest.mjs create");
     expect(workflow).toContain("release-digest-manifest.mjs alias-plan");
+  });
+
+  it("cannot publish when manifest resolution fails or a changed-scope build is skipped", () => {
+    const writer = workflow.slice(
+      workflow.indexOf("  write-release-digest-manifest:"),
+      workflow.indexOf("  site:"),
+    );
+
+    expect(writer).toContain("needs.resolve-release-digest-manifest.result == 'success'");
+    expect(writer).toContain("needs.detect-release-scope.outputs.run_platform == 'true' &&");
+    expect(writer).toContain("needs.gateway-artifacts.result == 'success'");
+    expect(writer).toContain("needs.platform.result == 'success'");
+    expect(writer).toContain("needs.detect-release-scope.outputs.run_gateway == 'true' &&");
+    expect(writer).toContain("needs.gateway.result == 'success'");
+    expect(writer).not.toContain("needs.gateway-artifacts.result == 'success' || needs.gateway-artifacts.result == 'skipped'");
+    expect(writer).not.toContain("needs.platform.result == 'success' || needs.platform.result == 'skipped'");
+    expect(writer).not.toContain("needs.gateway.result == 'success' || needs.gateway.result == 'skipped'");
   });
 
   it("removes the GitHub run-history walk from release promotion", () => {
@@ -192,8 +209,8 @@ describe("releasev2 digest manifest", () => {
     );
 
     expect(writer).toContain('"octogee-api", "octogee-project-runner"');
-    expect(writer).toContain("if image in baseline:");
-    expect(writer).toContain("missing SHA-addressed image and baseline manifest entry");
+    expect(writer).toContain('"baselineImages": baseline');
+    expect(writer).toContain("release-digest-manifest.mjs create-main-build");
   });
 
   it("carries a main image digest forward only after its exact SHA tag is confirmed absent", () => {

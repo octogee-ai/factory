@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createReleaseDigestManifest,
+  selectMainBuildImages,
   releaseDigestManifestReference,
   releaseDigestAliasPlan,
   validateBaselineReleaseDigestManifest,
@@ -78,6 +79,33 @@ function preBuilderManifest() {
 }
 
 describe("release digest manifest", () => {
+  it("refuses baseline digests for a changed scope when its exact-SHA build output is absent", () => {
+    expect(() => selectMainBuildImages({
+      baselineImages: {
+        ...manifest().surfaces.gateway,
+        ...manifest().surfaces.platform,
+      },
+      exactImages: {},
+      changedScopes: { platform: true, gateway: false },
+    })).toThrow("missing exact-SHA image for changed platform scope: artifact-worker");
+  });
+
+  it("carries baseline digests only for an unchanged scope", () => {
+    const baseline = manifest();
+
+    expect(selectMainBuildImages({
+      baselineImages: {
+        ...baseline.surfaces.gateway,
+        ...baseline.surfaces.platform,
+      },
+      exactImages: baseline.surfaces.platform,
+      changedScopes: { platform: true, gateway: false },
+    })).toEqual({
+      ...baseline.surfaces.gateway,
+      ...baseline.surfaces.platform,
+    });
+  });
+
   it("records the complete immutable platform and gateway digest set under its full source SHA", () => {
     expect(manifest()).toEqual({
       schemaVersion: 3,
