@@ -53,6 +53,7 @@ export interface FleetBrokerClient {
   uidForSlug(slug: string): Promise<string | null>;
   githubCloneToken(uid: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
+  reconcileProjectCoachMembership(uid: string): Promise<void>;
   setProvisioningStatus(
     uid: string,
     status: Exclude<FleetBrokerProvisioningStatus, "">,
@@ -112,6 +113,7 @@ export function createFleetBrokerClient(
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",
         { gatewayId, revisionId, completeOnly: opts.completeOnly === true },
+        await gatewayCredentialHeaders(),
       );
       return data.users;
     },
@@ -119,6 +121,7 @@ export function createFleetBrokerClient(
       const data = await postJson<{ bootstrap: FleetBrokerConfiguredBuilderBootstrap }>(
         "/internal/fleet/configured-builder-bootstrap",
         { gatewayId, revisionId, slug },
+        await gatewayCredentialHeaders(),
       );
       return data.bootstrap;
     },
@@ -158,6 +161,7 @@ export function createFleetBrokerClient(
         const data = await postJson<{ user: FleetBrokerUserSnapshot }>(
           "/internal/fleet/user-snapshot",
           { gatewayId, uid },
+          await gatewayCredentialHeaders(),
         );
         return data.user;
       } catch (err) {
@@ -169,6 +173,12 @@ export function createFleetBrokerClient(
         }
         throw err;
       }
+    },
+    reconcileProjectCoachMembership(uid) {
+      return postNoContent("/internal/fleet/reconcile-project-coach-membership", {
+        gatewayId,
+        uid,
+      });
     },
     setProvisioningStatus(uid, status) {
       return postNoContent("/internal/fleet/set-provisioning-status", {
@@ -184,6 +194,7 @@ export function createFleetBrokerClient(
       const data = await postJson<{ mmUpdate: FleetBrokerMattermostUpdate }>(
         "/internal/fleet/provision-mattermost",
         { gatewayId, uid },
+        await gatewayCredentialHeaders(),
       );
       return data.mmUpdate;
     },

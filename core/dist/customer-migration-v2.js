@@ -170,6 +170,7 @@ async function advanceForward(state, deps) {
             return { ...state, phase: "targetVerified" };
         case "targetVerified":
             await deps.commitCutover({
+                strategy: state.strategy ?? "migrate-state",
                 operationId: state.operationId,
                 migrationId: state.migrationId,
                 sourceGatewayId: state.sourceGatewayId,
@@ -216,6 +217,9 @@ async function advanceAbort(state, deps) {
 async function terminalState(state) {
     return state;
 }
+async function freshPhaseRequiresFreshDriver(state) {
+    throw new Error(`customer migration V2 fresh phase requires fresh driver: ${state.phase}`);
+}
 const ADVANCE_HANDLERS = {
     initialized: advancePreparation,
     keysSynced: advancePreparation,
@@ -223,6 +227,8 @@ const ADVANCE_HANDLERS = {
     sourceQuiesced: advanceForward,
     finalSynced: advanceForward,
     targetVerified: advanceForward,
+    freshSourceQuiesced: freshPhaseRequiresFreshDriver,
+    freshCutoverReady: freshPhaseRequiresFreshDriver,
     cutover: advanceForward,
     sourceRetired: advanceForward,
     abortIntent: advanceAbort,
@@ -238,22 +244,24 @@ const POST_INTENT_PHASES = new Set([
 export function isCustomerMigrationV2PostIntent(state) {
     return POST_INTENT_PHASES.has(state.phase);
 }
-const NEXT_PHASE = {
-    initialized: "keysSynced",
-    keysSynced: "preSynced",
-    preSynced: "sourceQuiesced",
-    sourceQuiesced: "finalSynced",
-    finalSynced: "targetVerified",
-    targetVerified: "cutover",
-    cutover: "sourceRetired",
-    sourceRetired: "complete",
-    abortIntent: "abortTargetUnmounted",
-    abortTargetUnmounted: "aborted",
+const NEXT_PHASES = {
+    initialized: ["keysSynced", "freshSourceQuiesced", "aborted"],
+    keysSynced: ["preSynced"],
+    preSynced: ["sourceQuiesced"],
+    sourceQuiesced: ["finalSynced"],
+    finalSynced: ["targetVerified"],
+    targetVerified: ["cutover"],
+    freshSourceQuiesced: ["freshCutoverReady", "aborted"],
+    freshCutoverReady: ["cutover", "aborted"],
+    cutover: ["sourceRetired"],
+    sourceRetired: ["complete"],
+    abortIntent: ["abortTargetUnmounted"],
+    abortTargetUnmounted: ["aborted"],
 };
 export function isCustomerMigrationV2Transition(from, to) {
     if (from === to)
         return true;
-    if (NEXT_PHASE[from] === to)
+    if (NEXT_PHASES[from]?.includes(to))
         return true;
     return to === "abortIntent" &&
         from !== "initialized" &&

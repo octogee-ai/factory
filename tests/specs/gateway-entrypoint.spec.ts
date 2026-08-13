@@ -201,15 +201,12 @@ describe("infra/gateway/entrypoint.sh — Builder-only customer runtime", () => 
     expect(entrypoint).not.toMatch(/shared\|builder\|operator|standard\|builder\|operator/);
   });
 
-  it("loads native-agent and Codex bootstrap hooks only for Builder gateways", () => {
-    const codexRegion = entrypoint.match(
-      /[\s\S]{0,200}apply-builder-codex-sandbox\.mjs[\s\S]{0,250}/,
-    )?.[0];
+  it("loads the native-agent bootstrap only for Builder gateways without weakening Agent policy", () => {
     const stamperRegion = entrypoint.match(
       /[\s\S]{0,200}stamp-claude-first-run\.mjs[\s\S]{0,250}/,
     )?.[0];
-    expect(codexRegion).toMatch(/GATEWAY_CLASS_EFFECTIVE[\s\S]*= "builder"[\s\S]*-f/);
     expect(stamperRegion).toMatch(/GATEWAY_CLASS_EFFECTIVE[\s\S]*= "builder"[\s\S]*-f/);
+    expect(entrypoint).not.toMatch(/apply-builder-codex-sandbox\.mjs/);
     expect(entrypoint).not.toMatch(/apply-operator-codex-sandbox\.mjs/);
     expect(entrypoint).not.toMatch(/operator\.env/);
   });

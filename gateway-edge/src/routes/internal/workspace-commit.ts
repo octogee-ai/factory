@@ -13,6 +13,8 @@ import {
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
+import { db } from "../../lib/db.js";
+import { verifyWorkspaceCommitProof } from "../../lib/workspace-commit-proof.js";
 
 const router = Router();
 
@@ -55,14 +57,7 @@ function customersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
-/**
- * Internal (no-auth, in-pod) commit+push for the `workspace_commit` agent tool.
- * Mounted under /internal/* — same trust boundary as /internal/agents — so an
- * exec-off coach can checkpoint its own workspace without a shell. The slug is
- * supplied by the tool from the agent's identity; the tool is the boundary that
- * scopes a coach to its own workspace (it never lets the agent name another).
- */
-type CommitRequest = { slug: string; project: string | null; message: string };
+type CommitRequest = { agentId: string; slug: string; project: string | null; message: string };
 type CommitRequestError = { status: number; error: string; code: string };
 
 function parseCommitRequest(
@@ -70,6 +65,8 @@ function parseCommitRequest(
 ): CommitRequest | CommitRequestError {
   const slug = typeof body?.slug === "string" ? body.slug : "";
   if (!isSafeSlug(slug)) return { status: 400, error: "Invalid slug", code: "BAD_SLUG" };
+  const agentId = typeof body?.agentId === "string" ? body.agentId : "";
+  if (!agentId) return { status: 400, error: "Invalid agent identity", code: "BAD_AGENT" };
   const project = typeof body?.project === "string" ? body.project : null;
   if (project !== null && !isValidProjectId(project)) {
     return { status: 400, error: "Invalid project", code: "BAD_PROJECT" };
@@ -78,7 +75,7 @@ function parseCommitRequest(
   if (raw.length > MAX_MESSAGE_LEN) {
     return { status: 400, error: "Commit message too long", code: "MESSAGE_TOO_LONG" };
   }
-  return { slug, project, message: raw || DEFAULT_MESSAGE };
+  return { agentId, slug, project, message: raw || DEFAULT_MESSAGE };
 }
 
 router.post("/commit", async (req: Request, res: Response) => {
@@ -87,7 +84,23 @@ router.post("/commit", async (req: Request, res: Response) => {
     res.status(parsed.status).json({ error: parsed.error, code: parsed.code });
     return;
   }
-  const { slug, project, message } = parsed;
+  const { agentId, slug, project, message } = parsed;
+
+  let authorized: boolean;
+  try {
+    authorized = await verifyWorkspaceCommitProof(req, { agentId, slug, project }, db);
+  } catch (error) {
+    logger.warn(
+      `internal/workspace/commit: identity proof lookup failed slug=${slug}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    res.status(503).json({ error: "Agent identity verification temporarily unavailable.", code: "PROOF_UNAVAILABLE" });
+    return;
+  }
+  if (!authorized) {
+    logger.warn(`internal/workspace/commit: rejected agent identity proof slug=${slug}`);
+    res.status(403).json({ error: "Agent identity proof rejected.", code: "PROOF_REJECTED" });
+    return;
+  }
 
   const start = Date.now();
   const customerDir = await resolveCustomerDir(customersRoot(), slug);
