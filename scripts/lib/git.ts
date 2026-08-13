@@ -270,14 +270,13 @@ function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentit
 function customerGitEnvironmentForRefresh(
   slug: string,
   githubToken?: string | null,
-  preserveBuilderGithubCredentialConfig = false,
 ): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...sanitizedGitProcessEnvironment(),
     ...githubCloneCredentialEnv(githubToken),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_SYSTEM: "/dev/null",
-    ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
+    GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
     GIT_ASKPASS: DISABLED_EXECUTABLE,
     SSH_ASKPASS: DISABLED_EXECUTABLE,
@@ -290,19 +289,17 @@ function customerGitEnvironmentForRefresh(
   };
 }
 
-// eslint-disable-next-line max-params -- explicit repository identity and credential controls prevent ambient Git state
 function runFreshCustomerGit(
   repoDir: string,
   gitDir: string,
   slug: string,
   argv: string[],
   githubToken?: string | null,
-  preserveBuilderGithubCredentialConfig = false,
 ): string {
   return execFileSync(
     GIT_BINARY,
     [
-      ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
+      ...gitHardeningArgs(),
       ...githubCredentialArgs(githubToken),
       "--git-dir",
       gitDir,
@@ -314,11 +311,7 @@ function runFreshCustomerGit(
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: customerGitEnvironmentForRefresh(
-        slug,
-        githubToken,
-        preserveBuilderGithubCredentialConfig,
-      ),
+      env: customerGitEnvironmentForRefresh(slug, githubToken),
     },
   ).trim();
 }
@@ -329,9 +322,6 @@ function initializeFreshCustomerGit(
   deps: CustomerGitRefreshDeps,
 ): void {
   const source = canonicalCustomerGitSource(identity, deps);
-  const preserveBuilderGithubCredentialConfig = source.kind === "github"
-    && !deps.githubToken
-    && process.env.GATEWAY_CLASS === "builder";
   const staging = `${identity.metadataDir}.octogee-new-${randomUUID()}`;
   fs.mkdirSync(path.dirname(identity.metadataDir), { recursive: true, mode: 0o700 });
   try {
@@ -341,11 +331,7 @@ function initializeFreshCustomerGit(
       {
         cwd: repoDir,
         stdio: ["ignore", "pipe", "pipe"],
-        env: customerGitEnvironmentForRefresh(
-          identity.slug,
-          deps.githubToken,
-          preserveBuilderGithubCredentialConfig,
-        ),
+        env: customerGitEnvironmentForRefresh(identity.slug, deps.githubToken),
       },
     );
     writeCanonicalGitConfig(staging, identity.slug, source);
@@ -355,14 +341,13 @@ function initializeFreshCustomerGit(
       "--prune",
       "origin",
       "+refs/heads/*:refs/remotes/origin/*",
-    ], deps.githubToken, preserveBuilderGithubCredentialConfig);
+    ], deps.githubToken);
     const remoteMain = runFreshCustomerGit(
       repoDir,
       staging,
       identity.slug,
       ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"],
       deps.githubToken,
-      preserveBuilderGithubCredentialConfig,
     );
     runFreshCustomerGit(
       repoDir,
@@ -370,7 +355,6 @@ function initializeFreshCustomerGit(
       identity.slug,
       ["symbolic-ref", "HEAD", "refs/heads/main"],
       deps.githubToken,
-      preserveBuilderGithubCredentialConfig,
     );
     if (remoteMain) {
       runFreshCustomerGit(
@@ -379,7 +363,6 @@ function initializeFreshCustomerGit(
         identity.slug,
         ["update-ref", "refs/heads/main", remoteMain],
         deps.githubToken,
-        preserveBuilderGithubCredentialConfig,
       );
       runFreshCustomerGit(
         repoDir,
@@ -387,7 +370,6 @@ function initializeFreshCustomerGit(
         identity.slug,
         ["read-tree", "refs/heads/main"],
         deps.githubToken,
-        preserveBuilderGithubCredentialConfig,
       );
     } else {
       runFreshCustomerGit(
@@ -396,7 +378,6 @@ function initializeFreshCustomerGit(
         identity.slug,
         ["read-tree", "--empty"],
         deps.githubToken,
-        preserveBuilderGithubCredentialConfig,
       );
     }
     fs.renameSync(staging, identity.metadataDir);
@@ -643,17 +624,12 @@ export function gitExec(
         return null;
       }
     }
-    const preserveBuilderGithubCredentialConfig = shouldUseBuilderGithubCredentialConfig(
-      cwd,
-      argv,
-      githubToken,
-    );
     const env: Record<string, string | undefined> = {
-      ...process.env,
+      ...sanitizedGitProcessEnvironment(),
       ...githubCloneCredentialEnv(githubToken),
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_SYSTEM: "/dev/null",
-      ...(preserveBuilderGithubCredentialConfig ? {} : { GIT_CONFIG_GLOBAL: "/dev/null" }),
+      GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
       GIT_ASKPASS: DISABLED_EXECUTABLE,
       SSH_ASKPASS: DISABLED_EXECUTABLE,
@@ -675,7 +651,7 @@ export function gitExec(
       ? ["--git-dir", gitDir, "--work-tree", cwd]
       : [];
     return execFileSync(GIT_BINARY, [
-      ...gitHardeningArgs(preserveBuilderGithubCredentialConfig),
+      ...gitHardeningArgs(),
       ...githubCredentialArgs(githubToken),
       ...repositoryArgs,
       ...argv,
@@ -711,31 +687,8 @@ const GIT_HARDENING_ARGS = [
   "-c", "protocol.ext.allow=never",
 ] as const;
 
-function gitHardeningArgs(preserveCredentialHelper: boolean): string[] {
-  if (!preserveCredentialHelper) return [...GIT_HARDENING_ARGS];
-  const args: string[] = [];
-  for (let index = 0; index < GIT_HARDENING_ARGS.length; index += 1) {
-    if (
-      GIT_HARDENING_ARGS[index] === "-c"
-      && GIT_HARDENING_ARGS[index + 1] === "credential.helper="
-    ) {
-      index += 1;
-      continue;
-    }
-    args.push(GIT_HARDENING_ARGS[index]!);
-  }
-  return args;
-}
-
-function shouldUseBuilderGithubCredentialConfig(
-  cwd: string,
-  argv: string[],
-  githubToken: string | null | undefined,
-): boolean {
-  if (githubToken || process.env.GATEWAY_CLASS !== "builder") return false;
-  if (argv.some((value) => value.startsWith("https://github.com/"))) return true;
-  const identity = customerGitIdentity(cwd);
-  return identity ? trustedCustomerGitSource(identity)?.kind === "github" : false;
+function gitHardeningArgs(): string[] {
+  return [...GIT_HARDENING_ARGS];
 }
 
 const UNSAFE_LOCAL_CONFIG_PREFIXES = [
@@ -1132,9 +1085,6 @@ async function cloneGiteaProjectRepo(
   return true;
 }
 
-// GitHub push credentials are the connector token materialized at boot
-// (github-cli-auth-hydrate → `gh auth setup-git`); with no explicit token the clone
-// rides that same ambient credential helper.
 // eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGithubProjectRepo(
   slug: string,
@@ -1168,6 +1118,28 @@ async function cloneGithubProjectRepo(
 }
 
 const GITHUB_CLONE_TOKEN_ENV = "OCTOGEE_GITHUB_CLONE_TOKEN";
+
+function sanitizedGitProcessEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = { ...source };
+  for (const key of Object.keys(env)) {
+    if (
+      key === "GH_TOKEN"
+      || key === "GITHUB_TOKEN"
+      || key === "GH_ENTERPRISE_TOKEN"
+      || key === "GITHUB_ENTERPRISE_TOKEN"
+      || key === GITHUB_CLONE_TOKEN_ENV
+      || key === "GIT_CONFIG"
+      || key === "GIT_CONFIG_COUNT"
+      || key === "GIT_CONFIG_PARAMETERS"
+      || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u.test(key)
+    ) {
+      delete env[key];
+    }
+  }
+  return env;
+}
 
 export function githubCloneCredentialEnv(
   token: string | null | undefined,
@@ -1307,7 +1279,7 @@ function runWorkspaceBootstrapGit(
 ): string | null {
   try {
     return execFileSync(GIT_BINARY, [
-      ...gitHardeningArgs(false),
+      ...gitHardeningArgs(),
       "-c",
       "protocol.file.allow=always",
       "--git-dir",
@@ -1637,8 +1609,14 @@ function rebaseFromOriginIfPresent(
   coachDir: string,
   keyArg: string | undefined,
   runGit: GitRunner,
+  githubToken?: string | null,
 ): void {
-  const remoteMain = runGit(coachDir, ["ls-remote", "--heads", "origin", "main"], keyArg);
+  const remoteMain = runGit(
+    coachDir,
+    ["ls-remote", "--heads", "origin", "main"],
+    keyArg,
+    githubToken,
+  );
   if (!remoteMain) return;
   const localHead = runGit(coachDir, ["rev-parse", "HEAD"]);
   const remoteHead = remoteMain.split(/\s+/u)[0];
@@ -1652,8 +1630,9 @@ function pushAndLog(
   label: string,
   keyArg: string | undefined,
   runGit: GitRunner,
+  githubToken?: string | null,
 ): boolean {
-  const pushResult = runGit(repoDir, ["push", "origin", "main"], keyArg);
+  const pushResult = runGit(repoDir, ["push", "origin", "main"], keyArg, githubToken);
   if (pushResult !== null) {
     log(`[git-sync] ${label}: pushed changes`);
     return true;
@@ -1728,13 +1707,21 @@ function syncOneRepository(
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
+  githubToken?: string | null,
 ): void {
   if (!repositoryMetadataExists(target.dir)) {
     if (strict) throw new Error(`${target.label}: git metadata is missing`);
     return;
   }
   runWorkspaceSyncMutation(target.dir, target.label, () => {
-    prepareRepository(target.dir, slug);
+    const identity = customerGitIdentity(target.dir);
+    const source = identity ? trustedCustomerGitSource(identity) : null;
+    prepareRepository(target.dir, slug, source?.kind === "github"
+      ? {
+          repoSource: { provider: "github", owner: source.owner, repo: source.repo },
+          githubToken,
+        }
+      : {});
     const sshKey = customerSshKeyPath(slug);
     const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
@@ -1753,10 +1740,10 @@ function syncOneRepository(
     }
 
     const committed = commitLocalChanges(target.dir, target.label, strict, runGit);
-    rebaseFromOriginIfPresent(target.dir, keyArg, runGit);
+    rebaseFromOriginIfPresent(target.dir, keyArg, runGit, githubToken);
 
     if (committed || strict) {
-      const pushed = pushAndLog(target.dir, target.label, keyArg, runGit);
+      const pushed = pushAndLog(target.dir, target.label, keyArg, runGit, githubToken);
       if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
     }
   }, { strict, acquire });
@@ -1789,11 +1776,39 @@ async function syncRepositoryTargets(
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
+  resolveGithubToken: ((slug: string) => Promise<string | null>) | undefined,
 ): Promise<void> {
   const failures: string[] = [];
+  const githubTargets = new Set(targets.filter((target) => {
+    const identity = customerGitIdentity(target.dir);
+    return identity ? trustedCustomerGitSource(identity)?.kind === "github" : false;
+  }).map((target) => target.dir));
+  let githubToken: string | null | undefined;
+  let githubTokenError: string | null = null;
+  if (githubTargets.size > 0) {
+    try {
+      githubToken = await resolveGithubToken?.(slug) ?? null;
+    } catch (err) {
+      githubToken = null;
+      githubTokenError = errMessage(err);
+    }
+  }
   for (const target of targets) {
     try {
-      syncOneRepository(slug, target, strict, runGit, prepareRepository, acquire);
+      const needsGithubToken = githubTargets.has(target.dir);
+      if (needsGithubToken && !githubToken) {
+        const detail = githubTokenError ? `: ${githubTokenError}` : "";
+        throw new Error(`${target.label}: GitHub credential unavailable${detail}`);
+      }
+      syncOneRepository(
+        slug,
+        target,
+        strict,
+        runGit,
+        prepareRepository,
+        acquire,
+        needsGithubToken ? githubToken : undefined,
+      );
     } catch (err) {
       const failure = errMessage(err);
       log(`⚠ [git-sync] ${failure}`);
@@ -1810,6 +1825,7 @@ export interface SyncCustomerRepositoriesOptions {
   gitExec?: GitRunner;
   prepareRepository?: typeof setRepoSshCommand;
   acquireWorkspaceMutationLease?: WorkspaceSyncLeaseFactory;
+  resolveGithubToken?: (slug: string) => Promise<string | null>;
 }
 
 export async function syncCustomerRepositoriesForSlug(
@@ -1823,6 +1839,7 @@ export async function syncCustomerRepositoriesForSlug(
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
     opts.acquireWorkspaceMutationLease,
+    opts.resolveGithubToken,
   );
 }
 
@@ -1863,6 +1880,7 @@ export async function syncAllWorkspaces(opts: SyncAllWorkspacesOptions = {}): Pr
         opts.gitExec ?? gitExec,
         opts.prepareRepository ?? setRepoSshCommand,
         opts.acquireWorkspaceMutationLease,
+        undefined,
       );
     } catch (err) {
       const failure = errMessage(err);

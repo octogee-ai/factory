@@ -293,7 +293,12 @@ export async function syncCleanWorkspaceToRemote(
  */
 export async function commitAndPushWorkspace(
   customerDir: string,
-  options: { message: string; author: CommitAuthor; excludePathspecs?: string[] },
+  options: {
+    message: string;
+    author: CommitAuthor;
+    excludePathspecs?: string[];
+    githubToken?: string;
+  },
   deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
   const lease = deps.acquireMutationLease({
@@ -305,7 +310,10 @@ export async function commitAndPushWorkspace(
     const commitRes = await deps.gitCommit(customerDir, options);
     if (!commitRes.ok) return commitRes;
     const committed = !commitRes.result.empty;
-    const prepareRes = await deps.gitPreparePush(customerDir, { author: options.author });
+    const prepareRes = await deps.gitPreparePush(customerDir, {
+      author: options.author,
+      ...(options.githubToken ? { githubToken: options.githubToken } : {}),
+    });
     if (!prepareRes.ok) {
       return {
         ok: true,
@@ -317,7 +325,10 @@ export async function commitAndPushWorkspace(
         },
       };
     }
-    const pushRes = await deps.gitPush(customerDir, prepareRes.target);
+    const pushRes = await deps.gitPush(customerDir, {
+      ...prepareRes.target,
+      ...(options.githubToken ? { githubToken: options.githubToken } : {}),
+    });
     if (!pushRes.ok) {
       return {
         ok: true,
@@ -423,7 +434,7 @@ type WorkspacePushPreparation =
 
 export async function gitPreparePush(
   customerDir: string,
-  options: { author: CommitAuthor },
+  options: { author: CommitAuthor; githubToken?: string },
 ): Promise<WorkspacePushPreparation> {
   const branchResult = await runGit(customerDir, ["branch", "--show-current"]);
   if (!branchResult.ok) return branchResult;
@@ -441,11 +452,13 @@ export async function gitPreparePush(
     return prepareUntrackedBranchPush(customerDir, {
       author: options.author,
       branch,
+      githubToken: options.githubToken,
     });
   }
   const syncResult = await gitRebaseOntoRemoteBranch(customerDir, {
     author: options.author,
     branch: upstreamResult.branch,
+    githubToken: options.githubToken,
   });
   if (!syncResult.ok) return syncResult;
   return {
@@ -492,7 +505,7 @@ async function readOriginUpstream(
 
 async function prepareUntrackedBranchPush(
   customerDir: string,
-  options: { author: CommitAuthor; branch: string },
+  options: { author: CommitAuthor; branch: string; githubToken?: string },
 ): Promise<WorkspacePushPreparation> {
   const remoteBranchResult = await runGit(
     customerDir,
@@ -504,12 +517,13 @@ async function prepareUntrackedBranchPush(
       "origin",
       `refs/heads/${options.branch}`,
     ],
-    { timeoutMs: GIT_PUSH_TIMEOUT_MS },
+    { timeoutMs: GIT_PUSH_TIMEOUT_MS, githubToken: options.githubToken },
   );
   if (remoteBranchResult.ok) {
     const syncResult = await gitRebaseOntoRemoteBranch(customerDir, {
       author: options.author,
       branch: options.branch,
+      githubToken: options.githubToken,
     });
     if (!syncResult.ok) return syncResult;
   } else if (!remoteBranchIsMissing(remoteBranchResult)) {
@@ -533,7 +547,7 @@ function gitConfigIsMissing(
 
 async function gitRebaseOntoRemoteBranch(
   customerDir: string,
-  options: { author: CommitAuthor; branch: string },
+  options: { author: CommitAuthor; branch: string; githubToken?: string },
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
   const fetchResult = await runGit(
     customerDir,
@@ -544,7 +558,7 @@ async function gitRebaseOntoRemoteBranch(
       "origin",
       `+refs/heads/${options.branch}:refs/remotes/origin/${options.branch}`,
     ],
-    { timeoutMs: GIT_PUSH_TIMEOUT_MS },
+    { timeoutMs: GIT_PUSH_TIMEOUT_MS, githubToken: options.githubToken },
   );
   if (!fetchResult.ok) return fetchResult;
 
@@ -712,13 +726,8 @@ export function workspaceGitCommandArgs(
   args: ReadonlyArray<string>,
   callerGithubCredential = false,
 ): string[] {
-  const hardeningPins = !callerGithubCredential && usesBuilderGithubCredential(cwd)
-    ? WORKSPACE_GIT_HARDENING_PINS.filter((value, index, pins) =>
-        value !== "credential.helper="
-        && !(value === "-c" && pins[index + 1] === "credential.helper="))
-    : WORKSPACE_GIT_HARDENING_PINS;
   return [
-    ...hardeningPins,
+    ...WORKSPACE_GIT_HARDENING_PINS,
     ...(callerGithubCredential
       ? [
           "-c",
@@ -744,11 +753,23 @@ export function workspaceGitEnvironment(
   githubToken?: string,
 ): NodeJS.ProcessEnv {
   const environment = { ...source, ...WORKSPACE_GIT_HARDENING_ENV };
+  for (const key of Object.keys(environment)) {
+    if (
+      key === "GH_TOKEN"
+      || key === "GITHUB_TOKEN"
+      || key === "GH_ENTERPRISE_TOKEN"
+      || key === "GITHUB_ENTERPRISE_TOKEN"
+      || key === "OCTOGEE_GITHUB_TOKEN"
+      || key === "GIT_CONFIG"
+      || key === "GIT_CONFIG_COUNT"
+      || key === "GIT_CONFIG_PARAMETERS"
+      || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)
+    ) {
+      delete environment[key];
+    }
+  }
   if (githubToken) {
     environment.OCTOGEE_GITHUB_TOKEN = githubToken;
-  } else if (cwd && usesBuilderGithubCredential(cwd, source)) {
-    if (source.GIT_CONFIG_GLOBAL === undefined) delete environment.GIT_CONFIG_GLOBAL;
-    else environment.GIT_CONFIG_GLOBAL = source.GIT_CONFIG_GLOBAL;
   }
   const identity = cwd ? customerGitIdentity(cwd) : null;
   if (identity) {
@@ -771,11 +792,7 @@ export function workspaceGitEnvironment(
   return environment;
 }
 
-export function usesBuilderGithubCredential(
-  cwd: string,
-  source: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (source.GATEWAY_CLASS !== "builder") return false;
+export function isTrustedGithubCustomerCheckout(cwd: string): boolean {
   const identity = customerGitIdentity(cwd);
   if (!identity) return false;
   const receipt = `${identity.metadataDir}.octogee-trusted-v3`;

@@ -2,22 +2,42 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({
-  resolveCustomerDir: vi.fn(),
-  resolveProjectDir: vi.fn(),
-  commitAndPushWorkspace: vi.fn(),
-  isSafeSlug: vi.fn(),
-  resolveCommitAuthor: vi.fn(),
-  warn: vi.fn(),
-  info: vi.fn(),
-  verifyWorkspaceCommitProof: vi.fn(),
-}));
+const h = vi.hoisted(() => {
+  class MockConnectorTokenReadError extends Error {
+    constructor(
+      readonly status: number,
+      readonly errorCode: string,
+    ) {
+      super(errorCode);
+    }
+  }
+  return {
+    ConnectorTokenReadError: MockConnectorTokenReadError,
+    resolveCustomerDir: vi.fn(),
+    resolveProjectDir: vi.fn(),
+    commitAndPushWorkspace: vi.fn(),
+    isSafeSlug: vi.fn(),
+    isTrustedGithubCustomerCheckout: vi.fn(),
+    readOwnerRuntimeConnectorAccessToken: vi.fn(),
+    resolveCommitAuthor: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    verifyWorkspaceCommitProof: vi.fn(),
+  };
+});
 
 vi.mock("../lib/workspace-git.js", () => ({
   resolveCustomerDir: h.resolveCustomerDir,
   resolveProjectDir: h.resolveProjectDir,
   commitAndPushWorkspace: h.commitAndPushWorkspace,
   isSafeSlug: h.isSafeSlug,
+  isTrustedGithubCustomerCheckout: h.isTrustedGithubCustomerCheckout,
+}));
+
+vi.mock("../lib/connector-tokens.js", () => ({
+  ConnectorTokenReadError: h.ConnectorTokenReadError,
+  readOwnerRuntimeConnectorAccessToken: h.readOwnerRuntimeConnectorAccessToken,
 }));
 
 vi.mock("../routes/workspace/helpers.js", () => ({
@@ -25,7 +45,7 @@ vi.mock("../routes/workspace/helpers.js", () => ({
 }));
 
 vi.mock("../middleware/logging.js", () => ({
-  logger: { warn: h.warn, info: h.info },
+  logger: { warn: h.warn, error: h.error, info: h.info },
 }));
 
 vi.mock("../lib/workspace-commit-proof.js", () => ({
@@ -47,6 +67,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.isSafeSlug.mockImplementation((slug: string) => /^[a-z0-9-]+$/.test(slug));
   h.resolveCustomerDir.mockResolvedValue("/customers/acme");
+  h.isTrustedGithubCustomerCheckout.mockReturnValue(false);
+  h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue("gh-owner-token");
   h.resolveCommitAuthor.mockReturnValue({ name: "Octogee Agent", email: "agent@octogee.test" });
   h.commitAndPushWorkspace.mockResolvedValue({
     ok: true,
@@ -95,6 +117,7 @@ describe("internal workspace commit route", () => {
 
     expect(h.resolveCustomerDir).not.toHaveBeenCalled();
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+    expect(h.readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 
   it("fails closed and reports a retryable error when proof lookup is unavailable", async () => {
@@ -206,6 +229,77 @@ describe("internal workspace commit route — Vegas project lane", () => {
     );
     const options = h.commitAndPushWorkspace.mock.calls[0][1] as { excludePathspecs?: string[] };
     expect(options.excludePathspecs).toBeUndefined();
+  });
+
+  it("fetches GitHub auth on demand and confines it to the commit operation", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit", message: "checkpoint" })
+      .expect(200);
+
+    expect(h.readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("github");
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith(
+      "/customers/acme/projects/orbit",
+      expect.objectContaining({ githubToken: "gh-owner-token" }),
+    );
+  });
+
+  it("does not create a local commit when GitHub is disconnected", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue(null);
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" })
+      .expect(422, {
+        error: "Connect GitHub before saving this project.",
+        code: "GITHUB_NOT_CONNECTED",
+      });
+
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly before committing when the GitHub broker is unavailable", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.readOwnerRuntimeConnectorAccessToken.mockRejectedValue(new Error("broker down"));
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" })
+      .expect(503, {
+        error: "GitHub authentication is temporarily unavailable; retry shortly.",
+        code: "GITHUB_AUTH_UNAVAILABLE",
+      });
+
+    expect(h.error).toHaveBeenCalledWith(
+      "internal/workspace/commit: GitHub credential broker failed",
+      { error: "broker down" },
+    );
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("directs the user to reconnect before committing when GitHub requires reauthorization", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.readOwnerRuntimeConnectorAccessToken.mockRejectedValue(
+      new h.ConnectorTokenReadError(409, "reauth_required"),
+    );
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" })
+      .expect(422, {
+        error: "Reconnect GitHub before saving this project.",
+        code: "GITHUB_REAUTH_REQUIRED",
+      });
+
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+    expect(h.error).not.toHaveBeenCalled();
   });
 
   it("rejects malformed project ids before touching the tree", async () => {

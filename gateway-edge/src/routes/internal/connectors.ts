@@ -37,7 +37,11 @@ router.get(
   requireBuilderShellInternalAuth,
   async (req: Request, res: Response) => {
     const connectorId = paramString(req.params.connector);
-    if (!connectorId || !isConnectorAgentRuntimeTokenMaterializable(connectorId)) {
+    if (
+      !connectorId
+      || connectorId === "github"
+      || !isConnectorAgentRuntimeTokenMaterializable(connectorId)
+    ) {
       res.status(403).json({ error: "forbidden", code: "connector_not_materializable" });
       return;
     }

@@ -223,6 +223,66 @@ describe("workspace autosync remote migration", () => {
     expect(localConfig(project, "remote.origin.url")).toBe(origin);
   });
 
+  it("mints one on-demand token and passes it only to a trusted GitHub checkout's network commands", async () => {
+    const project = path.join(paths.customers, SLUG, "projects", "demo");
+    initRepoWithOrigin(project, GITHUB_REMOTE);
+    rebuildTransferredGithubMetadata(project, SLUG, {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    });
+    fs.writeFileSync(path.join(project, "local.md"), "checkpoint\n");
+    const resolveGithubToken = vi.fn(async () => MATERIALIZED_TOKEN);
+    const runGit = vi.fn((
+      cwd: string,
+      args: string[],
+      _sshKey?: string,
+      _githubToken?: string | null,
+    ) => localGitExec(cwd, args));
+
+    await syncCustomerRepositoriesForSlug(SLUG, {
+      gitExec: runGit,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+      resolveGithubToken,
+    });
+
+    expect(resolveGithubToken).toHaveBeenCalledOnce();
+    expect(resolveGithubToken).toHaveBeenCalledWith(SLUG);
+    const calls = runGit.mock.calls;
+    expect(calls.filter(([, args]) => ["ls-remote", "push"].includes(args[0]!)))
+      .toEqual(expect.arrayContaining([
+        expect.arrayContaining([project, expect.arrayContaining(["ls-remote"]), undefined, MATERIALIZED_TOKEN]),
+        expect.arrayContaining([project, expect.arrayContaining(["push"]), undefined, MATERIALIZED_TOKEN]),
+      ]));
+    expect(calls.filter(([, args]) => !["ls-remote", "push"].includes(args[0]!)))
+      .toEqual(expect.not.arrayContaining([
+        expect.arrayContaining([expect.anything(), expect.anything(), expect.anything(), MATERIALIZED_TOKEN]),
+      ]));
+  });
+
+  it("still flushes Gitea repositories when the GitHub token broker is unavailable", async () => {
+    const workspace = path.join(paths.customers, SLUG);
+    execFileSync("git", ["clone", "-q", canonicalOrigin, workspace]);
+    git(workspace, ["config", "user.email", "test@octogee.test"]);
+    git(workspace, ["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(workspace, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(workspace, "workspace.md"), "durable\n");
+    const project = path.join(workspace, "projects", "demo");
+    initRepoWithOrigin(project, GITHUB_REMOTE);
+    rebuildTransferredGithubMetadata(project, SLUG, {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    });
+
+    await expect(syncCustomerRepositoriesForSlug(SLUG, {
+      strict: true,
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+      resolveGithubToken: async () => { throw new Error("broker down"); },
+    })).rejects.toThrow(/GitHub credential unavailable: broker down/u);
+
+    expect(git(canonicalOrigin, ["show", "main:workspace.md"])).toBe("durable");
+  });
+
   it("still migrates a legacy Gitea HTTP origin onto the SSH host", async () => {
     const project = path.join(paths.customers, SLUG, "projects", "legacy");
     initRepoWithOrigin(

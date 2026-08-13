@@ -86,6 +86,14 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBlobSignedUrl>;
 }
 
+export async function resolveGithubTokenForSlug(
+  client: Pick<FleetBrokerClient, "uidForSlug" | "githubCloneToken">,
+  slug: string,
+): Promise<string | null> {
+  const uid = await client.uidForSlug(slug);
+  return uid ? client.githubCloneToken(uid) : null;
+}
+
 export interface FleetBrokerClientOptions {
   gatewayCredentialHeaders?: () => Promise<Record<string, string>>;
 }

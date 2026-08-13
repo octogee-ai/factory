@@ -104,6 +104,30 @@ describe("commitAndPushWorkspace", () => {
     });
   });
 
+  it("passes an on-demand GitHub token through remote preparation and push only", async () => {
+    const prepare = vi.fn<PrepareFn>(async () => ({
+      ok: true,
+      target: { branch: "main", setUpstream: false },
+    }));
+    const push = vi.fn<PushFn>(async () => ({ ok: true }));
+
+    await commitAndPushWorkspace(
+      "/d",
+      { message: "m", author, githubToken: "gh-owner-token" },
+      mutationDeps(commitOk(false), push, vi.fn(), prepare),
+    );
+
+    expect(prepare).toHaveBeenCalledWith("/d", {
+      author,
+      githubToken: "gh-owner-token",
+    });
+    expect(push).toHaveBeenCalledWith("/d", {
+      branch: "main",
+      setUpstream: false,
+      githubToken: "gh-owner-token",
+    });
+  });
+
   it("forwards excludePathspecs to gitCommit — the workspace-lane projects/ exclusion rides through", async () => {
     let seen: unknown;
     const commit: CommitFn = async (_dir, options) => {

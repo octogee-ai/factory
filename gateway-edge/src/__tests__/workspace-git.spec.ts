@@ -259,7 +259,7 @@ git(repo, ["config", "--unset", "diff.external"]);
 });
 
 describe("platform-owned customer Git metadata", () => {
-  it("uses the Builder's GitHub credential only for a trusted GitHub project checkout", async () => {
+  it("never inherits the Builder's ambient GitHub credential", async () => {
     const previousCustomersDir = process.env.CUSTOMERS_DIR;
     const previousGatewayClass = process.env.GATEWAY_CLASS;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-builder-github-"));
@@ -282,8 +282,8 @@ describe("platform-owned customer Git metadata", () => {
         projectDir,
       );
 
-      expect(args).not.toContain("credential.helper=");
-      expect(env.GIT_CONFIG_GLOBAL).toBe("/home/node/.gitconfig");
+      expect(args).toContain("credential.helper=");
+      expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
       expect(env.GIT_CONFIG_SYSTEM).toBe("/dev/null");
 
       process.env.GATEWAY_CLASS = "shared";
@@ -318,7 +318,17 @@ describe("platform-owned customer Git metadata", () => {
 
       const args = workspaceGitCommandArgs(projectDir, ["push"], true);
       const env = workspaceGitEnvironment(
-        { GATEWAY_CLASS: "builder", GIT_CONFIG_GLOBAL: "/home/node/.gitconfig" },
+        {
+          GATEWAY_CLASS: "builder",
+          GIT_CONFIG_GLOBAL: "/home/node/.gitconfig",
+          GH_TOKEN: "ambient-gh-token",
+          GITHUB_TOKEN: "ambient-github-token",
+          GIT_CONFIG: "/tmp/ambient-config",
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_PARAMETERS: "'credential.helper=!leak'",
+          GIT_CONFIG_KEY_0: "credential.helper",
+          GIT_CONFIG_VALUE_0: "!leak",
+        },
         projectDir,
         "gh-member-token",
       );
@@ -328,6 +338,13 @@ describe("platform-owned customer Git metadata", () => {
       expect(args.join(" ")).not.toContain("gh-member-token");
       expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
       expect(env.OCTOGEE_GITHUB_TOKEN).toBe("gh-member-token");
+      expect(env.GH_TOKEN).toBeUndefined();
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GIT_CONFIG).toBeUndefined();
+      expect(env.GIT_CONFIG_COUNT).toBeUndefined();
+      expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+      expect(env.GIT_CONFIG_KEY_0).toBeUndefined();
+      expect(env.GIT_CONFIG_VALUE_0).toBeUndefined();
     } finally {
       if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
       else process.env.CUSTOMERS_DIR = previousCustomersDir;
