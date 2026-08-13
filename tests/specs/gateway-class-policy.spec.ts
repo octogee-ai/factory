@@ -311,7 +311,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     );
     expect(out.agents.entries["system-agent"].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
     expect(out.plugins.allow).toEqual(approvedPlugins);
-    expect(out.plugins.entries.codex).toBeUndefined();
+    expect(out.plugins.entries.codex).toEqual({ enabled: false });
     expect(out.gateway.terminal).toEqual({ enabled: false });
     expect(out.commands).toMatchObject({
       bash: false,
@@ -375,7 +375,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("shared class removes the default Codex plugin entry", () => {
+  it("shared class retains the durable disabled Codex invariant", () => {
     const out = runPolicy("shared", {
       plugins: {
         entries: {
@@ -386,7 +386,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       mcp: { servers: { stale: { command: "sh" } } },
     });
 
-    expect(out.plugins.entries.codex).toBeUndefined();
+    expect(out.plugins.entries.codex).toEqual({ enabled: false });
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
       enabled: true,
       config: {
@@ -400,7 +400,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("builder class preserves owner-bound runtime capabilities while clamping Project Agents", () => {
+  it("builder class denies Agent host execution while preserving structured project workflows", () => {
     const out = runPolicy("builder", {
       auth: {
         profiles: {
@@ -453,7 +453,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       plugins: {
         allow: ["codex", "octogee-connector-tools"],
         entries: {
-          codex: { enabled: true },
+          codex: {
+            enabled: true,
+            config: { appServer: { sandbox: "danger-full-access", approvalPolicy: "never" } },
+          },
           "octogee-connector-tools": {
             enabled: false,
             config: {
@@ -488,31 +491,29 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     });
 
-    expect(out.tools.deny).toEqual([
+    expect(out.tools.deny).toEqual(expect.arrayContaining([
       "exec",
       "process",
       "subagents",
       "sessions_spawn",
-      "read",
-      ...customerStructuredTools,
-    ]);
-    expect(out.tools.alsoAllow).toEqual(["browser", "nodes"]);
-    expect(out.tools.profile).toBe("full");
-    expect(out.tools.allow).toEqual(["browser", "nodes"]);
+      "terminal",
+      "browser",
+    ]));
+    expect(out.tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
+    expect(out.tools.alsoAllow).toEqual(workflowTools);
+    expect(out.tools.profile).toBe("coding");
+    expect(out.tools.allow).toBeUndefined();
     expect(out.tools.exec).toEqual({ mode: "deny" });
-    expect(out.tools.subagents.tools.deny).toEqual(["exec", "process", "write"]);
-    expect(out.agents.defaults.subagents).toEqual({
-      maxConcurrent: 8,
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect(out.agents.list[0].tools).toEqual({
-      profile: "full",
-      allow: ["browser"],
-      alsoAllow: ["nodes"],
-      deny: customerStructuredTools,
-      fs: { workspaceOnly: false },
+    expect(out.tools.fs).toEqual({ workspaceOnly: true });
+    expect(out.tools.subagents.tools.deny).toEqual(expect.arrayContaining(["exec", "process", "write"]));
+    expect(out.agents.defaults.subagents).toBeUndefined();
+    expect(out.agents.list[0].tools).toMatchObject({
+      profile: "coding",
+      fs: { workspaceOnly: true },
       keep: true,
     });
+    expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
+    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
     const projectTools = out.agents.entries["octogee-alice-proj-garden-coach"].tools;
     expect(projectTools).toMatchObject({
       profile: "minimal",
@@ -549,38 +550,78 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(projectTools.toolsBySender).toEqual({
       "*": { deny: expect.arrayContaining(["octogee_google_calendar_read"]) },
     });
-    expect(out.plugins.allow).toEqual(["codex", "octogee-connector-tools", "octogee-board-tools"]);
-    expect(out.plugins.entries.codex).toEqual({ enabled: true });
+    expect(out.plugins.allow).toEqual(approvedPlugins);
+    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+    expect(out.gateway.terminal).toEqual({ enabled: false });
     expect(out.commands).toMatchObject({
-      bash: true,
-      config: true,
-      mcp: true,
-      plugins: true,
-      debug: true,
+      bash: false,
+      config: false,
+      mcp: false,
+      plugins: false,
+      debug: false,
     });
-    expect(out.mcp.servers).toEqual({ stale: { command: "sh" } });
-    expect(out.cron.triggers.enabled).toBe(true);
+    expect(out.mcp.servers).toBeUndefined();
+    expect(out.cron.triggers.enabled).toBe(false);
     expect(out.skills).toEqual({
-      load: { allowSymlinkTargets: ["/tmp"], extraDirs: ["/tmp"] },
-      workshop: { autonomous: { mode: "auto" }, approvalPolicy: "auto", allowSymlinkTargetWrites: true },
+      load: {},
+      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", allowSymlinkTargetWrites: false },
     });
-    expect(out.channels.mattermost.baseUrl).toBe("https://attacker.example");
-    expect(out.channels.mattermost.accounts["mike-coach"].botToken).toBe("literal");
+    expect(out.channels.mattermost.baseUrl).toBe("${MM_URL}");
+    expect(out.channels.mattermost.accounts["mike-coach"]).toBeUndefined();
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
-      enabled: false,
-      config: {
-        timeoutMs: 1500,
-        baseUrl: "http://connector-tools",
+      enabled: true,
+      config: brokerPluginConfig,
+    });
+    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
+    expect(out.plugins.entries["octogee-board-tools"]).toEqual({
+      enabled: true,
+      config: brokerPluginConfig,
+    });
+    expect(out.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
+  });
+
+  it("builder class preserves owner-bound CLI credentials while removing Agent runtime bindings", () => {
+    const agentId = "octogee-alice-coach";
+    const result = runPolicyWithDir(
+      "builder",
+      {
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+          },
+        },
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          },
+          list: [{ id: agentId, model: "openai/gpt-5.5" }],
+        },
+        plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
       },
-    });
-    expect(out.auth.profiles["openai-codex:default"]).toEqual({
-      provider: "openai-codex",
-      mode: "oauth",
-    });
-    expect(out.plugins.entries["octogee-board-tools"]).toEqual({ enabled: true, config: {} });
-    expect(out.agents.defaults.models["openai/gpt-5.5"]).toEqual({
-      agentRuntime: { id: "codex" },
-    });
+      (dir, home) => {
+        const native = path.join(home, ".claude", ".credentials.json");
+        const agentDir = path.join(dir, "agents", agentId, "agent");
+        const codexHome = path.join(agentDir, "codex-home");
+        const staging = path.join(agentDir, "codex-home.staging");
+        mkdirSync(path.dirname(native), { recursive: true });
+        mkdirSync(codexHome, { recursive: true });
+        mkdirSync(staging, { recursive: true });
+        writeFileSync(native, "claude-shell-credential");
+        writeFileSync(path.join(codexHome, "auth.json"), "codex-shell-credential");
+        writeFileSync(path.join(codexHome, "auth.json.tmp"), "codex-shell-temp");
+        writeFileSync(path.join(staging, "auth.json"), "codex-shell-staging");
+      },
+    );
+
+    expect(result.config.auth.profiles["openai-codex:default"]).toBeUndefined();
+    expect(result.config.plugins.allow).not.toContain("codex");
+    expect(result.config.plugins.entries.codex).toEqual({ enabled: false });
+    expect(result.config.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
+    expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(true);
+    const agentDir = path.join(result.dir, "agents", agentId, "agent");
+    expect(existsSync(path.join(agentDir, "codex-home", "auth.json"))).toBe(true);
+    expect(existsSync(path.join(agentDir, "codex-home", "auth.json.tmp"))).toBe(true);
+    expect(existsSync(path.join(agentDir, "codex-home.staging", "auth.json"))).toBe(true);
   });
 
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {

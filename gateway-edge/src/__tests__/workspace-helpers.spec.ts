@@ -7,7 +7,13 @@ vi.mock('../lib/gitea', () => ({
   giteaApiAsUser: vi.fn(async () => [{ name: 'README.md' }]),
 }));
 
-import { repoContentsApi, isTargetPathWritable } from '../routes/workspace/helpers.js';
+import {
+  isTargetDirectoryEntryReadable,
+  isTargetDirectoryReadable,
+  isTargetPathReadable,
+  repoContentsApi,
+  isTargetPathWritable,
+} from '../routes/workspace/helpers.js';
 import { githubContentsApi } from '../lib/github.js';
 import { giteaApiAsUser } from '../lib/gitea.js';
 import type { FileTarget } from '../lib/fileTarget.js';
@@ -29,7 +35,7 @@ describe('repoContentsApi — identity source per provider', () => {
     brokered: true,
   };
 
-  it("github targets use the target's owner-brokered token, never a gitea sudo", async () => {
+  it("github targets use the target's caller-bound token, never a gitea sudo", async () => {
     await repoContentsApi(githubTarget, 'docs/INDEX.md');
     expect(githubContentsApi).toHaveBeenCalledWith('octogee-ai', 'octogee', 'docs/INDEX.md', 'gho_owner_token', undefined);
     expect(giteaApiAsUser).not.toHaveBeenCalled();
@@ -75,5 +81,37 @@ describe('isTargetPathWritable — brokered targets allowlisted, owners unrestri
     expect(isTargetPathWritable(t, 'README.md')).toBe(true);
     expect(isTargetPathWritable(t, 'src/index.ts')).toBe(false);
     expect(isTargetPathWritable(t, 'notes/sub/x.md')).toBe(false);
+  });
+});
+
+describe('workspace member brokered reads', () => {
+  const target: FileTarget = {
+    slug: 'alice',
+    projectSlug: null,
+    provider: 'gitea',
+    org: 'alice',
+    repoName: 'workspace',
+    gcsPrefix: 'customers/alice',
+    sudoUser: 'ws-alice',
+    brokered: true,
+    workspaceMemberBrokered: true,
+    canvasFile: 'docs/home.md',
+  };
+
+  it('allows notes and the configured canvas while denying other owner files', () => {
+    expect(isTargetPathReadable(target, 'notes/idea.md')).toBe(true);
+    expect(isTargetPathReadable(target, 'docs/home.md')).toBe(true);
+    expect(isTargetPathReadable(target, '.octogee/canvas.json')).toBe(true);
+    expect(isTargetPathReadable(target, 'docs/plan.md')).toBe(false);
+    expect(isTargetPathReadable(target, 'src/index.ts')).toBe(false);
+  });
+
+  it('allows only directories needed to reach readable files', () => {
+    expect(isTargetDirectoryReadable(target, '')).toBe(true);
+    expect(isTargetDirectoryReadable(target, 'notes')).toBe(true);
+    expect(isTargetDirectoryReadable(target, 'docs')).toBe(true);
+    expect(isTargetDirectoryReadable(target, 'src')).toBe(false);
+    expect(isTargetDirectoryEntryReadable(target, 'docs', 'dir')).toBe(true);
+    expect(isTargetDirectoryEntryReadable(target, 'src', 'dir')).toBe(false);
   });
 });

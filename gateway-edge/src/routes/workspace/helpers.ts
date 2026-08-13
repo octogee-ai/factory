@@ -31,6 +31,28 @@ export function isTargetPathWritable(target: FileTarget, path: string): boolean 
   return true;
 }
 
+export function isTargetPathReadable(target: FileTarget, path: string): boolean {
+  return !target.workspaceMemberBrokered
+    || isBrokeredWritablePath(path, target.canvasFile);
+}
+
+export function isTargetDirectoryReadable(target: FileTarget, path: string): boolean {
+  if (!target.workspaceMemberBrokered) return true;
+  if (!path || path === "notes") return true;
+  const canvasFile = target.canvasFile || "README.md";
+  return canvasFile.startsWith(`${path}/`);
+}
+
+export function isTargetDirectoryEntryReadable(
+  target: FileTarget,
+  path: string,
+  type: "dir" | "file",
+): boolean {
+  return type === "dir"
+    ? isTargetDirectoryReadable(target, path)
+    : isTargetPathReadable(target, path);
+}
+
 export function resolveCommitAuthor(
   user: FirebaseFirestore.DocumentData | undefined,
   slug: string,
