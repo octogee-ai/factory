@@ -152,7 +152,14 @@ export interface ActivationManifestExportResponse {
 
 export interface ActivateImportRequestBody extends MigrationRequestBody {}
 
+export type RsyncMigrationRpcPhase =
+  | "prepare-rsync-import"
+  | "push-rsync-state"
+  | "finish-rsync-import"
+  | "abort-rsync-import";
+
 export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
+  rpcPhase: "prepare-rsync-import";
   mode: MigrationTransferMode;
   transferUser: string;
   transferKey: string;
@@ -169,6 +176,7 @@ export interface PrepareRsyncImportResponse {
 }
 
 export interface PushRsyncStateRequestBody extends MigrationRequestBody {
+  rpcPhase: "push-rsync-state";
   mode: MigrationTransferMode;
   targetHost: string;
   targetPort: number;
@@ -178,10 +186,12 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
 }
 
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+  rpcPhase: "finish-rsync-import";
   mode: MigrationTransferMode;
 }
 
 export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
+  rpcPhase: "abort-rsync-import";
   mode: MigrationTransferMode;
 }
 

@@ -242,6 +242,13 @@ async function currentRosterConfig(ctx: BrokerCtx): Promise<unknown> {
   return fetched.config;
 }
 
+async function freshRosterConfig(ctx: BrokerCtx): Promise<unknown> {
+  const fetched = await ctx.rpc.configGet();
+  ctx.configCache.current = fetched.config;
+  ctx.configCache.hash = fetched.hash;
+  return fetched.config;
+}
+
 function invalidateConfigCache(ctx: BrokerCtx): void {
   ctx.configCache.current = undefined;
   ctx.configCache.hash = "";
@@ -268,7 +275,7 @@ async function deleteDepartingCustomerAgents(
   logPrefix: string,
 ): Promise<void> {
   if (slugs.length === 0) return;
-  const current = await currentRosterConfig(ctx);
+  const current = await freshRosterConfig(ctx);
   await deleteAgentsAndInvalidateCache(
     ctx,
     slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
@@ -292,7 +299,7 @@ async function deleteSupersededCustomerAgents(
     logPrefix: string;
   },
 ): Promise<void> {
-  const current = await currentRosterConfig(ctx);
+  const current = await freshRosterConfig(ctx);
   const keep = new Set(input.keepAgentIds);
   await deleteAgentsAndInvalidateCache(
     ctx,
