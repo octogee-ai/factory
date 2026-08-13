@@ -66,4 +66,17 @@ describe("fleet broker system config status", () => {
       }),
     );
   });
+
+  it("requests per-customer project coach membership reconciliation", async () => {
+    await createFleetBrokerClient("bender", "bender-r9")
+      .reconcileProjectCoachMembership("uid-alice");
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      "http://broker/internal/fleet/reconcile-project-coach-membership",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ gatewayId: "bender", uid: "uid-alice" }),
+      }),
+    );
+  });
 });

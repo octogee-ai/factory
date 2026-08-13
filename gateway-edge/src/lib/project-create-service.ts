@@ -407,7 +407,6 @@ async function createMattermostProjectChannel(
 function mattermostMemberAdds(callerCtx: WorkspaceMmContext): MattermostMemberAdd[] {
   return [
     { id: callerCtx.userId, label: "owner" },
-    { id: callerCtx.coachUserId, label: "agent" },
   ];
 }
 

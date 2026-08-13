@@ -378,13 +378,12 @@ export function buildMattermostAccounts(
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
-    // Group channels: the coach answers any member of the channels it has been
-    // added to. Mattermost channel membership IS the access boundary (auditable
-    // + revocable in MM, and the coach is only ever added to channels its owner
-    // controls). The prior owner+admin `allowlist` duplicated that boundary and
-    // silently dropped invited guests — breaking shared channels, the headline
-    // feature. `groupAllowFrom` is retained as an advisory seed (ignored under
-    // "open") for a possible future "synced allowlist" mode. See PR.
+    // Group channels: the coach answers any member of the workspace channels it
+    // has been added to. Mattermost channel membership IS the access boundary:
+    // workspace channels admit the coach, while project channels admit only
+    // their capability-scoped project agent. The prior owner+admin `allowlist`
+    // duplicated the workspace boundary and silently dropped invited guests.
+    // `groupAllowFrom` remains an advisory seed (ignored under "open").
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
@@ -394,8 +393,8 @@ export function buildMattermostAccounts(
     // the whole document — taking the mount, and every customer queued behind
     // it in the same reconcile batch, down with it. Clearing the key is also
     // the repair path for configs a prior release already wrote.
-    // Project channels still reach the right agent: buildCustomerBindings binds
-    // them to the project agent's OWN account, not the workspace coach's.
+    // Project channels reach the project agent through its own account and MM
+    // membership; the workspace coach is deliberately not a channel member.
     const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
     const groupsPatch: Pick<MattermostAccountEntry, "groups"> = managesGroups
       ? { groups: null }

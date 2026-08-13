@@ -1920,6 +1920,8 @@ async function runClaimedOperation(
           if (
             current.operationId !== state.operationId ||
             current.migrationId !== state.migrationId ||
+            (current.strategy ?? "migrate-state") !==
+              (state.strategy ?? "migrate-state") ||
             !isCustomerMigrationV2Transition(current.phase, state.phase)
           ) {
             throw new Error(
@@ -3109,6 +3111,7 @@ async function buildHandlers(
             updatedByOperationId: input.operationId,
           },
           customerMigrationV2Fence: {
+            strategy: input.strategy,
             operationId: input.operationId,
             migrationId: input.migrationId,
             uid: input.uid,
