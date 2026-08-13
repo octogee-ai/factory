@@ -150,6 +150,7 @@ describe("tenant binding middleware", () => {
       kind: "gateway",
       gatewayId: "bender",
       ownerUid: "uid-bender",
+      saName: "octogee-gw-bender",
       podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
       podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });

@@ -59,6 +59,22 @@ const routingActivationMocks = vi.hoisted(() => ({
     routingActivationMocks.pending = true;
     return "activation-token";
   }),
+  stopStale: vi.fn(async () => undefined),
+  activateAfterPatch: vi.fn(async (rpc, openclawDir, log, params) => {
+    if (params.configNoop) {
+      await routingActivationMocks.stopStale(rpc, {
+        currentSlug: params.currentSlug,
+        desiredAccountIds: params.accountIds,
+        evictionSlugs: params.evictionSlugs,
+      }, log);
+      routingActivationMocks.mark(openclawDir, params.reason, params.accountIds, params.baseline);
+    }
+    if (params.required || params.configNoop) {
+      await routingActivationMocks.activate(rpc, openclawDir, log, {
+        restartAfterConfigNoop: params.configNoop,
+      });
+    }
+  }),
 }));
 
 vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
@@ -121,10 +137,12 @@ vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
   };
 });
 vi.mock("../lib/mattermost-routing-activation.js", () => ({
+  activateMattermostRoutingAfterConfigPatch: routingActivationMocks.activateAfterPatch,
   captureMattermostRoutingActivationBaseline: routingActivationMocks.capture,
   activatePendingMattermostRouting: routingActivationMocks.activate,
   markMattermostRoutingActivationPending: routingActivationMocks.mark,
   mattermostRoutingActivationPending: () => routingActivationMocks.pending,
+  stopStaleMattermostRoutingAccounts: routingActivationMocks.stopStale,
 }));
 
 function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
@@ -260,6 +278,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     routingActivationMocks.capture.mockClear();
     routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
     routingActivationMocks.mark.mockClear();
+    routingActivationMocks.stopStale.mockClear();
+    routingActivationMocks.activateAfterPatch.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     tempStateDir = null;
     mocks.readActivationManifest.mockResolvedValue({
@@ -1049,6 +1069,78 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
     expect(events).toEqual(["config-patch", "routing-activation", "secrets-reload"]);
+  });
+
+  it("preserves isolated coach policy while refreshing no-op routing monitors", async () => {
+    routingActivationMocks.pending = true;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch({
+        agents: { list: [] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      }) as {
+        channels: { mattermost: { accounts: Record<string, unknown> } };
+      };
+      expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["mm-alice", "mm-admin"],
+        groups: null,
+      });
+      expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).not.toBeNull();
+      return { mode: "rpc", attempts: 1, noop: true };
+    });
+    const rpc = mkGatewayRpc();
+    const client = mkClient();
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc,
+      log: vi.fn(),
+      adminMmUserId: "mm-admin",
+    });
+
+    await adapter.applyAddCustomerConfigPatch(
+      aliceSnapshot({
+        channels: [
+          { scope: "workspace", kind: "general", channelId: "workspace-general" },
+          { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+        ],
+        projectAgents: [
+          { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+        ],
+      }),
+      { _coachPersonalToken: "pat-1" },
+    );
+
+    expect(client.reconcileProjectCoachMembership).toHaveBeenCalledWith("uid-alice");
+    expect(routingActivationMocks.stopStale).toHaveBeenCalledWith(
+      rpc,
+      {
+        currentSlug: "alice",
+        desiredAccountIds: ["alice-coach", "alice-proj-orbit"],
+        evictionSlugs: [],
+      },
+      expect.any(Function),
+    );
+    expect(routingActivationMocks.mark).toHaveBeenCalledWith(
+      expect.any(String),
+      "[add:alice] account-level Mattermost binding changed",
+      ["alice-coach", "alice-proj-orbit"],
+      { "alice-coach": 0, "alice-proj-orbit": 0 },
+    );
+    expect(routingActivationMocks.activateAfterPatch).toHaveBeenCalledWith(
+      rpc,
+      expect.any(String),
+      expect.any(Function),
+      {
+        accountIds: ["alice-coach", "alice-proj-orbit"],
+        baseline: { "alice-coach": 0, "alice-proj-orbit": 0 },
+        configNoop: true,
+        required: true,
+        reason: "[add:alice] account-level Mattermost binding changed",
+        currentSlug: "alice",
+        evictionSlugs: [],
+      },
+    );
   });
 
   it("does not patch one customer's runtime when membership isolation fails", async () => {

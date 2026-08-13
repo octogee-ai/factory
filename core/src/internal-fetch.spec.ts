@@ -2,7 +2,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_INTERNAL_FETCH_TIMEOUT_MS, internalFetch } from "./internal-fetch.js";
+import {
+  DEFAULT_INTERNAL_FETCH_TIMEOUT_MS,
+  GATEWAY_CREDENTIAL_TOKEN_HEADER,
+  gatewayCredentialHeaders,
+  internalFetch,
+} from "./internal-fetch.js";
 
 const hangingFetch: typeof fetch = (_url, init) =>
   new Promise((_resolve, reject) => {
@@ -30,6 +35,16 @@ afterEach(async () => {
 });
 
 describe("internalFetch", () => {
+  it("materializes the separate gateway credential capability header", async () => {
+    const headers = await gatewayCredentialHeaders(await tokenFile("credential-jwt\n"));
+    expect(headers).toEqual({ [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt" });
+  });
+
+  it("fails closed when the gateway credential capability is unavailable", async () => {
+    await expect(gatewayCredentialHeaders(path.join(os.tmpdir(), `missing-${Math.random()}`)))
+      .rejects.toThrow("projected gateway credential token unavailable");
+  });
+
   it("adds both internal key and projected service-account token headers", async () => {
     const seen: RequestInit[] = [];
     await internalFetch(

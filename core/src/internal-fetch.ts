@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 export const K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
 export const DEFAULT_PROJECTED_API_TOKEN_PATH =
   "/var/run/secrets/octogee-api/token";
+export const GATEWAY_CREDENTIAL_TOKEN_HEADER = "x-octogee-gateway-credential-token";
+export const GATEWAY_CREDENTIAL_TOKEN_AUDIENCE = "octogee-api-gateway-credentials";
+export const DEFAULT_GATEWAY_CREDENTIAL_TOKEN_PATH =
+  "/var/run/secrets/octogee-gateway-credentials/token";
 export const DEFAULT_INTERNAL_FETCH_TIMEOUT_MS = 60_000;
 
 export interface InternalFetchOptions {
@@ -21,6 +25,15 @@ async function readProjectedToken(tokenPath: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+export async function gatewayCredentialHeaders(
+  tokenPath = process.env.OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
+    ?? DEFAULT_GATEWAY_CREDENTIAL_TOKEN_PATH,
+): Promise<Record<string, string>> {
+  const token = await readProjectedToken(tokenPath);
+  if (!token) throw new Error("projected gateway credential token unavailable");
+  return { [GATEWAY_CREDENTIAL_TOKEN_HEADER]: token };
 }
 
 async function buildHeaders(

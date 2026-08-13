@@ -2092,11 +2092,9 @@ function centralGatewayReleasePayload(manifest) {
     return payload;
 }
 function centralReleaseAliasPlans(input) {
-    const aliases = input.authority.aliasesFor(input.manifest);
-    if (input.includeTestRecord) {
-        aliases.push(input.authority.testRecordAlias(input.version, input.manifest));
-    }
-    return aliases;
+    return input.includeTestRecord
+        ? [input.authority.testRecordAlias(input.version, input.manifest)]
+        : input.authority.aliasesFor(input.manifest);
 }
 function aliasOutcomesFromError(error) {
     return error instanceof ReleaseDigestAliasError ? error.aliasOutcomes : [];
@@ -4969,16 +4967,7 @@ export function addAdminFleetRoutes(router, deps) {
                         imageTag: payload.imageTag,
                     }),
                     action: async () => {
-                        let aliasOutcomes = [];
-                        try {
-                            aliasOutcomes = await authority.ensureAliases(authority.aliasesFor(manifest));
-                        }
-                        catch (error) {
-                            return {
-                                aliasOutcomes: aliasOutcomesFromError(error),
-                                failure: { error, failedStep: "aliases" },
-                            };
-                        }
+                        const aliasOutcomes = [];
                         try {
                             await assertNormalFleetMutationOpen(db);
                         }
