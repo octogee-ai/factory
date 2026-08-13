@@ -3216,23 +3216,12 @@ function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleaseP
   return payload;
 }
 
-function centralReleaseAliasPlans(input: {
-  authority: CentralReleaseAuthority;
-  manifest: ReleaseDigestManifest;
-  version: string;
-  includeTestRecord: boolean;
-}): OperationAuditAliasPlan[] {
-  return input.includeTestRecord
-    ? [input.authority.testRecordAlias(input.version, input.manifest)]
-    : input.authority.aliasesFor(input.manifest);
-}
-
 type CentralReleaseMutationResult = {
   appended?: { release: number; operationId: string | null; reused?: boolean };
   aliasOutcomes: ReleaseDigestAliasOutcome[];
   failure?: {
     error: unknown;
-    failedStep: "aliases" | "maintenance" | "release" | "test-record";
+    failedStep: "aliases" | "maintenance" | "release";
   };
 };
 
@@ -3641,15 +3630,30 @@ function centralTestReleaseRequest(body: unknown): {
   };
 }
 
-function centralPromotionRequest(version: unknown, body: unknown): string {
+function centralPromotionRequest(version: unknown, body: unknown): {
+  version: string;
+  sourceSha: string;
+} {
   const parsedVersion = releaseVersionFromBody(version);
   if (!parsedVersion) {
     rejectCentralReleaseRequest(400, { error: "release promotion requires a v-prefixed semantic version" });
   }
-  if (!isPlainRecord(body ?? {}) || Object.keys(body ?? {}).length !== 0) {
-    rejectCentralReleaseRequest(400, { error: "release promotion does not accept a request body" });
+  if (
+    !isPlainRecord(body) ||
+    Object.keys(body).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(body, "sourceSha")
+  ) {
+    rejectCentralReleaseRequest(400, {
+      error: "release promotion requires an exact full lowercase sourceSha",
+    });
   }
-  return parsedVersion;
+  const sourceSha = releaseSourceShaFromBody(body.sourceSha);
+  if (!sourceSha) {
+    rejectCentralReleaseRequest(400, {
+      error: "release promotion requires an exact full lowercase sourceSha",
+    });
+  }
+  return { version: parsedVersion, sourceSha };
 }
 
 async function centralManifestForSourceSha(
@@ -6636,13 +6640,12 @@ router.post(
     manifestDigest: string;
     version: string;
     sourceSha: string;
-    testProvenance: OperationAuditTestProvenance;
     createdBy: string;
     fanout: CentralReleaseFanoutInput;
   }): Promise<CentralTestRolloutOutcome[]> {
     const {
       req, gateways, primary, payload, note, manifestDigest,
-      version, sourceSha, testProvenance, createdBy,
+      version, sourceSha, createdBy,
       fanout,
     } = input;
     const rollouts: CentralTestRolloutOutcome[] = [];
@@ -6665,7 +6668,6 @@ router.post(
           sourceSha,
           manifestDigest,
         },
-        testProvenance,
         idempotencyScope: `promote-central-prod-release:${version}:${targetGateway.gatewayId}`,
         action: async () => appendGatewayRelease(db, {
           gateway: targetGateway,
@@ -6719,12 +6721,6 @@ router.post(
           Date.now(),
         );
         const payload = centralGatewayReleasePayload(manifest);
-        const aliasPlan = centralReleaseAliasPlans({
-          authority,
-          manifest,
-          version,
-          includeTestRecord: true,
-        });
         const testProvenance: OperationAuditTestProvenance = {
           environment: "test",
           sourceCommit: sourceSha,
@@ -6750,7 +6746,6 @@ router.post(
               sourceSha,
               manifestDigest: manifest.manifestDigest,
             },
-            aliasPlan,
             testProvenance,
             ...(existingFanout
               ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
@@ -6769,9 +6764,8 @@ router.post(
                   failure: { error, failedStep: "maintenance" },
                 };
               }
-              let appended: { release: number; operationId: string | null; reused?: boolean };
               try {
-                appended = await appendGatewayRelease(db, {
+                const appended = await appendGatewayRelease(db, {
                   gateway,
                   artifact: gatewayArtifactFromReleasePayload(payload),
                   payload,
@@ -6782,22 +6776,11 @@ router.post(
                   centralReleaseFanout: fanoutInput,
                   requireMaintenanceOpen: true,
                 });
+                return { appended, aliasOutcomes };
               } catch (error) {
                 return {
                   aliasOutcomes,
                   failure: { error, failedStep: "release" },
-                };
-              }
-              try {
-                const testRecordOutcomes = await authority.ensureAliases([
-                  authority.testRecordAlias(version, manifest),
-                ]);
-                return { appended, aliasOutcomes: [...aliasOutcomes, ...testRecordOutcomes] };
-              } catch (error) {
-                return {
-                  appended,
-                  aliasOutcomes: [...aliasOutcomes, ...aliasOutcomesFromError(error)],
-                  failure: { error, failedStep: "test-record" },
                 };
               }
             },
@@ -6856,14 +6839,8 @@ router.post(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const authority = centralReleaseAuthorityFor(deps, "prod");
-        const version = centralPromotionRequest(req.params.version, req.body);
-        const testManifest = await authority.resolveTestManifest(version);
-        const manifest = await authority.resolveManifest(testManifest.sourceSha);
-        if (manifest.manifestDigest !== testManifest.manifestDigest) {
-          rejectCentralReleaseRequest(409, {
-            error: "CENTRAL TEST record does not identify the exact release manifest",
-          });
-        }
+        const { version, sourceSha } = centralPromotionRequest(req.params.version, req.body);
+        const manifest = await centralManifestForSourceSha(authority, sourceSha);
         const { gateways, primary: gateway } = await centralReleaseGateways(db, "shared", "promote");
         const fanoutInput: CentralReleaseFanoutInput = {
           version,
@@ -6887,18 +6864,7 @@ router.post(
           Date.now(),
         );
         const payload = centralGatewayReleasePayload(manifest);
-        const aliasPlan = centralReleaseAliasPlans({
-          authority,
-          manifest,
-          version,
-          includeTestRecord: false,
-        });
-        const testProvenance: OperationAuditTestProvenance = {
-          environment: "test",
-          sourceCommit: manifest.sourceSha,
-          verifiedBy: createdBy,
-          verifiedAt: Date.now(),
-        };
+        const aliasPlan = authority.aliasesFor(manifest);
         let result: CentralReleaseMutationResult;
         try {
           result = await runAdminFleetMutation({
@@ -6918,7 +6884,6 @@ router.post(
               manifestDigest: manifest.manifestDigest,
             },
             aliasPlan,
-            testProvenance,
             classifyResult: classifyCentralReleaseMutation({
               gatewayId: gateway.gatewayId,
               imageTag: payload.imageTag,
@@ -6993,7 +6958,6 @@ router.post(
             manifestDigest: manifest.manifestDigest,
             version,
             sourceSha: manifest.sourceSha,
-            testProvenance,
             createdBy,
             fanout: fanoutInput,
           }),

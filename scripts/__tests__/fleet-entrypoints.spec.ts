@@ -975,8 +975,7 @@ describe("fleet CLI args", () => {
   it("maps normal CENTRAL release commands to journaled Admin API requests with deterministic idempotency keys", () => {
     const sourceSha = "a".repeat(40);
     expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0"]),
-      sourceSha,
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", `--sha=${sourceSha}`]),
     )).toEqual({
       method: "POST",
       path: "/api/admin/releases/cut",
@@ -984,8 +983,7 @@ describe("fleet CLI args", () => {
       idempotencyKey: `release-cut:v0.4.0:${sourceSha}:shared`,
     });
     expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--gateway-scope=all"]),
-      sourceSha,
+      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", `--sha=${sourceSha}`, "--gateway-scope=all"]),
     )).toEqual({
       method: "POST",
       path: "/api/admin/releases/cut",
@@ -993,11 +991,12 @@ describe("fleet CLI args", () => {
       idempotencyKey: `release-cut:v0.4.0:${sourceSha}:all`,
     });
     expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
+      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0", `--sha=${sourceSha}`]),
     )).toEqual({
       method: "POST",
       path: "/api/admin/releases/v0.4.0/promote",
-      idempotencyKey: "release-promote:v0.4.0",
+      body: { sourceSha },
+      idempotencyKey: `release-promote:v0.4.0:${sourceSha}`,
     });
   });
 
@@ -1039,9 +1038,9 @@ describe("fleet CLI args", () => {
         "release",
         "cut",
         "v0.4.0",
+        "--sha=" + "a".repeat(40),
         "--idempotency-key=operator-retry",
       ]),
-      "a".repeat(40),
     )).toMatchObject({ idempotencyKey: "operator-retry" });
   });
 
@@ -1063,8 +1062,7 @@ describe("fleet CLI args", () => {
     ])).toThrow("duplicate --env flag");
     for (const version of ["v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-01", "v1.2.3-alpha.01"]) {
       expect(() => resolveFleetReleaseMutation(
-        parseFleetArgs(["--env=test", "release", "cut", version]),
-        "a".repeat(40),
+        parseFleetArgs(["--env=test", "release", "cut", version, "--sha=" + "a".repeat(40)]),
       )).toThrow("release cut requires a v-prefixed semantic version");
     }
   });
@@ -1089,8 +1087,7 @@ describe("fleet CLI args", () => {
 
   it("rejects release commands outside their CENTRAL environment and never derives a version from git tags", () => {
     expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "cut", "v0.4.0"]),
-      "a".repeat(40),
+      parseFleetArgs(["--env=prod", "release", "cut", "v0.4.0", "--sha=" + "a".repeat(40)]),
     )).toThrow("release cut requires --env=test");
     expect(() => resolveFleetReleaseMutation(
       parseFleetArgs(["--env=test", "release", "promote", "v0.4.0"]),
@@ -1098,6 +1095,12 @@ describe("fleet CLI args", () => {
     expect(() => resolveFleetReleaseMutation(
       parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--sha=deadbeef"]),
     )).toThrow("release cut requires a full lowercase --sha");
+    expect(() => resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
+    )).toThrow("release promote requires a full lowercase --sha");
+    expect(() => resolveFleetReleaseMutation(
+      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0", "--sha=deadbeef"]),
+    )).toThrow("release promote requires a full lowercase --sha");
   });
 
   it("renders the raw Cowboy lifecycle alongside release and heartbeat observations", () => {

@@ -53,16 +53,13 @@ export declare class ReleaseDigestAliasError extends Error {
 }
 export interface CentralReleaseAuthority {
     resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
-    resolveTestManifest: (version: string) => Promise<ReleaseDigestManifest>;
     aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
-    testRecordAlias: (version: string, manifest: ReleaseDigestManifest) => ReleaseDigestAlias;
     ensureAliases: (aliases: readonly ReleaseDigestAlias[]) => Promise<ReleaseDigestAliasOutcome[]>;
 }
 export interface CentralReleaseAuthorityCoordinates {
     project: string;
     location: string;
     repository: string;
-    releaseRecordBucket?: string;
 }
 /** Injectable so the generator/authority contract can be exercised without
  *  Application Default Credentials — CI has none, and a contract test must not

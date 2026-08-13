@@ -73,7 +73,6 @@ const cyan = (s: string) => `${c.cyan}${s}${c.reset}`;
 const CHECK = COLOR_ENABLED ? "✓" : "[ok]";
 const CROSS = COLOR_ENABLED ? "✗" : "[x]";
 const ARROW = COLOR_ENABLED ? "→" : "->";
-const GIT_EXECUTABLE = "/usr/bin/git";
 
 const VERSION = readVersion();
 
@@ -153,25 +152,24 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "release cut",
     summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
-    args: "<version> [--sha=<sha>] [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
+    args: "<version> --sha=<sha> [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
     description:
-      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, cuts the selected shared or all-gateway desired releases, records the immutable TEST authorization, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+      "Requires an explicit full main SHA, then sends one Admin API request. The server reads the exact CENTRAL digest manifest, cuts the selected shared or all-gateway desired releases, journals each mutation, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
     examples: [
-      "fleet --env=test release cut v0.4.0",
       "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
-      "fleet --env=test release cut v0.4.0 --gateway-scope=all --apply",
+      "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --gateway-scope=all --apply",
     ],
     writes: true,
   },
   {
     verb: "release promote",
-    summary: "Promote an identical CENTRAL TEST manifest to PROD.",
-    args: "<version> [--idempotency-key=<key>] [--apply]",
+    summary: "Promote an explicitly selected CENTRAL main manifest to PROD.",
+    args: "<version> --sha=<sha> [--idempotency-key=<key>] [--apply]",
     description:
-      "Sends one Admin API request. The server requires the durable CENTRAL TEST manifest record and promotes those exact bytes through the PROD desired-state release path. Dry-run by default; pass --apply to send the request.",
+      "Sends one Admin API request. The server requires the same full main SHA selected for TEST, resolves its exact CENTRAL digest manifest, and promotes those bytes through the PROD desired-state release path. Dry-run by default; pass --apply to send the request.",
     examples: [
-      "fleet --env=prod release promote v0.4.0",
-      "fleet --env=prod release promote v0.4.0 --apply",
+      "fleet --env=prod release promote v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567",
+      "fleet --env=prod release promote v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
     ],
     writes: true,
   },
@@ -673,22 +671,15 @@ function validateReleaseFlags(args: ParsedFleetArgs, command: string, allowed: r
 
 export function resolveFleetReleaseMutation(
   args: ParsedFleetArgs,
-  defaultSourceSha?: string,
 ): AdminFleetRequest {
   const action = args.positional[1];
   if (action === "cut") {
     if (args.env !== "test") throw new Error("release cut requires --env=test");
     validateReleaseFlags(args, "release cut", ["sha", "gateway-scope"]);
     const version = requiredReleaseVersion(args, "release cut");
-    const explicitSourceSha = stringFlag(args, "sha");
-    if (args.flags.sha !== undefined && !explicitSourceSha) {
-      throw new Error("release cut requires a full lowercase --sha");
-    }
-    const sourceSha = explicitSourceSha ?? defaultSourceSha;
+    const sourceSha = stringFlag(args, "sha");
     if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw new Error(explicitSourceSha
-        ? "release cut requires a full lowercase --sha"
-        : "release cut requires a full lowercase source SHA");
+      throw new Error("release cut requires a full lowercase --sha");
     }
     const gatewayScope = stringFlag(args, "gateway-scope");
     if (gatewayScope !== undefined && gatewayScope !== "shared" && gatewayScope !== "all") {
@@ -702,12 +693,17 @@ export function resolveFleetReleaseMutation(
   }
   if (action === "promote") {
     if (args.env !== "prod") throw new Error("release promote requires --env=prod");
-    validateReleaseFlags(args, "release promote", []);
+    validateReleaseFlags(args, "release promote", ["sha"]);
     const version = requiredReleaseVersion(args, "release promote");
+    const sourceSha = stringFlag(args, "sha");
+    if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
+      throw new Error("release promote requires a full lowercase --sha");
+    }
     return releaseIdempotencyRequest({
       method: "POST",
       path: `/api/admin/releases/${encodeURIComponent(version)}/promote`,
-    }, args, `release-promote:${version}`);
+      body: { sourceSha },
+    }, args, `release-promote:${version}:${sourceSha}`);
   }
   throw new Error(`Unknown release mutation: release ${action ?? ""}`.trim());
 }
@@ -1720,23 +1716,12 @@ async function runFleetBuilderMutation(apply: boolean): Promise<void> {
   console.log(JSON.stringify(result.response, null, 2));
 }
 
-function currentSourceSha(): string {
-  const result = spawnSync(GIT_EXECUTABLE, ["rev-parse", "--verify", "HEAD"], {
-    encoding: "utf8",
-  });
-  const sourceSha = result.stdout.trim();
-  if (result.status !== 0 || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-    throw new Error("release cut could not resolve a full lowercase source SHA from local HEAD");
-  }
-  return sourceSha;
-}
-
 async function runFleetReleaseMutation(apply: boolean): Promise<void> {
-  const sourceSha = args.positional[1] === "cut" && args.flags.sha === undefined
-    ? currentSourceSha()
-    : undefined;
-  const request = resolveFleetReleaseMutation(args, sourceSha);
+  const request = resolveFleetReleaseMutation(args);
   console.log(bold(`RELEASE ${args.positional[1]?.toUpperCase() ?? ""} ${args.positional[2] ?? ""}`));
+  console.log(dim(`  environment: ${args.env}`));
+  console.log(dim(`  version: ${args.positional[2] ?? ""}`));
+  console.log(dim(`  source SHA: ${stringFlag(args, "sha") ?? ""}`));
   console.log(dim(`  ${request.method} ${request.path}`));
   if (!apply) {
     console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
