@@ -105,7 +105,6 @@ import {
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
-  type MattermostAccountEntry,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import {
@@ -141,6 +140,7 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import { quarantineMalformedCoachMattermostAccount } from "./mattermost-coach-quarantine.js";
 import {
   activateMattermostRoutingAfterConfigPatch,
   activatePendingMattermostRouting,
@@ -244,6 +244,13 @@ async function currentRosterConfig(ctx: BrokerCtx): Promise<unknown> {
   return fetched.config;
 }
 
+async function freshRosterConfig(ctx: BrokerCtx): Promise<unknown> {
+  const fetched = await ctx.rpc.configGet();
+  ctx.configCache.current = fetched.config;
+  ctx.configCache.hash = fetched.hash;
+  return fetched.config;
+}
+
 function invalidateConfigCache(ctx: BrokerCtx): void {
   ctx.configCache.current = undefined;
   ctx.configCache.hash = "";
@@ -270,7 +277,7 @@ async function deleteDepartingCustomerAgents(
   logPrefix: string,
 ): Promise<void> {
   if (slugs.length === 0) return;
-  const current = await currentRosterConfig(ctx);
+  const current = await freshRosterConfig(ctx);
   await deleteAgentsAndInvalidateCache(
     ctx,
     slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
@@ -294,7 +301,7 @@ async function deleteSupersededCustomerAgents(
     logPrefix: string;
   },
 ): Promise<void> {
-  const current = await currentRosterConfig(ctx);
+  const current = await freshRosterConfig(ctx);
   const keep = new Set(input.keepAgentIds);
   await deleteAgentsAndInvalidateCache(
     ctx,
@@ -359,6 +366,15 @@ async function snapshotForUid(ctx: BrokerCtx, uid: string): Promise<FleetBrokerU
   if (cached) return cached;
   const snapshot = await ctx.client.userSnapshot(uid);
   if (snapshot) cacheSnapshot(ctx, snapshot);
+  return snapshot;
+}
+
+async function snapshotForUidWithProjectMembershipIsolation(
+  ctx: BrokerCtx,
+  uid: string,
+): Promise<FleetBrokerUserSnapshot | null> {
+  const snapshot = await snapshotForUid(ctx, uid);
+  await ctx.client.reconcileProjectCoachMembership(uid);
   return snapshot;
 }
 
@@ -549,16 +565,6 @@ async function captureRoutingActivationBaseline(
   };
 }
 
-function requiredMattermostAccount(
-  accounts: Readonly<Record<string, MattermostAccountEntry>>,
-  accountId: string,
-  slug: string,
-): MattermostAccountEntry {
-  const account = accounts[accountId];
-  if (!account) throw new Error(`[add:${slug}] fleet broker account fragment was empty`);
-  return account;
-}
-
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
   const result = await ctx.rpc.secretsReload();
   const warningCount = result.warningCount ?? 0;
@@ -573,6 +579,16 @@ async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<
   ctx.log(`${logPrefix} secrets.reload complete`);
 }
 
+async function requiredCoachMattermostAccount(
+  ctx: BrokerCtx,
+  slug: string,
+  account: ReturnType<typeof buildMattermostAccounts>[string] | undefined,
+) {
+  if (account) return account;
+  await quarantineMalformedCoachMattermostAccount(slug, convergedConfigRpc(ctx), ctx.configCache, ctx.log);
+  throw new Error(`[add:${slug}] fleet broker account fragment was empty`);
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -580,7 +596,7 @@ async function applyAddCustomerConfigPatch(
   callOpts: AddCustomerConfigPatchOptions,
 ): Promise<{ elapsedMs: number }> {
   let evictionSlugs = evictionSlugsExcept(snapshot.slug, callOpts?.evictionBatch);
-  const brokerSnapshot = await snapshotForUid(ctx, snapshot.uid);
+  const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
   const coachPat = coachToken(mmUpdate, brokerSnapshot);
   if (!coachPat) {
     throw new Error(`[add:${snapshot.slug}] coach PAT unavailable from fleet broker`);
@@ -602,7 +618,7 @@ async function applyAddCustomerConfigPatch(
     (m) => ctx.log(m),
   );
   const accountId = `${snapshot.slug}-coach`;
-  const accountEntry = requiredMattermostAccount(accountsMap, accountId, snapshot.slug);
+  const accountEntry = await requiredCoachMattermostAccount(ctx, snapshot.slug, accountsMap[accountId]);
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
   const coachModelSelection = initialCoachModelSelection(snapshot);

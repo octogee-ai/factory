@@ -81,6 +81,23 @@ describe("gateway base image", () => {
     expect(installed.has("chromium")).toBe(true);
   });
 
+  it("ships discovery binaries and disables runtime tool downloads", () => {
+    const installed = installedAptPackages("infra/gateway/Dockerfile.base");
+    const baseDockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+
+    expect(installed.has("ripgrep")).toBe(true);
+    expect(installed.has("fd-find")).toBe(false);
+    expect(baseDockerfile).toContain("ARG FD_VERSION=10.3.0");
+    expect(baseDockerfile).toContain(
+      "f4be8742f936e4ef0e10016b661e4c1cd49e482e388080aa28c05d02f0559509",
+    );
+    expect(baseDockerfile).toContain(
+      'echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c -',
+    );
+    expect(dockerfile).toContain("ENV OPENCLAW_OFFLINE=1");
+  });
+
   it("upgrades the shipped npm only after OpenClaw stages its plugins", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
     const pluginInstall = dockerfile.indexOf("openclaw plugins install");

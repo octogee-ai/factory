@@ -25,6 +25,7 @@ const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/billing/check-trial-expiry",
   "/internal/billing/run-auto-top-ups",
   "/internal/notifications/digest",
+  "/internal/notifications/social",
   "/internal/activity-pairs/report",
 ]);
 
@@ -195,6 +196,10 @@ function routeRequiresTargetUserOwnership(req: Request): boolean {
   return path === "/api/notifications/ingest" || path === "/internal/notifications/ingest";
 }
 
+function routeIsPlatformWideNotificationProducer(req: Request): boolean {
+  return normalizeTenantPolicyPath(req.path) === "/internal/notifications/social";
+}
+
 async function slugAllowedForRequest(
   db: Pick<Firestore, "collection">,
   slug: string,
@@ -236,13 +241,14 @@ async function allSlugsAllowedForRequest(
   return true;
 }
 
-async function targetUsersAuthorizedForRequest(
+async function uidsAllowedForRequest(
   db: Pick<Firestore, "collection">,
+  uids: string[],
   gatewayId: string,
   req: Request,
 ): Promise<boolean> {
-  const uids = requestedUids(req);
-  return uids.length > 0 && allUidsBelongToGateway(db, uids, gatewayId);
+  if (routeRequiresTargetUserOwnership(req) && uids.length === 0) return false;
+  return uids.length === 0 || allUidsBelongToGateway(db, uids, gatewayId);
 }
 
 async function gatewayBindingAuthorized(
@@ -255,8 +261,8 @@ async function gatewayBindingAuthorized(
   if (gatewayIds.length > 0 && requestTargetsDifferentGateway) {
     return false;
   }
-  if (routeRequiresTargetUserOwnership(req)) {
-    return targetUsersAuthorizedForRequest(db, bound.gatewayId, req);
+  if (routeIsPlatformWideNotificationProducer(req)) {
+    return false;
   }
 
   // These brokers perform route-specific authorization from their own body
@@ -267,7 +273,7 @@ async function gatewayBindingAuthorized(
   }
 
   const uids = requestedUids(req);
-  if (uids.length > 0 && !(await allUidsBelongToGateway(db, uids, bound.gatewayId))) {
+  if (!(await uidsAllowedForRequest(db, uids, bound.gatewayId, req))) {
     return false;
   }
 
@@ -276,18 +282,12 @@ async function gatewayBindingAuthorized(
     return false;
   }
 
-  if (uids.length > 0 || slugs.length > 0) {
-    return true;
-  }
-
-  if (gatewayIds.length > 0) return true;
-
   const flowId = requestedFlowId(req);
-  if (flowId) {
-    return flowBelongsToGateway(db, flowId, bound.gatewayId);
+  if (flowId && !(await flowBelongsToGateway(db, flowId, bound.gatewayId))) {
+    return false;
   }
 
-  return false;
+  return uids.length > 0 || slugs.length > 0 || gatewayIds.length > 0 || flowId !== null;
 }
 
 export function createTenantEnforcementMiddleware(
