@@ -144,9 +144,18 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     else process.env.LOG_LEVEL = origLevel;
   });
 
-  function fakeReqRes(method: string, urlPath: string, statusCode: number) {
+  function fakeReqRes(
+    method: string,
+    urlPath: string,
+    statusCode: number,
+    options: { matchedRoute?: boolean } = {},
+  ) {
     const listeners: Record<string, () => void> = {};
-    const req = { method, path: urlPath } as Request;
+    const req = {
+      method,
+      path: urlPath,
+      ...(options.matchedRoute ? { route: { path: urlPath } } : {}),
+    } as Request;
     const res = {
       statusCode,
       on: (event: string, cb: () => void) => {
@@ -259,5 +268,39 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
       path: "/health",
       status: 404,
     });
+  });
+
+  it("unmatched 404 scanner paths are silent at default LOG_LEVEL", () => {
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("GET", "/wp-login.php", 404);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it("unmatched 404 scanner paths remain available at DEBUG", () => {
+    process.env.LOG_LEVEL = "debug";
+    const { req, res, fire } = fakeReqRes("GET", "/wp-login.php", 404);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "DEBUG",
+      path: "/wp-login.php",
+      status: 404,
+    });
+  });
+
+  it("matched route 404s stay at WARN", () => {
+    const { req, res, fire } = fakeReqRes(
+      "GET",
+      "/api/projects/missing",
+      404,
+      { matchedRoute: true },
+    );
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(warnSpy).toHaveBeenCalledOnce();
   });
 });

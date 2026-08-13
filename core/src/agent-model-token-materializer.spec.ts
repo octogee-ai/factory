@@ -465,17 +465,21 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
 
   it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", async () => {
     const { secretsApply, apply } = fakeSecretsApply(agentsDir);
+    const logFn = vi.fn();
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
 
-    await materializeBrokerProfilesForAgents(["octogee-alice-coach", "octogee-alice-alex", "main"], {
-      agentsDir,
-      secretsApply,
-    });
+    await materializeBrokerProfilesForAgents(
+      ["octogee-alice-coach", "octogee-unmatched-route", "octogee-alice-alex", "main"],
+      { agentsDir, secretsApply, logFn },
+    );
 
     expect(apply).toHaveBeenCalledOnce();
     expect(
       readAuthProfileStore(path.join(agentsDir, "octogee-alice-alex", "agent")),
     ).toBeNull();
+    expect(logFn.mock.calls.flat().join("\n")).not.toContain("octogee-unmatched-route");
+    expect(logFn.mock.calls.flat().join("\n")).toContain("octogee-alice-alex");
+    expect(logFn.mock.calls.flat().join("\n")).toContain("main");
   });
 
   it("is tolerant — one agent's failure does not abort the sweep", async () => {

@@ -30,6 +30,7 @@ import {
 } from "./openclaw/inbound-gate.js";
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
+import { createBridgeLog } from "./bridge-log.js";
 import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
 import { isAllowedLocalhostOrigin } from "../lib/dev-origins.js";
 import {
@@ -95,11 +96,7 @@ const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid"
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
-// Consistent, timestamped formatting for the bridge's human-readable text logs
-// (the `[bridge-boot] …` lines, incl. the frame trace) — kept plain (not JSON)
-// so they stay greppable/readable by eye during live debugging.
-const bridgeLog = (msg: string): void =>
-  console.warn(`${new Date().toISOString()} ${msg}`);
+const bridgeLog = createBridgeLog();
 
 const MM_PUBLIC_URL = MM_INTERNAL_URL;
 const BRIDGE_UNSYNCHRONIZED = 'unsynchronized' as const;

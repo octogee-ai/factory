@@ -1,10 +1,11 @@
 import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
+import type { BridgeLog } from "../bridge-log.js";
 
 export interface MmRestProxyDeps {
   mmInternalUrl: string;
-  log: (msg: string) => void;
+  log: BridgeLog;
 }
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -57,7 +58,7 @@ const forwardedHeaders: http.OutgoingHttpHeaders = {};
   );
 
   upstream.on("error", (err) => {
-    deps.log(`[mm-proxy/rest] upstream error: ${err.message} for ${req.method} ${req.url}`);
+    deps.log(`[mm-proxy/rest] upstream error: ${err.message} for ${req.method} ${req.url}`, "warn");
 
 req.unpipe(upstream);
     req.resume();
