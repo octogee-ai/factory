@@ -146,6 +146,14 @@ describe("surge handoff direct pod transport", () => {
       "http://10.0.0.2:3003/unmount/default",
       "http://10.0.0.2:3003/complete-surge-handoff/default",
     ]);
+    expect(calls.slice(2, 8).map((call) => call.body?.rpcPhase)).toEqual([
+      "prepare-rsync-import",
+      "push-rsync-state",
+      "finish-rsync-import",
+      "prepare-rsync-import",
+      "push-rsync-state",
+      "finish-rsync-import",
+    ]);
     expect(calls[2]?.body).toMatchObject({
       slug: "alice",
       mode: "keys",
@@ -205,10 +213,10 @@ describe("surge handoff direct pod transport", () => {
       targetPod: target,
     })).rejects.toThrow(/push-rsync-state.*404/u);
 
-    expect(calls.map((call) => [call.url, call.body?.mode])).toEqual([
-      ["http://10.0.0.2:3003/prepare-rsync-import/default", "keys"],
-      ["http://10.0.0.1:3003/push-rsync-state/default", "keys"],
-      ["http://10.0.0.2:3003/abort-rsync-import/default", "keys"],
+    expect(calls.map((call) => [call.url, call.body?.mode, call.body?.rpcPhase])).toEqual([
+      ["http://10.0.0.2:3003/prepare-rsync-import/default", "keys", "prepare-rsync-import"],
+      ["http://10.0.0.1:3003/push-rsync-state/default", "keys", "push-rsync-state"],
+      ["http://10.0.0.2:3003/abort-rsync-import/default", "keys", "abort-rsync-import"],
     ]);
   });
 

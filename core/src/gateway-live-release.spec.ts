@@ -47,7 +47,7 @@ describe("configuredBuilderBootstrapAllowed", () => {
     ...mutableConfig({ builderSlug: "alice" }),
   };
 
-  it("allows the configured isolated builder purely on gateway identity — never lifecycle state", () => {
+  it("allows the configured isolated builder while the gateway is running", () => {
     expect(configuredBuilderBootstrapAllowed(configured, {
       gatewayId: "bender",
       podName: POD_NAME,
@@ -71,15 +71,17 @@ describe("configuredBuilderBootstrapAllowed", () => {
   });
 
   it.each([
+    { desiredStatus: "paused" },
+    { desiredStatus: "draining" },
     { desiredStatus: "retired" },
     { retireAfter: 2 },
     { retirementClaim: { operationId: "retire-1", version: 1 } },
-  ])("ignores lifecycle state for configured-builder bootstrap: %o", (override) => {
+  ])("rejects configured-builder bootstrap after lifecycle revocation: %o", (override) => {
     expect(configuredBuilderBootstrapAllowed({ ...configured, ...override }, {
       gatewayId: "bender",
       podName: POD_NAME,
       slug: "alice",
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it("rejects shared gateways because they have no configured builder identity", () => {
@@ -105,9 +107,7 @@ describe("configuredBuilderCredentialBootstrapAllowed", () => {
     ...mutableConfig({ builderSlug: "alice", ownerUid: "uid-alice" }),
   };
 
-  it("allows credentials for the configured builder owner on gateway identity alone", () => {
-    // The deadlock class this replaces: hydration may NEVER depend on roll or
-    // lifecycle records — identity in, credentials out (GATEWAY-SIMPLE-ROLL-SPEC).
+  it("allows credentials for the configured builder owner while the gateway is running", () => {
     expect(configuredBuilderCredentialBootstrapAllowed(configured, {
       gatewayId: "bender",
       podName: POD_NAME,
@@ -119,6 +119,21 @@ describe("configuredBuilderCredentialBootstrapAllowed", () => {
       podName: POD_NAME,
       slug: "alice",
       uid: "uid-victim",
+    })).toBe(false);
+  });
+
+  it.each([
+    { desiredStatus: "paused" },
+    { desiredStatus: "draining" },
+    { desiredStatus: "retired" },
+    { retireAfter: 2 },
+    { retirementClaim: { operationId: "retire-1", version: 1 } },
+  ])("rejects credential bootstrap after lifecycle revocation: %o", (override) => {
+    expect(configuredBuilderCredentialBootstrapAllowed({ ...configured, ...override }, {
+      gatewayId: "bender",
+      podName: POD_NAME,
+      slug: "alice",
+      uid: "uid-alice",
     })).toBe(false);
   });
 

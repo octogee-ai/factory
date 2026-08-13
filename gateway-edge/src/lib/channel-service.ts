@@ -11,6 +11,7 @@ import {
   CUSTOM_CHANNEL_MIN_LENGTH,
   CUSTOM_CHANNEL_MAX_LENGTH,
 } from "@octogee/shared/types/identity";
+import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 const MM_DISPLAY_NAME_MAX_LENGTH = 64;
 const MM_PURPOSE_MAX_LENGTH = 250;
@@ -106,13 +107,29 @@ export async function createProjectSessionChannel(
   if (!actor.workspaceId) return bad(422, "Workspace not provisioned");
   const projectSnap = await db.doc(`workspaces/${actor.workspaceId}/projects/${project}`).get();
   if (!projectSnap.exists) return bad(404, "Project not found");
-  return createSessionChannelImpl(actor, input, project);
+  const projectAgentMember = await projectAgentChannelMember(actor.uid, project, projectSnap.data());
+  if (!projectAgentMember.ok) return bad(502, projectAgentMember.error);
+  return createSessionChannelImpl(actor, input, project, projectAgentMember.mmUserId);
+}
+
+async function projectAgentChannelMember(
+  uid: string,
+  project: string,
+  projectData: FirebaseFirestore.DocumentData | undefined,
+): Promise<{ ok: true; mmUserId: string | null } | { ok: false; error: string }> {
+  const enabled = (projectData?.agent as { enabled?: unknown } | undefined)?.enabled === true;
+  if (!enabled) return { ok: true, mmUserId: null };
+  const secret = await db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(project)}`).get();
+  const mmUserId = secret.data()?.mmUserId;
+  if (typeof mmUserId === "string" && mmUserId) return { ok: true, mmUserId };
+  return { ok: false, error: "Channel creation failed - project agent is not ready" };
 }
 
 async function createSessionChannelImpl(
   actor: SessionChannelActor,
   input: SessionChannelCreateInput,
   project: string | null,
+  projectAgentMmUserId: string | null = null,
 ): Promise<SessionChannelResult> {
   const normalized = normalizeSessionChannelCreateInput(input);
   const invalidInput = invalidSessionChannelCreateInput(normalized);
@@ -132,19 +149,23 @@ async function createSessionChannelImpl(
   }
 
   const channelName = laneChannelName(workspaceId, project, normalized.name);
+  const agentMember = project
+    ? { id: projectAgentMmUserId, label: "project agent" }
+    : { id: ctx.coachUserId, label: "coach" };
+  const memberAdds = [
+    { id: ctx.userId, label: "owner" },
+    ...(agentMember.id ? [agentMember] : []),
+  ];
   const channelId = await createPrimarySessionChannel(
     ctx.teamId,
     channelName,
     normalized,
     scope,
-    [ctx.userId, ctx.coachUserId],
+    memberAdds.map((member) => member.id),
   );
   if (!channelId) return bad(502, "Channel creation failed - could not create chat channel");
 
-  const memberFailure = await addChannelMembers(channelId, [
-    { id: ctx.userId, label: "owner" },
-    { id: ctx.coachUserId, label: "agent" },
-  ]);
+  const memberFailure = await addChannelMembers(channelId, memberAdds);
   if (memberFailure) {
     logger.error(`[channels] Channel membership failed for ${scope}: ${memberFailure}`);
     return bad(502, "Channel creation failed - could not add channel members");

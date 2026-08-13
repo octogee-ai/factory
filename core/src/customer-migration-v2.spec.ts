@@ -185,6 +185,7 @@ describe("advanceCustomerMigrationV2", () => {
       },
     ]);
     expect(d.commitCutover).toHaveBeenCalledWith({
+      strategy: "migrate-state",
       operationId: "op-1",
       migrationId: "mig-op-1",
       sourceGatewayId: "source",
@@ -372,6 +373,9 @@ describe("customer migration V2 failure boundary", () => {
     }
     expect(isCustomerMigrationV2Transition("initialized", "abortIntent")).toBe(false);
     expect(isCustomerMigrationV2Transition("targetVerified", "abortIntent")).toBe(true);
+    expect(isCustomerMigrationV2Transition("initialized", "freshSourceQuiesced")).toBe(true);
+    expect(isCustomerMigrationV2Transition("freshSourceQuiesced", "freshCutoverReady")).toBe(true);
+    expect(isCustomerMigrationV2Transition("freshCutoverReady", "cutover")).toBe(true);
     expect(isCustomerMigrationV2Transition("cutover", "abortIntent")).toBe(false);
     expect(isCustomerMigrationV2Transition("abortIntent", "abortTargetUnmounted")).toBe(true);
     expect(isCustomerMigrationV2Transition("abortTargetUnmounted", "aborted")).toBe(true);
