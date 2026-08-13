@@ -45,11 +45,17 @@ describe("releasev2 digest manifest", () => {
   });
 
   it("authors manifests only from full-SHA provenance tags", () => {
+    const missingWriter = workflow.slice(
+      workflow.indexOf("  write-missing-release-digest-manifest:"),
+      workflow.indexOf("  promote-built-digests:"),
+    );
     const writer = workflow.slice(
       workflow.indexOf("  write-release-digest-manifest:"),
       workflow.indexOf("  site:"),
     );
 
+    expect(missingWriter).toContain('ref = f"{os.environ[\'AR_REPO\']}/{image}:{os.environ[\'RELEASE_SHA\']}"');
+    expect(missingWriter).not.toContain("RELEASE_SHA'][:7]");
     expect(writer).toContain('ref = f"{os.environ[\'AR_REPO\']}/{image}:{os.environ[\'SOURCE_SHA\']}"');
     expect(writer).not.toContain("SOURCE_SHA'][:7]");
     const platformBuild = readFileSync(
