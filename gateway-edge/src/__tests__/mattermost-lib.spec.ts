@@ -91,6 +91,33 @@ describe("mattermost api helpers", () => {
     });
   });
 
+  it("throws expected idempotent membership conflicts without error logging", async () => {
+    process.env.MM_URL = "http://mattermost.test";
+    const fetchMock = vi.fn(async () => new Response("already a member", { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { mmApi } = await importMattermost();
+
+    await expect(
+      mmApi("/channels/channel-1/members", "POST", { user_id: "user-1" }, "user-token"),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      mmApi("/teams/team-1/members", "POST", { user_id: "user-1" }, "user-token"),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps unexpected Mattermost conflicts at error severity", async () => {
+    process.env.MM_URL = "http://mattermost.test";
+    const fetchMock = vi.fn(async () => new Response("conflict", { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { mmApi } = await importMattermost();
+
+    await expect(mmApi("/channels", "POST", {}, "user-token")).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(logger.error).toHaveBeenCalledOnce();
+  });
+
   it("uploads avatar buffers as form-data with the caller token", async () => {
     process.env.MM_URL = "http://mattermost.test";
     const fetchMock = vi.fn(async () => new Response("", { status: 200 }));

@@ -53,9 +53,12 @@ describe("gateway-edge gitea client — per-workspace org", () => {
   });
 
   it("reports that a 409 repo was not created by this attempt", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     fetchMock.mockResolvedValueOnce(res(409, { message: "already exists" }));
     const { createProjectGiteaRepo } = await import("../lib/gitea.js");
     await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).resolves.toBe(false);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   it("giteaDeleteRepo deletes {org}/{repo}", async () => {

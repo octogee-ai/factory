@@ -77,6 +77,8 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     const path = redactRequestPath(req.path);
     let level: "error" | "warn" | "debug" | "info";
     if (res.statusCode >= 500) level = "error";
+    else if (res.statusCode >= 400 && PROBE_PATHS.has(req.path)) level = "warn";
+    else if (res.statusCode === 404 && req.route === undefined) level = "debug";
     else if (res.statusCode >= 400) level = "warn";
     else if (PROBE_PATHS.has(req.path)) level = "debug";
     else level = "info";

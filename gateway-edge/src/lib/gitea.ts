@@ -170,6 +170,7 @@ async function giteaAdminFetch(
   url: string,
   body: unknown | undefined,
   allow404: boolean,
+  quietErrorStatuses: readonly number[] = [],
 ): Promise<unknown | null> {
   assertGiteaUrl(url);
   const resp = await fetch(url, {
@@ -184,9 +185,11 @@ async function giteaAdminFetch(
   if (!resp.ok) {
     if (allow404 && resp.status === 404) return null;
     const text = await resp.text().catch(() => "");
-    logger.error(`Gitea admin error: ${resp.status} ${method} ${url}`, {
-      response: text.slice(0, 500),
-    });
+    if (!quietErrorStatuses.includes(resp.status)) {
+      logger.error(`Gitea admin error: ${resp.status} ${method} ${url}`, {
+        response: text.slice(0, 500),
+      });
+    }
     const err = new Error(`Gitea API ${resp.status}: ${text.slice(0, 200)}`) as Error & { status: number };
     err.status = resp.status;
     throw err;
@@ -208,7 +211,7 @@ export async function createProjectGiteaRepo(
       private: privateRepo,
       auto_init: true,
       default_branch: "main",
-    }, false);
+    }, false, [409]);
     return true;
   } catch (err) {
     if ((err as Error & { status?: number })?.status === 409) return false;

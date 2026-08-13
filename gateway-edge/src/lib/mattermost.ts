@@ -10,6 +10,12 @@ function getAdminToken(): string {
   return token;
 }
 
+function isExpectedMembershipConflict(path: string, method: string, status: number): boolean {
+  return status === 409
+    && method === "POST"
+    && /^\/(?:channels|teams)\/[^/]+\/members$/u.test(path);
+}
+
 export async function mmApi(
   path: string,
   method = "GET",
@@ -28,9 +34,11 @@ export async function mmApi(
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    logger.error(`MM API error: ${resp.status} ${method} ${path}`, {
-      response: text.slice(0, 500),
-    });
+    if (!isExpectedMembershipConflict(path, method, resp.status)) {
+      logger.error(`MM API error: ${resp.status} ${method} ${path}`, {
+        response: text.slice(0, 500),
+      });
+    }
     const err = new Error(`MM API ${resp.status}: ${text.slice(0, 200)}`) as Error & { status: number };
     err.status = resp.status;
     throw err;

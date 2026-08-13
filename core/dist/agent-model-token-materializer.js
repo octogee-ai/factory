@@ -18,6 +18,7 @@ const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
 const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
+const QUIET_NON_BROKER_AGENT_IDS = new Set(["octogee-unmatched-route"]);
 function isBrokerResolvableAgentId(agentId) {
     return parseAgentId(agentId).kind !== "unknown";
 }
@@ -319,7 +320,9 @@ export async function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     const deferred = [];
     for (const agentId of agentIds) {
         if (!isBrokerResolvableAgentId(agentId)) {
-            opts.logFn?.(`[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`);
+            if (!QUIET_NON_BROKER_AGENT_IDS.has(agentId)) {
+                opts.logFn?.(`[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`);
+            }
             continue;
         }
         try {
