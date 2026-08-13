@@ -142,6 +142,7 @@ import {
 } from "./mattermost-account-secrets.js";
 import { quarantineMalformedCoachMattermostAccount } from "./mattermost-coach-quarantine.js";
 import {
+  activateMattermostRoutingAfterConfigPatch,
   activatePendingMattermostRouting,
   captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
@@ -552,6 +553,18 @@ function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
   };
 }
 
+async function captureRoutingActivationBaseline(
+  ctx: BrokerCtx,
+  accountId: string,
+  projectAccounts: Readonly<Record<string, unknown>>,
+): Promise<{ accountIds: string[]; baseline: Record<string, number> }> {
+  const accountIds = [accountId, ...Object.keys(projectAccounts)];
+  return {
+    accountIds,
+    baseline: await captureMattermostRoutingActivationBaseline(ctx.rpc, accountIds),
+  };
+}
+
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
   const result = await ctx.rpc.secretsReload();
   const warningCount = result.warningCount ?? 0;
@@ -683,9 +696,10 @@ async function applyAddCustomerConfigPatch(
     customerAgentEntries,
     `[add:${snapshot.slug}]`,
   );
-  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(ctx.rpc, [accountId, ...Object.keys(projectAccounts)]);
+  const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
+    captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
   const startedAt = Date.now();
-  await applyConfigPatch(
+  const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
@@ -757,13 +771,15 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  if (routingActivationRequired) {
-    await activatePendingMattermostRouting(
-      ctx.rpc,
-      OPENCLAW_DIR,
-      ctx.log,
-    );
-  }
+  await activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
+    accountIds: affectedAccountIds,
+    baseline: routingActivationBaseline,
+    configNoop: configPatch.noop === true,
+    required: routingActivationRequired,
+    reason: routingActivationReason,
+    currentSlug: snapshot.slug,
+    evictionSlugs,
+  });
   await reloadRuntimeSecrets(ctx, `[add:${snapshot.slug}]`);
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {

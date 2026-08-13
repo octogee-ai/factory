@@ -319,6 +319,101 @@ async function confirmRoutingActivation(
   throw new Error(`${pending.reason}; Mattermost routing activation was not observed`);
 }
 
+async function restartMattermostAccounts(
+  rpc: GatewayRpcClient,
+  pending: PendingActivationBatch,
+  accountIds: readonly string[],
+  log: (message: string) => void,
+): Promise<void> {
+  const failures: Error[] = [];
+  for (const accountId of accountIds) {
+    const before = failures.length;
+    try {
+      await rpc.channelsStop({ channel: "mattermost", accountId });
+    } catch (error) {
+      failures.push(new Error(`${accountId} stop failed`, { cause: error }));
+    }
+    try {
+      await rpc.channelsStart({ channel: "mattermost", accountId });
+    } catch (error) {
+      failures.push(new Error(`${accountId} start failed`, { cause: error }));
+    }
+    if (failures.length === before) {
+      log(`${pending.reason}; restarted Mattermost account ${accountId} after config no-op`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `${pending.reason}; Mattermost account restart failed`);
+  }
+}
+
+export async function stopStaleMattermostRoutingAccounts(
+  rpc: GatewayRpcClient,
+  params: {
+    currentSlug: string;
+    desiredAccountIds: readonly string[];
+    evictionSlugs: readonly string[];
+  },
+  log: (message: string) => void,
+): Promise<void> {
+  const desired = new Set(params.desiredAccountIds);
+  const managedSlugs = new Set([params.currentSlug, ...params.evictionSlugs]);
+  const statuses = await mattermostAccountStatuses(rpc);
+  const staleAccountIds = [...statuses.entries()].flatMap(([accountId, status]) => {
+    if (desired.has(accountId) || status.running !== true) return [];
+    return [...managedSlugs].some((slug) =>
+      accountId === `${slug}-coach` || accountId.startsWith(`${slug}-proj-`)
+    ) ? [accountId] : [];
+  });
+  const failures: Error[] = [];
+  for (const accountId of staleAccountIds) {
+    try {
+      await rpc.channelsStop({ channel: "mattermost", accountId });
+      log(`stopped stale Mattermost account ${accountId} after config no-op`);
+    } catch (error) {
+      failures.push(new Error(`${accountId} stop failed`, { cause: error }));
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Stale Mattermost account stop failed");
+  }
+}
+
+export async function activateMattermostRoutingAfterConfigPatch(
+  rpc: GatewayRpcClient,
+  openclawDir: string,
+  log: (message: string) => void,
+  params: {
+    accountIds: readonly string[];
+    baseline: Readonly<Record<string, number>>;
+    configNoop: boolean;
+    required: boolean;
+    reason: string;
+    currentSlug: string;
+    evictionSlugs: readonly string[];
+  },
+): Promise<void> {
+  let required = params.required;
+  if (params.configNoop) {
+    await stopStaleMattermostRoutingAccounts(rpc, {
+      currentSlug: params.currentSlug,
+      desiredAccountIds: params.accountIds,
+      evictionSlugs: params.evictionSlugs,
+    }, log);
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      params.reason,
+      params.accountIds,
+      params.baseline,
+    );
+    required = true;
+  }
+  if (!required) return;
+  await activatePendingMattermostRouting(rpc, openclawDir, log, {
+    restartAfterConfigNoop: params.configNoop,
+  });
+}
+
 export async function activatePendingMattermostRouting(
   rpc: GatewayRpcClient,
   openclawDir: string,
@@ -328,6 +423,7 @@ export async function activatePendingMattermostRouting(
     sleep?: (ms: number) => Promise<void>;
     timeoutMs?: number;
     accountAbsenceGraceMs?: number;
+    restartAfterConfigNoop?: boolean;
   } = {},
 ): Promise<void> {
   const now = options.now ?? Date.now;
@@ -357,6 +453,9 @@ export async function activatePendingMattermostRouting(
     if (accountIds.length === 0) {
       if (clearPendingActivation(openclawDir, pending)) return;
       continue;
+    }
+    if (options.restartAfterConfigNoop === true) {
+      await restartMattermostAccounts(rpc, pending, accountIds, log);
     }
     await confirmRoutingActivation(
       rpc,
