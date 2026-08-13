@@ -90,6 +90,7 @@ function projectCloneKey(project: FleetBrokerProjectRestore): string {
 
 export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): string {
   const configSlice = {
+    projectCoachMembershipIsolationVersion: 1,
     // Order-independent: bindings/accounts are keyed, not positional.
     channels: [...snapshot.channels]
       .map((c) => ({ scope: c.scope, kind: c.kind, channelId: c.channelId, projectId: c.projectId }))

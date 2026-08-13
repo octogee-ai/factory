@@ -367,6 +367,15 @@ async function snapshotForUid(ctx: BrokerCtx, uid: string): Promise<FleetBrokerU
   return snapshot;
 }
 
+async function snapshotForUidWithProjectMembershipIsolation(
+  ctx: BrokerCtx,
+  uid: string,
+): Promise<FleetBrokerUserSnapshot | null> {
+  const snapshot = await snapshotForUid(ctx, uid);
+  await ctx.client.reconcileProjectCoachMembership(uid);
+  return snapshot;
+}
+
 async function snapshotForSlug(ctx: BrokerCtx, slug: string): Promise<FleetBrokerUserSnapshot | null> {
   const cached = ctx.snapshotsBySlug.get(slug);
   if (cached) return cached;
@@ -563,12 +572,11 @@ async function applyAddCustomerConfigPatch(
   callOpts: AddCustomerConfigPatchOptions,
 ): Promise<{ elapsedMs: number }> {
   let evictionSlugs = evictionSlugsExcept(snapshot.slug, callOpts?.evictionBatch);
-  const brokerSnapshot = await snapshotForUid(ctx, snapshot.uid);
+  const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
   const coachPat = coachToken(mmUpdate, brokerSnapshot);
   if (!coachPat) {
     throw new Error(`[add:${snapshot.slug}] coach PAT unavailable from fleet broker`);
   }
-
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
   const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot);
   const accountsMap = buildMattermostAccounts(
@@ -590,7 +598,6 @@ async function applyAddCustomerConfigPatch(
   if (!accountEntry) {
     throw new Error(`[add:${snapshot.slug}] fleet broker account fragment was empty`);
   }
-
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
   const coachModelSelection = initialCoachModelSelection(snapshot);
