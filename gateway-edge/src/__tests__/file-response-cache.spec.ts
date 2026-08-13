@@ -4,6 +4,7 @@ import {
   clearWorkspaceFileResponseCache,
   invalidateWorkspaceFileResponseCache,
   workspaceFileCacheKey,
+  workspaceFileTargetCacheKey,
 } from "../routes/workspace/file-response-cache.js";
 import type { FileTarget } from "../lib/fileTarget.js";
 
@@ -23,6 +24,26 @@ const key = workspaceFileCacheKey("list", target, "");
 beforeEach(() => clearWorkspaceFileResponseCache());
 
 describe("cachedWorkspaceFileResponse", () => {
+  it("separates full owner responses from brokered workspace-member responses", () => {
+    expect(workspaceFileTargetCacheKey(target)).not.toBe(workspaceFileTargetCacheKey({
+      ...target,
+      brokered: true,
+      workspaceMemberBrokered: true,
+    }));
+  });
+
+  it("separates GitHub responses by caller authority", () => {
+    const githubTarget: FileTarget = {
+      ...target,
+      provider: "github",
+      cacheAuthority: "member-a",
+    };
+    expect(workspaceFileTargetCacheKey(githubTarget)).not.toBe(workspaceFileTargetCacheKey({
+      ...githubTarget,
+      cacheAuthority: "member-b",
+    }));
+  });
+
   it("caches the loaded value and reuses it on subsequent reads", async () => {
     const load = vi.fn().mockResolvedValue("v1");
     expect(await cachedWorkspaceFileResponse(key, 1000, load)).toBe("v1");
@@ -53,5 +74,21 @@ describe("cachedWorkspaceFileResponse", () => {
     const load2 = vi.fn().mockResolvedValue("fresh");
     expect(await cachedWorkspaceFileResponse(key, 1000, load2)).toBe("fresh");
     expect(load2).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates every authority view of the same repository", async () => {
+    const ownerTarget = { ...target, cacheAuthority: "owner" };
+    const memberTarget = { ...target, cacheAuthority: "member" };
+    const ownerKey = workspaceFileCacheKey("file", ownerTarget, "README.md");
+    const memberKey = workspaceFileCacheKey("file", memberTarget, "README.md");
+    await cachedWorkspaceFileResponse(ownerKey, 1000, async () => "owner-old");
+    await cachedWorkspaceFileResponse(memberKey, 1000, async () => "member-old");
+
+    invalidateWorkspaceFileResponseCache(ownerTarget);
+
+    expect(await cachedWorkspaceFileResponse(ownerKey, 1000, async () => "owner-new"))
+      .toBe("owner-new");
+    expect(await cachedWorkspaceFileResponse(memberKey, 1000, async () => "member-new"))
+      .toBe("member-new");
   });
 });

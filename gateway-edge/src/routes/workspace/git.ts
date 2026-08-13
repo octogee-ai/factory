@@ -26,6 +26,7 @@ const router = Router();
 
 const GIT_LANE_READ: ResolveFileTargetOpts = { resolveGithubToken: false };
 const GIT_LANE_WRITE: ResolveFileTargetOpts = { access: "write", resolveGithubToken: false };
+const GIT_LANE_REMOTE_WRITE: ResolveFileTargetOpts = { access: "write", resolveGithubToken: true };
 
 function customersRoot(): string {
 
@@ -331,7 +332,10 @@ router.post(
         respondCustomerDirMissing(res, target.slug);
         return;
       }
-      const mutation = await runWorkspaceGitMutation(dir, () => gitPush(dir, { branch }));
+      const mutation = await runWorkspaceGitMutation(
+        dir,
+        () => gitPush(dir, { branch, githubToken: target.githubToken }),
+      );
       if (!mutation.ok) {
         respondGitError(res, mutation.error);
         return;
@@ -344,7 +348,7 @@ router.post(
       res.json({ ok: true });
     });
     logger.info(`git/push slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_WRITE),
+  }, GIT_LANE_REMOTE_WRITE),
 );
 
 router.post(

@@ -142,11 +142,11 @@ async function projectAccessAuthorized(
   const projectSnap = await db.doc(projectPath).get();
   if (!projectSnap.exists) return false;
   const project = projectSnap.data() as Record<string, unknown> | undefined;
-  if (project?.ownerUid !== uid) return false;
   if (projectRepoSourceProvider(project) !== connectorId) return false;
-  if (access.requestingUid === uid) return true;
+  if (access.requestingUid !== uid) return false;
+  if (project?.ownerUid === uid) return true;
 
-  const memberSnap = await db.doc(`${projectPath}/members/${access.requestingUid}`).get();
+  const memberSnap = await db.doc(`${projectPath}/members/${uid}`).get();
   return memberSnap.exists;
 }
 
@@ -220,11 +220,12 @@ async function accessAuthorized(
   if (access?.kind === PUBLIC_CANVAS_ACCESS_KIND) {
     return publicCanvasAccessAuthorized(db, uid, connectorId, access);
   }
+  if (access?.kind === "project") {
+    if (uid !== bound.ownerUid || access.requestingUid !== bound.ownerUid) return false;
+    return projectAccessAuthorized(db, uid, connectorId, access);
+  }
   if (uid === bound.ownerUid) return true;
-
-  if (!access) return false;
-  if (access.requestingUid !== bound.ownerUid) return false;
-  return projectAccessAuthorized(db, uid, connectorId, access);
+  return false;
 }
 
 async function ownerRuntimeAccessAuthorized(input: {
