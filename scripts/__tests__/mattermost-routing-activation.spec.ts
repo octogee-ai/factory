@@ -10,6 +10,7 @@ import {
   captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
+  stopStaleMattermostRoutingAccounts,
 } from "../lib/mattermost-routing-activation.js";
 
 const temporaryDirectories: string[] = [];
@@ -79,6 +80,32 @@ describe("Mattermost routing activation", () => {
     ).rejects.toThrow("Mattermost account ceckert-coach has an invalid lastStartAt");
   });
 
+  it("stops removed project and evicted accounts without restarting them", async () => {
+    const rpc = channelOperationRpc(
+      ["alice-coach"],
+      vi.fn(async () => ({
+        channelAccounts: { mattermost: [
+          { accountId: "alice-coach", running: true, connected: true, lastStartAt: 100 },
+          { accountId: "alice-proj-retired", running: true, connected: true, lastStartAt: 100 },
+          { accountId: "bob-coach", running: true, connected: true, lastStartAt: 100 },
+          { accountId: "carol-coach", running: true, connected: true, lastStartAt: 100 },
+        ] },
+      })),
+    );
+
+    await stopStaleMattermostRoutingAccounts(rpc, {
+      currentSlug: "alice",
+      desiredAccountIds: ["alice-coach"],
+      evictionSlugs: ["bob"],
+    }, vi.fn());
+
+    expect(vi.mocked(rpc.channelsStop).mock.calls.map(([params]) => params.accountId)).toEqual([
+      "alice-proj-retired",
+      "bob-coach",
+    ]);
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
+  });
+
   it("accepts the config hot-reload activation without manually restarting the account", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
@@ -135,6 +162,69 @@ describe("Mattermost routing activation", () => {
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatusConnectionGeneration).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("restarts a marked account when persisted config was already a no-op", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "persisted binding may have a stale monitor",
+      ["ceckert-coach"],
+      { "ceckert-coach": 100 },
+    );
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => ({
+        channelAccounts: { mattermost: [
+          {
+            accountId: "ceckert-coach",
+            running: true,
+            connected: true,
+            lastStartAt: 101,
+          },
+        ] },
+      })),
+    );
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      restartAfterConfigNoop: true,
+      sleep: async () => undefined,
+    });
+
+    expect(rpc.channelsStop).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "ceckert-coach",
+    });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({
+      channel: "mattermost",
+      accountId: "ceckert-coach",
+    });
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("keeps the marker and attempts start when a no-op monitor stop fails", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "persisted binding may have a stale monitor",
+      ["ceckert-coach"],
+      { "ceckert-coach": 100 },
+    );
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+    );
+    vi.mocked(rpc.channelsStop).mockRejectedValueOnce(new Error("stop refused"));
+
+    await expect(
+      activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+        restartAfterConfigNoop: true,
+        sleep: async () => undefined,
+      }),
+    ).rejects.toThrow("Mattermost account restart failed");
+
+    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(true);
   });
 
   it("starts an initially absent account and verifies that it connects", async () => {

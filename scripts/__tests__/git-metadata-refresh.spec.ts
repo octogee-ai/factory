@@ -421,6 +421,28 @@ describe("customer Git metadata refresh", () => {
     expect(gitExec(repoDir, ["rev-parse", "HEAD"])).toBe(canonical.head);
   });
 
+  it("recreates a missing customer directory when canonical metadata is already trusted", () => {
+    const canonical = createCanonicalRepo({ "README.md": "canonical\n" });
+    temporaryRoots.push(canonical.root);
+    const repoDir = path.join(CUSTOMERS_DIR, "missing-worktree");
+    const metadataDir = path.join(METADATA_ROOT, "missing-worktree", "workspace.git");
+    writeWorktree(repoDir, { "README.md": "canonical\n" });
+
+    expect(externalizeCustomerGitDir(repoDir, {
+      fetchCanonical: fetchCanonicalFrom(canonical.bare),
+    })).toBe(metadataDir);
+    fs.rmSync(repoDir, { recursive: true });
+
+    expect(externalizeCustomerGitDir(repoDir, {
+      fetchCanonical: () => {
+        throw new Error("trusted metadata fetched unexpectedly");
+      },
+    })).toBe(metadataDir);
+    expect(fs.readFileSync(path.join(repoDir, ".git"), "utf8"))
+      .toBe(`gitdir: ${metadataDir}\n`);
+    expect(fs.statSync(repoDir).mode & 0o777).toBe(0o700);
+  });
+
   it("treats a transferred workspace with a dangling external metadata pointer as unready", () => {
     const repoDir = path.join(CUSTOMERS_DIR, "transferred");
     const metadataDir = path.join(METADATA_ROOT, "transferred", "workspace.git");

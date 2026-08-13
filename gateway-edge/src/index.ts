@@ -22,6 +22,7 @@ import githubReposRoutes from "./routes/workspace/github-repos.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
+import internalAgentMessageRoutes from "./routes/internal/agent-message.js";
 
 import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
@@ -177,6 +178,7 @@ app.use("/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
 if (surface === "sidecar") {
+  app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
 }
