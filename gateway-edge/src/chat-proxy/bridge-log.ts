@@ -1,4 +1,6 @@
-const WARNING_PATTERN = /\b(?:auth-failed|denied|error|failed|failure|fatal|invalid|rejected|refused|timed out|timeout|unavailable|unsynchronized|threw)\b/iu;
+export type BridgeLogSeverity = "info" | "warn";
+
+export type BridgeLog = (message: string, severity?: BridgeLogSeverity) => void;
 
 export interface BridgeLogDependencies {
   now?: () => Date;
@@ -6,14 +8,14 @@ export interface BridgeLogDependencies {
   warn?: (message: string) => void;
 }
 
-export function createBridgeLog(deps: BridgeLogDependencies = {}): (message: string) => void {
+export function createBridgeLog(deps: BridgeLogDependencies = {}): BridgeLog {
   const now = deps.now ?? (() => new Date());
   const info = deps.info ?? ((message: string) => console.log(message));
   const warn = deps.warn ?? ((message: string) => console.warn(message));
 
-  return (message: string): void => {
+  return (message: string, severity: BridgeLogSeverity = "info"): void => {
     const formatted = `${now().toISOString()} ${message}`;
-    if (WARNING_PATTERN.test(message)) {
+    if (severity === "warn") {
       warn(formatted);
       return;
     }

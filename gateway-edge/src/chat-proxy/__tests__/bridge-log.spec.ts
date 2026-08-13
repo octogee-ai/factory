@@ -33,7 +33,7 @@ describe("bridge lifecycle logging", () => {
     const warn = vi.fn();
     const log = createBridgeLog({ info, warn });
 
-    log(message);
+    log(message, "warn");
 
     expect(warn).toHaveBeenCalledOnce();
     expect(info).not.toHaveBeenCalled();

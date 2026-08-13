@@ -179,7 +179,7 @@ describe("attachMmWsBridge — roll roster verdict at authentication (Codex P0)"
       code: MM_WS_RECONNECT_CLOSE_CODE,
       reason: expect.stringContaining("serving-elsewhere"),
     });
-    expect(h.log).toHaveBeenCalledWith(expect.stringContaining("serving-elsewhere"));
+    expect(h.log).toHaveBeenCalledWith(expect.stringContaining("serving-elsewhere"), "warn");
   });
 
   it("roster-loading at auth time → closed with the reconnect code (retry semantics), no dial", async () => {
@@ -293,6 +293,10 @@ describe("attachMmWsBridge — pre-auth DoS bounds", () => {
     expect(h.openUpstream).not.toHaveBeenCalled();
     expect(h.browser.readyState).toBe(3);
     expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+    expect(h.log).toHaveBeenCalledWith(
+      expect.stringContaining("auth_deadline_exceeded"),
+      "warn",
+    );
   });
 
   it("pre-auth frame-count cap exceeded → closed; upstream NEVER dialed", async () => {
@@ -304,6 +308,10 @@ describe("attachMmWsBridge — pre-auth DoS bounds", () => {
     expect(h.openUpstream).not.toHaveBeenCalled();
     expect(h.browser.readyState).toBe(3);
     expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+    expect(h.log).toHaveBeenCalledWith(
+      expect.stringContaining("preauth_frame_cap_exceeded"),
+      "warn",
+    );
   });
 
   it("pre-auth byte cap exceeded → closed; upstream NEVER dialed", async () => {
@@ -316,6 +324,10 @@ describe("attachMmWsBridge — pre-auth DoS bounds", () => {
     expect(h.openUpstream).not.toHaveBeenCalled();
     expect(h.browser.readyState).toBe(3);
     expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
+    expect(h.log).toHaveBeenCalledWith(
+      expect.stringContaining("preauth_byte_cap_exceeded"),
+      "warn",
+    );
   });
 
   it("normal client (auth challenge first): admitted, buffered frame flushes, and neither cap nor deadline closes it (regression pin)", async () => {
@@ -387,6 +399,7 @@ describe("attachMmWsBridge — admission deadline (no silent hang)", () => {
     expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
     expect(h.log).toHaveBeenCalledWith(
       expect.stringContaining("admission_deadline_exceeded"),
+      "warn",
     );
   });
 
@@ -402,6 +415,7 @@ describe("attachMmWsBridge — admission deadline (no silent hang)", () => {
     expect(h.browser.closeCalls[0]).toMatchObject({ code: MM_WS_RECONNECT_CLOSE_CODE });
     expect(h.log).toHaveBeenCalledWith(
       expect.stringContaining("admission_deadline_exceeded"),
+      "warn",
     );
   });
 
@@ -415,6 +429,7 @@ describe("attachMmWsBridge — admission deadline (no silent hang)", () => {
     expect(h.browser.closeCalls).toHaveLength(0);
     expect(h.log).not.toHaveBeenCalledWith(
       expect.stringContaining("admission_deadline_exceeded"),
+      "warn",
     );
   });
 });
@@ -759,6 +774,7 @@ describe("attachMmWsBridge — connection lifecycle logging", () => {
 
     expect(log).toHaveBeenCalledWith(
       "[mm-proxy/ws] resolveMmUserId rejected: token lookup failed",
+      "warn",
     );
   });
 
