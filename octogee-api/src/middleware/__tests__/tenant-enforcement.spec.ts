@@ -145,6 +145,8 @@ function app(opts: {
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
   a.post("/internal/product-analytics/events", enforcement, handler);
+  a.post("/internal/notifications/social", enforcement, handler);
+  a.post("/api/notifications/ingest", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
@@ -342,6 +344,44 @@ describe("tenant enforcement middleware", () => {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("does not let a matching gatewayId bypass foreign notification recipients", async () => {
+    const owned = await request(app({ boundTenant: BENDER }))
+      .post("/api/notifications/ingest")
+      .send({ gatewayId: "bender", targetUserIds: ["alice"] });
+    const foreign = await request(app({ boundTenant: BENDER }))
+      .post("/api/notifications/ingest")
+      .send({ gatewayId: "bender", targetUserIds: ["victim"] });
+
+    expect(owned.status).toBe(200);
+    expect(foreign.status).toBe(403);
+  });
+
+  it("never lends gateway authority to the platform-wide social fanout", async () => {
+    const res = await request(app({ boundTenant: BENDER }))
+      .post("/internal/notifications/social")
+      .send({
+        gatewayId: "bender",
+        actorUid: "alice",
+        type: "announcement",
+        targetUserIds: [],
+      });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("keeps the platform producer authorized for the social fanout", async () => {
+    const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
+      .post("/internal/notifications/social")
+      .send({
+        actorUid: "admin",
+        actorName: "Octogee",
+        type: "announcement",
+        targetUserIds: [],
+      });
+
+    expect(res.status).toBe(200);
   });
 
   it("lets the connector-token broker perform its own project-membership authorization", async () => {
@@ -735,7 +775,7 @@ describe("tenant enforcement middleware", () => {
       }),
     )
       .post("/internal/probe")
-      .send({ flowId: "foreign" });
+      .send({ gatewayId: "bender", flowId: "foreign" });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
