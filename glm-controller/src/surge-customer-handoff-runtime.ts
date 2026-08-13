@@ -282,6 +282,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
             {
               migrationId: operationId,
               slug,
+              rpcPhase: "prepare-rsync-import",
               mode,
               transferUser: "migration",
               transferKey,
@@ -295,6 +296,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           await control(sourcePod, gatewayId, "push-rsync-state", operationId, {
             migrationId: operationId,
             slug,
+            rpcPhase: "push-rsync-state",
             mode,
             targetHost: targetPod.podIP,
             targetPort: prepare.port,
@@ -305,6 +307,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           await control(targetPod, gatewayId, "finish-rsync-import", operationId, {
             migrationId: operationId,
             slug,
+            rpcPhase: "finish-rsync-import",
             mode,
           });
         } catch (error) {
@@ -312,6 +315,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
             await control(targetPod, gatewayId, "abort-rsync-import", operationId, {
               migrationId: operationId,
               slug,
+              rpcPhase: "abort-rsync-import",
               mode,
             }).catch((abortError) => {
               opts.log(

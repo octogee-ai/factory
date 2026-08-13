@@ -28,6 +28,7 @@ import {
   type PushStateRequestBody,
   type QuiesceRequestBody,
   type QuiesceResponse,
+  type RsyncMigrationRpcPhase,
   type RestoreMigrationRequestBody,
   type RestoreMigrationResponse,
   type UnmountRequestBody,
@@ -1032,6 +1033,16 @@ function validateTransferMode(
   return null;
 }
 
+function validateRsyncRpcPhase(
+  value: unknown,
+  expected: RsyncMigrationRpcPhase,
+  res: Response,
+): boolean {
+  if (value === expected) return true;
+  res.status(400).json({ error: "invalid rsync RPC phase" });
+  return false;
+}
+
 function validateRsyncCredential(value: unknown, name: string, res: Response): string | null {
   if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(value)) {
     res.status(400).json({ error: `invalid ${name}` });
@@ -1341,6 +1352,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       log,
     );
     if (!body) return;
+    if (!validateRsyncRpcPhase(body.rpcPhase, "prepare-rsync-import", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
     const transferUser = validateRsyncCredential(body.transferUser, "transferUser", res);
@@ -1430,6 +1442,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       log,
     );
     if (!body) return;
+    if (!validateRsyncRpcPhase(body.rpcPhase, "push-rsync-state", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
     const targetHost = validateRsyncTargetHost(body.targetHost, res);
@@ -1510,6 +1523,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       log,
     );
     if (!body) return;
+    if (!validateRsyncRpcPhase(body.rpcPhase, "finish-rsync-import", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
@@ -1593,6 +1607,7 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
       log,
     );
     if (!body) return;
+    if (!validateRsyncRpcPhase(body.rpcPhase, "abort-rsync-import", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
