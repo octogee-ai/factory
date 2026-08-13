@@ -105,6 +105,7 @@ import {
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
+  type MattermostAccountEntry,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import {
@@ -141,6 +142,7 @@ import {
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
 import {
+  activateMattermostRoutingAfterConfigPatch,
   activatePendingMattermostRouting,
   captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
@@ -535,6 +537,28 @@ function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
   };
 }
 
+async function captureRoutingActivationBaseline(
+  ctx: BrokerCtx,
+  accountId: string,
+  projectAccounts: Readonly<Record<string, unknown>>,
+): Promise<{ accountIds: string[]; baseline: Record<string, number> }> {
+  const accountIds = [accountId, ...Object.keys(projectAccounts)];
+  return {
+    accountIds,
+    baseline: await captureMattermostRoutingActivationBaseline(ctx.rpc, accountIds),
+  };
+}
+
+function requiredMattermostAccount(
+  accounts: Readonly<Record<string, MattermostAccountEntry>>,
+  accountId: string,
+  slug: string,
+): MattermostAccountEntry {
+  const account = accounts[accountId];
+  if (!account) throw new Error(`[add:${slug}] fleet broker account fragment was empty`);
+  return account;
+}
+
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
   const result = await ctx.rpc.secretsReload();
   const warningCount = result.warningCount ?? 0;
@@ -561,7 +585,6 @@ async function applyAddCustomerConfigPatch(
   if (!coachPat) {
     throw new Error(`[add:${snapshot.slug}] coach PAT unavailable from fleet broker`);
   }
-
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
   const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot);
   const accountsMap = buildMattermostAccounts(
@@ -579,11 +602,7 @@ async function applyAddCustomerConfigPatch(
     (m) => ctx.log(m),
   );
   const accountId = `${snapshot.slug}-coach`;
-  const accountEntry = accountsMap[accountId];
-  if (!accountEntry) {
-    throw new Error(`[add:${snapshot.slug}] fleet broker account fragment was empty`);
-  }
-
+  const accountEntry = requiredMattermostAccount(accountsMap, accountId, snapshot.slug);
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");
   const coachModelSelection = initialCoachModelSelection(snapshot);
@@ -661,9 +680,10 @@ async function applyAddCustomerConfigPatch(
     customerAgentEntries,
     `[add:${snapshot.slug}]`,
   );
-  const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(ctx.rpc, [accountId, ...Object.keys(projectAccounts)]);
+  const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
+    captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
   const startedAt = Date.now();
-  await applyConfigPatch(
+  const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
@@ -735,13 +755,15 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  if (routingActivationRequired) {
-    await activatePendingMattermostRouting(
-      ctx.rpc,
-      OPENCLAW_DIR,
-      ctx.log,
-    );
-  }
+  await activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
+    accountIds: affectedAccountIds,
+    baseline: routingActivationBaseline,
+    configNoop: configPatch.noop === true,
+    required: routingActivationRequired,
+    reason: routingActivationReason,
+    currentSlug: snapshot.slug,
+    evictionSlugs,
+  });
   await reloadRuntimeSecrets(ctx, `[add:${snapshot.slug}]`);
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
