@@ -417,18 +417,25 @@ describe("system config platform invariants", () => {
     });
   });
 
-  it("preserves Builder-managed execution while enforcing platform routing and identity", () => {
+  it("enforces the customer no-host-code floor on Builder Agent runtimes", () => {
     const config: Record<string, unknown> = {
-      gateway: { terminal: { enabled: false } },
+      gateway: { terminal: { enabled: true } },
       plugins: {
-        allow: ["customer-plugin"],
-        entries: { codex: { enabled: false } },
+        allow: ["customer-plugin", "codex"],
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: { sandbox: "danger-full-access", approvalPolicy: "never" },
+            },
+          },
+        },
       },
       tools: {
-        deny: ["exec", "process", "customer-tool"],
-        exec: { mode: "deny" },
+        deny: ["customer-tool"],
+        exec: { mode: "unrestricted" },
         fs: { workspaceOnly: false },
-        subagents: { tools: { deny: ["exec", "process", "customer-subagent-deny"] } },
+        subagents: { tools: { deny: ["customer-subagent-deny"] } },
       },
       agents: {
         list: [{ id: "octogee-operator-coach", tools: { fs: { workspaceOnly: false } } }],
@@ -452,21 +459,23 @@ describe("system config platform invariants", () => {
 
     expect(platformInvariantViolations(config, builder)).toEqual([]);
     expect(config).toMatchObject({
-      gateway: { terminal: { enabled: true } },
+      gateway: {
+        terminal: { enabled: false },
+        controlUi: {
+          allowedOrigins: ["https://api.octogee.com"],
+          basePath: "/g/bender/openclaw",
+        },
+      },
       tools: {
-        deny: ["customer-tool"],
-        fs: { workspaceOnly: false },
-        subagents: { tools: { deny: ["customer-subagent-deny"] } },
+        deny: expect.arrayContaining(["customer-tool", "exec", "process", "terminal"]),
+        exec: { mode: "deny" },
+        fs: { workspaceOnly: true },
+        subagents: { tools: { deny: expect.arrayContaining(["customer-subagent-deny", "exec", "process"]) } },
       },
       plugins: {
-        allow: expect.arrayContaining(["customer-plugin", "codex"]),
+        allow: expect.arrayContaining(["customer-plugin"]),
         entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: { sandbox: "danger-full-access", approvalPolicy: "never" },
-            },
-          },
+          codex: { enabled: false },
         },
       },
       channels: {
@@ -483,16 +492,15 @@ describe("system config platform invariants", () => {
         },
       },
     });
-    expect((config.tools as Record<string, unknown>)).not.toHaveProperty("exec");
+    expect(((config.plugins as Record<string, unknown>).allow as unknown[])).not.toContain("codex");
     expect((((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)["operator-coach"])
       .not.toHaveProperty("baseUrl");
     expect(config).toMatchObject({
-      tools: { fs: { workspaceOnly: false } },
       agents: {
-        list: [{ tools: { fs: { workspaceOnly: false } } }],
+        list: [{ tools: { profile: "coding", fs: { workspaceOnly: true } } }],
         entries: {
-          "octogee-operator-coach": { tools: { fs: { workspaceOnly: false } } },
+          "octogee-operator-coach": { tools: { profile: "coding", fs: { workspaceOnly: true } } },
         },
       },
     });
