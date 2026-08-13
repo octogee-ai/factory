@@ -140,6 +140,7 @@ import {
   mattermostProjectAccountSecretChange,
   updateMattermostAccountSecrets,
 } from "./mattermost-account-secrets.js";
+import { quarantineMalformedCoachMattermostAccount } from "./mattermost-coach-quarantine.js";
 import {
   activatePendingMattermostRouting,
   captureMattermostRoutingActivationBaseline,
@@ -549,6 +550,16 @@ async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<
   ctx.log(`${logPrefix} secrets.reload complete`);
 }
 
+async function requiredCoachMattermostAccount(
+  ctx: BrokerCtx,
+  slug: string,
+  account: ReturnType<typeof buildMattermostAccounts>[string] | undefined,
+) {
+  if (account) return account;
+  await quarantineMalformedCoachMattermostAccount(slug, convergedConfigRpc(ctx), ctx.configCache, ctx.log);
+  throw new Error(`[add:${slug}] fleet broker account fragment was empty`);
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -579,10 +590,7 @@ async function applyAddCustomerConfigPatch(
     (m) => ctx.log(m),
   );
   const accountId = `${snapshot.slug}-coach`;
-  const accountEntry = accountsMap[accountId];
-  if (!accountEntry) {
-    throw new Error(`[add:${snapshot.slug}] fleet broker account fragment was empty`);
-  }
+  const accountEntry = await requiredCoachMattermostAccount(ctx, snapshot.slug, accountsMap[accountId]);
 
   const agentId = `octogee-${snapshot.slug}-coach`;
   const agentDir = path.join(AGENTS_DIR, agentId, "agent");

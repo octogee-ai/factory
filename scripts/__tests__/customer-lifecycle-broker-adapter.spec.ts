@@ -585,6 +585,59 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 });
 
+describe("broker adapter malformed coach identity quarantine", () => {
+  beforeEach(() => {
+    patchMocks.applyConfigPatch.mockClear();
+    secretMocks.updateMattermostAccountSecrets.mockClear();
+  });
+
+  it("deletes only the stale workspace coach account before reporting an empty allowlist", async () => {
+    const current = {
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { groupPolicy: "open", groupAllowFrom: ["legacy-guest"] },
+            "alice-proj-orbit": {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["mm-project-member"],
+            },
+          },
+        },
+      },
+    };
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      expect(args.buildPatch(current)).toEqual({
+        channels: { mattermost: { accounts: { "alice-coach": null } } },
+      });
+      expect(args.buildReplacePaths?.(current)).toEqual([
+        "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      ]);
+      return { mode: "rpc", attempts: 1 };
+    });
+    const rpc = mkGatewayRpc({
+      configPatchAndWaitForChange: vi.fn(async () => ({ ok: true })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(
+        aliceSnapshot({ mattermostUserId: null, customerMmUserId: null }),
+        { _coachPersonalToken: "pat-1" },
+      ),
+    ).rejects.toThrow(/account fragment was empty/);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: ["alice-coach"], removePrefixes: [] },
+    );
+  });
+});
+
 describe("buildBrokeredLifecycleAdapter github clone credential", () => {
   it("brokers the customer's own GitHub token for their slug", async () => {
     const client = mkClient({
