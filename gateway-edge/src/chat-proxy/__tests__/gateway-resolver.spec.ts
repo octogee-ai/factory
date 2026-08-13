@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  resolveGatewayAssignment,
   resolveGatewayUrl,
   GatewayResolveError,
 } from '../openclaw/gateway-resolver.js';
@@ -311,6 +312,56 @@ describe('resolveGatewayUrl — glm-heartbeat / revision resolution (no round-ro
     });
     await expect(resolveGatewayUrl({ db, uid: 'u1' })).rejects.toMatchObject({
       code: 'gateway-not-registered',
+    });
+  });
+});
+
+describe('resolveGatewayAssignment — tenant serving boundary', () => {
+  it('requires a serving assignment on a durable gateway', async () => {
+    const db = mkDb({
+      'users/u1': {
+        username: 'alice',
+        provisioning: { openclaw: { gatewayId: 'gw-a' } },
+      },
+      'gateways/gw-a': durableRoot('gw-a'),
+    });
+
+    await expect(resolveGatewayAssignment({ db, uid: 'u1' })).rejects.toMatchObject({
+      code: 'gateway-url-unresolved',
+    });
+  });
+
+  it('requires the durable assignment to be serving for that user and gateway', async () => {
+    const db = mkDb({
+      'users/u1': {
+        username: 'alice',
+        provisioning: { openclaw: { gatewayId: 'gw-a' } },
+      },
+      'gateways/gw-a': durableRoot('gw-a'),
+      'gateways/gw-a/assignments/u1': servingAssignment('gw-a', 'u1', 1, {
+        state: 'migrating',
+      }),
+    });
+
+    await expect(resolveGatewayAssignment({ db, uid: 'u1' })).rejects.toMatchObject({
+      code: 'gateway-url-unresolved',
+    });
+  });
+
+  it('preserves legacy assignment resolution when no durable root exists', async () => {
+    const db = mkDb({
+      'users/u1': {
+        username: 'alice',
+        provisioning: { openclaw: { gatewayId: 'gw-a' } },
+      },
+    });
+
+    await expect(resolveGatewayAssignment({ db, uid: 'u1' })).resolves.toEqual({
+      gatewayId: 'gw-a',
+      userData: {
+        username: 'alice',
+        provisioning: { openclaw: { gatewayId: 'gw-a' } },
+      },
     });
   });
 });

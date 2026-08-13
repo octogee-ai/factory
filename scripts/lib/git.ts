@@ -446,6 +446,7 @@ export function externalizeCustomerGitDir(
 ): string | null {
   const identity = customerGitIdentity(repoDir);
   if (!identity) return null;
+  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
   const target = identity.metadataDir;
   const localGit = path.join(repoDir, ".git");
   const expectedSource = canonicalCustomerGitSource(identity, deps);

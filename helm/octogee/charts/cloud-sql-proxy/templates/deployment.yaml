@@ -33,25 +33,34 @@ spec:
             - "--structured-logs"
             - "--address=0.0.0.0"
             - "--port=5432"
+            - "--health-check"
+            - "--http-address=0.0.0.0"
+            - "--http-port=9090"
             {{- if .Values.usePrivateIp }}
             - "--private-ip"
             {{- end }}
             - {{ required "cloud-sql-proxy.connectionName is required" .Values.connectionName | quote }}
           ports:
             - containerPort: 5432
+            - name: health
+              containerPort: 9090
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: health
+            periodSeconds: 5
+            failureThreshold: 24
           readinessProbe:
-            tcpSocket:
-              port: 5432
+            httpGet:
+              path: /readiness
+              port: health
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 3
-          # Catch the zombie-proxy failure mode: the process stays alive but stops
-          # accepting connections (connection-pool hang / unrecovered Cloud SQL
-          # blip), so K8s otherwise never restarts it. A TCP probe on 5432 forces
-          # a restart in ~90s instead of a multi-minute outage.
           livenessProbe:
-            tcpSocket:
-              port: 5432
+            httpGet:
+              path: /liveness
+              port: health
             initialDelaySeconds: 15
             periodSeconds: 30
             failureThreshold: 3

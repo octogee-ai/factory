@@ -1,5 +1,6 @@
 import type { RawData, WebSocket } from "ws";
 import type { UpgradeGateVerdict } from "../../roll-roster.js";
+import type { BridgeLog } from "../bridge-log.js";
 
 // Close code signalling the client to reconnect (same signal the OC WS bridge
 // uses for gatewayId changes); on reconnect the flipped Service selector /
@@ -29,7 +30,7 @@ const ADMISSION_TIMEOUT: unique symbol = Symbol("mm-ws-admission-timeout");
 export interface MmWsProxyDeps {
   
   mmInternalWsUrl: string;
-  log: (msg: string) => void;
+  log: BridgeLog;
 
 resolveMmUserId: (mmToken: string) => Promise<string | null>;
   
@@ -162,7 +163,7 @@ export function attachMmWsBridge(
   // code the roster refusal uses) and tear down.
   const closeWithReconnect = (reason: string) => {
     if (closed) return;
-    deps.log(`[mm-proxy/ws] ${reason} (mmUserId=${mmUserId ?? "unknown"}) — closing`);
+    deps.log(`[mm-proxy/ws] ${reason} (mmUserId=${mmUserId ?? "unknown"}) — closing`, "warn");
     try {
       browserWs.close(MM_WS_RECONNECT_CLOSE_CODE, reason);
     } catch {
@@ -205,7 +206,7 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
       try {
         upstream.send(queued.frame, { binary: queued.binary });
       } catch (err) {
-        deps.log(`[mm-proxy/ws] flushOutbox send failed: ${(err as Error).message}`);
+        deps.log(`[mm-proxy/ws] flushOutbox send failed: ${(err as Error).message}`, "warn");
         return;
       }
     }
@@ -231,13 +232,13 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
           try {
             browserWs.send(JSON.stringify(ack));
           } catch (err) {
-            deps.log(`[mm-proxy/ws] ack inject failed: ${(err as Error).message}`);
+            deps.log(`[mm-proxy/ws] ack inject failed: ${(err as Error).message}`, "warn");
           }
         }
         try {
           browserWs.send(data, { binary: isBinary });
         } catch (err) {
-          deps.log(`[mm-proxy/ws] downstream forward failed: ${(err as Error).message}`);
+          deps.log(`[mm-proxy/ws] downstream forward failed: ${(err as Error).message}`, "warn");
         }
       });
     });
@@ -246,7 +247,7 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
       close();
     });
     up.on("error", (err: Error) =>
-      deps.log(`[mm-proxy/ws] upstream error: ${err.message}`),
+      deps.log(`[mm-proxy/ws] upstream error: ${err.message}`, "warn"),
     );
   };
 
@@ -270,7 +271,7 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
     try {
       outcome = await Promise.race([resolveVerdict(), deadline.promise]);
     } catch (err) {
-      deps.log(`[mm-proxy/ws] roster verdict failed (failing CLOSED): ${errorToStr(err)}`);
+      deps.log(`[mm-proxy/ws] roster verdict failed (failing CLOSED): ${errorToStr(err)}`, "warn");
       outcome = { allow: false, reason: "roster-verdict-failed" };
     } finally {
       deadline.cancel();
@@ -281,7 +282,7 @@ const logClose = (side: "browser" | "upstream", code: number, reason: unknown) =
       return;
     }
     if (!outcome.allow) {
-      deps.log(`[mm-proxy/ws] roll roster refused MM WS (mmUserId=${mmUserId ?? "unknown"}): ${outcome.reason}`);
+      deps.log(`[mm-proxy/ws] roll roster refused MM WS (mmUserId=${mmUserId ?? "unknown"}): ${outcome.reason}`, "warn");
       try {
         browserWs.close(MM_WS_RECONNECT_CLOSE_CODE, `gateway_revision_unavailable:${outcome.reason}`);
       } catch {
@@ -305,7 +306,7 @@ browserWs.on("message", (data: RawData, isBinary: boolean) => {
           return resolvedId ?? null;
         })
         .catch((err: unknown) => {
-          deps.log(`[mm-proxy/ws] resolveMmUserId rejected: ${errorToStr(err)}`);
+          deps.log(`[mm-proxy/ws] resolveMmUserId rejected: ${errorToStr(err)}`, "warn");
           return null;
         })
         .finally(() => {
@@ -336,7 +337,7 @@ browserWs.on("message", (data: RawData, isBinary: boolean) => {
     close();
   });
   browserWs.on("error", (err: Error) =>
-    deps.log(`[mm-proxy/ws] browser error: ${err.message}`),
+    deps.log(`[mm-proxy/ws] browser error: ${err.message}`, "warn"),
   );
 
   return { close };

@@ -288,19 +288,17 @@ resource "google_project_iam_member" "functions_cloudbuild_builder" {
 }
 
 # ── Service Account: firebase-deployer (CI `firebase deploy`) ────────────────
-# Dedicated least-privilege identity for the GitHub Actions firebase-tools
-# deploy steps (firestore rules, hosting, functions). firebase-tools reads a
-# JSON key from GOOGLE_APPLICATION_CREDENTIALS and authenticates by JWT
-# signing — robust, unlike its bundled google-auth-library WIF/external_account
-# token exchange, which decayed and broke every release (gcloud's exchange,
-# used by the image-push jobs, is unaffected). The key is created out-of-band
-# and lives in the FIREBASE_DEPLOYER_KEY GitHub secret — never in Terraform
-# state. Scope is deploy reach only: none of github-actions@'s billing /
-# container / scheduler / secret-admin / run.admin authority.
+# Dedicated least-privilege identity for GitHub Actions Firebase mutations.
 resource "google_service_account" "firebase_deployer" {
   account_id   = var.firebase_deployer_sa_name
   display_name = "Octogee Firebase deployer — CI (${var.environment})"
   project      = var.project_id
+}
+
+resource "google_service_account_iam_member" "firebase_deployer_github_actions" {
+  service_account_id = google_service_account.firebase_deployer.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184"
 }
 
 resource "google_project_iam_member" "firebase_deployer" {
@@ -346,4 +344,14 @@ resource "google_project_iam_member" "firebase_deployer_secret_binding" {
   project = var.project_id
   role    = google_project_iam_custom_role.firebase_deployer_secret_binding.id
   member  = "serviceAccount:${google_service_account.firebase_deployer.email}"
+
+  condition {
+    title      = "function_secret_policy_binding"
+    expression = <<-EOT
+      resource.name == "projects/${data.google_project.this.number}/secrets/DISCORD_OPS_WEBHOOK_URL" ||
+      resource.name.startsWith("projects/${data.google_project.this.number}/secrets/DISCORD_OPS_WEBHOOK_URL/versions/") ||
+      resource.name == "projects/${data.google_project.this.number}/secrets/SOCIAL_NOTIFICATION_BEARER_TOKEN" ||
+      resource.name.startsWith("projects/${data.google_project.this.number}/secrets/SOCIAL_NOTIFICATION_BEARER_TOKEN/versions/")
+    EOT
+  }
 }

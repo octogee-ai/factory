@@ -52,10 +52,48 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     );
   });
 
-  it("reports that a 409 repo was not created by this attempt", async () => {
-    fetchMock.mockResolvedValueOnce(res(409, { message: "already exists" }));
+  it("quietly accepts a create conflict only after verifying the existing repo binding and configuration", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    fetchMock
+      .mockResolvedValueOnce(res(409, { message: "already exists" }))
+      .mockResolvedValueOnce(res(200, {
+        name: "my-game",
+        owner: { login: "alice" },
+        private: true,
+        default_branch: "main",
+      }));
     const { createProjectGiteaRepo } = await import("../lib/gitea.js");
     await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).resolves.toBe(false);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://gitea.test:3000/api/v1/orgs/alice/repos",
+      "http://gitea.test:3000/api/v1/repos/alice/my-game",
+    ]);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it.each([
+    ["owner", { name: "my-game", owner: { login: "victim" }, private: true, default_branch: "main" }],
+    ["privacy", { name: "my-game", owner: { login: "alice" }, private: false, default_branch: "main" }],
+    ["default branch", { name: "my-game", owner: { login: "alice" }, private: true, default_branch: "master" }],
+  ])("rejects a create conflict when the existing repo has mismatched %s", async (_label, existing) => {
+    fetchMock
+      .mockResolvedValueOnce(res(409, { message: "already exists" }))
+      .mockResolvedValueOnce(res(200, existing));
+    const { createProjectGiteaRepo } = await import("../lib/gitea.js");
+    await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).rejects.toThrow(
+      /binding mismatch|configuration mismatch/,
+    );
+  });
+
+  it("rejects a create conflict when no expected repo can be read back", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(409, { message: "conflict" }))
+      .mockResolvedValueOnce(res(404));
+    const { createProjectGiteaRepo } = await import("../lib/gitea.js");
+    await expect(createProjectGiteaRepo("alice", "my-game", "desc", true)).rejects.toThrow(
+      /conflict without existing repo/,
+    );
   });
 
   it("giteaDeleteRepo deletes {org}/{repo}", async () => {
