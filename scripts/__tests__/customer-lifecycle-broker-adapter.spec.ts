@@ -1403,6 +1403,32 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]);
   });
 
+  it("re-reads the live roster before destructive cleanup instead of trusting a stale patch cache", async () => {
+    const liveRoster = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    const configGet = vi.fn(async () => ({ config: liveRoster, hash: "live-hash" }));
+    const rpc = mkRemovalRpc(liveRoster, { configGet } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
+      options.cache!.current = {
+        agents: {
+          entries: keyedRoster([
+            "octogee-alice-coach",
+            "octogee-alice-proj-now-owned-elsewhere-coach",
+          ]),
+        },
+      };
+      options.cache!.hash = "stale-hash";
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+
+    expect(configGet).toHaveBeenCalledTimes(2);
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+  });
+
   it("creates an agent the roster does not carry yet through agents.create, not the patch alone", async () => {
     const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-bob-coach"]) } });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
