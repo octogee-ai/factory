@@ -29,6 +29,12 @@ vi.mock('../lib/internal-fetch', () => ({
   internalFetch: vi.fn(),
 }));
 
+vi.mock('@octogee/core/internal-fetch', () => ({
+  gatewayCredentialHeaders: vi.fn(async () => ({
+    'x-octogee-gateway-credential-token': 'credential-token',
+  })),
+}));
+
 import {
   ConnectorTokenBrokerError,
   readConnectorAccessToken,
@@ -97,6 +103,10 @@ describe('readConnectorAccessToken', () => {
       'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/access-token',
       expect.objectContaining({
         method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-octogee-gateway-credential-token': 'credential-token',
+        },
         body: JSON.stringify({ gatewayId: 'default', uid: 'u-alice', connectorId: 'github' }),
       }),
       expect.any(Object),
