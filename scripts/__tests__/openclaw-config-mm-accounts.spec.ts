@@ -182,7 +182,11 @@ describe("gatewayAgentRoster", () => {
       { id: "octogee-ceckert-coach" },
     ], "");
 
-    expect(roster[0]).toMatchObject({ id: SAFE_DEFAULT_AGENT_ID, default: true });
+    expect(roster[0]).toMatchObject({
+      id: SAFE_DEFAULT_AGENT_ID,
+      default: true,
+      heartbeat: { every: "0m" },
+    });
     expect(roster.slice(1)).toEqual([
       { id: "octogee-mike-coach" },
       { id: "octogee-ceckert-coach" },
