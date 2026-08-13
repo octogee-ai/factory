@@ -100,6 +100,7 @@ export type WorkspaceFileResponse =
     };
 
 type ListPathValidation = { ok: true } | { ok: false; status: 400 | 403; error: string };
+const ACCESS_DENIED = "Access denied";
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -112,7 +113,7 @@ function validateListPath(path: string): ListPathValidation {
   if (pathError) return { ok: false, status: 400, error: pathError };
 
   if (pathHasReservedOrHiddenSegment(path)) {
-    return { ok: false, status: 403, error: "Access denied" };
+    return { ok: false, status: 403, error: ACCESS_DENIED };
   }
 
   return { ok: true };
@@ -444,7 +445,7 @@ export async function workspaceFileResponse(
 function commitEntryValidationError(entryPath: string, dirPath: string): string | null {
   const pathError = validateFilePath(entryPath);
   if (pathError) return pathError;
-  if (pathHasReservedOrHiddenSegment(entryPath)) return "Access denied";
+  if (pathHasReservedOrHiddenSegment(entryPath)) return ACCESS_DENIED;
   if (parentDir(entryPath) !== dirPath) return "Commit entry is outside the requested directory";
   return null;
 }
@@ -489,7 +490,7 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     return;
   }
   if (!isTargetDirectoryReadable(target, path)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
@@ -505,7 +506,7 @@ router.get("/files/commits", withFileTarget(async (req, res, _next, target) => {
     return;
   }
   if (!isTargetDirectoryReadable(target, path)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
@@ -528,7 +529,7 @@ router.post("/files/commits", withFileTarget(async (req, res, _next, target) => 
   }
   if (!isTargetDirectoryReadable(target, path)
     || entries.some((entry) => !isTargetPathReadable(target, entry.path))) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
@@ -545,11 +546,11 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   if (pathError) { res.status(400).json({ error: pathError }); return; }
 
   if (pathHasReservedOrHiddenSegment(path) && !isCanvasDashboardDocumentPath(path)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
   if (!isTargetPathReadable(target, path)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
