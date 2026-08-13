@@ -10,6 +10,9 @@ import {
   giteaSudoUser,
   HIDDEN,
   isCanvasDashboardDocumentPath,
+  isTargetDirectoryEntryReadable,
+  isTargetDirectoryReadable,
+  isTargetPathReadable,
   isTargetPathWritable,
   pathHasReservedOrHiddenSegment,
   repoBranchesApi,
@@ -97,6 +100,7 @@ export type WorkspaceFileResponse =
     };
 
 type ListPathValidation = { ok: true } | { ok: false; status: 400 | 403; error: string };
+const ACCESS_DENIED = "Access denied";
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -109,7 +113,7 @@ function validateListPath(path: string): ListPathValidation {
   if (pathError) return { ok: false, status: 400, error: pathError };
 
   if (pathHasReservedOrHiddenSegment(path)) {
-    return { ok: false, status: 403, error: "Access denied" };
+    return { ok: false, status: 403, error: ACCESS_DENIED };
   }
 
   return { ok: true };
@@ -138,7 +142,10 @@ async function repoContentEntries(
   }
 }
 
-export function repoFileEntries(contents: RepoContentEntry[]): WorkspaceFileEntry[] {
+export function repoFileEntries(
+  contents: RepoContentEntry[],
+  target?: Parameters<typeof repoContentsApi>[0],
+): WorkspaceFileEntry[] {
   return contents
     .filter((file) => !HIDDEN.has(file.name) && !file.name.startsWith("."))
     .map((file) => ({
@@ -147,13 +154,15 @@ export function repoFileEntries(contents: RepoContentEntry[]): WorkspaceFileEntr
       type: file.type === "dir" ? "dir" : "file",
       size: file.size ?? 0,
       source: "git",
-    }));
+    } satisfies WorkspaceFileEntry))
+    .filter((file) => !target || isTargetDirectoryEntryReadable(target, file.path, file.type));
 }
 
 export function blobFileEntries(
   manifest: Manifest,
   path: string,
   gitPaths: Set<string>,
+  target?: Parameters<typeof repoContentsApi>[0],
 ): WorkspaceFileEntry[] {
   const prefix = path ? `${path}/` : "";
   const entries: WorkspaceFileEntry[] = [];
@@ -164,14 +173,15 @@ export function blobFileEntries(
     const relative = manifestPath.slice(prefix.length);
     if (relative.includes("/")) continue;
 
-    entries.push({
+    const file: WorkspaceFileEntry = {
       name: relative,
       path: manifestPath,
       type: "file",
       size: entry.size ?? 0,
       source: "blob",
       ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
-    });
+    };
+    if (!target || isTargetPathReadable(target, manifestPath)) entries.push(file);
   }
 
   return entries;
@@ -193,14 +203,14 @@ async function loadWorkspaceFileEntries(
   const contents = await repoContentEntries(target, path, ref);
   if (!contents) return null;
 
-  const gitFiles = repoFileEntries(contents);
+  const gitFiles = repoFileEntries(contents, target);
   if (target.provider === "github") return sortWorkspaceFiles(gitFiles);
 
   const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
   const gitPaths = new Set(gitFiles.map((file) => file.path));
   return sortWorkspaceFiles([
     ...gitFiles,
-    ...blobFileEntries(manifest, path, gitPaths),
+    ...blobFileEntries(manifest, path, gitPaths, target),
   ]);
 }
 
@@ -243,13 +253,14 @@ async function loadWorkspaceFileIndex(
   ref: string,
 ): Promise<WorkspaceFileIndexResponse> {
   const tree = await repoTreeApi(target, ref);
-  const gitPaths = new Set(tree.paths);
-  const entries: WorkspaceFileIndexEntry[] = tree.paths.map((path) => ({ path, source: "git" }));
+  const readableTreePaths = tree.paths.filter((path) => isTargetPathReadable(target, path));
+  const gitPaths = new Set(readableTreePaths);
+  const entries: WorkspaceFileIndexEntry[] = readableTreePaths.map((path) => ({ path, source: "git" }));
 
   if (target.provider !== "github") {
     const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
     for (const path of Object.keys(manifest)) {
-      if (gitPaths.has(path) || !validIndexPath(path)) continue;
+      if (gitPaths.has(path) || !validIndexPath(path) || !isTargetPathReadable(target, path)) continue;
       entries.push({ path, source: "blob" });
     }
   }
@@ -434,7 +445,7 @@ export async function workspaceFileResponse(
 function commitEntryValidationError(entryPath: string, dirPath: string): string | null {
   const pathError = validateFilePath(entryPath);
   if (pathError) return pathError;
-  if (pathHasReservedOrHiddenSegment(entryPath)) return "Access denied";
+  if (pathHasReservedOrHiddenSegment(entryPath)) return ACCESS_DENIED;
   if (parentDir(entryPath) !== dirPath) return "Commit entry is outside the requested directory";
   return null;
 }
@@ -478,6 +489,10 @@ router.get("/files", withFileTarget(async (req, res, _next, target) => {
     res.status(pathValidation.status).json({ error: pathValidation.error });
     return;
   }
+  if (!isTargetDirectoryReadable(target, path)) {
+    res.status(403).json({ error: ACCESS_DENIED });
+    return;
+  }
 
   res.json(await workspaceFilesResponse(target, path, bustCache, ref));
 }, { allowWorkspaceMembers: true }));
@@ -488,6 +503,10 @@ router.get("/files/commits", withFileTarget(async (req, res, _next, target) => {
   const pathValidation = validateListPath(path);
   if (!pathValidation.ok) {
     res.status(pathValidation.status).json({ error: pathValidation.error });
+    return;
+  }
+  if (!isTargetDirectoryReadable(target, path)) {
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
@@ -508,6 +527,11 @@ router.post("/files/commits", withFileTarget(async (req, res, _next, target) => 
     res.status(400).json({ error: "Invalid commit entries" });
     return;
   }
+  if (!isTargetDirectoryReadable(target, path)
+    || entries.some((entry) => !isTargetPathReadable(target, entry.path))) {
+    res.status(403).json({ error: ACCESS_DENIED });
+    return;
+  }
 
   res.json(await workspaceFileCommitsResponse(target, path, entries, ref));
 }, { allowWorkspaceMembers: true }));
@@ -522,7 +546,11 @@ router.get("/file", withFileTarget(async (req, res, _next, target) => {
   if (pathError) { res.status(400).json({ error: pathError }); return; }
 
   if (pathHasReservedOrHiddenSegment(path) && !isCanvasDashboardDocumentPath(path)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json({ error: ACCESS_DENIED });
+    return;
+  }
+  if (!isTargetPathReadable(target, path)) {
+    res.status(403).json({ error: ACCESS_DENIED });
     return;
   }
 
