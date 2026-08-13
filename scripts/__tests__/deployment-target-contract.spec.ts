@@ -184,17 +184,14 @@ describe("deployment target consumers", () => {
     const workflow = source(".github/workflows/site.yml");
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
 
-    expect(workflow).toContain('case "${{ steps.target.outputs.target_id }}" in');
     expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST");
     expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_BUILD_WEEK");
     expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
     expect(workflow).toContain("PUBLIC_MM_TEAM_ID_BUILD_WEEK");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_TEST");
-    expect(workflow).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_TEST");
-    expect(gateway).toContain("FIREBASE_DEPLOYER_KEY_BUILD_WEEK");
-    expect(workflow).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
-    expect(gateway).toMatch(/prod-central\) FB_KEY="\$FB_KEY_PROD_CENTRAL"/);
+    expect(workflow).toContain("firebase-deployer@${{ steps.target.outputs.firebase_project_id }}.iam.gserviceaccount.com");
+    expect(gateway).toContain("firebase-deployer@${{ needs.matrix-setup.outputs.firebase_project_id }}.iam.gserviceaccount.com");
+    expect(workflow).not.toContain("FIREBASE_DEPLOYER_KEY");
+    expect(gateway).not.toContain("FIREBASE_DEPLOYER_KEY");
     expect(workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
     expect(gateway).not.toMatch(/(?:TEST|PROD)_WEST/);
     expect(workflow).toContain(
@@ -203,8 +200,12 @@ describe("deployment target consumers", () => {
     expect(workflow).not.toContain(
       "for value_name in api_key app_id sender_id measurement_id mm_team_id; do",
     );
-    expect(workflow).toContain("No Firebase deployer key slot for deployment target");
-    expect(gateway).toContain("No Firebase deployer key slot for deployment target");
+    expect(workflow).toContain("export_environment_variables: false");
+    expect(gateway).toContain("export_environment_variables: false");
+    expect(workflow).toContain("token_format: access_token");
+    expect(gateway).toContain(
+      "GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.firebase_auth.outputs.access_token }}",
+    );
   });
 
   it("does not embed the active cluster context in fleet operations", () => {

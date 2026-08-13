@@ -7,6 +7,19 @@ const iamModule = path.join(repoRoot, "terraform/modules/iam/main.tf");
 const centralPlatform = path.join(repoRoot, "terraform/environments/prod/main.tf");
 
 describe("firebase deployer Terraform IAM", () => {
+  it("allows only the exact GitHub repository pool to federate as the deployer", () => {
+    const source = readFileSync(iamModule, "utf-8");
+    const binding = source.match(
+      /resource "google_service_account_iam_member" "firebase_deployer_github_actions" \{([\s\S]*?)^\}/m,
+    )?.[1];
+
+    expect(binding).toContain("service_account_id = google_service_account.firebase_deployer.name");
+    expect(binding).toContain('role               = "roles/iam.workloadIdentityUser"');
+    expect(binding).toContain(
+      "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184",
+    );
+  });
+
   it("grants the CI verifier the Firestore composite-index administrator role", () => {
     const source = readFileSync(iamModule, "utf-8");
     const firebaseDeployer = source.match(
