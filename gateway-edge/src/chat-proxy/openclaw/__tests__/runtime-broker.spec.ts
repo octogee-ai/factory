@@ -5,6 +5,7 @@ import {
   createOpenClawRuntimeBrokerFromEnv,
   runtimeBrokerBaseUrlFromEnv,
 } from "../runtime-broker.js";
+import { GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
@@ -60,6 +61,42 @@ describe("redeemOpenClawWs outcome", () => {
 });
 
 describe("OpenClaw runtime broker env", () => {
+  it("adds the credential capability only when resolving agent secrets", async () => {
+    const calls: Array<{ path: string; credential: string | null }> = [];
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "shared-blue",
+      credentialHeaders: async () => ({
+        [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
+      }),
+      fetchImpl: vi.fn(async (input, init) => {
+        calls.push({
+          path: new URL(String(input)).pathname,
+          credential: new Headers(init?.headers).get(GATEWAY_CREDENTIAL_TOKEN_HEADER),
+        });
+        const identity = {
+          agentId: "octogee-alice-coach",
+          uid: "uid-alice",
+          coachToken: "coach-pat",
+        };
+        return new Response(JSON.stringify(
+          String(input).endsWith("agent-identity") ? { identity } : { pair: null },
+        ), { headers: { "content-type": "application/json" }, status: 200 });
+      }),
+    });
+
+    await broker.resolveAgentIdentity("octogee-alice-coach");
+    await broker.resolveChannelPair("channel-1");
+
+    expect(calls).toEqual([
+      {
+        path: "/internal/openclaw/activity/agent-identity",
+        credential: "credential-jwt",
+      },
+      { path: "/internal/openclaw/activity/channel-pair", credential: null },
+    ]);
+  });
+
   it("requires OPENCLAW_RUNTIME_BROKER_URL", () => {
     expect(() => runtimeBrokerBaseUrlFromEnv({ GATEWAY_ID: "default" })).toThrow(
       "OPENCLAW_RUNTIME_BROKER_URL is required",

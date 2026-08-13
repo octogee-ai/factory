@@ -288,6 +288,8 @@ interface CoachChannelPair {
   activityChannelId: string;
 }
 
+type AgentScope = Omit<AgentIdentity, "coachMmUserId" | "coachToken">;
+
 function readCoachSecret(data: Record<string, unknown>): CoachSecret | null {
   const coachToken = typeof data.personalToken === "string" ? data.personalToken : "";
   const coachMmUserId = typeof data.coachMmUserId === "string" ? data.coachMmUserId : "";
@@ -313,11 +315,11 @@ function readProjectAgentSecret(data: Record<string, unknown>): CoachSecret | nu
   return coachToken && coachMmUserId ? { coachToken, coachMmUserId } : null;
 }
 
-async function resolveAgentIdentity(
+async function resolveAgentScope(
   db: Firestore,
   gatewayId: string,
   agentId: string,
-): Promise<AgentIdentity | null | "forbidden"> {
+): Promise<AgentScope | null | "forbidden"> {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "unknown") return null;
   const slug = parsed.username;
@@ -326,39 +328,46 @@ async function resolveAgentIdentity(
   const uid = await resolveUidBySlug(db, slug);
   if (!uid) return null;
 
-  // Vegas: a project agent authenticates as ITS OWN bot (never the coach
-  // PAT) and its runs anchor to the project's general channel pair.
-  const secretPath =
-    parsed.kind === "project"
-      ? `users/${uid}/secrets/${projectAgentSecretDocId(parsed.project)}`
-      : `users/${uid}/secrets/coachMattermost`;
   const channelDocPath =
     parsed.kind === "project"
       ? `workspaces/${slug}/projects/${parsed.project}/channels/general`
       : `workspaces/${slug}/channels/coach-dm`;
 
-  const [tokenSnap, channelSnap] = await Promise.all([
-    db.doc(secretPath).get(),
-    db.doc(channelDocPath).get(),
-  ]);
-  if (!tokenSnap.exists || !channelSnap.exists) return null;
-  const secret =
-    parsed.kind === "project"
-      ? readProjectAgentSecret(tokenSnap.data() ?? {})
-      : readCoachSecret(tokenSnap.data() ?? {});
+  const channelSnap = await db.doc(channelDocPath).get();
+  if (!channelSnap.exists) return null;
   const channel = readCoachChannelPair(channelSnap.data() ?? {});
-  if (!secret || !channel) return null;
+  if (!channel) return null;
   return {
     agentId,
     uid,
-    coachMmUserId: secret.coachMmUserId,
-    coachToken: secret.coachToken,
     primaryChannelId: channel.primaryChannelId,
     activityChannelId: channel.activityChannelId,
     channelDocPath,
     workspaceSlug: slug,
     projectSlug: parsed.kind === "project" ? parsed.project : "workspace",
   };
+}
+
+async function resolveAgentIdentity(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+): Promise<AgentIdentity | null | "forbidden"> {
+  const scope = await resolveAgentScope(db, gatewayId, agentId);
+  if (!scope || scope === "forbidden") return scope;
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown") return null;
+  const secretPath = parsed.kind === "project"
+    ? `users/${scope.uid}/secrets/${projectAgentSecretDocId(parsed.project)}`
+    : `users/${scope.uid}/secrets/coachMattermost`;
+  const tokenSnap = await db.doc(secretPath).get();
+  if (!tokenSnap.exists) return null;
+  const secret = parsed.kind === "project"
+    ? readProjectAgentSecret(tokenSnap.data() ?? {})
+    : readCoachSecret(tokenSnap.data() ?? {});
+  return secret
+    ? { ...scope, coachMmUserId: secret.coachMmUserId, coachToken: secret.coachToken }
+    : null;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -475,7 +484,7 @@ async function resolveSessionContext(
   const parsed = parseAgentId(agentId);
   const expectedAccountId = mattermostAccountId(parsed);
   if (!expectedAccountId || accountId !== expectedAccountId) return "forbidden";
-  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
+  const identity = await resolveAgentScope(db, gatewayId, agentId);
   if (identity === "forbidden") return identity;
   if (!identity) return null;
 
@@ -542,7 +551,7 @@ function dispatchEnvelope(
 
 async function resolveDirectDispatchContext(
   input: DispatchContextInput,
-  identity: AgentIdentity,
+  identity: AgentScope,
   parsed: KnownAgentId,
 ): Promise<DispatchContextLookup> {
   if (parsed.kind !== "coach") return "forbidden";
@@ -577,7 +586,7 @@ function isExactDispatchLane(
 
 async function resolveGroupDispatchContext(
   input: DispatchContextInput,
-  identity: AgentIdentity,
+  identity: AgentScope,
   parsed: KnownAgentId,
 ): Promise<DispatchContextLookup> {
   const channel = await resolveSessionChannel(input.db, input.conversationId);
@@ -609,7 +618,7 @@ async function resolveDispatchContext(
   const route = dispatchEnvelope(input, parsed);
   if (!route) return "forbidden";
 
-  const identity = await resolveAgentIdentity(input.db, input.gatewayId, input.agentId);
+  const identity = await resolveAgentScope(input.db, input.gatewayId, input.agentId);
   if (identity === "forbidden") return identity;
   if (!identity) return null;
 

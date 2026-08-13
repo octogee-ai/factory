@@ -332,6 +332,8 @@ spec:
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: OCTOGEE_API_SA_TOKEN_PATH
               value: "/var/run/secrets/octogee-gateway-broker/token"
+            - name: OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-credentials/token"
             # Same per-gateway K8s secret as init + gateway-edge (see init
             # container env block for the rationale). Pinned via the chart
             # so kubectl-set-env side-channels can't drift the value out
@@ -346,6 +348,9 @@ spec:
               mountPath: /home/node
             - name: gateway-broker-sa-token
               mountPath: /var/run/secrets/octogee-gateway-broker
+              readOnly: true
+            - name: gateway-credential-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-credentials
               readOnly: true
             # No platform secrets are mounted here. The projected token above
             # is this gateway's KSA identity for tenant-bound broker calls.
@@ -476,6 +481,8 @@ spec:
               value: {{ .Values.fleetBrokerUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
             - name: OCTOGEE_API_SA_TOKEN_PATH
               value: "/var/run/secrets/octogee-api/token"
+            - name: OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
+              value: "/var/run/secrets/octogee-gateway-credentials/token"
             # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
             # .Values.gatewayEdge.env range below already provides the
             # non-secret project/org identifiers. Platform secrets are not
@@ -545,6 +552,9 @@ spec:
             - name: octogee-api-sa-token
               mountPath: /var/run/secrets/octogee-api
               readOnly: true
+            - name: gateway-credential-sa-token
+              mountPath: /var/run/secrets/octogee-gateway-credentials
+              readOnly: true
             - name: k8s-api-token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
@@ -589,6 +599,13 @@ spec:
               - serviceAccountToken:
                   path: token
                   audience: octogee-api
+                  expirationSeconds: 3600
+        - name: gateway-credential-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api-gateway-credentials
                   expirationSeconds: 3600
         - name: openclaw-device-auth
           emptyDir: {}
