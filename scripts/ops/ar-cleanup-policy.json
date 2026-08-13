@@ -1,5 +1,12 @@
 [
   {
+    "name": "keep-release-digest-manifests",
+    "action": { "type": "Keep" },
+    "condition": {
+      "packageNamePrefixes": ["release-digest-manifest"]
+    }
+  },
+  {
     "name": "keep-pinned-and-release-pointers",
     "action": { "type": "Keep" },
     "condition": {
