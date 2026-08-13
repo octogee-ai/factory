@@ -208,15 +208,15 @@ export function wireCoachMattermostAccount(config, slug, mmUpdate) {
     const accountId = `${slug}-coach`;
     const customerMmUserId = mmUpdate["mattermost.userId"];
     const adminMmUserId = process.env.MM_ADMIN_USER_ID;
-    // "open": the coach answers any member of the group channels it has been added
-    // to (MM channel membership is the auditable/revocable access boundary). The
-    // prior owner+admin allowlist silently dropped invited guests. groupAllowFrom
-    // kept as an advisory seed (ignored under "open"). See PR.
     const groupAllowFrom = [customerMmUserId, adminMmUserId].filter((id) => typeof id === "string" && id.length > 0);
+    if (groupAllowFrom.length === 0) {
+        log(`[mattermost] ⚠ no authorized coach sender for ${slug} — skipping accounts upsert`);
+        return;
+    }
     mm.accounts[accountId] = {
         botToken: token,
-        groupPolicy: "open",
-        ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+        groupPolicy: "allowlist",
+        groupAllowFrom,
     };
     log(`[mattermost] account: ${accountId} ← coach PAT (WS will subscribe on next reload)`);
 }

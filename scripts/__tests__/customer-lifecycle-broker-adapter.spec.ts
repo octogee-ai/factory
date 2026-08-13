@@ -586,6 +586,59 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 });
 
+describe("broker adapter malformed coach identity quarantine", () => {
+  beforeEach(() => {
+    patchMocks.applyConfigPatch.mockClear();
+    secretMocks.updateMattermostAccountSecrets.mockClear();
+  });
+
+  it("deletes only the stale workspace coach account before reporting an empty allowlist", async () => {
+    const current = {
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { groupPolicy: "open", groupAllowFrom: ["legacy-guest"] },
+            "alice-proj-orbit": {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["mm-project-member"],
+            },
+          },
+        },
+      },
+    };
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      expect(args.buildPatch(current)).toEqual({
+        channels: { mattermost: { accounts: { "alice-coach": null } } },
+      });
+      expect(args.buildReplacePaths?.(current)).toEqual([
+        "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+      ]);
+      return { mode: "rpc", attempts: 1 };
+    });
+    const rpc = mkGatewayRpc({
+      configPatchAndWaitForChange: vi.fn(async () => ({ ok: true })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(
+        aliceSnapshot({ mattermostUserId: null, customerMmUserId: null }),
+        { _coachPersonalToken: "pat-1" },
+      ),
+    ).rejects.toThrow(/account fragment was empty/);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: ["alice-coach"], removePrefixes: [] },
+    );
+  });
+});
+
 describe("buildBrokeredLifecycleAdapter github clone credential", () => {
   it("brokers the customer's own GitHub token for their slug", async () => {
     const client = mkClient({
@@ -2026,6 +2079,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       client: mkClient(),
       rpc: mkGatewayRpc(),
       log: vi.fn(),
+      adminMmUserId: "mm-admin",
     });
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
@@ -2060,7 +2114,16 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       buildPatch: (current: unknown) => {
         agents: { list: Array<{ id?: string; workspace?: string }> };
         bindings: Array<{ agentId: string; match: { accountId: string; peer: { id: string } } }>;
-        channels: { mattermost: { accounts: Record<string, { botToken?: unknown } | null> } };
+        channels: {
+          mattermost: {
+            accounts: Record<string, {
+              botToken?: unknown;
+              groupPolicy?: string;
+              groupAllowFrom?: string[];
+              groups?: null;
+            } | null>;
+          };
+        };
       };
     };
     const patch = args.buildPatch({
@@ -2094,7 +2157,11 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     // The plugin schema has no per-channel mute, so the coach account clears
     // `groups` rather than listing the project channel; the project channel
     // still reaches its own agent through the partitioned bindings above.
-    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({ groups: null });
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-alice", "mm-admin"],
+      groups: null,
+    });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });

@@ -422,7 +422,7 @@ describe("buildMattermostAccounts", () => {
     expect(accounts.admin).toBeUndefined();
   });
 
-  it("adds `{slug}-coach` entries with groupPolicy `open` (membership-gated) + advisory (customer, admin) seed", () => {
+  it("restricts each workspace coach to its Builder and platform admin", () => {
     const accounts = buildMattermostAccounts(
       [
         { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
@@ -437,14 +437,14 @@ describe("buildMattermostAccounts", () => {
     expect(accounts["chris-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       allowFrom: [],
-      groupPolicy: "open",
+      groupPolicy: "allowlist",
       groupAllowFrom: ["mm-chris", "mm-admin"],
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
       allowFrom: [],
-      groupPolicy: "open",
+      groupPolicy: "allowlist",
       groupAllowFrom: ["mm-sam", "mm-admin"],
       commands: { native: false },
     });
@@ -461,7 +461,7 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toMatchObject({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
-      groupPolicy: "open",
+      groupPolicy: "allowlist",
     });
     expect(accounts["sam-coach"]).toBeUndefined();
     expect(Object.values(accounts).every((a) => a.botToken.source === "file")).toBe(true);
@@ -496,17 +496,17 @@ describe("buildMattermostAccounts", () => {
     expect(accounts["chris-coach"].allowFrom).toEqual([CHRIS_MM_ID]);
   });
 
-  it("when customerMmUserId is absent, the advisory seed is {admin} but the gate stays open (membership-gated)", () => {
+  it("keeps the platform admin as the only sender when the Builder id is unavailable", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
       new Map([["uid-a", "tok-chris"]]),
       "mm-admin",
     );
-    expect(accounts["chris-coach"].groupPolicy).toBe("open");
+    expect(accounts["chris-coach"].groupPolicy).toBe("allowlist");
     expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
   });
 
-  it("still emits an `open` account when both customerMmUserId and adminMmUserId are missing (no allowlist needed; no skip)", () => {
+  it("fails closed when no authorized coach sender is available", () => {
     const warn = vi.fn();
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
@@ -514,13 +514,8 @@ describe("buildMattermostAccounts", () => {
       undefined,
       warn,
     );
-    expect(accounts["chris-coach"]).toEqual({
-      botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
-      allowFrom: [],
-      groupPolicy: "open",
-      commands: { native: false },
-    });
-    expect(warn).not.toHaveBeenCalled();
+    expect(accounts).toEqual({});
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("sender allowlist is empty"));
   });
 
   // OpenClaw 2026.7.2's mattermost plugin builds its group entry as
@@ -536,6 +531,7 @@ describe("buildMattermostAccounts", () => {
         {
           uid: "uid-a",
           slug: "chris",
+          customerMmUserId: "mm-chris",
           channels: [
             { channelId: "ws-general", scope: "workspace" },
             { channelId: "proj-orbit", scope: "project", projectId: "orbit" },
@@ -558,6 +554,7 @@ describe("buildMattermostAccounts", () => {
         {
           uid: "uid-a",
           slug: "chris",
+          customerMmUserId: "mm-chris",
           channels: [{ channelId: "proj-orbit", scope: "project", projectId: "orbit" }],
           agentProjects: new Set(),
         },

@@ -375,21 +375,19 @@ export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
   adminMmUserId?: string | null,
-  _warn?: (msg: string) => void,
+  warn: (msg: string) => void = () => {},
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
-    // Group channels: the coach answers any member of the workspace channels it
-    // has been added to. Mattermost channel membership IS the access boundary:
-    // workspace channels admit the coach, while project channels admit only
-    // their capability-scoped project agent. The prior owner+admin `allowlist`
-    // duplicated the workspace boundary and silently dropped invited guests.
-    // `groupAllowFrom` remains an advisory seed (ignored under "open").
     const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
+    if (groupAllowFrom.length === 0) {
+      warn(`Skipping ${c.slug}-coach Mattermost account: sender allowlist is empty`);
+      continue;
+    }
     // Per-channel mutes are not expressible: the mattermost plugin builds its
     // group entry as buildGroupEntrySchema().omit({ skills, enabled, allowFrom,
     // systemPrompt }), so `enabled` is rejected outright and config.patch fails
@@ -410,8 +408,8 @@ export function buildMattermostAccounts(
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
       allowFrom: ownerAllowFrom,
-      groupPolicy: "open",
-      ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+      groupPolicy: "allowlist",
+      groupAllowFrom,
       ...groupsPatch,
       commands: { native: false },
     };
