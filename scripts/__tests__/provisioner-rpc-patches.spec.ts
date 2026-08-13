@@ -109,11 +109,11 @@ describe("buildCoachBindings", () => {
 });
 
 describe("buildCoachAccountFragment", () => {
-  it("returns the account entry keyed by {slug}-coach with groupPolicy `open` + advisory owner/admin seed", () => {
+  it("returns the account entry keyed by {slug}-coach with an owner/admin sender allowlist", () => {
     const frag = buildCoachAccountFragment(SLUG, mkMmUpdate());
     expect(frag.accounts[ACCOUNT_ID]).toEqual({
       botToken: "tok-marie",
-      groupPolicy: "open",
+      groupPolicy: "allowlist",
       groupAllowFrom: ["mm-marie", "mm-admin"],
     });
     expect(frag.defaultAccount).toBe("default");
@@ -125,12 +125,9 @@ describe("buildCoachAccountFragment", () => {
     expect(frag.defaultAccount).toBe("default");
   });
 
-  it("still emits an `open` account when no owner/admin id is available (membership-gated; no allowlist needed)", () => {
+  it("fails closed when no owner/admin sender id is available", () => {
     delete process.env.MM_ADMIN_USER_ID;
     const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ "mattermost.userId": "" }));
-    expect(frag.accounts[ACCOUNT_ID]).toEqual({
-      botToken: "tok-marie",
-      groupPolicy: "open",
-    });
+    expect(frag.accounts).toEqual({});
   });
 });

@@ -21,6 +21,7 @@
 # constraints (Firebase Functions Node 24 support lags the runtime).
 FROM node:24-bookworm-slim
 ARG NPM_VERSION=12.0.1
+ARG FD_VERSION=10.3.0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -51,6 +52,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     htop strace dnsutils net-tools \
     # Fuzzy finder
     fzf \
+    && case "$(dpkg --print-architecture)" in \
+      amd64) FD_SHA256=f4be8742f936e4ef0e10016b661e4c1cd49e482e388080aa28c05d02f0559509 ;; \
+      arm64) FD_SHA256=35659891c839f9db2a6a5f082342b43961db36cfb08ea3b72a09f19543766a4f ;; \
+      *) echo "Unsupported fd architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd_${FD_VERSION}_$(dpkg --print-architecture).deb" -o /tmp/fd.deb \
+    && echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c - \
+    && dpkg -i /tmp/fd.deb \
+    && rm /tmp/fd.deb \
     && rm -rf /var/lib/apt/lists/*
 
 # ── OpenClaw from private fork tarball ──────────────────────────────────────
