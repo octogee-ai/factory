@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -89,6 +92,8 @@ const BUILDER_GATEWAY_ID = "builder-projowner";
 const ORIGINAL_FLEET_BROKER_URL = process.env.FLEET_BROKER_URL;
 const ORIGINAL_CONNECTOR_TOKEN_BROKER_URL = process.env.CONNECTOR_TOKEN_BROKER_URL;
 const ORIGINAL_GATEWAY_ID = process.env.GATEWAY_ID;
+const ORIGINAL_GATEWAY_CREDENTIAL_TOKEN_PATH = process.env.OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH;
+let gatewayCredentialDir = "";
 
 async function seedCaller(): Promise<void> {
   await db.collection("workspaces").doc(USERNAME).set({
@@ -225,17 +230,30 @@ beforeEach(async () => {
   process.env.FLEET_BROKER_URL = "http://octogee-api.test:3001";
   process.env.CONNECTOR_TOKEN_BROKER_URL = "http://octogee-api.test:3001";
   process.env.GATEWAY_ID = BUILDER_GATEWAY_ID;
+  gatewayCredentialDir = await mkdtemp(join(tmpdir(), "octogee-gateway-credential-"));
+  const gatewayCredentialPath = join(gatewayCredentialDir, "token");
+  await writeFile(gatewayCredentialPath, "projected-gateway-credential\n", { mode: 0o600 });
+  process.env.OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH = gatewayCredentialPath;
   await seedCaller();
   token = await getIdTokenForUid(CALLER_UID);
 });
 
-afterEach(() => {
+afterEach(async () => {
   if (ORIGINAL_FLEET_BROKER_URL === undefined) delete process.env.FLEET_BROKER_URL;
   else process.env.FLEET_BROKER_URL = ORIGINAL_FLEET_BROKER_URL;
   if (ORIGINAL_CONNECTOR_TOKEN_BROKER_URL === undefined) delete process.env.CONNECTOR_TOKEN_BROKER_URL;
   else process.env.CONNECTOR_TOKEN_BROKER_URL = ORIGINAL_CONNECTOR_TOKEN_BROKER_URL;
   if (ORIGINAL_GATEWAY_ID === undefined) delete process.env.GATEWAY_ID;
   else process.env.GATEWAY_ID = ORIGINAL_GATEWAY_ID;
+  if (ORIGINAL_GATEWAY_CREDENTIAL_TOKEN_PATH === undefined) {
+    delete process.env.OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH;
+  } else {
+    process.env.OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH = ORIGINAL_GATEWAY_CREDENTIAL_TOKEN_PATH;
+  }
+  if (gatewayCredentialDir) {
+    await rm(gatewayCredentialDir, { recursive: true, force: true });
+    gatewayCredentialDir = "";
+  }
 });
 
 describe("project create ↔ SSR project page read contract", () => {
@@ -350,6 +368,16 @@ describe("github-backed project create", () => {
       { requireProjectedToken: true },
     );
     expect(mockGithubRepoApi).toHaveBeenCalledWith("octogee-ai", "octogee", "github-owner-token");
+    expect(mockInternalFetch).toHaveBeenCalledWith(
+      "http://octogee-api.test:3001/internal/connectors/access-token",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "x-octogee-gateway-credential-token": "projected-gateway-credential",
+        }),
+      }),
+      {},
+    );
     expect(mockMmApi).toHaveBeenCalled();
   });
 
