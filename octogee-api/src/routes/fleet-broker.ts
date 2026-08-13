@@ -83,6 +83,10 @@ import {
   createOwnerWorkspaceTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
+import {
+  reconcileCoachProjectMembership,
+  type ProjectCoachMembershipInput,
+} from "../lib/project-coach-membership.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -164,6 +168,7 @@ type ResolveChatIdentity = (
 }>;
 
 interface FleetBrokerRouteDeps {
+  reconcileCoachProjectMembership?: (input: ProjectCoachMembershipInput) => Promise<void>;
   provisionMattermost?: (input: {
     uid: string;
     userData: Record<string, unknown>;
@@ -963,7 +968,10 @@ async function runBrokered(
 async function collectChannelBindings(
   db: Firestore,
   slug: string,
-): Promise<FleetBrokerChannelBinding[]> {
+): Promise<{
+  bindings: FleetBrokerChannelBinding[];
+  projectMemberships: Array<{ projectId: string; channelIds: string[] }>;
+}> {
   const workspaceRef = db.collection("workspaces").doc(slug);
   const [wsChannels, projects] = await Promise.all([
     workspaceRef.collection("channels").get(),
@@ -971,18 +979,31 @@ async function collectChannelBindings(
   ]);
 
   const bindings: FleetBrokerChannelBinding[] = [];
+  const projectMemberships: Array<{ projectId: string; channelIds: string[] }> = [];
   for (const ch of wsChannels.docs) {
     const b = mapWorkspaceChannelDoc(ch.data());
     if (b) bindings.push(b);
   }
   for (const p of projects.docs) {
     const projChannels = await p.ref.collection("channels").get();
+    const channelIds: string[] = [];
     for (const ch of projChannels.docs) {
-      const b = mapProjectChannelDoc(p.id, ch.data());
+      const data = ch.data();
+      const b = mapProjectChannelDoc(p.id, data);
       if (b) bindings.push(b);
+      const mattermost = data.mattermost as {
+        channelId?: unknown;
+        activityChannelId?: unknown;
+      } | undefined;
+      for (const channelId of [mattermost?.channelId, mattermost?.activityChannelId]) {
+        if (typeof channelId === "string" && channelId) {
+          channelIds.push(channelId);
+        }
+      }
     }
+    if (channelIds.length > 0) projectMemberships.push({ projectId: p.id, channelIds });
   }
-  return bindings;
+  return { bindings, projectMemberships };
 }
 
 async function collectProjects(
@@ -1184,7 +1205,7 @@ async function loadSnapshot(
 ): Promise<FleetBrokerUserSnapshot | null> {
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
-  const [channels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
+  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
     collectChannelBindings(db, slug),
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(db, slug)
@@ -1200,6 +1221,7 @@ async function loadSnapshot(
     sysConfig.data() as Record<string, unknown> | undefined,
   );
   const baseFields = snapshotBaseFields(data, slug);
+  const channels = collectedChannels.bindings;
   return {
     uid,
     slug,
@@ -1255,12 +1277,19 @@ type ResolvedFleetBrokerRouteDeps = {
     input: BuilderRuntimeDemandRequest,
   ) => ReturnType<typeof requestBuilderActivationLease>;
   now: () => number;
+  reconcileCoachProjectMembership: (input: ProjectCoachMembershipInput) => Promise<void>;
 };
 
 function ownerWorkspaceTurnVerifier(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): OwnerWorkspaceTurnVerifier {
   return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db);
+}
+
+function projectCoachMembershipReconciler(
+  opts: FleetBrokerRouteDeps,
+): (input: ProjectCoachMembershipInput) => Promise<void> {
+  return opts.reconcileCoachProjectMembership ?? reconcileCoachProjectMembership;
 }
 
 async function verifyOwnerWorkspaceTurnFailClosed(
@@ -1316,6 +1345,7 @@ function resolveFleetBrokerRouteDeps(
     requestBuilderActivation:
       opts.requestBuilderActivation ?? requestBuilderActivationLease,
     now: opts.now ?? Date.now,
+    reconcileCoachProjectMembership: projectCoachMembershipReconciler(opts),
   };
 }
 
@@ -1460,6 +1490,48 @@ function installSnapshotRoutes(
       return;
     }
     res.json({ user: snapshot });
+  });
+
+  router.post("/reconcile-project-coach-membership", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = typeof req.body?.uid === "string" ? req.body.uid : "";
+    if (!uid) {
+      res.status(400).json({ error: "uid_required" });
+      return;
+    }
+    const data = await isAssignedToGateway(db, bound.gatewayId, uid);
+    if (!data) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const slug = slugFromAssignedUser(data);
+    if (!slug) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const [collectedChannels, coachSecret, projectAgents] = await Promise.all([
+      collectChannelBindings(db, slug),
+      db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+      collectProjectAgentStates(db, uid, slug),
+    ]);
+    const coach = snapshotCoachFields(
+      coachSecret.data() as Record<string, unknown> | undefined,
+    );
+    const agentByProject = new Map(projectAgents.map((agent) => [agent.projectId, agent]));
+    await deps.reconcileCoachProjectMembership({
+      coachMmUserId: coach.coachMmUserId,
+      projects: collectedChannels.projectMemberships.map(({ projectId, channelIds }) => {
+        const agent = agentByProject.get(projectId);
+        return {
+          projectId,
+          projectAgentEnabled: agent?.enabled === true,
+          projectAgentMmUserId: agent?.mmUserId ?? null,
+          channelIds,
+        };
+      }),
+    });
+    res.status(204).end();
   });
 }
 

@@ -48,6 +48,7 @@ export interface FleetBrokerClient {
   uidForSlug(slug: string): Promise<string | null>;
   githubCloneToken(uid: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
+  reconcileProjectCoachMembership(uid: string): Promise<void>;
   setProvisioningStatus(
     uid: string,
     status: Exclude<FleetBrokerProvisioningStatus, "">,
@@ -144,6 +145,12 @@ export function createFleetBrokerClient(gatewayId: string, revisionId = gatewayI
         }
         throw err;
       }
+    },
+    reconcileProjectCoachMembership(uid) {
+      return postNoContent("/internal/fleet/reconcile-project-coach-membership", {
+        gatewayId,
+        uid,
+      });
     },
     setProvisioningStatus(uid, status) {
       return postNoContent("/internal/fleet/set-provisioning-status", {

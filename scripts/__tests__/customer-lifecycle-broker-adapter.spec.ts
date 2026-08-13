@@ -133,6 +133,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     uidForSlug: vi.fn(async () => "uid-tester10"),
     githubCloneToken: vi.fn(async () => null),
     userSnapshot: vi.fn(async () => null),
+    reconcileProjectCoachMembership: vi.fn(async () => undefined),
     setProvisioningStatus: vi.fn(async () => undefined),
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
@@ -1015,8 +1016,9 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         return { ok: true, warningCount: 0 };
       }),
     } as unknown as GatewayRpcClient;
+    const client = mkClient();
     const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
+      client,
       rpc,
       log: vi.fn(),
     });
@@ -1042,10 +1044,29 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
 
+    expect(client.reconcileProjectCoachMembership).toHaveBeenCalledWith("uid-alice");
     expect(rpc.channelsStop).not.toHaveBeenCalled();
     expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
     expect(events).toEqual(["config-patch", "routing-activation", "secrets-reload"]);
+  });
+
+  it("does not patch one customer's runtime when membership isolation fails", async () => {
+    const client = mkClient({
+      reconcileProjectCoachMembership: vi.fn(async () => {
+        throw new Error("Mattermost unavailable");
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }),
+    ).rejects.toThrow("Mattermost unavailable");
+    expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
   });
 
   it("fails provisioning when the refreshed secret surface remains incomplete", async () => {
@@ -1454,6 +1475,32 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       "octogee-unmatched-route",
       "octogee-alice-coach",
     ]);
+  });
+
+  it("re-reads the live roster before destructive cleanup instead of trusting a stale patch cache", async () => {
+    const liveRoster = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    const configGet = vi.fn(async () => ({ config: liveRoster, hash: "live-hash" }));
+    const rpc = mkRemovalRpc(liveRoster, { configGet } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
+      options.cache!.current = {
+        agents: {
+          entries: keyedRoster([
+            "octogee-alice-coach",
+            "octogee-alice-proj-now-owned-elsewhere-coach",
+          ]),
+        },
+      };
+      options.cache!.hash = "stale-hash";
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+
+    expect(configGet).toHaveBeenCalledTimes(2);
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
   });
 
   it("creates an agent the roster does not carry yet through agents.create, not the patch alone", async () => {
@@ -2032,6 +2079,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       client: mkClient(),
       rpc: mkGatewayRpc(),
       log: vi.fn(),
+      adminMmUserId: "mm-admin",
     });
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
@@ -2066,7 +2114,16 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       buildPatch: (current: unknown) => {
         agents: { list: Array<{ id?: string; workspace?: string }> };
         bindings: Array<{ agentId: string; match: { accountId: string; peer: { id: string } } }>;
-        channels: { mattermost: { accounts: Record<string, { botToken?: unknown } | null> } };
+        channels: {
+          mattermost: {
+            accounts: Record<string, {
+              botToken?: unknown;
+              groupPolicy?: string;
+              groupAllowFrom?: string[];
+              groups?: null;
+            } | null>;
+          };
+        };
       };
     };
     const patch = args.buildPatch({
@@ -2100,7 +2157,11 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     // The plugin schema has no per-channel mute, so the coach account clears
     // `groups` rather than listing the project channel; the project channel
     // still reaches its own agent through the partitioned bindings above.
-    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({ groups: null });
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["mm-alice", "mm-admin"],
+      groups: null,
+    });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });

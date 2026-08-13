@@ -10,6 +10,7 @@ declare global {
   namespace Express {
     interface Request {
       uid?: string;
+      authTime?: number;
       user?: FirebaseFirestore.DocumentData;
       workspaceSlug?: string | null;
       isAdmin?: boolean;
@@ -30,17 +31,41 @@ function authenticateUid(
 
   const token = header.slice(7);
   void (async () => {
-    let uid: string;
+    let decoded: Awaited<ReturnType<typeof auth.verifyIdToken>>;
     try {
-      uid = (await auth.verifyIdToken(token)).uid;
+      decoded = await auth.verifyIdToken(token);
     } catch (err) {
       logger.warn(`Auth failed: ${(err as Error).message}`);
       res.status(401).json({ error: "Invalid token" });
       return;
     }
-    req.uid = uid;
+    req.uid = decoded.uid;
+    req.authTime = Number.isSafeInteger(decoded.auth_time) ? decoded.auth_time : undefined;
     next();
   })();
+}
+
+export const RECENT_AUTH_MAX_AGE_SECONDS = 5 * 60;
+
+export function requireRecentAuthentication(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const authTime = req.authTime;
+  if (
+    typeof authTime !== "number" ||
+    authTime > nowSeconds + 60 ||
+    nowSeconds - authTime > RECENT_AUTH_MAX_AGE_SECONDS
+  ) {
+    res.status(403).json({
+      error: "auth/requires-recent-login",
+      message: "Recent authentication required",
+    });
+    return;
+  }
+  next();
 }
 
 export function requireAuthenticatedUid(req: Request, res: Response, next: NextFunction): void {

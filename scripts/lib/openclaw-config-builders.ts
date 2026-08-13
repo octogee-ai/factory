@@ -391,8 +391,8 @@ export function buildMattermostAccounts(
     // the whole document — taking the mount, and every customer queued behind
     // it in the same reconcile batch, down with it. Clearing the key is also
     // the repair path for configs a prior release already wrote.
-    // Project channels still reach the right agent: buildCustomerBindings binds
-    // them to the project agent's OWN account, not the workspace coach's.
+    // Project channels reach the project agent through its own account and MM
+    // membership; the workspace coach is deliberately not a channel member.
     const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
     const groupsPatch: Pick<MattermostAccountEntry, "groups"> = managesGroups
       ? { groups: null }
