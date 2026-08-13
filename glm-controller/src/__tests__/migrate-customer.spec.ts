@@ -331,7 +331,7 @@ describe("migrate-customer — openclaw version gate", () => {
     expect(steps.map((step) => step.name)).toContain("cutover-firestore");
   });
 
-  it("takes the fresh path for a durable-class customer without persisting V2 state", async () => {
+  it("fences a fresh durable-class cutover without transferring incompatible state", async () => {
     const { deps, ctx, client, persisted, events } = mkDeps({
       durable: true,
       openclawVersions: CROSS_VERSION,
@@ -341,9 +341,172 @@ describe("migrate-customer — openclaw version gate", () => {
     const result = await handler(mkOp({}), ctx);
 
     expect(result).toMatchObject({ success: true, rolledBack: false });
-    expect(persisted).toEqual([]);
+    expect(persisted.map((state) => state.phase)).toEqual([
+      "initialized",
+      "freshSourceQuiesced",
+      "freshCutoverReady",
+      "cutover",
+      "sourceRetired",
+      "complete",
+    ]);
     expect(client.transferState).not.toHaveBeenCalled();
-    expect(events).toContain("cutover:gw-blue->gw-green:mirror=true");
+    expect(events).toContain("v2-cutover:gw-blue->gw-green");
+    expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
+    expect(deps.useDurableMigration).toHaveBeenCalledWith("gw-blue", "gw-green");
+    expect(deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({
+      operationId: "op-1",
+      migrationId: "mig-op-1",
+      sourceGatewayId: "gw-blue",
+      sourceEpoch: 4,
+      sourceRelease: 1,
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetGatewayId: "gw-green",
+      targetRelease: 2,
+      targetRootFence: gatewayRootFence("gw-green", 2),
+    }));
+  });
+
+  it("replays an ambiguous fresh durable cutover without reopening the source roster", async () => {
+    const { deps, ctx, client, persisted, events } = mkDeps({
+      durable: true,
+      openclawVersions: CROSS_VERSION,
+    });
+    const commitV2Cutover = deps.commitV2Cutover as ReturnType<typeof vi.fn>;
+    commitV2Cutover.mockRejectedValueOnce(
+      Object.assign(new Error("cutover response unavailable"), { retryable: true }),
+    );
+    const handler = createMigrateCustomerHandler(deps);
+
+    const first = await handler(mkOp({}), ctx);
+
+    expect(first).toMatchObject({ success: false, rolledBack: false });
+    expect(first.error).toMatch(/retry pending: status 503/u);
+    expect(persisted.at(-1)?.phase).toBe("freshCutoverReady");
+    expect(events).not.toContain("assignment:gw-blue:serving");
+
+    const cutoverReady = persisted.at(-1);
+    const changedPersisted: Array<NonNullable<Operation["customerMigrationV2"]>> = [];
+    const changedCtx = {
+      ...ctx,
+      persistCustomerMigrationV2: vi.fn(async (state) => {
+        changedPersisted.push(state);
+      }),
+    } as unknown as OperationContext;
+    const changed = await handler(mkOp({
+      customerMigrationV2: cutoverReady,
+      input: { uid: "uid-alice", toGatewayId: "gw-other" },
+    }), changedCtx);
+
+    expect(changed).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/input changed/u),
+      rolledBack: true,
+    });
+    expect(changedPersisted.at(-1)?.phase).toBe("aborted");
+    expect(events).toContain("assignment:gw-blue:serving");
+    expect(commitV2Cutover).toHaveBeenCalledTimes(1);
+
+    const replay = await handler(mkOp({ customerMigrationV2: cutoverReady }), ctx);
+
+    expect(replay).toMatchObject({ success: true, rolledBack: false });
+    expect(commitV2Cutover).toHaveBeenCalledTimes(2);
+    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual([
+      "unmount:gw-blue",
+    ]);
+  });
+
+  it("cancels a fresh durable move before cutover and restores the source roster", async () => {
+    const { deps, client, events } = mkDeps({
+      durable: true,
+      openclawVersions: CROSS_VERSION,
+    });
+    const persisted: Array<NonNullable<Operation["customerMigrationV2"]>> = [];
+    let cancelRequested = false;
+    const ctx: OperationContext = {
+      reportStep: vi.fn(async () => undefined),
+      persistCustomerMigrationV2: vi.fn(async (state) => {
+        persisted.push(state);
+        if (state.phase === "freshSourceQuiesced") cancelRequested = true;
+      }),
+      cancellationRequested: vi.fn(async () => cancelRequested),
+    } as unknown as OperationContext;
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.error).toMatch(/cancelled/u);
+    expect(persisted.map((state) => state.phase)).toEqual([
+      "initialized",
+      "freshSourceQuiesced",
+      "aborted",
+    ]);
+    expect(events).toContain("assignment:gw-blue:serving");
+    expect(deps.commitV2Cutover).not.toHaveBeenCalled();
+    expect(client.unmount).not.toHaveBeenCalled();
+  });
+
+  it("durably aborts an initialized fresh migration without recreating a missing assignment", async () => {
+    const { deps, persisted } = mkDeps({
+      durable: true,
+      openclawVersions: CROSS_VERSION,
+    });
+    const state: NonNullable<Operation["customerMigrationV2"]> = {
+      phase: "initialized",
+      strategy: "provision-fresh",
+      operationId: "op-1",
+      migrationId: "mig-op-1",
+      uid: "uid-alice",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceRelease: 1,
+      sourceEpoch: 4,
+      sourceAssignmentMode: "unassigned-live",
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetGatewayId: "gw-green",
+      targetRelease: 2,
+      targetRootFence: gatewayRootFence("gw-green", 2),
+    };
+    const ctx = {
+      reportStep: vi.fn(async () => undefined),
+      persistCustomerMigrationV2: vi.fn(async (nextState) => {
+        persisted.push(nextState);
+      }),
+      cancellationRequested: vi.fn(async () => true),
+    } as unknown as OperationContext;
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ customerMigrationV2: state }), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.error).toMatch(/cancelled/u);
+    expect(deps.setAssignmentState).toHaveBeenCalledWith(expect.objectContaining({
+      state: "serving",
+      createIfMissing: false,
+    }));
+    expect(persisted.at(-1)?.phase).toBe("aborted");
+  });
+
+  it("retries a fresh durable abort when restoring the source roster fails", async () => {
+    const client = happyClient();
+    (client.flushGateway as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("flush refused"),
+    );
+    const { deps, ctx, persisted } = mkDeps({
+      client,
+      durable: true,
+      openclawVersions: CROSS_VERSION,
+    });
+    (deps.setAssignmentState as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("roster unavailable"), { retryable: true }));
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/retry pending: status 503.*roster unavailable/u);
+    expect(persisted.map((state) => state.phase)).toEqual(["initialized"]);
   });
 
   it("provisions fresh when either gateway reports no openclaw version", async () => {
