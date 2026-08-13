@@ -522,6 +522,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(projectTools.allow).toBeUndefined();
     expect(projectTools.alsoAllow).toEqual(expect.arrayContaining([
+      "read",
+      "grep",
+      "find",
+      "ls",
       "octogee_project_commit",
       "octogee_project_build",
       "octogee_project_test",

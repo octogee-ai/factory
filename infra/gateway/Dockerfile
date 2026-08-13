@@ -166,6 +166,7 @@ ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation
+ENV OPENCLAW_OFFLINE=1
 
 # Build SHA — injected by Cloud Build via --build-arg
 ARG BUILD_SHA=unknown

@@ -75,6 +75,9 @@ export const WORKSPACE_COACH_ALLOWED_TOOLS = [
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
+  "grep",
+  "find",
+  "ls",
   "write",
   "edit",
   "apply_patch",
