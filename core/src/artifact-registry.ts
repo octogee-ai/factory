@@ -265,13 +265,6 @@ export async function removeKeepTag(opts: PinOpts): Promise<void> {
 const SOURCE_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const OPENCLAW_VERSION_PATTERN = /^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/;
-const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
-const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
-const RELEASE_VERSION_PATTERN = new RegExp(
-  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
-    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
-);
-
 // The manifest is a lookup for release invariant 1 — the bytes are already
 // built — not an approval system. A schema version or an unfamiliar surface key
 // says nothing about whether those bytes exist, so gating on either blocks a
@@ -320,12 +313,7 @@ export class ReleaseDigestAliasError extends Error {
 
 export interface CentralReleaseAuthority {
   resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
-  resolveTestManifest: (version: string) => Promise<ReleaseDigestManifest>;
   aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
-  testRecordAlias: (
-    version: string,
-    manifest: ReleaseDigestManifest,
-  ) => ReleaseDigestAlias;
   ensureAliases: (
     aliases: readonly ReleaseDigestAlias[],
   ) => Promise<ReleaseDigestAliasOutcome[]>;
@@ -335,7 +323,6 @@ export interface CentralReleaseAuthorityCoordinates {
   project: string;
   location: string;
   repository: string;
-  releaseRecordBucket?: string;
 }
 
 /** Injectable so the generator/authority contract can be exercised without
@@ -348,13 +335,6 @@ export interface CentralReleaseAuthorityDeps {
 function assertSourceSha(value: string): string {
   if (!SOURCE_SHA_PATTERN.test(value)) {
     throw new Error("release source SHA must be a full lowercase commit SHA");
-  }
-  return value;
-}
-
-function assertReleaseVersion(value: string): string {
-  if (!RELEASE_VERSION_PATTERN.test(value)) {
-    throw new Error("release version must be a v-prefixed semantic version");
   }
   return value;
 }
@@ -542,95 +522,12 @@ function digestFromImageReference(reference: string, expectedRepository: string)
   return assertDigest(reference.slice(at + 1), "release alias target");
 }
 
-function releaseRecordObjectName(version: string): string {
-  return `test-${assertReleaseVersion(version)}.json`;
-}
-
-function releaseRecordMediaUrl(bucket: string, objectName: string): string {
-  return `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}` +
-    `/o/${encodeURIComponent(objectName)}?alt=media`;
-}
-
-function releaseRecordUploadUrl(bucket: string, objectName: string): string {
-  const params = new URLSearchParams({
-    uploadType: "media",
-    name: objectName,
-    ifGenerationMatch: "0",
-  });
-  return `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucket)}` +
-    `/o?${params.toString()}`;
-}
-
-function releaseRecordDigest(input: unknown, description: string): string {
-  const record = plainRecord(input, description);
-  exactObjectKeys(record, ["manifestDigest"], description);
-  return assertDigest(record.manifestDigest, `${description} manifestDigest`);
-}
-
-async function readReleaseRecord(
-  bucket: string,
-  objectName: string,
-  token: string,
-): Promise<string | null> {
-  const response = await fetch(releaseRecordMediaUrl(bucket, objectName), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (response.status === 404) return null;
-  return releaseRecordDigest(
-    await requireJson(response, `release record ${objectName}`),
-    `release record ${objectName}`,
-  );
-}
-
-async function ensureReleaseRecord(input: {
-  alias: ReleaseDigestAlias;
-  bucket: string;
-  repository: string;
-  token: string;
-}): Promise<ReleaseDigestAliasOutcome> {
-  const prefix = `gs://${input.bucket}/`;
-  if (!input.alias.alias.startsWith(prefix)) throw new Error("release record is outside its authority bucket");
-  const objectName = input.alias.alias.slice(prefix.length);
-  const version = objectName.startsWith("test-") && objectName.endsWith(".json")
-    ? objectName.slice("test-".length, -".json".length)
-    : "";
-  if (releaseRecordObjectName(version) !== objectName) {
-    throw new Error("release record object name is invalid");
-  }
-  const intendedDigest = digestFromImageReference(input.alias.intendedTarget, input.repository);
-  const existing = await readReleaseRecord(input.bucket, objectName, input.token);
-  if (existing !== null) {
-    if (existing !== intendedDigest) throw new Error(`${input.alias.alias} already points at a different digest`);
-    return { alias: input.alias.alias, status: "already-applied", observedTarget: input.alias.intendedTarget };
-  }
-  const createResponse = await fetch(releaseRecordUploadUrl(input.bucket, objectName), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ manifestDigest: intendedDigest }),
-  });
-  if (!createResponse.ok && createResponse.status !== 409 && createResponse.status !== 412) {
-    const detail = await createResponse.text().catch(() => "");
-    throw new Error(`release record create ${input.alias.alias} failed: ${createResponse.status} ${detail.slice(0, 200)}`);
-  }
-  const observed = await readReleaseRecord(input.bucket, objectName, input.token);
-  if (observed !== intendedDigest) throw new Error(`${input.alias.alias} already points at a different digest`);
-  return {
-    alias: input.alias.alias,
-    status: createResponse.ok ? "applied" : "already-applied",
-    observedTarget: input.alias.intendedTarget,
-  };
-}
-
 export function createCentralReleaseAuthority(
   coordinates: CentralReleaseAuthorityCoordinates,
   deps: CentralReleaseAuthorityDeps = {},
 ): CentralReleaseAuthority {
   const repository = dockerRepository(coordinates);
   const packages = packagesBaseForCoordinates(coordinates);
-  const releaseRecordBucket = coordinates.releaseRecordBucket ?? `${coordinates.project}-release-records`;
   const accessToken = deps.getAccessToken ?? getAccessToken;
 
   async function resolveTagDigest(packageName: string, tag: string, token: string): Promise<string | null> {
@@ -702,13 +599,6 @@ export function createCentralReleaseAuthority(
       }
       return manifest;
     },
-    async resolveTestManifest(version) {
-      const token = await accessToken();
-      const objectName = releaseRecordObjectName(version);
-      const manifestDigest = await readReleaseRecord(releaseRecordBucket, objectName, token);
-      if (!manifestDigest) throw new Error(`release record ${objectName} does not exist`);
-      return resolveManifestFromDigest(manifestDigest, token);
-    },
     aliasesFor(manifest) {
       const sourceSha = assertSourceSha(manifest.sourceSha);
       const validated = validateResolvedReleaseDigestManifest(manifest, repository);
@@ -728,27 +618,11 @@ export function createCentralReleaseAuthority(
       }
       return aliases;
     },
-    testRecordAlias(version, manifest) {
-      const validated = validateResolvedReleaseDigestManifest(manifest, repository);
-      return {
-        alias: `gs://${releaseRecordBucket}/${releaseRecordObjectName(version)}`,
-        intendedTarget: `${repository}/release-digest-manifest@${validated.manifestDigest}`,
-      };
-    },
     async ensureAliases(aliases) {
       const token = await getWriteToken();
       const outcomes: ReleaseDigestAliasOutcome[] = [];
       for (const alias of aliases) {
         try {
-          if (alias.alias.startsWith("gs://")) {
-            outcomes.push(await ensureReleaseRecord({
-              alias,
-              bucket: releaseRecordBucket,
-              repository,
-              token,
-            }));
-            continue;
-          }
           const parsed = parseReleaseAlias(alias.alias, repository);
           const intendedDigest = digestFromImageReference(alias.intendedTarget, repository);
           const existing = await resolveTagDigest(parsed.packageName, parsed.tag, token);
