@@ -418,7 +418,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
         intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
       }]),
       testRecordAlias: vi.fn(() => ({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest:test-v0.4.0",
+        alias: "gs://octogee-release-records/test-v0.4.0.json",
         intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest@${manifestDigest}`,
       })),
       ensureAliases: vi.fn(async (aliases: Array<{ alias: string; intendedTarget: string }>) =>
@@ -463,7 +463,12 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       },
     });
     expect(opsIn(store, "rollout")).toHaveLength(1);
-    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+    expect(authority.aliasesFor).not.toHaveBeenCalled();
+    expect(authority.ensureAliases).toHaveBeenCalledOnce();
+    expect(authority.ensureAliases).toHaveBeenCalledWith([{
+      alias: "gs://octogee-release-records/test-v0.4.0.json",
+      intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest@${manifestDigest}`,
+    }]);
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
       status: "completed",
       what: "cut CENTRAL TEST release",
@@ -724,7 +729,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(response.body).toMatchObject({ release: 2, operationId: "rollout-existing" });
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
     expect(opsIn(store, "rollout")).toHaveLength(0);
-    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+    expect(authority.ensureAliases).toHaveBeenCalledOnce();
   });
 
   it("serializes concurrent matching TEST cuts through one durable reservation", async () => {
@@ -754,19 +759,12 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(opsIn(store, "rollout")).toHaveLength(1);
   });
 
-  it("journals aliases as partial when maintenance freezes before desired state append", async () => {
+  it("does not mint a TEST record when maintenance freezes before desired state append", async () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
       releaseAuthority: authority,
     });
-    authority.ensureAliases.mockImplementationOnce(async (aliases: Array<{ alias: string; intendedTarget: string }>) => {
-      store.set("config/glmMaintenance", { mode: "frozen", reason: "incident" });
-      return aliases.map((alias) => ({
-        alias: alias.alias,
-        status: "applied",
-        observedTarget: alias.intendedTarget,
-      }));
-    });
+    store.set("config/glmMaintenance", { mode: "frozen", reason: "incident" });
 
     await request(app)
       .post("/releases/cut")
@@ -776,13 +774,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
 
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
     expect(opsIn(store, "rollout")).toHaveLength(0);
-    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
-      status: "completed",
-      lifecycleStage: "action-partial",
-      outcome: "partial",
-      aliasOutcomes: expect.arrayContaining([expect.objectContaining({ status: "applied" })]),
-      partialOutcome: expect.any(Object),
-    }));
+    expect(authority.ensureAliases).not.toHaveBeenCalled();
   });
 
   it("journals completed aliases and rollout when the TEST authorization marker fails", async () => {
@@ -790,13 +782,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
       releaseAuthority: authority,
     });
-    authority.ensureAliases
-      .mockResolvedValueOnce([{
-        alias: "source-alias",
-        status: "applied",
-        observedTarget: "source-target",
-      }])
-      .mockRejectedValueOnce(new ReleaseDigestAliasError([{
+    authority.ensureAliases.mockRejectedValueOnce(new ReleaseDigestAliasError([{
         alias: "test-record-alias",
         status: "failed",
         error: "marker collision",
@@ -817,7 +803,6 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       lifecycleStage: "action-partial",
       outcome: "partial",
       aliasOutcomes: [
-        expect.objectContaining({ alias: "source-alias", status: "applied" }),
         expect.objectContaining({ alias: "test-record-alias", status: "failed" }),
       ],
       releaseRollout: expect.objectContaining({ releaseId: "default/2" }),
@@ -834,21 +819,11 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     });
     const idempotencyKey = `release-cut:v0.4.0:${sourceSha}`;
     authority.ensureAliases
-      .mockResolvedValueOnce([{
-        alias: "source-alias",
-        status: "applied",
-        observedTarget: "source-target",
-      }])
       .mockRejectedValueOnce(new ReleaseDigestAliasError([{
         alias: "test-record-alias",
         status: "failed",
         error: "marker collision",
       }], new Error("marker collision")))
-      .mockResolvedValueOnce([{
-        alias: "source-alias",
-        status: "already-applied",
-        observedTarget: "source-target",
-      }])
       .mockResolvedValueOnce([{
         alias: "test-record-alias",
         status: "applied",
