@@ -243,6 +243,53 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).not.toContain("gateway-secret");
   });
 
+  it("does not let browser range requests split the upstream gateway credential", async () => {
+    let capturedRange: string | undefined;
+    const upstream = http.createServer((req, res) => {
+      capturedRange = req.headers.range;
+      res.setHeader("accept-ranges", "bytes");
+      if (capturedRange) {
+        res.statusCode = 206;
+        res.setHeader("content-range", "bytes 0-6/14");
+        res.end("gateway");
+        return;
+      }
+      res.end("native-ui gateway-secret");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({ env: env(port), sessions: manager }))
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("cookie", issue(manager))
+      .set("range", "bytes=0-6");
+
+    expect(response.status).toBe(200);
+    expect(capturedRange).toBeUndefined();
+    expect(response.headers["accept-ranges"]).toBeUndefined();
+    expect(response.headers["content-range"]).toBeUndefined();
+    expect(response.text).toBe("native-ui **************");
+  });
+
+  it("rejects unsolicited partial upstream responses before exposing their body", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.statusCode = 206;
+      res.setHeader("content-range", "bytes 0-6/14");
+      res.end("gateway");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({ env: env(port), sessions: manager }))
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(502);
+    expect(response.body).toEqual({ error: "openclaw-partial-response-rejected" });
+    expect(response.text).not.toContain("gateway");
+    expect(response.headers["content-range"]).toBeUndefined();
+  });
+
   it.each([
     "/",
     "/chat?session=agent%3Aoctogee-eggman-coach%3Amain",
