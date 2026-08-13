@@ -66,15 +66,12 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   "if-none-match",
   "if-unmodified-since",
   "pragma",
-  "range",
 ]);
 const ALLOWED_RESPONSE_HEADERS = new Set([
-  "accept-ranges",
   "cache-control",
   "content-disposition",
   "content-language",
   "content-length",
-  "content-range",
   "content-type",
   "etag",
   "last-modified",
@@ -553,6 +550,17 @@ export function createOpenClawControlHttpRouter(
         headers: requestHeaders(req, env, gatewayToken),
       }, (upstream) => {
         settled = true;
+        if (upstream.statusCode === 206) {
+          logger.warn("OpenClaw Dashboard upstream returned a partial response", {
+            gatewayId,
+          });
+          upstream.resume();
+          res.setHeader("set-cookie", touched.cookie);
+          dashboardFailure(req, res, frameAncestor, 502, {
+            error: "openclaw-partial-response-rejected",
+          });
+          return;
+        }
         res.status(upstream.statusCode ?? 502);
         for (const [name, value] of Object.entries(upstream.headers)) {
           if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) {

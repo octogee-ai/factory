@@ -489,11 +489,8 @@ describe("createSessionChannel", () => {
   });
 
   it("fails loudly when a member cannot be added and does not write the doc", async () => {
-    h.getWorkspaceMmContext.mockResolvedValueOnce({
-      teamId: "team-1",
-      userId: "owner-mm",
-      coachUserId: null,
-    });
+    h.mmApi.mockImplementationOnce(async () => ({ id: "channel-1" }))
+      .mockRejectedValueOnce(new Error("membership unavailable"));
 
     const result = await createSessionChannel(actor(), input);
 
@@ -686,7 +683,13 @@ const PROJECT_DOC_PATH = "workspaces/mira/projects/orbit";
 const PROJECT_CHANNEL_DOC_PATH = "workspaces/mira/projects/orbit/channels/patchroll";
 
 function seedProjectDoc() {
-  h.docs.set(PROJECT_DOC_PATH, { id: "orbit", slug: "orbit", provisioningState: "active" });
+  h.docs.set(PROJECT_DOC_PATH, {
+    id: "orbit",
+    slug: "orbit",
+    provisioningState: "active",
+    agent: { enabled: true },
+  });
+  h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", { mmUserId: "project-agent-mm" });
 }
 
 function seedProjectSessionDoc(extra: Record<string, unknown> = {}) {
@@ -758,6 +761,9 @@ describe("createProjectSessionChannel", () => {
       type: "P",
       purpose: "Rolls",
     });
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "project-agent-mm" });
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "coach-mm" });
     expect(h.writes).toEqual([
       {
         path: PROJECT_CHANNEL_DOC_PATH,
@@ -773,6 +779,29 @@ describe("createProjectSessionChannel", () => {
         options: undefined,
       },
     ]);
+  });
+
+  it("keeps human project chat working when the scoped agent is disabled", async () => {
+    h.docs.set(PROJECT_DOC_PATH, {
+      id: "orbit",
+      slug: "orbit",
+      provisioningState: "active",
+      agent: { enabled: false },
+    });
+    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
+      mmUserId: "stale-project-agent-mm",
+    });
+
+    const result = await createProjectSessionChannel(actor(), "orbit", input);
+
+    expect(result.status).toBe(200);
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "coach-mm" });
+    expect(h.mmApi).not.toHaveBeenCalledWith(
+      "/channels/channel-1/members",
+      "POST",
+      { user_id: "stale-project-agent-mm" },
+    );
   });
 });
 
