@@ -17,6 +17,7 @@ export interface FileTarget {
   repoName: string;
   gcsPrefix: string;
   githubToken?: string;
+  cacheAuthority?: string;
   // Gitea: the username to impersonate via admin Sudo (no per-user PAT). The caller's
   // own gitea identity where they hold real ACL (owner / project collaborator), or the
   // workspace owner's when brokering for a workspace member who has no repo access.
@@ -150,6 +151,7 @@ async function resolveGithubProjectTarget(args: {
     repoName: github.repo,
     gcsPrefix: `customers/${slug}/projects/${projectSlug}`,
     canvasFile: project.canvasFile,
+    ...(callerUid ? { cacheAuthority: callerUid } : {}),
   };
   if (!resolveGithubToken) {
     return { ok: true, target: githubTarget };

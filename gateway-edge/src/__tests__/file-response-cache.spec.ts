@@ -32,6 +32,18 @@ describe("cachedWorkspaceFileResponse", () => {
     }));
   });
 
+  it("separates GitHub responses by caller authority", () => {
+    const githubTarget: FileTarget = {
+      ...target,
+      provider: "github",
+      cacheAuthority: "member-a",
+    };
+    expect(workspaceFileTargetCacheKey(githubTarget)).not.toBe(workspaceFileTargetCacheKey({
+      ...githubTarget,
+      cacheAuthority: "member-b",
+    }));
+  });
+
   it("caches the loaded value and reuses it on subsequent reads", async () => {
     const load = vi.fn().mockResolvedValue("v1");
     expect(await cachedWorkspaceFileResponse(key, 1000, load)).toBe("v1");
@@ -62,5 +74,21 @@ describe("cachedWorkspaceFileResponse", () => {
     const load2 = vi.fn().mockResolvedValue("fresh");
     expect(await cachedWorkspaceFileResponse(key, 1000, load2)).toBe("fresh");
     expect(load2).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates every authority view of the same repository", async () => {
+    const ownerTarget = { ...target, cacheAuthority: "owner" };
+    const memberTarget = { ...target, cacheAuthority: "member" };
+    const ownerKey = workspaceFileCacheKey("file", ownerTarget, "README.md");
+    const memberKey = workspaceFileCacheKey("file", memberTarget, "README.md");
+    await cachedWorkspaceFileResponse(ownerKey, 1000, async () => "owner-old");
+    await cachedWorkspaceFileResponse(memberKey, 1000, async () => "member-old");
+
+    invalidateWorkspaceFileResponseCache(ownerTarget);
+
+    expect(await cachedWorkspaceFileResponse(ownerKey, 1000, async () => "owner-new"))
+      .toBe("owner-new");
+    expect(await cachedWorkspaceFileResponse(memberKey, 1000, async () => "member-new"))
+      .toBe("member-new");
   });
 });

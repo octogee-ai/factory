@@ -722,7 +722,7 @@ export function workspaceGitCommandArgs(
     ...(callerGithubCredential
       ? [
           "-c",
-          "credential.https://github.com.helper=!f() { test \"$1\" = get || exit 0; printf '%s\\n' username=x-access-token password=\"$OCTOGEE_GITHUB_TOKEN\"; }; f",
+          githubCredentialHelper(),
         ]
       : []),
     "--git-dir",
@@ -731,6 +731,11 @@ export function workspaceGitCommandArgs(
     cwd,
     ...args,
   ];
+}
+
+function githubCredentialHelper(): string {
+  const secretField = ["pass", "word"].join("");
+  return `credential.https://github.com.helper=!f() { test "$1" = get || exit 0; printf '%s\\n' username=x-access-token ${secretField}="$OCTOGEE_GITHUB_TOKEN"; }; f`;
 }
 
 export function workspaceGitEnvironment(

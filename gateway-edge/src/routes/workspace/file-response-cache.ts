@@ -27,12 +27,23 @@ function evictOldest(): void {
 
 export function workspaceFileTargetCacheKey(target: FileTarget): string {
   return [
+    workspaceFileRepositoryCacheKey(target),
+    workspaceFileAuthorityCacheKey(target),
+  ].join("|");
+}
+
+function workspaceFileAuthorityCacheKey(target: FileTarget): string {
+  if (target.cacheAuthority) return `caller:${encodeURIComponent(target.cacheAuthority)}`;
+  return target.workspaceMemberBrokered ? "knowledge" : "full";
+}
+
+function workspaceFileRepositoryCacheKey(target: FileTarget): string {
+  return [
     target.provider,
     target.slug,
     target.projectSlug ?? "",
     target.org,
     target.repoName,
-    target.workspaceMemberBrokered ? "knowledge" : "full",
   ].join("|");
 }
 
@@ -82,7 +93,7 @@ export async function cachedWorkspaceFileResponse<T>(
 
 export function invalidateWorkspaceFileResponseCache(target: FileTarget): void {
   invalidationEpoch++;
-  const prefix = `${workspaceFileTargetCacheKey(target)}|`;
+  const prefix = `${workspaceFileRepositoryCacheKey(target)}|`;
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
   }
