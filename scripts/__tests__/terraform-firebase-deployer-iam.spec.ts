@@ -54,4 +54,17 @@ describe("firebase deployer Terraform IAM", () => {
 
     expect(bindings).toHaveLength(2);
   });
+
+  it("limits Firebase deployer's secret policy authority to function-bound secrets", () => {
+    const source = readFileSync(iamModule, "utf-8");
+    const binding = source.match(
+      /resource "google_project_iam_member" "firebase_deployer_secret_binding" \{([\s\S]*?)^\}/m,
+    )?.[1];
+
+    expect(binding).toContain("condition {");
+    expect(binding).toContain("projects/${data.google_project.this.number}/secrets/DISCORD_OPS_WEBHOOK_URL");
+    expect(binding).toContain("projects/${data.google_project.this.number}/secrets/SOCIAL_NOTIFICATION_BEARER_TOKEN");
+    expect(binding).not.toContain("expression  = \"true\"");
+    expect(source).not.toContain("secretmanager.versions.access");
+  });
 });

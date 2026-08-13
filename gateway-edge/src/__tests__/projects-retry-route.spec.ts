@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   mmApi: vi.fn(),
   provisionProjectRepo: vi.fn(),
   reconcileActivityPair: vi.fn(),
+  setProjectAgentEnabled: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -114,6 +115,10 @@ vi.mock("../lib/activityPair.js", () => ({
   reconcileActivityPair: (...args: unknown[]) => h.reconcileActivityPair(...args),
 }));
 
+vi.mock("../lib/project-agent-service.js", () => ({
+  setProjectAgentEnabled: (...args: unknown[]) => h.setProjectAgentEnabled(...args),
+}));
+
 vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
 }));
@@ -161,6 +166,7 @@ beforeEach(() => {
   });
   h.provisionProjectRepo.mockReset().mockResolvedValue(null);
   h.reconcileActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
+  h.setProjectAgentEnabled.mockReset().mockResolvedValue({ status: 200, body: { success: true } });
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
@@ -184,7 +190,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       type: "P",
     });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
-    expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "agent-mm" });
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "agent-mm" });
+    expect(h.setProjectAgentEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: "owner-1", workspaceId: "mira" }),
+      "orbit",
+      true,
+    );
     expect(h.reconcileActivityPair).toHaveBeenCalledWith(
       expect.objectContaining({
         channelDocPath: "workspaces/mira/projects/orbit/channels/general",

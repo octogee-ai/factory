@@ -62,6 +62,7 @@ export interface CentralReleaseAuthorityCoordinates {
     project: string;
     location: string;
     repository: string;
+    releaseRecordBucket?: string;
 }
 /** Injectable so the generator/authority contract can be exercised without
  *  Application Default Credentials — CI has none, and a contract test must not

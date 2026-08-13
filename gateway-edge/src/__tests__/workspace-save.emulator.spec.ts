@@ -123,7 +123,7 @@ beforeEach(async () => {
   mockGithubPut.mockReset();
   mockReadConnectorAccessToken.mockReset();
   mockReadConnectorAccessToken.mockImplementation(async (uid: string) =>
-    uid === ALICE_UID ? "gh-tok" : null,
+    uid === ALICE_UID ? "gh-owner-tok" : uid === BOB_UID ? "gh-member-tok" : null,
   );
   await seedAll();
 });
@@ -219,7 +219,7 @@ describe("POST /api/workspace/save — gitea targets", () => {
 });
 
 describe("POST /api/workspace/save — github targets (brokered, allowlisted)", () => {
-  it("saves a flat note via the owner-brokered token with the editing member as author", async () => {
+  it("saves a flat note via the member's token with the editing member as author", async () => {
     mockGithubGet.mockRejectedValue(new Error("GitHub API 404"));
     mockGithubPut.mockResolvedValue({ content: { sha: "gh-sha-1" } });
 
@@ -234,8 +234,8 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
     const [owner, repo, path, token, body] = mockGithubPut.mock.calls[0] as [
       string, string, string, string, Record<string, unknown>,
     ];
-    expect([owner, repo, path, token]).toEqual(["octogee-ai", "octogee", "notes/wild-card.md", "gh-tok"]);
-    expect(mockReadConnectorAccessToken).toHaveBeenCalledWith(ALICE_UID, "github", {
+    expect([owner, repo, path, token]).toEqual(["octogee-ai", "octogee", "notes/wild-card.md", "gh-member-tok"]);
+    expect(mockReadConnectorAccessToken).toHaveBeenCalledWith(BOB_UID, "github", {
       kind: "project",
       requestingUid: BOB_UID,
       workspaceSlug: "alice",
@@ -313,14 +313,15 @@ describe("POST /api/workspace/save — github targets (brokered, allowlisted)", 
     expect(res.body.code).toBe("PATH_NOT_WRITABLE");
   });
 
-  it("422s when the owner has not connected GitHub", async () => {
+  it("422s when a project member has not connected GitHub", async () => {
+    mockReadConnectorAccessToken.mockResolvedValue(null);
     const res = await request(app)
       .post("/api/workspace/save")
       .set(await authHeader(BOB_UID))
       .send({ slug: "carl", project: "ghost", path: "notes/x.md", content: "x" });
 
     expect(res.status).toBe(422);
-    expect(res.body.reason).toBe("owner_github_not_connected");
+    expect(res.body.reason).toBe("caller_github_not_connected");
   });
 });
 
@@ -389,7 +390,7 @@ describe("workspace targets — member access, brokered through the owner's toke
     expect(mockGiteaApiAs.mock.calls[0][0]).toBe("ws-alice");
   });
 
-  it("marks the canvas home writable for a member but other paths read-only", async () => {
+  it("lets a member read the canvas home but denies other owner files", async () => {
     mockGiteaApiAs.mockResolvedValue({
       content: Buffer.from("x", "utf8").toString("base64"),
       sha: "s",
@@ -401,12 +402,49 @@ describe("workspace targets — member access, brokered through the owner's toke
       .set(await authHeader(BOB_UID));
     expect(home.status).toBe(200);
     expect(home.body.writable).toBe(true);
+    const callsAfterHome = mockGiteaApiAs.mock.calls.length;
 
     const other = await request(app)
       .get("/api/workspace/file?slug=alice&path=docs/plan.md")
       .set(await authHeader(BOB_UID));
-    expect(other.status).toBe(200);
-    expect(other.body.writable).toBe(false);
+    expect(other.status).toBe(403);
+    expect(other.body).toEqual({ error: "Access denied" });
+    expect(mockGiteaApiAs).toHaveBeenCalledTimes(callsAfterHome);
+  });
+
+  it("does not reveal arbitrary owner files in a member's root listing", async () => {
+    mockGiteaApiAs.mockImplementation(async (_sudo, _org, apiPath) => {
+      if (String(apiPath).endsWith("/contents")) {
+        return [
+          { name: "README.md", path: "README.md", type: "file", size: 1 },
+          { name: "notes", path: "notes", type: "dir", size: 0 },
+          { name: "src", path: "src", type: "dir", size: 0 },
+          { name: "owner-secret.txt", path: "owner-secret.txt", type: "file", size: 1 },
+        ];
+      }
+      throw new Error("Gitea API 404");
+    });
+
+    const res = await request(app)
+      .get("/api/workspace/files?slug=alice")
+      .set(await authHeader(BOB_UID));
+
+    expect(res.status).toBe(200);
+    expect(res.body.files.map((file: { path: string }) => file.path)).toEqual(["notes", "README.md"]);
+  });
+
+  it("denies member traversal and commit lookups outside the shared knowledge paths", async () => {
+    const list = await request(app)
+      .get("/api/workspace/files?slug=alice&path=src")
+      .set(await authHeader(BOB_UID));
+    const commits = await request(app)
+      .post("/api/workspace/files/commits?slug=alice")
+      .set(await authHeader(BOB_UID))
+      .send({ entries: [{ path: "owner-secret.txt", source: "git" }] });
+
+    expect(list.status).toBe(403);
+    expect(commits.status).toBe(403);
+    expect(mockGiteaApiAs).not.toHaveBeenCalled();
   });
 
   it("saves a member's note through the owner's token with the member as author", async () => {

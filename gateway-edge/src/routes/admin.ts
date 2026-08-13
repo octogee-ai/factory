@@ -63,6 +63,7 @@ export function centralReleaseRouteDeps(
         project: "octogee",
         location: "us-central1",
         repository: "octogee",
+        releaseRecordBucket: "octogee-release-records",
       }),
     };
   }
@@ -73,6 +74,7 @@ export function centralReleaseRouteDeps(
         project: "octogee",
         location: "us-central1",
         repository: "octogee",
+        releaseRecordBucket: "octogee-release-records",
       }),
     };
   }

@@ -154,7 +154,12 @@ export function createTenantBindingMiddleware(
     if (mapped.attached) {
       req.boundTenant =
         mapped.tenant.kind === "gateway" && review.podName && review.podUid
-          ? { ...mapped.tenant, podName: review.podName, podUid: review.podUid }
+          ? {
+              ...mapped.tenant,
+              saName: review.saName,
+              podName: review.podName,
+              podUid: review.podUid,
+            }
           : mapped.tenant;
     } else if (mapped.result !== "shared_gateway") {
       warn(logger, "service account did not map to a tenant", {

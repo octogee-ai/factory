@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internalFetch } from "../lib/internal-fetch.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 
 vi.mock("../lib/internal-fetch.js", () => ({ internalFetch: vi.fn() }));
 
@@ -52,17 +53,37 @@ describe("fleet broker system config status", () => {
     ));
 
     await expect(
-      createFleetBrokerClient("bender", "bender-r9").configuredBuilderBootstrap("alice"),
+      createFleetBrokerClient("bender", "bender-r9", {
+        gatewayCredentialHeaders: async () => ({
+          [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
+        }),
+      }).configuredBuilderBootstrap("alice"),
     ).resolves.toEqual(bootstrap);
     expect(internalFetch).toHaveBeenCalledWith(
       "http://broker/internal/fleet/configured-builder-bootstrap",
       expect.objectContaining({
         method: "POST",
+        headers: expect.objectContaining({
+          [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
+        }),
         body: JSON.stringify({
           gatewayId: "bender",
           revisionId: "bender-r9",
           slug: "alice",
         }),
+      }),
+    );
+  });
+
+  it("requests per-customer project coach membership reconciliation", async () => {
+    await createFleetBrokerClient("bender", "bender-r9")
+      .reconcileProjectCoachMembership("uid-alice");
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      "http://broker/internal/fleet/reconcile-project-coach-membership",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ gatewayId: "bender", uid: "uid-alice" }),
       }),
     );
   });

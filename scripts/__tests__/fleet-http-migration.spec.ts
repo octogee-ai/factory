@@ -1459,6 +1459,7 @@ describe("queued-rsync migration control handlers", () => {
     const body: PrepareRsyncImportRequestBody = {
       migrationId: "mig-rsync",
       slug: "chris",
+      rpcPhase: "prepare-rsync-import",
       mode: "pre",
       transferUser: "migration",
       transferKey: "a".repeat(64),
@@ -1498,14 +1499,25 @@ describe("queued-rsync migration control handlers", () => {
     expect(config).toContain(`lock file = ${configPath.replace(/rsyncd\.conf$/, "rsyncd.lock")}`);
     expect(config).toContain(`  hosts allow = ${SOURCE_POD_IP}`);
 
+    const abortHandler = createAbortRsyncImportHandler(mkDeps({ adapter }));
+    const replayedPrepare = mkResponse();
+    await abortHandler(
+      mkRequest(body, { signature: sig }),
+      replayedPrepare.res,
+      vi.fn(),
+    );
+    expect(replayedPrepare.getStatus()).toBe(400);
+    expect(replayedPrepare.getBody()).toEqual({ error: "invalid rsync RPC phase" });
+    expect(daemon.kill).not.toHaveBeenCalled();
+
     const abortBody: AbortRsyncImportRequestBody = {
       migrationId: "mig-rsync",
       slug: "chris",
+      rpcPhase: "abort-rsync-import",
       mode: "pre",
     };
     const abortRaw = JSON.stringify(abortBody);
     const abortSig = signFleetRequest(PRIVATE_KEY, abortBody.migrationId, abortRaw);
-    const abortHandler = createAbortRsyncImportHandler(mkDeps({ adapter }));
     const abortReq = mkRequest(abortBody, { signature: abortSig });
     const abortRes = mkResponse();
     await abortHandler(abortReq, abortRes.res, vi.fn());
@@ -1529,6 +1541,7 @@ describe("queued-rsync migration control handlers", () => {
     const interrupted: PrepareRsyncImportRequestBody = {
       migrationId: "surge-default-b-target",
       slug: "smoke-dave-smoke",
+      rpcPhase: "prepare-rsync-import",
       mode: "pre",
       transferUser: "migration",
       transferKey: "a".repeat(64),
@@ -1614,6 +1627,7 @@ describe("queued-rsync migration control handlers", () => {
     const body: PushRsyncStateRequestBody = {
       migrationId: "mig-rsync",
       slug: "chris",
+      rpcPhase: "push-rsync-state",
       mode: "final",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
@@ -1656,6 +1670,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-finish",
       slug: "chris",
+      rpcPhase: "prepare-rsync-import",
       mode: "final",
       transferUser: "migration",
       transferKey: "c".repeat(64),
@@ -1692,6 +1707,7 @@ describe("queued-rsync migration control handlers", () => {
     const finishBody: FinishRsyncImportRequestBody = {
       migrationId: "mig-finish",
       slug: "chris",
+      rpcPhase: "finish-rsync-import",
       mode: "final",
     };
     const finishRaw = JSON.stringify(finishBody);
@@ -1731,6 +1747,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-keys-exit",
       slug: "chris",
+      rpcPhase: "prepare-rsync-import",
       mode: "keys",
       transferUser: "migration",
       transferKey: "d".repeat(64),
@@ -1746,6 +1763,7 @@ describe("queued-rsync migration control handlers", () => {
     const finishBody: FinishRsyncImportRequestBody = {
       migrationId: "mig-keys-exit",
       slug: "chris",
+      rpcPhase: "finish-rsync-import",
       mode: "keys",
     };
     const finishRaw = JSON.stringify(finishBody);
@@ -1823,6 +1841,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     const body: PushRsyncStateRequestBody = {
       migrationId,
       slug: "chris",
+      rpcPhase: "push-rsync-state",
       mode: "pre",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
@@ -1904,6 +1923,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     const body: PrepareRsyncImportRequestBody = {
       migrationId: input.migrationId,
       slug: "chris",
+      rpcPhase: "prepare-rsync-import",
       mode: "final",
       transferUser: "migration",
       transferKey: "c".repeat(64),
@@ -1927,7 +1947,12 @@ describe("agent sqlite stores across an rsync carry", () => {
     deps: MigrationHandlerDeps,
     migrationId: string,
   ): Promise<ReturnType<typeof mkResponse>> {
-    const body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", mode: "final" };
+    const body: FinishRsyncImportRequestBody = {
+      migrationId,
+      slug: "chris",
+      rpcPhase: "finish-rsync-import",
+      mode: "final",
+    };
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(
       mkRequest(body, {

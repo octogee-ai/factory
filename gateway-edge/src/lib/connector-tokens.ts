@@ -1,4 +1,5 @@
 import { FieldValue } from "firebase-admin/firestore";
+import { gatewayCredentialHeaders } from "@octogee/core/internal-fetch";
 import { db } from "./db.js";
 import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
@@ -101,7 +102,10 @@ async function readConnectorAccessTokenViaBroker(
     `${trimBaseUrl(baseUrl)}/internal/connectors/access-token`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...await gatewayCredentialHeaders(),
+      },
       body: JSON.stringify({
         gatewayId,
         ...(uid ? { uid } : {}),

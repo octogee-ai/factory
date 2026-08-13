@@ -344,4 +344,14 @@ resource "google_project_iam_member" "firebase_deployer_secret_binding" {
   project = var.project_id
   role    = google_project_iam_custom_role.firebase_deployer_secret_binding.id
   member  = "serviceAccount:${google_service_account.firebase_deployer.email}"
+
+  condition {
+    title      = "function_secret_policy_binding"
+    expression = <<-EOT
+      resource.name == "projects/${data.google_project.this.number}/secrets/DISCORD_OPS_WEBHOOK_URL" ||
+      resource.name.startsWith("projects/${data.google_project.this.number}/secrets/DISCORD_OPS_WEBHOOK_URL/versions/") ||
+      resource.name == "projects/${data.google_project.this.number}/secrets/SOCIAL_NOTIFICATION_BEARER_TOKEN" ||
+      resource.name.startsWith("projects/${data.google_project.this.number}/secrets/SOCIAL_NOTIFICATION_BEARER_TOKEN/versions/")
+    EOT
+  }
 }

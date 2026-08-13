@@ -23,6 +23,9 @@ function eligibleConfiguredBuilderGateway(value, input) {
     if (gateway === null)
         return null;
     if (!podBelongsToGateway(input.gatewayId, input.podName) ||
+        gateway.desiredStatus !== "running" ||
+        gateway.retireAfter != null ||
+        gateway.retirementClaim != null ||
         gateway.gatewayClass === "shared" ||
         gateway.builderSlug !== input.slug) {
         return null;

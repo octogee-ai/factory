@@ -155,7 +155,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
     args: "<version> [--sha=<sha>] [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
     description:
-      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, verifies immutable aliases, records the TEST marker, cuts the selected shared or all-gateway desired releases, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
+      "Resolves an explicit source SHA (defaulting to the local HEAD), then sends one Admin API request. The server reads the exact CENTRAL digest manifest, cuts the selected shared or all-gateway desired releases, records the immutable TEST authorization, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test release cut v0.4.0",
       "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",

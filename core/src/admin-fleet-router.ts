@@ -3222,11 +3222,9 @@ function centralReleaseAliasPlans(input: {
   version: string;
   includeTestRecord: boolean;
 }): OperationAuditAliasPlan[] {
-  const aliases = input.authority.aliasesFor(input.manifest);
-  if (input.includeTestRecord) {
-    aliases.push(input.authority.testRecordAlias(input.version, input.manifest));
-  }
-  return aliases;
+  return input.includeTestRecord
+    ? [input.authority.testRecordAlias(input.version, input.manifest)]
+    : input.authority.aliasesFor(input.manifest);
 }
 
 type CentralReleaseMutationResult = {
@@ -6762,17 +6760,7 @@ router.post(
               imageTag: payload.imageTag,
             }),
             action: async () => {
-              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
-              try {
-                aliasOutcomes = await authority.ensureAliases(
-                  authority.aliasesFor(manifest),
-                );
-              } catch (error) {
-                return {
-                  aliasOutcomes: aliasOutcomesFromError(error),
-                  failure: { error, failedStep: "aliases" },
-                };
-              }
+              const aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
               try {
                 await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
               } catch (error) {

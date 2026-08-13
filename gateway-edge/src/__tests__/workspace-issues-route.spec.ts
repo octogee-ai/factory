@@ -178,6 +178,24 @@ describe("workspace issues route", () => {
     expect(res.body).toEqual({ issue: { number: 2, title: "New", labels: ["status:todo"], state: "open" } });
   });
 
+  it("passes a GitHub project member's caller-bound token to issue mutations", async () => {
+    h.target = target({
+      provider: "github",
+      org: "octogee-ai",
+      repoName: "rocket",
+      githubToken: "gh-member-token",
+      sudoUser: undefined,
+      brokered: true,
+    });
+
+    await request(app()).post("/api/workspace/issues").send({ title: "Member issue" }).expect(201);
+
+    expect(h.createIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ githubToken: "gh-member-token" }),
+      expect.objectContaining({ title: "Member issue" }),
+    );
+  });
+
   it("validates move input before calling the provider", async () => {
     await request(app()).patch("/api/workspace/issues/0/move").send({ status: "doing" }).expect(400, {
       error: "Invalid issue number",

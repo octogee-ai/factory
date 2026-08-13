@@ -44,12 +44,19 @@ WORKDIR /octogee/scripts
 RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
-COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
-RUN chmod 755 /octogee/scripts/secret-resolver.mjs
+COPY --chown=root:root scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
+RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
+      --bundle --platform=node --format=esm \
+      --outfile=/tmp/octogee-secret-resolver.mjs \
+    && cp /tmp/octogee-secret-resolver.mjs /octogee/scripts/secret-resolver.mjs \
+    && rm /tmp/octogee-secret-resolver.mjs \
+    && chown root:root /octogee/scripts \
+    && chmod 755 /octogee/scripts \
+    && chmod 555 /octogee/scripts/secret-resolver.mjs
 
 # ── Canonical identity module (imported via ../../shared/types/identity.js) ──
 # scripts/tsconfig.json rootDir is ".." so it expects shared/ at a sibling
@@ -159,6 +166,7 @@ ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation
+ENV OPENCLAW_OFFLINE=1
 
 # Build SHA — injected by Cloud Build via --build-arg
 ARG BUILD_SHA=unknown
