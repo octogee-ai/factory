@@ -408,6 +408,13 @@ describe("migration activation manifest", () => {
     const missing = await applyWith([]);
     expect(missing.events).toEqual(["activation:alice-coach", "configPatch"]);
     expect(missing.result.routingActivationRequired).toBe(true);
+    expect(missing.result.restartExistingAccountIds).toEqual([]);
+
+    const existingAccount = await applyWith([], {
+      "alice-coach": { botToken: "stale-secret-ref" },
+    });
+    expect(existingAccount.result.routingActivationRequired).toBe(true);
+    expect(existingAccount.result.restartExistingAccountIds).toEqual(["alice-coach"]);
 
     const present = await applyWith([accountBinding]);
     expect(present.events).toEqual(["configPatch"]);
@@ -439,6 +446,7 @@ describe("migration activation manifest", () => {
     );
     expect(retired.events).toEqual(["activation:mike-coach", "configPatch"]);
     expect(retired.result.routingActivationRequired).toBe(true);
+    expect(retired.result.restartExistingAccountIds).toEqual(["mike-coach"]);
     expect(retired.rpc.configPatch.mock.calls[0]?.[0]).toMatchObject({
       bindings: [accountBinding],
     });

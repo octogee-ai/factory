@@ -299,6 +299,7 @@ describe("customer lifecycle config patch agent directories", () => {
         agentId,
         removedBindings: 0,
       }));
+      const channelsStop = vi.fn(async () => ({ ok: true as const }));
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
         rpc: {
@@ -307,6 +308,12 @@ describe("customer lifecycle config patch agent directories", () => {
             hash: "cfg-hash",
           })),
           agentsDelete,
+          channelsStatus: vi.fn(async () => ({
+            channelAccounts: {
+              mattermost: [{ accountId: "alice-coach", running: true }],
+            },
+          })),
+          channelsStop,
         } as unknown as GatewayRpcClient,
         log: vi.fn(),
       });
@@ -314,6 +321,10 @@ describe("customer lifecycle config patch agent directories", () => {
       await adapter.removeImportedCustomerBySlug("alice");
 
       expect(agentsDelete).toHaveBeenCalledWith({ agentId: "octogee-alice-coach", deleteFiles: false });
+      expect(channelsStop).toHaveBeenCalledWith({
+        channel: "mattermost",
+        accountId: "alice-coach",
+      });
       expect(fsSync.existsSync(customerDir)).toBe(false);
       expect(fsSync.existsSync(customerKey)).toBe(true);
     });

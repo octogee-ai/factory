@@ -173,7 +173,7 @@ describe("Mattermost routing activation", () => {
       { "ceckert-coach": 100 },
     );
     const rpc = channelOperationRpc(
-      ["ceckert-coach"],
+      ["ceckert-coach", "unrelated-coach"],
       vi.fn(async () => ({
         channelAccounts: { mattermost: [
           {
@@ -182,12 +182,18 @@ describe("Mattermost routing activation", () => {
             connected: true,
             lastStartAt: 101,
           },
+          {
+            accountId: "unrelated-coach",
+            running: true,
+            connected: true,
+            lastStartAt: 200,
+          },
         ] },
       })),
     );
 
     await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
-      restartAfterConfigNoop: true,
+      restartConfiguredPending: true,
       sleep: async () => undefined,
     });
 
@@ -195,6 +201,8 @@ describe("Mattermost routing activation", () => {
       channel: "mattermost",
       accountId: "ceckert-coach",
     });
+    expect(rpc.channelsStop).toHaveBeenCalledOnce();
+    expect(rpc.channelsStart).toHaveBeenCalledOnce();
     expect(rpc.channelsStart).toHaveBeenCalledWith({
       channel: "mattermost",
       accountId: "ceckert-coach",
@@ -218,7 +226,7 @@ describe("Mattermost routing activation", () => {
 
     await expect(
       activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
-        restartAfterConfigNoop: true,
+        restartAccountIds: ["ceckert-coach"],
         sleep: async () => undefined,
       }),
     ).rejects.toThrow("Mattermost account restart failed");

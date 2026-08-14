@@ -71,7 +71,7 @@ const routingActivationMocks = vi.hoisted(() => ({
     }
     if (params.required || params.configNoop) {
       await routingActivationMocks.activate(rpc, openclawDir, log, {
-        restartAfterConfigNoop: params.configNoop,
+        restartAccountIds: params.configNoop ? params.accountIds : [],
       });
     }
   }),
@@ -291,6 +291,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     mocks.applyOpenClawActivationManifest.mockResolvedValue({
       elapsedMs: 42,
       routingActivationRequired: true,
+      restartExistingAccountIds: [],
     });
     mocks.removeActivationManifest.mockResolvedValue(undefined);
   });
@@ -392,6 +393,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       rpc,
       expect.stringContaining(".openclaw"),
       expect.any(Function),
+      { restartAccountIds: [], restartConfiguredPending: false },
     );
     expect(rpc.secretsReload).toHaveBeenCalledOnce();
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
@@ -451,6 +453,83 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).not.toHaveBeenCalled();
+    expect(rpc.secretsReload).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries unresolved secrets before restarting a pre-existing imported account", async () => {
+    const events: string[] = [];
+    mocks.applyOpenClawActivationManifest
+      .mockImplementationOnce(async (_manifest, options) => {
+        options.onRoutingActivationRequired?.(["tester10-coach"]);
+        return {
+          elapsedMs: 42,
+          routingActivationRequired: true,
+          restartExistingAccountIds: ["tester10-coach"],
+        };
+      });
+    routingActivationMocks.activate.mockImplementationOnce(async (_rpc, _dir, _log, options) => {
+      events.push(options?.restartAccountIds?.join(",") ?? "activate");
+      routingActivationMocks.pending = false;
+    });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          events.push("reload-unresolved");
+          return { ok: true, warningCount: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          events.push("reload-resolved");
+          return { ok: true, warningCount: 0 };
+        }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+      appliedFingerprint: "fp-tester10",
+    });
+
+    expect(events).toEqual(["reload-unresolved", "reload-resolved", "tester10-coach"]);
+    expect(routingActivationMocks.activate).toHaveBeenCalledWith(
+      rpc,
+      expect.stringContaining(".openclaw"),
+      expect.any(Function),
+      { restartAccountIds: ["tester10-coach"], restartConfiguredPending: false },
+    );
+  });
+
+  it("restarts every still-pending account when replay finds the config already patched", async () => {
+    routingActivationMocks.pending = true;
+    mocks.applyOpenClawActivationManifest.mockResolvedValueOnce({
+      elapsedMs: 42,
+      routingActivationRequired: false,
+      restartExistingAccountIds: [],
+    });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(routingActivationMocks.activate).toHaveBeenCalledWith(
+      rpc,
+      expect.stringContaining(".openclaw"),
+      expect.any(Function),
+      { restartAccountIds: [], restartConfiguredPending: true },
+    );
   });
 
   it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
@@ -762,6 +841,7 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
   beforeEach(() => {
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
+    routingActivationMocks.stopStale.mockClear();
   });
 
   // 2026.7.2 refuses any config write whose canonical roster drops entries
@@ -815,6 +895,32 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     expect(patch).not.toHaveProperty("bindings");
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigReplacePaths(current, "alice"),
+    );
+    expect(routingActivationMocks.stopStale).toHaveBeenCalledWith(
+      rpc,
+      {
+        currentSlug: "alice",
+        desiredAccountIds: [],
+        evictionSlugs: [],
+      },
+      expect.any(Function),
+    );
+  });
+
+  it("waits for config.changed before stopping the removed account monitor", async () => {
+    const current = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    const configPatchAndWaitForChange = vi.fn(async () => ({ hash: "h2", config: {} }));
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) =>
+      options.rpc.configPatch({}, "h1")
+    );
+
+    await adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach");
+
+    expect(configPatchAndWaitForChange).toHaveBeenCalledWith({}, "h1", undefined);
+    expect(configPatchAndWaitForChange.mock.invocationCallOrder[0]).toBeLessThan(
+      routingActivationMocks.stopStale.mock.invocationCallOrder[0]!,
     );
   });
 

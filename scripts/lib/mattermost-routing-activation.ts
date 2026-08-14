@@ -347,6 +347,22 @@ async function restartMattermostAccounts(
   }
 }
 
+async function pendingAccountsToRestart(
+  rpc: GatewayRpcClient,
+  accountIds: readonly string[],
+  restartAccountIds: readonly string[],
+  restartConfiguredPending: boolean,
+): Promise<string[]> {
+  const requested = new Set(restartAccountIds);
+  if (restartConfiguredPending) {
+    const configured = await configuredMattermostAccountIds(rpc);
+    for (const accountId of accountIds) {
+      if (configured.has(accountId)) requested.add(accountId);
+    }
+  }
+  return accountIds.filter((accountId) => requested.has(accountId));
+}
+
 export async function stopStaleMattermostRoutingAccounts(
   rpc: GatewayRpcClient,
   params: {
@@ -410,7 +426,7 @@ export async function activateMattermostRoutingAfterConfigPatch(
   }
   if (!required) return;
   await activatePendingMattermostRouting(rpc, openclawDir, log, {
-    restartAfterConfigNoop: params.configNoop,
+    restartAccountIds: params.configNoop ? params.accountIds : [],
   });
 }
 
@@ -423,7 +439,8 @@ export async function activatePendingMattermostRouting(
     sleep?: (ms: number) => Promise<void>;
     timeoutMs?: number;
     accountAbsenceGraceMs?: number;
-    restartAfterConfigNoop?: boolean;
+    restartAccountIds?: readonly string[];
+    restartConfiguredPending?: boolean;
   } = {},
 ): Promise<void> {
   const now = options.now ?? Date.now;
@@ -454,8 +471,14 @@ export async function activatePendingMattermostRouting(
       if (clearPendingActivation(openclawDir, pending)) return;
       continue;
     }
-    if (options.restartAfterConfigNoop === true) {
-      await restartMattermostAccounts(rpc, pending, accountIds, log);
+    const accountsToRestart = await pendingAccountsToRestart(
+      rpc,
+      accountIds,
+      options.restartAccountIds ?? [],
+      options.restartConfiguredPending === true,
+    );
+    if (accountsToRestart.length > 0) {
+      await restartMattermostAccounts(rpc, pending, accountsToRestart, log);
     }
     await confirmRoutingActivation(
       rpc,

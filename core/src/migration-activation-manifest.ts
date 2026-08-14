@@ -471,9 +471,14 @@ export async function applyOpenClawActivationManifest(
     log: (msg: string) => void;
     onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
   },
-): Promise<{ elapsedMs: number; routingActivationRequired: boolean }> {
+): Promise<{
+  elapsedMs: number;
+  routingActivationRequired: boolean;
+  restartExistingAccountIds: string[];
+}> {
   const startedAt = Date.now();
   let routingActivationRequired = false;
+  let restartExistingAccountIds: string[] = [];
   await applyConfigPatch(
     {
       buildPatch: (current) => {
@@ -491,10 +496,16 @@ export async function applyOpenClawActivationManifest(
             targetUsesKeyedEntries,
           ),
         }));
+        const currentAccounts = (current as {
+          channels?: { mattermost?: { accounts?: Record<string, unknown> } };
+        } | undefined)?.channels?.mattermost?.accounts ?? {};
         const missingAccountIds = accountBindingsNeedingActivation(
           currentBindings,
           activationAgents.flatMap((entry) => entry.bindings),
         );
+        restartExistingAccountIds = missingAccountIds
+          .filter((accountId) => isRecord(currentAccounts[accountId]))
+          .sort();
         if (missingAccountIds.length > 0 && !routingActivationRequired) {
           opts.onRoutingActivationRequired?.(missingAccountIds);
           routingActivationRequired = true;
@@ -549,5 +560,9 @@ export async function applyOpenClawActivationManifest(
       totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
     },
   );
-  return { elapsedMs: Date.now() - startedAt, routingActivationRequired };
+  return {
+    elapsedMs: Date.now() - startedAt,
+    routingActivationRequired,
+    restartExistingAccountIds,
+  };
 }

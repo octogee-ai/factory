@@ -52,4 +52,5 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
 }): Promise<{
     elapsedMs: number;
     routingActivationRequired: boolean;
+    restartExistingAccountIds: string[];
 }>;

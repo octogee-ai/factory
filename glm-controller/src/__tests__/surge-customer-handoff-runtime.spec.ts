@@ -220,6 +220,78 @@ describe("surge handoff direct pod transport", () => {
     ]);
   });
 
+  it("retries signed target cleanup once after a structured config hash race", async () => {
+    let attempts = 0;
+    const log = vi.fn();
+    const fetch = vi.fn(async () => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response(JSON.stringify({
+          error: "unmount failed",
+          message: "config changed",
+          code: "hash-mismatch",
+        }), { status: 500 })
+        : new Response(JSON.stringify({ unmounted: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log,
+    });
+
+    await expect(transport.discardTargetCustomer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      targetPod: target,
+    })).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("retrying signed unmount once"));
+  });
+
+  it("does not retry target cleanup after an unstructured or permanent failure", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      error: "unmount failed",
+      message: "account removal rejected",
+      code: "invalid-patch",
+    }), { status: 500 })) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.discardTargetCustomer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      targetPod: target,
+    })).rejects.toThrow("invalid-patch");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("stops after the single bounded retry when the config hash keeps racing", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      error: "unmount failed",
+      message: "config changed",
+      code: "hash-mismatch",
+    }), { status: 500 })) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.discardTargetCustomer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      targetPod: target,
+    })).rejects.toThrow("hash-mismatch");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a latched runtime as booting when the live OpenClaw probe is down", async () => {
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);

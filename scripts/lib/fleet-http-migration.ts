@@ -71,6 +71,7 @@ import {
   readSystemConfigWatchFenceGeneration,
 } from "./system-config-watch-state.js";
 import { OPENCLAW_DIR } from "./config.js";
+import { OpenclawWireError } from "./gateway-rpc.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
@@ -2096,7 +2097,11 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ unmount migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
-      res.status(500).json({ error: "unmount failed", message });
+      res.status(500).json({
+        error: "unmount failed",
+        message,
+        ...(err instanceof OpenclawWireError ? { code: err.code } : {}),
+      });
     }
   };
 }

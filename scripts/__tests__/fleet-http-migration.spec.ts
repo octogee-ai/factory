@@ -57,6 +57,7 @@ import {
   writeMountedMarker,
 } from "../lib/local-coach-wired.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
+import { OpenclawWireError } from "../lib/gateway-rpc.js";
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
@@ -1151,6 +1152,32 @@ const adapter = mkAdapter();
     expect(removalPatchApplied).toBe(true);
     expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
     expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured config hash race for the surge controller's bounded retry", async () => {
+    const adapter = mkAdapter({
+      removeImportedCustomerBySlug: vi.fn(async () => {
+        throw new OpenclawWireError("hash-mismatch", "config changed");
+      }),
+    });
+    const handler = createUnmountHandler(mkDeps({
+      adapter,
+      pauseSystemConfigWatch: vi.fn(async () => undefined),
+    }));
+    const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
+    const req = mkRequest(SAMPLE_UNMOUNT, {
+      signature: signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toEqual({
+      error: "unmount failed",
+      message: "config changed",
+      code: "hash-mismatch",
+    });
   });
 });
 

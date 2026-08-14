@@ -335,6 +335,7 @@ export async function removeActivationManifest(openclawDir, slug) {
 export async function applyOpenClawActivationManifest(manifest, opts) {
     const startedAt = Date.now();
     let routingActivationRequired = false;
+    let restartExistingAccountIds = [];
     await applyConfigPatch({
         buildPatch: (current) => {
             const cfg = current;
@@ -345,7 +346,11 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 ...entry,
                 agent: activationAgentForTarget(entry.agent, currentActivationAgent(current, entry.agentId), targetUsesKeyedEntries),
             }));
+            const currentAccounts = current?.channels?.mattermost?.accounts ?? {};
             const missingAccountIds = accountBindingsNeedingActivation(currentBindings, activationAgents.flatMap((entry) => entry.bindings));
+            restartExistingAccountIds = missingAccountIds
+                .filter((accountId) => isRecord(currentAccounts[accountId]))
+                .sort();
             if (missingAccountIds.length > 0 && !routingActivationRequired) {
                 opts.onRoutingActivationRequired?.(missingAccountIds);
                 routingActivationRequired = true;
@@ -381,5 +386,9 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
         log: opts.log,
         totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
     });
-    return { elapsedMs: Date.now() - startedAt, routingActivationRequired };
+    return {
+        elapsedMs: Date.now() - startedAt,
+        routingActivationRequired,
+        restartExistingAccountIds,
+    };
 }

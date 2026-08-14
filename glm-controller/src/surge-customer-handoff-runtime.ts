@@ -36,6 +36,16 @@ interface PodList {
   }>;
 }
 
+class SurgePodControlError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
+  }
+}
+
 export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
   const parsed = JSON.parse(raw) as PodList;
   const observedPodUids: string[] = [];
@@ -156,7 +166,14 @@ function podBaseUrl(pod: SurgePod): string {
 
 async function responseJson(response: Response, context: string): Promise<Record<string, unknown>> {
   const text = await response.text();
-  if (!response.ok) throw new Error(`${context}: ${response.status} ${text}`);
+  if (!response.ok) {
+    let code: string | null = null;
+    try {
+      const body = JSON.parse(text) as { code?: unknown };
+      if (typeof body.code === "string") code = body.code;
+    } catch {}
+    throw new SurgePodControlError(`${context}: ${response.status} ${text}`, response.status, code);
+  }
   try {
     return JSON.parse(text) as Record<string, unknown>;
   } catch {
@@ -333,10 +350,27 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async discardTargetCustomer({ gatewayId, slug, operationId, targetPod }) {
-      await control(targetPod, gatewayId, "unmount", operationId, {
-        migrationId: operationId,
-        slug,
-      });
+      const unmount = () => control(
+        targetPod,
+        gatewayId,
+        "unmount",
+        operationId,
+        {
+          migrationId: operationId,
+          slug,
+        },
+      );
+      try {
+        await unmount();
+      } catch (error) {
+        if (!(error instanceof SurgePodControlError) || error.code !== "hash-mismatch") {
+          throw error;
+        }
+        opts.log(
+          `[surge-handoff] target cleanup lost config CAS pod=${targetPod.name} slug=${slug}; retrying signed unmount once`,
+        );
+        await unmount();
+      }
     },
 
     async releaseTarget({ gatewayId, operationId, pod }) {

@@ -147,6 +147,7 @@ import {
   captureMattermostRoutingActivationBaseline,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
+  stopStaleMattermostRoutingAccounts,
 } from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 
@@ -566,17 +567,27 @@ async function captureRoutingActivationBaseline(
 }
 
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
-  const result = await ctx.rpc.secretsReload();
-  const warningCount = result.warningCount ?? 0;
-  if (result.ok !== true) {
-    throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
-  }
-  if (warningCount !== 0) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const result = await ctx.rpc.secretsReload();
+    const warningCount = result.warningCount ?? 0;
+    if (result.ok !== true) {
+      throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
+    }
+    if (warningCount === 0) {
+      ctx.log(`${logPrefix} secrets.reload complete`);
+      return;
+    }
+    if (attempt < 2) {
+      ctx.log(
+        `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}; retrying`,
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      continue;
+    }
     throw new Error(
       `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}`,
     );
   }
-  ctx.log(`${logPrefix} secrets.reload complete`);
 }
 
 async function requiredCoachMattermostAccount(
@@ -809,7 +820,7 @@ async function applyRemoveCustomerConfigPatch(
         logPrefix: `[remove:${slug}]`,
       },
       {
-        rpc: ctx.rpc,
+        rpc: convergedConfigRpc(ctx),
         cache: ctx.configCache,
         totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
         maxRetries: 1,
@@ -820,6 +831,13 @@ async function applyRemoveCustomerConfigPatch(
   const remaining = currentEvictionBatch
     ? [...new Set(await currentEvictionBatch())].filter((batchSlug) => slugs.includes(batchSlug))
     : slugs;
+  if (remaining.length > 0) {
+    await stopStaleMattermostRoutingAccounts(ctx.rpc, {
+      currentSlug: remaining[0]!,
+      desiredAccountIds: [],
+      evictionSlugs: remaining.slice(1),
+    }, ctx.log);
+  }
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     remove: remaining.map((batchSlug) => `${batchSlug}-coach`),
     removePrefixes: remaining.map((batchSlug) => `${batchSlug}-proj-`),
@@ -1074,14 +1092,18 @@ async function activateImportedCustomer(
     },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
   if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
     await activatePendingMattermostRouting(
       ctx.rpc,
       OPENCLAW_DIR,
       ctx.log,
+      {
+        restartAccountIds: patch.restartExistingAccountIds ?? [],
+        restartConfiguredPending: patch.routingActivationRequired === false,
+      },
     );
   }
-  await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
   await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
 
   ctx.log(
