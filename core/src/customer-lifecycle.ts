@@ -311,9 +311,9 @@ export interface AddCustomerResult {
   steps: AddCustomerStep[];
   appliedFingerprint?: string;
   // Active projects whose pod checkout is STILL absent after this converge. Non-empty means
-  // the converge did not reach desired state, so the caller must not record its fingerprint
-  // as applied: doing so marks the customer clean and strands the checkout — and with it the
-  // project agent's whole workspace — until unrelated drift moves the fingerprint again.
+  // the converge did not reach desired state, so the caller must not record its real
+  // fingerprint as applied — it parks the customer on the pending-clone marker instead, which
+  // keeps the checkout retried (checkout-only, no re-attach) until it lands.
   pendingProjectClones: string[];
 }
 
@@ -1053,7 +1053,7 @@ async function reconcileCommunityMembershipIfSupported(
   }
 }
 
-async function cloneMissingProjects(
+export async function cloneMissingProjects(
   adapter: CustomerLifecycleAdapter,
   slug: string,
 ): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {
@@ -1090,7 +1090,7 @@ async function cloneMissingProjects(
   const pending = remaining.map((p) => p.projectSlug).sort();
   if (pending.length > 0) {
     adapter.log(
-      `[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — leaving this customer stale so the next reconcile retries`,
+      `[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — the pending-checkout retry lane re-runs the clone`,
     );
   }
   return { steps, pending };

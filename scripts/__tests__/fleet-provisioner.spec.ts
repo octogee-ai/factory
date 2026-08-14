@@ -13,10 +13,13 @@ import {
   cancelRemovedEviction,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
+  ensureCustomerCheckoutsOnly,
   evictLocalCustomer,
   evictLocalCustomerIfStillUndesired,
   gatewayServiceName,
   finalizeConvergedMount,
+  pendingCloneAppliedFingerprint,
+  pendingCloneOnlyStale,
   settleConvergence,
   selectStableContentStale,
   getEvictObservedSlugs,
@@ -91,15 +94,28 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
     expect(() => settleConvergence(pending(["camp"]), h)).toThrow(/camp/);
   });
 
-  it("withholds the fingerprint and schedules a backed-off retry while a checkout is absent", () => {
+  it("parks the customer on the pending-clone marker and schedules a backed-off retry while a checkout is absent", () => {
     const h = hooks();
     expect(() => settleConvergence(pending(["camp"]), h)).toThrow();
-    expect(h.recordApplied).not.toHaveBeenCalled();
+    expect(h.recordApplied).toHaveBeenCalledWith(
+      "alice",
+      pendingCloneAppliedFingerprint("fp1"),
+    );
     expect(h.rememberRetry).toHaveBeenCalledWith("alice", {
       attempts: 1,
       nextAt: 1_000 + cloneRetryDelayMs(1),
       fingerprint: "fp1",
     });
+  });
+
+  it("never records the real fingerprint while a checkout is absent — the marker stays stale against every real fingerprint", () => {
+    const h = hooks();
+    expect(() => settleConvergence(pending(["camp"]), h)).toThrow();
+    expect(h.recordApplied).not.toHaveBeenCalledWith("alice", "fp1");
+    expect(pendingCloneOnlyStale(pendingCloneAppliedFingerprint("fp1"), "fp1")).toBe(true);
+    expect(pendingCloneOnlyStale(pendingCloneAppliedFingerprint("fp1"), "fp2")).toBe(false);
+    expect(pendingCloneOnlyStale("fp1", "fp1")).toBe(false);
+    expect(pendingCloneOnlyStale(undefined, "fp1")).toBe(false);
   });
 
   it("records the post-attach fingerprint instead of relaunching a newly provisioned customer as stale", () => {
@@ -129,7 +145,7 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
 });
 
 describe("finalizeConvergedMount — the durable mount boundary", () => {
-  it("does not stamp or mark a customer mounted while a project checkout is pending", async () => {
+  it("stamps and marks the completed mount even while a project checkout is pending — the retry must be checkout-only, never a full re-attach", async () => {
     const stampMounted = vi.fn(async () => undefined);
     const writeMountMarker = vi.fn();
     const hooks = {
@@ -151,11 +167,15 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
     })).rejects.toThrow(/camp/);
 
     expect(hooks.rememberRetry).toHaveBeenCalledOnce();
-    expect(stampMounted).not.toHaveBeenCalled();
-    expect(writeMountMarker).not.toHaveBeenCalled();
+    expect(hooks.recordApplied).toHaveBeenCalledWith(
+      "alice",
+      pendingCloneAppliedFingerprint("fp1"),
+    );
+    expect(stampMounted).toHaveBeenCalledWith("uid-alice", true);
+    expect(writeMountMarker).toHaveBeenCalledWith("alice");
   });
 
-  it("settles convergence before stamping and writing the mount marker", async () => {
+  it("stamps and marks the mount before settling so the pending-clone throw cannot leave a completed mount unmarked", async () => {
     const events: string[] = [];
     const hooks = {
       recordApplied: vi.fn(() => events.push("applied")),
@@ -178,11 +198,75 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
     });
 
     expect(events).toEqual([
-      "retry-forgotten",
-      "applied",
       "mounted-stamped",
       "mount-marker",
+      "retry-forgotten",
+      "applied",
     ]);
+  });
+});
+
+describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
+  const adapterWith = (overrides: Record<string, unknown>) => ({
+    log: vi.fn(),
+    listProjectsNeedingClone: vi.fn(async () => []),
+    cloneProjectRepo: vi.fn(async () => true),
+    ...overrides,
+  }) as unknown as CustomerLifecycleAdapter;
+
+  it("records the real fingerprint and drops the backoff once the checkout lands, without a full attach", async () => {
+    const adapter = adapterWith({
+      listProjectsNeedingClone: vi.fn(async () => []),
+    });
+    const hooks = {
+      recordApplied: vi.fn(),
+      rememberRetry: vi.fn(),
+      forgetRetry: vi.fn(),
+    };
+
+    const outcome = await ensureCustomerCheckoutsOnly(
+      adapter,
+      { now: 1_000, slug: "alice", desiredFingerprint: "fp1", prior: undefined },
+      hooks,
+    );
+
+    expect(outcome).toBe("noop");
+    expect(hooks.recordApplied).toHaveBeenCalledWith("alice", "fp1");
+    expect(hooks.forgetRetry).toHaveBeenCalledWith("alice");
+  });
+
+  it("re-arms the marker and the lengthened backoff while the checkout is still absent, and throws so lastError persists", async () => {
+    const adapter = adapterWith({
+      listProjectsNeedingClone: vi.fn(async () => [
+        { projectSlug: "camp", giteaRepoName: null },
+      ]),
+    });
+    const hooks = {
+      recordApplied: vi.fn(),
+      rememberRetry: vi.fn(),
+      forgetRetry: vi.fn(),
+    };
+
+    await expect(ensureCustomerCheckoutsOnly(
+      adapter,
+      {
+        now: 1_000,
+        slug: "alice",
+        desiredFingerprint: "fp1",
+        prior: { attempts: 2, nextAt: 0, fingerprint: "fp1" },
+      },
+      hooks,
+    )).rejects.toThrow(/camp/);
+
+    expect(hooks.recordApplied).toHaveBeenCalledWith(
+      "alice",
+      pendingCloneAppliedFingerprint("fp1"),
+    );
+    expect(hooks.rememberRetry).toHaveBeenCalledWith("alice", {
+      attempts: 3,
+      nextAt: 1_000 + cloneRetryDelayMs(3),
+      fingerprint: "fp1",
+    });
   });
 });
 
