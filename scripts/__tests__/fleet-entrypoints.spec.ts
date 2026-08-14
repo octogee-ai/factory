@@ -970,6 +970,11 @@ describe("fleet CLI args", () => {
       writes: false,
     });
     expect(resolveFleetCredentialMode(statusArgs)).toBe("service-account-key");
+    expect(
+      resolveFleetCredentialMode(statusArgs, {
+        GOOGLE_APPLICATION_CREDENTIALS: "/tmp/wif-credentials.json",
+      }),
+    ).toBe("application-default");
   });
 
   it("maps normal CENTRAL release commands to journaled Admin API requests with deterministic idempotency keys", () => {
@@ -1167,6 +1172,20 @@ describe("fleet CLI args", () => {
         parseFleetArgs(["--env=prod", "migrate-customer", "alice", "--to=canary"]),
       ),
     ).toBe("service-account-key");
+
+    expect(
+      resolveFleetCredentialMode(
+        parseFleetArgs([
+          "--env=test",
+          "release",
+          "cut",
+          "v0.6.8",
+          `--sha=${"a".repeat(40)}`,
+          "--apply",
+        ]),
+        { GOOGLE_APPLICATION_CREDENTIALS: "/tmp/wif-credentials.json" },
+      ),
+    ).toBe("application-default");
   });
 
   it("uses the environment service-account key to sign Admin API tokens", () => {

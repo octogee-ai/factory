@@ -203,9 +203,11 @@ describe("deployment target consumers", () => {
     expect(workflow).toContain("export_environment_variables: false");
     expect(gateway).toContain("export_environment_variables: false");
     expect(workflow).toContain("token_format: access_token");
+    expect(gateway).toContain("create_credentials_file: true");
     expect(gateway).toContain(
-      "GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.firebase_auth.outputs.access_token }}",
+      "GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.firebase_auth.outputs.credentials_file_path }}",
     );
+    expect(gateway).not.toContain("GOOGLE_OAUTH_ACCESS_TOKEN");
   });
 
   it("does not embed the active cluster context in fleet operations", () => {

@@ -36,7 +36,6 @@ import {
   rollbackPlan,
   describeStep,
 } from "../lib/fleet-migration.js";
-import { firebaseCredentialFromAccessToken } from "../lib/firebase-access-token-credential.js";
 import {
   enqueueOperation,
   awaitOperation,
@@ -342,7 +341,11 @@ export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
   return verbsByName.get(`${verb ?? ""} ${sub ?? ""}`.trim()) ?? verbsByName.get(verb ?? "") ?? null;
 }
 
-export function resolveFleetCredentialMode(args: ParsedFleetArgs): FleetCredentialMode {
+export function resolveFleetCredentialMode(
+  args: ParsedFleetArgs,
+  env: { GOOGLE_APPLICATION_CREDENTIALS?: string } = process.env,
+): FleetCredentialMode {
+  if (env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) return "application-default";
   const verb = resolveFleetVerb(args);
   if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
   return args.positional[0] === "gw" || args.positional[0] === "builder" || args.positional[0] === "release"
@@ -1212,9 +1215,6 @@ function initializeFleetCli(argv: string[]): void {
   }
 
   const credentialMode = resolveFleetCredentialMode(args);
-  const accessTokenCredential = firebaseCredentialFromAccessToken(
-    process.env.GOOGLE_OAUTH_ACCESS_TOKEN,
-  );
   const target = resolveFleetDeploymentTarget(args.env);
   const projectId = target.projectId;
   const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
@@ -1223,16 +1223,15 @@ function initializeFleetCli(argv: string[]): void {
     `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
   );
   const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || saPath;
-  if (!accessTokenCredential && credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
+  if (credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
     console.error(red(`${CROSS} SA key not found at ${saPath}`));
     console.error(dim(`  Set GOOGLE_APPLICATION_CREDENTIALS or provide the local key used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
     process.exit(1);
   }
   initializeApp({
-    credential: accessTokenCredential ??
-      (credentialMode === "application-default"
-        ? applicationDefault()
-        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8")))),
+    credential: credentialMode === "application-default"
+      ? applicationDefault()
+      : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
     projectId,
   });
   if (credentialMode === "application-default") {

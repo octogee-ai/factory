@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "../..");
 const iamModule = path.join(repoRoot, "terraform/modules/iam/main.tf");
 const centralPlatform = path.join(repoRoot, "terraform/environments/prod/main.tf");
+const testEnvironment = path.join(repoRoot, "terraform/environments/test/main.tf");
 
 describe("firebase deployer Terraform IAM", () => {
   it("allows only the exact GitHub repository pool to federate as the deployer", () => {
@@ -27,6 +28,35 @@ describe("firebase deployer Terraform IAM", () => {
     );
 
     expect(firebaseDeployer?.[1]).toContain('"roles/datastore.indexAdmin"');
+  });
+
+  it("allows the deployer to sign Firebase custom tokens only as itself", () => {
+    const moduleSource = readFileSync(iamModule, "utf-8");
+    const prodSource = readFileSync(centralPlatform, "utf-8");
+    const testSource = readFileSync(testEnvironment, "utf-8");
+
+    for (const source of [testSource, prodSource]) {
+      const role = source.match(
+        /resource "google_project_iam_custom_role" "firebase_custom_token_signer" \{([\s\S]*?)^\}/m,
+      )?.[1];
+      const binding = source.match(
+        /resource "google_service_account_iam_member" "firebase_deployer_self_custom_token_signer" \{([\s\S]*?)^\}/m,
+      )?.[1];
+
+      expect(role).toContain('role_id     = "octogeeFirebaseCustomTokenSigner"');
+      expect(role).toContain('permissions = ["iam.serviceAccounts.signBlob"]');
+      expect(binding).toContain(
+        'service_account_id = "projects/${var.project_id}/serviceAccounts/${module.iam.firebase_deployer_sa_email}"',
+      );
+      expect(binding).toContain(
+        "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
+      );
+      expect(binding).toContain(
+        'member             = "serviceAccount:${module.iam.firebase_deployer_sa_email}"',
+      );
+      expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
+    }
+    expect(moduleSource).not.toContain("octogeeFirebaseCustomTokenSigner");
   });
 
   it("grants every Central release Firebase deployer reader access to the Central Artifact Registry", () => {
