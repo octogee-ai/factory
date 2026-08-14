@@ -34,6 +34,12 @@ function markerPath(openclawDir: string): string {
   return path.join(openclawDir, MARKER_FILE);
 }
 
+function writePendingActivationFile(filePath: string, pending: PendingActivation): void {
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(pending)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, filePath);
+}
+
 function readPendingActivationFile(filePath: string): PendingActivation | null {
   try {
     const value = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<PendingActivation>;
@@ -146,11 +152,47 @@ export function markMattermostRoutingActivationPending(
     throw new Error("Mattermost routing activation requires at least one account");
   }
   const target = `${markerPath(openclawDir)}.${token}.pending`;
-  const temporary = `${target}.${pending.token}.tmp`;
   fs.mkdirSync(openclawDir, { recursive: true });
-  fs.writeFileSync(temporary, `${JSON.stringify(pending)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, target);
+  writePendingActivationFile(target, pending);
   return pending.token;
+}
+
+function accountBelongsToCustomer(accountId: string, slugs: ReadonlySet<string>): boolean {
+  return [...slugs].some((slug) =>
+    accountId === `${slug}-coach` || accountId.startsWith(`${slug}-proj-`)
+  );
+}
+
+export function discardMattermostRoutingActivationForCustomers(
+  openclawDir: string,
+  slugs: readonly string[],
+): void {
+  const managedSlugs = new Set(slugs);
+  if (managedSlugs.size === 0) return;
+  for (const filePath of pendingActivationFilePaths(openclawDir)) {
+    const pending = readPendingActivationFile(filePath);
+    if (!pending) continue;
+    const retainedAccountIds = pending.accountIds.filter((accountId) =>
+      !accountBelongsToCustomer(accountId, managedSlugs)
+    );
+    if (retainedAccountIds.length === pending.accountIds.length) continue;
+    if (retainedAccountIds.length === 0) {
+      try {
+        fs.rmSync(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      continue;
+    }
+    writePendingActivationFile(filePath, {
+      ...pending,
+      token: randomUUID(),
+      accountIds: retainedAccountIds,
+      baselineLastStartAt: Object.fromEntries(
+        retainedAccountIds.map((accountId) => [accountId, pending.baselineLastStartAt[accountId]!]),
+      ),
+    });
+  }
 }
 
 function clearPendingActivation(openclawDir: string, batch: PendingActivationBatch): boolean {

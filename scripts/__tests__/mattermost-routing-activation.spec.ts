@@ -8,6 +8,7 @@ import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   activatePendingMattermostRouting,
   captureMattermostRoutingActivationBaseline,
+  discardMattermostRoutingActivationForCustomers,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
   stopStaleMattermostRoutingAccounts,
@@ -65,6 +66,41 @@ afterEach(async () => {
 });
 
 describe("Mattermost routing activation", () => {
+  it("discards only an unmounted customer's pending accounts before the next import", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "failed s510 binding",
+      ["s510-coach", "s510-proj-retired", "aug09-coach"],
+      { "s510-coach": 100, "s510-proj-retired": 200, "aug09-coach": 300 },
+    );
+
+    discardMattermostRoutingActivationForCustomers(openclawDir, ["s510"]);
+
+    const snapshots = [
+      { channelAccounts: { mattermost: [{ accountId: "aug09-coach", lastStartAt: 300 }] } },
+      {
+        channelAccounts: { mattermost: [{
+          accountId: "aug09-coach",
+          running: true,
+          connected: true,
+          lastStartAt: 301,
+        }] },
+      },
+    ];
+    const rpc = channelOperationRpc(
+      ["aug09-coach"],
+      vi.fn(async () => snapshots.shift() ?? snapshots.at(-1)),
+    );
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      sleep: async () => undefined,
+    });
+
+    expect(rpc.channelsStatus).toHaveBeenCalledTimes(2);
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
   it("fails closed when a present account has no valid lastStartAt baseline", async () => {
     const rpc = channelOperationRpc(
       ["ceckert-coach"],

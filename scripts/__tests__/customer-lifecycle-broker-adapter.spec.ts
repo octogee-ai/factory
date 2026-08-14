@@ -59,6 +59,7 @@ const routingActivationMocks = vi.hoisted(() => ({
     routingActivationMocks.pending = true;
     return "activation-token";
   }),
+  discardForCustomers: vi.fn(),
   stopStale: vi.fn(async () => undefined),
   activateAfterPatch: vi.fn(async (rpc, openclawDir, log, params) => {
     if (params.configNoop) {
@@ -141,6 +142,7 @@ vi.mock("../lib/mattermost-routing-activation.js", () => ({
   captureMattermostRoutingActivationBaseline: routingActivationMocks.capture,
   activatePendingMattermostRouting: routingActivationMocks.activate,
   markMattermostRoutingActivationPending: routingActivationMocks.mark,
+  discardMattermostRoutingActivationForCustomers: routingActivationMocks.discardForCustomers,
   mattermostRoutingActivationPending: () => routingActivationMocks.pending,
   stopStaleMattermostRoutingAccounts: routingActivationMocks.stopStale,
 }));
@@ -278,6 +280,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     routingActivationMocks.capture.mockClear();
     routingActivationMocks.activate.mockReset().mockImplementation(async () => undefined);
     routingActivationMocks.mark.mockClear();
+    routingActivationMocks.discardForCustomers.mockClear();
     routingActivationMocks.stopStale.mockClear();
     routingActivationMocks.activateAfterPatch.mockClear();
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
@@ -435,7 +438,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
-  it("preserves the activation manifest when imported agent secrets do not materialize", async () => {
+  it("preserves the activation manifest when secrets.reload does not acknowledge success", async () => {
     const rpc = {
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
@@ -443,21 +446,22 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
-      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 2 })),
+      secretsReload: vi.fn(async () => ({ ok: false, warningCount: 2 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
-      /secrets\.reload.*2 unresolved references/,
+      /secrets\.reload did not acknowledge success/,
     );
 
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).not.toHaveBeenCalled();
-    expect(rpc.secretsReload).toHaveBeenCalledTimes(2);
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
   });
 
-  it("retries unresolved secrets before restarting a pre-existing imported account", async () => {
+  it("logs global secret warnings before verifying the current imported account", async () => {
     const events: string[] = [];
+    const log = vi.fn((message: string) => events.push(message));
     mocks.applyOpenClawActivationManifest
       .mockImplementationOnce(async (_manifest, options) => {
         options.onRoutingActivationRequired?.(["tester10-coach"]);
@@ -478,24 +482,22 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
-      secretsReload: vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          events.push("reload-unresolved");
-          return { ok: true, warningCount: 1 };
-        })
-        .mockImplementationOnce(async () => {
-          events.push("reload-resolved");
-          return { ok: true, warningCount: 0 };
-        }),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 4 })),
     } as unknown as GatewayRpcClient;
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
 
     await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
       appliedFingerprint: "fp-tester10",
     });
 
-    expect(events).toEqual(["reload-unresolved", "reload-resolved", "tester10-coach"]);
+    expect(log).toHaveBeenCalledWith(
+      "[import:tester10] secrets.reload complete with 4 warnings",
+    );
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(rpc.channelsStatus).toHaveBeenCalled();
+    expect(events.indexOf("[import:tester10] secrets.reload complete with 4 warnings")).toBeLessThan(
+      events.indexOf("tester10-coach"),
+    );
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(
       rpc,
       expect.stringContaining(".openclaw"),
@@ -904,6 +906,16 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
         evictionSlugs: [],
       },
       expect.any(Function),
+    );
+    expect(routingActivationMocks.discardForCustomers).toHaveBeenCalledWith(
+      expect.stringContaining(".openclaw"),
+      ["alice"],
+    );
+    expect(routingActivationMocks.stopStale.mock.invocationCallOrder[0]).toBeLessThan(
+      routingActivationMocks.discardForCustomers.mock.invocationCallOrder[0]!,
+    );
+    expect(routingActivationMocks.discardForCustomers.mock.invocationCallOrder[0]).toBeLessThan(
+      secretMocks.updateMattermostAccountSecrets.mock.invocationCallOrder[0]!,
     );
   });
 

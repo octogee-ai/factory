@@ -145,6 +145,7 @@ import {
   activateMattermostRoutingAfterConfigPatch,
   activatePendingMattermostRouting,
   captureMattermostRoutingActivationBaseline,
+  discardMattermostRoutingActivationForCustomers,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
   stopStaleMattermostRoutingAccounts,
@@ -567,27 +568,17 @@ async function captureRoutingActivationBaseline(
 }
 
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const result = await ctx.rpc.secretsReload();
-    const warningCount = result.warningCount ?? 0;
-    if (result.ok !== true) {
-      throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
-    }
-    if (warningCount === 0) {
-      ctx.log(`${logPrefix} secrets.reload complete`);
-      return;
-    }
-    if (attempt < 2) {
-      ctx.log(
-        `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}; retrying`,
-      );
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
-      continue;
-    }
-    throw new Error(
-      `${logPrefix} secrets.reload left ${warningCount} unresolved reference${warningCount === 1 ? "" : "s"}`,
-    );
+  const result = await ctx.rpc.secretsReload();
+  const warningCount = result.warningCount ?? 0;
+  if (result.ok !== true) {
+    throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
   }
+  if (warningCount === 0) {
+    ctx.log(`${logPrefix} secrets.reload complete`);
+    return;
+  }
+  const warningLabel = warningCount === 1 ? "warning" : "warnings";
+  ctx.log(`${logPrefix} secrets.reload complete with ${warningCount} ${warningLabel}`);
 }
 
 async function requiredCoachMattermostAccount(
@@ -837,6 +828,7 @@ async function applyRemoveCustomerConfigPatch(
       desiredAccountIds: [],
       evictionSlugs: remaining.slice(1),
     }, ctx.log);
+    discardMattermostRoutingActivationForCustomers(OPENCLAW_DIR, remaining);
   }
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     remove: remaining.map((batchSlug) => `${batchSlug}-coach`),
