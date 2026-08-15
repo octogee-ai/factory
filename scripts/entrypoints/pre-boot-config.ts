@@ -187,37 +187,46 @@ function managedAgentIdForMattermostAccount(accountId: string): string | null {
 function applySharedDefaultAgent(config: OpenClawConfig): boolean {
   const agents = ensureNullishObjectProperty(config, "agents");
   if (!agents) throw new Error("shared routing safety requires an agents object");
+  let changed = false;
   if (Array.isArray(agents.list)) {
     const next = gatewayAgentRoster(agents.list, "");
-    if (valueEqual(agents.list, next)) return false;
-    agents.list = next;
-    return true;
-  }
-  if (agents.list !== undefined) {
-    throw new Error("shared routing safety requires agents.list to be an array");
-  }
-  const entries = objectProperty(agents, "entries");
-  if (!entries) {
-    if (agents.entries !== undefined) {
-      throw new Error("shared routing safety requires agents.entries to be an object");
+    if (!valueEqual(agents.list, next)) {
+      agents.list = next;
+      changed = true;
     }
-    agents.list = gatewayAgentRoster([], "");
-    return true;
+  } else if (agents.list !== undefined) {
+    throw new Error("shared routing safety requires agents.list to be an array");
+  } else {
+    const entries = objectProperty(agents, "entries");
+    if (!entries) {
+      if (agents.entries !== undefined) {
+        throw new Error("shared routing safety requires agents.entries to be an object");
+      }
+      agents.list = gatewayAgentRoster([], "");
+      changed = true;
+    } else {
+      if (Object.values(entries).some((entry) => !isPlainObject(entry))) {
+        throw new Error("shared routing safety requires every agent entry to be an object");
+      }
+      const list = Object.entries(entries)
+        .map(([id, entry]) => ({ ...(entry as Record<string, unknown>), id }));
+      const nextEntries = Object.fromEntries(
+        gatewayAgentRoster(list, "").map((entry) => {
+          const { id, ...rest } = entry as Record<string, unknown> & { id: string };
+          return [id, rest];
+        }),
+      );
+      if (!valueEqual(entries, nextEntries)) {
+        agents.entries = nextEntries;
+        changed = true;
+      }
+    }
   }
-  if (Object.values(entries).some((entry) => !isPlainObject(entry))) {
-    throw new Error("shared routing safety requires every agent entry to be an object");
+  if (agents.ownership !== "explicit") {
+    agents.ownership = "explicit";
+    changed = true;
   }
-  const list = Object.entries(entries)
-    .map(([id, entry]) => ({ ...(entry as Record<string, unknown>), id }));
-  const nextEntries = Object.fromEntries(
-    gatewayAgentRoster(list, "").map((entry) => {
-      const { id, ...rest } = entry as Record<string, unknown> & { id: string };
-      return [id, rest];
-    }),
-  );
-  if (valueEqual(entries, nextEntries)) return false;
-  agents.entries = nextEntries;
-  return true;
+  return changed;
 }
 
 function managedMattermostRoutes(
@@ -251,7 +260,7 @@ export function applySharedMattermostRoutingSafetyPatch(
   if (env.GATEWAY_CLASS?.trim() === "builder") return false;
   let changed = applySharedDefaultAgent(config);
   if (changed) {
-    logFn("installed the non-tenant default agent for unmatched routes");
+    logFn("converged the non-tenant agent roster for unmatched routes");
   }
 
   const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");

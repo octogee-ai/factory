@@ -32,9 +32,11 @@ describe("shared Mattermost routing safety", () => {
     expect(
       applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
     ).toBe(true);
+    expect(config.agents.ownership).toBe("explicit");
     expect(config.agents.list).toEqual([
-      expect.objectContaining({ id: "octogee-unmatched-route", default: true }),
+      expect.objectContaining({ id: "octogee-unmatched-route" }),
     ]);
+    expect(config.agents.list[0]).not.toHaveProperty("default");
   });
 
   it.each([
@@ -46,9 +48,11 @@ describe("shared Mattermost routing safety", () => {
     const config: any = {};
 
     expect(applySharedMattermostRoutingSafetyPatch(config, env, vi.fn())).toBe(true);
+    expect(config.agents.ownership).toBe("explicit");
     expect(config.agents.list).toEqual([
-      expect.objectContaining({ id: "octogee-unmatched-route", default: true }),
+      expect.objectContaining({ id: "octogee-unmatched-route" }),
     ]);
+    expect(config.agents.list[0]).not.toHaveProperty("default");
   });
 
   it("leaves a Builder gateway pinned to its own coach", () => {
@@ -60,7 +64,30 @@ describe("shared Mattermost routing safety", () => {
     expect(config.agents.list).toEqual([{ id: "octogee-ceckert-coach", default: true }]);
   });
 
-  it("installs a quarantine default and deterministic stable account routes", () => {
+  it("repairs an explicit keyed shared roster that still carries a legacy default marker", () => {
+    const config: any = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          "octogee-unmatched-route": { default: true },
+          "octogee-ceckert-test-coach": {},
+        },
+      },
+    };
+
+    expect(
+      applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
+    ).toBe(true);
+    expect(config.agents).toEqual({
+      ownership: "explicit",
+      entries: expect.objectContaining({
+        "octogee-unmatched-route": expect.not.objectContaining({ default: expect.anything() }),
+        "octogee-ceckert-test-coach": {},
+      }),
+    });
+  });
+
+  it("installs an explicit quarantine roster and deterministic stable account routes", () => {
     const config: any = {
       agents: {
         list: [
@@ -99,10 +126,11 @@ describe("shared Mattermost routing safety", () => {
     expect(
       applySharedMattermostRoutingSafetyPatch(config, { GATEWAY_CLASS: "shared" }, vi.fn()),
     ).toBe(true);
+    expect(config.agents.ownership).toBe("explicit");
     expect(config.agents.list[0]).toMatchObject({
       id: "octogee-unmatched-route",
-      default: true,
     });
+    expect(config.agents.list[0]).not.toHaveProperty("default");
     expect(config.agents.list[1]).not.toHaveProperty("default");
     expect(config.bindings).toEqual(expect.arrayContaining([
       {

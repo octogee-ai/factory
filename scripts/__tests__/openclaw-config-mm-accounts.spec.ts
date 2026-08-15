@@ -176,7 +176,7 @@ describe("buildCustomerAgent", () => {
 });
 
 describe("gatewayAgentRoster", () => {
-  it("uses a non-customer sentinel as the only default on a shared gateway", () => {
+  it("uses a non-customer sentinel without a legacy default marker on a shared gateway", () => {
     const roster = gatewayAgentRoster([
       { id: "octogee-mike-coach", default: true },
       { id: "octogee-ceckert-coach" },
@@ -184,26 +184,26 @@ describe("gatewayAgentRoster", () => {
 
     expect(roster[0]).toMatchObject({
       id: SAFE_DEFAULT_AGENT_ID,
-      default: true,
       heartbeat: { every: "0m" },
     });
+    expect(roster[0]).not.toHaveProperty("default");
     expect(roster.slice(1)).toEqual([
       { id: "octogee-mike-coach" },
       { id: "octogee-ceckert-coach" },
     ]);
   });
 
-  it("keeps a dedicated gateway pinned to its sole Builder without a sentinel", () => {
+  it("keeps a dedicated gateway free of legacy default markers", () => {
     expect(gatewayAgentRoster([
       { id: "octogee-mike-coach" },
       { id: "octogee-ceckert-coach" },
     ], "ceckert")).toEqual([
       { id: "octogee-mike-coach" },
-      { id: "octogee-ceckert-coach", default: true },
+      { id: "octogee-ceckert-coach" },
     ]);
   });
 
-  it("strips a retired operator default end to end rather than preserving it", () => {
+  it("strips retired default markers end to end", () => {
     expect(gatewayAgentRoster(
       [
         { id: "octogee-ops", default: true },
@@ -211,7 +211,7 @@ describe("gatewayAgentRoster", () => {
       ],
       gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" }),
     )).toEqual([
-      expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID, default: true }),
+      expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID }),
       { id: "octogee-ops" },
     ]);
   });
