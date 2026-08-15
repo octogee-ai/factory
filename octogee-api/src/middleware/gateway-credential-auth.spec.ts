@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CREDENTIAL_TOKEN_AUDIENCE,
   GATEWAY_CREDENTIAL_TOKEN_HEADER,
+  SIDECAR_BROKER_TOKEN_AUDIENCE,
+  SIDECAR_BROKER_TOKEN_HEADER,
 } from "@octogee/core/internal-fetch";
 import type { BoundTenant } from "../lib/sa-to-tenant.js";
 import type { Reviewer } from "../lib/token-review.js";
@@ -23,6 +25,7 @@ function appWith(
   reviewer: Reviewer,
   mapped: BoundTenant | null = { kind: "gateway", gatewayId: "shared-blue" },
   bound: BoundTenant = BOUND,
+  credentialOptions: { tokenHeader?: string; audience?: string } = {},
 ) {
   const app = express();
   app.use((req, _res, next) => {
@@ -34,6 +37,7 @@ function appWith(
     namespace: "octogee",
     mapIdentity: async () => mapped,
     logger: { warn: vi.fn() },
+    ...credentialOptions,
   }));
   app.post("/secret", (_req, res) => res.status(204).end());
   return app;
@@ -67,6 +71,23 @@ describe("gateway credential capability", () => {
 
     expect(res.status).toBe(204);
     expect(reviewer).toHaveBeenCalledWith(JWT);
+  });
+
+  it("accepts a projected sidecar capability only for its separate header and audience", async () => {
+    const review = { ...validReview(), audiences: [SIDECAR_BROKER_TOKEN_AUDIENCE] };
+    const res = await request(appWith(
+      vi.fn<Reviewer>().mockResolvedValue(review),
+      undefined,
+      undefined,
+      {
+        tokenHeader: SIDECAR_BROKER_TOKEN_HEADER,
+        audience: SIDECAR_BROKER_TOKEN_AUDIENCE,
+      },
+    ))
+      .post("/secret")
+      .set(SIDECAR_BROKER_TOKEN_HEADER, JWT);
+
+    expect(res.status).toBe(204);
   });
 
   it.each([

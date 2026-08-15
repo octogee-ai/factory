@@ -1,5 +1,8 @@
 import { FieldValue } from "firebase-admin/firestore";
-import { gatewayCredentialHeaders } from "@octogee/core/internal-fetch";
+import {
+  gatewayCredentialHeaders,
+  sidecarBrokerHeaders,
+} from "@octogee/core/internal-fetch";
 import { db } from "./db.js";
 import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
@@ -64,10 +67,17 @@ export interface ConnectorTokenPublicCanvasAccessContext {
   canvasPath: string;
 }
 
+export interface ConnectorTokenProjectCloneAccessContext {
+  kind: "project-clone";
+  builderSlug: string;
+  projectSlug: string;
+}
+
 export type ConnectorTokenAccessContext =
   | ConnectorTokenProjectAccessContext
   | ConnectorTokenOwnerRuntimeAccessContext
-  | ConnectorTokenPublicCanvasAccessContext;
+  | ConnectorTokenPublicCanvasAccessContext
+  | ConnectorTokenProjectCloneAccessContext;
 
 export class ConnectorTokenReadError extends Error {
   constructor(
@@ -179,6 +189,83 @@ export async function readOwnerRuntimeConnectorAccessToken(
     kind: "owner-runtime",
     builderSlug,
   });
+}
+
+export interface GithubProjectCloneAccess {
+  accessToken: string;
+  repository: { owner: string; repo: string };
+}
+
+function githubProjectCloneBrokerIdentity(): {
+  baseUrl: string;
+  gatewayId: string;
+  builderSlug: string;
+} {
+  const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
+  if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
+  const gatewayId = nonBlank(process.env.GATEWAY_ID);
+  const builderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
+  if (!gatewayId || !builderSlug) {
+    throw new Error("GATEWAY_ID and GATEWAY_BUILDER_SLUG are required for GitHub project clone");
+  }
+  return { baseUrl, gatewayId, builderSlug };
+}
+
+function githubProjectCloneResponse(body: Record<string, unknown> | null): GithubProjectCloneAccess {
+  const accessToken = body?.accessToken;
+  const repository = body?.repository;
+  if (
+    typeof accessToken !== "string" || accessToken.length === 0 ||
+    !repository || typeof repository !== "object" ||
+    typeof (repository as Record<string, unknown>).owner !== "string" ||
+    typeof (repository as Record<string, unknown>).repo !== "string"
+  ) {
+    throw new Error("connector token broker returned malformed GitHub project clone response");
+  }
+  return {
+    accessToken,
+    repository: {
+      owner: (repository as Record<string, string>).owner,
+      repo: (repository as Record<string, string>).repo,
+    },
+  };
+}
+
+export async function readOwnerGithubProjectCloneAccess(
+  projectSlug: string,
+): Promise<GithubProjectCloneAccess | null> {
+  const { baseUrl, gatewayId, builderSlug } = githubProjectCloneBrokerIdentity();
+
+  let headers: Record<string, string>;
+  try {
+    headers = await sidecarBrokerHeaders();
+  } catch {
+    throw new ConnectorTokenReadError(503, "sidecar_broker_credential_unavailable");
+  }
+
+  const res = await internalFetch(
+    `${trimBaseUrl(baseUrl)}/internal/connectors/github-project-clone-access`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify({
+        gatewayId,
+        connectorId: "github",
+        access: { kind: "project-clone", builderSlug, projectSlug },
+      }),
+    },
+    {},
+  );
+  if (res.status === 404) return null;
+  const body = await readJsonOrNull(res);
+  if (!res.ok) {
+    const error = typeof body?.error === "string" ? body.error : `broker HTTP ${res.status}`;
+    throw new ConnectorTokenBrokerError(res.status, error);
+  }
+  return githubProjectCloneResponse(body);
 }
 
 export interface ConnectorClientCreds {

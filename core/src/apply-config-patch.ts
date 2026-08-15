@@ -82,12 +82,17 @@ function updateCacheAfterPatch(
 ): void {
   if (!cache) return;
   if (patchResult.noop === true) return;
-  if (typeof patchResult.hash === "string" && patchResult.hash.length > 0) {
+  if (
+    typeof patchResult.hash === "string" &&
+    patchResult.hash.length > 0 &&
+    patchResult.config !== undefined
+  ) {
     cache.hash = patchResult.hash;
-    cache.current = patchResult.config ?? cache.current;
+    cache.current = patchResult.config;
     return;
   }
   cache.hash = "";
+  cache.current = undefined;
 }
 
 function invalidateCacheForHashMismatch(cache: ConfigCache | undefined): void {

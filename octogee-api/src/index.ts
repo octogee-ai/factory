@@ -104,7 +104,11 @@ import {
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
 import { createGatewayCredentialAuth } from "./middleware/gateway-credential-auth.js";
-import { GATEWAY_CREDENTIAL_TOKEN_AUDIENCE } from "@octogee/core/internal-fetch";
+import {
+  GATEWAY_CREDENTIAL_TOKEN_AUDIENCE,
+  SIDECAR_BROKER_TOKEN_AUDIENCE,
+  SIDECAR_BROKER_TOKEN_HEADER,
+} from "@octogee/core/internal-fetch";
 import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
 import {
   createOpsAgentHttpClient,
@@ -150,16 +154,21 @@ const TENANT_BOUND_API_ROUTES = new Set([
 ]);
 export const GATEWAY_CREDENTIAL_ROUTES = new Set([
   "/internal/connectors/access-token",
-  "/internal/openclaw/activity/agent-identity",
   "/internal/fleet/assigned-users",
   "/internal/fleet/configured-builder-bootstrap",
   "/internal/fleet/user-snapshot",
   "/internal/fleet/provision-mattermost",
 ]);
 
+export const SIDECAR_BROKER_ROUTES = new Set([
+  "/internal/connectors/github-project-clone-access",
+  "/internal/openclaw/activity/agent-identity",
+]);
+
 export interface CreateAppOptions {
   tenantBindingReviewer?: Parameters<typeof createTenantBindingMiddleware>[0]["reviewer"];
   gatewayCredentialReviewer?: Parameters<typeof createGatewayCredentialAuth>[0]["reviewer"];
+  sidecarBrokerReviewer?: Parameters<typeof createGatewayCredentialAuth>[0]["reviewer"];
   tenantBindingSelfCheck?: {
     inCluster?: boolean;
     tokenPath?: string;
@@ -488,6 +497,18 @@ export function createApp(opts: CreateAppOptions = {}) {
     db,
     namespace,
   });
+  const sidecarBrokerReviewer = opts.sidecarBrokerReviewer ?? createKubernetesTokenReviewer({
+    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
+    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
+    audience: SIDECAR_BROKER_TOKEN_AUDIENCE,
+  });
+  const sidecarBrokerAuth = createGatewayCredentialAuth({
+    reviewer: sidecarBrokerReviewer,
+    db,
+    namespace,
+    tokenHeader: SIDECAR_BROKER_TOKEN_HEADER,
+    audience: SIDECAR_BROKER_TOKEN_AUDIENCE,
+  });
   startTenantBindingSelfCheck(tenantBindingHealth, {
     reviewer: tenantBindingReviewer,
     ...opts.tenantBindingSelfCheck,
@@ -565,6 +586,13 @@ export function createApp(opts: CreateAppOptions = {}) {
       return;
     }
     gatewayCredentialAuth(req, res, next);
+  });
+  app.use((req, res, next) => {
+    if (!SIDECAR_BROKER_ROUTES.has(normalizeTenantPolicyPath(req.path))) {
+      next();
+      return;
+    }
+    sidecarBrokerAuth(req, res, next);
   });
   mountClusterRoutes(app, clusterRouteOverrides(featurePolicy));
   const chatArtifacts = defaultChatArtifactRoutes();

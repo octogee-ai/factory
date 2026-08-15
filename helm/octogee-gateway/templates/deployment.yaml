@@ -483,6 +483,8 @@ spec:
               value: "/var/run/secrets/octogee-api/token"
             - name: OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH
               value: "/var/run/secrets/octogee-gateway-credentials/token"
+            - name: OCTOGEE_SIDECAR_BROKER_TOKEN_PATH
+              value: "/var/run/secrets/octogee-sidecar-broker/token"
             # NOTE: GCP_PROJECT_ID + GITEA_ORG are NOT set here — the
             # .Values.gatewayEdge.env range below already provides the
             # non-secret project/org identifiers. Platform secrets are not
@@ -555,6 +557,9 @@ spec:
             - name: gateway-credential-sa-token
               mountPath: /var/run/secrets/octogee-gateway-credentials
               readOnly: true
+            - name: sidecar-broker-sa-token
+              mountPath: /var/run/secrets/octogee-sidecar-broker
+              readOnly: true
             - name: k8s-api-token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
@@ -606,6 +611,13 @@ spec:
               - serviceAccountToken:
                   path: token
                   audience: octogee-api-gateway-credentials
+                  expirationSeconds: 3600
+        - name: sidecar-broker-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api-sidecar-broker
                   expirationSeconds: 3600
         - name: openclaw-device-auth
           emptyDir: {}

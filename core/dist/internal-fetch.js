@@ -4,6 +4,9 @@ export const DEFAULT_PROJECTED_API_TOKEN_PATH = "/var/run/secrets/octogee-api/to
 export const GATEWAY_CREDENTIAL_TOKEN_HEADER = "x-octogee-gateway-credential-token";
 export const GATEWAY_CREDENTIAL_TOKEN_AUDIENCE = "octogee-api-gateway-credentials";
 export const DEFAULT_GATEWAY_CREDENTIAL_TOKEN_PATH = "/var/run/secrets/octogee-gateway-credentials/token";
+export const SIDECAR_BROKER_TOKEN_HEADER = "x-octogee-sidecar-broker-token";
+export const SIDECAR_BROKER_TOKEN_AUDIENCE = "octogee-api-sidecar-broker";
+export const DEFAULT_SIDECAR_BROKER_TOKEN_PATH = "/var/run/secrets/octogee-sidecar-broker/token";
 export const DEFAULT_INTERNAL_FETCH_TIMEOUT_MS = 60_000;
 async function readProjectedToken(tokenPath) {
     try {
@@ -20,6 +23,13 @@ export async function gatewayCredentialHeaders(tokenPath = process.env.OCTOGEE_G
     if (!token)
         throw new Error("projected gateway credential token unavailable");
     return { [GATEWAY_CREDENTIAL_TOKEN_HEADER]: token };
+}
+export async function sidecarBrokerHeaders(tokenPath = process.env.OCTOGEE_SIDECAR_BROKER_TOKEN_PATH
+    ?? DEFAULT_SIDECAR_BROKER_TOKEN_PATH) {
+    const token = await readProjectedToken(tokenPath);
+    if (!token)
+        throw new Error("projected sidecar broker token unavailable");
+    return { [SIDECAR_BROKER_TOKEN_HEADER]: token };
 }
 async function buildHeaders(init, opts) {
     const headers = new Headers(init.headers);

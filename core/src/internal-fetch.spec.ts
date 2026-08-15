@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_INTERNAL_FETCH_TIMEOUT_MS,
   GATEWAY_CREDENTIAL_TOKEN_HEADER,
+  SIDECAR_BROKER_TOKEN_HEADER,
   gatewayCredentialHeaders,
   internalFetch,
+  sidecarBrokerHeaders,
 } from "./internal-fetch.js";
 
 const hangingFetch: typeof fetch = (_url, init) =>
@@ -43,6 +45,11 @@ describe("internalFetch", () => {
   it("fails closed when the gateway credential capability is unavailable", async () => {
     await expect(gatewayCredentialHeaders(path.join(os.tmpdir(), `missing-${Math.random()}`)))
       .rejects.toThrow("projected gateway credential token unavailable");
+  });
+
+  it("materializes the sidecar-only broker capability header", async () => {
+    const headers = await sidecarBrokerHeaders(await tokenFile("sidecar-jwt\n"));
+    expect(headers).toEqual({ [SIDECAR_BROKER_TOKEN_HEADER]: "sidecar-jwt" });
   });
 
   it("adds both internal key and projected service-account token headers", async () => {

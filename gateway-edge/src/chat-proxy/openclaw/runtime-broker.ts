@@ -1,5 +1,5 @@
 import { internalFetch } from "../../lib/internal-fetch.js";
-import { gatewayCredentialHeaders } from "@octogee/core/internal-fetch";
+import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type { AgentIdentity, ChannelPair } from "./activity-bridge.js";
 import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
 import {
@@ -264,11 +264,11 @@ export function createOpenClawRuntimeBroker(opts: {
   baseUrl: string;
   gatewayId: string;
   fetchImpl?: typeof fetch;
-  credentialHeaders?: () => Promise<Record<string, string>>;
+  sidecarBrokerHeaders?: () => Promise<Record<string, string>>;
 }): OpenClawRuntimeBroker {
   const baseUrl = trimBaseUrl(opts.baseUrl);
   const gatewayId = opts.gatewayId;
-  const credentialHeaders = opts.credentialHeaders ?? gatewayCredentialHeaders;
+  const credentialHeaders = opts.sidecarBrokerHeaders ?? sidecarBrokerHeaders;
 
   const post = async (
     path: string,

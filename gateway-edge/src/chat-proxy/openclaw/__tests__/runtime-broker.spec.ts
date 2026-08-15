@@ -5,7 +5,7 @@ import {
   createOpenClawRuntimeBrokerFromEnv,
   runtimeBrokerBaseUrlFromEnv,
 } from "../runtime-broker.js";
-import { GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
+import { SIDECAR_BROKER_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
@@ -61,18 +61,18 @@ describe("redeemOpenClawWs outcome", () => {
 });
 
 describe("OpenClaw runtime broker env", () => {
-  it("adds the credential capability only when resolving agent secrets", async () => {
+  it("adds the sidecar capability only when resolving agent secrets", async () => {
     const calls: Array<{ path: string; credential: string | null }> = [];
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
       gatewayId: "shared-blue",
-      credentialHeaders: async () => ({
-        [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
+      sidecarBrokerHeaders: async () => ({
+        [SIDECAR_BROKER_TOKEN_HEADER]: "credential-jwt",
       }),
       fetchImpl: vi.fn(async (input, init) => {
         calls.push({
           path: new URL(String(input)).pathname,
-          credential: new Headers(init?.headers).get(GATEWAY_CREDENTIAL_TOKEN_HEADER),
+          credential: new Headers(init?.headers).get(SIDECAR_BROKER_TOKEN_HEADER),
         });
         const identity = {
           agentId: "octogee-alice-coach",

@@ -45,7 +45,6 @@ export interface ProjectCloneTarget {
 }
 export interface ProjectCloneOptions {
     repoSource?: ProjectRepoSource | null;
-    githubToken?: string | null;
 }
 export interface CustomerContext {
     uid: string;
@@ -143,7 +142,6 @@ export interface CustomerLifecycleAdapter {
     reassertByotForCustomer: (userData: Record<string, unknown>) => Promise<void>;
     reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
     listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
-    resolveGithubCloneToken?: (slug: string) => Promise<string | null>;
     cloneProjectRepo: (customerSlug: string, projectSlug: string, giteaRepoName: string | null, opts?: ProjectCloneOptions) => Promise<boolean>;
     provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
     /**
