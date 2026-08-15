@@ -9,9 +9,11 @@ import { buildAgentImportConfigArtifacts } from "@octogee/shared/types/agent-imp
 import {
   AgentImportSourceError,
   extractLocalAgentImportArchive,
+  githubAgentImportCloneCommandArgs,
   githubAgentImportCloneEnvironment,
   githubAgentImportCloneUrl,
 } from "../lib/agent-import-source.js";
+import { workspaceGitEnvironment } from "../lib/workspace-git.js";
 
 const roots: string[] = [];
 
@@ -87,17 +89,22 @@ afterEach(() => {
 });
 
 describe("GitHub agent import source", () => {
-  it("uses a token-free URL and passes OAuth only through ephemeral git environment", () => {
+  it("uses a token-free URL and passes OAuth through a scoped Git credential helper", () => {
     expect(githubAgentImportCloneUrl("jack", "moof")).toBe("https://github.com/jack/moof.git");
     const env = githubAgentImportCloneEnvironment("gho_private", { PATH: "/bin", OTHER_SECRET: "drop" });
     expect(env).toMatchObject({
       PATH: "/usr/local/bin:/usr/bin:/bin",
       GIT_TERMINAL_PROMPT: "0",
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from("octogee:gho_private").toString("base64")}`,
+      OCTOGEE_GITHUB_TOKEN: "gho_private",
     });
     expect(env).not.toHaveProperty("OTHER_SECRET");
+    expect(env).not.toHaveProperty("GIT_CONFIG_COUNT");
+    const args = githubAgentImportCloneCommandArgs(["clone", "https://github.com/jack/moof.git"]);
+    expect(args).toContain("credential.helper=");
+    expect(args.join(" ")).toContain("OCTOGEE_GITHUB_TOKEN");
+    expect(args.join(" ")).not.toContain("gho_private");
+    expect(workspaceGitEnvironment(env, undefined, env.OCTOGEE_GITHUB_TOKEN).OCTOGEE_GITHUB_TOKEN)
+      .toBe("gho_private");
     expect(githubAgentImportCloneUrl("jack", "moof")).not.toContain("gho_private");
   });
 
