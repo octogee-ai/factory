@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe("GitHub project clone sidecar client", () => {
   it("binds the clone request to the caller's builder and project", async () => {
-    process.env.GATEWAY_EDGE_INTERNAL_URL = "http://gateway-edge:3001";
+    process.env.GATEWAY_EDGE_INTERNAL_URL = "http://127.0.0.1:3001";
     vi.mocked(internalFetch).mockResolvedValue(new Response(JSON.stringify({ status: "cloned" }), {
       status: 201,
       headers: { "content-type": "application/json" },
@@ -20,7 +20,7 @@ describe("GitHub project clone sidecar client", () => {
 
     await expect(cloneGithubProjectViaBroker("alice", "octo")).resolves.toBe(true);
     expect(internalFetch).toHaveBeenCalledWith(
-      "http://gateway-edge:3001/internal/connectors/github/clone",
+      "http://127.0.0.1:3001/internal/connectors/github/clone",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ builderSlug: "alice", projectSlug: "octo" }),
