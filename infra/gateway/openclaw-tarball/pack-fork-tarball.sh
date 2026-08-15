@@ -69,8 +69,15 @@ for name in $WS_DEPS; do
   mkdir -p "$vend"
   tar -xzf "$tmpp"/*.tgz -C "$vend" --strip-components=1
   rm -rf "$tmpp"
-  if grep -q '"workspace:' "$vend/package.json"; then
-    echo "FATAL: $name carries nested workspace:* specs — extend vendoring" >&2
+  nested_runtime_ws="$(node -e '
+    const p = require("./" + process.argv[1]);
+    const all = { ...p.dependencies, ...p.optionalDependencies };
+    console.log(Object.entries(all)
+      .filter(([, v]) => String(v).startsWith("workspace:"))
+      .map(([k]) => k).join("\n"));
+  ' "$vend/package.json")"
+  if [ -n "$nested_runtime_ws" ]; then
+    echo "FATAL: $name carries nested runtime workspace:* specs ($nested_runtime_ws) — extend vendoring" >&2
     exit 1
   fi
 
