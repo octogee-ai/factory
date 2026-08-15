@@ -44,7 +44,7 @@ WORKDIR /octogee/scripts
 RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
-COPY --chown=root:root scripts/secret-resolver.mjs /octogee/scripts/
+COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
@@ -56,7 +56,7 @@ RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.
     && rm /tmp/octogee-secret-resolver.mjs \
     && chown root:root /octogee/scripts \
     && chmod 755 /octogee/scripts \
-    && chmod 555 /octogee/scripts/secret-resolver.mjs
+    && chmod 500 /octogee/scripts/secret-resolver.mjs
 
 # ── Canonical identity module (imported via ../../shared/types/identity.js) ──
 # scripts/tsconfig.json rootDir is ".." so it expects shared/ at a sibling
