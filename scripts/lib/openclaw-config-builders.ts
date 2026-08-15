@@ -520,7 +520,6 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
   return {
     id: SAFE_DEFAULT_AGENT_ID,
     name: "Unmatched Mattermost route",
-    default: true,
     heartbeat: { every: "0m" },
     tools: {
       profile: "minimal",
@@ -550,18 +549,7 @@ export function gatewayAgentRoster(
     ));
   const withoutExistingDefault = retained.map(withoutDefault);
   if (!builderSlug) return [buildSafeDefaultAgent(), ...withoutExistingDefault];
-  const dedicatedAgentId = `octogee-${builderSlug}-coach`;
-  return withoutExistingDefault.map((agent) => {
-    if (
-      agent === null ||
-      typeof agent !== "object" ||
-      Array.isArray(agent) ||
-      (agent as { id?: unknown }).id !== dedicatedAgentId
-    ) {
-      return agent;
-    }
-    return { ...(agent as Record<string, unknown>), default: true };
-  });
+  return withoutExistingDefault;
 }
 
 export function gatewayAgentRosterBuilderSlug(
