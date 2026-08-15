@@ -249,7 +249,14 @@ function customerToolInvariants() {
         { kind: "exact", path: "skills.workshop.approvalPolicy", value: "pending" },
         { kind: "exact", path: "skills.workshop.allowSymlinkTargetWrites", value: false },
         { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: ["codex"] },
-        { kind: "exact", path: "plugins.entries.codex", value: { enabled: false } },
+        {
+            kind: "exact",
+            path: "plugins.entries.codex",
+            value: {
+                enabled: false,
+                config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+            },
+        },
         {
             kind: "customer-agent-workspace",
             path: "agents.list[].tools.fs.workspaceOnly",

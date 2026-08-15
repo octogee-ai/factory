@@ -14,6 +14,8 @@ type GatewayBinding = Extract<BoundTenant, { kind: "gateway" }>;
 
 export interface GatewayCredentialAuthOptions {
   reviewer: Reviewer;
+  tokenHeader?: string;
+  audience?: string;
   db?: Parameters<typeof mapSaToTenant>[0];
   namespace?: string;
   mapIdentity?: (identity: { namespace: string; saName: string }) => Promise<BoundTenant | null>;
@@ -42,6 +44,8 @@ export function createGatewayCredentialAuth(
   const db = opts.db ?? defaultDb;
   const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
   const logger = opts.logger ?? defaultLogger;
+  const tokenHeader = opts.tokenHeader ?? GATEWAY_CREDENTIAL_TOKEN_HEADER;
+  const audience = opts.audience ?? GATEWAY_CREDENTIAL_TOKEN_AUDIENCE;
   const mapIdentity = opts.mapIdentity ?? (async (identity) => {
     const mapped = await mapSaToTenant(db, identity, namespace);
     return mapped.attached ? mapped.tenant : null;
@@ -50,14 +54,14 @@ export function createGatewayCredentialAuth(
   return (req, res, next): void => {
     const authenticate = async (): Promise<boolean> => {
       const bound = req.boundTenant;
-      const token = req.get(GATEWAY_CREDENTIAL_TOKEN_HEADER) ?? "";
+      const token = req.get(tokenHeader) ?? "";
       if (!bound || bound.kind !== "gateway" || !isWellFormedServiceAccountJwt(token)) {
         return false;
       }
       const review = await opts.reviewer(token);
       if (
         !review.authenticated
-        || !review.audiences.includes(GATEWAY_CREDENTIAL_TOKEN_AUDIENCE)
+        || !review.audiences.includes(audience)
         || review.namespace !== namespace
         || !exactPodMatch(bound, review)
       ) return false;

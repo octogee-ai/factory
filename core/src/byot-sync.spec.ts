@@ -1435,7 +1435,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
     ]);
   });
 
-  it("preserves an existing Codex sandbox while adding runtime defaults", async () => {
+  it("resets an existing Codex sandbox to the platform policy while adding runtime defaults", async () => {
     const calls: object[] = [];
     const r = await applyOauthRuntimeModelAllowlist(["openai"], {
       applyConfigPatch: async (args) => {
@@ -1473,7 +1473,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
               enabled: true,
               config: {
                 appServer: {
-                  sandbox: "danger-full-access",
+                  sandbox: "workspace-write",
                   approvalPolicy: "never",
                 },
               },
@@ -2735,7 +2735,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     ]);
   });
 
-  it("syncByotForCustomer: preserves an operator Codex danger-full-access sandbox through the full restore and coach patch cycle", async () => {
+  it("syncByotForCustomer: restores OAuth without widening the Codex sandbox", async () => {
     const currentConfig = {
       agents: {
         list: [
@@ -2807,7 +2807,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
               enabled: true,
               config: {
                 appServer: {
-                  sandbox: "danger-full-access",
+                  sandbox: "workspace-write",
                   approvalPolicy: "never",
                 },
               },

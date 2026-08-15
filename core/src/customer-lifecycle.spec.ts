@@ -63,7 +63,6 @@ giteaReadShouldThrow: boolean;
   logs: string[];
   cloneProjectThrows?: boolean;
   cloneProjectLands?: boolean;
-  githubCloneToken?: string | null;
 
   lastGreetingCronParams: unknown;
   
@@ -192,10 +191,6 @@ return "ssh-pubkey";
     listProjectsNeedingClone: async () => {
       record("listProjectsNeedingClone");
       return [...state.pendingProjects];
-    },
-    resolveGithubCloneToken: async () => {
-      record("resolveGithubCloneToken");
-      return state.githubCloneToken ?? null;
     },
     cloneProjectRepo: async (_slug, projectSlug, giteaRepoName, opts) => {
       record("cloneProjectRepo");
@@ -1386,40 +1381,19 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
-  it("carries the customer's brokered GitHub token into a GitHub-backed clone", async () => {
+  it("does not pass a GitHub credential for a Gitea-only project", async () => {
     const state = makeState(mountedSnapshot(), mountedDisk());
-    state.githubCloneToken = "ghu_customer";
-    state.pendingProjects = [
-      { projectSlug: "gh", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
-    ];
-
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    expect(state.cloneProjectCalls).toEqual([
-      {
-        projectSlug: "gh",
-        giteaRepoName: null,
-        opts: { repoSource: GITHUB_REPO_SOURCE, githubToken: "ghu_customer" },
-      },
-    ]);
-  });
-
-  it("does not resolve a GitHub token for a Gitea-only project", async () => {
-    const state = makeState(mountedSnapshot(), mountedDisk());
-    state.githubCloneToken = "ghu_customer";
     state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
 
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls).not.toContain("resolveGithubCloneToken");
     expect(state.cloneProjectCalls).toEqual([
       { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
     ]);
   });
 
-  it("still attempts a GitHub clone when the customer has no GitHub connected", async () => {
+  it("delegates a GitHub-backed clone without exposing a credential to the lifecycle", async () => {
     const state = makeState(mountedSnapshot(), mountedDisk());
-    state.githubCloneToken = null;
     state.pendingProjects = [
       { projectSlug: "gh", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
     ];

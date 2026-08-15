@@ -30,17 +30,6 @@ function markPlatformCatalogRestartPending() {
 function clearPlatformCatalogRestartPending() {
     fs.rmSync(PLATFORM_CATALOG_RESTART_MARKER, { force: true });
 }
-function currentCodexAppServerConfig(current) {
-    const appServer = current?.plugins?.entries?.codex?.config?.appServer;
-    return {
-        sandbox: typeof appServer?.sandbox === "string"
-            ? appServer.sandbox
-            : STANDARD_CODEX_APP_SERVER.sandbox,
-        approvalPolicy: typeof appServer?.approvalPolicy === "string"
-            ? appServer.approvalPolicy
-            : STANDARD_CODEX_APP_SERVER.approvalPolicy,
-    };
-}
 export async function applyCoachModelPatch(input, deps) {
     const logFn = deps?.logFn ?? log;
     if (!input)
@@ -178,7 +167,7 @@ export async function applyOauthRuntimeModelAllowlist(providers, deps) {
     if (Object.keys(models).length === 0) {
         return { patched: false, changed: false, restartRequired: false };
     }
-    const buildPatch = (current) => ({
+    const buildPatch = () => ({
         agents: { defaults: { models } },
         ...(enableCodex
             ? {
@@ -186,7 +175,7 @@ export async function applyOauthRuntimeModelAllowlist(providers, deps) {
                     entries: {
                         codex: {
                             enabled: true,
-                            config: { appServer: currentCodexAppServerConfig(current) },
+                            config: { appServer: STANDARD_CODEX_APP_SERVER },
                         },
                     },
                 },

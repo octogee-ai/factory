@@ -151,7 +151,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
   return {
     assignedUsers: vi.fn(async () => []),
     uidForSlug: vi.fn(async () => "uid-tester10"),
-    githubCloneToken: vi.fn(async () => null),
+    githubTokenForSync: vi.fn(async () => null),
     userSnapshot: vi.fn(async () => null),
     reconcileProjectCoachMembership: vi.fn(async () => undefined),
     setProvisioningStatus: vi.fn(async () => undefined),
@@ -737,51 +737,6 @@ describe("broker adapter malformed coach identity quarantine", () => {
       expect.any(String),
       { remove: ["alice-coach"], removePrefixes: [] },
     );
-  });
-});
-
-describe("buildBrokeredLifecycleAdapter github clone credential", () => {
-  it("brokers the customer's own GitHub token for their slug", async () => {
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => "uid-tester10"),
-      githubCloneToken: vi.fn(async () => "ghu_customer"),
-    });
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as unknown as GatewayRpcClient,
-      log: vi.fn(),
-    });
-
-    await expect(adapter.resolveGithubCloneToken?.("tester10")).resolves.toBe("ghu_customer");
-    expect(client.githubCloneToken).toHaveBeenCalledWith("uid-tester10");
-  });
-
-  it("reports an unconnected GitHub account instead of failing the provisioning pass", async () => {
-    const log = vi.fn();
-    const client = mkClient({ githubCloneToken: vi.fn(async () => null) });
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as unknown as GatewayRpcClient,
-      log,
-    });
-
-    await expect(adapter.resolveGithubCloneToken?.("tester10")).resolves.toBeNull();
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/GitHub not connected/));
-  });
-
-  it("does not ask for a token when the slug has no uid", async () => {
-    const client = mkClient({
-      uidForSlug: vi.fn(async () => null),
-      githubCloneToken: vi.fn(async () => "ghu_customer"),
-    });
-    const adapter = buildBrokeredLifecycleAdapter({
-      client,
-      rpc: {} as unknown as GatewayRpcClient,
-      log: vi.fn(),
-    });
-
-    await expect(adapter.resolveGithubCloneToken?.("ghost")).resolves.toBeNull();
-    expect(client.githubCloneToken).not.toHaveBeenCalled();
   });
 });
 

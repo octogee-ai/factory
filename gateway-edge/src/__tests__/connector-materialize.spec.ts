@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => {
 
   return {
     readOwnerRuntimeConnectorAccessToken: vi.fn(),
+    readOwnerGithubProjectCloneAccess: vi.fn(),
+    cloneGithubProjectCheckout: vi.fn(),
     ConnectorTokenReadError,
     ConnectorTokenBrokerError,
     error: vi.fn(),
@@ -33,8 +35,13 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../lib/connector-tokens.js", () => ({
   readOwnerRuntimeConnectorAccessToken: mocks.readOwnerRuntimeConnectorAccessToken,
+  readOwnerGithubProjectCloneAccess: mocks.readOwnerGithubProjectCloneAccess,
   ConnectorTokenReadError: mocks.ConnectorTokenReadError,
   ConnectorTokenBrokerError: mocks.ConnectorTokenBrokerError,
+}));
+
+vi.mock("../lib/github-project-clone.js", () => ({
+  cloneGithubProjectCheckout: mocks.cloneGithubProjectCheckout,
 }));
 
 vi.mock("../middleware/builder-shell-auth.js", () => ({
@@ -47,8 +54,10 @@ vi.mock("../middleware/logging.js", () => ({
 
 import connectorRoutes from "../routes/internal/connectors.js";
 import {
+  readOwnerGithubProjectCloneAccess,
   readOwnerRuntimeConnectorAccessToken,
 } from "../lib/connector-tokens.js";
+import { cloneGithubProjectCheckout } from "../lib/github-project-clone.js";
 
 function app() {
   const a = express();
@@ -145,5 +154,40 @@ describe("internal connector materialize route", () => {
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "connector_not_materializable" });
     expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("clones through the sidecar broker without returning the GitHub credential", async () => {
+    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    vi.mocked(readOwnerGithubProjectCloneAccess).mockResolvedValue({
+      accessToken: "gho_secret",
+      repository: { owner: "octogee-ai", repo: "octogee" },
+    });
+    vi.mocked(cloneGithubProjectCheckout).mockResolvedValue("cloned");
+
+    const res = await request(app())
+      .post("/internal/connectors/github/clone")
+      .send({ builderSlug: "alice", projectSlug: "octo" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ status: "cloned" });
+    expect(cloneGithubProjectCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      builderSlug: "alice",
+      projectSlug: "octo",
+      accessToken: "gho_secret",
+    }));
+  });
+
+  it("preserves the owner reauthorization signal from the broker", async () => {
+    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    vi.mocked(readOwnerGithubProjectCloneAccess).mockRejectedValue(
+      new mocks.ConnectorTokenBrokerError(409, "reauth_required"),
+    );
+
+    const res = await request(app())
+      .post("/internal/connectors/github/clone")
+      .send({ builderSlug: "alice", projectSlug: "octo" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "reauth_required" });
   });
 });

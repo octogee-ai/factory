@@ -211,7 +211,12 @@ describe("system config platform invariants", () => {
       },
       plugins: {
         allow: expect.arrayContaining(["customer-plugin", "octogee-chat-tools"]),
-        entries: { codex: { enabled: false } },
+        entries: {
+          codex: {
+            enabled: false,
+            config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+          },
+        },
       },
       commands: {
         bash: false,

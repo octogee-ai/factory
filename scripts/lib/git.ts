@@ -26,6 +26,7 @@ import {
   workspaceGiteaOrg, workspaceRepoName, projectRepoName, systemConfigRepoName,
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
+import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
@@ -1095,6 +1096,14 @@ async function cloneGithubProjectRepo(
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
 ): Promise<boolean> {
+  if (!githubToken && process.env.GATEWAY_EDGE_INTERNAL_URL) {
+    try {
+      return await cloneGithubProjectViaBroker(slug, projectSlug);
+    } catch (error) {
+      log(`⚠ [git] GitHub project clone broker failed for ${slug}/${projectSlug}: ${errMessage(error)}`);
+      return false;
+    }
+  }
   const remoteUrl = githubHttpsRemoteUrl(repoSource.owner, repoSource.repo);
   const cloned = checkoutProjectRepo({
     dest,

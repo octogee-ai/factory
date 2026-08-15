@@ -86,33 +86,6 @@ function clearPlatformCatalogRestartPending(): void {
   fs.rmSync(PLATFORM_CATALOG_RESTART_MARKER, { force: true });
 }
 
-function currentCodexAppServerConfig(current: unknown): typeof STANDARD_CODEX_APP_SERVER {
-  const appServer = (current as {
-    plugins?: {
-      entries?: {
-        codex?: {
-          config?: {
-            appServer?: {
-              sandbox?: unknown;
-              approvalPolicy?: unknown;
-            };
-          };
-        };
-      };
-    };
-  } | null | undefined)?.plugins?.entries?.codex?.config?.appServer;
-  return {
-    sandbox:
-      typeof appServer?.sandbox === "string"
-        ? appServer.sandbox
-        : STANDARD_CODEX_APP_SERVER.sandbox,
-    approvalPolicy:
-      typeof appServer?.approvalPolicy === "string"
-        ? appServer.approvalPolicy
-        : STANDARD_CODEX_APP_SERVER.approvalPolicy,
-  };
-}
-
 export async function applyCoachModelPatch(
   input: CoachModelInput | null,
   deps?: {
@@ -304,7 +277,7 @@ export async function applyOauthRuntimeModelAllowlist(
     return { patched: false, changed: false, restartRequired: false };
   }
 
-  const buildPatch = (current: unknown) => ({
+  const buildPatch = () => ({
     agents: { defaults: { models } },
     ...(enableCodex
       ? {
@@ -312,7 +285,7 @@ export async function applyOauthRuntimeModelAllowlist(
             entries: {
               codex: {
                 enabled: true,
-                config: { appServer: currentCodexAppServerConfig(current) },
+                config: { appServer: STANDARD_CODEX_APP_SERVER },
               },
             },
           },

@@ -19,6 +19,7 @@ const WORKSPACE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PROJECT_ID_RE = /^[a-z0-9]{1,16}$/;
 const OWNER_RUNTIME_ACCESS_KIND = "owner-runtime";
 const PUBLIC_CANVAS_ACCESS_KIND = "public-canvas";
+const PROJECT_CLONE_ACCESS_KIND = "project-clone";
 
 interface ProjectAccessContext {
   kind: "project";
@@ -39,10 +40,17 @@ interface PublicCanvasAccessContext {
   canvasPath: string;
 }
 
+interface ProjectCloneAccessContext {
+  kind: typeof PROJECT_CLONE_ACCESS_KIND;
+  builderSlug: string;
+  projectSlug: string;
+}
+
 type ConnectorAccessContext =
   | ProjectAccessContext
   | OwnerRuntimeAccessContext
-  | PublicCanvasAccessContext;
+  | PublicCanvasAccessContext
+  | ProjectCloneAccessContext;
 type ParsedAccess =
   | { status: "absent" }
   | { status: "invalid" }
@@ -78,9 +86,18 @@ function requestAccess(req: Request): ParsedAccess {
   if (!access || typeof access !== "object") return { status: "invalid" };
   const data = access as Record<string, unknown>;
   if (data.kind === OWNER_RUNTIME_ACCESS_KIND) return parseOwnerRuntimeAccess(data);
+  if (data.kind === PROJECT_CLONE_ACCESS_KIND) return parseProjectCloneAccess(data);
   if (data.kind === PUBLIC_CANVAS_ACCESS_KIND) return parsePublicCanvasAccess(data);
   if (data.kind === "project") return parseProjectAccess(data);
   return { status: "invalid" };
+}
+
+function parseProjectCloneAccess(data: Record<string, unknown>): ParsedAccess {
+  const builderSlug = typeof data.builderSlug === "string" ? data.builderSlug : "";
+  const projectSlug = typeof data.projectSlug === "string" ? data.projectSlug : "";
+  return WORKSPACE_SLUG_RE.test(builderSlug) && PROJECT_ID_RE.test(projectSlug)
+    ? { status: "valid", value: { kind: PROJECT_CLONE_ACCESS_KIND, builderSlug, projectSlug } }
+    : { status: "invalid" };
 }
 
 function parseOwnerRuntimeAccess(data: Record<string, unknown>): ParsedAccess {
@@ -250,6 +267,34 @@ async function ownerRuntimeAccessAuthorized(input: {
   return workspaceOwnerUid === input.ownerUid;
 }
 
+async function projectCloneSourceAuthorized(input: {
+  db: Firestore;
+  bound: GatewayBinding;
+  uid: string;
+  access: ProjectCloneAccessContext;
+  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
+}): Promise<{ owner: string; repo: string } | null> {
+  const { db, bound, uid, access, readPodOwnerIdentity } = input;
+  if (!bound.ownerUid || uid !== bound.ownerUid) return null;
+  const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
+  if (
+    !authorization ||
+    authorization.gatewayClass !== "builder" ||
+    authorization.builderSlug !== access.builderSlug
+  ) return null;
+
+  const project = await db.doc(`workspaces/${access.builderSlug}/projects/${access.projectSlug}`).get();
+  const data = project.data() as Record<string, unknown> | undefined;
+  const source = data?.repoSource;
+  if (!project.exists || data?.ownerUid !== bound.ownerUid || !source || typeof source !== "object") {
+    return null;
+  }
+  const { provider, owner, repo } = source as Record<string, unknown>;
+  return provider === "github" && typeof owner === "string" && typeof repo === "string"
+    ? { owner, repo }
+    : null;
+}
+
 function connectorAllowedForAccess(
   connectorId: string,
   access: ConnectorAccessContext | null,
@@ -257,6 +302,7 @@ function connectorAllowedForAccess(
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
     return isConnectorAgentRuntimeTokenMaterializable(connectorId);
   }
+  if (access?.kind === PROJECT_CLONE_ACCESS_KIND) return connectorId === "github";
   return isConnectorTokenBrokerable(connectorId);
 }
 
@@ -283,6 +329,73 @@ async function readOwnerRuntimeAccessToken(
   return { status: "connected", accessToken: fresh.accessToken };
 }
 
+async function respondProjectCloneAccess(input: {
+  db: Firestore;
+  bound: GatewayBinding;
+  uid: string;
+  access: ProjectCloneAccessContext;
+  connectorId: string;
+  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
+  res: Response;
+}): Promise<void> {
+  const { db, bound, uid, access, connectorId, readPodOwnerIdentity, res } = input;
+  const repository = await projectCloneSourceAuthorized({
+    db,
+    bound,
+    uid,
+    access,
+    readPodOwnerIdentity,
+  });
+  if (!repository) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
+  if (token.status === "disconnected") {
+    res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
+    return;
+  }
+  res.json({ accessToken: token.accessToken, repository });
+}
+
+async function respondAuthorizedAccess(input: {
+  db: Firestore;
+  bound: GatewayBinding;
+  uid: string;
+  connectorId: string;
+  access: Exclude<ConnectorAccessContext, ProjectCloneAccessContext> | null;
+  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
+  res: Response;
+}): Promise<void> {
+  const { db, bound, uid, connectorId, access, readPodOwnerIdentity, res } = input;
+  if (!(await accessAuthorized({
+    db,
+    bound,
+    uid,
+    connectorId,
+    access,
+    readPodOwnerIdentity,
+  }))) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
+    const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
+    if (token.status === "disconnected") {
+      res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
+      return;
+    }
+    res.json({ accessToken: token.accessToken });
+    return;
+  }
+  const enc = await readEncryptedAccessToken(db, uid, connectorId);
+  if (!enc) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ accessToken: await decryptSecret(enc) });
+}
+
 export function createConnectorTokenBrokerRoutes(opts: {
   db: Firestore;
   readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
@@ -290,7 +403,7 @@ export function createConnectorTokenBrokerRoutes(opts: {
   const router = Router();
   const { db, readPodOwnerIdentity } = opts;
 
-  router.post("/access-token", async (req, res) => {
+  router.post(["/access-token", "/github-project-clone-access"], async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
 
@@ -305,7 +418,14 @@ export function createConnectorTokenBrokerRoutes(opts: {
       return;
     }
     const access = parsedAccess.status === "valid" ? parsedAccess.value : null;
-    const uid = access?.kind === OWNER_RUNTIME_ACCESS_KIND ? bound.ownerUid : stringBody(req, "uid");
+    const projectCloneBrokerRequest = req.path === "/github-project-clone-access";
+    if (projectCloneBrokerRequest !== (access?.kind === PROJECT_CLONE_ACCESS_KIND)) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const uid = access?.kind === OWNER_RUNTIME_ACCESS_KIND || access?.kind === PROJECT_CLONE_ACCESS_KIND
+      ? bound.ownerUid
+      : stringBody(req, "uid");
     if (!uid) {
       res.status(400).json({ error: "uid required" });
       return;
@@ -315,34 +435,28 @@ export function createConnectorTokenBrokerRoutes(opts: {
       return;
     }
 
-    if (!(await accessAuthorized({
+    if (access?.kind === PROJECT_CLONE_ACCESS_KIND) {
+      await respondProjectCloneAccess({
+        db,
+        bound,
+        uid,
+        access,
+        connectorId,
+        readPodOwnerIdentity,
+        res,
+      });
+      return;
+    }
+
+    await respondAuthorizedAccess({
       db,
       bound,
       uid,
       connectorId,
       access,
       readPodOwnerIdentity,
-    }))) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-
-    if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
-      const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
-      if (token.status === "disconnected") {
-        res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
-        return;
-      }
-      res.json({ accessToken: token.accessToken });
-      return;
-    }
-
-    const enc = await readEncryptedAccessToken(db, uid, connectorId);
-    if (!enc) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json({ accessToken: await decryptSecret(enc) });
+      res,
+    });
   });
 
   return router;

@@ -33,11 +33,15 @@ vi.mock('@octogee/core/internal-fetch', () => ({
   gatewayCredentialHeaders: vi.fn(async () => ({
     'x-octogee-gateway-credential-token': 'credential-token',
   })),
+  sidecarBrokerHeaders: vi.fn(async () => ({
+    'x-octogee-sidecar-broker-token': 'sidecar-token',
+  })),
 }));
 
 import {
   ConnectorTokenBrokerError,
   readConnectorAccessToken,
+  readOwnerGithubProjectCloneAccess,
   readOwnerRuntimeConnectorAccessToken,
   readConnectorClientCreds,
   getFreshAccessToken,
@@ -45,6 +49,7 @@ import {
 import { getConnector } from '../lib/connectors/index.js';
 import { decryptSecret } from '../lib/kms.js';
 import { internalFetch } from '../lib/internal-fetch.js';
+import { sidecarBrokerHeaders } from '@octogee/core/internal-fetch';
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
@@ -223,6 +228,60 @@ describe('readConnectorAccessToken', () => {
     await expect(readOwnerRuntimeConnectorAccessToken('cloudflare')).rejects.toThrow(
       'GATEWAY_BUILDER_SLUG is required',
     );
+    expect(internalFetch).not.toHaveBeenCalled();
+  });
+
+  it('uses the sidecar capability to obtain a GitHub project clone credential', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'bender';
+    process.env.GATEWAY_BUILDER_SLUG = 'alice';
+    vi.mocked(internalFetch).mockResolvedValue(
+      new Response(JSON.stringify({
+        accessToken: 'gho_brokered',
+        repository: { owner: 'octogee-ai', repo: 'octogee' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    await expect(readOwnerGithubProjectCloneAccess('octo')).resolves.toEqual({
+      accessToken: 'gho_brokered',
+      repository: { owner: 'octogee-ai', repo: 'octogee' },
+    });
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      'http://octogee-api.octogee-test.svc.cluster.local:3001/internal/connectors/github-project-clone-access',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-octogee-sidecar-broker-token': 'sidecar-token',
+        },
+        body: JSON.stringify({
+          gatewayId: 'bender',
+          connectorId: 'github',
+          access: { kind: 'project-clone', builderSlug: 'alice', projectSlug: 'octo' },
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('reports an unavailable sidecar capability as a typed broker failure', async () => {
+    process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
+    process.env.GATEWAY_ID = 'bender';
+    process.env.GATEWAY_BUILDER_SLUG = 'alice';
+    vi.mocked(sidecarBrokerHeaders).mockRejectedValueOnce(
+      new Error('projected sidecar broker token unavailable'),
+    );
+
+    const error = await readOwnerGithubProjectCloneAccess('octo').then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      status: 503,
+      errorCode: 'sidecar_broker_credential_unavailable',
+    });
     expect(internalFetch).not.toHaveBeenCalled();
   });
 

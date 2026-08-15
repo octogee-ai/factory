@@ -51,7 +51,7 @@ export interface FleetBrokerClient {
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   uidForSlug(slug: string): Promise<string | null>;
-  githubCloneToken(uid: string): Promise<string | null>;
+  githubTokenForSync(uid: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
   reconcileProjectCoachMembership(uid: string): Promise<void>;
   setProvisioningStatus(
@@ -87,11 +87,11 @@ export interface FleetBrokerClient {
 }
 
 export async function resolveGithubTokenForSlug(
-  client: Pick<FleetBrokerClient, "uidForSlug" | "githubCloneToken">,
+  client: Pick<FleetBrokerClient, "uidForSlug" | "githubTokenForSync">,
   slug: string,
 ): Promise<string | null> {
   const uid = await client.uidForSlug(slug);
-  return uid ? client.githubCloneToken(uid) : null;
+  return uid ? client.githubTokenForSync(uid) : null;
 }
 
 export interface FleetBrokerClientOptions {
@@ -137,7 +137,7 @@ export function createFleetBrokerClient(
         throw err;
       }
     },
-    async githubCloneToken(uid) {
+    async githubTokenForSync(uid) {
       const credentialHeaders = await gatewayCredentialHeaders();
       try {
         const data = await postJson<{ accessToken?: unknown }>(
@@ -148,8 +148,8 @@ export function createFleetBrokerClient(
         return typeof data.accessToken === "string" && data.accessToken ? data.accessToken : null;
       } catch (err) {
         if (
-          err instanceof Error &&
-          ["→ 404", "→ 409", "→ 403"].some((code) => err.message.includes(code))
+          err instanceof Error
+          && ["→ 404", "→ 409", "→ 403"].some((code) => err.message.includes(code))
         ) {
           return null;
         }

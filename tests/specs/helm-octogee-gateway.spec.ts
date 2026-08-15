@@ -112,6 +112,23 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
+  it("mounts the clone-broker capability only in the gateway-edge sidecar", () => {
+    const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
+    const gateway = containerBlock(deployment, "gateway");
+    const edge = containerBlock(deployment, "gateway-edge");
+
+    expect(gateway).not.toContain("sidecar-broker-sa-token");
+    expect(edge).toMatch(
+      /name:\s*OCTOGEE_SIDECAR_BROKER_TOKEN_PATH[\s\S]*?value:\s*"\/var\/run\/secrets\/octogee-sidecar-broker\/token"/,
+    );
+    expect(edge).toMatch(
+      /name:\s*sidecar-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-sidecar-broker/,
+    );
+    expect(deployment).toMatch(
+      /name:\s*sidecar-broker-sa-token[\s\S]*?audience:\s*octogee-api-sidecar-broker/,
+    );
+  });
+
   it("does not inject OpenClaw Doctor into gateway boot", () => {
     const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(containerBlock(deployment, "gateway")).not.toMatch(/OPENCLAW_DOCTOR_MODE/);
