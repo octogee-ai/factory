@@ -614,6 +614,18 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         writeFileSync(path.join(codexHome, "auth.json"), "codex-shell-credential");
         writeFileSync(path.join(codexHome, "auth.json.tmp"), "codex-shell-temp");
         writeFileSync(path.join(staging, "auth.json"), "codex-shell-staging");
+        const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+        db.exec(
+          "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+        );
+        db.prepare(
+          "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+        ).run(
+          "primary",
+          JSON.stringify({ profiles: { "openai-codex:default": { provider: "openai-codex" } } }),
+          Date.now(),
+        );
+        db.close();
       },
     );
 
@@ -626,6 +638,35 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(agentDir, "codex-home", "auth.json"))).toBe(true);
     expect(existsSync(path.join(agentDir, "codex-home", "auth.json.tmp"))).toBe(true);
     expect(existsSync(path.join(agentDir, "codex-home.staging", "auth.json"))).toBe(true);
+    const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), { readOnly: true });
+    const row = db.prepare(
+      "SELECT store_json AS value FROM auth_profile_store WHERE store_key = ?",
+    ).get("primary") as { value: string };
+    db.close();
+    expect(JSON.parse(row.value).profiles).toEqual(canonicalAgentAuthProfiles(agentId));
+  });
+
+  it("builder class leaves a fresh agent database for OpenClaw to initialize", () => {
+    const agentId = "octogee-alice-coach";
+    const result = runPolicyWithDir("builder", {
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+        },
+        list: [{ id: agentId, model: "openai/gpt-5.5" }],
+      },
+      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+    });
+
+    const agentDir = path.join(result.dir, "agents", agentId, "agent");
+    expect(existsSync(agentDir)).toBe(true);
+    expect(existsSync(path.join(agentDir, "models.json"))).toBe(true);
+    expect(existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
   });
 
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
