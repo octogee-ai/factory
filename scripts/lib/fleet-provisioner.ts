@@ -52,11 +52,15 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
-import { addCustomerToGateway, removeCustomerFromGateway } from "./customer-lifecycle.js";
+import {
+  addCustomerToGateway,
+  cloneMissingProjects,
+  removeCustomerFromGateway,
+} from "./customer-lifecycle.js";
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { isPermanentConfigPatchFailure } from "@octogee/core/apply-config-patch";
-import { startReconcileLoop, type UnmountOutcome } from "./reconcile-loop.js";
+import { startReconcileLoop, type EnsureOutcome, type UnmountOutcome } from "./reconcile-loop.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -167,6 +171,26 @@ export interface ConvergenceHooks {
   forgetRetry: (slug: string) => void;
 }
 
+// A pending optional project checkout must not hold the whole customer stale: re-running
+// the full attach re-patches config and restarts the coach on every retry (observed live
+// 2026-08-14 on shared-a: 205 consecutive ~50s re-attaches, two agent restarts each). The
+// applied store instead records this marker — unequal to every real fingerprint, so the
+// level-triggered loop keeps selecting the slug — and ensureSlug recognizes it and retries
+// ONLY the checkout. Restart-safe on durable disks because the marker persists with the
+// applied-fingerprint store.
+const PENDING_CLONE_FINGERPRINT_SUFFIX = "!clones-pending";
+
+export function pendingCloneAppliedFingerprint(fingerprint: string | undefined): string {
+  return `${fingerprint ?? ""}${PENDING_CLONE_FINGERPRINT_SUFFIX}`;
+}
+
+export function pendingCloneOnlyStale(
+  applied: string | undefined,
+  desired: string | undefined,
+): boolean {
+  return applied !== undefined && applied === pendingCloneAppliedFingerprint(desired);
+}
+
 export interface SettleConvergenceInput {
   now: number;
   slug: string;
@@ -175,10 +199,12 @@ export interface SettleConvergenceInput {
   result: Pick<AddCustomerResult, "pendingProjectClones" | "appliedFingerprint">;
 }
 
-// A converge that left a project checkout absent has NOT reached desired state, so its
-// fingerprint must not be recorded: that marks the customer clean and strands the checkout —
-// and with it the project agent's whole workspace, which is rooted in it — until unrelated
-// drift moves the fingerprint again.
+// A converge that left a project checkout absent has NOT reached desired state, so its real
+// fingerprint must not be recorded — that would mark the customer clean and strand the
+// checkout until unrelated drift. It records the pending-clone MARKER instead: still stale
+// against every real fingerprint, so the loop keeps converging, but recognizably so — the
+// retry re-runs only the checkout, never the full attach with its config write and coach
+// restart.
 //
 // It THROWS rather than returning, and that is load-bearing. reconcile-loop fires
 // onEnsureSuccess on a normal return, which clears gateways/{id}.lastError — erasing the very
@@ -186,12 +212,14 @@ export interface SettleConvergenceInput {
 // persists until a later converge lands the clone and clears it naturally.
 export function settleConvergence(input: SettleConvergenceInput, hooks: ConvergenceHooks): void {
   const { now, slug, desiredFingerprint, prior, result } = input;
+  const settledFingerprint = result.appliedFingerprint ?? desiredFingerprint;
   if (result.pendingProjectClones.length === 0) {
     hooks.forgetRetry(slug);
-    hooks.recordApplied(slug, result.appliedFingerprint ?? desiredFingerprint);
+    hooks.recordApplied(slug, settledFingerprint);
     return;
   }
   const attempts = (prior?.attempts ?? 0) + 1;
+  hooks.recordApplied(slug, pendingCloneAppliedFingerprint(settledFingerprint));
   hooks.rememberRetry(slug, {
     attempts,
     nextAt: now + cloneRetryDelayMs(attempts),
@@ -209,6 +237,10 @@ export interface FinalizeConvergedMountInput extends SettleConvergenceInput {
   writeMountMarker?: (slug: string) => void;
 }
 
+// The mount itself is complete once the attach returns — the coach is wired and verified —
+// so it is stamped and marked BEFORE settleConvergence's pending-clone throw. Leaving the
+// customer unmounted over an absent optional checkout would re-run the full attach on every
+// retry instead of the checkout-only converge the pending-clone marker selects.
 export async function finalizeConvergedMount(input: FinalizeConvergedMountInput): Promise<void> {
   const {
     uid,
@@ -217,9 +249,27 @@ export async function finalizeConvergedMount(input: FinalizeConvergedMountInput)
     writeMountMarker,
     ...convergence
   } = input;
-  settleConvergence(convergence, hooks);
   await stampMounted(uid, true);
   writeMountMarker?.(input.slug);
+  settleConvergence(convergence, hooks);
+}
+
+// The checkout-only converge for a customer whose applied fingerprint is the pending-clone
+// marker: everything else already converged, so retry ONLY the project clones — no config
+// patch, no coach restart. Settling records the real fingerprint once the checkout lands
+// (clearing lastError via the loop's onEnsureSuccess) and re-arms the marker + backoff while
+// it is still absent.
+export async function ensureCustomerCheckoutsOnly(
+  adapter: CustomerLifecycleAdapter,
+  input: Omit<SettleConvergenceInput, "result">,
+  hooks: ConvergenceHooks,
+): Promise<EnsureOutcome> {
+  const { pending } = await cloneMissingProjects(adapter, input.slug);
+  settleConvergence(
+    { ...input, result: { pendingProjectClones: pending } },
+    hooks,
+  );
+  return "noop";
 }
 
 export function registerByosubDeviceAuth(
@@ -969,6 +1019,29 @@ function startMaybeReconcileLoop(params: {
       pendingEvictions: () => readonly string[],
     ) => {
       wrappedAdapter.cancelPendingEviction?.(slug);
+      const convergenceHooks: ConvergenceHooks = {
+        recordApplied: (s, fp) => {
+          if (!fingerprintSource) return;
+          if (fp !== undefined) {
+            appliedFp.set(s, fp);
+            persistAppliedFp();
+          }
+        },
+        rememberRetry: (s, state) => cloneRetry.set(s, state),
+        forgetRetry: (s) => cloneRetry.delete(s),
+      };
+      if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
+        return ensureCustomerCheckoutsOnly(
+          wrappedAdapter,
+          {
+            now: Date.now(),
+            slug,
+            desiredFingerprint: desiredFp.get(slug),
+            prior: cloneRetry.get(slug),
+          },
+          convergenceHooks,
+        );
+      }
       const uid = await wrappedAdapter.uidForSlug(slug);
       if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
       const readCurrentEvictionBatch = createCurrentEvictionBatchReader({
@@ -992,17 +1065,7 @@ function startMaybeReconcileLoop(params: {
         desiredFingerprint: desiredFp.get(slug),
         prior: cloneRetry.get(slug),
         result,
-        hooks: {
-          recordApplied: (s, fp) => {
-            if (!fingerprintSource) return;
-            if (fp !== undefined) {
-              appliedFp.set(s, fp);
-              persistAppliedFp();
-            }
-          },
-          rememberRetry: (s, state) => cloneRetry.set(s, state),
-          forgetRetry: (s) => cloneRetry.delete(s),
-        },
+        hooks: convergenceHooks,
         stampMounted,
         writeMountMarker: wrappedAdapter.writeMountMarker,
       });

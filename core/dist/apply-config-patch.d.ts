@@ -41,6 +41,18 @@ export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: Appl
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
 export declare function replaceCustomerAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
 /**
+ * After the first mount, model authority belongs to the byot-sync pipeline
+ * (BYOK overrides, house pins, picker selections) — the attach path re-ships
+ * each customer entry wholesale, so re-seeding a compiled default here would
+ * revert that pipeline's write on every re-attach and the follow-up sync
+ * would flip it back: two config writes and two agent restarts per converge
+ * (observed live 2026-08-14 on shared-a). An agent whose current entry
+ * carries a model keeps it verbatim; an entry without one (first mount, or
+ * created-but-unseeded) keeps its seed — no pipeline path ever deletes a
+ * model, so seeding on absence converges in one write and stays put.
+ */
+export declare function preserveMountedAgentModels(current: unknown, agentEntries: readonly unknown[]): unknown[];
+/**
  * The customer's slice of the agent roster, as a merge patch that only ever
  * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
  * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,

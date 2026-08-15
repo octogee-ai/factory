@@ -502,7 +502,7 @@ async function reconcileCommunityMembershipIfSupported(adapter, ctx) {
         return [];
     }
 }
-async function cloneMissingProjects(adapter, slug) {
+export async function cloneMissingProjects(adapter, slug) {
     const toClone = await adapter.listProjectsNeedingClone(slug);
     const steps = [];
     const githubCloneToken = createGithubCloneTokenResolver(adapter, slug);
@@ -528,7 +528,7 @@ async function cloneMissingProjects(adapter, slug) {
     const remaining = await adapter.listProjectsNeedingClone(slug);
     const pending = remaining.map((p) => p.projectSlug).sort();
     if (pending.length > 0) {
-        adapter.log(`[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — leaving this customer stale so the next reconcile retries`);
+        adapter.log(`[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — the pending-checkout retry lane re-runs the clone`);
     }
     return { steps, pending };
 }

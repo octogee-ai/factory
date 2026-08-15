@@ -25,6 +25,7 @@ import {
   customerConfigAgentRosterReplacePaths,
   customerConfigReplacePaths,
   mergeCustomerBindings,
+  preserveMountedAgentModels,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   type ConfigCache,
@@ -722,7 +723,7 @@ async function applyAddCustomerConfigPatch(
         const nextAgents = replaceCustomerAgentsInFullAgentList(
           current,
           snapshot.slug,
-          customerAgentEntries,
+          preserveMountedAgentModels(current, customerAgentEntries),
         );
         return {
           agents: {

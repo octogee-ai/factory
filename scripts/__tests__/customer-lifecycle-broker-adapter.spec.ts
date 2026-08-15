@@ -1502,6 +1502,42 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
   });
 
+  it("re-attach preserves the mounted coach's byot-sync-owned model instead of re-seeding the compiled default", async () => {
+    // A byosub Builder on a shared gateway: the attach path has no coach-model
+    // selection (byotActive), while byot-sync owns the entry's model. Re-seeding
+    // the compiled default string here reverted the sync's {primary, fallbacks}
+    // pin on every re-attach — one config write + agent restart per converge,
+    // flipped straight back by the sync for a second (observed live 2026-08-14).
+    const snapshot = aliceSnapshot({ byotActive: true });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => {
+        agents: { entries?: Record<string, { model?: unknown }> };
+      };
+    };
+    const syncOwnedModel = {
+      primary: "platform-openrouter/openai/gpt-5.6-luna",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    };
+    const patch = args.buildPatch({
+      agents: {
+        entries: {
+          "octogee-alice-coach": { model: syncOwnedModel },
+        },
+      },
+      bindings: [],
+    });
+
+    expect(patch.agents.entries?.["octogee-alice-coach"]?.model).toEqual(syncOwnedModel);
+  });
+
   it("deletes the still-undesired batch's agents, then adds the fresh Builder in one config mutation", async () => {
     const roster = {
       agents: {
@@ -1782,7 +1818,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     const patch = args.buildPatch(current);
     expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
-      model: "platform-openrouter/openai/gpt-5.6-luna",
+      // The mounted entry's model is byot-sync's to converge — the attach keeps it.
+      model: "stale",
       memory: {
         search: platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"),
       },
