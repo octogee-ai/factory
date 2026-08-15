@@ -30,7 +30,7 @@ describe("firebase deployer Terraform IAM", () => {
     expect(firebaseDeployer?.[1]).toContain('"roles/datastore.indexAdmin"');
   });
 
-  it("allows the deployer to sign Firebase custom tokens only as itself", () => {
+  it("allows the deployer and the exact GitHub repository pool to sign Firebase custom tokens", () => {
     const moduleSource = readFileSync(iamModule, "utf-8");
     const prodSource = readFileSync(centralPlatform, "utf-8");
     const testSource = readFileSync(testEnvironment, "utf-8");
@@ -39,20 +39,32 @@ describe("firebase deployer Terraform IAM", () => {
       const role = source.match(
         /resource "google_project_iam_custom_role" "firebase_custom_token_signer" \{([\s\S]*?)^\}/m,
       )?.[1];
-      const binding = source.match(
+      const selfBinding = source.match(
         /resource "google_service_account_iam_member" "firebase_deployer_self_custom_token_signer" \{([\s\S]*?)^\}/m,
+      )?.[1];
+      const githubActionsBinding = source.match(
+        /resource "google_service_account_iam_member" "firebase_deployer_github_actions_custom_token_signer" \{([\s\S]*?)^\}/m,
       )?.[1];
 
       expect(role).toContain('role_id     = "octogeeFirebaseCustomTokenSigner"');
       expect(role).toContain('permissions = ["iam.serviceAccounts.signBlob"]');
-      expect(binding).toContain(
+      expect(selfBinding).toContain(
         'service_account_id = "projects/${var.project_id}/serviceAccounts/${module.iam.firebase_deployer_sa_email}"',
       );
-      expect(binding).toContain(
+      expect(selfBinding).toContain(
         "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
       );
-      expect(binding).toContain(
+      expect(selfBinding).toContain(
         'member             = "serviceAccount:${module.iam.firebase_deployer_sa_email}"',
+      );
+      expect(githubActionsBinding).toContain(
+        'service_account_id = "projects/${var.project_id}/serviceAccounts/${module.iam.firebase_deployer_sa_email}"',
+      );
+      expect(githubActionsBinding).toContain(
+        "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
+      );
+      expect(githubActionsBinding).toContain(
+        "principalSet://iam.googleapis.com/projects/94934561284/locations/global/workloadIdentityPools/github-actions/attribute.repository_id/1181841184",
       );
       expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
     }
