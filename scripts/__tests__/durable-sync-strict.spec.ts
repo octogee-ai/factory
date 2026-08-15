@@ -24,6 +24,8 @@ vi.mock("../lib/config.js", () => ({
 
 const {
   externalizeCustomerGitDir,
+  retryAllCustomerRepositoryPushes,
+  syncAllCustomerRepositories,
   syncAllWorkspaces,
   syncCustomerRepositoriesForSlug,
 } = await import("../lib/git.js");
@@ -138,6 +140,65 @@ describe("strict durable sync", () => {
       cwd: projectRemote,
       encoding: "utf8",
     })).toBe("project checkpoint\n");
+  });
+
+  it("retries a project push that failed after the local checkpoint committed", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remote = path.join(paths.root, "remotes", "project.git");
+    initPushableRepo(customer, path.join(paths.root, "remotes", "workspace.git"));
+    initPushableRepo(project, remote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(project, "README.md"), "recoverable project checkpoint\n");
+    let failFirstPush = true;
+    const flakyGitExec = (cwd: string, argv: string[]): string | null => {
+      if (cwd === project && argv[0] === "push" && failFirstPush) {
+        failFirstPush = false;
+        return null;
+      }
+      return testGitExec(cwd, argv);
+    };
+
+    await syncAllCustomerRepositories({
+      gitExec: flakyGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+    expect(testGitExec(remote, ["rev-parse", "refs/heads/main"])).toBeNull();
+
+    await retryAllCustomerRepositoryPushes({
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(execFileSync("git", ["show", "main:README.md"], {
+      cwd: remote,
+      encoding: "utf8",
+    })).toBe("recoverable project checkpoint\n");
+  });
+
+  it("does not commit in-progress work during push recovery", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remote = path.join(paths.root, "remotes", "project.git");
+    initPushableRepo(project, remote);
+    fs.writeFileSync(path.join(project, "README.md"), "committed checkpoint\n");
+    execFileSync("git", ["add", "README.md"], { cwd: project });
+    execFileSync("git", ["commit", "-q", "-m", "existing checkpoint"], { cwd: project });
+    fs.writeFileSync(path.join(project, "IN_PROGRESS.md"), "do not commit\n");
+
+    await retryAllCustomerRepositoryPushes({
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(execFileSync("git", ["show", "main:README.md"], {
+      cwd: remote,
+      encoding: "utf8",
+    })).toBe("committed checkpoint\n");
+    expect(execFileSync("git", ["status", "--porcelain"], {
+      cwd: project,
+      encoding: "utf8",
+    })).toBe("?? IN_PROGRESS.md\n");
   });
 
   it("a slug-scoped migration blob flush does not touch another customer", async () => {

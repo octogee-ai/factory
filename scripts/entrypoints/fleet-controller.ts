@@ -12,7 +12,11 @@ import {
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import { syncAllWorkspaces, syncCustomerRepositoriesForSlug } from "../lib/git.js";
+import {
+  retryAllCustomerRepositoryPushes,
+  syncAllCustomerRepositories,
+  syncCustomerRepositoriesForSlug,
+} from "../lib/git.js";
 import {
   buildBrokeredLifecycleAdapter,
   projectCheckoutScopeForRuntime,
@@ -28,7 +32,10 @@ import { startFleetController } from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
-import { startWorkspaceAutosaveLoop } from "../lib/workspace-autosave-runner.js";
+import {
+  startWorkspaceAutosaveLoop,
+  startWorkspacePushRecoveryLoop,
+} from "../lib/workspace-autosave-runner.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   checkpointDurableSystemConfigForSlug,
@@ -301,7 +308,9 @@ async function main(): Promise<void> {
     {
       envValue: process.env.WORKSPACE_AUTOSAVE_ENABLED,
       isBuilderGateway,
-      syncWorkspaces: syncAllWorkspaces,
+      syncWorkspaces: () => syncAllCustomerRepositories({
+        resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
+      }),
       syncBlobs: builder
         ? undefined
         : () => blobSyncAllWithOptions({
@@ -311,6 +320,17 @@ async function main(): Promise<void> {
     },
     GIT_SYNC_INTERVAL_MS,
   );
+  const pushRecoveryTimer = builder
+    ? startWorkspacePushRecoveryLoop(
+        {
+          syncWorkspaces: () => retryAllCustomerRepositoryPushes({
+            resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
+          }),
+          log,
+        },
+        GIT_SYNC_INTERVAL_MS,
+      )
+    : null;
   const usageTimer = builder
     ? null
     : startUsageEventTailer({
@@ -329,6 +349,7 @@ async function main(): Promise<void> {
   const cleanup = async () => {
     runtimeHealthPublisher?.close();
     if (autosaveTimer) clearInterval(autosaveTimer);
+    if (pushRecoveryTimer) clearInterval(pushRecoveryTimer);
     if (usageTimer) clearInterval(usageTimer);
     try { await fleetHandle.stop(); } catch {}
     try { await rpc.close(); } catch {}

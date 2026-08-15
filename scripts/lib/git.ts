@@ -1651,6 +1651,19 @@ function pushAndLog(
   }
 }
 
+function hasUnpushedLocalCommit(
+  repoDir: string,
+  keyArg: string | undefined,
+  runGit: GitRunner,
+  githubToken?: string | null,
+): boolean {
+  const localHead = runGit(repoDir, ["rev-parse", "HEAD"]);
+  if (!localHead) return false;
+  const remoteMain = runGit(repoDir, ["ls-remote", "--heads", "origin", "main"], keyArg, githubToken);
+  if (remoteMain === null || remoteMain === "") return true;
+  return remoteMain.split(/\s+/u)[0] !== localHead;
+}
+
 interface WorkspaceSyncLease {
   release(): void;
 }
@@ -1708,11 +1721,16 @@ interface RepositorySyncTarget {
   label: string;
 }
 
+function requirePushedInStrictSync(target: RepositorySyncTarget, strict: boolean, pushed: boolean): void {
+  if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
+}
+
 // eslint-disable-next-line max-params -- sync policy and injected mutation controls are intentionally explicit
 function syncOneRepository(
   slug: string,
   target: RepositorySyncTarget,
   strict: boolean,
+  commitPendingChanges: boolean,
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
@@ -1748,12 +1766,14 @@ function syncOneRepository(
       }
     }
 
-    const committed = commitLocalChanges(target.dir, target.label, strict, runGit);
+    const committed = commitPendingChanges
+      ? commitLocalChanges(target.dir, target.label, strict, runGit)
+      : false;
     rebaseFromOriginIfPresent(target.dir, keyArg, runGit, githubToken);
 
-    if (committed || strict) {
+    if (committed || strict || hasUnpushedLocalCommit(target.dir, keyArg, runGit, githubToken)) {
       const pushed = pushAndLog(target.dir, target.label, keyArg, runGit, githubToken);
-      if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
+      requirePushedInStrictSync(target, strict, pushed);
     }
   }, { strict, acquire });
 }
@@ -1782,6 +1802,7 @@ async function syncRepositoryTargets(
   slug: string,
   targets: RepositorySyncTarget[],
   strict: boolean,
+  commitPendingChanges: boolean,
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
@@ -1813,6 +1834,7 @@ async function syncRepositoryTargets(
         slug,
         target,
         strict,
+        commitPendingChanges,
         runGit,
         prepareRepository,
         acquire,
@@ -1831,6 +1853,7 @@ async function syncRepositoryTargets(
 
 export interface SyncCustomerRepositoriesOptions {
   strict?: boolean;
+  recoverUnpushedOnly?: boolean;
   gitExec?: GitRunner;
   prepareRepository?: typeof setRepoSshCommand;
   acquireWorkspaceMutationLease?: WorkspaceSyncLeaseFactory;
@@ -1845,11 +1868,18 @@ export async function syncCustomerRepositoriesForSlug(
     slug,
     [workspaceSyncTarget(slug), ...projectSyncTargets(slug)],
     opts.strict === true,
+    opts.recoverUnpushedOnly !== true,
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
     opts.acquireWorkspaceMutationLease,
     opts.resolveGithubToken,
   );
+}
+
+export async function retryAllCustomerRepositoryPushes(
+  opts: Omit<SyncCustomerRepositoriesOptions, "recoverUnpushedOnly"> = {},
+): Promise<void> {
+  await syncAllCustomerRepositories({ ...opts, recoverUnpushedOnly: true });
 }
 
 export async function syncAllCustomerRepositories(
@@ -1886,6 +1916,7 @@ export async function syncAllWorkspaces(opts: SyncAllWorkspacesOptions = {}): Pr
         slug,
         workspaceSyncTarget(slug),
         opts.strict === true,
+        true,
         opts.gitExec ?? gitExec,
         opts.prepareRepository ?? setRepoSshCommand,
         opts.acquireWorkspaceMutationLease,
