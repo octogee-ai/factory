@@ -75,11 +75,14 @@ function sourceGitEnvironment(
 function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitEnvironment()): Promise<string> {
   return new Promise((resolve, reject) => {
     const githubToken = env.OCTOGEE_GITHUB_TOKEN;
-    const commandArgs = fs.existsSync(path.join(cwd, ".git"))
-      ? workspaceGitCommandArgs(cwd, args, Boolean(githubToken))
-      : githubToken
-        ? githubAgentImportCloneCommandArgs(args)
-        : [...WORKSPACE_GIT_HARDENING_PINS, ...args];
+    let commandArgs: string[];
+    if (fs.existsSync(path.join(cwd, ".git"))) {
+      commandArgs = workspaceGitCommandArgs(cwd, args, Boolean(githubToken));
+    } else if (githubToken) {
+      commandArgs = githubAgentImportCloneCommandArgs(args);
+    } else {
+      commandArgs = [...WORKSPACE_GIT_HARDENING_PINS, ...args];
+    }
     const child = spawn("/usr/bin/git", commandArgs, {
       cwd,
       env: workspaceGitEnvironment(env, cwd, githubToken),
