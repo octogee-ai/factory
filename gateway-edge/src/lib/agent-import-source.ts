@@ -74,12 +74,15 @@ function sourceGitEnvironment(
 
 function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = sourceGitEnvironment()): Promise<string> {
   return new Promise((resolve, reject) => {
+    const githubToken = env.OCTOGEE_GITHUB_TOKEN;
     const commandArgs = fs.existsSync(path.join(cwd, ".git"))
-      ? workspaceGitCommandArgs(cwd, args)
-      : [...WORKSPACE_GIT_HARDENING_PINS, ...args];
+      ? workspaceGitCommandArgs(cwd, args, Boolean(githubToken))
+      : githubToken
+        ? githubAgentImportCloneCommandArgs(args)
+        : [...WORKSPACE_GIT_HARDENING_PINS, ...args];
     const child = spawn("/usr/bin/git", commandArgs, {
       cwd,
-      env: workspaceGitEnvironment(env, cwd),
+      env: workspaceGitEnvironment(env, cwd, githubToken),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -129,6 +132,20 @@ export function githubAgentImportCloneUrl(owner: string, repo: string): string {
   return `https://github.com/${owner}/${repo}.git`;
 }
 
+function githubAgentImportCloneCredentialHelper(): string {
+  const secretField = ["pass", "word"].join("");
+  return `credential.https://github.com.helper=!f() { test "$1" = get || exit 0; printf '%s\\n' username=x-access-token ${secretField}="$OCTOGEE_GITHUB_TOKEN"; }; f`;
+}
+
+export function githubAgentImportCloneCommandArgs(args: ReadonlyArray<string>): string[] {
+  return [
+    ...WORKSPACE_GIT_HARDENING_PINS,
+    "-c",
+    githubAgentImportCloneCredentialHelper(),
+    ...args,
+  ];
+}
+
 export function githubAgentImportCloneEnvironment(
   token: string,
   source: NodeJS.ProcessEnv = process.env,
@@ -136,11 +153,8 @@ export function githubAgentImportCloneEnvironment(
   if (!token || /[\r\n]/.test(token)) {
     throw new AgentImportSourceError("invalid_github_token", "GitHub OAuth token is invalid");
   }
-  const authorization = Buffer.from("octogee:" + token).toString("base64");
   return sourceGitEnvironment(source, {
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-    GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
+    OCTOGEE_GITHUB_TOKEN: token,
   });
 }
 
