@@ -521,6 +521,11 @@ export function createApp(opts: CreateAppOptions = {}) {
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
     audience: PROJECT_PUBLISH_CONTROL_AUDIENCE,
   });
+  const projectHostingRetirementReviewer = createKubernetesTokenReviewer({
+    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
+    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
+    audience: PROJECT_HOSTING_RETIREMENT_AUDIENCE,
+  });
   app.use("/internal/project-publish-control", createProjectPublishControlRoutes({
     allocations: projectPublishAllocations,
     auth: requireProjectPublishService({
@@ -534,7 +539,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     db,
     retire: retireProjectHosting,
     auth: requireProjectPublishService({
-      reviewer: projectPublishControlReviewer,
+      reviewer: projectHostingRetirementReviewer,
       namespace,
       serviceAccount: "glm-controller",
       audience: PROJECT_HOSTING_RETIREMENT_AUDIENCE,
