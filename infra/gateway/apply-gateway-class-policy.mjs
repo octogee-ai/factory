@@ -1028,6 +1028,7 @@ function canonicalAgentAuthProfiles(agentId) {
 function scrubAgentOauthProfiles(agentDir, agentId) {
   fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) return false;
   const db = new DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA busy_timeout = 30000;");
