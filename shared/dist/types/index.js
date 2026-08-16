@@ -3,6 +3,7 @@ export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetenti
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export { AGENT_IMPORT_FORMAT_VERSION, AGENT_IMPORT_AUTHORIZATION_INTENTS, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, isAgentImportAuthorizationIntent, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
 export { FEATURE_FLAGS, FEATURE_FLAG_KEYS, USER_VISIBLE_FEATURE_FLAG_KEYS, isFeatureFlagKey, } from './feature-flags.js';
+export { TALK_INPUT_SAMPLE_RATE, TALK_OUTPUT_SAMPLE_RATE, TALK_PROTOCOL_VERSION, TALK_SETTINGS_DEFAULTS, TALK_TICKET_PURPOSE, VOICE_TALK_FLAG, parseTalkClientMessage, parseTalkServerEvent, parseTalkSettings, resolveTalkSettings, } from './voice.js';
 export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';
 export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, resolveSignupOfferBudget, signupOfferBudgetForOwner, signupOfferDayIndex, } from './billing.js';

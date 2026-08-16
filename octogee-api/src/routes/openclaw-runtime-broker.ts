@@ -64,6 +64,7 @@ interface ChannelPair {
 }
 
 const TICKETS = "gatewayTickets";
+const REDEEMABLE_WS_TICKET_PURPOSES: ReadonlySet<string> = new Set(["openclaw-ws", "voice-ws"]);
 const FORBIDDEN = { error: "forbidden" } as const;
 const RECEIPT_MAX_LEASE_MS = 60_000;
 const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -1064,6 +1065,11 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
       res.status(400).json({ error: "ticketId required" });
       return;
     }
+    const requestedPurpose = stringBody(req, "purpose") || "openclaw-ws";
+    if (!REDEEMABLE_WS_TICKET_PURPOSES.has(requestedPurpose)) {
+      res.status(400).json({ error: "unsupported ticket purpose" });
+      return;
+    }
 
     const result = await db.runTransaction<{
       status: number;
@@ -1076,7 +1082,7 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
       const uid = typeof ticket.uid === "string" ? ticket.uid : "";
       const purpose = ticket.purpose;
       const expiresAt = ticket.expiresAt;
-      if (!uid || purpose !== "openclaw-ws" || typeof expiresAt !== "number" || expiresAt < Date.now()) {
+      if (!uid || purpose !== requestedPurpose || typeof expiresAt !== "number" || expiresAt < Date.now()) {
         return { status: 401, body: { error: "unauthorized" } };
       }
 

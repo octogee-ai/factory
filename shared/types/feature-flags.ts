@@ -6,6 +6,7 @@ export const FEATURE_FLAG_KEYS = [
   "release-obsidian-connection",
   "release-workspace-sharing",
   "release-project-repo-source",
+  "release-voice-talk",
 ] as const;
 
 export type FeatureFlagKey = typeof FEATURE_FLAG_KEYS[number];
@@ -23,6 +24,7 @@ export const FEATURE_FLAGS: Record<FeatureFlagKey, FeatureFlagDefinition> = {
   "release-obsidian-connection": { userVisible: true },
   "release-workspace-sharing": { userVisible: true },
   "release-project-repo-source": { userVisible: true, adminBypass: true },
+  "release-voice-talk": { userVisible: true, adminBypass: true },
 };
 
 export function featureFlagBypassedForAdmin(

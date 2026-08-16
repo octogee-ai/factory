@@ -9,6 +9,8 @@ export interface CoachIdentityPatch {
   name?: string;
   persona?: string;
   emoji?: string;
+  /** Speech-engine voice id for Talk mode; "" restores the engine default. */
+  voice?: string;
   avatarPng?: Buffer;
 }
 
@@ -54,6 +56,10 @@ function applyTextIdentity(
   if (typeof patch.emoji === "string" && patch.emoji) {
     update.avatarEmoji = patch.emoji;
     updated.push("emoji");
+  }
+  if (typeof patch.voice === "string") {
+    update.voice = patch.voice;
+    updated.push("voice");
   }
 }
 

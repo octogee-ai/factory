@@ -229,6 +229,10 @@
     "./types/workspace": {
       "types": "./dist/types/workspace.d.ts",
       "default": "./dist/types/workspace.js"
+    },
+    "./types/voice": {
+      "types": "./dist/types/voice.d.ts",
+      "default": "./dist/types/voice.js"
     }
   },
   "typesVersions": {
@@ -385,6 +389,9 @@
       ],
       "types/workspace": [
         "dist/types/workspace.d.ts"
+      ],
+      "types/voice": [
+        "dist/types/voice.d.ts"
       ]
     }
   },

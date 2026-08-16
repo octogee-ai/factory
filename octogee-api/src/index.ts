@@ -1,4 +1,5 @@
 
+import http from "node:http";
 import express, { Request, Response, type RequestHandler } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
@@ -66,6 +67,7 @@ import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builde
 import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
+import { createVoiceRoutes } from "../../gateway-edge/src/routes/voice.js";
 import { createProductivityApprovalRoutes } from "../../gateway-edge/src/routes/productivity-approvals.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
 import { createStripeSessionRoutes } from "../../gateway-edge/src/routes/billing/stripe-session.js";
@@ -105,6 +107,13 @@ import {
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
+import { createVoiceCatalog, type VoiceCatalog } from "./voice/catalog.js";
+import { parseVoiceRelayConfig, type VoiceRelayConfig } from "./voice/config.js";
+import {
+  createVoiceRelayRoutes,
+  createVoiceRelayUpgradeHandler,
+  type VoiceRelayUpgradeAuth,
+} from "./voice/relay.js";
 import { createGatewayCredentialAuth } from "./middleware/gateway-credential-auth.js";
 import {
   GATEWAY_CREDENTIAL_TOKEN_AUDIENCE,
@@ -182,6 +191,7 @@ export interface CreateAppOptions {
   askOpsAgent?: AskOpsAgent;
   resolveOpsAgentModel?: OpsAgentModelResolver;
   featurePolicy?: FeaturePolicy;
+  voiceRelayConfig?: VoiceRelayConfig | null;
   productAnalytics?: ProductAnalytics;
   postHogServices?: PostHogServices;
   projectRunControlPlane?: ProjectRunControlPlane;
@@ -334,7 +344,7 @@ function recordProductEvent(
   }
 }
 
-function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
+function clusterRouteOverrides(featurePolicy: FeaturePolicy, voiceCatalog: VoiceCatalog) {
   return {
     mmRestProxyHandler,
     mattermostMintRoutes,
@@ -345,6 +355,7 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy) {
     sharingRoutes: createSharingRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
+    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)
       .use(createProductivityApprovalRoutes({ db })),
@@ -398,6 +409,31 @@ function mountDiagnosticRoutes(
   };
   app.get("/health", healthHandler);
   app.get("/api/health", healthHandler);
+}
+
+async function authorizeVoiceRelayUpgrade(
+  app: ReturnType<typeof express>,
+  bindTenant: RequestHandler,
+  upgradeReq: http.IncomingMessage,
+): Promise<VoiceRelayUpgradeAuth> {
+  const req = Object.setPrototypeOf(upgradeReq, app.request) as Request;
+  const res = Object.setPrototypeOf(new http.ServerResponse(upgradeReq), app.response) as Response;
+  req.res = res;
+  res.req = req;
+  await new Promise<void>((resolve, reject) => {
+    bindTenant(req, res, (err?: unknown) => {
+      if (!err) {
+        resolve();
+        return;
+      }
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+  const bound = req.boundTenant;
+  if (!bound || bound.kind !== "gateway") return { ok: false, status: 403 };
+  const claimed = new URL(upgradeReq.url ?? "/", "https://relay.local").searchParams.get("gatewayId");
+  if (claimed && claimed !== bound.gatewayId) return { ok: false, status: 403 };
+  return { ok: true, gatewayId: bound.gatewayId };
 }
 
 // eslint-disable-next-line max-lines-per-function, complexity -- application assembly keeps route ownership and dependency wiring explicit
@@ -602,7 +638,9 @@ export function createApp(opts: CreateAppOptions = {}) {
     }
     sidecarBrokerAuth(req, res, next);
   });
-  mountClusterRoutes(app, clusterRouteOverrides(featurePolicy));
+  const voiceRelayConfig = opts.voiceRelayConfig === undefined ? parseVoiceRelayConfig() : opts.voiceRelayConfig;
+  const voiceRelayLog = (message: string, fields?: Record<string, unknown>) => logger.warn(message, fields ?? {});
+  mountClusterRoutes(app, clusterRouteOverrides(featurePolicy, createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog })));
   const chatArtifacts = defaultChatArtifactRoutes();
   app.use("/api/chat/artifacts", chatArtifacts.public);
   // App-facing, Firebase-authed: Codex-style link unfurl (SSRF-guarded). Lives
@@ -623,6 +661,20 @@ export function createApp(opts: CreateAppOptions = {}) {
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
+  // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
+  // audio and fetch speech here so provider keys never reach a gateway pod.
+  app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, log: voiceRelayLog }));
+  const voiceRelayUpgrade = createVoiceRelayUpgradeHandler({
+    config: voiceRelayConfig,
+    log: voiceRelayLog,
+    authorize: (upgradeReq) => authorizeVoiceRelayUpgrade(app, tenantBindingMiddleware, upgradeReq),
+  });
+  app.locals.attachUpgradeHandlers = (server: http.Server) => {
+    server.on("upgrade", (upgradeReq, socket, head) => {
+      if (voiceRelayUpgrade(upgradeReq, socket, head)) return;
+      socket.destroy();
+    });
+  };
   // octogee-api-only: broker standard gateway fleet-mount Firestore/MM
   // operations. The shell-bearing gateway sees only assigned roster snapshots
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
@@ -776,6 +828,7 @@ const app = createApp();
 
 if (process.env.NODE_ENV !== "test") {
   const server = app.listen(PORT, () => {
+    (app.locals.attachUpgradeHandlers as ((s: http.Server) => void) | undefined)?.(server);
     logger.info(`octogee-api boot — listening on port ${PORT}`, {
       port: PORT,
       env: process.env.K8S_NAMESPACE || "local",

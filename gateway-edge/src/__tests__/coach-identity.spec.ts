@@ -146,6 +146,14 @@ describe("syncCoachIdentity", () => {
     expect(mockSet).toHaveBeenCalledTimes(1);
   });
 
+  it("persists the Talk voice on agents/{uid} without touching Mattermost, and an empty voice restores the default", async () => {
+    expect(await syncCoachIdentity("u1", { voice: "gb_jane_confident" })).toEqual(["voice"]);
+    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ id: "u1", voice: "gb_jane_confident" }), { merge: true });
+    expect(mockMmApi).not.toHaveBeenCalled();
+    expect(await syncCoachIdentity("u1", { voice: "" })).toEqual(["voice"]);
+    expect(mockSet).toHaveBeenLastCalledWith(expect.objectContaining({ voice: "" }), { merge: true });
+  });
+
   it("no-ops on an empty patch (no Firestore write)", async () => {
     const updated = await syncCoachIdentity("u1", {});
     expect(updated).toEqual([]);

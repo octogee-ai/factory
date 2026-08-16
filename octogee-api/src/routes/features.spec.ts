@@ -32,6 +32,7 @@ describe("GET /api/features", () => {
         "release-obsidian-connection": false,
         "release-workspace-sharing": false,
         "release-project-repo-source": false,
+        "release-voice-talk": false,
       },
     });
   });

@@ -74,6 +74,8 @@ import {
 import type { ActivitySinkControlLifecycle } from "./openclaw/activity-sink.js";
 import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
+import { createVoiceWsUpgradeHandler } from "../voice/route.js";
+import { SileroVad } from "../voice/silero-vad.js";
 import {
   resolveActivityBridgeMode,
   resolveActivityBridgeSelection,
@@ -953,12 +955,31 @@ export function attachChatProxyWsUpgrade(
 
   const wsRouter = new WsUpgradeRouter();
   const upgradeGate = opts.upgradeGate ?? null;
+  const voiceWsUpgrade = createVoiceWsUpgradeHandler({
+    runtimeBroker: {
+      redeemOpenClawWs: (ticket, purpose) =>
+        (opts.runtimeBroker ?? getOpenClawRuntimeBroker()).redeemOpenClawWs(ticket, purpose),
+    },
+    establishUpstream: establishUpstreamWithRotation,
+    upgradeGate,
+    isAllowedWsOrigin,
+    stripGatewayPrefix,
+    relayBaseUrl: process.env.OPENCLAW_RUNTIME_BROKER_URL ?? "",
+    mmInternalUrl: MM_INTERNAL_URL,
+    createVad: () => SileroVad.create(),
+    registry: chatProxyMetricsRegistry,
+    log: (message, fields) => console.log(`[voice] ${message}`, fields ?? {}),
+  });
 
   server.on("upgrade", (req, socket, head) => {
     if (guardUpgradeRequest(upgradeGate, req, socket)) return;
     const originalUrl = req.url ?? "(none)";
 
     const urlPath = applyGatewayPrefixStripInPlace(req);
+    if (urlPath.startsWith("/api/voice/ws/")) {
+      void voiceWsUpgrade(req, socket, head);
+      return;
+    }
     if (urlPath.startsWith("/api/openclaw/ws/")) {
       handleOpenClawWsUpgrade(
         wss,

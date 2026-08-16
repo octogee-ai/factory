@@ -596,6 +596,47 @@ else
     --from-literal=cost_per_credit_usd="$TAVILY_COST_PER_CREDIT_USD"
 fi
 
+# ── 7c. Voice relay speech-provider keys (octogee-api /internal/voice) ─────
+# Talk mode's relay is the only place speech-provider keys live (gateway pods
+# never see them). One Mistral key serves Voxtral Realtime STT + Voxtral TTS;
+# VOICE_STT_API_KEY / VOICE_TTS_API_KEY override either half. Talk stays dark
+# until VOICE_* engine env is set on octogee-api regardless of these keys.
+info "voice-provider"
+set +u
+MISTRAL_API_KEY="${MISTRAL_API_KEY:-}"
+VOICE_STT_API_KEY="${VOICE_STT_API_KEY:-}"
+VOICE_TTS_API_KEY="${VOICE_TTS_API_KEY:-}"
+set -u
+voice_key_from_env() {
+  local name="$1" value="$2"
+  [[ -n "$value" ]] || return 0
+  secret_manager_persist_value "$name" "$value" "$FIREBASE_PROJECT" \
+    || fail "Could not persist $name to Secret Manager ($FIREBASE_PROJECT)"
+  ok "Secret Manager: $name"
+}
+voice_key_from_env MISTRAL_API_KEY "$MISTRAL_API_KEY"
+voice_key_from_env VOICE_STT_API_KEY "$VOICE_STT_API_KEY"
+voice_key_from_env VOICE_TTS_API_KEY "$VOICE_TTS_API_KEY"
+[[ -z "$MISTRAL_API_KEY" ]] && MISTRAL_API_KEY=$(sm_get MISTRAL_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$VOICE_STT_API_KEY" ]] && VOICE_STT_API_KEY=$(sm_get VOICE_STT_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+[[ -z "$VOICE_TTS_API_KEY" ]] && VOICE_TTS_API_KEY=$(sm_get VOICE_TTS_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+# Without a Mistral key the platform OpenRouter key serves both halves (batch
+# Voxtral transcription + Kokoro/Voxtral speech through OpenRouter — the
+# zero-signup recipe in docs/operations/VOICE-TALK.md); the VOICE_* engine env
+# in helm values decides which provider each half actually calls.
+if [[ -n "$MISTRAL_API_KEY" ]]; then
+  [[ -z "$VOICE_STT_API_KEY" ]] && VOICE_STT_API_KEY="$MISTRAL_API_KEY"
+  [[ -z "$VOICE_TTS_API_KEY" ]] && VOICE_TTS_API_KEY="$MISTRAL_API_KEY"
+  ok "voice-provider: Mistral key (Voxtral Realtime STT + Voxtral TTS)"
+else
+  [[ -z "$VOICE_STT_API_KEY" ]] && VOICE_STT_API_KEY="$OPENROUTER_API_KEY"
+  [[ -z "$VOICE_TTS_API_KEY" ]] && VOICE_TTS_API_KEY="$OPENROUTER_API_KEY"
+  ok "voice-provider: no MISTRAL_API_KEY — platform OpenRouter key serves the halves not overridden (batch STT; use the OpenRouter blocks in VOICE_* env)"
+fi
+ksecret voice-provider \
+  --from-literal=stt_api_key="$VOICE_STT_API_KEY" \
+  --from-literal=tts_api_key="$VOICE_TTS_API_KEY"
+
 # ── 8. Connector OAuth client secrets (octogee-api /api/connect/<provider>) ─
 # octogee-api reads client_id + client_secret from these K8s secrets to run the
 # Connections OAuth flow (helm wires them with optional:true). Sourced from the
@@ -1077,6 +1118,8 @@ completeness_row "system-notification-bearer"                   "${SYSTEM_NOTIFI
 completeness_row "octogee-anthropic"                            "${ANTHROPIC_API_KEY:-}"                    launch
 completeness_row "octogee-openrouter"                           "${OPENROUTER_API_KEY:-}"                   launch
 completeness_row "openai-embeddings"                            "${OPENAI_API_KEY:-}"                       optional
+completeness_row "voice-provider / stt_api_key"                 "${VOICE_STT_API_KEY:-}"                    optional
+completeness_row "voice-provider / tts_api_key"                 "${VOICE_TTS_API_KEY:-}"                    optional
 completeness_row "resend-secrets / api_key"                     "${RESEND_API_KEY:-}"                       launch
 completeness_row "resend-secrets / from_email"                  "${RESEND_FROM_EMAIL:-}"                    launch
 completeness_row "github-oauth / client_id"                     "${GITHUB_CLIENT_ID:-}"                     "$(octogee_oauth_provider_requirement github)"

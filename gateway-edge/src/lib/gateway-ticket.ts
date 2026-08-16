@@ -10,6 +10,7 @@ export const GATEWAY_TICKET_PURPOSES = [
   "mattermost-ws",
   "openclaw-ws",
   "preview",
+  "voice-ws",
 ] as const;
 export type GatewayTicketPurpose = (typeof GATEWAY_TICKET_PURPOSES)[number];
 
@@ -66,6 +67,7 @@ const POLICIES: Record<GatewayTicketPurpose, PurposePolicy> = {
   "mattermost-ws": { ttlMs: 30_000 },
   "openclaw-ws": { ttlMs: 30_000 },
   "preview": { ttlMs: 30_000 },
+  "voice-ws": { ttlMs: 30_000, perUidCap: 5, hourlyQuota: 120 },
 };
 
 const COLLECTION = "gatewayTickets";

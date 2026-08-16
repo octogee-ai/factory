@@ -26,6 +26,7 @@ import gatewayAccessRoutes from "./gateway-access.js";
 import accessApprovalRoutes from "./access-approvals.js";
 import productivityApprovalRoutes from "./productivity-approvals.js";
 import shellsRoutes from "./shells.js";
+import voiceRoutes from "./voice.js";
 
 import workspaceDisplayNameRoutes from "./workspace/display-name.js";
 import workspaceFilesRoutes from "./workspace/files.js";
@@ -64,6 +65,7 @@ export interface MountClusterRoutesOpts {
   projectsCreateRoutes?: Router;
   projectsRepoSourceRoutes?: Router;
   productivityApprovalRoutes?: Router;
+  voiceRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -126,6 +128,7 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/access-approvals", accessApprovalRoutes],
   ["/api/productivity-approvals", productivityApprovalRoutes],
   ["/api/shells", shellsRoutes],
+  ["/api/voice", voiceRoutes],
 ];
 
 const INTERNAL_ROUTES: readonly (readonly [string, RouteHandler])[] = [
@@ -159,6 +162,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
     if (path === "/api/productivity-approvals") {
       return [path, opts.productivityApprovalRoutes ?? route] as const;
     }
+    if (path === "/api/voice") return [path, opts.voiceRoutes ?? route] as const;
     return [path, route] as const;
   }));
   mountRouteTable(app, INTERNAL_ROUTES);

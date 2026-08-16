@@ -35,13 +35,15 @@ export interface RedeemedOpenClawWs {
 // (mid-roll or just-retired), so the client must retry after the roll settles,
 // NOT see an opaque 500. `unauthorized` folds 401/403/404 (bad/expired ticket,
 // wrong gateway) into the 401 the upgrade surface already returns.
+export type RedeemableWsTicketPurpose = "openclaw-ws" | "voice-ws";
+
 export type RedeemOpenClawWsOutcome =
   | { kind: "redeemed"; redeemed: RedeemedOpenClawWs }
   | { kind: "unauthorized" }
   | { kind: "revision-unavailable"; reason: string };
 
 export interface OpenClawRuntimeBroker {
-  redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome>;
+  redeemOpenClawWs(ticketId: string, purpose?: RedeemableWsTicketPurpose): Promise<RedeemOpenClawWsOutcome>;
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
@@ -314,12 +316,15 @@ export function createOpenClawRuntimeBroker(opts: {
   const receiptPort = createActivityWriteReceiptBrokerPort(post);
 
   return {
-    async redeemOpenClawWs(ticketId: string): Promise<RedeemOpenClawWsOutcome> {
+    async redeemOpenClawWs(
+      ticketId: string,
+      purpose: RedeemableWsTicketPurpose = "openclaw-ws",
+    ): Promise<RedeemOpenClawWsOutcome> {
       // 502 is EXPECTED (revision unresolvable / dead), not a thrown error — the
       // upgrade surface turns it into a retryable roll-in-progress signal.
       const res = await post(
         "/internal/openclaw/ws/redeem",
-        { ticketId },
+        { ticketId, purpose },
         new Set([200, 401, 403, 404, 502]),
       );
       if (res.status === 502) {
