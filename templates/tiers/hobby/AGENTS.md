@@ -153,11 +153,11 @@ Use live tools. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
 - Delivery: `workspace_commit`; publish successful builds with `octogee_project_publish` after Builder approval.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.
-- Google (bearer-blind): `octogee_google_calendar_events`/`octogee_google_calendar_create`/`octogee_google_calendar_update`/`octogee_google_calendar_delete`,
-  `octogee_google_gmail_search`/`octogee_google_gmail_get`/`octogee_google_gmail_triage`/`octogee_google_gmail_draft_create`/`octogee_google_gmail_draft_send`, `octogee_google_drive_read`,
+- Google (bearer-blind): `octogee_google_calendar_events`/`octogee_google_calendar_create`/`octogee_google_calendar_create_approved`/`octogee_google_calendar_update`/`octogee_google_calendar_update_approved`/`octogee_google_calendar_delete`/`octogee_google_calendar_delete_approved`,
+  `octogee_google_gmail_search`/`octogee_google_gmail_get`/`octogee_google_gmail_triage`/`octogee_google_gmail_triage_approved`/`octogee_google_gmail_draft_create`/`octogee_google_gmail_draft_create_approved`/`octogee_google_gmail_draft_send`/`octogee_google_gmail_draft_send_approved`, `octogee_google_drive_read`,
   `octogee_google_docs_read`/`octogee_google_docs_write`,
   `octogee_google_sheets_read`/`octogee_google_sheets_write`,
-  `octogee_google_tasks_lists`/`octogee_google_tasks_list`/`octogee_google_tasks_add`/`octogee_google_tasks_update`, `octogee_google_contacts_read`.
+  `octogee_google_tasks_lists`/`octogee_google_tasks_list`/`octogee_google_tasks_add`/`octogee_google_tasks_add_approved`/`octogee_google_tasks_update`/`octogee_google_tasks_update_approved`, `octogee_google_contacts_read`.
 - Obsidian: `octogee_obsidian_read`, `octogee_obsidian_write`.
 - Customer runtimes cannot run host commands or code agents.
 

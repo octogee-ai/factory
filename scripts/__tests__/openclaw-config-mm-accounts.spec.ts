@@ -170,7 +170,7 @@ describe("buildCustomerAgent", () => {
       "utf8",
     )) as { contracts: { tools: string[] } };
 
-    expect(PRODUCTIVITY_TOOL_NAMES).toHaveLength(21);
+    expect(PRODUCTIVITY_TOOL_NAMES).toHaveLength(29);
     expect([...PRODUCTIVITY_TOOL_NAMES].sort()).toEqual(manifest.contracts.tools.slice().sort());
   });
 });
