@@ -1,16 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Request } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-const TIMESTAMP_HEADER = "x-octogee-agent-proof-timestamp";
-const SIGNATURE_HEADER = "x-octogee-agent-proof-signature";
+export const WORKSPACE_COMMIT_PROOF_PATH = "/internal/workspace/commit";
+
 const MAX_AGE_MS = 30_000;
 
 export interface WorkspaceCommitProofTarget {
   agentId: string;
   slug: string;
   project: string | null;
+}
+
+export interface WorkspaceCommitProof {
+  timestamp: string;
+  signature: string;
+  body: string;
 }
 
 export function workspaceCommitProofSignature(
@@ -29,6 +34,27 @@ function signaturesMatch(actual: string, expected: string): boolean {
   return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
+export function workspaceCommitProofTargetFromBody(
+  serializedBody: string,
+): WorkspaceCommitProofTarget | null {
+  let body: unknown;
+  try {
+    body = JSON.parse(serializedBody);
+  } catch {
+    return null;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const data = body as Record<string, unknown>;
+  const agentId = typeof data.agentId === "string" ? data.agentId : "";
+  const slug = typeof data.slug === "string" ? data.slug : "";
+  if (!agentId || !slug) return null;
+  return {
+    agentId,
+    slug,
+    project: typeof data.project === "string" ? data.project : null,
+  };
+}
+
 function secretDocument(ownerUid: string, target: WorkspaceCommitProofTarget): string | null {
   const identity = parseAgentId(target.agentId);
   if (identity.kind === "unknown" || identity.username !== target.slug) return null;
@@ -39,12 +65,12 @@ function secretDocument(ownerUid: string, target: WorkspaceCommitProofTarget): s
   return `users/${ownerUid}/secrets/coachMattermost`;
 }
 
-function proofHeaders(
-  req: Request,
+function normalizedProof(
+  proof: WorkspaceCommitProof,
   now: () => number,
-): { timestamp: string; signature: string } | null {
-  const timestamp = req.get(TIMESTAMP_HEADER)?.trim() ?? "";
-  const signature = req.get(SIGNATURE_HEADER)?.trim() ?? "";
+): Pick<WorkspaceCommitProof, "timestamp" | "signature"> | null {
+  const timestamp = proof.timestamp.trim();
+  const signature = proof.signature.trim();
   if (!/^\d{10,16}$/u.test(timestamp) || !signature) return null;
   const proofTime = Number(timestamp);
   if (!Number.isSafeInteger(proofTime) || Math.abs(now() - proofTime) > MAX_AGE_MS) return null;
@@ -71,21 +97,21 @@ async function proofSecret(
 }
 
 export async function verifyWorkspaceCommitProof(
-  req: Request,
+  proof: WorkspaceCommitProof,
   target: WorkspaceCommitProofTarget,
   db: Firestore,
   now: () => number = Date.now,
 ): Promise<boolean> {
-  const proof = proofHeaders(req, now);
-  if (!proof) return false;
+  const normalized = normalizedProof(proof, now);
+  if (!normalized) return false;
   const secret = await proofSecret(db, target);
   if (!secret) return false;
 
   const expected = workspaceCommitProofSignature(
     secret,
-    proof.timestamp,
-    req.originalUrl,
-    JSON.stringify(req.body),
+    normalized.timestamp,
+    WORKSPACE_COMMIT_PROOF_PATH,
+    proof.body,
   );
-  return signaturesMatch(proof.signature, expected);
+  return signaturesMatch(normalized.signature, expected);
 }

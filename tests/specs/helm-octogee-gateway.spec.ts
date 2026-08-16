@@ -112,7 +112,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
-  it("mounts the clone-broker capability only in the gateway-edge sidecar", () => {
+  it("mounts sidecar-only broker capabilities without adding gateway credentials", () => {
     const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gateway = containerBlock(deployment, "gateway");
     const edge = containerBlock(deployment, "gateway-edge");
@@ -123,6 +123,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
     expect(edge).toMatch(
       /name:\s*sidecar-broker-sa-token[\s\S]*?mountPath:\s*\/var\/run\/secrets\/octogee-sidecar-broker/,
+    );
+    expect(gateway).not.toContain("WORKSPACE_COMMIT_PROOF_BROKER_URL");
+    expect(edge).toMatch(
+      /name:\s*WORKSPACE_COMMIT_PROOF_BROKER_URL[\s\S]*?value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/,
     );
     expect(deployment).toMatch(
       /name:\s*sidecar-broker-sa-token[\s\S]*?audience:\s*octogee-api-sidecar-broker/,

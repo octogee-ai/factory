@@ -1,12 +1,13 @@
-import { createHmac } from "node:crypto";
-import type { Request } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { describe, expect, it } from "vitest";
 
-import { verifyWorkspaceCommitProof } from "../lib/workspace-commit-proof.js";
+import {
+  verifyWorkspaceCommitProof,
+  WORKSPACE_COMMIT_PROOF_PATH,
+  workspaceCommitProofSignature,
+} from "./workspace-commit-proof.js";
 
 const NOW = 1_785_000_000_000;
-const PATH = "/internal/workspace/commit";
 
 function fakeDb(records: Record<string, Record<string, unknown>>): Firestore {
   return {
@@ -21,20 +22,13 @@ function fakeDb(records: Record<string, Record<string, unknown>>): Firestore {
   } as unknown as Firestore;
 }
 
-function request(body: Record<string, unknown>, secret: string, timestamp = String(NOW)): Request {
+function proof(body: Record<string, unknown>, secret: string, timestamp = String(NOW)) {
   const serialized = JSON.stringify(body);
-  const signature = createHmac("sha256", secret)
-    .update(`octogee-workspace-commit-v1\n${timestamp}\n${PATH}\n${serialized}`)
-    .digest("hex");
   return {
-    body,
-    originalUrl: PATH,
-    get: (name: string) => {
-      if (name.toLowerCase() === "x-octogee-agent-proof-timestamp") return timestamp;
-      if (name.toLowerCase() === "x-octogee-agent-proof-signature") return signature;
-      return undefined;
-    },
-  } as unknown as Request;
+    body: serialized,
+    timestamp,
+    signature: workspaceCommitProofSignature(secret, timestamp, WORKSPACE_COMMIT_PROOF_PATH, serialized),
+  };
 }
 
 const records = {
@@ -50,7 +44,7 @@ describe("workspace commit agent proof", () => {
   it("accepts the selected workspace coach for workspace and project checkpoints", async () => {
     const workspace = { agentId: "octogee-acme-coach", slug: "acme" };
     expect(await verifyWorkspaceCommitProof(
-      request(workspace, "acme-coach-pat"),
+      proof(workspace, "acme-coach-pat"),
       { ...workspace, project: null },
       fakeDb(records),
       () => NOW,
@@ -58,7 +52,7 @@ describe("workspace commit agent proof", () => {
 
     const project = { agentId: "octogee-acme-coach", slug: "acme", project: "orbit" };
     expect(await verifyWorkspaceCommitProof(
-      request(project, "acme-coach-pat"),
+      proof(project, "acme-coach-pat"),
       project,
       fakeDb(records),
       () => NOW,
@@ -68,12 +62,12 @@ describe("workspace commit agent proof", () => {
   it("accepts a project agent only for its own project", async () => {
     const own = { agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" };
     expect(await verifyWorkspaceCommitProof(
-      request(own, "acme-orbit-pat"), own, fakeDb(records), () => NOW,
+      proof(own, "acme-orbit-pat"), own, fakeDb(records), () => NOW,
     )).toBe(true);
 
     const other = { ...own, project: "other" };
     expect(await verifyWorkspaceCommitProof(
-      request(other, "acme-orbit-pat"), other, fakeDb(records), () => NOW,
+      proof(other, "acme-orbit-pat"), other, fakeDb(records), () => NOW,
     )).toBe(false);
   });
 
@@ -84,14 +78,14 @@ describe("workspace commit agent proof", () => {
       "workspaces/acme/projects/orbit": { agent: { enabled: false } },
     };
     expect(await verifyWorkspaceCommitProof(
-      request(own, "acme-orbit-pat"), own, fakeDb(disabled), () => NOW,
+      proof(own, "acme-orbit-pat"), own, fakeDb(disabled), () => NOW,
     )).toBe(false);
   });
 
   it("rejects a cross-tenant slug even when the attacker signs with its own valid secret", async () => {
     const forged = { agentId: "octogee-victim-coach", slug: "victim" };
     expect(await verifyWorkspaceCommitProof(
-      request(forged, "acme-coach-pat"),
+      proof(forged, "acme-coach-pat"),
       { ...forged, project: null },
       fakeDb(records),
       () => NOW,
@@ -101,14 +95,14 @@ describe("workspace commit agent proof", () => {
   it("rejects stale timestamps and signatures bound to another body", async () => {
     const body = { agentId: "octogee-acme-coach", slug: "acme" };
     expect(await verifyWorkspaceCommitProof(
-      request(body, "acme-coach-pat", String(NOW - 31_000)),
+      proof(body, "acme-coach-pat", String(NOW - 31_000)),
       { ...body, project: null },
       fakeDb(records),
       () => NOW,
     )).toBe(false);
 
-    const signed = request(body, "acme-coach-pat");
-    signed.body = { ...body, slug: "victim" };
+    const signed = proof(body, "acme-coach-pat");
+    signed.body = JSON.stringify({ ...body, slug: "victim" });
     expect(await verifyWorkspaceCommitProof(
       signed,
       { agentId: "octogee-victim-coach", slug: "victim", project: null },
