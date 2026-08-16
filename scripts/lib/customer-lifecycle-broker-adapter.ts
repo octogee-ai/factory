@@ -18,7 +18,7 @@ import {
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
 import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
-import { projectRepoSourceFromDoc } from "../../shared/types/project.js";
+import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
@@ -442,6 +442,10 @@ async function listProjectsNeedingClone(
   if (!snapshot) return [];
   return snapshot.projects.flatMap((p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
+    if (!projectCheckoutEnabled(p.checkoutEnabled)) {
+      ctx.log(`[add:${slug}/${p.projectSlug}] project checkout is turned off by its owner`);
+      return [];
+    }
     const repoSource = projectRepoSourceFromDoc(p.repoSource);
     const target = {
       projectSlug: p.projectSlug,

@@ -46,6 +46,10 @@ export interface ProjectRepoSource {
   repo: string;
 }
 
+export function projectCheckoutEnabled(value: unknown): boolean {
+  return value !== false;
+}
+
 export function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null {
   if (!value || typeof value !== 'object') return null;
   const { provider, owner, repo } = value as {
@@ -82,6 +86,12 @@ provisioningError?: string | null;
 pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
   repoSource?: ProjectRepoSource | null;
+
+/** Owner-controlled: should this project be checked out on the Builder's gateway?
+ *  Distinct from provisioningState, which is the server's record of what provisioning
+ *  did. A repo the gateway cannot reach (a GitHub project on a shared pod) is turned
+ *  off here rather than misreported as a provisioning failure. Absent means enabled. */
+checkoutEnabled?: boolean;
   commercialLifecycle?: {
     status: "active" | "archived";
     archivedAt?: unknown;

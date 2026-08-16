@@ -163,6 +163,37 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
   });
 
+  it("skips a project whose owner turned the checkout off — an unreachable repo must not strand the mount", async () => {
+    const log = vi.fn();
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: null,
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+        checkoutEnabled: false,
+      },
+    ], log);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
+    expect(log.mock.calls.flat().join("\n")).toMatch(/turned off by its owner/);
+  });
+
+  it("clones a project whose checkoutEnabled is absent — existing docs carry no flag and stay on", async () => {
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: null,
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "gh", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
+    ]);
+  });
+
   it("reconciles a checkout whose trusted source does not match the project source", async () => {
     fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
     const { adapter } = mkAdapter([

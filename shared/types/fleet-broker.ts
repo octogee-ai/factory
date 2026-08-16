@@ -19,6 +19,9 @@ export interface FleetBrokerProjectRestore {
   giteaRepoName: string | null;
   repoSource?: ProjectRepoSource | null;
   provisioningState?: string;
+  // Owner-controlled checkout switch. Absent means enabled; only an explicit
+  // false keeps the project off the pod.
+  checkoutEnabled?: boolean;
   // Whatever the project doc declares; the pod's preview gate filters it
   // against the static-recipe catalog it governs.
   recipe?: string;

@@ -172,6 +172,36 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(active)).not.toBe(snapshotConfigFingerprint(provisioning));
   });
 
+  it("changes when the owner turns a project's checkout off — the toggle must converge on the next tick, not only on remount", () => {
+    const on = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    const off = snap({
+      projects: [{
+        projectSlug: "camp",
+        giteaRepoName: "alice-camp",
+        provisioningState: "active",
+        checkoutEnabled: false,
+      }],
+    });
+    expect(snapshotConfigFingerprint(off)).not.toBe(snapshotConfigFingerprint(on));
+  });
+
+  it("treats an absent checkoutEnabled as on — existing project docs carry no flag and must not re-converge", () => {
+    const absent = snap({
+      projects: [{ projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" }],
+    });
+    const explicitlyOn = snap({
+      projects: [{
+        projectSlug: "camp",
+        giteaRepoName: "alice-camp",
+        provisioningState: "active",
+        checkoutEnabled: true,
+      }],
+    });
+    expect(snapshotConfigFingerprint(explicitlyOn)).toBe(snapshotConfigFingerprint(absent));
+  });
+
   it("changes when a project appears — a new project must converge its pod checkout", () => {
     const base = snapshotConfigFingerprint(snap({ projects: [] }));
     expect(

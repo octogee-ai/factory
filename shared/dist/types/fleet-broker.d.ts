@@ -20,6 +20,7 @@ export interface FleetBrokerProjectRestore {
     giteaRepoName: string | null;
     repoSource?: ProjectRepoSource | null;
     provisioningState?: string;
+    checkoutEnabled?: boolean;
     recipe?: string;
 }
 export type FleetBrokerProjectCheckoutScope = "workspace-only" | "workspace-and-projects";

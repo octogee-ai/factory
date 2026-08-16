@@ -2,6 +2,7 @@ import type {
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
+import { projectCheckoutEnabled } from "../../shared/types/project.js";
 
 // A stable fingerprint of the fields of a customer snapshot that shape what an ensure
 // applies on disk — the generated OpenClaw config (agents.list,
@@ -102,7 +103,8 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
       .filter(
         (p) =>
           (!!p.giteaRepoName || p.repoSource?.provider === "github")
-          && (p.provisioningState === undefined || p.provisioningState === "active"),
+          && (p.provisioningState === undefined || p.provisioningState === "active")
+          && projectCheckoutEnabled(p.checkoutEnabled),
       )
       .map(projectCloneKey)
       .sort(compareStrings),

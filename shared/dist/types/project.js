@@ -22,6 +22,9 @@ export function defaultProjectRecipe(projectType) {
             return DEFAULT_PROJECT_RECIPE;
     }
 }
+export function projectCheckoutEnabled(value) {
+    return value !== false;
+}
 export function projectRepoSourceFromDoc(value) {
     if (!value || typeof value !== 'object')
         return null;

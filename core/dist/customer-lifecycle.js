@@ -1,3 +1,4 @@
+import { projectCheckoutEnabled } from "@octogee/shared/types/project";
 import { ADD_CUSTOMER_DEADLINE_MS, VERIFY_ACCOUNT_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
@@ -148,6 +149,10 @@ async function cloneProjectsFromSnapshot(adapter, snapshot) {
     for (const p of snapshot.projects ?? []) {
         if (p.provisioningState !== undefined && p.provisioningState !== "active")
             continue;
+        if (!projectCheckoutEnabled(p.checkoutEnabled)) {
+            adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] project checkout is turned off by its owner`);
+            continue;
+        }
         if (!hasProjectCloneSource(p)) {
             adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
             continue;

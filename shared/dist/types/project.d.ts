@@ -12,6 +12,7 @@ export interface ProjectRepoSource {
     owner: string;
     repo: string;
 }
+export declare function projectCheckoutEnabled(value: unknown): boolean;
 export declare function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null;
 export interface Project {
     id: string;
@@ -30,6 +31,11 @@ export interface Project {
     pendingVisibility?: ProjectVisibility | null;
     giteaRepoName: string | null;
     repoSource?: ProjectRepoSource | null;
+    /** Owner-controlled: should this project be checked out on the Builder's gateway?
+     *  Distinct from provisioningState, which is the server's record of what provisioning
+     *  did. A repo the gateway cannot reach (a GitHub project on a shared pod) is turned
+     *  off here rather than misreported as a provisioning failure. Absent means enabled. */
+    checkoutEnabled?: boolean;
     commercialLifecycle?: {
         status: "active" | "archived";
         archivedAt?: unknown;

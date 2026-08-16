@@ -1930,6 +1930,32 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
   });
 
+  it("skips a restored project whose owner turned the checkout off, and clones the rest", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        projects: [
+          {
+            projectSlug: "gh",
+            giteaRepoName: null,
+            repoSource: GITHUB_REPO_SOURCE,
+            provisioningState: "active",
+            checkoutEnabled: false,
+          },
+          { projectSlug: "camp", giteaRepoName: "test-camp", provisioningState: "active" },
+        ],
+      }),
+      emptyDisk(),
+    );
+
+    await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(state.cloneProjectCalls).toEqual([
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
+    ]);
+    expect(state.logs.find((l) => l.includes("test/gh"))).toMatch(/turned off by its owner/);
+  });
+
   it("skips a restored project with neither checkout source, and says so", async () => {
     const state = makeState(
       snap({

@@ -1020,6 +1020,9 @@ async function collectProjects(
     if (typeof data.provisioningState === "string") {
       out.provisioningState = data.provisioningState;
     }
+    if (data.checkoutEnabled === false) {
+      out.checkoutEnabled = false;
+    }
     if (typeof data.recipe === "string") {
       out.recipe = data.recipe;
     }

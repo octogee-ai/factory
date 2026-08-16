@@ -7,6 +7,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
+import { projectCheckoutEnabled } from "@octogee/shared/types/project";
 import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -565,6 +566,12 @@ async function cloneProjectsFromSnapshot(
   const steps: AddCustomerStep[] = [];
   for (const p of snapshot.projects ?? []) {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") continue;
+    if (!projectCheckoutEnabled(p.checkoutEnabled)) {
+      adapter.log(
+        `[restore:${snapshot.slug}/${p.projectSlug}] project checkout is turned off by its owner`,
+      );
+      continue;
+    }
     if (!hasProjectCloneSource(p)) {
       adapter.log(
         `[restore:${snapshot.slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`,
