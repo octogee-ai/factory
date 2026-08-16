@@ -21,6 +21,7 @@ import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/
 import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
+import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
 import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
@@ -163,6 +164,7 @@ export const GATEWAY_CREDENTIAL_ROUTES = new Set([
 export const SIDECAR_BROKER_ROUTES = new Set([
   "/internal/connectors/github-project-clone-access",
   "/internal/openclaw/activity/agent-identity",
+  "/internal/workspace-commit/verify-proof",
 ]);
 
 export interface CreateAppOptions {
@@ -633,6 +635,7 @@ export function createApp(opts: CreateAppOptions = {}) {
       namespace: process.env.K8S_NAMESPACE ?? "octogee",
     }),
   }));
+  app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).

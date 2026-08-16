@@ -475,6 +475,8 @@ spec:
               value: {{ $conversationMode | quote }}
             - name: CONNECTOR_TOKEN_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: WORKSPACE_COMMIT_PROOF_BROKER_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: BUILDER_SHELL_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: FLEET_BROKER_URL

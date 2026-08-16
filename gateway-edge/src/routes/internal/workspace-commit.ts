@@ -13,8 +13,7 @@ import {
 import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
-import { db } from "../../lib/db.js";
-import { verifyWorkspaceCommitProof } from "../../lib/workspace-commit-proof.js";
+import { verifyWorkspaceCommitProofViaBroker } from "../../lib/workspace-commit-proof-broker.js";
 
 const router = Router();
 
@@ -88,7 +87,7 @@ router.post("/commit", async (req: Request, res: Response) => {
 
   let authorized: boolean;
   try {
-    authorized = await verifyWorkspaceCommitProof(req, { agentId, slug, project }, db);
+    authorized = await verifyWorkspaceCommitProofViaBroker(req, { agentId, slug, project });
   } catch (error) {
     logger.warn(
       `internal/workspace/commit: identity proof lookup failed slug=${slug}: ${error instanceof Error ? error.message : String(error)}`,

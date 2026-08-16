@@ -23,7 +23,7 @@ const h = vi.hoisted(() => {
     warn: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
-    verifyWorkspaceCommitProof: vi.fn(),
+    verifyWorkspaceCommitProofViaBroker: vi.fn(),
   };
 });
 
@@ -48,8 +48,8 @@ vi.mock("../middleware/logging.js", () => ({
   logger: { warn: h.warn, error: h.error, info: h.info },
 }));
 
-vi.mock("../lib/workspace-commit-proof.js", () => ({
-  verifyWorkspaceCommitProof: h.verifyWorkspaceCommitProof,
+vi.mock("../lib/workspace-commit-proof-broker.js", () => ({
+  verifyWorkspaceCommitProofViaBroker: h.verifyWorkspaceCommitProofViaBroker,
 }));
 
 import workspaceCommitRouter from "../routes/internal/workspace-commit.js";
@@ -74,7 +74,7 @@ beforeEach(() => {
     ok: true,
     result: { committed: true, pushed: true, nothingToCommit: false },
   });
-  h.verifyWorkspaceCommitProof.mockResolvedValue(true);
+  h.verifyWorkspaceCommitProofViaBroker.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -109,7 +109,7 @@ describe("internal workspace commit route", () => {
       code: "BAD_AGENT",
     });
 
-    h.verifyWorkspaceCommitProof.mockResolvedValue(false);
+    h.verifyWorkspaceCommitProofViaBroker.mockResolvedValue(false);
     await request(app())
       .post("/internal/workspace/commit")
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
@@ -121,7 +121,7 @@ describe("internal workspace commit route", () => {
   });
 
   it("fails closed and reports a retryable error when proof lookup is unavailable", async () => {
-    h.verifyWorkspaceCommitProof.mockRejectedValue(new Error("firestore unavailable"));
+    h.verifyWorkspaceCommitProofViaBroker.mockRejectedValue(new Error("proof broker unavailable"));
     await request(app())
       .post("/internal/workspace/commit")
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
