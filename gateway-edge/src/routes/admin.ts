@@ -6,7 +6,6 @@ import { decryptSecret } from "../lib/kms.js";
 import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
-import { createAdminProjectRunRoutes } from "./admin-project-runs.js";
 import { getResend } from "../lib/resend.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
@@ -180,11 +179,6 @@ function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
     invalidFields,
   };
 }
-
-router.use("/project-runs", createAdminProjectRunRoutes({
-  db,
-  previewOrigin: process.env.PREVIEW_PUBLIC_URL ?? "",
-}));
 
 router.get("/platform-config", async (_req, res) => {
   try {

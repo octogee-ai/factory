@@ -26,6 +26,7 @@ import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-ide
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createAgentProjectRunRoutes } from "./routes/agent-project-runs.js";
+import { createAdminProjectRunRoutes } from "./routes/admin-project-runs.js";
 import { createAgentProjectPublishRoutes } from "./routes/agent-project-publish.js";
 import { createProjectPublishControlRoutes } from "./routes/project-publish-control.js";
 import { createProjectHostingRetirementRoutes } from "./routes/project-hosting-retirement.js";
@@ -89,7 +90,7 @@ import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
 import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
-import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
+import { requireAdmin, requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import {
   createKubernetesTokenReviewer,
   IN_CLUSTER_IDENTITY_CA_PATH,
@@ -534,6 +535,11 @@ export function createApp(opts: CreateAppOptions = {}) {
     store: projectRunStore,
     previewOrigin,
     auth: requireAuth,
+  }));
+  app.use("/api/admin/project-runs", requireAdmin, createAdminProjectRunRoutes({
+    db,
+    controlPlane: projectRunControlPlane,
+    previewOrigin,
   }));
   app.use(
     "/api/connect/obsidian/pair",
