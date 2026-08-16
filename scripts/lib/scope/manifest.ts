@@ -65,7 +65,12 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     typecheck: COMMITTED_DIST_TYPECHECK,
   },
   { name: JOBS.gatewayEdge, dir: "gateway-edge", typecheck: TYPECHECK },
-  { name: JOBS.octogeeApi, dir: "octogee-api", typecheck: TYPECHECK },
+  {
+    name: JOBS.octogeeApi,
+    dir: "octogee-api",
+    typecheck: TYPECHECK,
+    matchGatewayImageNpm: true,
+  },
   { name: JOBS.glmController, dir: "glm-controller", typecheck: TYPECHECK },
   { name: JOBS.opsAgent, dir: "ops-agent", typecheck: TYPECHECK, nodeVersion: 24 },
   {

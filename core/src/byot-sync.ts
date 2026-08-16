@@ -114,6 +114,7 @@ export const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock = {
     "octogee_project_list",
     "workspace_commit",
     "octogee_project_commit",
+    "octogee_project_capability",
     "octogee_project_build",
     "octogee_project_test",
     "octogee_project_preview",
