@@ -253,7 +253,7 @@ describe("system config platform invariants", () => {
       "octogee_board_card_update",
       "octogee_board_card_move",
       "octogee_board_card_comment",
-      "octogee_google_gmail_read",
+      "octogee_google_gmail_search",
     ]));
     expect(agents.list[0].tools.toolsBySender).toEqual({});
     expect(agents.list[0].tools.deny).not.toEqual(

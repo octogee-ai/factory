@@ -29,17 +29,23 @@ const workflowTools = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
-  "octogee_google_calendar_list",
-  "octogee_google_calendar_read",
-  "octogee_google_calendar_write",
-  "octogee_google_gmail_read",
-  "octogee_google_gmail_write",
+  "octogee_google_calendar_events",
+  "octogee_google_calendar_create",
+  "octogee_google_calendar_update",
+  "octogee_google_calendar_delete",
+  "octogee_google_gmail_search",
+  "octogee_google_gmail_get",
+  "octogee_google_gmail_triage",
+  "octogee_google_gmail_draft_create",
+  "octogee_google_gmail_draft_send",
   "octogee_google_drive_read",
   "octogee_google_docs_read",
   "octogee_google_docs_write",
   "octogee_google_contacts_read",
-  "octogee_google_tasks_read",
-  "octogee_google_tasks_write",
+  "octogee_google_tasks_lists",
+  "octogee_google_tasks_list",
+  "octogee_google_tasks_add",
+  "octogee_google_tasks_update",
   "octogee_google_sheets_read",
   "octogee_google_sheets_write",
   "octogee_obsidian_read",
@@ -129,7 +135,7 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
   it("enables bearer-blind productivity skills in the shared-safe base template", () => {
     const template = readTemplate();
 
-    expect(template.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(template.tools.alsoAllow).toContain("octogee_google_calendar_events");
     expect(template.tools.alsoAllow).toContain("octogee_obsidian_read");
     expect(template.plugins.allow).toContain("octogee-connector-tools");
     expect(template.plugins.entries["octogee-connector-tools"]).toEqual({

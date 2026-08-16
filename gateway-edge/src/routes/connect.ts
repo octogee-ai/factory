@@ -1,10 +1,12 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
 import {
+  GOOGLE_CAPABILITY_SCOPES,
   googleCapabilitiesFromScopes,
   parseGooglePickedFiles,
   type ConnectorCaptureMethod,
 } from "@octogee/shared/types/connectors";
+import { GOOGLE_CAPABILITY_CATALOG_VERSION } from "@octogee/shared/types/google-capabilities";
 import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { revokeProviderGrant } from "@octogee/core/connector-revocation";
@@ -34,6 +36,22 @@ import {
 
 const router = Router();
 const APP_URL = process.env.APP_URL || "https://octogee.com";
+const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
+
+const GOOGLE_PRODUCTIVITY_APPROVAL_KINDS = new Set([
+  "gmail-triage",
+  "gmail-draft-create",
+  "gmail-send",
+  "calendar-create",
+  "calendar-update",
+  "calendar-delete",
+  "docs-create",
+  "docs-append",
+  "sheets-create",
+  "sheets-append",
+  "tasks-create",
+  "tasks-update",
+]);
 
 interface TokenResponse {
   access_token: string;
@@ -94,6 +112,28 @@ function userCol(uid: string, sub: "secrets" | "integrations") {
   return db.collection("users").doc(uid).collection(sub);
 }
 
+function isGoogleProductivityApproval(data: Record<string, unknown>): boolean {
+  if (data.connectorId === "google") return true;
+  const action = data.action;
+  if (action === null || typeof action !== "object" || Array.isArray(action)) return false;
+  const kind = (action as { kind?: unknown }).kind;
+  return typeof kind === "string" && GOOGLE_PRODUCTIVITY_APPROVAL_KINDS.has(kind);
+}
+
+async function purgeGoogleProductivityApprovals(uid: string): Promise<void> {
+  const snapshot = await db
+    .collection(PRODUCTIVITY_APPROVALS_COLLECTION)
+    .where("ownerUid", "==", uid)
+    .get();
+  const approvals = snapshot.docs.filter((approval) => isGoogleProductivityApproval(approval.data()));
+
+  for (let start = 0; start < approvals.length; start += 500) {
+    const batch = db.batch();
+    for (const approval of approvals.slice(start, start + 500)) batch.delete(approval.ref);
+    await batch.commit();
+  }
+}
+
 function requestScopesFor(def: ConnectorDef, capability: unknown): string[] | RouteError {
   if (!def.capabilityRequestScopes) return def.meta.scopes;
   if (typeof capability !== "string" || capability.length === 0) {
@@ -117,6 +157,17 @@ async function enforceGoogleAccountContinuity(uid: string, accountLabel: string)
   ) {
     throw new GoogleAccountMismatchError();
   }
+}
+
+function googleCapabilityGrantLedger(scopes: readonly string[]): Record<string, unknown>[] {
+  const consentedAt = Timestamp.now();
+  return googleCapabilitiesFromScopes(scopes).map((capability) => ({
+    capability,
+    state: "granted",
+    scopes: GOOGLE_CAPABILITY_SCOPES[capability],
+    catalogVersion: GOOGLE_CAPABILITY_CATALOG_VERSION,
+    consentedAt,
+  }));
 }
 
 async function storeConnectorTokens(args: {
@@ -160,6 +211,12 @@ async function storeConnectorTokens(args: {
     captureMethod,
     connectedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
+    ...(def.meta.id === "google"
+      ? {
+          capabilityCatalogVersion: GOOGLE_CAPABILITY_CATALOG_VERSION,
+          capabilityGrants: googleCapabilityGrantLedger(grantedScopes ?? []),
+        }
+      : {}),
   };
   await db.runTransaction(async (tx) => {
     const ownerRef = db.collection("users").doc(uid);
@@ -267,6 +324,13 @@ router.post(
         res.status(400).json({ error: `Unknown connector: ${connector}` });
         return;
       }
+      if (def.meta.id === "google") {
+        await userCol(req.uid!, "integrations").doc("google").set({
+          provider: "google",
+          status: "disconnected",
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
       if (def.oauth?.revocationUrl) {
         await revokeProviderGrant(
           req.uid!,
@@ -281,12 +345,17 @@ router.post(
           logger.warn(`[connect] ${def.meta.id} provider revoke failed for uid=${req.uid}: ${String(error)}`);
         }
       }
+      if (def.meta.id === "google") {
+        await purgeGoogleProductivityApprovals(req.uid!);
+      }
       await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
-      await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-        provider: def.meta.id,
-        status: "disconnected",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      if (def.meta.id !== "google") {
+        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
+          provider: def.meta.id,
+          status: "disconnected",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
       res.json({ ok: true });
     } catch (e) {
       next(e);

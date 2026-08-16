@@ -981,9 +981,25 @@ describe("connect — google platform capability flow", () => {
 
   it("granular consent: an unticked data scope is absent from the stored grant", async () => {
     await setGoogleStage("on");
-    await connectGoogle("gmail", EMAIL);
+    await connectGoogle("gmail", `${GMAIL} ${EMAIL}`);
     const status = await readStatus(UID, "google");
-    expect(status?.scopes).toEqual([EMAIL]);
+    expect(status?.scopes).toEqual([GMAIL, EMAIL]);
+    expect(status?.capabilityCatalogVersion).toBe(1);
+    expect(status?.capabilityGrants).toMatchObject([
+      { capability: "gmail", state: "granted", scopes: [GMAIL], catalogVersion: 1 },
+    ]);
+  });
+
+  it("replaces the capability ledger with the scopes Google actually returns", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("gmail", `${GMAIL} ${EMAIL}`);
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+
+    const status = await readStatus(UID, "google");
+    expect(status?.scopes).toEqual([CAL, EMAIL]);
+    expect(status?.capabilityGrants).toMatchObject([
+      { capability: "calendar", state: "granted", scopes: [CAL], catalogVersion: 1 },
+    ]);
   });
 
   it("disconnect revokes the Google grant with the refresh token, then deletes the secret", async () => {
@@ -1003,6 +1019,31 @@ describe("connect — google platform capability flow", () => {
     ]);
     expect(await readSecret(UID, "google")).toBeUndefined();
     expect((await readStatus(UID, "google"))?.status).toBe("disconnected");
+  });
+
+  it("removes Google approval content immediately without removing other provider approvals", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+    await db.doc("productivityApprovals/google-approval").set({
+      ownerUid: UID,
+      action: { kind: "gmail-send" },
+      preview: { bodyText: "private Google content" },
+    });
+    await db.doc("productivityApprovals/obsidian-approval").set({
+      ownerUid: UID,
+      action: { kind: "obsidian-write" },
+      preview: { content: "private Obsidian content" },
+    });
+
+    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    await request(createApp())
+      .post("/api/connect/disconnect")
+      .set("Authorization", auth.bearer())
+      .send({ connector: "google" })
+      .expect(200, { ok: true });
+
+    expect((await db.doc("productivityApprovals/google-approval").get()).exists).toBe(false);
+    expect((await db.doc("productivityApprovals/obsidian-approval").get()).exists).toBe(true);
   });
 
   it("falls back to the REQUESTED capability bundle when the token response omits scope", async () => {

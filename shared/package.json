@@ -74,6 +74,10 @@
       "types": "./dist/types/connectors.d.ts",
       "default": "./dist/types/connectors.js"
     },
+    "./types/google-capabilities": {
+      "types": "./dist/types/google-capabilities.d.ts",
+      "default": "./dist/types/google-capabilities.js"
+    },
     "./types/commercial-entitlements": {
       "types": "./dist/types/commercial-entitlements.d.ts",
       "default": "./dist/types/commercial-entitlements.js"
@@ -270,6 +274,9 @@
       ],
       "types/connectors": [
         "dist/types/connectors.d.ts"
+      ],
+      "types/google-capabilities": [
+        "dist/types/google-capabilities.d.ts"
       ],
       "types/commercial-entitlements": [
         "dist/types/commercial-entitlements.d.ts"

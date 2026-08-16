@@ -34,17 +34,23 @@ const workflowTools = [
   "octogee_chat_set_identity",
   "octogee_status",
   "octogee_ask_ops",
-  "octogee_google_calendar_list",
-  "octogee_google_calendar_read",
-  "octogee_google_calendar_write",
-  "octogee_google_gmail_read",
-  "octogee_google_gmail_write",
+  "octogee_google_calendar_events",
+  "octogee_google_calendar_create",
+  "octogee_google_calendar_update",
+  "octogee_google_calendar_delete",
+  "octogee_google_gmail_search",
+  "octogee_google_gmail_get",
+  "octogee_google_gmail_triage",
+  "octogee_google_gmail_draft_create",
+  "octogee_google_gmail_draft_send",
   "octogee_google_drive_read",
   "octogee_google_docs_read",
   "octogee_google_docs_write",
   "octogee_google_contacts_read",
-  "octogee_google_tasks_read",
-  "octogee_google_tasks_write",
+  "octogee_google_tasks_lists",
+  "octogee_google_tasks_list",
+  "octogee_google_tasks_add",
+  "octogee_google_tasks_update",
   "octogee_google_sheets_read",
   "octogee_google_sheets_write",
   "octogee_obsidian_read",
@@ -269,7 +275,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
     expect(out.agents.list[0].tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
     expect(out.agents.list[0].tools.toolsBySender).toEqual({});
-    expect(out.agents.list[0].tools.alsoAllow).toContain("octogee_google_gmail_read");
+    expect(out.agents.list[0].tools.alsoAllow).toContain("octogee_google_gmail_search");
     expect(out.agents.list[0].tools.alsoAllow).toEqual(expect.arrayContaining([
       "octogee_project_build",
       "octogee_project_test",
@@ -362,7 +368,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
       },
     });
-    expect(out.tools.alsoAllow).toContain("octogee_google_calendar_list");
+    expect(out.tools.alsoAllow).toContain("octogee_google_calendar_events");
     expect(out.tools.alsoAllow).toContain("octogee_board_card_create");
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
     expect(out.plugins.entries["octogee-ops-tools"]).toEqual({
@@ -548,16 +554,16 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "workspace_commit",
       "octogee_project_create",
       "octogee_project_publish",
-      "octogee_google_calendar_read",
+      "octogee_google_calendar_events",
     ]));
     expect(projectTools.deny).toEqual(expect.arrayContaining([
       "workspace_commit",
       "octogee_project_create",
       "octogee_project_publish",
-      "octogee_google_calendar_read",
+      "octogee_google_calendar_events",
     ]));
     expect(projectTools.toolsBySender).toEqual({
-      "*": { deny: expect.arrayContaining(["octogee_google_calendar_read"]) },
+      "*": { deny: expect.arrayContaining(["octogee_google_calendar_events"]) },
     });
     expect(out.plugins.allow).toEqual(approvedPlugins);
     expect(out.plugins.entries.codex).toEqual({ enabled: false });
