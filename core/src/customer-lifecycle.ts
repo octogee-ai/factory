@@ -233,6 +233,9 @@ opts?: {
   byosActive?: boolean;
   evictionBatch?: readonly string[];
   currentEvictionBatch?: () => Promise<readonly string[]>;
+  /** Projects whose pod checkout is absent. Their agents point at a workspace dir
+   *  that does not exist, so they stay out of the config until the checkout lands. */
+  withoutProjectIds?: readonly string[];
 },
   ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
   applyRemoveCustomerConfigPatch: (
@@ -302,6 +305,7 @@ export type AddCustomerStep =
   | "notify-ops";
 
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
+const CONFIG_PATCH = "config-patch";
 
 export interface AddCustomerResult {
   newCustomer: boolean;
@@ -502,12 +506,12 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   steps.push(...byos.steps);
   throwIfAborted(signal, uid);
 
-  markStep("config-patch");
+  markStep(CONFIG_PATCH);
   await applyConfigPatchAndMount(adapter, snapshot, null, {
     byosActive: byos.present,
     signal,
   });
-  steps.push("config-patch");
+  steps.push(CONFIG_PATCH);
   throwIfAborted(signal, uid);
 
   markStep("reassert-converged");
@@ -673,19 +677,11 @@ async function addCustomerToGatewayInner(
   steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
   throwIfAborted(signal, uid);
 
-  markStep("project-clones");
-  const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-    ? await cloneMissingProjects(adapter, slug)
-    : { steps: [], pending: [] };
-  steps.push(...projectClones.steps);
+  const rehydratesProjects = rehydratesProjectCheckouts(adapter, snapshot);
+  const absentBeforeClone = rehydratesProjects
+    ? (await adapter.listProjectsNeedingClone(slug)).map((p) => p.projectSlug)
+    : [];
   throwIfAborted(signal, uid);
-  if (projectClones.pending.length > 0) {
-    return {
-      newCustomer,
-      steps,
-      pendingProjectClones: projectClones.pending,
-    };
-  }
 
   markStep("byos-restore");
   const byos = await restoreByos(adapter, slug);
@@ -698,19 +694,18 @@ async function addCustomerToGatewayInner(
   steps.push(...mm.steps);
   throwIfAborted(signal, uid);
 
-  markStep("config-patch");
-  const appliedFingerprint = await applyConfigPatchAndMount(
-    adapter,
-    snapshot,
-    mm.mmUpdate,
-    {
-      byosActive: byos.present,
-      signal,
-      evictionBatch: opts.evictionBatch,
-      currentEvictionBatch: opts.currentEvictionBatch,
-    },
-  );
-  steps.push("config-patch");
+  markStep(CONFIG_PATCH);
+  const configPatchOptions = {
+    byosActive: byos.present,
+    signal,
+    evictionBatch: opts.evictionBatch,
+    currentEvictionBatch: opts.currentEvictionBatch,
+  };
+  let appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
+    ...configPatchOptions,
+    withoutProjectIds: absentBeforeClone,
+  });
+  steps.push(CONFIG_PATCH);
   throwIfAborted(signal, uid);
 
   markStep("reassert-converged");
@@ -725,6 +720,21 @@ async function addCustomerToGatewayInner(
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push(VERIFY_CHANNEL_READY);
   throwIfAborted(signal, uid);
+
+  markStep("project-clones");
+  const projectClones = rehydratesProjects
+    ? await cloneMissingProjects(adapter, slug)
+    : { steps: [], pending: [] };
+  steps.push(...projectClones.steps);
+  throwIfAborted(signal, uid);
+  if (checkoutsLanded(absentBeforeClone, projectClones.pending)) {
+    appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, null, {
+      ...configPatchOptions,
+      withoutProjectIds: projectClones.pending,
+    });
+    steps.push(CONFIG_PATCH);
+    throwIfAborted(signal, uid);
+  }
 
   markStep("blob-sync");
   steps.push(...(await runBlobSync(adapter, slug)));
@@ -1092,6 +1102,10 @@ async function provisionMattermostIfMissing(
   };
 }
 
+function checkoutsLanded(before: readonly string[], pending: readonly string[]): boolean {
+  return before.some((projectSlug) => !pending.includes(projectSlug));
+}
+
 async function applyConfigPatchAndMount(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
@@ -1101,6 +1115,7 @@ async function applyConfigPatchAndMount(
     signal?: AbortSignal;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
+    withoutProjectIds?: readonly string[];
   },
 ): Promise<string | undefined> {
   const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
@@ -1108,6 +1123,7 @@ async function applyConfigPatchAndMount(
     byosActive: options.byosActive,
     evictionBatch: options.evictionBatch,
     currentEvictionBatch: options.currentEvictionBatch,
+    withoutProjectIds: options.withoutProjectIds,
   });
   adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
   if (adapter.onMounted) adapter.onMounted(snapshot.slug);

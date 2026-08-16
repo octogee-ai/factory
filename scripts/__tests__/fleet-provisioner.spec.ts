@@ -14,6 +14,7 @@ import {
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   ensureCustomerCheckoutsOnly,
+  NEEDS_FULL_ATTACH_FINGERPRINT,
   evictLocalCustomer,
   evictLocalCustomerIfStillUndesired,
   gatewayServiceName,
@@ -214,7 +215,7 @@ describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
     ...overrides,
   }) as unknown as CustomerLifecycleAdapter;
 
-  it("records the real fingerprint and drops the backoff once the checkout lands, without a full attach", async () => {
+  it("routes the next converge to a full attach once the checkout lands, so the held-out project agent gets wired", async () => {
     const adapter = adapterWith({
       listProjectsNeedingClone: vi.fn(async () => []),
     });
@@ -231,8 +232,9 @@ describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
     );
 
     expect(outcome).toBe("noop");
-    expect(hooks.recordApplied).toHaveBeenCalledWith("alice", "fp1");
+    expect(hooks.recordApplied).toHaveBeenCalledWith("alice", NEEDS_FULL_ATTACH_FINGERPRINT);
     expect(hooks.forgetRetry).toHaveBeenCalledWith("alice");
+    expect(pendingCloneOnlyStale(NEEDS_FULL_ATTACH_FINGERPRINT, "fp1")).toBe(false);
   });
 
   it("re-arms the marker and the lengthened backoff while the checkout is still absent, and throws so lastError persists", async () => {

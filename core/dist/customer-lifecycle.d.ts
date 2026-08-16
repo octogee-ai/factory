@@ -179,6 +179,9 @@ export interface CustomerLifecycleAdapter {
         byosActive?: boolean;
         evictionBatch?: readonly string[];
         currentEvictionBatch?: () => Promise<readonly string[]>;
+        /** Projects whose pod checkout is absent. Their agents point at a workspace dir
+         *  that does not exist, so they stay out of the config until the checkout lands. */
+        withoutProjectIds?: readonly string[];
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;

@@ -254,17 +254,23 @@ export async function finalizeConvergedMount(input: FinalizeConvergedMountInput)
   settleConvergence(convergence, hooks);
 }
 
-// The checkout-only converge for a customer whose applied fingerprint is the pending-clone
-// marker: everything else already converged, so retry ONLY the project clones — no config
-// patch, no coach restart. Settling records the real fingerprint once the checkout lands
-// (clearing lastError via the loop's onEnsureSuccess) and re-arms the marker + backoff while
-// it is still absent.
+export const NEEDS_FULL_ATTACH_FINGERPRINT = "";
+
+function requireFullAttachNextConverge(slug: string, hooks: ConvergenceHooks): void {
+  hooks.forgetRetry(slug);
+  hooks.recordApplied(slug, NEEDS_FULL_ATTACH_FINGERPRINT);
+}
+
 export async function ensureCustomerCheckoutsOnly(
   adapter: CustomerLifecycleAdapter,
   input: Omit<SettleConvergenceInput, "result">,
   hooks: ConvergenceHooks,
 ): Promise<EnsureOutcome> {
   const { pending } = await cloneMissingProjects(adapter, input.slug);
+  if (pending.length === 0) {
+    requireFullAttachNextConverge(input.slug, hooks);
+    return "noop";
+  }
   settleConvergence(
     { ...input, result: { pendingProjectClones: pending } },
     hooks,

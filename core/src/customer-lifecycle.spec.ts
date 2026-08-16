@@ -52,6 +52,7 @@ giteaReadShouldThrow: boolean;
   communityMembershipCtx?: { uid: string; slug: string };
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
+  configPatchWithoutProjectIds: Array<readonly string[]>;
   configPatchFingerprint?: string;
   healthy: boolean;
   pendingProjects: ProjectCloneTarget[];
@@ -224,6 +225,7 @@ return "ssh-pubkey";
     applyAddCustomerConfigPatch: async (_snap, _mm, opts) => {
       record("applyAddCustomerConfigPatch");
       state.lastConfigPatchByosActive = opts?.byosActive ?? false;
+      state.configPatchWithoutProjectIds.push([...(opts?.withoutProjectIds ?? [])]);
       return {
         elapsedMs: 42,
         ...(state.configPatchFingerprint
@@ -300,6 +302,7 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     healthy: true,
     pendingProjects: [],
     cloneProjectCalls: [],
+    configPatchWithoutProjectIds: [],
     logs: [],
     lastGreetingCronParams: undefined,
     greetingCronShouldFail: false,
@@ -1441,7 +1444,7 @@ const state = makeState(
 
     expect(state.cloneProjectCalls.map((c) => c.projectSlug)).toEqual(["camp"]);
     expect(result.pendingProjectClones).toEqual(["orphan"]);
-    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.configPatchWithoutProjectIds.at(-1)).toEqual(["orphan"]);
     expect(state.logs).toContainEqual(expect.stringContaining("test/orphan"));
     expect(state.logs.find((l) => l.includes("test/orphan"))).toMatch(
       /no Gitea repo and no GitHub repoSource/,
@@ -1468,7 +1471,7 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
-  it("converges project checkouts before activating project agents", async () => {
+  it("attaches the coach before converging project checkouts", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1482,9 +1485,58 @@ const state = makeState(
 
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls.indexOf("cloneProjectRepo")).toBeLessThan(
-      state.calls.indexOf("applyAddCustomerConfigPatch"),
+    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
+      state.calls.indexOf("cloneProjectRepo"),
     );
+  });
+
+  it("holds a project agent out of the config until its checkout lands, then patches it in", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [{ projectSlug: "camp", giteaRepoName: "test-camp" }];
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.pendingProjectClones).toEqual([]);
+    expect(state.configPatchWithoutProjectIds).toEqual([["camp"], []]);
+  });
+
+  it("patches the config once when every project checkout is already on disk", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.configPatchWithoutProjectIds).toEqual([[]]);
+  });
+
+  it("attaches the coach when an optional project checkout can never clone — a GitHub project on a shared gateway must not strand the Builder", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
+    );
+    state.pendingProjects = [
+      { projectSlug: "octogee", giteaRepoName: null, repoSource: GITHUB_REPO_SOURCE },
+    ];
+    state.cloneProjectThrows = true;
+
+    const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(result.pendingProjectClones).toEqual(["octogee"]);
+    expect(state.configPatchWithoutProjectIds).toEqual([["octogee"]]);
   });
 
   it("surfaces a project whose clone did not land as pending — a swallowed failure must not read as converged", async () => {
@@ -1503,8 +1555,7 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
-    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(state.configPatchWithoutProjectIds).toEqual([["camp"]]);
   });
 
   it("surfaces a clone that throws as pending, so the next reconcile retries instead of stranding the checkout", async () => {
@@ -1523,8 +1574,7 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual(["camp"]);
-    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(state.configPatchWithoutProjectIds).toEqual([["camp"]]);
   });
 
   it("throws when verify times out — restores must NOT silently succeed on a broken mount", async () => {

@@ -1216,6 +1216,47 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
+  it("holds a project agent out of the patch while its checkout is absent — its workspace dir does not exist yet", async () => {
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch({
+        agents: { list: [] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      }) as {
+        agents: { list: Array<{ id: string }> };
+        channels: { mattermost: { accounts: Record<string, unknown> } };
+      };
+      const ids = patch.agents.list.map((a) => a.id);
+      expect(ids).toContain("octogee-alice-coach");
+      expect(ids).not.toContain("octogee-alice-proj-orbit");
+      expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).toBeUndefined();
+      return { mode: "rpc", attempts: 1, noop: true };
+    });
+    const client = mkClient();
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+      adminMmUserId: "mm-admin",
+    });
+
+    await adapter.applyAddCustomerConfigPatch(
+      aliceSnapshot({
+        channels: [
+          { scope: "workspace", kind: "general", channelId: "workspace-general" },
+          { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
+        ],
+        projectAgents: [
+          { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+        ],
+      }),
+      { _coachPersonalToken: "pat-1" },
+      { withoutProjectIds: ["orbit"] },
+    );
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+  });
+
   it("does not patch one customer's runtime when membership isolation fails", async () => {
     const client = mkClient({
       reconcileProjectCoachMembership: vi.fn(async () => {

@@ -184,8 +184,12 @@ async function currentEvictionSlugs(
 function brokerProjectAgents(
   brokerSnapshot: FleetBrokerUserSnapshot | null,
   snapshot: UserSnapshot,
+  withoutProjectIds?: readonly string[],
 ): NonNullable<UserSnapshot["projectAgents"]> {
-  return brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  const agents = brokerSnapshot?.projectAgents ?? snapshot.projectAgents ?? [];
+  if (!withoutProjectIds?.length) return agents;
+  const excluded = new Set(withoutProjectIds);
+  return agents.filter((p) => !excluded.has(p.projectId));
 }
 
 function brokerCustomerMattermostUserId(
@@ -594,7 +598,7 @@ async function applyAddCustomerConfigPatch(
     throw new Error(`[add:${snapshot.slug}] coach PAT unavailable from fleet broker`);
   }
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
-  const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot);
+  const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot, callOpts?.withoutProjectIds);
   const accountsMap = buildMattermostAccounts(
     [
       {
