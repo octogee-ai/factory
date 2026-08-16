@@ -27,6 +27,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
 export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "workspace_commit",
   "octogee_project_commit",
+  "octogee_project_capability",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
@@ -45,6 +46,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",
+  "octogee_project_capability",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
@@ -98,6 +100,7 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
   "tavily_search",
   "tavily_extract",
   "octogee_project_build",
+  "octogee_project_capability",
   "octogee_project_test",
   "octogee_project_preview",
   "octogee_project_run_status",

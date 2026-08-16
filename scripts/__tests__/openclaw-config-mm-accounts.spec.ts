@@ -81,7 +81,7 @@ describe("buildCustomerAgent", () => {
     expect(PROJECT_AGENT_DENIED_TOOLS).toEqual(expect.arrayContaining(["exec", "process"]));
   });
 
-  it("exposes isolated build, test, and exact-run status only through customer project lanes", () => {
+  it("exposes capability and isolated runs only through customer project lanes", () => {
     const coach = buildCustomerAgent({
       uid: "uid-chris",
       slug: "chris",
@@ -89,7 +89,7 @@ describe("buildCustomerAgent", () => {
       agentDir: "/agents/octogee-chris-coach/agent",
       coach: { name: "Coach", emoji: "🤖", model: "house" },
     });
-    const runTools = ["octogee_project_build", "octogee_project_test", "octogee_project_preview", "octogee_project_run_status"];
+    const runTools = ["octogee_project_capability", "octogee_project_build", "octogee_project_test", "octogee_project_preview", "octogee_project_run_status"];
     expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(runTools));
     expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(expect.arrayContaining(runTools));
     expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(runTools));

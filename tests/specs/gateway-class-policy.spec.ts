@@ -12,6 +12,7 @@ const workflowTools = [
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",
+  "octogee_project_capability",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
@@ -52,6 +53,7 @@ const workflowTools = [
 const customerStructuredTools = [
   "workspace_commit",
   "octogee_project_commit",
+  "octogee_project_capability",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
@@ -273,6 +275,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee_project_test",
       "octogee_project_preview",
       "octogee_project_run_status",
+      "octogee_project_capability",
       "octogee_project_publish",
     ]));
     expect(out.agents.list[0].tools.allow).toBeUndefined();
@@ -290,6 +293,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         "octogee_project_test",
         "octogee_project_preview",
         "octogee_project_run_status",
+        "octogee_project_capability",
         "octogee_project_commit",
         "octogee_project_set_recipe",
         "octogee_board_list",
@@ -527,6 +531,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "find",
       "ls",
       "octogee_project_commit",
+      "octogee_project_capability",
       "octogee_project_build",
       "octogee_project_test",
       "octogee_project_preview",

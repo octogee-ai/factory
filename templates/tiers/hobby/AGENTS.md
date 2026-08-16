@@ -140,7 +140,7 @@ upgrade — never hand them the raw error.
 
 ## Platform Tools
 
-Use live tools only. Skills hold schemas; ask `octogee_ask_ops` when unsure.
+Use live tools. Skills hold schemas; ask `octogee_ask_ops` when unsure.
 
 - Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
@@ -148,7 +148,7 @@ Use live tools only. Skills hold schemas; ask `octogee_ask_ops` when unsure.
   their named purpose.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
-  `octogee_project_set_recipe`; isolated `octogee_project_build`, `octogee_project_test`,
+  `octogee_project_set_recipe`, `octogee_project_capability`; isolated `octogee_project_build`, `octogee_project_test`,
   `octogee_project_preview`, `octogee_project_run_status`.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
 - Delivery: `workspace_commit`; publish successful builds with `octogee_project_publish` after Builder approval.

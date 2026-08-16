@@ -8,6 +8,7 @@ const workflowTools = [
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",
+  "octogee_project_capability",
   "octogee_project_build",
   "octogee_project_test",
   "octogee_project_preview",
