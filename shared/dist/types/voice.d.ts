@@ -4,6 +4,10 @@ export declare const TALK_INPUT_SAMPLE_RATE: 16000;
 export declare const TALK_OUTPUT_SAMPLE_RATE: 24000;
 export declare const TALK_TICKET_PURPOSE: "voice-ws";
 export type TalkMode = "converse" | "dictate";
+export interface TalkCapabilities {
+    speed: boolean;
+}
+export declare const TALK_CAPABILITIES_DEFAULT: TalkCapabilities;
 export type TalkState = "idle" | "listening" | "thinking" | "speaking" | "error";
 export type TalkEndpointing = "normal" | "patient";
 export interface TalkSettings {
@@ -93,6 +97,8 @@ export type TalkServerEvent = {
         stt: string;
         tts: string;
     };
+    /** What the speech engine can do itself; the client compensates for the rest (speed → playback rate). */
+    capabilities: TalkCapabilities;
     settings: ResolvedTalkSettings;
 } | {
     type: "state";

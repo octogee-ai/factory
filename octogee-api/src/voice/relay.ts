@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { Router, type Request, type Response } from "express";
 import { WebSocket, WebSocketServer } from "ws";
-import { describeVoiceEngines, type VoiceRelayConfig } from "./config.js";
+import { describeVoiceCapabilities, describeVoiceEngines, type VoiceRelayConfig } from "./config.js";
 import { createSttSession, type SttSession, type SttSessionDeps } from "./stt-session.js";
 import { TTS_MAX_INPUT_CHARS, TTS_OUTPUT_SAMPLE_RATE, TtsUpstreamError, synthesizeSpeech } from "./tts-openai-compatible.js";
 
@@ -155,7 +155,7 @@ export function createVoiceRelayRoutes(deps: VoiceRelayDeps): Router {
     if (!boundGatewayId(req, res)) return;
     res.json(
       deps.config
-        ? { configured: true, engines: describeVoiceEngines(deps.config) }
+        ? { configured: true, engines: describeVoiceEngines(deps.config), capabilities: describeVoiceCapabilities(deps.config) }
         : { configured: false },
     );
   });

@@ -19,6 +19,8 @@ export interface VoiceTtsConfig {
   apiKey: string;
   voice: string;
   voiceParam: string;
+  /** Request field for playback speed; null when the engine has no speed control (Mistral). */
+  speedParam: string | null;
   format: VoiceTtsFormat;
   pcmSampleRate: number;
   pcmEncoding: VoicePcmEncoding;
@@ -170,6 +172,7 @@ export function parseVoiceRelayConfig(env: Env = process.env): VoiceRelayConfig 
     apiKey: required(env, "VOICE_TTS_API_KEY"),
     voice: required(env, "VOICE_TTS_VOICE"),
     voiceParam: read(env, "VOICE_TTS_VOICE_PARAM") ?? "voice",
+    speedParam: speedParam(env, "VOICE_TTS_SPEED_PARAM"),
     format: oneOf<VoiceTtsFormat>(env, "VOICE_TTS_FORMAT", ["wav", "pcm"], "wav"),
     pcmSampleRate: positiveInteger(env, "VOICE_TTS_PCM_SAMPLE_RATE", VOICE_TTS_DEFAULT_PCM_SAMPLE_RATE),
     pcmEncoding: oneOf<VoicePcmEncoding>(env, "VOICE_TTS_PCM_ENCODING", ["s16le", "f32le"], "s16le"),
@@ -178,6 +181,20 @@ export function parseVoiceRelayConfig(env: Env = process.env): VoiceRelayConfig 
   };
 
   return { stt, tts };
+}
+
+function speedParam(env: Env, key: string): string | null {
+  const value = read(env, key) ?? "speed";
+  return value === "none" ? null : value;
+}
+
+export interface VoiceCapabilities {
+  /** The engine can change speaking rate itself; otherwise the client paces playback. */
+  speed: boolean;
+}
+
+export function describeVoiceCapabilities(config: VoiceRelayConfig): VoiceCapabilities {
+  return { speed: config.tts.speedParam !== null };
 }
 
 export function describeVoiceEngines(config: VoiceRelayConfig): { stt: string; tts: string } {

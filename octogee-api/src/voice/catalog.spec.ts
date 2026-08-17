@@ -11,6 +11,7 @@ const config: VoiceRelayConfig = {
     apiKey: "tts-key",
     voice: "en_paul_neutral",
     voiceParam: "voice_id",
+    speedParam: null,
     format: "wav",
     pcmSampleRate: 24_000,
     pcmEncoding: "s16le",

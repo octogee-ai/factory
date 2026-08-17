@@ -43,7 +43,7 @@ export function buildTtsRequestBody(config: VoiceTtsConfig, req: TtsRequest): Re
     [config.voiceParam]: req.voice?.trim() || config.voice,
     response_format: config.format,
   };
-  if (req.speed !== undefined && req.speed !== 1) body.speed = req.speed;
+  if (config.speedParam && req.speed !== undefined && req.speed !== 1) body[config.speedParam] = req.speed;
   return { ...body, ...config.extraBody };
 }
 

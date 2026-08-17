@@ -72,7 +72,7 @@ async function fakeOcGateway() {
 }
 
 async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
-  const relayStatus = { configured: true, engines: { stt: "fake-stt", tts: "fake-tts" } };
+  const relayStatus = { configured: true, engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } };
   const relay = fakeRelay();
   const posts: Array<Record<string, unknown>> = [];
   const oc = await fakeOcGateway();
@@ -236,7 +236,7 @@ describe("voice ws route", () => {
     await once(ws, "open");
     ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1", mmToken: "mm-token-1234567890" }));
     await waitFor(() => events.some((e) => e.type === "session.ready"));
-    expect(events[0]).toMatchObject({ type: "session.ready", engines: { stt: "fake-stt", tts: "fake-tts" } });
+    expect(events[0]).toMatchObject({ type: "session.ready", engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } });
 
     ws.send(JSON.stringify({ type: "listen.start" }));
     await waitFor(() => relay.stts.length === 1);

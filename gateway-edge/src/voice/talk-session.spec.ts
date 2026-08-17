@@ -93,7 +93,7 @@ async function settle(rounds = 8) {
   for (let i = 0; i < rounds; i++) await Promise.resolve();
 }
 
-function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate" } = {}) {
+function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate"; speedControl?: boolean } = {}) {
   const events: TalkServerEvent[] = [];
   const audio: Buffer[] = [];
   const relay = new FakeRelay();
@@ -108,6 +108,7 @@ function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate" } = {
     createBrain: createBrain as never,
     vad,
     engines: { stt: "fake-stt", tts: "fake-tts" },
+    ...(opts.speedControl === undefined ? {} : { capabilities: { speed: opts.speedControl } }),
   });
   session.handleText(
     JSON.stringify({
@@ -136,6 +137,7 @@ describe("TalkSession", () => {
       type: "session.ready",
       sessionId: "s1",
       engines: { stt: "fake-stt", tts: "fake-tts" },
+      capabilities: { speed: true },
       settings: { speed: 0.9, handsFreeMs: 0, endpointing: "normal" },
     });
     expect(states(events)).toEqual(["idle"]);
@@ -208,6 +210,22 @@ describe("TalkSession", () => {
     const metrics = events.find((e) => e.type === "metrics") as { metrics: { sttMs: number | null; firstAudioMs: number | null } };
     expect(metrics.metrics.sttMs).not.toBeNull();
     expect(metrics.metrics.firstAudioMs).not.toBeNull();
+  });
+
+  it("announces an engine without speed control and then never asks the relay for a speed", async () => {
+    const { session, events, relay, brain, vad } = setup({ speedControl: false });
+    expect(events[0]).toMatchObject({ type: "session.ready", capabilities: { speed: false } });
+    session.handleText(JSON.stringify({ type: "listen.start" }));
+    vad.probs = [...Array<number>(10).fill(0.9), ...Array<number>(30).fill(0.02)];
+    session.handleAudio(frameBuffer(40));
+    await session.drainVad();
+    relay.last.events.onFinal?.("Slow down please");
+    await settle();
+    brain.last.handlers.onDelta("Of course, I will.");
+    brain.last.handlers.onDone({ text: "Of course, I will.", status: "complete", runId: "r" });
+    await settle(40);
+    expect(relay.ttsRequests).toHaveLength(1);
+    expect(relay.ttsRequests[0]).not.toHaveProperty("speed");
   });
 
   it("dictate mode delivers the transcript and returns to idle without asking the agent", async () => {

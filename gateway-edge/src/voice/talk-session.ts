@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
+  TALK_CAPABILITIES_DEFAULT,
   TALK_INPUT_SAMPLE_RATE,
   TALK_OUTPUT_SAMPLE_RATE,
   TALK_PROTOCOL_VERSION,
   parseTalkClientMessage,
   resolveTalkSettings,
   type ResolvedTalkSettings,
+  type TalkCapabilities,
   type TalkClientMessage,
   type TalkErrorCode,
   type TalkMode,
@@ -39,6 +41,7 @@ export interface TalkSessionDeps {
   createBrain: (mmToken: string) => MattermostBrain;
   vad: SpeechProbabilityModel;
   engines: { stt: string; tts: string };
+  capabilities?: TalkCapabilities;
   now?: () => number;
   setTimeoutImpl?: typeof setTimeout;
   clearTimeoutImpl?: typeof clearTimeout;
@@ -105,8 +108,11 @@ export class TalkSession {
   private playbackGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReplyText = "";
 
+  private readonly capabilities: TalkCapabilities;
+
   constructor(private readonly deps: TalkSessionDeps) {
     this.sessionId = deps.sessionId ?? randomUUID();
+    this.capabilities = deps.capabilities ?? TALK_CAPABILITIES_DEFAULT;
     this.now = deps.now ?? Date.now;
     this.setTimer = deps.setTimeoutImpl ?? setTimeout;
     this.clearTimer = deps.clearTimeoutImpl ?? clearTimeout;
@@ -241,6 +247,7 @@ export class TalkSession {
       input: { sampleRate: TALK_INPUT_SAMPLE_RATE },
       output: { sampleRate: TALK_OUTPUT_SAMPLE_RATE },
       engines: this.deps.engines,
+      capabilities: this.capabilities,
       settings: this.settings,
     });
     this.setState("idle");
@@ -477,7 +484,7 @@ export class TalkSession {
       const stream = this.deps.relay.tts({
         text: job.text,
         ...(this.settings.voice ? { voice: this.settings.voice } : {}),
-        speed: this.settings.speed,
+        ...(this.capabilities.speed ? { speed: this.settings.speed } : {}),
         signal: job.abort.signal,
       });
       for await (const chunk of stream) {

@@ -9,6 +9,7 @@ const config: VoiceTtsConfig = {
   apiKey: "k",
   voice: "en_paul_neutral",
   voiceParam: "voice_id",
+  speedParam: "speed",
   format: "wav",
   pcmSampleRate: 24_000,
   pcmEncoding: "s16le",
@@ -58,6 +59,12 @@ describe("buildTtsRequestBody", () => {
       speed: 0.9,
     });
     expect(buildTtsRequestBody(config, { text: "hi", speed: 1 })).not.toHaveProperty("speed");
+  });
+
+  it("never sends a speed field to an engine without speed control (Mistral rejects extra inputs with 422)", () => {
+    const mistral: VoiceTtsConfig = { ...config, speedParam: null };
+    expect(buildTtsRequestBody(mistral, { text: "hi", speed: 1.1 })).not.toHaveProperty("speed");
+    expect(buildTtsRequestBody({ ...config, speedParam: "rate" }, { text: "hi", speed: 0.9 })).toMatchObject({ rate: 0.9 });
   });
 });
 

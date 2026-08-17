@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VoiceConfigError, describeVoiceEngines, parseVoiceRelayConfig } from "./config.js";
+import { VoiceConfigError, describeVoiceCapabilities, describeVoiceEngines, parseVoiceRelayConfig } from "./config.js";
 
 const full = {
   VOICE_STT_PROVIDER: "mistral-realtime",
@@ -33,12 +33,17 @@ describe("parseVoiceRelayConfig", () => {
       apiKey: "tts",
       voice: "en_paul_neutral",
       voiceParam: "voice_id",
+      speedParam: "speed",
       format: "wav",
       pcmSampleRate: 24_000,
       pcmEncoding: "s16le",
       extraBody: { stream: true },
       voices: [],
     });
+    expect(describeVoiceCapabilities(cfg)).toEqual({ speed: true });
+    const mistral = parseVoiceRelayConfig({ ...full, VOICE_TTS_SPEED_PARAM: "none" })!;
+    expect(mistral.tts.speedParam).toBeNull();
+    expect(describeVoiceCapabilities(mistral)).toEqual({ speed: false });
     expect(describeVoiceEngines(cfg)).toEqual({
       stt: "mistral-realtime:voxtral-mini-transcribe-realtime-2602",
       tts: "openai-compatible:voxtral-mini-tts-2603",

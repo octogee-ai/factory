@@ -28,6 +28,7 @@ const config: VoiceRelayConfig = {
     apiKey: "tts-key",
     voice: "en_paul_neutral",
     voiceParam: "voice_id",
+    speedParam: "speed",
     format: "wav",
     pcmSampleRate: 24_000,
     pcmEncoding: "s16le",
@@ -102,6 +103,7 @@ describe("POST /internal/voice/tts", () => {
     expect(res.body).toEqual({
       configured: true,
       engines: { stt: "mistral-realtime:voxtral-mini-transcribe-realtime-2602", tts: "openai-compatible:voxtral-mini-tts-2603" },
+      capabilities: { speed: true },
     });
     expect((await request(appWith({ config: null })).get("/internal/voice/status?gatewayId=gw-mom")).body).toEqual({ configured: false });
     expect((await request(appWith({ config })).get("/internal/voice/status?gatewayId=gw-other")).status).toBe(403);

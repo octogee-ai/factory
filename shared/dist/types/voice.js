@@ -11,6 +11,7 @@ export const TALK_PROTOCOL_VERSION = 1;
 export const TALK_INPUT_SAMPLE_RATE = 16_000;
 export const TALK_OUTPUT_SAMPLE_RATE = 24_000;
 export const TALK_TICKET_PURPOSE = "voice-ws";
+export const TALK_CAPABILITIES_DEFAULT = { speed: true };
 export const TALK_SETTINGS_DEFAULTS = {
     voice: "",
     speed: 1,

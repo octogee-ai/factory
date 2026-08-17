@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import { Counter, Gauge, type Registry } from "prom-client";
 import { internalFetch } from "@octogee/core/internal-fetch";
-import type { TalkErrorCode, TalkServerEvent } from "@octogee/shared/types/voice";
+import { TALK_CAPABILITIES_DEFAULT, type TalkCapabilities, type TalkErrorCode, type TalkServerEvent } from "@octogee/shared/types/voice";
 import { createActivityMmClientFactory } from "../chat-proxy/openclaw/mm-client.js";
 import { shouldForwardFrame } from "../chat-proxy/openclaw/frame-filter.js";
 import type { OpenClawRuntimeBroker } from "../chat-proxy/openclaw/runtime-broker.js";
@@ -45,6 +45,7 @@ export interface VoiceWsRouteDeps {
 interface RelayStatus {
   configured: boolean;
   engines?: { stt: string; tts: string };
+  capabilities?: TalkCapabilities;
 }
 
 interface RedeemedVoiceTicket {
@@ -250,6 +251,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
       return;
     }
     const engines = status.engines;
+    const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
 
     const upstreamOutcome = await deps.establishUpstream(redeemed.gatewayId, redeemed.gatewayUrl);
     if (!upstreamOutcome.ok) {
@@ -293,6 +295,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         createBrain: (mmToken) => createMattermostBrain({ posts: mmClients(mmToken), events, log: sessionLog }),
         vad,
         engines,
+        capabilities,
         log: sessionLog,
       });
       log("voice ws session open", { uid: redeemed.uid, gatewayId: redeemed.gatewayId, sessionId: session.sessionId });
