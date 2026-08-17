@@ -406,7 +406,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
 
-  it("activates a shared-gateway import before project hydration", async () => {
+  it("keeps imported-customer activation focused on runtime activation", async () => {
     const client = mkClient();
     const log = vi.fn();
     const rpc = {
@@ -433,9 +433,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(client.userSnapshot).not.toHaveBeenCalled();
     expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      "[import:tester10] project hydration deferred until target serves the customer",
-    );
   });
 
   it("preserves the activation manifest when secrets.reload does not acknowledge success", async () => {

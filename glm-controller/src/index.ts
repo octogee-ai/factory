@@ -900,10 +900,16 @@ interface GatewayConvergencePassDeps {
     gatewayId: string;
     desiredImageTag: string;
     requiresCustomerMigration: boolean;
+    disposableBuilderGateway: boolean;
     ownerlessOperatorPrewarm: boolean;
     stateMigration: RollStateMigrationDecision;
   }) => Promise<{ ready: boolean }>;
   log: (msg: string) => void;
+}
+
+function isDisposableBuilderGateway(gateway: DurableGateway): boolean {
+  return gateway.gatewayClass === "builder" &&
+    gateway.allocation?.kind === "disposable-builder";
 }
 
 // The pod's own self-reported build (heartbeat.version, written by the
@@ -956,6 +962,7 @@ export async function refineGatewayConvergenceAction(input: {
     gatewayId: gateway.gatewayId,
     desiredImageTag: desiredImage.imageTag,
     requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
+    disposableBuilderGateway: isDisposableBuilderGateway(gateway),
     ownerlessOperatorPrewarm: false,
     stateMigration: decideRollStateMigration({
       sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),

@@ -54,13 +54,14 @@ export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
     const { uid, name, deletionTimestamp } = item.metadata ?? {};
     const { phase, podIP, conditions } = item.status ?? {};
     if (uid) observedPodUids.push(uid);
-    if (deletionTimestamp || phase !== "Running" || !uid || !name || !podIP) continue;
+    if (phase !== "Running" || !uid || !name || !podIP) continue;
     pods.push({
       uid,
       name,
       podIP,
       ready: (conditions ?? []).some((condition) =>
         condition.type === "Ready" && condition.status === "True"),
+      terminating: Boolean(deletionTimestamp),
     });
   }
   return { pods, observedPodUids };
@@ -286,7 +287,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       });
     },
 
-    async transfer({ gatewayId, slug, operationId, sourcePod, targetPod }) {
+    async transfer({ gatewayId, slug, operationId, sourcePod, targetPod, loadStrategy }) {
       const transferMode = async (mode: "keys" | "final") => {
         const transferKey = randomKey();
         let prepared = false;
@@ -326,6 +327,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
             slug,
             rpcPhase: "finish-rsync-import",
             mode,
+            ...(mode === "final" ? { loadStrategy } : {}),
           });
         } catch (error) {
           if (prepared) {

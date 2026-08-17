@@ -1,5 +1,6 @@
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { OperationStatus } from "@octogee/shared/types/glm";
+import type { MigrationLoadStrategy } from "@octogee/shared/types/fleet-controller";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import type { RollStateMigrationDecision } from "./roll-state-migration.js";
 
@@ -8,6 +9,7 @@ export interface SurgePod {
   name: string;
   podIP: string;
   ready: boolean;
+  terminating: boolean;
 }
 
 export interface SurgePodSnapshot {
@@ -86,6 +88,7 @@ export interface SurgeCustomerHandoffDeps {
     operationId: string;
     sourcePod: SurgePod;
     targetPod: SurgePod;
+    loadStrategy: MigrationLoadStrategy;
   }) => Promise<void>;
   discardTargetCustomer: (input: {
     gatewayId: string;
@@ -112,6 +115,7 @@ export interface ReconcileSurgeCustomerHandoffInput {
   gatewayId: string;
   desiredImageTag: string;
   requiresCustomerMigration: boolean;
+  disposableBuilderGateway?: boolean;
   ownerlessOperatorPrewarm?: boolean;
   stateMigration: RollStateMigrationDecision;
 }
@@ -156,7 +160,7 @@ function selectTarget(
   healthByUid: ReadonlyMap<string, SurgePodHealth>,
   desiredImageTag: string,
 ): SurgePod | null {
-  const desired = pods.filter((pod) => gatewayHeartbeatMatchesImageTag(
+  const desired = pods.filter((pod) => !pod.terminating && gatewayHeartbeatMatchesImageTag(
     healthByUid.get(pod.uid)?.version,
     desiredImageTag,
   ));
@@ -343,6 +347,9 @@ async function transferAssignments(
         operationId: ownedBy,
         sourcePod,
         targetPod,
+        loadStrategy: input.disposableBuilderGateway === true && sourcePod.terminating
+          ? "expedited"
+          : "standard",
       });
       const [sourceDigest, targetDigest] = await Promise.all([
         deps.readDurableSessionDigest({
@@ -384,7 +391,9 @@ function selectSource(pods: readonly SurgePod[], target: SurgePod): SurgeSourceS
   if (sources.length > 1) throw new Error("multiple source pods found");
   const source = sources[0];
   if (!source) return { kind: "missing" };
-  return source.ready ? { kind: "ready", pod: source } : { kind: "waiting", pod: source };
+  return source.ready || source.terminating
+    ? { kind: "ready", pod: source }
+    : { kind: "waiting", pod: source };
 }
 
 async function releaseTargetWithConfirmation(

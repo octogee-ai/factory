@@ -257,6 +257,9 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 LOCAL chris@gateway"),
     createGiteaUser: vi.fn(async () => undefined),
     activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+    projectCheckoutScope: vi.fn(() => "workspace-and-projects"),
+    listProjectsNeedingClone: vi.fn(async () => []),
+    cloneProjectRepo: vi.fn(async () => true),
     reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
     onMounted: vi.fn(),
@@ -1435,16 +1438,23 @@ describe("queued-rsync migration control handlers", () => {
     expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", manifest });
   });
 
-  it("createActivateImportHandler defers project hydration until cutover", async () => {
+  it("createActivateImportHandler records a completed standard activation", async () => {
     const markCustomerMigratingIn = vi.fn();
     const onMounted = vi.fn();
     const recordAppliedFingerprint = vi.fn();
     const createGiteaUser = vi.fn(async () => undefined);
+    let pendingProjects = [{ projectSlug: "camp", giteaRepoName: "chris-camp" }];
+    const cloneProjectRepo = vi.fn(async () => {
+      pendingProjects = [];
+      return true;
+    });
     const adapter = mkAdapter({
       markCustomerMigratingIn,
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TARGET chris@gateway"),
       createGiteaUser,
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      listProjectsNeedingClone: vi.fn(async () => pendingProjects),
+      cloneProjectRepo,
       recordAppliedFingerprint,
       onMounted,
     });
@@ -1470,9 +1480,45 @@ describe("queued-rsync migration control handlers", () => {
     expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
     );
-    expect(recordAppliedFingerprint).not.toHaveBeenCalled();
+    expect(cloneProjectRepo).toHaveBeenCalledWith(
+      "chris",
+      "camp",
+      "chris-camp",
+      undefined,
+    );
+    expect(cloneProjectRepo.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
+    );
+    expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
+  });
+
+  it("does not activate a standard migration while a project checkout is still missing", async () => {
+    const adapter = mkAdapter({
+      listProjectsNeedingClone: vi.fn(async () => [
+        { projectSlug: "camp", giteaRepoName: "chris-camp" },
+      ]),
+      cloneProjectRepo: vi.fn(async () => false),
+    });
+    const body: ActivateImportRequestBody = {
+      migrationId: "mig-project-pending",
+      slug: "chris",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const handler = createActivateImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({
+      error: "activate-import failed",
+      message: expect.stringContaining("project checkout hydration incomplete"),
+    });
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
   it("createPrepareRsyncImportHandler opens a one-time target rsync import session", async () => {
@@ -1682,7 +1728,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(args).toContain(`rsync://migration@${TARGET_POD_IP}:30873/state/`);
   });
 
-  it("createFinishRsyncImportHandler copies staged bytes and activates the customer", async () => {
+  it("createFinishRsyncImportHandler leaves expedited project convergence to reconciliation", async () => {
     const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
@@ -1736,6 +1782,7 @@ describe("queued-rsync migration control handlers", () => {
       slug: "chris",
       rpcPhase: "finish-rsync-import",
       mode: "final",
+      loadStrategy: "expedited",
     };
     const finishRaw = JSON.stringify(finishBody);
     const finishSig = signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw);
@@ -1752,6 +1799,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
     expect(deps.resumeSystemConfigWatch).not.toHaveBeenCalled();
     expect(recordAppliedFingerprint).not.toHaveBeenCalled();
+    expect(adapter.listProjectsNeedingClone).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];

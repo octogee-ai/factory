@@ -19,6 +19,7 @@ import {
   type FlushGatewayRequestBody,
   type FlushGatewayResponse,
   type CompleteSurgeHandoffRequestBody,
+  type MigrationLoadStrategy,
   type MigrationRequestBody,
   type MigrationTransferMode,
   type PrepareRsyncImportRequestBody,
@@ -56,6 +57,7 @@ import { pickPlanInputs } from "../../shared/types/billing.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
+  cloneMissingProjects,
   removeCustomerFromGateway,
   restoreCustomerRuntimeFromSnapshot,
   type UserSnapshot,
@@ -169,17 +171,31 @@ async function activateImportedCustomerForMigration(input: {
   deps: MigrationHandlerDeps;
   slug: string;
   mode: MigrationImportMode;
+  loadStrategy?: MigrationLoadStrategy;
   signal?: AbortSignal;
 }): Promise<void> {
-  const { deps, slug, mode, signal } = input;
+  const { deps, slug, mode, signal, loadStrategy = "standard" } = input;
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
-  if (signal) {
-    await deps.adapter.activateImportedCustomer(slug, { signal });
-  } else {
-    await deps.adapter.activateImportedCustomer(slug);
+  if (
+    loadStrategy === "standard" &&
+    deps.adapter.projectCheckoutScope?.(slug) !== "workspace-only"
+  ) {
+    const { pending } = await cloneMissingProjects(deps.adapter, slug);
+    if (pending.length > 0) {
+      throw new Error(
+        `[migration-http] project checkout hydration incomplete for ${slug}: ${pending.join(", ")}`,
+      );
+    }
   }
-  deps.log?.(`[migration-http] project hydration deferred until cutover slug=${slug}`);
+  const activation = signal
+    ? await deps.adapter.activateImportedCustomer(slug, { signal })
+    : await deps.adapter.activateImportedCustomer(slug);
+  if (loadStrategy === "standard") {
+    deps.adapter.recordAppliedFingerprint?.(slug, activation.appliedFingerprint);
+  } else {
+    deps.log?.(`[migration-http] expedited activation defers project hydration slug=${slug}`);
+  }
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }
@@ -1034,6 +1050,16 @@ function validateTransferMode(
   return null;
 }
 
+function validateMigrationLoadStrategy(
+  value: unknown,
+  res: Response,
+): MigrationLoadStrategy | null {
+  if (value === undefined || value === "standard") return "standard";
+  if (value === "expedited") return value;
+  res.status(400).json({ error: "invalid loadStrategy" });
+  return null;
+}
+
 function validateRsyncRpcPhase(
   value: unknown,
   expected: RsyncMigrationRpcPhase,
@@ -1527,6 +1553,8 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     if (!validateRsyncRpcPhase(body.rpcPhase, "finish-rsync-import", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
+    const loadStrategy = validateMigrationLoadStrategy(body.loadStrategy, res);
+    if (!loadStrategy) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     const session = rsyncImportSessions.get(key);
     if (!session) {
@@ -1575,6 +1603,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
           deps,
           slug: body.slug,
           mode,
+          loadStrategy,
           signal: controller.signal,
         });
         deps.adapter.writeMountMarker?.(body.slug);

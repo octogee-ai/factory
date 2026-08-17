@@ -7,8 +7,20 @@ import {
 import type { SurgePod } from "../surge-customer-handoff.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
-const source: SurgePod = { uid: "old", name: "old-pod", podIP: "10.0.0.1", ready: true };
-const target: SurgePod = { uid: "new", name: "new-pod", podIP: "10.0.0.2", ready: false };
+const source: SurgePod = {
+  uid: "old",
+  name: "old-pod",
+  podIP: "10.0.0.1",
+  ready: true,
+  terminating: false,
+};
+const target: SurgePod = {
+  uid: "new",
+  name: "new-pod",
+  podIP: "10.0.0.2",
+  ready: false,
+  terminating: false,
+};
 
 describe("surge handoff Kubernetes projection", () => {
   it("keeps every observed UID while projecting usable pods independently", () => {
@@ -36,7 +48,17 @@ describe("surge handoff Kubernetes projection", () => {
         },
       ],
     }))).toEqual({
-      pods: [source, target],
+      pods: [
+        source,
+        target,
+        {
+          uid: "gone",
+          name: "gone-pod",
+          podIP: "10.0.0.3",
+          ready: false,
+          terminating: true,
+        },
+      ],
       observedPodUids: ["old", "new", "gone", "pending"],
     });
   });
@@ -121,6 +143,7 @@ describe("surge handoff direct pod transport", () => {
       operationId: "surge-default-new",
       sourcePod: source,
       targetPod: target,
+      loadStrategy: "expedited",
     });
     await transport.discardTargetCustomer({
       gatewayId: "default",
@@ -177,6 +200,10 @@ describe("surge handoff direct pod transport", () => {
       targetPort: 30873,
       includeActivationManifest: true,
     });
+    expect(calls[7]?.body).toMatchObject({
+      mode: "final",
+      loadStrategy: "expedited",
+    });
     expect(calls[9]?.body).toEqual({
       migrationId: "surge-default-new",
       targetPodUid: "new",
@@ -211,6 +238,7 @@ describe("surge handoff direct pod transport", () => {
       operationId: "surge-default-new",
       sourcePod: source,
       targetPod: target,
+      loadStrategy: "standard",
     })).rejects.toThrow(/push-rsync-state.*404/u);
 
     expect(calls.map((call) => [call.url, call.body?.mode, call.body?.rpcPhase])).toEqual([

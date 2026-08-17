@@ -84,6 +84,7 @@ export interface PushStateRequestBody extends MigrationRequestBody {
     mode?: "keys" | "pre" | "final";
 }
 export type MigrationTransferMode = "keys" | "pre" | "final";
+export type MigrationLoadStrategy = "standard" | "expedited";
 export declare const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
 export interface PrepareImportRequestBody extends MigrationRequestBody {
     mode: MigrationTransferMode;
@@ -136,6 +137,7 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
     rpcPhase: "finish-rsync-import";
     mode: MigrationTransferMode;
+    loadStrategy?: MigrationLoadStrategy;
 }
 export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
     rpcPhase: "abort-rsync-import";
