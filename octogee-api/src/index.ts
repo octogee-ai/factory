@@ -26,7 +26,7 @@ import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commi
 import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
-import { createAgentProjectRunRoutes } from "./routes/agent-project-runs.js";
+import { createAgentProjectRunRoutes, finalizeProjectRun } from "./routes/agent-project-runs.js";
 import { createAdminProjectRunRoutes } from "./routes/admin-project-runs.js";
 import { createAgentProjectPublishRoutes } from "./routes/agent-project-publish.js";
 import { createProjectPublishControlRoutes } from "./routes/project-publish-control.js";
@@ -145,6 +145,7 @@ import {
   type ProjectPreviewArtifactStore,
 } from "./lib/project-runs/preview-artifacts.js";
 import { startProjectRunRetention } from "./lib/project-runs/retention.js";
+import { startProjectRunFinalization } from "./lib/project-runs/finalization.js";
 import { createProjectPublishAllocationStore, type ProjectPublishAllocationStore } from "./lib/project-publish/allocation.js";
 import { createGcsProjectPublishArtifactSource, type ProjectPublishArtifactSource } from "./lib/project-publish/artifact-source.js";
 import { createProjectPublisherClient, type ProjectPublisherClient } from "./lib/project-publish/publisher-client.js";
@@ -709,16 +710,26 @@ export function createApp(opts: CreateAppOptions = {}) {
       properties: { source: "agent" },
     }),
   }));
-  app.use("/internal/project-runs", createAgentProjectRunRoutes({
-    db,
+  const projectRunFinalizerDeps = {
     store: projectRunStore,
-    source: projectRunSource,
     controlPlane: projectRunControlPlane,
     artifactStore: projectRunArtifactStore,
     previewArtifactStore: projectPreviewArtifactStore,
     previewOrigin,
+  };
+  app.use("/internal/project-runs", createAgentProjectRunRoutes({
+    db,
+    ...projectRunFinalizerDeps,
+    source: projectRunSource,
     runnerImage,
   }));
+  if (process.env.NODE_ENV !== "test") {
+    startProjectRunFinalization({
+      runs: projectRunStore,
+      finalize: async (run) => { await finalizeProjectRun(run, projectRunFinalizerDeps); },
+      onError: (error) => logger.error("[project-runs] finalization sweep failed", { error }),
+    });
+  }
   app.use("/internal/openclaw", createAgentProjectPublishRoutes({
     db,
     runStore: projectRunStore,
