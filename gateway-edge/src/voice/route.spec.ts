@@ -18,10 +18,13 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
 });
 
+const sttFault = { throwOnAudio: false };
+
 class FakeStt implements SttStream {
   audio: Buffer[] = [];
   constructor(readonly events: SttStreamEvents) {}
   sendAudio(pcm: Buffer) {
+    if (sttFault.throwOnAudio) throw new RangeError("start offset of Int16Array should be a multiple of 2");
     this.audio.push(pcm);
   }
   end() {
@@ -185,6 +188,40 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     expect(((await once(ws, "error")) as [Error])[0].message).toMatch(/409/);
     expect(refuse).toHaveBeenCalled();
+  });
+
+  it("a session that throws mid-frame is torn down with a typed error while the server keeps serving other sessions", async () => {
+    const { base, relay } = await serverWith();
+    const ws = new WebSocket(`${base}/g/gw-mom/api/voice/ws/${TICKET}`);
+    const events: TalkServerEvent[] = [];
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary) events.push(JSON.parse(data.toString()) as TalkServerEvent);
+    });
+    await once(ws, "open");
+    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1", mmToken: "mm-token-1234567890" }));
+    await waitFor(() => events.some((e) => e.type === "session.ready"));
+    ws.send(JSON.stringify({ type: "listen.start" }));
+    await waitFor(() => relay.stts.length === 1);
+    sttFault.throwOnAudio = true;
+    try {
+      ws.send(Buffer.alloc(1024), { binary: true });
+      const [code, reason] = (await once(ws, "close")) as [number, Buffer];
+      expect(code).toBe(1000);
+      expect(reason.toString()).toBe("session-error");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "internal", recoverable: false });
+    } finally {
+      sttFault.throwOnAudio = false;
+    }
+
+    const next = new WebSocket(`${base}/g/gw-mom/api/voice/ws/${TICKET}`);
+    const nextEvents: TalkServerEvent[] = [];
+    next.on("message", (data, isBinary) => {
+      if (!isBinary) nextEvents.push(JSON.parse(data.toString()) as TalkServerEvent);
+    });
+    await once(next, "open");
+    next.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1", mmToken: "mm-token-1234567890" }));
+    await waitFor(() => nextEvents.some((e) => e.type === "session.ready"));
+    next.close();
   });
 
   it("runs a talk turn end to end: audio → relay STT → Mattermost post → agent events → speech frames", async () => {

@@ -17,6 +17,18 @@ describe("VadFramer", () => {
     expect(framer.push(Buffer.alloc(511 * 2))).toHaveLength(0);
   });
 
+  it("accepts frames that are odd-offset slices of a shared pool, as ws delivers them", () => {
+    const pool = Buffer.alloc(3 + VAD_FRAME_SAMPLES * 2 * 2);
+    pool.writeInt16LE(16384, 3);
+    pool.writeInt16LE(-32768, 3 + VAD_FRAME_SAMPLES * 2);
+    const message = pool.subarray(3, 3 + VAD_FRAME_SAMPLES * 2 * 2);
+    expect(message.byteOffset % 2).toBe(1);
+    const frames = new VadFramer().push(message);
+    expect(frames).toHaveLength(2);
+    expect(frames[0][0]).toBeCloseTo(0.5, 5);
+    expect(frames[1][0]).toBe(-1);
+  });
+
   it("scales samples into [-1, 1]", () => {
     const framer = new VadFramer();
     const buf = Buffer.alloc(VAD_FRAME_SAMPLES * 2);

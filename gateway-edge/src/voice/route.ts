@@ -317,7 +317,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         log("voice ws session closed", { uid: redeemed.uid, sessionId: session.sessionId, reason });
       };
 
-      client.on("message", (data, isBinary) => {
+      const onFrame = (data: WebSocket.RawData, isBinary: boolean) => {
         const buf = rawDataToBuffer(data);
         if (isBinary) {
           if (buf.length > MAX_CLIENT_AUDIO_FRAME_BYTES) {
@@ -335,6 +335,15 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         }
         session.handleText(buf.toString("utf8"));
         if (session.currentState === "closed") teardown("session-ended");
+      };
+      client.on("message", (data, isBinary) => {
+        try {
+          onFrame(data, isBinary);
+        } catch (err) {
+          log("voice ws session failed", { uid: redeemed.uid, sessionId: session.sessionId, error: err instanceof Error ? err.stack ?? err.message : String(err) });
+          send({ type: "error", code: "internal", message: "the voice engine hit an error; please reconnect", recoverable: false });
+          teardown("session-error");
+        }
       });
       client.on("close", () => teardown("client-closed"));
       client.on("error", () => teardown("client-error"));

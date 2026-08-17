@@ -205,11 +205,18 @@ export function createVoiceRelayClient(options: VoiceRelayClientOptions): VoiceR
       }
       if (!res.body) throw new VoiceRelayError("voice relay TTS returned no body");
       const reader = res.body.getReader();
+      let carry: Buffer = Buffer.alloc(0);
       try {
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          if (value && value.byteLength > 0) yield Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+          if (!value || value.byteLength === 0) continue;
+          const bytes = carry.length
+            ? Buffer.concat([carry, Buffer.from(value.buffer, value.byteOffset, value.byteLength)])
+            : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+          const whole = bytes.length - (bytes.length % 2);
+          carry = Buffer.from(bytes.subarray(whole));
+          if (whole > 0) yield bytes.subarray(0, whole);
         }
       } finally {
         reader.releaseLock();

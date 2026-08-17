@@ -70,10 +70,10 @@ export class VadFramer {
   private carry = new Int16Array(0);
 
   push(pcm16le: Buffer): Float32Array[] {
-    const incoming = new Int16Array(pcm16le.buffer, pcm16le.byteOffset, Math.floor(pcm16le.byteLength / 2));
-    const samples = new Int16Array(this.carry.length + incoming.length);
+    const incomingLength = Math.floor(pcm16le.byteLength / 2);
+    const samples = new Int16Array(this.carry.length + incomingLength);
     samples.set(this.carry, 0);
-    samples.set(incoming, this.carry.length);
+    for (let i = 0; i < incomingLength; i++) samples[this.carry.length + i] = pcm16le.readInt16LE(i * 2);
     const frames: Float32Array[] = [];
     let offset = 0;
     while (samples.length - offset >= VAD_FRAME_SAMPLES) {
