@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { signFleetRequest } from "./fleet-signature";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
 import {
+  CONFIG_PATCH_DEADLINE_MS,
   SIGNATURE_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
@@ -703,6 +704,11 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     expect(signals).toHaveLength(1);
     expect(signals[0]).toBeInstanceOf(AbortSignal);
     expect(MIGRATION_TRANSFER_TIMEOUT_MS).toBeGreaterThan(MIGRATION_UNMOUNT_TIMEOUT_MS);
+  });
+
+  it("gives source unmount enough time for agent deletion and its config cleanup", () => {
+    expect(CONFIG_PATCH_DEADLINE_MS).toBe(120_000);
+    expect(MIGRATION_UNMOUNT_TIMEOUT_MS).toBe(2 * CONFIG_PATCH_DEADLINE_MS + 30_000);
   });
 
   it("passes the AbortSignal on /verify inside verifyTarget", async () => {

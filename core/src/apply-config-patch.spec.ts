@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -61,7 +62,7 @@ afterEach(() => {
 });
 
 describe("applyConfigPatch — RPC happy path", () => {
-  it("uses a 60-second RPC call timeout without changing a caller's 90-second deadline", async () => {
+  it("uses the fleet config-patch deadline for its owned RPC", async () => {
     const rpc = makeFakeRpc();
     h.createGatewayRpc.mockReturnValue(rpc);
 
@@ -72,7 +73,7 @@ describe("applyConfigPatch — RPC happy path", () => {
 
     expect(h.createGatewayRpc).toHaveBeenCalledWith({
       allowLegacyGatewayTokenFallback: true,
-      callTimeoutMs: 60_000,
+      callTimeoutMs: CONFIG_PATCH_DEADLINE_MS,
     });
   });
 

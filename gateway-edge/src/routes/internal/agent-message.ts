@@ -1,18 +1,11 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-import { db } from "../../lib/db.js";
-import {
-  resolveOwnerSystemMessageTarget,
-  type OwnerSystemMessageTarget,
-} from "../../lib/gateway-system-message.js";
 import { requireAgentMessageAuth } from "../../middleware/agent-message-auth.js";
 import { logger } from "../../middleware/logging.js";
 
 const OPENCLAW_URL = "http://127.0.0.1:18789";
 const MESSAGE_TIMEOUT_MS = 15_000;
-
-type TargetResolver = (uid: string) => Promise<OwnerSystemMessageTarget>;
 
 interface AgentMessageInput {
   uid: string;
@@ -59,14 +52,13 @@ async function deliverAgentMessage(
   );
 }
 
-export function createInternalAgentMessageRouter(
-  resolveTarget: TargetResolver = (uid) => resolveOwnerSystemMessageTarget(db, uid),
-): Router {
+export function createInternalAgentMessageRouter(): Router {
   const router = Router({ mergeParams: true });
   router.post(
     "/",
     requireAgentMessageAuth,
     async (req: Request, res: Response, next: NextFunction) => {
+      let agentId: string | undefined;
       try {
         const gatewayId = requestString(req.params.gatewayId);
         if (!gatewayId || gatewayId !== process.env.GATEWAY_ID) {
@@ -78,11 +70,7 @@ export function createInternalAgentMessageRouter(
           res.status(400).json({ error: "invalid agent message" });
           return;
         }
-        const target = await resolveTarget(input.uid);
-        if (target.gatewayId !== gatewayId || target.agentId !== input.agentId) {
-          res.status(403).json({ error: "agent message target rejected" });
-          return;
-        }
+        agentId = input.agentId;
         const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
         if (!gatewayToken) {
           logger.error("internal agent message delivery failed", {
@@ -107,6 +95,7 @@ export function createInternalAgentMessageRouter(
       } catch (error) {
         logger.error("internal agent message delivery failed", {
           gatewayId: req.params.gatewayId,
+          agentId,
           error: error instanceof Error ? error.message : String(error),
         });
         next(error);

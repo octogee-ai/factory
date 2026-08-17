@@ -40,6 +40,36 @@ describe("deleteRosterAgents", () => {
     ]);
   });
 
+  it("emits progress while a roster delete is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      let finishDelete: (() => void) | undefined;
+      const deleteFinished = new Promise<void>((resolve) => {
+        finishDelete = resolve;
+      });
+      const log = vi.fn();
+      const rpc = mkRpc(async () => {
+        await deleteFinished;
+        return { ok: true };
+      });
+
+      const deleting = deleteRosterAgents(["octogee-alice-coach"], { rpc, log });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(log).toHaveBeenCalledWith(
+        "agents.delete pending agentId=octogee-alice-coach elapsedMs=15000",
+      );
+      finishDelete?.();
+      await deleting;
+      expect(log).toHaveBeenCalledWith(
+        "agents.delete completed agentId=octogee-alice-coach elapsedMs=15000",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A coach's openclaw workspace IS the customer directory. Letting openclaw
   // trash it would destroy a retained customer's checkout during a cancelled
   // eviction and would override a cleanup job's `deleteWorkspace: false`.

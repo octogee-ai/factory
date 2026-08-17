@@ -252,7 +252,7 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
-  it("uses the sixty-second RPC timeout while retaining the provisioning mutation gate", async () => {
+  it("uses a two-minute RPC timeout while retaining the provisioning mutation gate", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-timeout-"));
     const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
     const createRpc = vi.fn(() => ({
@@ -268,6 +268,7 @@ describe("fleet-controller entrypoint config", () => {
     })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
 
     try {
+      expect(FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS).toBe(120_000);
       expect(createRpc).toHaveBeenCalledWith({
         allowLegacyGatewayTokenFallback: true,
         callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,

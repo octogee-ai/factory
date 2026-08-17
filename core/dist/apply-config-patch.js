@@ -1,4 +1,5 @@
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { log as defaultLog } from "./config.js";
 import { OpenclawWireError, createGatewayRpc, } from "./gateway-rpc.js";
 const RETRY_AFTER_PATTERN = /\brate limit exceeded\b.*?\bretry after (\d+)s\b/i;
@@ -217,7 +218,7 @@ export async function applyConfigPatch(args, opts = {}) {
     const sleep = createAbortableSleep(signal, opts.sleep);
     const rpc = opts.rpc ?? createGatewayRpc({
         allowLegacyGatewayTokenFallback: true,
-        callTimeoutMs: 60_000,
+        callTimeoutMs: CONFIG_PATCH_DEADLINE_MS,
     });
     const ownsRpc = !opts.rpc;
     const startedAt = now();

@@ -16,6 +16,8 @@ export interface DeleteRosterAgentsOptions {
   logPrefix?: string;
 }
 
+const AGENT_DELETE_PROGRESS_INTERVAL_MS = 15_000;
+
 export function customerAgentIdsInRoster(current: unknown, slug: string): string[] {
   return agentIdsFromConfig(current).filter((agentId) => agentIdBelongsToSlug(agentId, slug));
 }
@@ -45,8 +47,18 @@ export async function deleteRosterAgents(
   const failures: string[] = [];
 
   for (const agentId of agentIds) {
+    const startedAt = Date.now();
+    log(`${prefix}agents.delete started agentId=${agentId}`);
+    const progressTimer = setInterval(() => {
+      log(
+        `${prefix}agents.delete pending agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
+      );
+    }, AGENT_DELETE_PROGRESS_INTERVAL_MS);
     try {
       await opts.rpc.agentsDelete({ agentId, deleteFiles: false });
+      log(
+        `${prefix}agents.delete completed agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
+      );
       results.push({ agentId, status: "deleted" });
     } catch (err) {
       if (isAgentNotFoundRpcError(err)) {
@@ -57,6 +69,8 @@ export async function deleteRosterAgents(
       const message = err instanceof Error ? err.message : String(err);
       log(`⚠ ${prefix}agents.delete ${agentId} failed: ${message}`);
       failures.push(`${agentId} (${message})`);
+    } finally {
+      clearInterval(progressTimer);
     }
   }
 

@@ -66,7 +66,7 @@ export const SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS = [
   2_500,
   3_000,
 ] as const;
-export const FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS = 60_000;
+export const FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS = 120_000;
 
 export function resolveFleetControllerEntrypointConfig(
   env: NodeJS.ProcessEnv = process.env,
