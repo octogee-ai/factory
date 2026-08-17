@@ -138,7 +138,7 @@ async function runConfigPatchAttempt(args, ctx) {
     };
 }
 function isPermanentConfigPatchError(err) {
-    return (err.code === "auth-failed" ||
+    return ((err.code === "auth-failed" && !/^gateway starting; retry shortly$/i.test(err.message)) ||
         err.code === "invalid-patch" ||
         err.code === "invalid-response" ||
         (err.code === "rpc-error" && /redacted id placeholder with no matching original value/i.test(err.message)));

@@ -324,6 +324,22 @@ expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
 });
 
 describe("applyConfigPatch — permanent RPC errors throw without retry", () => {
+  it("retries a gateway-startup auth rejection", async () => {
+    const configGet = vi.fn()
+      .mockRejectedValueOnce(new OpenclawWireError("auth-failed", "gateway starting; retry shortly"))
+      .mockResolvedValueOnce({ config: {}, hash: "h1" });
+    const sleep = vi.fn(async () => {});
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configGet }) },
+    );
+
+    expect(result.attempts).toBe(2);
+    expect(configGet).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
   it("throws auth-failed without retry", async () => {
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("auth-failed", "bad token");
@@ -883,7 +899,15 @@ describe("applyConfigPatch — replacePaths threading (OC destructive-array guar
 });
 
 describe("isPermanentConfigPatchFailure", () => {
-  it("classifies invalid patch responses, redacted SecretRefs, and destructive array guard rejections as permanent", () => {
+  it("classifies credential rejections, invalid patch responses, redacted SecretRefs, and destructive array guard rejections as permanent", () => {
+    expect(
+      isPermanentConfigPatchFailure(new OpenclawWireError("auth-failed", "bad token")),
+    ).toBe(true);
+    expect(
+      isPermanentConfigPatchFailure(
+        new OpenclawWireError("auth-failed", "gateway starting; retry shortly"),
+      ),
+    ).toBe(false);
     expect(
       isPermanentConfigPatchFailure(
         new OpenclawWireError("invalid-patch", "invalid patch"),
