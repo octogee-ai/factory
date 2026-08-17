@@ -511,13 +511,18 @@ function transientRecoveryFence(
   context: PlacementPolicyReconcileContext,
   gateway: PlacementPolicyGateway,
 ): string | null {
+  const sharedGateway = isSharedPoolGateway(context, gateway.gatewayId) && gateway.gatewayClass === "shared";
   if (
-    gateway.kubernetesStatus === "not-ready"
-    && gatewayHeartbeatFresh(gateway)
+    sharedGateway &&
+    gatewayHeartbeatFresh(gateway) &&
+    (gateway.kubernetesStatus === "not-ready" || gateway.kubernetesStatus === "missing")
   ) {
-    return `source ${gateway.gatewayId} still has a fresh runtime heartbeat while its Kubernetes pod restarts or boots`;
+    return `source ${gateway.gatewayId} still has a fresh runtime heartbeat while Kubernetes reports ${gateway.kubernetesStatus}`;
   }
-  if (!isSharedPoolGateway(context, gateway.gatewayId)) return null;
+  if (!sharedGateway) return null;
+  if (gateway.kubernetesStatus === "not-ready") {
+    return `shared source ${gateway.gatewayId} still has Kubernetes pods; retaining assignments until it is missing`;
+  }
   if (gateway.rollActive) {
     return `shared source ${gateway.gatewayId} is in an active roll`;
   }

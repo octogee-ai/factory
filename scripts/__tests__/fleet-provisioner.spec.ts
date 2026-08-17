@@ -763,6 +763,19 @@ describe("in-pod gateway heartbeat", () => {
     expect(probeHealthz).not.toHaveBeenCalled();
   });
 
+  it("keeps readiness open while a Builder is actively provisioning", async () => {
+    const probeHealthz = vi.fn(async () => false);
+
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      provisioning: true,
+      probeHealthz,
+    })).resolves.toEqual({ ready: true, openclawUp: true });
+
+    expect(probeHealthz).not.toHaveBeenCalled();
+  });
+
   it("reports the OpenClaw runtime version through the poller health endpoint", () => {
     expect(
       buildFleetHealthResponse({
