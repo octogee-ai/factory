@@ -136,6 +136,7 @@ spec:
               # source owner/timestamps needs FOWNER, which restricted PSA denies.
               cp -rn /etc/skel/. /home/node/
               mkdir -p /home/node/.npm-cache
+              install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
           env:
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
@@ -157,6 +158,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            - name: secret-resolver
+              mountPath: /octogee-secret-resolver
           resources:
             requests:
               cpu: "50m"
@@ -346,6 +349,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            # OpenClaw's exec secret provider requires the resolver to be owned
+            # by the runtime uid, so the image cannot make it root-owned. The
+            # init container stages the bundle into a pod-local volume and this
+            # read-only mount pins it over the image path: the runtime user
+            # owns the file but cannot chmod, rewrite, or replace it.
+            - name: secret-resolver
+              mountPath: /octogee/scripts/secret-resolver.mjs
+              subPath: secret-resolver.mjs
+              readOnly: true
             - name: gateway-broker-sa-token
               mountPath: /var/run/secrets/octogee-gateway-broker
               readOnly: true
@@ -589,6 +601,8 @@ spec:
       volumes:
         # Durable product state is substrate-backed; every pod disk is disposable.
         - name: data
+          emptyDir: {}
+        - name: secret-resolver
           emptyDir: {}
         - name: tmp
           emptyDir:

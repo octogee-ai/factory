@@ -1063,6 +1063,45 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(init).not.toMatch(/--archive/);
   });
 
+  it.each(["standard", "builder"])(
+    "stages the secret resolver in the init container and mounts it read-only for the runtime user (%s)",
+    (profile) => {
+      const dep =
+        findDoc(
+          helmTemplate("octogee-gw-default", { profile }),
+          "Deployment",
+          "octogee-gateway-default",
+        ) ?? "";
+      const podSpec = parseDocument(dep).toJS().spec.template.spec as {
+        initContainers: Array<{ name: string; command?: string[]; volumeMounts?: Array<Record<string, unknown>> }>;
+        containers: Array<{ name: string; volumeMounts?: Array<Record<string, unknown>> }>;
+        volumes: Array<{ name: string; emptyDir?: Record<string, unknown> }>;
+      };
+
+      const init = podSpec.initContainers.find((c) => c.name === "fix-perms");
+      expect(init?.command?.join("\n")).toMatch(
+        /install -m 0500 \/octogee\/scripts\/secret-resolver\.mjs \/octogee-secret-resolver\/secret-resolver\.mjs/,
+      );
+      expect(init?.volumeMounts).toContainEqual({
+        name: "secret-resolver",
+        mountPath: "/octogee-secret-resolver",
+      });
+
+      const gateway = podSpec.containers.find((c) => c.name === "gateway");
+      expect(gateway?.volumeMounts).toContainEqual({
+        name: "secret-resolver",
+        mountPath: "/octogee/scripts/secret-resolver.mjs",
+        subPath: "secret-resolver.mjs",
+        readOnly: true,
+      });
+
+      for (const container of podSpec.containers.filter((c) => c.name !== "gateway")) {
+        expect(container.volumeMounts?.some((m) => m.name === "secret-resolver")).toBe(false);
+      }
+      expect(podSpec.volumes).toContainEqual({ name: "secret-resolver", emptyDir: {} });
+    },
+  );
+
   it("mounts the data volume at /home/node (whole home, not just .openclaw)", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
