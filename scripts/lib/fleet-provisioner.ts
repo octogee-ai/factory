@@ -551,8 +551,17 @@ export function buildFleetHealthResponse(input: {
 }
 
 interface FleetRuntime {
+  activeProvisioning: number;
   mountedCustomers: string[];
   status: "booting" | "ready";
+}
+
+function createFleetRuntime(): FleetRuntime {
+  return {
+    activeProvisioning: 0,
+    mountedCustomers: [],
+    status: "booting",
+  };
 }
 
 // Only openclaw writes an agent's auth-profile store, and it can refuse the
@@ -657,11 +666,12 @@ export async function waitForOpenClawHealthz(input: {
 export async function probeSurgeReadiness(input: {
   runtimeStatus: FleetRuntime["status"];
   handoffReleased: boolean;
+  provisioning?: boolean;
   probeHealthz: () => Promise<boolean>;
 }): Promise<{ ready: boolean; openclawUp: boolean }> {
-  const openclawUp = input.runtimeStatus === "ready"
+  const openclawUp = input.runtimeStatus === "ready" && input.provisioning !== true
     ? await input.probeHealthz()
-    : false;
+    : input.runtimeStatus === "ready";
   return {
     ready: input.handoffReleased && openclawUp,
     openclawUp,
@@ -680,6 +690,7 @@ function createSurgeReadinessHandler(input: {
       const { ready, openclawUp } = await probeSurgeReadiness({
         runtimeStatus: input.runtime.status,
         handoffReleased,
+        provisioning: input.runtime.activeProvisioning > 0,
         probeHealthz: input.probeHealthz,
       });
       res.status(ready ? 200 : 503).json({
@@ -1024,59 +1035,64 @@ function startMaybeReconcileLoop(params: {
       evictionBatch: readonly string[],
       pendingEvictions: () => readonly string[],
     ) => {
-      wrappedAdapter.cancelPendingEviction?.(slug);
-      const convergenceHooks: ConvergenceHooks = {
-        recordApplied: (s, fp) => {
-          if (!fingerprintSource) return;
-          if (fp !== undefined) {
-            appliedFp.set(s, fp);
-            persistAppliedFp();
-          }
-        },
-        rememberRetry: (s, state) => cloneRetry.set(s, state),
-        forgetRetry: (s) => cloneRetry.delete(s),
-      };
-      if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
-        return ensureCustomerCheckoutsOnly(
-          wrappedAdapter,
-          {
-            now: Date.now(),
-            slug,
-            desiredFingerprint: desiredFp.get(slug),
-            prior: cloneRetry.get(slug),
+      runtime.activeProvisioning += 1;
+      try {
+        wrappedAdapter.cancelPendingEviction?.(slug);
+        const convergenceHooks: ConvergenceHooks = {
+          recordApplied: (s, fp) => {
+            if (!fingerprintSource) return;
+            if (fp !== undefined) {
+              appliedFp.set(s, fp);
+              persistAppliedFp();
+            }
           },
-          convergenceHooks,
+          rememberRetry: (s, state) => cloneRetry.set(s, state),
+          forgetRetry: (s) => cloneRetry.delete(s),
+        };
+        if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
+          return ensureCustomerCheckoutsOnly(
+            wrappedAdapter,
+            {
+              now: Date.now(),
+              slug,
+              desiredFingerprint: desiredFp.get(slug),
+              prior: cloneRetry.get(slug),
+            },
+            convergenceHooks,
+          );
+        }
+        const uid = await wrappedAdapter.uidForSlug(slug);
+        if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
+        const readCurrentEvictionBatch = createCurrentEvictionBatchReader({
+          readDesired,
+          pendingEvictions,
+          cancelPendingEviction,
+        });
+        const result = await addCustomerToGateway(
+          wrappedAdapter,
+          uid,
+          reconcileAddCustomerOptions(
+            fingerprintSource !== undefined,
+            evictionBatch,
+            readCurrentEvictionBatch,
+          ),
         );
-      }
-      const uid = await wrappedAdapter.uidForSlug(slug);
-      if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
-      const readCurrentEvictionBatch = createCurrentEvictionBatchReader({
-        readDesired,
-        pendingEvictions,
-        cancelPendingEviction,
-      });
-      const result = await addCustomerToGateway(
-        wrappedAdapter,
-        uid,
-        reconcileAddCustomerOptions(
-          fingerprintSource !== undefined,
-          evictionBatch,
-          readCurrentEvictionBatch,
-        ),
-      );
-      await finalizeConvergedMount({
-        now: Date.now(),
-        slug,
-        uid,
-        desiredFingerprint: desiredFp.get(slug),
-        prior: cloneRetry.get(slug),
-        result,
-        hooks: convergenceHooks,
-        stampMounted,
-        writeMountMarker: wrappedAdapter.writeMountMarker,
-      });
+        await finalizeConvergedMount({
+          now: Date.now(),
+          slug,
+          uid,
+          desiredFingerprint: desiredFp.get(slug),
+          prior: cloneRetry.get(slug),
+          result,
+          hooks: convergenceHooks,
+          stampMounted,
+          writeMountMarker: wrappedAdapter.writeMountMarker,
+        });
 
-      return result.newCustomer ? "mounted" : "noop";
+        return result.newCustomer ? "mounted" : "noop";
+      } finally {
+        runtime.activeProvisioning -= 1;
+      }
     },
     onEnsureError: (slug, message, error) => {
       if (isPermanentConfigPatchFailure(error)) {
@@ -1230,10 +1246,7 @@ export async function startFleetController(
   const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);
 
-  const runtime: FleetRuntime = {
-    mountedCustomers: [],
-    status: "booting",
-  };
+  const runtime = createFleetRuntime();
   const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
   const surgeReadiness = createSurgeReadinessGate(openclawDir);
 
