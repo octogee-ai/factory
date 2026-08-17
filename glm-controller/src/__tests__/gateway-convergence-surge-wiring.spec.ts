@@ -82,6 +82,7 @@ describe("gateway convergence surge wiring", () => {
       gatewayId: "bender",
       desiredImageTag: "def5678-oc2026.7.1",
       requiresCustomerMigration: true,
+      disposableBuilderGateway: false,
       ownerlessOperatorPrewarm: false,
       stateMigration: unchangedOpenclaw,
     });
@@ -182,6 +183,13 @@ describe("gateway convergence surge wiring", () => {
       imageProfile: "builder" as const,
       ownerUid: "uid-bender",
       builderSlug: "bender",
+      allocation: {
+        kind: "disposable-builder" as const,
+        schemaVersion: 1 as const,
+        leaseId: "lease-bender",
+        generation: 1,
+        claimedByUid: "uid-bender",
+      },
     };
     const builderArtifact: ReleasePayload = {
       ...artifact,
@@ -214,6 +222,7 @@ describe("gateway convergence surge wiring", () => {
       gatewayId: "bender",
       desiredImageTag: builderImageTag,
       requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
       ownerlessOperatorPrewarm: false,
       stateMigration: unchangedOpenclaw,
     });

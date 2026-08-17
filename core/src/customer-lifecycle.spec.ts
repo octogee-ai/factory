@@ -1471,7 +1471,7 @@ const state = makeState(
     expect(result.pendingProjectClones).toEqual([]);
   });
 
-  it("attaches the coach before converging project checkouts", async () => {
+  it("converges project checkouts before attaching the coach", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1485,12 +1485,12 @@ const state = makeState(
 
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
+    expect(state.calls.indexOf("cloneProjectRepo")).toBeLessThan(
+      state.calls.indexOf("applyAddCustomerConfigPatch"),
     );
   });
 
-  it("holds a project agent out of the config until its checkout lands, then patches it in", async () => {
+  it("includes a project agent in the single config patch after its checkout lands", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1505,7 +1505,7 @@ const state = makeState(
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.pendingProjectClones).toEqual([]);
-    expect(state.configPatchWithoutProjectIds).toEqual([["camp"], []]);
+    expect(state.configPatchWithoutProjectIds).toEqual([[]]);
   });
 
   it("patches the config once when every project checkout is already on disk", async () => {
@@ -1883,7 +1883,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(state.calls).not.toContain("cloneProjectRepo");
   });
 
-  it("establishes and verifies the coach before restoring isolated project checkouts", async () => {
+  it("restores isolated project checkouts before establishing the coach", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1896,11 +1896,8 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
 
     await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
 
-    expect(state.calls.indexOf("applyAddCustomerConfigPatch")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
-    );
-    expect(state.calls.indexOf("waitForAccountHealthy")).toBeLessThan(
-      state.calls.indexOf("cloneProjectRepo"),
+    expect(state.calls.indexOf("cloneProjectRepo")).toBeLessThan(
+      state.calls.indexOf("applyAddCustomerConfigPatch"),
     );
   });
 

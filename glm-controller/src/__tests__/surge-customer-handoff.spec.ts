@@ -23,12 +23,14 @@ const oldPod: SurgePod = {
   name: "gateway-old",
   podIP: "10.0.0.1",
   ready: true,
+  terminating: false,
 };
 const targetPod: SurgePod = {
   uid: "target-uid",
   name: "gateway-new",
   podIP: "10.0.0.2",
   ready: false,
+  terminating: false,
 };
 const abandonedPodUid = "11111111-2222-4333-8444-555555555555";
 const abandonedOperationId = `surge-default-${abandonedPodUid}`;
@@ -186,13 +188,14 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("migrates a same-release replacement when an old Ready pod still exists", async () => {
+  it("uses the standard load for a planned disposable-gateway replacement", async () => {
     const h = harness({ assignments: [assignment("u1", "alice")] });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
       stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
 
@@ -204,6 +207,47 @@ describe("surge customer handoff", () => {
       "digest:target-uid:alice",
       "release:target-uid",
     ]);
+    expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
+      loadStrategy: "standard",
+    }));
+  });
+
+  it("uses the expedited load only for a terminating disposable-gateway source", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false, terminating: true }, targetPod],
+      assignments: [assignment("u1", "alice")],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
+      loadStrategy: "expedited",
+    }));
+  });
+
+  it("keeps a terminating shared-gateway source on the standard load", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false, terminating: true }, targetPod],
+      assignments: [assignment("u1", "alice")],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: false,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
+      loadStrategy: "standard",
+    }));
   });
 
   it("selects a replacement that reports the complete OpenClaw-qualified image tag", async () => {

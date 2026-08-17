@@ -1044,9 +1044,6 @@ async function activateImportedCustomer(
   );
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
-  if (projectCheckoutScope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) {
-    ctx.log(`[import:${slug}] project hydration deferred until target serves the customer`);
-  }
   // The rsync brings whatever store the source pod had. One openclaw cannot
   // open takes down the whole target gateway the moment activation registers
   // the agent, which then blocks the very account health-check below — so
