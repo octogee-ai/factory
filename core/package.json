@@ -646,7 +646,7 @@
     "firebase-admin": "^14.2.0",
     "google-auth-library": "^11.0.0",
     "unique-names-generator": "^4.7.1",
-    "ws": "^8.21.1"
+    "ws": "^8.21.3"
   },
   "overrides": {
     "brace-expansion@>=2.0.0 <3.0.0": "2.1.4",
