@@ -30,6 +30,8 @@ describe("Build main digest manifest", () => {
     expect(writer).toContain("needs.existing-manifest.result == 'success'");
     expect(writer).toContain("needs.gateway-images.result == 'success'");
     expect(writer).toContain("needs.platform-images.result == 'success'");
+    expect(writer).toContain("needs.site.result == 'success'");
+    expect(writer).toContain("(needs.site.result == 'skipped' && needs.scope.outputs.run_site != 'true')");
     expect(writer).toContain(
       "needs.scope.outputs.run_platform != 'true' && needs.scope.outputs.run_gateway != 'true'",
     );
