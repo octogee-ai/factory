@@ -10,19 +10,18 @@ const verifyEnv = readFileSync(
   path.resolve(__dirname, "../verify-env.sh"),
   "utf8",
 );
-describe("tagged gateway release desired-state workflow", () => {
-  it("ends CI authority at the desired-state write", () => {
-    expect(workflow).toContain("update-environment-desired-state:");
+describe("gateway image build workflow", () => {
+  it("builds images only — desired state is written by Release platform through the fleet CLI", () => {
+    expect(workflow).not.toContain("update-environment-desired-state:");
+    expect(workflow).not.toContain("promotion-authority:");
+    expect(workflow).not.toContain("alias-with-oc-version:");
+    expect(workflow).not.toContain("canonical-alias-authority:");
+    expect(workflow).not.toContain("promote-gateway.ts");
+    expect(workflow).not.toContain("release-state-authority");
     expect(workflow).not.toContain("capture-release-convergence-baseline:");
     expect(workflow).not.toContain("verify-release-convergence:");
     expect(workflow).not.toContain("ops/capture-release-convergence-baseline.ts");
     expect(workflow).not.toContain("ops/verify-release-convergence.ts");
-  });
-
-  it("promotes desired state directly after release authority", () => {
-    expect(workflow).toMatch(
-      /update-environment-desired-state:\n\s+needs: \[matrix-setup, alias-with-oc-version, promotion-authority\]/,
-    );
   });
 
   it("does not retain the now-uninvoked convergence-baseline capture entrypoint", () => {

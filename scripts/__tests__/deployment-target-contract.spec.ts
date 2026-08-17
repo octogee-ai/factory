@@ -74,7 +74,7 @@ describe("deployment target consumers", () => {
     ]);
 
     for (const workflow of [
-      ".github/workflows/releasev2.yml",
+      ".github/workflows/build-main.yml",
       ".github/workflows/gateway-build-operator-base.yml",
       ".github/workflows/site.yml",
     ]) {
@@ -90,7 +90,6 @@ describe("deployment target consumers", () => {
     expect(targetAction).toContain("Candidate deployment targets cannot run release or build automation");
 
     for (const workflow of [
-      ".github/workflows/releasev2.yml",
       ".github/workflows/build-and-deploy.yml",
       ".github/workflows/gateway-build-operator-base.yml",
       ".github/workflows/site.yml",
@@ -145,11 +144,9 @@ describe("deployment target consumers", () => {
   });
 
   it("passes exact targets into promotion and secret preflight", () => {
-    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
     const platform = source(".github/workflows/build-and-deploy.yml");
     const verifySecrets = source("scripts/verify-secrets.sh");
 
-    expect(gateway).toContain('--deployment-target="${DEPLOYMENT_TARGET}"');
     expect(platform).toContain(
       "--deployment-target=${{ steps.target.outputs.target_id }}",
     );
@@ -189,7 +186,7 @@ describe("deployment target consumers", () => {
     expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
     expect(workflow).toContain("PUBLIC_MM_TEAM_ID_BUILD_WEEK");
     expect(workflow).toContain("firebase-deployer@${{ steps.target.outputs.firebase_project_id }}.iam.gserviceaccount.com");
-    expect(gateway).toContain("firebase-deployer@${{ needs.matrix-setup.outputs.firebase_project_id }}.iam.gserviceaccount.com");
+    expect(gateway).not.toContain("firebase-deployer@");
     expect(workflow).not.toContain("FIREBASE_DEPLOYER_KEY");
     expect(gateway).not.toContain("FIREBASE_DEPLOYER_KEY");
     expect(workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
@@ -201,13 +198,9 @@ describe("deployment target consumers", () => {
       "for value_name in api_key app_id sender_id measurement_id mm_team_id; do",
     );
     expect(workflow).toContain("export_environment_variables: false");
-    expect(gateway).toContain("export_environment_variables: false");
     expect(workflow).toContain("token_format: access_token");
-    expect(gateway).toContain("create_credentials_file: true");
-    expect(gateway).toContain(
-      "GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.firebase_auth.outputs.credentials_file_path }}",
-    );
     expect(gateway).not.toContain("GOOGLE_OAUTH_ACCESS_TOKEN");
+    expect(gateway).not.toContain("google-github-actions/auth");
   });
 
   it("does not embed the active cluster context in fleet operations", () => {
@@ -224,7 +217,7 @@ describe("deployment target consumers", () => {
   it("keeps the platform credential reset out of ordinary deploy and gateway migration paths", () => {
     const resetScript = "reset-platform-builder-credentials";
     for (const path of [
-      ".github/workflows/releasev2.yml",
+      ".github/workflows/build-main.yml",
       ".github/workflows/build-and-deploy.yml",
       ".github/workflows/gateway-build-operator-base.yml",
       "scripts/ops/fleet.ts",
