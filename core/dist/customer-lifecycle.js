@@ -98,6 +98,12 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
         steps.push("write-templates");
     }
     throwIfAborted(signal, uid);
+    markStep("project-clones");
+    const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+        ? await cloneProjectsFromSnapshot(adapter, snapshot)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
+    throwIfAborted(signal, uid);
     markStep("byos-restore");
     const byos = await restoreByos(adapter, slug);
     steps.push(...byos.steps);
@@ -106,6 +112,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     await applyConfigPatchAndMount(adapter, snapshot, null, {
         byosActive: byos.present,
         signal,
+        withoutProjectIds: projectClones.pending,
     });
     steps.push(CONFIG_PATCH);
     throwIfAborted(signal, uid);
@@ -118,11 +125,6 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     markStep(VERIFY_CHANNEL_READY);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push(VERIFY_CHANNEL_READY);
-    throwIfAborted(signal, uid);
-    markStep("project-clones");
-    if (rehydratesProjectCheckouts(adapter, snapshot)) {
-        steps.push(...(await cloneProjectsFromSnapshot(adapter, snapshot)));
-    }
     throwIfAborted(signal, uid);
     adapter.writeMountMarker?.(slug);
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
@@ -146,27 +148,32 @@ function hasProjectCloneSource(target) {
 }
 async function cloneProjectsFromSnapshot(adapter, snapshot) {
     const steps = [];
-    for (const p of snapshot.projects ?? []) {
-        if (p.provisioningState !== undefined && p.provisioningState !== "active")
+    const pending = [];
+    for (const project of snapshot.projects ?? []) {
+        if (project.provisioningState !== undefined && project.provisioningState !== "active")
             continue;
-        if (!projectCheckoutEnabled(p.checkoutEnabled)) {
-            adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] project checkout is turned off by its owner`);
+        if (!projectCheckoutEnabled(project.checkoutEnabled)) {
+            adapter.log(`[restore:${snapshot.slug}/${project.projectSlug}] project checkout is turned off by its owner`);
             continue;
         }
-        if (!hasProjectCloneSource(p)) {
-            adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
+        if (!hasProjectCloneSource(project)) {
+            adapter.log(`[restore:${snapshot.slug}/${project.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
+            pending.push(project.projectSlug);
             continue;
         }
         try {
-            const ok = await adapter.cloneProjectRepo(snapshot.slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
-            if (ok)
+            const cloned = await adapter.cloneProjectRepo(snapshot.slug, project.projectSlug, project.giteaRepoName, projectCloneOptions(project));
+            if (cloned)
                 steps.push("project-clone");
+            else
+                pending.push(project.projectSlug);
         }
-        catch (err) {
-            adapter.log(`[restore:${snapshot.slug}/${p.projectSlug}] ⚠ project clone failed (non-fatal): ${String(err)}`);
+        catch (error) {
+            pending.push(project.projectSlug);
+            adapter.log(`[restore:${snapshot.slug}/${project.projectSlug}] ⚠ project clone failed (non-fatal): ${String(error)}`);
         }
     }
-    return steps;
+    return { steps, pending: pending.sort() };
 }
 function rehydratesProjectCheckouts(adapter, snapshot) {
     const scope = snapshot.projectCheckoutScope ?? adapter.projectCheckoutScope?.(snapshot.slug);
@@ -231,9 +238,11 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
     throwIfAborted(signal, uid);
     const rehydratesProjects = rehydratesProjectCheckouts(adapter, snapshot);
-    const absentBeforeClone = rehydratesProjects
-        ? (await adapter.listProjectsNeedingClone(slug)).map((p) => p.projectSlug)
-        : [];
+    markStep("project-clones");
+    const projectClones = rehydratesProjects
+        ? await cloneMissingProjects(adapter, slug)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
     throwIfAborted(signal, uid);
     markStep("byos-restore");
     const byos = await restoreByos(adapter, slug);
@@ -251,9 +260,9 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
         evictionBatch: opts.evictionBatch,
         currentEvictionBatch: opts.currentEvictionBatch,
     };
-    let appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
+    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
         ...configPatchOptions,
-        withoutProjectIds: absentBeforeClone,
+        withoutProjectIds: projectClones.pending,
     });
     steps.push(CONFIG_PATCH);
     throwIfAborted(signal, uid);
@@ -267,20 +276,6 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push(VERIFY_CHANNEL_READY);
     throwIfAborted(signal, uid);
-    markStep("project-clones");
-    const projectClones = rehydratesProjects
-        ? await cloneMissingProjects(adapter, slug)
-        : { steps: [], pending: [] };
-    steps.push(...projectClones.steps);
-    throwIfAborted(signal, uid);
-    if (checkoutsLanded(absentBeforeClone, projectClones.pending)) {
-        appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, null, {
-            ...configPatchOptions,
-            withoutProjectIds: projectClones.pending,
-        });
-        steps.push(CONFIG_PATCH);
-        throwIfAborted(signal, uid);
-    }
     markStep("blob-sync");
     steps.push(...(await runBlobSync(adapter, slug)));
     throwIfAborted(signal, uid);
@@ -546,9 +541,6 @@ async function provisionMattermostIfMissing(adapter, uid, snapshot, ctx) {
         mmUpdate,
         steps: ["mattermost-provision"],
     };
-}
-function checkoutsLanded(before, pending) {
-    return before.some((projectSlug) => !pending.includes(projectSlug));
 }
 async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
     const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
