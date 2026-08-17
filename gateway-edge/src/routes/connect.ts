@@ -324,13 +324,6 @@ router.post(
         res.status(400).json({ error: `Unknown connector: ${connector}` });
         return;
       }
-      if (def.meta.id === "google") {
-        await userCol(req.uid!, "integrations").doc("google").set({
-          provider: "google",
-          status: "disconnected",
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
       if (def.oauth?.revocationUrl) {
         await revokeProviderGrant(
           req.uid!,
@@ -345,16 +338,16 @@ router.post(
           logger.warn(`[connect] ${def.meta.id} provider revoke failed for uid=${req.uid}: ${String(error)}`);
         }
       }
+      const disconnect = db.batch();
+      disconnect.set(userCol(req.uid!, "integrations").doc(def.meta.id), {
+        provider: def.meta.id,
+        status: "disconnected",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      disconnect.delete(userCol(req.uid!, "secrets").doc(def.meta.id));
+      await disconnect.commit();
       if (def.meta.id === "google") {
         await purgeGoogleProductivityApprovals(req.uid!);
-      }
-      await userCol(req.uid!, "secrets").doc(def.meta.id).delete();
-      if (def.meta.id !== "google") {
-        await userCol(req.uid!, "integrations").doc(def.meta.id).set({
-          provider: def.meta.id,
-          status: "disconnected",
-          updatedAt: FieldValue.serverTimestamp(),
-        });
       }
       res.json({ ok: true });
     } catch (e) {

@@ -689,6 +689,31 @@ describe("connect — disconnect", () => {
     expect((await readStatus(UID, "github"))?.status).toBe("disconnected");
   });
 
+  it("the local disconnect is all-or-nothing — a failed write leaves status and secret intact together", async () => {
+    stubProviderFetch([{ url: /api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
+    await request(createApp())
+      .post("/api/connect/github/pat")
+      .set("Authorization", auth.bearer())
+      .send({ token: PLAINTEXT_GH_PAT });
+
+    const failingBatch = vi.spyOn(db, "batch").mockImplementation(() => ({
+      set() { return this; },
+      delete() { return this; },
+      commit: async () => { throw new Error("firestore unavailable"); },
+    }) as unknown as ReturnType<typeof db.batch>);
+    try {
+      const res = await request(createApp())
+        .post("/api/connect/disconnect")
+        .set("Authorization", auth.bearer())
+        .send({ connector: "github" });
+      expect(res.status).toBe(500);
+    } finally {
+      failingBatch.mockRestore();
+    }
+    expect(await readSecret(UID, "github")).toBeDefined();
+    expect((await readStatus(UID, "github"))?.status).toBe("connected");
+  });
+
   it("attempts to revoke a dedicated Obsidian session and still deletes local fields on provider failure", async () => {
     await db.doc(`users/${UID}/secrets/obsidian`).set({
       provider: "obsidian",
@@ -1019,6 +1044,63 @@ describe("connect — google platform capability flow", () => {
     ]);
     expect(await readSecret(UID, "google")).toBeUndefined();
     expect((await readStatus(UID, "google"))?.status).toBe("disconnected");
+  });
+
+  it("disconnect leaves a bare disconnected doc — no scopes, account, capability ledger or picked files survive", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+    await db
+      .collection("users")
+      .doc(UID)
+      .collection("integrations")
+      .doc("google")
+      .set(
+        { pickedFiles: [{ id: "f1", name: "Plan.pdf", mimeType: "application/pdf" }] },
+        { merge: true },
+      );
+
+    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    await request(createApp())
+      .post("/api/connect/disconnect")
+      .set("Authorization", auth.bearer())
+      .send({ connector: "google" })
+      .expect(200, { ok: true });
+
+    const status = await readStatus(UID, "google");
+    expect(Object.keys(status ?? {}).sort()).toEqual(["provider", "status", "updatedAt"]);
+    expect(status).toMatchObject({ provider: "google", status: "disconnected" });
+  });
+
+  it("after a disconnect, a different Google account can connect — the continuity guard resets", async () => {
+    await setGoogleStage("on");
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    await request(createApp())
+      .post("/api/connect/disconnect")
+      .set("Authorization", auth.bearer())
+      .send({ connector: "google" })
+      .expect(200, { ok: true });
+    vi.restoreAllMocks();
+    _setKmsClientForTesting(deterministicMockKms());
+
+    stubProviderFetch([
+      googleTokenStub(`${GMAIL} ${EMAIL}`),
+      {
+        url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+        respond: () => ({ email: "other@x.com" }),
+      },
+    ]);
+    const { state } = await mintAuthUrlState("google", "&capability=gmail");
+    const res = await request(createApp()).get(
+      `/api/connect/google/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(res.headers.location).toContain("google_connected=true");
+    expect(await readStatus(UID, "google")).toMatchObject({
+      status: "connected",
+      accountLabel: "other@x.com",
+      scopes: [GMAIL, EMAIL],
+    });
   });
 
   it("removes Google approval content immediately without removing other provider approvals", async () => {
