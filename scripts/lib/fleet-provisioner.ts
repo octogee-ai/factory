@@ -556,6 +556,14 @@ interface FleetRuntime {
   status: "booting" | "ready";
 }
 
+function createFleetRuntime(): FleetRuntime {
+  return {
+    activeProvisioning: 0,
+    mountedCustomers: [],
+    status: "booting",
+  };
+}
+
 // Only openclaw writes an agent's auth-profile store, and it can refuse the
 // apply at both of the one-shot moments — the gateway-ready sweep and the
 // mount's own retry — leaving the catalog in place but the broker profile
@@ -1238,11 +1246,7 @@ export async function startFleetController(
   const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);
 
-  const runtime: FleetRuntime = {
-    activeProvisioning: 0,
-    mountedCustomers: [],
-    status: "booting",
-  };
+  const runtime = createFleetRuntime();
   const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
   const surgeReadiness = createSurgeReadinessGate(openclawDir);
 
