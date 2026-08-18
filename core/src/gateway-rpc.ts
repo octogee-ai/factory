@@ -53,6 +53,8 @@ export interface GatewayRpcClientOptions {
 export interface ConfigGetResult {
   config: unknown;
   hash: string;
+  configRevisionHash: string;
+  appliedConfigHash: string | null;
 }
 
 export interface ConfigPatchResult {
@@ -839,14 +841,39 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
   return {
     async configGet() {
       const payload = await call("config.get", {});
-      const snap = payload as { hash?: unknown; config?: unknown } | undefined;
+      const snap = payload as {
+        hash?: unknown;
+        config?: unknown;
+        configRevisionHash?: unknown;
+        appliedConfigHash?: unknown;
+      } | undefined;
       if (!snap || typeof snap !== "object") {
         throw new OpenclawWireError(INVALID_RESPONSE, "config.get returned non-object payload");
       }
       if (typeof snap.hash !== "string" || snap.hash.length === 0) {
         throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `hash`");
       }
-      return { config: snap.config, hash: snap.hash };
+      if (typeof snap.configRevisionHash !== "string" || snap.configRevisionHash.length === 0) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "config.get payload missing `configRevisionHash`",
+        );
+      }
+      if (
+        snap.appliedConfigHash !== null &&
+        (typeof snap.appliedConfigHash !== "string" || snap.appliedConfigHash.length === 0)
+      ) {
+        throw new OpenclawWireError(
+          INVALID_RESPONSE,
+          "config.get payload has invalid `appliedConfigHash`",
+        );
+      }
+      return {
+        config: snap.config,
+        hash: snap.hash,
+        configRevisionHash: snap.configRevisionHash,
+        appliedConfigHash: snap.appliedConfigHash,
+      };
     },
 
     async configApply(config, baseHash) {

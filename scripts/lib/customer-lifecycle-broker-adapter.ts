@@ -94,7 +94,9 @@ import {
   writeMountedMarker,
 } from "./local-coach-wired.js";
 import {
+  SAFE_DEFAULT_AGENT_ID,
   activeAgentProjectIds,
+  buildSafeDefaultAgent,
   buildCustomerAgent,
   buildCustomerBindings,
   buildMattermostAccounts,
@@ -343,6 +345,23 @@ async function createMissingCustomerAgents(
   }
 }
 
+async function reconcileCustomerRosterAgents(
+  ctx: BrokerCtx,
+  slug: string,
+  evictionSlugs: readonly string[],
+  keepAgentIds: readonly string[],
+  agentEntries: readonly unknown[],
+): Promise<void> {
+  const logPrefix = `[add:${slug}]`;
+  await deleteSupersededCustomerAgents(ctx, {
+    slug,
+    evictionSlugs,
+    keepAgentIds,
+    logPrefix,
+  });
+  await createMissingCustomerAgents(ctx, agentEntries, logPrefix);
+}
+
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
   const runtimeScope = ctx.projectCheckoutScope?.(snapshot.slug)
     ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
@@ -542,6 +561,32 @@ function platformModelDefaults(
   return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : null;
 }
 
+function customerAgentDefaults(
+  coachModelDefaults: Record<string, object> | null,
+  builderGateway: boolean,
+): Record<string, unknown> | null {
+  if (!coachModelDefaults && !builderGateway) return null;
+  return {
+    ...(coachModelDefaults ? { models: coachModelDefaults } : {}),
+    ...(builderGateway ? { authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID } } : {}),
+  };
+}
+
+function customerGatewayAgentRoster(
+  current: unknown,
+  slug: string,
+  customerAgentEntries: readonly unknown[],
+  builderGateway: boolean,
+): unknown[] {
+  const nextAgents = replaceCustomerAgentsInFullAgentList(
+    current,
+    slug,
+    preserveMountedAgentModels(current, customerAgentEntries),
+  );
+  const roster = gatewayAgentRoster(nextAgents, builderGateway ? slug : "");
+  return builderGateway ? [buildSafeDefaultAgent(), ...roster] : roster;
+}
+
 function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {
   return {
     ...ctx.rpc,
@@ -579,6 +624,44 @@ async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<
   ctx.log(`${logPrefix} secrets.reload complete with ${warningCount} ${warningLabel}`);
 }
 
+function throwIfConfigApplicationWaitAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason ?? new Error("config application wait aborted");
+}
+
+export async function waitForAppliedConfigRevision(
+  rpc: Pick<GatewayRpcClient, "configGet">,
+  slug: string,
+  opts: { timeoutMs?: number; pollIntervalMs?: number; signal?: AbortSignal } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? CONFIG_PATCH_DEADLINE_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? 250;
+  const deadline = Date.now() + timeoutMs;
+  throwIfConfigApplicationWaitAborted(opts.signal);
+  let snapshot = await rpc.configGet();
+  const targetRevisionHash = snapshot.configRevisionHash;
+  let appliedConfigHash: string | null = null;
+  for (;;) {
+    throwIfConfigApplicationWaitAborted(opts.signal);
+    if (snapshot.configRevisionHash !== targetRevisionHash) {
+      throw new Error(
+        `[import:${slug}] config revision changed while waiting ` +
+          `(expected=${targetRevisionHash}, observed=${snapshot.configRevisionHash})`,
+      );
+    }
+    appliedConfigHash = snapshot.appliedConfigHash;
+    if (targetRevisionHash === appliedConfigHash) return;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
+    throwIfConfigApplicationWaitAborted(opts.signal);
+    snapshot = await rpc.configGet();
+  }
+  throw new Error(
+    `[import:${slug}] active config did not reach revision ${targetRevisionHash} ` +
+      `within ${timeoutMs}ms (applied=${appliedConfigHash ?? "none"})`,
+  );
+}
+
 async function requiredCoachMattermostAccount(
   ctx: BrokerCtx,
   slug: string,
@@ -596,6 +679,7 @@ async function applyAddCustomerConfigPatch(
   callOpts: AddCustomerConfigPatchOptions,
 ): Promise<{ elapsedMs: number }> {
   let evictionSlugs = evictionSlugsExcept(snapshot.slug, callOpts?.evictionBatch);
+  const builderGateway = isConfiguredGatewayBuilder(snapshot.slug);
   const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
   const coachPat = coachToken(mmUpdate, brokerSnapshot);
   if (!coachPat) {
@@ -634,7 +718,7 @@ async function applyAddCustomerConfigPatch(
       model: DEFAULT_COACH.model,
     },
     customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
-    default: process.env.GATEWAY_BUILDER_SLUG?.trim() === snapshot.slug,
+    default: builderGateway,
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
       : {}),
@@ -685,16 +769,12 @@ async function applyAddCustomerConfigPatch(
   let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
-  await deleteSupersededCustomerAgents(ctx, {
-    slug: snapshot.slug,
-    evictionSlugs,
-    keepAgentIds: brokerAgentIds,
-    logPrefix: `[add:${snapshot.slug}]`,
-  });
-  await createMissingCustomerAgents(
+  await reconcileCustomerRosterAgents(
     ctx,
+    snapshot.slug,
+    evictionSlugs,
+    brokerAgentIds,
     customerAgentEntries,
-    `[add:${snapshot.slug}]`,
   );
   const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
     captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
@@ -717,20 +797,20 @@ async function applyAddCustomerConfigPatch(
           );
           routingActivationRequired = true;
         }
-        const nextAgents = replaceCustomerAgentsInFullAgentList(
+        const agentDefaults = customerAgentDefaults(coachModelDefaults, builderGateway);
+        const roster = customerGatewayAgentRoster(
           current,
           snapshot.slug,
-          preserveMountedAgentModels(current, customerAgentEntries),
+          customerAgentEntries,
+          builderGateway,
         );
         return {
           agents: {
-            ...(coachModelDefaults
-              ? { defaults: { models: coachModelDefaults } }
-              : {}),
+            ...(agentDefaults ? { defaults: agentDefaults } : {}),
             ...customerAgentRosterPatch(
               current,
               snapshot.slug,
-              rebindPlatformEmbeddingRefs(gatewayAgentRoster(nextAgents)),
+              rebindPlatformEmbeddingRefs(roster),
             ),
           },
           bindings: mergeCustomerBindings(
@@ -1014,22 +1094,28 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
+async function readImportedActivationManifest(
+  ctx: BrokerCtx,
+  slug: string,
+): Promise<MigrationActivationManifest> {
+  try {
+    return await readActivationManifest(OPENCLAW_DIR, slug);
+  } catch (error) {
+    if (!(error instanceof LegacyActivationManifestFingerprintError)) throw error;
+    const desiredSnapshot = await snapshotForSlug(ctx, slug);
+    if (!desiredSnapshot) throw error;
+    return readActivationManifest(OPENCLAW_DIR, slug, {
+      legacyAppliedFingerprint: snapshotConfigFingerprint(desiredSnapshot),
+    });
+  }
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<string> {
-  let manifest: MigrationActivationManifest;
-  try {
-    manifest = await readActivationManifest(OPENCLAW_DIR, slug);
-  } catch (error) {
-    if (!(error instanceof LegacyActivationManifestFingerprintError)) throw error;
-    const desiredSnapshot = await snapshotForSlug(ctx, slug);
-    if (!desiredSnapshot) throw error;
-    manifest = await readActivationManifest(OPENCLAW_DIR, slug, {
-      legacyAppliedFingerprint: snapshotConfigFingerprint(desiredSnapshot),
-    });
-  }
+  const manifest = await readImportedActivationManifest(ctx, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)
@@ -1069,6 +1155,14 @@ async function activateImportedCustomer(
     cache: ctx.configCache,
     signal: opts?.signal,
     log: ctx.log,
+    ...(isConfiguredGatewayBuilder(slug)
+      ? {
+        authInheritanceAnchor: {
+          agentId: SAFE_DEFAULT_AGENT_ID,
+          agent: buildSafeDefaultAgent(),
+        },
+      }
+      : {}),
     onRoutingActivationRequired: (accountIds) => {
       markMattermostRoutingActivationPending(
         OPENCLAW_DIR,
@@ -1079,6 +1173,7 @@ async function activateImportedCustomer(
     },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  await waitForAppliedConfigRevision(ctx.rpc, slug, { signal: opts?.signal });
   await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
   if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
     await activatePendingMattermostRouting(

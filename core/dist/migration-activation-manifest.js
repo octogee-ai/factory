@@ -48,6 +48,12 @@ function currentActivationAgent(current, agentId) {
         ? list.find((entry) => isRecord(entry) && entry.id === agentId)
         : undefined;
 }
+function rosterAgentId(agent) {
+    if (typeof agent.id !== "string" || agent.id.length === 0) {
+        throw new Error("activation roster agent requires a non-empty id");
+    }
+    return agent.id;
+}
 export function activationManifestTarPath(slug) {
     return path.join(MIGRATION_ACTIVATION_DIR, slug, MIGRATION_ACTIVATION_FILE);
 }
@@ -266,12 +272,6 @@ function accountBindingsNeedingActivation(current, desired) {
             return [];
         return [binding.match.accountId];
     }));
-    const desiredAgentUsernames = new Set(desired.flatMap((binding) => {
-        if (!isRecord(binding) || typeof binding.agentId !== "string")
-            return [];
-        const parsed = parseAgentId(binding.agentId);
-        return parsed.kind === "unknown" ? [] : [parsed.username];
-    }));
     const existing = new Set(current.flatMap((binding) => {
         const key = mattermostBindingKey(binding);
         return key ? [key] : [];
@@ -294,14 +294,7 @@ function accountBindingsNeedingActivation(current, desired) {
         if (!key)
             continue;
         const accountId = key.slice(0, key.indexOf("\u0000"));
-        const agentId = isRecord(binding) && typeof binding.agentId === "string"
-            ? binding.agentId
-            : "";
-        const parsedAgentId = parseAgentId(agentId);
-        const managedAgent = parsedAgentId.kind !== "unknown" &&
-            desiredAgentUsernames.has(parsedAgentId.username);
-        if ((desiredAccountIds.has(accountId) || managedAgent) &&
-            !desiredKeys.has(key)) {
+        if (desiredAccountIds.has(accountId) && !desiredKeys.has(key)) {
             affected.add(accountId);
         }
     }
@@ -333,6 +326,11 @@ export async function removeActivationManifest(openclawDir, slug) {
     await fs.rm(manifestDir, { recursive: true, force: true });
 }
 export async function applyOpenClawActivationManifest(manifest, opts) {
+    const authInheritanceAnchor = opts.authInheritanceAnchor;
+    if (authInheritanceAnchor &&
+        rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId) {
+        throw new Error("activation auth inheritance anchor id mismatch");
+    }
     const startedAt = Date.now();
     let routingActivationRequired = false;
     let restartExistingAccountIds = [];
@@ -355,11 +353,22 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 opts.onRoutingActivationRequired?.(missingAccountIds);
                 routingActivationRequired = true;
             }
+            const rosterAgents = authInheritanceAnchor
+                ? [authInheritanceAnchor.agent, ...activationAgents.map((entry) => entry.agent)]
+                : activationAgents.map((entry) => entry.agent);
             const nextAgents = targetUsesKeyedEntries
-                ? activationAgents.map((entry) => entry.agent)
-                : activationAgents.reduce((agentList, entry) => upsertAgentInFullAgentList({ agents: { list: agentList } }, entry.agentId, entry.agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
+                ? rosterAgents
+                : rosterAgents.reduce((agentList, agent) => upsertAgentInFullAgentList({ agents: { list: agentList } }, rosterAgentId(agent), agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
+            const rosterPatch = customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(nextAgents));
             return {
-                agents: customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(nextAgents)),
+                agents: authInheritanceAnchor
+                    ? {
+                        ...rosterPatch,
+                        defaults: {
+                            authInheritance: { agentId: authInheritanceAnchor.agentId },
+                        },
+                    }
+                    : rosterPatch,
                 bindings: [
                     ...filterOutCustomerBindings(currentBindings, manifest.slug),
                     ...activationAgents.flatMap((entry) => entry.bindings),

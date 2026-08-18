@@ -92,6 +92,13 @@ function currentActivationAgent(
     : undefined;
 }
 
+function rosterAgentId(agent: Record<string, unknown>): string {
+  if (typeof agent.id !== "string" || agent.id.length === 0) {
+    throw new Error("activation roster agent requires a non-empty id");
+  }
+  return agent.id;
+}
+
 export function activationManifestTarPath(slug: string): string {
   return path.join(MIGRATION_ACTIVATION_DIR, slug, MIGRATION_ACTIVATION_FILE);
 }
@@ -381,11 +388,6 @@ function accountBindingsNeedingActivation(
     if (!isAccountBinding(binding)) return [];
     return [(binding as { match: { accountId: string } }).match.accountId];
   }));
-  const desiredAgentUsernames = new Set(desired.flatMap((binding) => {
-    if (!isRecord(binding) || typeof binding.agentId !== "string") return [];
-    const parsed = parseAgentId(binding.agentId);
-    return parsed.kind === "unknown" ? [] : [parsed.username];
-  }));
   const existing = new Set(current.flatMap((binding) => {
     const key = mattermostBindingKey(binding);
     return key ? [key] : [];
@@ -405,16 +407,7 @@ function accountBindingsNeedingActivation(
     const key = mattermostBindingKey(binding);
     if (!key) continue;
     const accountId = key.slice(0, key.indexOf("\u0000"));
-    const agentId = isRecord(binding) && typeof binding.agentId === "string"
-      ? binding.agentId
-      : "";
-    const parsedAgentId = parseAgentId(agentId);
-    const managedAgent = parsedAgentId.kind !== "unknown" &&
-      desiredAgentUsernames.has(parsedAgentId.username);
-    if (
-      (desiredAccountIds.has(accountId) || managedAgent) &&
-      !desiredKeys.has(key)
-    ) {
+    if (desiredAccountIds.has(accountId) && !desiredKeys.has(key)) {
       affected.add(accountId);
     }
   }
@@ -470,12 +463,23 @@ export async function applyOpenClawActivationManifest(
     signal?: AbortSignal;
     log: (msg: string) => void;
     onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
+    authInheritanceAnchor?: {
+      agentId: string;
+      agent: Record<string, unknown>;
+    };
   },
 ): Promise<{
   elapsedMs: number;
   routingActivationRequired: boolean;
   restartExistingAccountIds: string[];
 }> {
+  const authInheritanceAnchor = opts.authInheritanceAnchor;
+  if (
+    authInheritanceAnchor &&
+    rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId
+  ) {
+    throw new Error("activation auth inheritance anchor id mismatch");
+  }
   const startedAt = Date.now();
   let routingActivationRequired = false;
   let restartExistingAccountIds: string[] = [];
@@ -510,22 +514,33 @@ export async function applyOpenClawActivationManifest(
           opts.onRoutingActivationRequired?.(missingAccountIds);
           routingActivationRequired = true;
         }
+        const rosterAgents = authInheritanceAnchor
+          ? [authInheritanceAnchor.agent, ...activationAgents.map((entry) => entry.agent)]
+          : activationAgents.map((entry) => entry.agent);
         const nextAgents = targetUsesKeyedEntries
-          ? activationAgents.map((entry) => entry.agent)
-          : activationAgents.reduce(
-            (agentList, entry) => upsertAgentInFullAgentList(
+          ? rosterAgents
+          : rosterAgents.reduce(
+            (agentList, agent) => upsertAgentInFullAgentList(
               { agents: { list: agentList } },
-              entry.agentId,
-              entry.agent,
+              rosterAgentId(agent),
+              agent,
             ),
             replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
           );
+        const rosterPatch = customerAgentRosterPatch(
+          current,
+          manifest.slug,
+          rebindPlatformEmbeddingRefs(nextAgents),
+        );
         return {
-          agents: customerAgentRosterPatch(
-            current,
-            manifest.slug,
-            rebindPlatformEmbeddingRefs(nextAgents),
-          ),
+          agents: authInheritanceAnchor
+            ? {
+              ...rosterPatch,
+              defaults: {
+                authInheritance: { agentId: authInheritanceAnchor.agentId },
+              },
+            }
+            : rosterPatch,
           bindings: [
             ...filterOutCustomerBindings(currentBindings, manifest.slug),
             ...activationAgents.flatMap((entry) => entry.bindings),

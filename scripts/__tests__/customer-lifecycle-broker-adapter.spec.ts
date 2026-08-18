@@ -8,6 +8,7 @@ import {
   buildBrokeredLifecycleAdapter,
   projectCheckoutScopeForRuntime,
   pruneWorkspaceOnlyProjectCheckouts,
+  waitForAppliedConfigRevision,
 } from "../lib/customer-lifecycle-broker-adapter.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
@@ -16,6 +17,7 @@ import {
   customerConfigReplacePaths,
 } from "../lib/apply-config-patch.js";
 import {
+  SAFE_DEFAULT_AGENT_ID,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingSecretId,
 } from "../lib/openclaw-config-builders.js";
@@ -201,12 +203,21 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
   } as GatewayRpcClient;
 }
 
+function configSnapshot(config: unknown) {
+  return {
+    config,
+    hash: "cfg-hash",
+    configRevisionHash: "revision-hash",
+    appliedConfigHash: "revision-hash",
+  };
+}
+
 // The add path reads the live roster to decide which agents leave by
 // `agents.delete` and which arrive by `agents.create`, so every add fixture
 // needs all three calls.
 function rosterRpc(config: unknown = { agents: { entries: {} } }) {
   return {
-    configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+    configGet: vi.fn(async () => configSnapshot(config)),
     secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
       ok: true as const,
@@ -356,9 +367,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({
-        config: { agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] } },
-        hash: "cfg-hash",
+      configGet: vi.fn(async () => configSnapshot({
+        agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] },
       })),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
@@ -406,6 +416,158 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
 
+  it("waits for the imported config to apply before reloading its secret runtime", async () => {
+    const configGet = vi.fn()
+      .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
+      .mockResolvedValueOnce({
+        ...configSnapshot({ agents: { list: [] } }),
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-old",
+      })
+      .mockResolvedValueOnce({
+        ...configSnapshot({ agents: { list: [] } }),
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+      })
+      .mockResolvedValue(configSnapshot({ agents: { list: [] } }));
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet,
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(configGet).toHaveBeenCalledTimes(4);
+    expect(configGet.mock.invocationCallOrder[2]).toBeLessThan(
+      rpc.secretsReload.mock.invocationCallOrder[0]!,
+    );
+    expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.removeActivationManifest.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("fails the import wait when the runtime never applies the persisted config", async () => {
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        ...configSnapshot({}),
+        configRevisionHash: "revision-new",
+        appliedConfigHash: null,
+      })),
+    } as Pick<GatewayRpcClient, "configGet">;
+
+    await expect(
+      waitForAppliedConfigRevision(rpc, "tester10", { timeoutMs: 0 }),
+    ).rejects.toThrow(
+      /active config did not reach revision revision-new within 0ms \(applied=none\)/,
+    );
+  });
+
+  it("stops the import wait when the migration is cancelled", async () => {
+    const controller = new AbortController();
+    const cancelled = new Error("migration cancelled");
+    const rpc = {
+      configGet: vi.fn(async () => {
+        controller.abort(cancelled);
+        return {
+          ...configSnapshot({}),
+          configRevisionHash: "revision-new",
+          appliedConfigHash: "revision-old",
+        };
+      }),
+    } as Pick<GatewayRpcClient, "configGet">;
+
+    await expect(
+      waitForAppliedConfigRevision(rpc, "tester10", { signal: controller.signal }),
+    ).rejects.toBe(cancelled);
+    expect(rpc.configGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an import wait when another config revision supersedes the import", async () => {
+    const rpc = {
+      configGet: vi.fn()
+        .mockResolvedValueOnce({
+          ...configSnapshot({}),
+          configRevisionHash: "revision-import",
+          appliedConfigHash: "revision-before-import",
+        })
+        .mockResolvedValueOnce({
+          ...configSnapshot({}),
+          configRevisionHash: "revision-other",
+          appliedConfigHash: "revision-other",
+        }),
+    } as Pick<GatewayRpcClient, "configGet">;
+
+    await expect(
+      waitForAppliedConfigRevision(rpc, "tester10", { pollIntervalMs: 0 }),
+    ).rejects.toThrow(
+      /config revision changed while waiting \(expected=revision-import, observed=revision-other\)/,
+    );
+  });
+
+  it("anchors inherited auth to the neutral agent for the configured Builder", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({
+          channelAccounts: {
+            mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+          },
+        })),
+        configGet: vi.fn(async () => configSnapshot({})),
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+      await adapter.activateImportedCustomer("tester10", {});
+
+      expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          authInheritanceAnchor: {
+            agentId: SAFE_DEFAULT_AGENT_ID,
+            agent: expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID }),
+          },
+        }),
+      );
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it("does not add a Builder auth anchor for another Builder's customer", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "someone-else";
+    try {
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({
+          channelAccounts: {
+            mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+          },
+        })),
+        configGet: vi.fn(async () => configSnapshot({})),
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+      await adapter.activateImportedCustomer("tester10", {});
+
+      expect(mocks.applyOpenClawActivationManifest.mock.calls[0]?.[1]).not.toHaveProperty(
+        "authInheritanceAnchor",
+      );
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
   it("keeps imported-customer activation focused on runtime activation", async () => {
     const client = mkClient();
     const log = vi.fn();
@@ -415,7 +577,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      configGet: vi.fn(async () => configSnapshot({})),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
@@ -442,7 +604,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      configGet: vi.fn(async () => configSnapshot({})),
       secretsReload: vi.fn(async () => ({ ok: false, warningCount: 2 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -478,7 +640,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      configGet: vi.fn(async () => configSnapshot({})),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 4 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
@@ -516,7 +678,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      configGet: vi.fn(async () => configSnapshot({})),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -556,7 +718,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => ({ config: {}, hash: "cfg-hash" })),
+      configGet: vi.fn(async () => configSnapshot({})),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     mocks.readActivationManifest
@@ -1823,6 +1985,51 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(args.buildReplacePaths?.(current)).toEqual(
       customerConfigReplacePaths(current, "alice"),
     );
+  });
+
+  it("retains the Builder auth anchor during regular list-roster reconciliation", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    try {
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(),
+        rpc: mkGatewayRpc(),
+        log: vi.fn(),
+      });
+
+      await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+
+      const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+        buildPatch: (current: unknown) => {
+          agents: {
+            list: Array<Record<string, unknown>>;
+            defaults: { authInheritance: { agentId: string } };
+          };
+        };
+      };
+      const patch = args.buildPatch({
+        agents: {
+          list: [
+            { id: SAFE_DEFAULT_AGENT_ID, name: "old anchor" },
+            { id: "octogee-alice-coach", default: true },
+            { id: "octogee-bob-coach", model: "foreign" },
+          ],
+          defaults: { authInheritance: { agentId: "octogee-alice-coach" } },
+        },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      });
+
+      expect(patch.agents.defaults.authInheritance).toEqual({ agentId: SAFE_DEFAULT_AGENT_ID });
+      expect(patch.agents.list.filter((agent) => agent.id === SAFE_DEFAULT_AGENT_ID)).toHaveLength(1);
+      expect(patch.agents.list).toContainEqual(expect.objectContaining({
+        id: "octogee-bob-coach",
+        model: "foreign",
+      }));
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
   });
 
   it("materializes every active agent's broker catalog before its config hot-reload", async () => {
