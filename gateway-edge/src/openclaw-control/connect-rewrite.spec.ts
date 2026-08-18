@@ -38,6 +38,7 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
           "operator.read",
           "operator.write",
           "operator.approvals",
+          "operator.questions",
           "operator.pairing",
         ],
         auth: { token: gatewayToken },

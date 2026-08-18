@@ -877,6 +877,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
           "operator.read",
           "operator.write",
           "operator.approvals",
+          "operator.questions",
           "operator.pairing",
         ],
         auth: { token: "gateway-secret" },

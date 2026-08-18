@@ -5,6 +5,7 @@ const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 
