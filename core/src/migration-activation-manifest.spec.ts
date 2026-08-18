@@ -12,6 +12,12 @@ import {
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
 import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
+import {
+  CUSTOMER_CODE_DENIED_TOOLS,
+  CUSTOMER_WORKFLOW_TOOLS,
+  platformInvariantViolations,
+  reconcilePlatformInvariants,
+} from "./system-config-invariants";
 
 const tmpDirs: string[] = [];
 const APPLIED_FINGERPRINT = "fp-alice-v1";
@@ -38,6 +44,10 @@ function manifest(): MigrationActivationManifest {
     bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     projectAgents: [],
   };
+}
+
+function withoutTools(agents: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return agents.map(({ tools: _tools, ...agent }) => agent);
 }
 
 describe("activationManifestAgentIds", () => {
@@ -308,7 +318,7 @@ describe("migration activation manifest", () => {
       channels: { mattermost: { accounts: Record<string, unknown> } };
       bindings: Array<{ agentId: string; stale?: boolean; keep?: boolean }>;
     };
-    expect(patch.agents.list).toEqual([
+    expect(withoutTools(patch.agents.list)).toEqual([
       { id: "octogee-bob-coach" },
       { id: "octogee-alice-coach", model: "old" },
     ]);
@@ -409,9 +419,16 @@ describe("migration activation manifest", () => {
       model: "house",
       default: true,
     });
-    expect(patch.agents.entries[anchor.id]).toEqual({
+    expect(patch.agents.entries[anchor.id]).toMatchObject({
       name: anchor.name,
       heartbeat: anchor.heartbeat,
+      tools: {
+        profile: "minimal",
+        alsoAllow: [],
+        deny: [...CUSTOMER_CODE_DENIED_TOOLS],
+        fs: { workspaceOnly: true },
+        toolsBySender: {},
+      },
     });
     expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
   });
@@ -454,12 +471,12 @@ describe("migration activation manifest", () => {
     };
     expect(patch.agents.ownership).toBe("explicit");
     expect(patch.agents.defaults.authInheritance).toEqual({ agentId: anchor.id });
-    expect(patch.agents.list).toContainEqual({ id: "octogee-bob-coach", model: "foreign" });
-    expect(patch.agents.list).toContainEqual({
+    expect(withoutTools(patch.agents.list)).toContainEqual({ id: "octogee-bob-coach", model: "foreign" });
+    expect(withoutTools(patch.agents.list)).toContainEqual({
       id: "octogee-alice-coach",
       model: "house",
     });
-    expect(patch.agents.list.filter((agent) => agent.id === anchor.id)).toEqual([anchor]);
+    expect(withoutTools(patch.agents.list).filter((agent) => agent.id === anchor.id)).toEqual([anchor]);
   });
 
   it("requests routing activation before patching only when the stable account route is absent", async () => {
@@ -673,7 +690,7 @@ describe("migration activation manifest", () => {
       bindings: Array<{ agentId: string; stale?: boolean; keep?: boolean }>;
       channels: { mattermost: { accounts: Record<string, unknown> } };
     };
-    expect(patch.agents.list).toEqual([
+    expect(withoutTools(patch.agents.list)).toEqual([
       { id: "octogee-bob-coach", model: "foreign" },
       { id: "octogee-alice-coach", model: "workspace-target" },
       { id: "octogee-alice-proj-orbit-coach", model: "orbit-target" },
@@ -728,7 +745,7 @@ describe("migration activation manifest", () => {
       agents: { entries: Record<string, Record<string, unknown>> };
       bindings: Array<{ agentId: string; keep?: boolean }>;
     };
-    expect(patch.agents.entries["octogee-alice-coach"]).toEqual({
+    expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
       model: "house",
       memory: { search: { provider: "openai-compatible" } },
     });
@@ -751,6 +768,13 @@ describe("migration activation manifest", () => {
         list: [{
           id: "octogee-alice-coach",
           model: "beta-model",
+          tools: {
+            profile: "coding",
+            alsoAllow: CUSTOMER_WORKFLOW_TOOLS,
+            deny: ["preview_start", "preview_stop", "preview_list", "octogee_publish"],
+            fs: { workspaceOnly: true },
+            toolsBySender: {},
+          },
           memory: { search: { provider: "openai-compatible", model: "text-embedding-3-small" } },
         }],
       },
@@ -782,7 +806,7 @@ describe("migration activation manifest", () => {
     const patch = configPatch.mock.calls[0][0] as {
       agents: { list: Array<Record<string, unknown>> };
     };
-    expect(patch.agents.list).toEqual([
+    expect(withoutTools(patch.agents.list)).toEqual([
       {
         id: "octogee-alice-coach",
         model: "house",
@@ -790,6 +814,10 @@ describe("migration activation manifest", () => {
       },
     ]);
     expect(patch.agents.list[0]).not.toHaveProperty("memory");
+    const candidate: Record<string, unknown> = {};
+    reconcilePlatformInvariants(candidate, { gatewayClass: "shared" });
+    candidate.agents = patch.agents;
+    expect(platformInvariantViolations(candidate, { gatewayClass: "shared" })).toEqual([]);
   });
 
   it("refuses beta-only memory fields that stable agents cannot represent", async () => {
@@ -863,7 +891,7 @@ describe("migration activation manifest", () => {
     const patch = configPatch.mock.calls[0][0] as {
       agents: { list: Array<{ id: string; model?: unknown; name?: string }> };
     };
-    expect(patch.agents.list).toEqual([
+    expect(withoutTools(patch.agents.list)).toEqual([
       {
         id: "octogee-alice-coach",
         name: "Gene (alice)",

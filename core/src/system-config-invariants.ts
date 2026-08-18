@@ -599,6 +599,16 @@ function forceAgentToolPolicy(config: JsonObject, agent: JsonObject, agentId: st
   delete tools.allow;
 }
 
+export function reconcileCustomerAgentEntry(
+  agentId: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown> {
+  const agent = structuredClone(entry);
+  forceAgentWorkspaceOnly(agent);
+  forceAgentToolPolicy({}, agent, agentId);
+  return agent;
+}
+
 function accountIdForAgentId(agentId: string): string | null {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "coach") return `${parsed.username}-coach`;

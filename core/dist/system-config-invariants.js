@@ -506,6 +506,12 @@ function forceAgentToolPolicy(config, agent, agentId) {
     tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
     delete tools.allow;
 }
+export function reconcileCustomerAgentEntry(agentId, entry) {
+    const agent = structuredClone(entry);
+    forceAgentWorkspaceOnly(agent);
+    forceAgentToolPolicy({}, agent, agentId);
+    return agent;
+}
 function accountIdForAgentId(agentId) {
     const parsed = parseAgentId(agentId);
     if (parsed.kind === "coach")

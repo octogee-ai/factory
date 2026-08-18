@@ -14,6 +14,7 @@ import {
 } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
+import { reconcileCustomerAgentEntry } from "./system-config-invariants.js";
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
@@ -480,6 +481,13 @@ export async function applyOpenClawActivationManifest(
   ) {
     throw new Error("activation auth inheritance anchor id mismatch");
   }
+  const normalizedAuthInheritanceAnchor = authInheritanceAnchor && {
+    ...authInheritanceAnchor,
+    agent: reconcileCustomerAgentEntry(
+      authInheritanceAnchor.agentId,
+      authInheritanceAnchor.agent,
+    ),
+  };
   const startedAt = Date.now();
   let routingActivationRequired = false;
   let restartExistingAccountIds: string[] = [];
@@ -494,10 +502,13 @@ export async function applyOpenClawActivationManifest(
         const targetUsesKeyedEntries = isRecord(agents?.entries);
         const activationAgents = manifestAgents(manifest).map((entry) => ({
           ...entry,
-          agent: activationAgentForTarget(
-            entry.agent,
-            currentActivationAgent(current, entry.agentId),
-            targetUsesKeyedEntries,
+          agent: reconcileCustomerAgentEntry(
+            entry.agentId,
+            activationAgentForTarget(
+              entry.agent,
+              currentActivationAgent(current, entry.agentId),
+              targetUsesKeyedEntries,
+            ),
           ),
         }));
         const currentAccounts = (current as {
@@ -514,8 +525,8 @@ export async function applyOpenClawActivationManifest(
           opts.onRoutingActivationRequired?.(missingAccountIds);
           routingActivationRequired = true;
         }
-        const rosterAgents = authInheritanceAnchor
-          ? [authInheritanceAnchor.agent, ...activationAgents.map((entry) => entry.agent)]
+        const rosterAgents = normalizedAuthInheritanceAnchor
+          ? [normalizedAuthInheritanceAnchor.agent, ...activationAgents.map((entry) => entry.agent)]
           : activationAgents.map((entry) => entry.agent);
         const nextAgents = targetUsesKeyedEntries
           ? rosterAgents
@@ -533,12 +544,12 @@ export async function applyOpenClawActivationManifest(
           rebindPlatformEmbeddingRefs(nextAgents),
         );
         return {
-          agents: authInheritanceAnchor
+          agents: normalizedAuthInheritanceAnchor
             ? {
               ...rosterPatch,
               ownership: "explicit",
               defaults: {
-                authInheritance: { agentId: authInheritanceAnchor.agentId },
+                authInheritance: { agentId: normalizedAuthInheritanceAnchor.agentId },
               },
             }
             : rosterPatch,

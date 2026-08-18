@@ -1807,6 +1807,190 @@ describe("manual disposable runtime return", () => {
     });
   });
 
+  it("rearms the exact failed automatic Builder return", async () => {
+    const targetGatewayId = "run-alice";
+    const operationId = `builder-return-${targetGatewayId}`;
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          username: "alice",
+          provisioning: {
+            openclaw: {
+              gatewayId: targetGatewayId,
+              managedBy: "cowboy",
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "returning",
+                targetGatewayId,
+                returnOperationId: operationId,
+              },
+            },
+          },
+        },
+      },
+      gateways: {
+        [targetGatewayId]: {
+          gatewayId: targetGatewayId,
+          gatewayClass: "builder",
+          ownerUid: "uid-alice",
+          allocation: {
+            kind: "disposable-builder",
+            leaseId: "lease-1",
+            generation: 3,
+            claimedByUid: "uid-alice",
+          },
+        },
+      },
+      assignments: {
+        [targetGatewayId]: {
+          "uid-alice": {
+            uid: "uid-alice",
+            gatewayId: targetGatewayId,
+            slug: "alice",
+            epoch: 7,
+            state: "serving",
+          },
+        },
+      },
+      operations: {
+        [operationId]: {
+          kind: "migrate-customer",
+          status: "failed",
+          origin: "automatic",
+          createdBy: "glm-controller-placement-policy",
+          inputUid: "uid-alice",
+          gatewayId: "shared-blue",
+          attempts: 1,
+          attemptHistory: [{ attempt: 1, error: "checkpoint failed" }],
+          rolledBack: true,
+          error: "checkpoint failed",
+          completedAt: 2,
+          output: { ignored: true },
+          input: {
+            uid: "uid-alice",
+            builderSlug: "alice",
+            fromGatewayId: targetGatewayId,
+            toGatewayId: "shared-blue",
+            source: "builder-activation-lease",
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/return/retry")
+      .send({ operationId })
+      .expect(202, { status: "return-retried", operationId });
+
+    expect(state.operations[operationId]).toMatchObject({
+      kind: "migrate-customer",
+      status: "pending",
+      origin: "automatic",
+      createdBy: "glm-controller-placement-policy",
+      inputUid: "uid-alice",
+      gatewayId: "shared-blue",
+      attempts: 1,
+      attemptHistory: [{ attempt: 1, error: "checkpoint failed" }],
+      startedAt: null,
+      completedAt: null,
+      steps: [],
+      input: {
+        uid: "uid-alice",
+        builderSlug: "alice",
+        fromGatewayId: targetGatewayId,
+        toGatewayId: "shared-blue",
+        source: "builder-activation-lease",
+      },
+    });
+    expect(state.operations[operationId]).not.toHaveProperty("error");
+    expect(state.operations[operationId]).not.toHaveProperty("rolledBack");
+    expect(state.users["uid-alice"]).toMatchObject({
+      provisioning: {
+        openclaw: {
+          gatewayId: targetGatewayId,
+          activationLease: { status: "returning", returnOperationId: operationId },
+        },
+      },
+    });
+  });
+
+  it("refuses to rearm a manual migration as a Builder return", async () => {
+    const targetGatewayId = "run-alice";
+    const operationId = `builder-return-${targetGatewayId}`;
+    const { app, state } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {
+        "uid-alice": {
+          provisioning: {
+            openclaw: {
+              gatewayId: targetGatewayId,
+              activationLease: {
+                leaseId: "lease-1",
+                generation: 3,
+                status: "returning",
+                targetGatewayId,
+                returnOperationId: operationId,
+              },
+            },
+          },
+        },
+      },
+      gateways: {
+        [targetGatewayId]: {
+          gatewayId: targetGatewayId,
+          gatewayClass: "builder",
+          ownerUid: "uid-alice",
+          allocation: {
+            kind: "disposable-builder",
+            leaseId: "lease-1",
+            generation: 3,
+            claimedByUid: "uid-alice",
+          },
+        },
+      },
+      assignments: {
+        [targetGatewayId]: {
+          "uid-alice": {
+            uid: "uid-alice",
+            gatewayId: targetGatewayId,
+            state: "serving",
+            epoch: 7,
+          },
+        },
+      },
+      operations: {
+        [operationId]: {
+          kind: "migrate-customer",
+          status: "failed",
+          origin: "operator",
+          createdBy: "admin",
+          inputUid: "uid-alice",
+          gatewayId: "shared-blue",
+          rolledBack: true,
+          input: {
+            uid: "uid-alice",
+            fromGatewayId: targetGatewayId,
+            toGatewayId: "shared-blue",
+            source: "builder-activation-lease",
+          },
+        },
+      },
+    });
+
+    await request(app)
+      .post("/customers/uid-alice/activation-lease/return/retry")
+      .send({ operationId })
+      .expect(409);
+
+    expect(state.operations[operationId]).toMatchObject({
+      status: "failed",
+      origin: "operator",
+      rolledBack: true,
+    });
+  });
+
   it("rejects stale generations and caller-selected target gateways", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
