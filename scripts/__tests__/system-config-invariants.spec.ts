@@ -6,6 +6,11 @@ import {
   reconcilePlatformInvariants,
   systemConfigInvariantContextFromEnv,
 } from "../lib/system-config-invariants.js";
+import {
+  buildCustomerAgent,
+  buildProjectAgents,
+  buildSafeDefaultAgent,
+} from "../lib/openclaw-config-builders.js";
 
 function config(): Record<string, unknown> {
   return {
@@ -164,5 +169,38 @@ describe("system config platform invariants", () => {
 
     expect(reconcilePlatformInvariants(candidate, env)).toEqual({ changedPaths: [] });
     expect(() => assertPlatformInvariants(candidate, env)).not.toThrow();
+  });
+
+  it("accepts generated Builder agents at a durable checkpoint", () => {
+    const candidate = config();
+    const builderEnv = { ...env, GATEWAY_CLASS: "builder" };
+    reconcilePlatformInvariants(candidate, builderEnv);
+    candidate.agents = {
+      list: [
+        buildSafeDefaultAgent(),
+        buildCustomerAgent({
+          uid: "uid-chris",
+          slug: "chris",
+          customerDir: "/customers/chris",
+          agentDir: "/agents/octogee-chris-coach/agent",
+          coach: { name: "Coach", emoji: "🤖", model: "house" },
+          default: true,
+        }),
+        ...buildProjectAgents({
+          slug: "chris",
+          customerDir: "/customers/chris",
+          agentsDir: "/agents",
+          coach: { name: "Coach", emoji: "🤖", model: "house" },
+          projectAgents: [{
+            projectId: "garden",
+            enabled: true,
+            mmUserId: "mm-garden",
+            token: "pat",
+          }],
+        }),
+      ],
+    };
+
+    expect(() => assertPlatformInvariants(candidate, builderEnv)).not.toThrow();
   });
 });

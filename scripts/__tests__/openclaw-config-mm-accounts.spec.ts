@@ -689,7 +689,7 @@ describe("buildProjectAgents", () => {
           deny: PROJECT_AGENT_DENIED_TOOLS,
           exec: { mode: "deny", host: "node" },
           fs: { workspaceOnly: true },
-          toolsBySender: {},
+          toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
         },
       },
     ]);
