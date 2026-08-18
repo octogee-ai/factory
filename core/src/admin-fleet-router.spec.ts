@@ -168,8 +168,7 @@ describe("projectGatewaySummary — pod replacement projection", () => {
     expect(summary.podReplacements).toEqual({
       count24h: 2,
       count7d: 3,
-      lastAt: NOW - HOUR,
-      lastVacatedPodUid: "uid-fresh",
+      lastAgeMs: HOUR,
       lastVacatedNodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
       lastVacatedInstanceId: "7311234567890123456",
       lastVacatedNodePool: "nap-1dx2tv8d",

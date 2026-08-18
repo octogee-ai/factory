@@ -94,8 +94,13 @@ def target(expr, legend="", refId="A"):
     return {"datasource": ds(), "expr": pin_ksm(expr), "legendFormat": legend, "refId": refId}
 
 
+# A group-by only takes effect under a cross-series reducer, and the legend is
+# built from the same labels so a "by X" panel actually reads by X.
 def cloud_target(metric_type, legend="", refId="A", group_bys=None,
-                 metric_kind="DELTA", value_type="INT64", aligner="ALIGN_SUM"):
+                 metric_kind="DELTA", value_type="INT64", aligner="ALIGN_SUM",
+                 filters=None):
+    group_bys = group_bys or []
+    alias = legend or " · ".join("{{" + g + "}}" for g in group_bys)
     return {
         "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
         "metricQuery": {
@@ -105,25 +110,31 @@ def cloud_target(metric_type, legend="", refId="A", group_bys=None,
             "valueType": value_type,
             "alignmentPeriod": "cloud-monitoring-auto",
             "perSeriesAligner": aligner,
-            "crossSeriesReducer": "REDUCE_NONE",
-            "groupBys": group_bys or [],
-            "filters": [],
-            "aliasBy": legend,
+            "crossSeriesReducer": "REDUCE_SUM" if group_bys else "REDUCE_NONE",
+            "groupBys": group_bys,
+            "filters": filters or [],
+            "aliasBy": alias,
         },
         "refId": refId,
     }
 
 
+# TEST and PROD share the CENTRAL cluster and both write to the same log metric;
+# metrics that carry a namespace label follow the board's $namespace like every
+# Prometheus panel does.
+NAMESPACE_FILTER = ["metric.label.namespace", "=", "$namespace"]
+
+
 def cloud_panel(title, metric_type, unit="short", w=12, h=8,
                 group_bys=None, legend=True, desc="", kind="timeseries",
-                thresholds=None):
+                thresholds=None, filters=None):
     steps = thresholds or [{"color": "green", "value": None}]
     if kind == "stat":
         return {
             "id": nid(), "type": "stat", "title": title,
             "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
             "description": desc,
-            "targets": [cloud_target(metric_type, "", "A", group_bys)],
+            "targets": [cloud_target(metric_type, "", "A", group_bys, filters=filters)],
             "fieldConfig": {"defaults": {"unit": unit, "color": {"mode": "thresholds"},
                             "thresholds": {"mode": "absolute", "steps": steps}}, "overrides": []},
             "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
@@ -134,7 +145,7 @@ def cloud_panel(title, metric_type, unit="short", w=12, h=8,
         "id": nid(), "type": "timeseries", "title": title,
         "datasource": {"type": "stackdriver", "uid": "cloud-monitoring"},
         "description": desc,
-        "targets": [cloud_target(metric_type, "{{metric.label.cause}}" if group_bys and "metric.label.cause" in group_bys else "", "A", group_bys)],
+        "targets": [cloud_target(metric_type, "", "A", group_bys, filters=filters)],
         "fieldConfig": {"defaults": {"unit": unit, "custom": {
             "drawStyle": "line", "fillOpacity": 15, "showPoints": "never", "lineWidth": 1,
             "stacking": {"mode": "normal" if not legend else "none", "group": "A"}}}, "overrides": []},
@@ -784,13 +795,16 @@ def d_spot_disruptions():
                      desc="Derived from Compute Engine system audit logs with methodName=compute.instances.preempted."),
         cloud_panel("Structured disruption records by cause", "logging.googleapis.com/user/octogee_disruption_records",
                      unit="short", w=12, h=8, group_bys=["metric.label.cause", "metric.label.capacity_class"], legend=True,
+                     filters=NAMESPACE_FILTER,
                      desc="Controller observations from Kubernetes Events; these are not independently authoritative Spot confirmations."),
         cloud_panel("Unplanned gateway pod losses by gateway", "logging.googleapis.com/user/octogee_gateway_pod_replacements",
                      unit="short", w=12, h=8, group_bys=["metric.label.gateway_id", "metric.label.node_pool"], legend=True,
-                     desc="Gateway pods that vanished with no desired-state change (no roll, pause, or drain). Names the gateway a preemption hit; match metric.label.instance_id against the audit metric to confirm Spot as the cause."),
+                     filters=NAMESPACE_FILTER,
+                     desc="Gateway pods that vanished while their ReplicaSet still wanted them running (a roll, restart, pause, or uninstall scales the ReplicaSet first and is excluded). Names the gateway a preemption hit; match metric.label.instance_id against the audit metric to confirm Spot as the cause."),
         cloud_panel("Unplanned gateway pod losses by vacated instance", "logging.googleapis.com/user/octogee_gateway_pod_replacements",
                      unit="short", w=12, h=8, group_bys=["metric.label.instance_id"], legend=True,
-                     desc="Join key against octogee_spot_preemptions: an instance id appearing in both is a confirmed Spot preemption of that gateway."),
+                     filters=NAMESPACE_FILTER,
+                     desc="Join key against octogee_spot_preemptions: an instance id appearing in both is a confirmed Spot preemption of that gateway. instance_id=unknown means the pod was never observed on a node, so the loss is real but cannot be attributed."),
         row("Kubernetes signals"),
         ts("Controller observations by cause", [(f'sum(rate(glm_disruption_observations_total{{namespace="{NS}"}}[15m])) by (cause)', "{{cause}}")], unit="ops", legend=True),
         ts("Node conditions", [("sum(kube_node_status_condition{condition=\"Ready\",status=\"false\"})", "NotReady"), ("sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "Ready")], legend=True),
@@ -803,7 +817,8 @@ def d_spot_disruptions():
             "- Same `instance_id` in `octogee_gateway_pod_replacements` and `octogee_spot_preemptions`: "
             "**confirmed Spot preemption of that named gateway**.\n"
             "- An unplanned pod loss with no matching audit record is a node repair, an eviction, or an "
-            "OOM-kill — the counter proves the loss, not the cause.\n"
+            "OOM-kill — the counter proves the loss, not the cause. `instance_id=unknown` means the pod was "
+            "never observed on a node before it vanished, so no join is possible either way.\n"
             "- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n"
             "- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n"
             "- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n"

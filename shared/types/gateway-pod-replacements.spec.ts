@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   POD_REPLACEMENT_WARNING_THRESHOLD_24H,
+  isGatewayPodPlacement,
   isGatewayPodReplacements,
+  pruneGatewayPodReplacementWindow,
   summarizeGatewayPodReplacements,
   type GatewayPodReplacements,
 } from "./gateway-pod-replacements";
@@ -28,8 +30,7 @@ describe("summarizeGatewayPodReplacements", () => {
     expect(summarizeGatewayPodReplacements(null, NOW)).toEqual({
       count24h: 0,
       count7d: 0,
-      lastAt: null,
-      lastVacatedPodUid: null,
+      lastAgeMs: null,
       lastVacatedNodeName: null,
       lastVacatedInstanceId: null,
       lastVacatedNodePool: null,
@@ -51,7 +52,7 @@ describe("summarizeGatewayPodReplacements", () => {
     expect(summary.count24h).toBe(2);
     expect(summary.count7d).toBe(4);
     expect(summary.total).toBe(9);
-    expect(summary.lastVacatedPodUid).toBe("uid-d");
+    expect(summary.lastAgeMs).toBe(HOUR);
   });
 
   it("passes the vacated instance identity through for the preemption join", () => {
@@ -73,14 +74,21 @@ describe("summarizeGatewayPodReplacements", () => {
     expect(summary.lastVacatedNodePool).toBe("nap-1dx2tv8d");
   });
 
-  it("keeps lastAt after the entry has aged out of the 7d window", () => {
+  it("keeps the last-loss age after the entry has aged out of the 7d window", () => {
     const summary = summarizeGatewayPodReplacements(
-      stored({ lastAt: NOW - 30 * DAY, lastVacatedPodUid: "uid-old", total: 1 }),
+      stored({ recentAt: [NOW - 30 * DAY], lastAt: NOW - 30 * DAY, lastVacatedPodUid: "uid-old", total: 1 }),
       NOW,
     );
     expect(summary.count7d).toBe(0);
-    expect(summary.lastAt).toBe(NOW - 30 * DAY);
-    expect(summary.lastVacatedPodUid).toBe("uid-old");
+    expect(summary.lastAgeMs).toBe(30 * DAY);
+  });
+
+  it("clamps a last loss stamped ahead of the reader's clock to zero age", () => {
+    const summary = summarizeGatewayPodReplacements(
+      stored({ recentAt: [NOW + HOUR], lastAt: NOW + HOUR, total: 1 }),
+      NOW,
+    );
+    expect(summary.lastAgeMs).toBe(0);
   });
 
   it("ignores timestamps in the future rather than counting them", () => {
@@ -110,6 +118,36 @@ describe("summarizeGatewayPodReplacements", () => {
     );
     expect(atThreshold.count24h).toBe(POD_REPLACEMENT_WARNING_THRESHOLD_24H);
     expect(atThreshold.warn).toBe(true);
+  });
+});
+
+describe("pruneGatewayPodReplacementWindow", () => {
+  it("drops entries older than the window and keeps the rest in order", () => {
+    expect(pruneGatewayPodReplacementWindow([NOW - 8 * DAY, NOW - 6 * DAY, NOW - HOUR], NOW))
+      .toEqual([NOW - 6 * DAY, NOW - HOUR]);
+  });
+
+  it("keeps an entry stamped by a newer clock rather than erasing it", () => {
+    expect(pruneGatewayPodReplacementWindow([NOW - HOUR, NOW + 200], NOW)).toEqual([NOW - HOUR, NOW + 200]);
+  });
+});
+
+describe("isGatewayPodPlacement", () => {
+  it("accepts a placement with and without node facts", () => {
+    expect(isGatewayPodPlacement({
+      uid: "uid-a", name: "pod-a", replicaSetUid: "rs-1", nodeName: "n", instanceId: "1", nodePool: "nap",
+    })).toBe(true);
+    expect(isGatewayPodPlacement({
+      uid: "uid-a", name: "pod-a", replicaSetUid: null, nodeName: null, instanceId: null, nodePool: null,
+    })).toBe(true);
+  });
+
+  it.each([
+    ["an empty uid", { uid: "", name: "p", replicaSetUid: null, nodeName: null, instanceId: null, nodePool: null }],
+    ["a missing name", { uid: "u", replicaSetUid: null, nodeName: null, instanceId: null, nodePool: null }],
+    ["a numeric instance id", { uid: "u", name: "p", replicaSetUid: null, nodeName: null, instanceId: 7, nodePool: null }],
+  ])("rejects %s", (_label, value) => {
+    expect(isGatewayPodPlacement(value)).toBe(false);
   });
 });
 

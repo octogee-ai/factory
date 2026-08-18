@@ -23,6 +23,7 @@ export interface KubeOps {
   readGatewayPodDiagnosticsBatch(opts: {
     namespace: string;
     gatewayIds: readonly string[];
+    includeReplicaSets?: boolean;
   }): Promise<Record<string, GatewayPodDiagnostics>>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
@@ -55,9 +56,21 @@ export interface GatewayNodeFacts {
   nodePool: string | null;
 }
 
+// A gateway ReplicaSet as the apiserver reports it: what it wants
+// (spec.replicas) and what its controller currently counts (status.replicas).
+// It outlives its pods, so it is the record of intent that tells a pod lost to
+// a preemption apart from one removed by a roll, a restart, or a pause.
+export interface GatewayReplicaSetSummary {
+  uid: string;
+  name: string;
+  desiredReplicas: number;
+  observedReplicas: number;
+}
+
 export interface GatewayPodDiagnostic {
   name: string;
   uid: string | null;
+  replicaSetUid: string | null;
   phase: string;
   readyContainers: number;
   totalContainers: number;
@@ -79,6 +92,7 @@ export interface GatewayPodDiagnostics {
   onDemandPods: number;
   unknownCapacityPods: number;
   pods: GatewayPodDiagnostic[];
+  replicaSets?: GatewayReplicaSetSummary[];
   error?: string;
 }
 
@@ -188,6 +202,33 @@ function projectPodPlacement(
   };
 }
 
+function replicaSetOwnerUid(metadata: Record<string, unknown>): string | null {
+  const owners = Array.isArray(metadata.ownerReferences) ? metadata.ownerReferences : [];
+  for (const owner of owners) {
+    if (isRecord(owner) && owner.kind === "ReplicaSet") return stringOrNull(owner.uid);
+  }
+  return null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function projectReplicaSetSummary(replicaSet: Record<string, unknown>): GatewayReplicaSetSummary | null {
+  const metadata = isRecord(replicaSet.metadata) ? replicaSet.metadata : {};
+  const spec = isRecord(replicaSet.spec) ? replicaSet.spec : {};
+  const status = isRecord(replicaSet.status) ? replicaSet.status : {};
+  const uid = stringOrNull(metadata.uid);
+  const name = stringOrNull(metadata.name);
+  if (!uid || !name) return null;
+  return {
+    uid,
+    name,
+    desiredReplicas: numberOrNull(spec.replicas) ?? 0,
+    observedReplicas: numberOrNull(status.replicas) ?? 0,
+  };
+}
+
 function projectPodDiagnostic(
   pod: Record<string, unknown>,
   now: number,
@@ -201,6 +242,7 @@ function projectPodDiagnostic(
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
     uid: stringOrNull(metadata.uid),
+    replicaSetUid: replicaSetOwnerUid(metadata),
     phase: stringOrNull(status.phase) ?? "Unknown",
     ...projectPodContainers(status),
     ...projectPodPlacement(spec, factsByNodeName),
@@ -296,10 +338,62 @@ function summarizePodRecords(
   };
 }
 
-function gatewayIdForPod(pod: Record<string, unknown>): string | null {
-  const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+function gatewayIdForRecord(value: Record<string, unknown>): string | null {
+  const metadata = isRecord(value.metadata) ? value.metadata : {};
   const labels = isRecord(metadata.labels) ? metadata.labels : {};
   return stringOrNull(labels["gateway-instance"]);
+}
+
+function groupByGatewayId(
+  records: readonly Record<string, unknown>[],
+  gatewayIds: readonly string[],
+): Map<string, Record<string, unknown>[]> {
+  const requested = new Set(gatewayIds);
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const value of records) {
+    const gatewayId = gatewayIdForRecord(value);
+    if (!gatewayId || !requested.has(gatewayId)) continue;
+    const bucket = grouped.get(gatewayId) ?? [];
+    bucket.push(value);
+    grouped.set(gatewayId, bucket);
+  }
+  return grouped;
+}
+
+// The ReplicaSet list is optional context for the pod-loss accounting; a failure
+// to read it must not degrade the pod status observation the placement policy
+// depends on, so it is logged and the summaries are omitted rather than thrown.
+async function readGatewayReplicaSetsByGatewayId(
+  deps: KubeOpsRunnerDeps,
+  namespace: string,
+  gatewayIds: readonly string[],
+): Promise<Map<string, GatewayReplicaSetSummary[]> | null> {
+  const result = await deps.runKubectl([
+    "-n",
+    namespace,
+    "get",
+    "replicasets",
+    "-l",
+    "app=octogee-gateway",
+    "-o",
+    "json",
+  ]);
+  if (result.code !== 0) {
+    deps.log(
+      `[kube-ops] kubectl get replicasets ns=${namespace} failed (code=${result.code}); ` +
+        `pod-loss verdicts are deferred this observation: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+    return null;
+  }
+  const grouped = groupByGatewayId(kubeListRecords(result.stdout, "replicasets"), gatewayIds);
+  return new Map(
+    gatewayIds.map((gatewayId) => [
+      gatewayId,
+      (grouped.get(gatewayId) ?? [])
+        .map(projectReplicaSetSummary)
+        .filter((summary): summary is GatewayReplicaSetSummary => summary !== null),
+    ]),
+  );
 }
 
 function summarizeGatewayPodDiagnosticsBatch(
@@ -307,25 +401,19 @@ function summarizeGatewayPodDiagnosticsBatch(
   gatewayIds: readonly string[],
   now: number,
   factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
+  replicaSetsByGatewayId: ReadonlyMap<string, GatewayReplicaSetSummary[]> | null,
 ): Record<string, GatewayPodDiagnostics> {
-  const requested = new Set(gatewayIds);
-  const podsByGatewayId = new Map<string, Record<string, unknown>[]>();
-  for (const pod of podRecords) {
-    const gatewayId = gatewayIdForPod(pod);
-    if (!gatewayId || !requested.has(gatewayId)) continue;
-    const pods = podsByGatewayId.get(gatewayId) ?? [];
-    pods.push(pod);
-    podsByGatewayId.set(gatewayId, pods);
-  }
+  const podsByGatewayId = groupByGatewayId(podRecords, gatewayIds);
   return Object.fromEntries(
-    gatewayIds.map((gatewayId) => [
-      gatewayId,
-      summarizePodRecords(
+    gatewayIds.map((gatewayId) => {
+      const summary = summarizePodRecords(
         podsByGatewayId.get(gatewayId) ?? [],
         now,
         factsByNodeName,
-      ),
-    ]),
+      );
+      const replicaSets = replicaSetsByGatewayId?.get(gatewayId);
+      return [gatewayId, replicaSets ? { ...summary, replicaSets } : summary];
+    }),
   );
 }
 
@@ -501,7 +589,7 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
       );
     },
 
-    async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds }) {
+    async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds, includeReplicaSets = false }) {
       const args = [
         "-n",
         namespace,
@@ -529,12 +617,18 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
         );
       }
       const podRecords = kubeListRecords(result.stdout, "pods");
-      const factsByNodeName = await readNodeFactsByName(deps, podRecords);
+      const [factsByNodeName, replicaSetsByGatewayId] = await Promise.all([
+        readNodeFactsByName(deps, podRecords),
+        includeReplicaSets
+          ? readGatewayReplicaSetsByGatewayId(deps, namespace, gatewayIds)
+          : Promise.resolve(null),
+      ]);
       return summarizeGatewayPodDiagnosticsBatch(
         podRecords,
         gatewayIds,
         deps.now?.() ?? Date.now(),
         factsByNodeName,
+        replicaSetsByGatewayId,
       );
     },
 

@@ -521,6 +521,215 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
   });
 });
 
+describe("createKubeSubprocessRunner — pod identity and ReplicaSet intent", () => {
+  const NODE = "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-vbsk";
+
+  function batchResponses(replicaSets: unknown) {
+    return [
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: {
+                name: "octogee-gateway-ceckert-test-xs-08a5a3dd-98d6b8cd7-mg4l5",
+                uid: "pod-uid-mg4l5",
+                creationTimestamp: "2026-08-18T17:20:00.000Z",
+                labels: {
+                  "app": "octogee-gateway",
+                  "gateway-instance": "ceckert-test-xs-08a5a3dd",
+                  "pod-template-hash": "98d6b8cd7",
+                },
+                ownerReferences: [
+                  {
+                    apiVersion: "apps/v1",
+                    kind: "ReplicaSet",
+                    name: "octogee-gateway-ceckert-test-xs-08a5a3dd-98d6b8cd7",
+                    uid: "rs-uid-new",
+                    controller: true,
+                  },
+                ],
+              },
+              spec: { nodeName: NODE },
+              status: {
+                phase: "Running",
+                containerStatuses: [
+                  { name: "gateway", ready: false, restartCount: 0 },
+                  { name: "gateway-edge", ready: true, restartCount: 0 },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      {
+        stdout: JSON.stringify({
+          items: [
+            {
+              metadata: {
+                name: NODE,
+                labels: {
+                  "cloud.google.com/gke-spot": "true",
+                  "cloud.google.com/gke-nodepool": "nap-1dx2tv8d",
+                },
+                annotations: {
+                  "container.googleapis.com/instance_id": "7311234567890123456",
+                },
+              },
+            },
+          ],
+        }),
+      },
+      { stdout: JSON.stringify(replicaSets) },
+    ];
+  }
+
+  it("projects the pod uid, its owning ReplicaSet, and the node's GCE identity", async () => {
+    const { runKubectl, calls } = mockSubprocess(batchResponses({
+      items: [
+        {
+          metadata: {
+            name: "octogee-gateway-ceckert-test-xs-08a5a3dd-7c9f4b6d5",
+            uid: "rs-uid-old",
+            labels: { "app": "octogee-gateway", "gateway-instance": "ceckert-test-xs-08a5a3dd" },
+          },
+          spec: { replicas: 0 },
+          status: { replicas: 0 },
+        },
+        {
+          metadata: {
+            name: "octogee-gateway-ceckert-test-xs-08a5a3dd-98d6b8cd7",
+            uid: "rs-uid-new",
+            labels: { "app": "octogee-gateway", "gateway-instance": "ceckert-test-xs-08a5a3dd" },
+          },
+          spec: { replicas: 1 },
+          status: { replicas: 1 },
+        },
+        {
+          metadata: {
+            name: "octogee-gateway-shared-a-66d46fc76c",
+            uid: "rs-uid-shared-a",
+            labels: { "app": "octogee-gateway", "gateway-instance": "shared-a" },
+          },
+          spec: { replicas: 1 },
+          status: { replicas: 1 },
+        },
+      ],
+    }));
+    const kube = createKubeSubprocessRunner({
+      runKubectl,
+      log: vi.fn(),
+      now: () => new Date("2026-08-18T17:24:14.000Z").getTime(),
+    });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["ceckert-test-xs-08a5a3dd"],
+      includeReplicaSets: true,
+    });
+
+    expect(calls[2]).toEqual([
+      "-n",
+      "octogee-test",
+      "get",
+      "replicasets",
+      "-l",
+      "app=octogee-gateway",
+      "-o",
+      "json",
+    ]);
+    const gateway = diagnostics["ceckert-test-xs-08a5a3dd"]!;
+    expect(gateway.pods).toEqual([
+      expect.objectContaining({
+        name: "octogee-gateway-ceckert-test-xs-08a5a3dd-98d6b8cd7-mg4l5",
+        uid: "pod-uid-mg4l5",
+        replicaSetUid: "rs-uid-new",
+        nodeName: NODE,
+        instanceId: "7311234567890123456",
+        nodePool: "nap-1dx2tv8d",
+        capacityType: "spot",
+        readyContainers: 1,
+        totalContainers: 2,
+        restarts: 0,
+      }),
+    ]);
+    expect(gateway.replicaSets).toEqual([
+      {
+        uid: "rs-uid-old",
+        name: "octogee-gateway-ceckert-test-xs-08a5a3dd-7c9f4b6d5",
+        desiredReplicas: 0,
+        observedReplicas: 0,
+      },
+      {
+        uid: "rs-uid-new",
+        name: "octogee-gateway-ceckert-test-xs-08a5a3dd-98d6b8cd7",
+        desiredReplicas: 1,
+        observedReplicas: 1,
+      },
+    ]);
+  });
+
+  it("reports an empty ReplicaSet list for a gateway whose deployment is gone", async () => {
+    const { runKubectl } = mockSubprocess(batchResponses({ items: [] }));
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["ceckert-test-xs-08a5a3dd", "retired-gw"],
+      includeReplicaSets: true,
+    });
+
+    expect(diagnostics["retired-gw"]?.replicaSets).toEqual([]);
+    expect(diagnostics["ceckert-test-xs-08a5a3dd"]?.replicaSets).toEqual([]);
+  });
+
+  it("does not read ReplicaSets unless asked", async () => {
+    const { runKubectl, calls } = mockSubprocess(batchResponses({ items: [] }));
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["ceckert-test-xs-08a5a3dd"],
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(diagnostics["ceckert-test-xs-08a5a3dd"]).not.toHaveProperty("replicaSets");
+  });
+
+  it("logs and omits ReplicaSet intent when the list is unreadable, keeping the pod observation", async () => {
+    const responses = batchResponses({ items: [] });
+    responses[2] = { stdout: "", stderr: 'Error from server (Forbidden): replicasets.apps is forbidden', code: 1 };
+    const { runKubectl } = mockSubprocess(responses);
+    const log = vi.fn();
+    const kube = createKubeSubprocessRunner({ runKubectl, log });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["ceckert-test-xs-08a5a3dd"],
+      includeReplicaSets: true,
+    });
+
+    expect(diagnostics["ceckert-test-xs-08a5a3dd"]).toMatchObject({ status: "not-ready", totalPods: 1 });
+    expect(diagnostics["ceckert-test-xs-08a5a3dd"]).not.toHaveProperty("replicaSets");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/kubectl get replicasets .* failed .*Forbidden/));
+  });
+
+  it("leaves a pod without a ReplicaSet owner unattributed rather than guessing", async () => {
+    const responses = batchResponses({ items: [] });
+    const pods = JSON.parse(responses[0]!.stdout!) as { items: Array<{ metadata: Record<string, unknown> }> };
+    delete pods.items[0]!.metadata.ownerReferences;
+    responses[0] = { stdout: JSON.stringify(pods) };
+    const { runKubectl } = mockSubprocess(responses);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
+
+    const diagnostics = await kube.readGatewayPodDiagnosticsBatch({
+      namespace: "octogee-test",
+      gatewayIds: ["ceckert-test-xs-08a5a3dd"],
+    });
+
+    expect(diagnostics["ceckert-test-xs-08a5a3dd"]?.pods[0]?.replicaSetUid).toBeNull();
+  });
+});
+
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("deletes the named PVC idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([

@@ -14,6 +14,7 @@ export type GatewayPodCapacityType = "spot" | "on-demand";
 export interface GatewayPodDiagnostic {
     name: string;
     uid: string | null;
+    replicaSetUid: string | null;
     phase: string;
     readyContainers: number;
     totalContainers: number;

@@ -22,6 +22,17 @@ function isEpochMs(value) {
 function isNullableString(value) {
     return value === null || typeof value === "string";
 }
+export function isGatewayPodPlacement(value) {
+    if (!isRecord(value))
+        return false;
+    return (typeof value.uid === "string" &&
+        value.uid.length > 0 &&
+        typeof value.name === "string" &&
+        isNullableString(value.replicaSetUid) &&
+        isNullableString(value.nodeName) &&
+        isNullableString(value.instanceId) &&
+        isNullableString(value.nodePool));
+}
 export function isGatewayPodReplacements(value) {
     if (!isRecord(value))
         return false;
@@ -36,8 +47,8 @@ export function isGatewayPodReplacements(value) {
         Number.isSafeInteger(value.total) &&
         value.total >= 0);
 }
-// A replacement stamped ahead of `now` cannot be counted against a window that
-// ends at `now`; clock skew must not inflate the indicator.
+// A loss stamped ahead of `now` cannot be counted against a window that ends at
+// `now`; clock skew must not inflate the indicator.
 function countWithin(recentAt, now, windowMs) {
     return recentAt.filter((at) => at <= now && now - at < windowMs).length;
 }
@@ -46,8 +57,7 @@ export function summarizeGatewayPodReplacements(value, now) {
         return {
             count24h: 0,
             count7d: 0,
-            lastAt: null,
-            lastVacatedPodUid: null,
+            lastAgeMs: null,
             lastVacatedNodeName: null,
             lastVacatedInstanceId: null,
             lastVacatedNodePool: null,
@@ -59,8 +69,7 @@ export function summarizeGatewayPodReplacements(value, now) {
     return {
         count24h,
         count7d: countWithin(value.recentAt, now, POD_REPLACEMENT_RECENT_WINDOW_MS),
-        lastAt: value.lastAt,
-        lastVacatedPodUid: value.lastVacatedPodUid,
+        lastAgeMs: value.lastAt === null ? null : Math.max(0, now - value.lastAt),
         lastVacatedNodeName: value.lastVacatedNodeName,
         lastVacatedInstanceId: value.lastVacatedInstanceId,
         lastVacatedNodePool: value.lastVacatedNodePool,
@@ -68,9 +77,9 @@ export function summarizeGatewayPodReplacements(value, now) {
         warn: count24h >= POD_REPLACEMENT_WARNING_THRESHOLD_24H,
     };
 }
+// Only entries older than the window are dropped. An entry stamped ahead of
+// `now` is excluded from the counts, not deleted — a reconcile pass that ran on
+// an older clock must not erase a loss a newer pass already recorded.
 export function pruneGatewayPodReplacementWindow(recentAt, now) {
-    return recentAt
-        .filter((at) => at <= now && now - at < POD_REPLACEMENT_RECENT_WINDOW_MS)
-        .sort((left, right) => left - right)
-        .slice(-POD_REPLACEMENT_MAX_RETAINED);
+    return recentAt.filter((at) => now - at < POD_REPLACEMENT_RECENT_WINDOW_MS);
 }

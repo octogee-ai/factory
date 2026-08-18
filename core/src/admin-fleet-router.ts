@@ -160,6 +160,7 @@ function rejectPersistenceInBody(body: Record<string, unknown>): {
 export interface GatewayPodDiagnostic {
   name: string;
   uid: string | null;
+  replicaSetUid: string | null;
   phase: string;
   readyContainers: number;
   totalContainers: number;

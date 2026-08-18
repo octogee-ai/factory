@@ -155,7 +155,6 @@ export interface GatewayKubernetesObservation {
     readyPods: number;
     observedAt: number;
     pods?: GatewayPodPlacement[];
-    planToken?: string;
 }
 export declare function hasFreshReadyKubernetesObservation(runtime: GatewayRuntimeDoc, nowMs: number, maxAgeMs: number): boolean;
 export declare function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc;

@@ -410,12 +410,11 @@ export interface GatewayKubernetesObservation {
   totalPods: number;
   readyPods: number;
   observedAt: number;
-  // Pod identities with their node placement, plus the desired-state fingerprint
-  // they were observed under. Together they let the next observation tell an
-  // unplanned pod loss apart from a roll, a pause, or a drain — and name the GCE
-  // instance that was vacated, which is unrecoverable once the node is gone.
+  // The pods observed, each with its owning ReplicaSet and node placement. The
+  // next observation diffs against this to notice a pod that vanished, asks the
+  // ReplicaSet whether it still wanted that pod, and names the vacated GCE
+  // instance — which is unrecoverable once the node is gone.
   pods?: GatewayPodPlacement[];
-  planToken?: string;
 }
 
 export function hasFreshReadyKubernetesObservation(
