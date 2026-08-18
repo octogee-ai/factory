@@ -175,9 +175,7 @@ function profileRefMatches(stored, desire) {
     const profile = asRecord(stored);
     return (profile.type === "api_key" &&
         profile.provider === desire.provider &&
-        asRecord(profile.keyRef).id === desire.entry.keyRef.id &&
-        typeof profile.key === "string" &&
-        profile.key.length > 0);
+        asRecord(profile.keyRef).id === desire.entry.keyRef.id);
 }
 function readJsonFile(pathname) {
     if (!fs.existsSync(pathname))

@@ -296,9 +296,7 @@ function profileRefMatches(stored: unknown, desire: PlatformBrokerProfileDesire)
   return (
     profile.type === "api_key" &&
     profile.provider === desire.provider &&
-    asRecord(profile.keyRef).id === desire.entry.keyRef.id &&
-    typeof profile.key === "string" &&
-    profile.key.length > 0
+    asRecord(profile.keyRef).id === desire.entry.keyRef.id
   );
 }
 
