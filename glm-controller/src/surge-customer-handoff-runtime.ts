@@ -9,6 +9,7 @@ import {
 import { signFleetRequest } from "@octogee/core/fleet-signature";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import {
+  SurgeOpenClawProcessEndpointMissingError,
   type SurgeCustomerHandoffDeps,
   type SurgePod,
   type SurgePodHealth,
@@ -405,7 +406,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       });
     } catch (error) {
       if (error instanceof SurgePodControlError && error.status === 404) {
-        throw new Error(
+        throw new SurgeOpenClawProcessEndpointMissingError(
           `pod ${input.pod.name} lacks the required surge OpenClaw ${input.capability} endpoint`,
           { cause: error },
         );

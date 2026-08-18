@@ -66,6 +66,12 @@ interface SessionDigest {
 
 class SurgeTargetCleanupError extends Error {}
 
+// A source pod whose image predates the OpenClaw process gate cannot stop its
+// own OpenClaw on request. It still quiesces and flushes, so the handoff
+// degrades to the pre-gate contract for that one roll instead of wedging the
+// gateway on its own image forever.
+export class SurgeOpenClawProcessEndpointMissingError extends Error {}
+
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
 export interface SurgeCustomerHandoffDeps {
@@ -471,14 +477,24 @@ async function finalizeSourceForAssignment(
     operationId: ownedBy,
     targetPod,
   });
+  try {
+    await stopSourceOpenClaw(deps, {
+      gatewayId: input.gatewayId,
+      slug: assignment.slug,
+      operationId: ownedBy,
+      sourcePod,
+      targetPod,
+    });
+  } catch (error) {
+    if (!(error instanceof SurgeOpenClawProcessEndpointMissingError)) throw error;
+    deps.log(
+      `[surge-handoff] source predates the OpenClaw process gate; copying from the quiesced ` +
+      `source and relying on the digest check ` +
+      `gateway=${input.gatewayId} source=${sourcePod.name} slug=${assignment.slug}`,
+    );
+    return sourceSystemConfigCommit;
+  }
   if (!heldSourceSlugs.includes(assignment.slug)) heldSourceSlugs.push(assignment.slug);
-  await stopSourceOpenClaw(deps, {
-    gatewayId: input.gatewayId,
-    slug: assignment.slug,
-    operationId: ownedBy,
-    sourcePod,
-    targetPod,
-  });
   return sourceSystemConfigCommit;
 }
 

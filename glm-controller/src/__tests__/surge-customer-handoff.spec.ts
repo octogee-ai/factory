@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   reconcileSurgeCustomerHandoff,
   assertSurgeAssignmentCoverage,
+  SurgeOpenClawProcessEndpointMissingError,
   type SurgeAssignment,
   type SurgeCustomerHandoffDeps,
   type SurgePod,
@@ -71,6 +72,7 @@ function harness(input: {
   prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
   resumeSourceError?: Error;
   stopSourceError?: Error;
+  stopSourceLegacy?: boolean;
   holdTargetError?: Error;
   holdTargetErrorFromCall?: number;
 } = {}) {
@@ -99,6 +101,11 @@ function harness(input: {
     })),
     stopSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
       events.push(`stop-source:${sourcePod.uid}:${slug}`);
+      if (input.stopSourceLegacy) {
+        throw new SurgeOpenClawProcessEndpointMissingError(
+          `pod ${sourcePod.name} lacks the required surge OpenClaw hold endpoint`,
+        );
+      }
       if (input.stopSourceError) throw input.stopSourceError;
       sourceHeld = true;
     }),
@@ -335,10 +342,10 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("restores the roster without a resume when the source stop never landed", async () => {
+  it("copies from a quiesced legacy source that predates the OpenClaw process gate", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],
-      stopSourceError: new Error("pod old lacks the required surge OpenClaw hold endpoint"),
+      stopSourceLegacy: true,
     });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -347,7 +354,7 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: false,
       disposableBuilderGateway: true,
       stateMigration: MIGRATE_STATE,
-    })).rejects.toThrow("lacks the required surge OpenClaw hold endpoint");
+    })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -355,11 +362,41 @@ describe("surge customer handoff", () => {
       "flush:old-uid:alice:migration-final",
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+    expect(h.deps.log).toHaveBeenCalledWith(
+      expect.stringContaining("predates the OpenClaw process gate"),
+    );
+  });
+
+  it("restores the roster without a resume when the source stop never landed", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      stopSourceError: new Error("source pod connection reset"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("source pod connection reset");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
       "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
       "assignment:u1:serving",
     ]);
     expect(h.deps.transfer).not.toHaveBeenCalled();
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("source is not held; skipping resume"));
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
     expect(h.assignments()).toEqual([
       expect.objectContaining({ state: "serving", updatedByOperationId: h.operationId }),
     ]);
