@@ -29,6 +29,12 @@ import {
   projectGatewayDesiredRootForGateway,
   type PlacementFirestore,
 } from "@octogee/shared/types/gateway-releases";
+import { isGatewayPodReplacements } from "@octogee/shared/types/gateway-pod-replacements";
+import {
+  gatewayPlanToken,
+  nextPodReplacementTransition,
+  observedPodUids,
+} from "./pod-replacement-tracking.js";
 import {
   parseSharedGatewayPoolConfig,
   planSharedGatewayRebalance,
@@ -122,6 +128,7 @@ export interface PlacementPolicyPodDiagnostics {
   status: string;
   totalPods: number;
   readyPods: number;
+  pods?: ReadonlyArray<{ uid?: string | null }>;
   error?: string;
 }
 
@@ -2493,19 +2500,44 @@ interface KubernetesObservation {
   readyPods: number;
 }
 
-function kubernetesObservationIsCurrent(
-  stored: unknown,
-  observed: KubernetesObservation,
-  now: number,
+function storedPodUids(stored: Record<string, unknown> | null): string[] | null {
+  const uids = stored?.podUids;
+  if (!Array.isArray(uids)) return null;
+  return uids.every((uid) => typeof uid === "string") ? uids as string[] : null;
+}
+
+// A Spot preemption replaces the pod without changing readyPods or the restart
+// count, so pod identity has to be part of the freshness comparison — otherwise
+// a replacement inside the refresh interval is skipped and never recorded.
+function samePodUids(
+  stored: Record<string, unknown> | null,
+  observed: readonly string[] | null,
 ): boolean {
-  const current = record(stored);
+  if (observed === null) return true;
+  const previous = storedPodUids(stored);
+  if (previous === null) return false;
+  return previous.length === observed.length &&
+    previous.every((uid, index) => uid === observed[index]);
+}
+
+function kubernetesObservationIsCurrent(input: {
+  stored: unknown;
+  observed: KubernetesObservation;
+  observedUids: readonly string[] | null;
+  planToken: string | null;
+  now: number;
+}): boolean {
+  const { observed, observedUids, planToken, now } = input;
+  const current = record(input.stored);
   if (!current) return false;
   const observedAt = current.observedAt;
   if (typeof observedAt !== "number") return false;
   if (observedAt > now || now - observedAt >= KUBERNETES_OBSERVATION_REFRESH_MS) return false;
   return current.status === observed.status &&
     current.totalPods === observed.totalPods &&
-    current.readyPods === observed.readyPods;
+    current.readyPods === observed.readyPods &&
+    samePodUids(current, observedUids) &&
+    (planToken === null || current.planToken === planToken);
 }
 
 export async function persistKubernetesObservations(
@@ -2513,6 +2545,10 @@ export async function persistKubernetesObservations(
   runtimeDocuments: ReadonlyArray<QueryDocumentSnapshot>,
   kubernetesByGatewayId: Readonly<Record<string, PlacementPolicyPodDiagnostics>>,
   now: number,
+  options: {
+    planTokenByGatewayId?: Readonly<Record<string, string>>;
+    log?: (message: string) => void;
+  } = {},
 ): Promise<void> {
   if (runtimeDocuments.length === 0) return;
   await Promise.all(runtimeDocuments.map(async (runtimeDocument) => {
@@ -2522,14 +2558,49 @@ export async function persistKubernetesObservations(
       totalPods: diagnostics?.totalPods ?? 0,
       readyPods: diagnostics?.readyPods ?? 0,
     };
+    const observedUids = observedPodUids(diagnostics);
+    const planToken = options.planTokenByGatewayId?.[runtimeDocument.id] ?? null;
     const scanned = record(runtimeDocument.data());
-    if (kubernetesObservationIsCurrent(scanned?.kubernetes, observed, now)) return;
+    if (kubernetesObservationIsCurrent({
+      stored: scanned?.kubernetes,
+      observed,
+      observedUids,
+      planToken,
+      now,
+    })) return;
     await db.runTransaction(async (transaction) => {
       const current = await transaction.get(runtimeDocument.ref);
-      if (!current.exists || !isGatewayRuntimeDoc(current.data())) return;
-      transaction.set(runtimeDocument.ref, {
-        kubernetes: { ...observed, observedAt: now },
-      }, { merge: true });
+      const data = current.data();
+      if (!current.exists || !isGatewayRuntimeDoc(data)) return;
+      const storedKubernetes = record(data.kubernetes);
+      const transition = planToken === null ? null : nextPodReplacementTransition({
+        previousPodUids: storedPodUids(storedKubernetes),
+        previousPlanToken: typeof storedKubernetes?.planToken === "string"
+          ? storedKubernetes.planToken
+          : null,
+        previous: isGatewayPodReplacements(data.podReplacements) ? data.podReplacements : null,
+        observedPodUids: observedUids,
+        planToken,
+        now,
+      });
+      if (transition !== null && transition.replacedCount > 0) {
+        options.log?.(
+          `[placement-policy] ${runtimeDocument.id} observed ${transition.replacedCount} ` +
+            `unplanned pod replacement(s) at plan ${planToken}; ` +
+            `pod=${transition.replacements.lastPodUid} total=${transition.replacements.total}`,
+        );
+      }
+      transaction.set(runtimeDocument.ref, transition === null
+        ? { kubernetes: { ...observed, observedAt: now } }
+        : {
+            kubernetes: {
+              ...observed,
+              observedAt: now,
+              podUids: transition.podUids,
+              planToken: transition.planToken,
+            },
+            podReplacements: transition.replacements,
+          }, { merge: true });
     });
   }));
 }
@@ -2676,7 +2747,13 @@ async function readPlacementPolicySnapshot(
       readyPods: 0,
     }]));
   });
-  await persistKubernetesObservations(db, runtimeDocs, kubernetesByGatewayId, now);
+  await persistKubernetesObservations(db, runtimeDocs, kubernetesByGatewayId, now, {
+    planTokenByGatewayId: Object.fromEntries(gatewayDocs.flatMap((doc) => {
+      const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
+      return root ? [[doc.id, gatewayPlanToken(root)]] : [];
+    })),
+    log: input.log,
+  });
   const assignments = assignmentDocs
     .map(placementAssignmentFromDocument)
     .filter((assignment): assignment is PlacementPolicyAssignment => assignment !== null);

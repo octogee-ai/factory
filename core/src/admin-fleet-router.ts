@@ -60,6 +60,11 @@ import {
   type ReleaseDoc,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
+import {
+  isGatewayPodReplacements,
+  summarizeGatewayPodReplacements,
+  type GatewayPodReplacementSummary,
+} from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -154,6 +159,7 @@ function rejectPersistenceInBody(body: Record<string, unknown>): {
 
 export interface GatewayPodDiagnostic {
   name: string;
+  uid: string | null;
   phase: string;
   readyContainers: number;
   totalContainers: number;
@@ -1185,6 +1191,7 @@ function projectDurableGatewayRuntime(
     imageTag: runtime.helm.imageTag,
     heartbeat: runtime.heartbeat,
     lastError: runtime.lastError,
+    podReplacements: runtime.podReplacements,
   };
 }
 
@@ -1462,6 +1469,18 @@ function projectDisposableRuntime(
   };
 }
 
+// The stored window is a list of replacement timestamps, so the rolling counts
+// are derived against the request clock rather than read back from a number that
+// was accurate only when Cowboy last wrote the document.
+function projectGatewayPodReplacements(
+  glmDoc: GlmDoc | undefined,
+  now: number,
+): GatewayPodReplacementSummary | null {
+  const stored = glmDoc?.podReplacements;
+  if (!isGatewayPodReplacements(stored)) return null;
+  return summarizeGatewayPodReplacements(stored, now);
+}
+
 export function projectGatewaySummary(
   doc: FirestoreDocLike,
   glmDoc: GlmDoc | undefined,
@@ -1481,6 +1500,7 @@ export function projectGatewaySummary(
   gatewayClass: GatewayClass;
   imageProfile: GatewayImageProfile;
   disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
+  podReplacements: GatewayPodReplacementSummary | null;
 } {
   const data = doc.data();
   const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
@@ -1506,6 +1526,7 @@ export function projectGatewaySummary(
     gatewayClass: normalizeGatewayClass(glmDoc),
     imageProfile: normalizeGatewayImageProfile(glmDoc),
     disposableRuntime: projectDisposableRuntime(glmDoc),
+    podReplacements: projectGatewayPodReplacements(glmDoc, now),
   };
 }
 

@@ -1,3 +1,4 @@
+import type { GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
 import type { GatewayDesiredStatus, ManagedBy } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
@@ -142,6 +143,7 @@ export interface GatewayRuntimeDoc {
     helm: GatewayHelmObservation;
     heartbeat: GatewayHeartbeatObservation;
     kubernetes?: GatewayKubernetesObservation;
+    podReplacements?: GatewayPodReplacements;
     lastError: {
         message: string | null;
         at: number | null;
@@ -152,6 +154,8 @@ export interface GatewayKubernetesObservation {
     totalPods: number;
     readyPods: number;
     observedAt: number;
+    podUids?: string[];
+    planToken?: string;
 }
 export declare function hasFreshReadyKubernetesObservation(runtime: GatewayRuntimeDoc, nowMs: number, maxAgeMs: number): boolean;
 export declare function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc;

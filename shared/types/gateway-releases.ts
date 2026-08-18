@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
+import type { GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import {
   projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
@@ -397,6 +398,7 @@ export interface GatewayRuntimeDoc {
   helm: GatewayHelmObservation;
   heartbeat: GatewayHeartbeatObservation;
   kubernetes?: GatewayKubernetesObservation;
+  podReplacements?: GatewayPodReplacements;
   lastError: { message: string | null; at: number | null };
 }
 
@@ -405,6 +407,11 @@ export interface GatewayKubernetesObservation {
   totalPods: number;
   readyPods: number;
   observedAt: number;
+  // Pod identities and the desired-state fingerprint they were observed under.
+  // Together they let the next observation tell an unplanned pod replacement
+  // apart from a roll, a pause, or a drain.
+  podUids?: string[];
+  planToken?: string;
 }
 
 export function hasFreshReadyKubernetesObservation(

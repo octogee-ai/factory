@@ -47,6 +47,7 @@ export type GatewayPodCapacityType = "spot" | "on-demand";
 
 export interface GatewayPodDiagnostic {
   name: string;
+  uid: string | null;
   phase: string;
   readyContainers: number;
   totalContainers: number;
@@ -167,6 +168,7 @@ function projectPodDiagnostic(
   const nodeName = stringOrNull(spec.nodeName);
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
+    uid: stringOrNull(metadata.uid),
     phase: stringOrNull(status.phase) ?? "Unknown",
     readyContainers,
     totalContainers,
