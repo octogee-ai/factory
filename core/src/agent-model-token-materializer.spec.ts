@@ -137,7 +137,7 @@ describe("missingPlatformBrokerProfileTargets", () => {
     ).toHaveLength(3);
   });
 
-  it("settles on a profile openclaw already resolved — the ref identity is the match, not the key", () => {
+  it("settles on an OpenClaw-resolved profile without comparing its resolved key", () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
@@ -156,6 +156,29 @@ describe("missingPlatformBrokerProfileTargets", () => {
         openAi: false,
       }),
     ).toEqual([]);
+  });
+
+  it("retries a profile whose reference exists but whose key was not materialized", () => {
+    writeAuthProfileStore(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: agentModelTokenProfileEntry("octogee-alice-coach").keyRef,
+        },
+      },
+    });
+
+    expect(
+      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+        openRouter: false,
+        openAi: false,
+      }),
+    ).toEqual(platformBrokerProfileTargets("octogee-alice-coach", {
+      openRouter: false,
+      openAi: false,
+    }));
   });
 
   it("still reports a profile pinned to another agent's broker token", () => {

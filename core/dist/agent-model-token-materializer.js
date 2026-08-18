@@ -171,13 +171,13 @@ export function missingPlatformBrokerProfileTargets(agentDir, agentId, surfaces)
         .filter((desire) => !profileRefMatches(profiles[desire.profileId], desire))
         .map((desire) => profileTarget(agentId, desire));
 }
-/** openclaw stores the resolved key alongside the ref, so an applied profile is
- *  never byte-equal to the desired entry — the ref identity is what settles it. */
 function profileRefMatches(stored, desire) {
     const profile = asRecord(stored);
     return (profile.type === "api_key" &&
         profile.provider === desire.provider &&
-        asRecord(profile.keyRef).id === desire.entry.keyRef.id);
+        asRecord(profile.keyRef).id === desire.entry.keyRef.id &&
+        typeof profile.key === "string" &&
+        profile.key.length > 0);
 }
 function readJsonFile(pathname) {
     if (!fs.existsSync(pathname))
