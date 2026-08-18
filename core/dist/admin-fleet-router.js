@@ -4,6 +4,7 @@ import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
+import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
@@ -692,6 +693,7 @@ function projectDurableGatewayRuntime(root, runtime) {
         imageTag: runtime.helm.imageTag,
         heartbeat: runtime.heartbeat,
         lastError: runtime.lastError,
+        podReplacements: runtime.podReplacements,
     };
 }
 // The admin surface is addressed by the durable gateway identity. Runtime
@@ -892,6 +894,15 @@ function projectDisposableRuntime(glmDoc) {
         generation: allocation.generation,
     };
 }
+// The stored window is a list of replacement timestamps, so the rolling counts
+// are derived against the request clock rather than read back from a number that
+// was accurate only when Cowboy last wrote the document.
+function projectGatewayPodReplacements(glmDoc, now) {
+    const stored = glmDoc?.podReplacements;
+    if (!isGatewayPodReplacements(stored))
+        return null;
+    return summarizeGatewayPodReplacements(stored, now);
+}
 export function projectGatewaySummary(doc, glmDoc, now) {
     const data = doc.data();
     const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
@@ -917,6 +928,7 @@ export function projectGatewaySummary(doc, glmDoc, now) {
         gatewayClass: normalizeGatewayClass(glmDoc),
         imageProfile: normalizeGatewayImageProfile(glmDoc),
         disposableRuntime: projectDisposableRuntime(glmDoc),
+        podReplacements: projectGatewayPodReplacements(glmDoc, now),
     };
 }
 const LIVE_BUILDER_RUNTIME_STATUSES = new Set([
