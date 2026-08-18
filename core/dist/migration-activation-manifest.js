@@ -364,6 +364,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 agents: authInheritanceAnchor
                     ? {
                         ...rosterPatch,
+                        ownership: "explicit",
                         defaults: {
                             authInheritance: { agentId: authInheritanceAnchor.agentId },
                         },
