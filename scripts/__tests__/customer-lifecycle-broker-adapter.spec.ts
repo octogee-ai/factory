@@ -2003,6 +2003,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         buildPatch: (current: unknown) => {
           agents: {
             list: Array<Record<string, unknown>>;
+            ownership: string;
             defaults: { authInheritance: { agentId: string } };
           };
         };
@@ -2020,8 +2021,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         channels: { mattermost: { accounts: {} } },
       });
 
+      expect(patch.agents.ownership).toBe("explicit");
       expect(patch.agents.defaults.authInheritance).toEqual({ agentId: SAFE_DEFAULT_AGENT_ID });
       expect(patch.agents.list.filter((agent) => agent.id === SAFE_DEFAULT_AGENT_ID)).toHaveLength(1);
+      expect(patch.agents.list.find((agent) => agent.id === "octogee-alice-coach")).not.toHaveProperty(
+        "default",
+      );
       expect(patch.agents.list).toContainEqual(expect.objectContaining({
         id: "octogee-bob-coach",
         model: "foreign",
