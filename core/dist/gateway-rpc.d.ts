@@ -27,6 +27,8 @@ export interface GatewayRpcClientOptions {
 export interface ConfigGetResult {
     config: unknown;
     hash: string;
+    configRevisionHash: string;
+    appliedConfigHash: string | null;
 }
 export interface ConfigPatchResult {
     ok: true;

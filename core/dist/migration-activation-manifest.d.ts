@@ -49,6 +49,10 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
     signal?: AbortSignal;
     log: (msg: string) => void;
     onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
+    authInheritanceAnchor?: {
+        agentId: string;
+        agent: Record<string, unknown>;
+    };
 }): Promise<{
     elapsedMs: number;
     routingActivationRequired: boolean;

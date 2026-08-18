@@ -460,7 +460,19 @@ export function createGatewayRpc(opts = {}) {
             if (typeof snap.hash !== "string" || snap.hash.length === 0) {
                 throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `hash`");
             }
-            return { config: snap.config, hash: snap.hash };
+            if (typeof snap.configRevisionHash !== "string" || snap.configRevisionHash.length === 0) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `configRevisionHash`");
+            }
+            if (snap.appliedConfigHash !== null &&
+                (typeof snap.appliedConfigHash !== "string" || snap.appliedConfigHash.length === 0)) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload has invalid `appliedConfigHash`");
+            }
+            return {
+                config: snap.config,
+                hash: snap.hash,
+                configRevisionHash: snap.configRevisionHash,
+                appliedConfigHash: snap.appliedConfigHash,
+            };
         },
         async configApply(config, baseHash) {
             return await writeConfig(call, "config.apply", config, baseHash);

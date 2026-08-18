@@ -364,6 +364,101 @@ describe("migration activation manifest", () => {
     ]);
   });
 
+  it("anchors Builder auth inheritance while retaining the coach routing default", async () => {
+    const anchor = {
+      id: "octogee-unmatched-route",
+      name: "Unmatched Mattermost route",
+      heartbeat: { every: "0m" },
+    };
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            entries: {
+              "octogee-alice-coach": { model: "house", default: true },
+              "octogee-bob-coach": { model: "foreign" },
+            },
+            defaults: { authInheritance: { agentId: "octogee-alice-coach" } },
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+      authInheritanceAnchor: { agentId: anchor.id, agent: anchor },
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: {
+        entries: Record<string, Record<string, unknown>>;
+        defaults: { authInheritance: { agentId: string } };
+      };
+    };
+    expect(patch.agents.defaults.authInheritance).toEqual({ agentId: anchor.id });
+    expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
+      model: "house",
+      default: true,
+    });
+    expect(patch.agents.entries[anchor.id]).toEqual({
+      name: anchor.name,
+      heartbeat: anchor.heartbeat,
+    });
+    expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
+  });
+
+  it("adds the Builder auth anchor once to a list roster", async () => {
+    const anchor = { id: "octogee-unmatched-route", heartbeat: { every: "0m" } };
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            list: [
+              { id: "octogee-bob-coach", model: "foreign" },
+              { ...anchor, name: "old anchor" },
+              { id: "octogee-alice-coach", model: "house", default: true },
+            ],
+            defaults: { authInheritance: { agentId: "octogee-alice-coach" } },
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+      authInheritanceAnchor: { agentId: anchor.id, agent: anchor },
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: {
+        list: Array<Record<string, unknown>>;
+        defaults: { authInheritance: { agentId: string } };
+      };
+    };
+    expect(patch.agents.defaults.authInheritance).toEqual({ agentId: anchor.id });
+    expect(patch.agents.list).toContainEqual({ id: "octogee-bob-coach", model: "foreign" });
+    expect(patch.agents.list).toContainEqual({
+      id: "octogee-alice-coach",
+      model: "house",
+      default: true,
+    });
+    expect(patch.agents.list.filter((agent) => agent.id === anchor.id)).toEqual([anchor]);
+  });
+
   it("requests routing activation before patching only when the stable account route is absent", async () => {
     const accountBinding = {
       agentId: "octogee-alice-coach",
@@ -444,11 +539,26 @@ describe("migration activation manifest", () => {
       [accountBinding, retiredProjectOnForeignAccount],
       { "mike-coach": { botToken: "mike-pat" } },
     );
-    expect(retired.events).toEqual(["activation:mike-coach", "configPatch"]);
-    expect(retired.result.routingActivationRequired).toBe(true);
-    expect(retired.result.restartExistingAccountIds).toEqual(["mike-coach"]);
+    expect(retired.events).toEqual(["configPatch"]);
+    expect(retired.result.routingActivationRequired).toBe(false);
+    expect(retired.result.restartExistingAccountIds).toEqual([]);
     expect(retired.rpc.configPatch.mock.calls[0]?.[0]).toMatchObject({
       bindings: [accountBinding],
+    });
+
+    const wildcardRoute = {
+      agentId: "octogee-unmatched-route",
+      match: { channel: "mattermost", accountId: "*" },
+    };
+    const wildcard = await applyWith(
+      [wildcardRoute],
+      { "alice-coach": { botToken: "stale-secret-ref" } },
+    );
+    expect(wildcard.events).toEqual(["activation:alice-coach", "configPatch"]);
+    expect(wildcard.result.routingActivationRequired).toBe(true);
+    expect(wildcard.result.restartExistingAccountIds).toEqual(["alice-coach"]);
+    expect(wildcard.rpc.configPatch.mock.calls[0]?.[0]).toMatchObject({
+      bindings: [wildcardRoute, accountBinding],
     });
   });
 

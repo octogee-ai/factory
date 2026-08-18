@@ -543,23 +543,49 @@ describe("gateway-rpc", () => {
     it("returns the config snapshot and its hash", async () => {
       server.setHandler("config.get", () => ({
         ok: true,
-        payload: { valid: true, hash: "abc123", config: { channels: { mattermost: {} } } },
+        payload: {
+          valid: true,
+          hash: "abc123",
+          configRevisionHash: "revision-123",
+          appliedConfigHash: "revision-123",
+          config: { channels: { mattermost: {} } },
+        },
       }));
 
-      const { config, hash } = await client.configGet();
+      const { config, hash, configRevisionHash, appliedConfigHash } = await client.configGet();
       expect(hash).toBe("abc123");
+      expect(configRevisionHash).toBe("revision-123");
+      expect(appliedConfigHash).toBe("revision-123");
       expect(config).toEqual({ channels: { mattermost: {} } });
     });
 
     it("throws OpenclawWireError when the snapshot has no hash", async () => {
       server.setHandler("config.get", () => ({
         ok: true,
-        payload: { valid: true, config: {} },
+        payload: {
+          valid: true,
+          configRevisionHash: "revision-123",
+          appliedConfigHash: null,
+          config: {},
+        },
       }));
 
       await expect(client.configGet()).rejects.toMatchObject({
         name: "OpenclawWireError",
         code: "invalid-response",
+      });
+    });
+
+    it("rejects a snapshot without runtime application state", async () => {
+      server.setHandler("config.get", () => ({
+        ok: true,
+        payload: { valid: true, hash: "abc123", config: {} },
+      }));
+
+      await expect(client.configGet()).rejects.toMatchObject({
+        name: "OpenclawWireError",
+        code: "invalid-response",
+        message: expect.stringContaining("configRevisionHash"),
       });
     });
   });
