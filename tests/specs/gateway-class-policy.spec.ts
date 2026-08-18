@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import {
+  platformInvariantViolations,
+  reconcilePlatformInvariants,
+} from "../../core/dist/system-config-invariants.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
@@ -100,6 +104,10 @@ const approvedPlugins = [
 const brokerPluginConfig = {
   brokerUrl: "${FLEET_BROKER_URL}",
   tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
+};
+const disabledCodexPlugin = {
+  enabled: false,
+  config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
 };
 
 function canonicalAgentAuthProfiles(agentId: string) {
@@ -329,7 +337,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     );
     expect(out.agents.entries["system-agent"].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
     expect(out.plugins.allow).toEqual(approvedPlugins);
-    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+    expect(out.plugins.entries.codex).toEqual(disabledCodexPlugin);
     expect(out.gateway.terminal).toEqual({ enabled: false });
     expect(out.commands).toMatchObject({
       bash: false,
@@ -404,7 +412,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       mcp: { servers: { stale: { command: "sh" } } },
     });
 
-    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+    expect(out.plugins.entries.codex).toEqual(disabledCodexPlugin);
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
       enabled: true,
       config: {
@@ -416,6 +424,30 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: brokerPluginConfig,
     });
+  });
+
+  it("keeps Builder policy output compatible with durable config validation", () => {
+    const context = {
+      gatewayClass: "builder" as const,
+      gatewayId: "alice-xs-12345678",
+      apiOrigin: "https://api-test.octogee.com",
+    };
+    const config: Record<string, unknown> = {
+      agents: {
+        list: [
+          { id: "octogee-alice-coach" },
+          { id: "octogee-alice-proj-garden-coach" },
+        ],
+      },
+    };
+    reconcilePlatformInvariants(config, context);
+
+    const out = runPolicy("builder", config);
+    const violations = platformInvariantViolations(out, context);
+
+    expect(violations.filter((path) =>
+      path === "plugins.entries.codex" || path === "agents.list[].tools",
+    )).toEqual([]);
   });
 
   it("builder class denies Agent host execution while preserving structured project workflows", () => {
@@ -574,7 +606,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "*": { deny: expect.arrayContaining(["octogee_google_calendar_events"]) },
     });
     expect(out.plugins.allow).toEqual(approvedPlugins);
-    expect(out.plugins.entries.codex).toEqual({ enabled: false });
+    expect(out.plugins.entries.codex).toEqual(disabledCodexPlugin);
     expect(out.gateway.terminal).toEqual({ enabled: false });
     expect(out.commands).toMatchObject({
       bash: false,
@@ -650,7 +682,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
     expect(result.config.auth.profiles["openai-codex:default"]).toBeUndefined();
     expect(result.config.plugins.allow).not.toContain("codex");
-    expect(result.config.plugins.entries.codex).toEqual({ enabled: false });
+    expect(result.config.plugins.entries.codex).toEqual(disabledCodexPlugin);
     expect(result.config.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(true);
     const agentDir = path.join(result.dir, "agents", agentId, "agent");

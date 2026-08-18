@@ -294,6 +294,7 @@ describe("system config platform invariants", () => {
       fs: { workspaceOnly: true },
     });
     expect(agents.list[1].tools.alsoAllow).toContain("read");
+    expect(agents.list[1].tools.alsoAllow).toEqual(expect.arrayContaining(["grep", "find", "ls"]));
     expect(agents.list[1].tools.alsoAllow).toContain("octogee_project_commit");
     expect(agents.list[1].tools.alsoAllow).toEqual(expect.arrayContaining([
       "octogee_project_build",

@@ -1,6 +1,11 @@
 #!/usr/bin/env tsx
 
-import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
+import {
+  applicationDefault,
+  cert,
+  initializeApp,
+  type ServiceAccount,
+} from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
@@ -319,6 +324,41 @@ const VERBS: readonly VerbHelp[] = [
 const verbsByName = new Map<string, VerbHelp>(VERBS.map((v) => [v.verb, v]));
 
 export type FleetCredentialMode = "service-account-key" | "application-default";
+
+export function fleetServiceAccountCredential(
+  value: unknown,
+  projectId: string,
+): ServiceAccount | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const credential = value as Record<string, unknown>;
+  if (
+    credential.type !== "service_account" ||
+    typeof credential.client_email !== "string" ||
+    typeof credential.private_key !== "string"
+  ) {
+    return null;
+  }
+  return {
+    projectId,
+    clientEmail: credential.client_email,
+    privateKey: credential.private_key,
+  };
+}
+
+function applicationDefaultServiceAccountCredential(
+  credentialPath: string | undefined,
+  projectId: string,
+): ServiceAccount | null {
+  if (!credentialPath) return null;
+  try {
+    return fleetServiceAccountCredential(
+      JSON.parse(fs.readFileSync(credentialPath, "utf-8")),
+      projectId,
+    );
+  } catch {
+    return null;
+  }
+}
 
 export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
   projectId: string;
@@ -1228,14 +1268,26 @@ function initializeFleetCli(argv: string[]): void {
     console.error(dim(`  Set GOOGLE_APPLICATION_CREDENTIALS or provide the local key used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
     process.exit(1);
   }
+  const applicationDefaultServiceAccount = credentialMode === "application-default"
+    ? applicationDefaultServiceAccountCredential(
+      process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      projectId,
+    )
+    : null;
   initializeApp({
-    credential: credentialMode === "application-default"
-      ? applicationDefault()
-      : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
+    credential: applicationDefaultServiceAccount
+      ? cert(applicationDefaultServiceAccount)
+      : credentialMode === "application-default"
+        ? applicationDefault()
+        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
     projectId,
   });
   if (credentialMode === "application-default") {
-    console.error(dim(`  fleet writes use Application Default Credentials for ${projectId}.`));
+    console.error(dim(
+      applicationDefaultServiceAccount
+        ? `  fleet writes use the service-account key supplied through GOOGLE_APPLICATION_CREDENTIALS for ${projectId}.`
+        : `  fleet writes use Application Default Credentials for ${projectId}.`,
+    ));
   }
   db = getFirestore();
   KUBE_CONTEXT = target.kubeContext;

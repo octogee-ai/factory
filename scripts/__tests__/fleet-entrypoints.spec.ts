@@ -35,6 +35,7 @@ import {
   resolveFleetBuilderMutation,
   resolveFleetReleaseMutation,
   runForcedGatewayRestart,
+  fleetServiceAccountCredential,
   resolveFleetGatewayMutation,
   resolveFleetGatewayRestart,
   resolveFleetVerb,
@@ -976,6 +977,19 @@ describe("fleet CLI args", () => {
         GOOGLE_APPLICATION_CREDENTIALS: "/tmp/wif-credentials.json",
       }),
     ).toBe("application-default");
+  });
+
+  it("uses a service-account credential supplied through application-default configuration as a local signer", () => {
+    expect(fleetServiceAccountCredential({
+      type: "service_account",
+      client_email: "fleet@test.iam.gserviceaccount.com",
+      private_key: "private-key",
+    }, "octogee-test")).toEqual({
+      projectId: "octogee-test",
+      clientEmail: "fleet@test.iam.gserviceaccount.com",
+      privateKey: "private-key",
+    });
+    expect(fleetServiceAccountCredential({ type: "external_account" }, "octogee-test")).toBeNull();
   });
 
   it("maps normal CENTRAL release commands to journaled Admin API requests with deterministic idempotency keys", () => {

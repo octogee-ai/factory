@@ -459,7 +459,10 @@ function disableCodex(config) {
   config.plugins ??= {};
   config.plugins.allow = [...CUSTOMER_APPROVED_PLUGINS];
   config.plugins.entries ??= {};
-  config.plugins.entries.codex = { enabled: false };
+  config.plugins.entries.codex = {
+    enabled: false,
+    config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+  };
 }
 
 function setTerminal(config, enabled) {
