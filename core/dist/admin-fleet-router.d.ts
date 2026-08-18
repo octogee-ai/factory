@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { type Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile } from "@octogee/shared/types/glm";
+import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
@@ -12,12 +13,16 @@ export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "u
 export type GatewayPodCapacityType = "spot" | "on-demand";
 export interface GatewayPodDiagnostic {
     name: string;
+    uid: string | null;
+    replicaSetUid: string | null;
     phase: string;
     readyContainers: number;
     totalContainers: number;
     restarts: number;
     reason: string | null;
     nodeName: string | null;
+    instanceId: string | null;
+    nodePool: string | null;
     capacityType: GatewayPodCapacityType | null;
     ageMs: number | null;
 }
@@ -133,6 +138,7 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     gatewayClass: GatewayClass;
     imageProfile: GatewayImageProfile;
     disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
+    podReplacements: GatewayPodReplacementSummary | null;
 };
 export type AdminBuilderRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
 export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gatewaysById: ReadonlyMap<string, GlmDoc>, operationsById: ReadonlyMap<string, GlmDoc>, now: number): {

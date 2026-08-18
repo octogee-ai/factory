@@ -1313,6 +1313,7 @@ function reconcileFingerprintStableStringify(v: unknown): string {
 
 function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
   const { heartbeat, kubernetes, helm, ...rest } = data;
+  delete rest.podReplacements;
   const heartbeatRecord =
     heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
       ? heartbeat as Record<string, unknown>
@@ -1322,6 +1323,7 @@ function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
       ? { ...kubernetes as Record<string, unknown> }
       : {};
   delete kubernetesRecord.observedAt;
+  delete kubernetesRecord.pods;
   const helmRecord =
     helm !== null && typeof helm === "object" && !Array.isArray(helm)
       ? { ...helm as Record<string, unknown> }

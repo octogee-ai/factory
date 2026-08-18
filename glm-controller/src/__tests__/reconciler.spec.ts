@@ -190,6 +190,58 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
+  it("ignores pod-identity and loss-history changes on the runtime doc", () => {
+    const fingerprints = new Map<string, string>();
+    snapshotHasReconcileRelevantChange(
+      [{
+        type: "added",
+        doc: {
+          id: "default",
+          data: () => servingRuntime({
+            kubernetes: {
+              status: "ready",
+              totalPods: 1,
+              readyPods: 1,
+              observedAt: 1,
+              pods: [{ uid: "uid-a", name: "pod-a", replicaSetUid: "rs-1", nodeName: "node-1", instanceId: "1", nodePool: "nap" }],
+            },
+          }),
+        },
+      }],
+      fingerprints,
+    );
+
+    expect(
+      snapshotHasReconcileRelevantChange(
+        [{
+          type: "modified",
+          doc: {
+            id: "default",
+            data: () => servingRuntime({
+              kubernetes: {
+                status: "ready",
+                totalPods: 1,
+                readyPods: 1,
+                observedAt: 2,
+                pods: [{ uid: "uid-b", name: "pod-b", replicaSetUid: "rs-1", nodeName: "node-2", instanceId: "2", nodePool: "nap" }],
+              },
+              podReplacements: {
+                recentAt: [2],
+                lastAt: 2,
+                lastVacatedPodUid: "uid-a",
+                lastVacatedNodeName: "node-1",
+                lastVacatedInstanceId: "1",
+                lastVacatedNodePool: "nap",
+                total: 1,
+              },
+            }),
+          },
+        }],
+        fingerprints,
+      ),
+    ).toBe(false);
+  });
+
   it.each([
     ["status", { status: "unreachable", version: "abc1234" }],
     ["version", { status: "ready", version: "def5678" }],

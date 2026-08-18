@@ -143,6 +143,63 @@ describe("shapeOperationsHistoryRecord", () => {
 // Step 1 of the Fleet regroup (GATEWAY-RELEASES-SPEC): every row projects its
 // durable "gateway" identity so the client can group blue/green siblings under
 // one card without an id/route migration.
+describe("projectGatewaySummary — pod replacement projection", () => {
+  const HOUR = 60 * 60 * 1000;
+  const NOW = 1_770_000_000_000;
+
+  function summaryWith(podReplacements: unknown) {
+    return projectGatewaySummary(
+      { id: "ceckert-test-xs", data: () => ({ gatewayId: "ceckert-test-xs" }) },
+      { gatewayId: "ceckert-test-xs", podReplacements },
+      NOW,
+    );
+  }
+
+  it("derives the rolling counts against the request clock", () => {
+    const summary = summaryWith({
+      recentAt: [NOW - 30 * HOUR, NOW - 5 * HOUR, NOW - HOUR],
+      lastAt: NOW - HOUR,
+      lastVacatedPodUid: "uid-fresh",
+      lastVacatedNodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+      lastVacatedInstanceId: "7311234567890123456",
+      lastVacatedNodePool: "nap-1dx2tv8d",
+      total: 12,
+    });
+    expect(summary.podReplacements).toEqual({
+      count24h: 2,
+      count7d: 3,
+      lastAgeMs: HOUR,
+      lastVacatedNodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+      lastVacatedInstanceId: "7311234567890123456",
+      lastVacatedNodePool: "nap-1dx2tv8d",
+      total: 12,
+      warn: false,
+    });
+  });
+
+  it("flags a gateway that crossed the 24h warning threshold", () => {
+    const summary = summaryWith({
+      recentAt: [NOW - 3 * HOUR, NOW - 2 * HOUR, NOW - HOUR],
+      lastAt: NOW - HOUR,
+      lastVacatedPodUid: "uid-c",
+      lastVacatedNodeName: null,
+      lastVacatedInstanceId: null,
+      lastVacatedNodePool: null,
+      total: 3,
+    });
+    expect(summary.podReplacements?.count24h).toBe(3);
+    expect(summary.podReplacements?.warn).toBe(true);
+  });
+
+  it("projects null for a gateway Cowboy has not tracked yet", () => {
+    expect(summaryWith(undefined).podReplacements).toBeNull();
+  });
+
+  it("projects null rather than trusting a malformed stored record", () => {
+    expect(summaryWith({ recentAt: "lots", total: 3 }).podReplacements).toBeNull();
+  });
+});
+
 describe("projectGatewaySummary — gateway identity projection", () => {
   it("uses the explicit glmGateways.gateway field when present", () => {
     const summary = projectGatewaySummary(

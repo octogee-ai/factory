@@ -23,6 +23,7 @@ export interface KubeOps {
   readGatewayPodDiagnosticsBatch(opts: {
     namespace: string;
     gatewayIds: readonly string[];
+    includeReplicaSets?: boolean;
   }): Promise<Record<string, GatewayPodDiagnostics>>;
   deletePersistentVolumeClaim(opts: {
     namespace: string;
@@ -45,14 +46,39 @@ export interface KubeOps {
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
 export type GatewayPodCapacityType = "spot" | "on-demand";
 
+// GCE identity of the node a pod is on, captured at observation time. A Spot
+// preemption destroys the node, so the instance id can never be looked up after
+// the fact — it is only joinable to the octogee_spot_preemptions log metric if
+// it was already recorded while the node still existed.
+export interface GatewayNodeFacts {
+  capacityType: GatewayPodCapacityType;
+  instanceId: string | null;
+  nodePool: string | null;
+}
+
+// A gateway ReplicaSet as the apiserver reports it: what it wants
+// (spec.replicas) and what its controller currently counts (status.replicas).
+// It outlives its pods, so it is the record of intent that tells a pod lost to
+// a preemption apart from one removed by a roll, a restart, or a pause.
+export interface GatewayReplicaSetSummary {
+  uid: string;
+  name: string;
+  desiredReplicas: number;
+  observedReplicas: number;
+}
+
 export interface GatewayPodDiagnostic {
   name: string;
+  uid: string | null;
+  replicaSetUid: string | null;
   phase: string;
   readyContainers: number;
   totalContainers: number;
   restarts: number;
   reason: string | null;
   nodeName: string | null;
+  instanceId: string | null;
+  nodePool: string | null;
   capacityType: GatewayPodCapacityType | null;
   ageMs: number | null;
 }
@@ -66,6 +92,7 @@ export interface GatewayPodDiagnostics {
   onDemandPods: number;
   unknownCapacityPods: number;
   pods: GatewayPodDiagnostic[];
+  replicaSets?: GatewayReplicaSetSummary[];
   error?: string;
 }
 
@@ -141,39 +168,84 @@ function podConditionReason(status: Record<string, unknown>): string | null {
   return null;
 }
 
+function projectPodContainers(status: Record<string, unknown>): {
+  readyContainers: number;
+  totalContainers: number;
+  restarts: number;
+  reason: string | null;
+} {
+  const containerStatuses = Array.isArray(status.containerStatuses)
+    ? status.containerStatuses.filter(isRecord)
+    : [];
+  return {
+    readyContainers: containerStatuses.filter((c) => c.ready === true).length,
+    totalContainers: containerStatuses.length,
+    restarts: containerStatuses.reduce((sum, c) => sum + numberOrZero(c.restartCount), 0),
+    reason:
+      containerStatuses.map(containerWaitingReason).find((v): v is string => v !== null) ??
+      stringOrNull(status.reason) ??
+      podConditionReason(status),
+  };
+}
+
+function projectPodPlacement(
+  spec: Record<string, unknown>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
+): Pick<GatewayPodDiagnostic, "nodeName" | "instanceId" | "nodePool" | "capacityType"> {
+  const nodeName = stringOrNull(spec.nodeName);
+  const facts = nodeName ? factsByNodeName.get(nodeName) ?? null : null;
+  return {
+    nodeName,
+    instanceId: facts?.instanceId ?? null,
+    nodePool: facts?.nodePool ?? null,
+    capacityType: facts?.capacityType ?? null,
+  };
+}
+
+function replicaSetOwnerUid(metadata: Record<string, unknown>): string | null {
+  const owners = Array.isArray(metadata.ownerReferences) ? metadata.ownerReferences : [];
+  for (const owner of owners) {
+    if (isRecord(owner) && owner.kind === "ReplicaSet") return stringOrNull(owner.uid);
+  }
+  return null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function projectReplicaSetSummary(replicaSet: Record<string, unknown>): GatewayReplicaSetSummary | null {
+  const metadata = isRecord(replicaSet.metadata) ? replicaSet.metadata : {};
+  const spec = isRecord(replicaSet.spec) ? replicaSet.spec : {};
+  const status = isRecord(replicaSet.status) ? replicaSet.status : {};
+  const uid = stringOrNull(metadata.uid);
+  const name = stringOrNull(metadata.name);
+  if (!uid || !name) return null;
+  return {
+    uid,
+    name,
+    desiredReplicas: numberOrNull(spec.replicas) ?? 0,
+    observedReplicas: numberOrNull(status.replicas) ?? 0,
+  };
+}
+
 function projectPodDiagnostic(
   pod: Record<string, unknown>,
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
 ): GatewayPodDiagnostic {
   const metadata = isRecord(pod.metadata) ? pod.metadata : {};
   const spec = isRecord(pod.spec) ? pod.spec : {};
   const status = isRecord(pod.status) ? pod.status : {};
-  const containerStatuses = Array.isArray(status.containerStatuses)
-    ? status.containerStatuses.filter(isRecord)
-    : [];
-  const readyContainers = containerStatuses.filter((c) => c.ready === true).length;
-  const totalContainers = containerStatuses.length;
-  const restarts = containerStatuses.reduce(
-    (sum, c) => sum + numberOrZero(c.restartCount),
-    0,
-  );
-  const reason =
-    containerStatuses.map(containerWaitingReason).find((v): v is string => v !== null) ??
-    stringOrNull(status.reason) ??
-    podConditionReason(status);
   const createdAt = stringOrNull(metadata.creationTimestamp);
   const createdMs = createdAt ? Date.parse(createdAt) : NaN;
-  const nodeName = stringOrNull(spec.nodeName);
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
+    uid: stringOrNull(metadata.uid),
+    replicaSetUid: replicaSetOwnerUid(metadata),
     phase: stringOrNull(status.phase) ?? "Unknown",
-    readyContainers,
-    totalContainers,
-    restarts,
-    reason,
-    nodeName,
-    capacityType: nodeName ? capacityByNodeName.get(nodeName) ?? null : null,
+    ...projectPodContainers(status),
+    ...projectPodPlacement(spec, factsByNodeName),
     ageMs: Number.isFinite(createdMs) ? Math.max(0, now - createdMs) : null,
   };
 }
@@ -189,25 +261,30 @@ function kubeListRecords(
   return parsed.items.filter(isRecord);
 }
 
-function nodeCapacityByName(stdout: string): Map<string, GatewayPodCapacityType> {
-  const capacities = new Map<string, GatewayPodCapacityType>();
+function nodeFactsByName(stdout: string): Map<string, GatewayNodeFacts> {
+  const facts = new Map<string, GatewayNodeFacts>();
   for (const node of kubeListRecords(stdout, "nodes")) {
     const metadata = isRecord(node.metadata) ? node.metadata : {};
     const name = stringOrNull(metadata.name);
     if (!name) continue;
     const labels = isRecord(metadata.labels) ? metadata.labels : {};
+    const annotations = isRecord(metadata.annotations) ? metadata.annotations : {};
     const spot =
       labels["cloud.google.com/gke-spot"] === "true" ||
       labels["cloud.google.com/gke-preemptible"] === "true";
-    capacities.set(name, spot ? "spot" : "on-demand");
+    facts.set(name, {
+      capacityType: spot ? "spot" : "on-demand",
+      instanceId: stringOrNull(annotations["container.googleapis.com/instance_id"]),
+      nodePool: stringOrNull(labels["cloud.google.com/gke-nodepool"]),
+    });
   }
-  return capacities;
+  return facts;
 }
 
-async function readNodeCapacityByName(
+async function readNodeFactsByName(
   deps: KubeOpsRunnerDeps,
   podRecords: readonly Record<string, unknown>[],
-): Promise<Map<string, GatewayPodCapacityType>> {
+): Promise<Map<string, GatewayNodeFacts>> {
   const hasScheduledPod = podRecords.some((pod) => {
     const spec = isRecord(pod.spec) ? pod.spec : {};
     return stringOrNull(spec.nodeName) !== null;
@@ -221,16 +298,16 @@ async function readNodeCapacityByName(
       }`,
     );
   }
-  return nodeCapacityByName(result.stdout);
+  return nodeFactsByName(result.stdout);
 }
 
 function summarizePodRecords(
   podRecords: readonly Record<string, unknown>[],
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
 ): GatewayPodDiagnostics {
   const pods = podRecords.map((pod) =>
-    projectPodDiagnostic(pod, now, capacityByNodeName)
+    projectPodDiagnostic(pod, now, factsByNodeName)
   );
   const totalPods = pods.length;
   const readyPods = pods.filter(
@@ -261,36 +338,82 @@ function summarizePodRecords(
   };
 }
 
-function gatewayIdForPod(pod: Record<string, unknown>): string | null {
-  const metadata = isRecord(pod.metadata) ? pod.metadata : {};
+function gatewayIdForRecord(value: Record<string, unknown>): string | null {
+  const metadata = isRecord(value.metadata) ? value.metadata : {};
   const labels = isRecord(metadata.labels) ? metadata.labels : {};
   return stringOrNull(labels["gateway-instance"]);
+}
+
+function groupByGatewayId(
+  records: readonly Record<string, unknown>[],
+  gatewayIds: readonly string[],
+): Map<string, Record<string, unknown>[]> {
+  const requested = new Set(gatewayIds);
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const value of records) {
+    const gatewayId = gatewayIdForRecord(value);
+    if (!gatewayId || !requested.has(gatewayId)) continue;
+    const bucket = grouped.get(gatewayId) ?? [];
+    bucket.push(value);
+    grouped.set(gatewayId, bucket);
+  }
+  return grouped;
+}
+
+// The ReplicaSet list is optional context for the pod-loss accounting; a failure
+// to read it must not degrade the pod status observation the placement policy
+// depends on, so it is logged and the summaries are omitted rather than thrown.
+async function readGatewayReplicaSetsByGatewayId(
+  deps: KubeOpsRunnerDeps,
+  namespace: string,
+  gatewayIds: readonly string[],
+): Promise<Map<string, GatewayReplicaSetSummary[]> | null> {
+  const result = await deps.runKubectl([
+    "-n",
+    namespace,
+    "get",
+    "replicasets",
+    "-l",
+    "app=octogee-gateway",
+    "-o",
+    "json",
+  ]);
+  if (result.code !== 0) {
+    deps.log(
+      `[kube-ops] kubectl get replicasets ns=${namespace} failed (code=${result.code}); ` +
+        `pod-loss verdicts are deferred this observation: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+    return null;
+  }
+  const grouped = groupByGatewayId(kubeListRecords(result.stdout, "replicasets"), gatewayIds);
+  return new Map(
+    gatewayIds.map((gatewayId) => [
+      gatewayId,
+      (grouped.get(gatewayId) ?? [])
+        .map(projectReplicaSetSummary)
+        .filter((summary): summary is GatewayReplicaSetSummary => summary !== null),
+    ]),
+  );
 }
 
 function summarizeGatewayPodDiagnosticsBatch(
   podRecords: readonly Record<string, unknown>[],
   gatewayIds: readonly string[],
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
+  replicaSetsByGatewayId: ReadonlyMap<string, GatewayReplicaSetSummary[]> | null,
 ): Record<string, GatewayPodDiagnostics> {
-  const requested = new Set(gatewayIds);
-  const podsByGatewayId = new Map<string, Record<string, unknown>[]>();
-  for (const pod of podRecords) {
-    const gatewayId = gatewayIdForPod(pod);
-    if (!gatewayId || !requested.has(gatewayId)) continue;
-    const pods = podsByGatewayId.get(gatewayId) ?? [];
-    pods.push(pod);
-    podsByGatewayId.set(gatewayId, pods);
-  }
+  const podsByGatewayId = groupByGatewayId(podRecords, gatewayIds);
   return Object.fromEntries(
-    gatewayIds.map((gatewayId) => [
-      gatewayId,
-      summarizePodRecords(
+    gatewayIds.map((gatewayId) => {
+      const summary = summarizePodRecords(
         podsByGatewayId.get(gatewayId) ?? [],
         now,
-        capacityByNodeName,
-      ),
-    ]),
+        factsByNodeName,
+      );
+      const replicaSets = replicaSetsByGatewayId?.get(gatewayId);
+      return [gatewayId, replicaSets ? { ...summary, replicaSets } : summary];
+    }),
   );
 }
 
@@ -458,15 +581,15 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
         );
       }
       const podRecords = kubeListRecords(result.stdout, "pods");
-      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
+      const factsByNodeName = await readNodeFactsByName(deps, podRecords);
       return summarizePodRecords(
         podRecords,
         deps.now?.() ?? Date.now(),
-        capacityByNodeName,
+        factsByNodeName,
       );
     },
 
-    async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds }) {
+    async readGatewayPodDiagnosticsBatch({ namespace, gatewayIds, includeReplicaSets = false }) {
       const args = [
         "-n",
         namespace,
@@ -494,12 +617,18 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
         );
       }
       const podRecords = kubeListRecords(result.stdout, "pods");
-      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
+      const [factsByNodeName, replicaSetsByGatewayId] = await Promise.all([
+        readNodeFactsByName(deps, podRecords),
+        includeReplicaSets
+          ? readGatewayReplicaSetsByGatewayId(deps, namespace, gatewayIds)
+          : Promise.resolve(null),
+      ]);
       return summarizeGatewayPodDiagnosticsBatch(
         podRecords,
         gatewayIds,
         deps.now?.() ?? Date.now(),
-        capacityByNodeName,
+        factsByNodeName,
+        replicaSetsByGatewayId,
       );
     },
 

@@ -110,6 +110,10 @@
       "types": "./dist/types/gateway-releases.d.ts",
       "default": "./dist/types/gateway-releases.js"
     },
+    "./types/gateway-pod-replacements": {
+      "types": "./dist/types/gateway-pod-replacements.d.ts",
+      "default": "./dist/types/gateway-pod-replacements.js"
+    },
     "./types/gateway-mutable-config": {
       "types": "./dist/types/gateway-mutable-config.d.ts",
       "default": "./dist/types/gateway-mutable-config.js"

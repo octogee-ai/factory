@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
+import type {
+  GatewayPodPlacement,
+  GatewayPodReplacements,
+} from "./gateway-pod-replacements.js";
 import {
   projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
@@ -397,6 +401,7 @@ export interface GatewayRuntimeDoc {
   helm: GatewayHelmObservation;
   heartbeat: GatewayHeartbeatObservation;
   kubernetes?: GatewayKubernetesObservation;
+  podReplacements?: GatewayPodReplacements;
   lastError: { message: string | null; at: number | null };
 }
 
@@ -405,6 +410,11 @@ export interface GatewayKubernetesObservation {
   totalPods: number;
   readyPods: number;
   observedAt: number;
+  // The pods observed, each with its owning ReplicaSet and node placement. The
+  // next observation diffs against this to notice a pod that vanished, asks the
+  // ReplicaSet whether it still wanted that pod, and names the vacated GCE
+  // instance — which is unrecoverable once the node is gone.
+  pods?: GatewayPodPlacement[];
 }
 
 export function hasFreshReadyKubernetesObservation(
