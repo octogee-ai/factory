@@ -166,6 +166,8 @@ export interface GatewayPodDiagnostic {
   restarts: number;
   reason: string | null;
   nodeName: string | null;
+  instanceId: string | null;
+  nodePool: string | null;
   capacityType: GatewayPodCapacityType | null;
   ageMs: number | null;
 }

@@ -3,11 +3,24 @@ const DAY_MS = 24 * HOUR_MS;
 export const POD_REPLACEMENT_RECENT_WINDOW_MS = 7 * DAY_MS;
 export const POD_REPLACEMENT_WARNING_THRESHOLD_24H = 3;
 export const POD_REPLACEMENT_MAX_RETAINED = 64;
+export const GATEWAY_POD_REPLACEMENT_SCHEMA = "octogee.gateway-pod-replacement.v1";
+export const EMPTY_GATEWAY_POD_REPLACEMENTS = {
+    recentAt: [],
+    lastAt: null,
+    lastVacatedPodUid: null,
+    lastVacatedNodeName: null,
+    lastVacatedInstanceId: null,
+    lastVacatedNodePool: null,
+    total: 0,
+};
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function isEpochMs(value) {
     return typeof value === "number" && Number.isFinite(value);
+}
+function isNullableString(value) {
+    return value === null || typeof value === "string";
 }
 export function isGatewayPodReplacements(value) {
     if (!isRecord(value))
@@ -15,7 +28,10 @@ export function isGatewayPodReplacements(value) {
     return (Array.isArray(value.recentAt) &&
         value.recentAt.every(isEpochMs) &&
         (value.lastAt === null || isEpochMs(value.lastAt)) &&
-        (value.lastPodUid === null || typeof value.lastPodUid === "string") &&
+        isNullableString(value.lastVacatedPodUid) &&
+        isNullableString(value.lastVacatedNodeName) &&
+        isNullableString(value.lastVacatedInstanceId) &&
+        isNullableString(value.lastVacatedNodePool) &&
         typeof value.total === "number" &&
         Number.isSafeInteger(value.total) &&
         value.total >= 0);
@@ -27,14 +43,27 @@ function countWithin(recentAt, now, windowMs) {
 }
 export function summarizeGatewayPodReplacements(value, now) {
     if (!value) {
-        return { count24h: 0, count7d: 0, lastAt: null, lastPodUid: null, total: 0, warn: false };
+        return {
+            count24h: 0,
+            count7d: 0,
+            lastAt: null,
+            lastVacatedPodUid: null,
+            lastVacatedNodeName: null,
+            lastVacatedInstanceId: null,
+            lastVacatedNodePool: null,
+            total: 0,
+            warn: false,
+        };
     }
     const count24h = countWithin(value.recentAt, now, DAY_MS);
     return {
         count24h,
         count7d: countWithin(value.recentAt, now, POD_REPLACEMENT_RECENT_WINDOW_MS),
         lastAt: value.lastAt,
-        lastPodUid: value.lastPodUid,
+        lastVacatedPodUid: value.lastVacatedPodUid,
+        lastVacatedNodeName: value.lastVacatedNodeName,
+        lastVacatedInstanceId: value.lastVacatedInstanceId,
+        lastVacatedNodePool: value.lastVacatedNodePool,
         total: value.total,
         warn: count24h >= POD_REPLACEMENT_WARNING_THRESHOLD_24H,
     };

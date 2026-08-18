@@ -159,14 +159,20 @@ describe("projectGatewaySummary — pod replacement projection", () => {
     const summary = summaryWith({
       recentAt: [NOW - 30 * HOUR, NOW - 5 * HOUR, NOW - HOUR],
       lastAt: NOW - HOUR,
-      lastPodUid: "uid-fresh",
+      lastVacatedPodUid: "uid-fresh",
+      lastVacatedNodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+      lastVacatedInstanceId: "7311234567890123456",
+      lastVacatedNodePool: "nap-1dx2tv8d",
       total: 12,
     });
     expect(summary.podReplacements).toEqual({
       count24h: 2,
       count7d: 3,
       lastAt: NOW - HOUR,
-      lastPodUid: "uid-fresh",
+      lastVacatedPodUid: "uid-fresh",
+      lastVacatedNodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+      lastVacatedInstanceId: "7311234567890123456",
+      lastVacatedNodePool: "nap-1dx2tv8d",
       total: 12,
       warn: false,
     });
@@ -176,7 +182,10 @@ describe("projectGatewaySummary — pod replacement projection", () => {
     const summary = summaryWith({
       recentAt: [NOW - 3 * HOUR, NOW - 2 * HOUR, NOW - HOUR],
       lastAt: NOW - HOUR,
-      lastPodUid: "uid-c",
+      lastVacatedPodUid: "uid-c",
+      lastVacatedNodeName: null,
+      lastVacatedInstanceId: null,
+      lastVacatedNodePool: null,
       total: 3,
     });
     expect(summary.podReplacements?.count24h).toBe(3);

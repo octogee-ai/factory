@@ -1,4 +1,4 @@
-import type { GatewayPodReplacements } from "./gateway-pod-replacements.js";
+import type { GatewayPodPlacement, GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
 import type { GatewayDesiredStatus, ManagedBy } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
@@ -154,7 +154,7 @@ export interface GatewayKubernetesObservation {
     totalPods: number;
     readyPods: number;
     observedAt: number;
-    podUids?: string[];
+    pods?: GatewayPodPlacement[];
     planToken?: string;
 }
 export declare function hasFreshReadyKubernetesObservation(runtime: GatewayRuntimeDoc, nowMs: number, maxAgeMs: number): boolean;

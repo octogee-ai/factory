@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import type { GatewayPodPlacement } from "@octogee/shared/types/gateway-pod-replacements";
 import {
   gatewayPlanToken,
   nextPodReplacementTransition,
-  observedPodUids,
+  observedPodPlacements,
 } from "./pod-replacement-tracking.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -16,25 +17,35 @@ const RUNNING = gatewayPlanToken({
   desiredStatus: "running",
 });
 
+function placement(uid: string, overrides: Partial<GatewayPodPlacement> = {}): GatewayPodPlacement {
+  return {
+    uid,
+    nodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+    instanceId: "7311234567890123456",
+    nodePool: "nap-1dx2tv8d",
+    ...overrides,
+  };
+}
+
 function transition(overrides: {
-  previousPodUids?: readonly string[] | null;
+  previousPlacements?: readonly GatewayPodPlacement[] | null;
   previousPlanToken?: string | null;
   previous?: Parameters<typeof nextPodReplacementTransition>[0]["previous"];
-  observedPodUids?: readonly string[] | null;
+  observedPlacements?: readonly GatewayPodPlacement[] | null;
   planToken?: string;
   now?: number;
 }) {
   return nextPodReplacementTransition({
-    previousPodUids: overrides.previousPodUids === undefined
-      ? ["uid-a"]
-      : overrides.previousPodUids,
+    previousPlacements: overrides.previousPlacements === undefined
+      ? [placement("uid-a")]
+      : overrides.previousPlacements,
     previousPlanToken: overrides.previousPlanToken === undefined
       ? RUNNING
       : overrides.previousPlanToken,
     previous: overrides.previous ?? null,
-    observedPodUids: overrides.observedPodUids === undefined
-      ? ["uid-b"]
-      : overrides.observedPodUids,
+    observedPlacements: overrides.observedPlacements === undefined
+      ? [placement("uid-b")]
+      : overrides.observedPlacements,
     planToken: overrides.planToken ?? RUNNING,
     now: overrides.now ?? NOW,
   });
@@ -67,46 +78,94 @@ describe("gatewayPlanToken", () => {
   });
 });
 
-describe("observedPodUids", () => {
+describe("observedPodPlacements", () => {
   it("returns null when diagnostics are unreadable so nothing is attributed", () => {
-    expect(observedPodUids({ status: "unknown", totalPods: 0, readyPods: 0 })).toBeNull();
-    expect(observedPodUids(undefined)).toBeNull();
-    expect(observedPodUids({
+    expect(observedPodPlacements({ status: "unknown", totalPods: 0, readyPods: 0 })).toBeNull();
+    expect(observedPodPlacements(undefined)).toBeNull();
+    expect(observedPodPlacements({
       status: "ready", totalPods: 1, readyPods: 1, error: "kubectl exploded",
     })).toBeNull();
   });
 
   it("returns an empty set for a legitimately observed missing pod", () => {
-    expect(observedPodUids({ status: "missing", totalPods: 0, readyPods: 0, pods: [] }))
+    expect(observedPodPlacements({ status: "missing", totalPods: 0, readyPods: 0, pods: [] }))
       .toEqual([]);
   });
 
+  it("carries the node identity needed to join a preemption record", () => {
+    expect(observedPodPlacements({
+      status: "ready",
+      totalPods: 1,
+      readyPods: 1,
+      pods: [{
+        uid: "uid-a",
+        nodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+        instanceId: "7311234567890123456",
+        nodePool: "nap-1dx2tv8d",
+      }],
+    })).toEqual([{
+      uid: "uid-a",
+      nodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+      instanceId: "7311234567890123456",
+      nodePool: "nap-1dx2tv8d",
+    }]);
+  });
+
+  it("tolerates a pod that has not been scheduled onto a node yet", () => {
+    expect(observedPodPlacements({
+      status: "not-ready", totalPods: 1, readyPods: 0, pods: [{ uid: "uid-a" }],
+    })).toEqual([{ uid: "uid-a", nodeName: null, instanceId: null, nodePool: null }]);
+  });
+
   it("sorts and de-duplicates identities so set comparison is order-independent", () => {
-    expect(observedPodUids({
+    const placements = observedPodPlacements({
       status: "ready",
       totalPods: 3,
       readyPods: 3,
       pods: [{ uid: "uid-c" }, { uid: "uid-a" }, { uid: "uid-c" }],
-    })).toEqual(["uid-a", "uid-c"]);
+    });
+    expect(placements?.map((pod) => pod.uid)).toEqual(["uid-a", "uid-c"]);
   });
 
   it("refuses to guess when a pod carries no uid", () => {
-    expect(observedPodUids({
+    expect(observedPodPlacements({
       status: "ready", totalPods: 1, readyPods: 1, pods: [{ uid: null }],
     })).toBeNull();
   });
 });
 
 describe("nextPodReplacementTransition", () => {
-  it("counts pod churn when the desired state did not move", () => {
+  it("counts a vanished pod when the desired state did not move", () => {
     const result = transition({});
     expect(result).not.toBeNull();
-    expect(result!.replacedCount).toBe(1);
+    expect(result!.vacated.map((pod) => pod.uid)).toEqual(["uid-a"]);
     expect(result!.replacements.total).toBe(1);
     expect(result!.replacements.recentAt).toEqual([NOW]);
     expect(result!.replacements.lastAt).toBe(NOW);
-    expect(result!.replacements.lastPodUid).toBe("uid-b");
-    expect(result!.podUids).toEqual(["uid-b"]);
+    expect(result!.placements.map((pod) => pod.uid)).toEqual(["uid-b"]);
+  });
+
+  it("records the vacated node identity that joins to the preemption record", () => {
+    const result = transition({
+      previousPlacements: [placement("uid-a", {
+        nodeName: "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd",
+        instanceId: "7311234567890123456",
+        nodePool: "nap-1dx2tv8d",
+      })],
+    });
+    expect(result!.replacements.lastVacatedPodUid).toBe("uid-a");
+    expect(result!.replacements.lastVacatedNodeName)
+      .toBe("gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-q7zd");
+    expect(result!.replacements.lastVacatedInstanceId).toBe("7311234567890123456");
+    expect(result!.replacements.lastVacatedNodePool).toBe("nap-1dx2tv8d");
+  });
+
+  it("attributes the vacated node even when no successor pod exists yet", () => {
+    const result = transition({ observedPlacements: [] });
+    expect(result!.vacated.map((pod) => pod.uid)).toEqual(["uid-a"]);
+    expect(result!.replacements.total).toBe(1);
+    expect(result!.replacements.lastVacatedInstanceId).toBe("7311234567890123456");
+    expect(result!.placements).toEqual([]);
   });
 
   it("does not count pod churn across a release change", () => {
@@ -117,11 +176,11 @@ describe("nextPodReplacementTransition", () => {
         desiredStatus: "running",
       }),
     });
-    expect(result!.replacedCount).toBe(0);
+    expect(result!.vacated).toEqual([]);
     expect(result!.replacements.total).toBe(0);
     expect(result!.replacements.recentAt).toEqual([]);
-    expect(result!.replacements.lastPodUid).toBeNull();
-    expect(result!.podUids).toEqual(["uid-b"]);
+    expect(result!.replacements.lastVacatedPodUid).toBeNull();
+    expect(result!.placements.map((pod) => pod.uid)).toEqual(["uid-b"]);
   });
 
   it("does not count pod churn across a desired-status change", () => {
@@ -132,63 +191,82 @@ describe("nextPodReplacementTransition", () => {
         desiredStatus: "paused",
       }),
     });
-    expect(result!.replacedCount).toBe(0);
+    expect(result!.vacated).toEqual([]);
+    expect(result!.replacements.total).toBe(0);
   });
 
   it("does not count the first observation of a gateway", () => {
-    const result = transition({ previousPodUids: null, previousPlanToken: null });
-    expect(result!.replacedCount).toBe(0);
-    expect(result!.podUids).toEqual(["uid-b"]);
+    const result = transition({ previousPlacements: null, previousPlanToken: null });
+    expect(result!.vacated).toEqual([]);
+    expect(result!.placements.map((pod) => pod.uid)).toEqual(["uid-b"]);
   });
 
   it("does not count an unchanged pod identity set", () => {
-    const result = transition({ previousPodUids: ["uid-a"], observedPodUids: ["uid-a"] });
-    expect(result!.replacedCount).toBe(0);
+    const result = transition({
+      previousPlacements: [placement("uid-a")],
+      observedPlacements: [placement("uid-a")],
+    });
+    expect(result!.vacated).toEqual([]);
+    expect(result!.replacements.total).toBe(0);
   });
 
-  it("does not count a pod that only disappeared", () => {
-    const result = transition({ previousPodUids: ["uid-a"], observedPodUids: [] });
-    expect(result!.replacedCount).toBe(0);
-    expect(result!.podUids).toEqual([]);
+  it("does not count a newly appeared pod on its own", () => {
+    const result = transition({
+      previousPlacements: [],
+      observedPlacements: [placement("uid-b")],
+    });
+    expect(result!.vacated).toEqual([]);
+    expect(result!.replacements.total).toBe(0);
   });
 
-  it("counts the replacement once when the pod reappears after a gap", () => {
-    const gone = transition({ previousPodUids: ["uid-a"], observedPodUids: [] });
+  it("counts the loss once across the empty window and its recovery", () => {
+    const gone = transition({
+      previousPlacements: [placement("uid-a")],
+      observedPlacements: [],
+    });
     const back = transition({
-      previousPodUids: gone!.podUids,
+      previousPlacements: gone!.placements,
       previous: gone!.replacements,
-      observedPodUids: ["uid-b"],
+      observedPlacements: [placement("uid-b")],
       now: NOW + HOUR,
     });
-    expect(back!.replacedCount).toBe(1);
+    expect(gone!.replacements.total).toBe(1);
     expect(back!.replacements.total).toBe(1);
+    expect(back!.replacements.lastVacatedPodUid).toBe("uid-a");
   });
 
-  it("counts each newly observed identity when several pods are replaced at once", () => {
+  it("counts each vanished identity when several pods are lost at once", () => {
     const result = transition({
-      previousPodUids: ["uid-a", "uid-b"],
-      observedPodUids: ["uid-c", "uid-d"],
+      previousPlacements: [placement("uid-a"), placement("uid-b")],
+      observedPlacements: [placement("uid-c")],
     });
-    expect(result!.replacedCount).toBe(2);
+    expect(result!.vacated.map((pod) => pod.uid)).toEqual(["uid-a", "uid-b"]);
     expect(result!.replacements.recentAt).toEqual([NOW, NOW]);
+    expect(result!.replacements.total).toBe(2);
   });
 
   it("skips accounting entirely when diagnostics are unreadable", () => {
-    expect(transition({ observedPodUids: null })).toBeNull();
+    expect(transition({ observedPlacements: null })).toBeNull();
   });
 
-  it("counts the replacement after diagnostics recover from an unreadable window", () => {
-    expect(transition({ observedPodUids: null })).toBeNull();
-    const recovered = transition({ previousPodUids: ["uid-a"], observedPodUids: ["uid-b"] });
-    expect(recovered!.replacedCount).toBe(1);
+  it("counts the loss after diagnostics recover from an unreadable window", () => {
+    expect(transition({ observedPlacements: null })).toBeNull();
+    const recovered = transition({
+      previousPlacements: [placement("uid-a")],
+      observedPlacements: [placement("uid-b")],
+    });
+    expect(recovered!.replacements.total).toBe(1);
   });
 
-  it("carries prior history forward and appends the new replacement", () => {
+  it("carries prior history forward and appends the new loss", () => {
     const result = transition({
       previous: {
         recentAt: [NOW - 2 * HOUR],
         lastAt: NOW - 2 * HOUR,
-        lastPodUid: "uid-a",
+        lastVacatedPodUid: "uid-old",
+        lastVacatedNodeName: "node-old",
+        lastVacatedInstanceId: "111",
+        lastVacatedNodePool: "nap-old",
         total: 5,
       },
     });
@@ -201,7 +279,10 @@ describe("nextPodReplacementTransition", () => {
       previous: {
         recentAt: [NOW - 8 * DAY, NOW - 2 * DAY],
         lastAt: NOW - 2 * DAY,
-        lastPodUid: "uid-a",
+        lastVacatedPodUid: "uid-old",
+        lastVacatedNodeName: null,
+        lastVacatedInstanceId: null,
+        lastVacatedNodePool: null,
         total: 7,
       },
     });
@@ -214,7 +295,10 @@ describe("nextPodReplacementTransition", () => {
       previous: {
         recentAt: Array.from({ length: 200 }, (_, index) => NOW - 200 * 1000 + index),
         lastAt: NOW - 1000,
-        lastPodUid: "uid-a",
+        lastVacatedPodUid: "uid-old",
+        lastVacatedNodeName: null,
+        lastVacatedInstanceId: null,
+        lastVacatedNodePool: null,
         total: 200,
       },
     });
@@ -225,9 +309,9 @@ describe("nextPodReplacementTransition", () => {
 
   it("treats identity order as insignificant", () => {
     const result = transition({
-      previousPodUids: ["uid-b", "uid-a"],
-      observedPodUids: ["uid-a", "uid-b"],
+      previousPlacements: [placement("uid-b"), placement("uid-a")],
+      observedPlacements: [placement("uid-a"), placement("uid-b")],
     });
-    expect(result!.replacedCount).toBe(0);
+    expect(result!.vacated).toEqual([]);
   });
 });

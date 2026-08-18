@@ -29,11 +29,15 @@ import {
   projectGatewayDesiredRootForGateway,
   type PlacementFirestore,
 } from "@octogee/shared/types/gateway-releases";
-import { isGatewayPodReplacements } from "@octogee/shared/types/gateway-pod-replacements";
+import {
+  GATEWAY_POD_REPLACEMENT_SCHEMA,
+  isGatewayPodReplacements,
+  type GatewayPodPlacement,
+} from "@octogee/shared/types/gateway-pod-replacements";
 import {
   gatewayPlanToken,
   nextPodReplacementTransition,
-  observedPodUids,
+  observedPodPlacements,
 } from "./pod-replacement-tracking.js";
 import {
   parseSharedGatewayPoolConfig,
@@ -128,7 +132,12 @@ export interface PlacementPolicyPodDiagnostics {
   status: string;
   totalPods: number;
   readyPods: number;
-  pods?: ReadonlyArray<{ uid?: string | null }>;
+  pods?: ReadonlyArray<{
+    uid?: string | null;
+    nodeName?: string | null;
+    instanceId?: string | null;
+    nodePool?: string | null;
+  }>;
   error?: string;
 }
 
@@ -2500,34 +2509,69 @@ interface KubernetesObservation {
   readyPods: number;
 }
 
-function storedPodUids(stored: Record<string, unknown> | null): string[] | null {
-  const uids = stored?.podUids;
-  if (!Array.isArray(uids)) return null;
-  return uids.every((uid) => typeof uid === "string") ? uids as string[] : null;
+// Structured record mirroring octogee.disruption.v1: emitted to stdout so Cloud
+// Logging can extract gateway_id / instance_id / node_pool as log-metric labels.
+// instance_id is the join key against octogee_spot_preemptions, which knows the
+// preempted instance but not which gateway was running on it.
+export interface GatewayPodReplacementRecord {
+  schema: typeof GATEWAY_POD_REPLACEMENT_SCHEMA;
+  recordType: "gateway_pod_replacement";
+  observedAt: string;
+  namespace: string | null;
+  gatewayId: string;
+  planToken: string;
+  vacatedPodUid: string;
+  nodeName: string | null;
+  instanceId: string | null;
+  nodePool: string | null;
+  total: number;
+}
+
+function emitGatewayPodReplacementRecord(value: GatewayPodReplacementRecord): void {
+  console.log(JSON.stringify(value));
+}
+
+function storedPodPlacements(
+  stored: Record<string, unknown> | null,
+): GatewayPodPlacement[] | null {
+  const pods = stored?.pods;
+  if (!Array.isArray(pods)) return null;
+  const placements: GatewayPodPlacement[] = [];
+  for (const pod of pods) {
+    const entry = record(pod);
+    if (!entry || typeof entry.uid !== "string") return null;
+    placements.push({
+      uid: entry.uid,
+      nodeName: typeof entry.nodeName === "string" ? entry.nodeName : null,
+      instanceId: typeof entry.instanceId === "string" ? entry.instanceId : null,
+      nodePool: typeof entry.nodePool === "string" ? entry.nodePool : null,
+    });
+  }
+  return placements;
 }
 
 // A Spot preemption replaces the pod without changing readyPods or the restart
 // count, so pod identity has to be part of the freshness comparison — otherwise
 // a replacement inside the refresh interval is skipped and never recorded.
-function samePodUids(
+function samePodPlacements(
   stored: Record<string, unknown> | null,
-  observed: readonly string[] | null,
+  observed: readonly GatewayPodPlacement[] | null,
 ): boolean {
   if (observed === null) return true;
-  const previous = storedPodUids(stored);
+  const previous = storedPodPlacements(stored);
   if (previous === null) return false;
   return previous.length === observed.length &&
-    previous.every((uid, index) => uid === observed[index]);
+    previous.every((pod, index) => pod.uid === observed[index]?.uid);
 }
 
 function kubernetesObservationIsCurrent(input: {
   stored: unknown;
   observed: KubernetesObservation;
-  observedUids: readonly string[] | null;
+  observedPlacements: readonly GatewayPodPlacement[] | null;
   planToken: string | null;
   now: number;
 }): boolean {
-  const { observed, observedUids, planToken, now } = input;
+  const { observed, observedPlacements, planToken, now } = input;
   const current = record(input.stored);
   if (!current) return false;
   const observedAt = current.observedAt;
@@ -2536,7 +2580,7 @@ function kubernetesObservationIsCurrent(input: {
   return current.status === observed.status &&
     current.totalPods === observed.totalPods &&
     current.readyPods === observed.readyPods &&
-    samePodUids(current, observedUids) &&
+    samePodPlacements(current, observedPlacements) &&
     (planToken === null || current.planToken === planToken);
 }
 
@@ -2548,6 +2592,8 @@ export async function persistKubernetesObservations(
   options: {
     planTokenByGatewayId?: Readonly<Record<string, string>>;
     log?: (message: string) => void;
+    emitReplacement?: (record: GatewayPodReplacementRecord) => void;
+    namespace?: string;
   } = {},
 ): Promise<void> {
   if (runtimeDocuments.length === 0) return;
@@ -2558,13 +2604,13 @@ export async function persistKubernetesObservations(
       totalPods: diagnostics?.totalPods ?? 0,
       readyPods: diagnostics?.readyPods ?? 0,
     };
-    const observedUids = observedPodUids(diagnostics);
+    const observedPlacements = observedPodPlacements(diagnostics);
     const planToken = options.planTokenByGatewayId?.[runtimeDocument.id] ?? null;
     const scanned = record(runtimeDocument.data());
     if (kubernetesObservationIsCurrent({
       stored: scanned?.kubernetes,
       observed,
-      observedUids,
+      observedPlacements,
       planToken,
       now,
     })) return;
@@ -2574,21 +2620,36 @@ export async function persistKubernetesObservations(
       if (!current.exists || !isGatewayRuntimeDoc(data)) return;
       const storedKubernetes = record(data.kubernetes);
       const transition = planToken === null ? null : nextPodReplacementTransition({
-        previousPodUids: storedPodUids(storedKubernetes),
+        previousPlacements: storedPodPlacements(storedKubernetes),
         previousPlanToken: typeof storedKubernetes?.planToken === "string"
           ? storedKubernetes.planToken
           : null,
         previous: isGatewayPodReplacements(data.podReplacements) ? data.podReplacements : null,
-        observedPodUids: observedUids,
+        observedPlacements,
         planToken,
         now,
       });
-      if (transition !== null && transition.replacedCount > 0) {
-        options.log?.(
-          `[placement-policy] ${runtimeDocument.id} observed ${transition.replacedCount} ` +
-            `unplanned pod replacement(s) at plan ${planToken}; ` +
-            `pod=${transition.replacements.lastPodUid} total=${transition.replacements.total}`,
-        );
+      if (planToken !== null && transition !== null) {
+        for (const vacated of transition.vacated) {
+          options.log?.(
+            `[placement-policy] ${runtimeDocument.id} lost pod ${vacated.uid} with no ` +
+              `desired-state change at plan ${planToken}; node=${vacated.nodeName} ` +
+              `instance=${vacated.instanceId} nodePool=${vacated.nodePool}`,
+          );
+          (options.emitReplacement ?? emitGatewayPodReplacementRecord)({
+            schema: GATEWAY_POD_REPLACEMENT_SCHEMA,
+            recordType: "gateway_pod_replacement",
+            observedAt: new Date(now).toISOString(),
+            namespace: options.namespace ?? null,
+            gatewayId: runtimeDocument.id,
+            planToken,
+            vacatedPodUid: vacated.uid,
+            nodeName: vacated.nodeName,
+            instanceId: vacated.instanceId,
+            nodePool: vacated.nodePool,
+            total: transition.replacements.total,
+          });
+        }
       }
       transaction.set(runtimeDocument.ref, transition === null
         ? { kubernetes: { ...observed, observedAt: now } }
@@ -2596,7 +2657,7 @@ export async function persistKubernetesObservations(
             kubernetes: {
               ...observed,
               observedAt: now,
-              podUids: transition.podUids,
+              pods: transition.placements,
               planToken: transition.planToken,
             },
             podReplacements: transition.replacements,
@@ -2753,6 +2814,7 @@ async function readPlacementPolicySnapshot(
       return root ? [[doc.id, gatewayPlanToken(root)]] : [];
     })),
     log: input.log,
+    namespace: input.namespace,
   });
   const assignments = assignmentDocs
     .map(placementAssignmentFromDocument)

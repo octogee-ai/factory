@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
-import type { GatewayPodReplacements } from "./gateway-pod-replacements.js";
+import type {
+  GatewayPodPlacement,
+  GatewayPodReplacements,
+} from "./gateway-pod-replacements.js";
 import {
   projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
@@ -407,10 +410,11 @@ export interface GatewayKubernetesObservation {
   totalPods: number;
   readyPods: number;
   observedAt: number;
-  // Pod identities and the desired-state fingerprint they were observed under.
-  // Together they let the next observation tell an unplanned pod replacement
-  // apart from a roll, a pause, or a drain.
-  podUids?: string[];
+  // Pod identities with their node placement, plus the desired-state fingerprint
+  // they were observed under. Together they let the next observation tell an
+  // unplanned pod loss apart from a roll, a pause, or a drain — and name the GCE
+  // instance that was vacated, which is unrecoverable once the node is gone.
+  pods?: GatewayPodPlacement[];
   planToken?: string;
 }
 

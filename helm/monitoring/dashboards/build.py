@@ -740,6 +740,14 @@ def d_spot_disruptions():
         "https://console.cloud.google.com/logs/query?project=octogee&query="
         "log_id%28%22events%22%29%0AjsonPayload.reason%3D%22NodeShutdown%22"
     )
+    # Interleaves the audit preemption records with Cowboy's pod-loss records so
+    # the operator can match a preempted instance_id to the gateway that was on it.
+    correlation_query = (
+        "https://console.cloud.google.com/logs/query?project=octogee&query="
+        "%28log_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%20AND%20"
+        "protoPayload.methodName%3D%22compute.instances.preempted%22%29%20OR%20"
+        "jsonPayload.schema%3D%22octogee.gateway-pod-replacement.v1%22"
+    )
     p = [
         text("What this board proves", (
             "This is the substrate view for Spot and Kubernetes disruption. **A real Spot preemption is only "
@@ -747,7 +755,13 @@ def d_spot_disruptions():
             "are correlated observations; `FailedScheduling: preemption` is scheduler fit logic, not Spot proof.\n\n"
             "The controller emits `octogee.disruption.v1` JSON records with node UID, provider/instance ID, "
             "capacity class, taints, gateway identity, assignment roster, and active Cowboy operations.\n\n"
-            f"[Authoritative Spot Audit Logs]({logs_query}) · [Kubernetes NodeShutdown events]({events_query})"
+            "The audit metric knows **which instance** was preempted but not which gateway was on it. Cowboy "
+            "records each gateway pod's instance id while the node still exists and emits "
+            "`octogee.gateway-pod-replacement.v1` when that pod disappears with no desired-state change, so "
+            "`instance_id` joins the two. Pod `RESTARTS` stays 0 through a preemption and Kubernetes events "
+            "expire in ~1h — pod age is only a point-in-time hint.\n\n"
+            f"[Authoritative Spot Audit Logs]({logs_query}) · [Kubernetes NodeShutdown events]({events_query}) · "
+            f"[Preemption ↔ gateway correlation]({correlation_query})"
         ), h=7),
         row("Current placement").copy(),
         stat("Spot nodes", [f'sum(glm_disruption_nodes{{namespace="{NS}",capacity_class="spot"}}) or count(kube_node_labels{{label_cloud_google_com_gke_spot="true"}}) or vector(0)'],
@@ -771,6 +785,12 @@ def d_spot_disruptions():
         cloud_panel("Structured disruption records by cause", "logging.googleapis.com/user/octogee_disruption_records",
                      unit="short", w=12, h=8, group_bys=["metric.label.cause", "metric.label.capacity_class"], legend=True,
                      desc="Controller observations from Kubernetes Events; these are not independently authoritative Spot confirmations."),
+        cloud_panel("Unplanned gateway pod losses by gateway", "logging.googleapis.com/user/octogee_gateway_pod_replacements",
+                     unit="short", w=12, h=8, group_bys=["metric.label.gateway_id", "metric.label.node_pool"], legend=True,
+                     desc="Gateway pods that vanished with no desired-state change (no roll, pause, or drain). Names the gateway a preemption hit; match metric.label.instance_id against the audit metric to confirm Spot as the cause."),
+        cloud_panel("Unplanned gateway pod losses by vacated instance", "logging.googleapis.com/user/octogee_gateway_pod_replacements",
+                     unit="short", w=12, h=8, group_bys=["metric.label.instance_id"], legend=True,
+                     desc="Join key against octogee_spot_preemptions: an instance id appearing in both is a confirmed Spot preemption of that gateway."),
         row("Kubernetes signals"),
         ts("Controller observations by cause", [(f'sum(rate(glm_disruption_observations_total{{namespace="{NS}"}}[15m])) by (cause)', "{{cause}}")], unit="ops", legend=True),
         ts("Node conditions", [("sum(kube_node_status_condition{condition=\"Ready\",status=\"false\"})", "NotReady"), ("sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "Ready")], legend=True),
@@ -780,6 +800,10 @@ def d_spot_disruptions():
         ts("Cowboy reconcile failures", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}",result="fail"}}[15m]))', "fail/s")], legend=True),
         text("Action guide", (
             "- `compute.instances.preempted` + a node/pod event: **confirmed Spot preemption**.\n"
+            "- Same `instance_id` in `octogee_gateway_pod_replacements` and `octogee_spot_preemptions`: "
+            "**confirmed Spot preemption of that named gateway**.\n"
+            "- An unplanned pod loss with no matching audit record is a node repair, an eviction, or an "
+            "OOM-kill — the counter proves the loss, not the cause.\n"
             "- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n"
             "- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n"
             "- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n"

@@ -45,6 +45,16 @@ export interface KubeOps {
 export type GatewayPodDiagnosticsStatus = "ready" | "not-ready" | "missing" | "unknown";
 export type GatewayPodCapacityType = "spot" | "on-demand";
 
+// GCE identity of the node a pod is on, captured at observation time. A Spot
+// preemption destroys the node, so the instance id can never be looked up after
+// the fact — it is only joinable to the octogee_spot_preemptions log metric if
+// it was already recorded while the node still existed.
+export interface GatewayNodeFacts {
+  capacityType: GatewayPodCapacityType;
+  instanceId: string | null;
+  nodePool: string | null;
+}
+
 export interface GatewayPodDiagnostic {
   name: string;
   uid: string | null;
@@ -54,6 +64,8 @@ export interface GatewayPodDiagnostic {
   restarts: number;
   reason: string | null;
   nodeName: string | null;
+  instanceId: string | null;
+  nodePool: string | null;
   capacityType: GatewayPodCapacityType | null;
   ageMs: number | null;
 }
@@ -142,40 +154,56 @@ function podConditionReason(status: Record<string, unknown>): string | null {
   return null;
 }
 
+function projectPodContainers(status: Record<string, unknown>): {
+  readyContainers: number;
+  totalContainers: number;
+  restarts: number;
+  reason: string | null;
+} {
+  const containerStatuses = Array.isArray(status.containerStatuses)
+    ? status.containerStatuses.filter(isRecord)
+    : [];
+  return {
+    readyContainers: containerStatuses.filter((c) => c.ready === true).length,
+    totalContainers: containerStatuses.length,
+    restarts: containerStatuses.reduce((sum, c) => sum + numberOrZero(c.restartCount), 0),
+    reason:
+      containerStatuses.map(containerWaitingReason).find((v): v is string => v !== null) ??
+      stringOrNull(status.reason) ??
+      podConditionReason(status),
+  };
+}
+
+function projectPodPlacement(
+  spec: Record<string, unknown>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
+): Pick<GatewayPodDiagnostic, "nodeName" | "instanceId" | "nodePool" | "capacityType"> {
+  const nodeName = stringOrNull(spec.nodeName);
+  const facts = nodeName ? factsByNodeName.get(nodeName) ?? null : null;
+  return {
+    nodeName,
+    instanceId: facts?.instanceId ?? null,
+    nodePool: facts?.nodePool ?? null,
+    capacityType: facts?.capacityType ?? null,
+  };
+}
+
 function projectPodDiagnostic(
   pod: Record<string, unknown>,
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
 ): GatewayPodDiagnostic {
   const metadata = isRecord(pod.metadata) ? pod.metadata : {};
   const spec = isRecord(pod.spec) ? pod.spec : {};
   const status = isRecord(pod.status) ? pod.status : {};
-  const containerStatuses = Array.isArray(status.containerStatuses)
-    ? status.containerStatuses.filter(isRecord)
-    : [];
-  const readyContainers = containerStatuses.filter((c) => c.ready === true).length;
-  const totalContainers = containerStatuses.length;
-  const restarts = containerStatuses.reduce(
-    (sum, c) => sum + numberOrZero(c.restartCount),
-    0,
-  );
-  const reason =
-    containerStatuses.map(containerWaitingReason).find((v): v is string => v !== null) ??
-    stringOrNull(status.reason) ??
-    podConditionReason(status);
   const createdAt = stringOrNull(metadata.creationTimestamp);
   const createdMs = createdAt ? Date.parse(createdAt) : NaN;
-  const nodeName = stringOrNull(spec.nodeName);
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
     uid: stringOrNull(metadata.uid),
     phase: stringOrNull(status.phase) ?? "Unknown",
-    readyContainers,
-    totalContainers,
-    restarts,
-    reason,
-    nodeName,
-    capacityType: nodeName ? capacityByNodeName.get(nodeName) ?? null : null,
+    ...projectPodContainers(status),
+    ...projectPodPlacement(spec, factsByNodeName),
     ageMs: Number.isFinite(createdMs) ? Math.max(0, now - createdMs) : null,
   };
 }
@@ -191,25 +219,30 @@ function kubeListRecords(
   return parsed.items.filter(isRecord);
 }
 
-function nodeCapacityByName(stdout: string): Map<string, GatewayPodCapacityType> {
-  const capacities = new Map<string, GatewayPodCapacityType>();
+function nodeFactsByName(stdout: string): Map<string, GatewayNodeFacts> {
+  const facts = new Map<string, GatewayNodeFacts>();
   for (const node of kubeListRecords(stdout, "nodes")) {
     const metadata = isRecord(node.metadata) ? node.metadata : {};
     const name = stringOrNull(metadata.name);
     if (!name) continue;
     const labels = isRecord(metadata.labels) ? metadata.labels : {};
+    const annotations = isRecord(metadata.annotations) ? metadata.annotations : {};
     const spot =
       labels["cloud.google.com/gke-spot"] === "true" ||
       labels["cloud.google.com/gke-preemptible"] === "true";
-    capacities.set(name, spot ? "spot" : "on-demand");
+    facts.set(name, {
+      capacityType: spot ? "spot" : "on-demand",
+      instanceId: stringOrNull(annotations["container.googleapis.com/instance_id"]),
+      nodePool: stringOrNull(labels["cloud.google.com/gke-nodepool"]),
+    });
   }
-  return capacities;
+  return facts;
 }
 
-async function readNodeCapacityByName(
+async function readNodeFactsByName(
   deps: KubeOpsRunnerDeps,
   podRecords: readonly Record<string, unknown>[],
-): Promise<Map<string, GatewayPodCapacityType>> {
+): Promise<Map<string, GatewayNodeFacts>> {
   const hasScheduledPod = podRecords.some((pod) => {
     const spec = isRecord(pod.spec) ? pod.spec : {};
     return stringOrNull(spec.nodeName) !== null;
@@ -223,16 +256,16 @@ async function readNodeCapacityByName(
       }`,
     );
   }
-  return nodeCapacityByName(result.stdout);
+  return nodeFactsByName(result.stdout);
 }
 
 function summarizePodRecords(
   podRecords: readonly Record<string, unknown>[],
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
 ): GatewayPodDiagnostics {
   const pods = podRecords.map((pod) =>
-    projectPodDiagnostic(pod, now, capacityByNodeName)
+    projectPodDiagnostic(pod, now, factsByNodeName)
   );
   const totalPods = pods.length;
   const readyPods = pods.filter(
@@ -273,7 +306,7 @@ function summarizeGatewayPodDiagnosticsBatch(
   podRecords: readonly Record<string, unknown>[],
   gatewayIds: readonly string[],
   now: number,
-  capacityByNodeName: ReadonlyMap<string, GatewayPodCapacityType>,
+  factsByNodeName: ReadonlyMap<string, GatewayNodeFacts>,
 ): Record<string, GatewayPodDiagnostics> {
   const requested = new Set(gatewayIds);
   const podsByGatewayId = new Map<string, Record<string, unknown>[]>();
@@ -290,7 +323,7 @@ function summarizeGatewayPodDiagnosticsBatch(
       summarizePodRecords(
         podsByGatewayId.get(gatewayId) ?? [],
         now,
-        capacityByNodeName,
+        factsByNodeName,
       ),
     ]),
   );
@@ -460,11 +493,11 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
         );
       }
       const podRecords = kubeListRecords(result.stdout, "pods");
-      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
+      const factsByNodeName = await readNodeFactsByName(deps, podRecords);
       return summarizePodRecords(
         podRecords,
         deps.now?.() ?? Date.now(),
-        capacityByNodeName,
+        factsByNodeName,
       );
     },
 
@@ -496,12 +529,12 @@ export function createKubeSubprocessRunner(deps: KubeOpsRunnerDeps): KubeOps {
         );
       }
       const podRecords = kubeListRecords(result.stdout, "pods");
-      const capacityByNodeName = await readNodeCapacityByName(deps, podRecords);
+      const factsByNodeName = await readNodeFactsByName(deps, podRecords);
       return summarizeGatewayPodDiagnosticsBatch(
         podRecords,
         gatewayIds,
         deps.now?.() ?? Date.now(),
-        capacityByNodeName,
+        factsByNodeName,
       );
     },
 
