@@ -34,11 +34,22 @@ import {
   createUnmountHandler,
   createVerifyHandler,
   createCompleteSurgeHandoffHandler,
+  type MigrationHandlerDeps,
 } from "./fleet-http-migration.js";
 import {
   createSurgeReadinessGate,
   type SurgeReadinessGate,
 } from "./surge-readiness.js";
+import {
+  createSurgeOpenClawProcessSupervisorClient,
+  type SurgeOpenClawProcessSupervisorClient,
+} from "./surge-openclaw-process-gate.js";
+import {
+  createHoldSurgeOpenClawHandler,
+  createResumeSurgeOpenClawHandler,
+  createUnreserveSurgeOpenClawHandler,
+  type SurgeOpenClawProcessHandlerDeps,
+} from "./surge-openclaw-process-http.js";
 import {
   observeReadySibling,
   startAfterSurgeReadiness,
@@ -76,6 +87,8 @@ import {
 import { probeOpenClawHealth } from "./system-config-runtime-health.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
+const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
+const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 120_000;
 
 export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
@@ -349,6 +362,7 @@ export interface StartFleetOptions {
   recordReconcileError?: (slug: string, message: string) => Promise<void>;
   clearReconcileError?: (slug: string) => Promise<void>;
   openclawDir?: string;
+  surgeOpenClawProcessGate?: SurgeOpenClawProcessSupervisorClient;
   internalServiceKey?: string;
   agentImportDoctorToken?: string;
   runAgentImportDoctor?: (candidate: unknown) => Promise<AgentImportDoctorResult>;
@@ -443,6 +457,10 @@ export async function readMountedCustomersFromAssignedState(
   adapter: Pick<
     CustomerLifecycleAdapter,
     | "hasCustomerDir"
+    | "isBuilderGateway"
+    | "isConfiguredBuilderCustomer"
+    | "configuredBuilderOverlayPresent"
+    | "customerMountMarked"
     | "customerCoachWiredInOpenclawConfig"
     | "hasCustomerAgentRuntime"
     | "hasWorkspaceGitDir"
@@ -458,27 +476,50 @@ export async function readMountedCustomersFromAssignedState(
   const mounted = new Set<string>();
   for (const doc of snap.docs) {
     const slug = slugFromAssignedUser(doc.data() as Record<string, unknown> | undefined);
-    if (!slug) continue;
-    if (!adapter.hasCustomerDir(slug)) continue;
-    if (
-      adapter.customerCoachWiredInOpenclawConfig
-      && !adapter.customerCoachWiredInOpenclawConfig(slug)
-    ) {
-      continue;
-    }
-    if (!hasMountedRuntimeAndWorkspace(adapter, slug)) continue;
-    mounted.add(slug);
+    if (slug && assignedCustomerLooksMounted(adapter, slug)) mounted.add(slug);
   }
   return [...mounted].sort((a, b) => a.localeCompare(b));
+}
+
+type MountObservationAdapter = Parameters<typeof readMountedCustomersFromAssignedState>[2];
+
+function configuredBuilderLooksMounted(adapter: MountObservationAdapter, slug: string): boolean {
+  return adapter.isConfiguredBuilderCustomer?.(slug) === true
+    && adapter.configuredBuilderOverlayPresent?.(slug) === true
+    && adapter.customerMountMarked?.(slug) === true;
+}
+
+function sharedCoachLooksWired(adapter: MountObservationAdapter, slug: string): boolean {
+  return !adapter.customerCoachWiredInOpenclawConfig
+    || adapter.customerCoachWiredInOpenclawConfig(slug);
+}
+
+function assignedCustomerLooksMounted(adapter: MountObservationAdapter, slug: string): boolean {
+  if (!adapter.hasCustomerDir(slug)) return false;
+  const classGate = adapter.isBuilderGateway?.()
+    ? configuredBuilderLooksMounted(adapter, slug)
+    : sharedCoachLooksWired(adapter, slug);
+  return classGate && hasMountedRuntimeAndWorkspace(adapter, slug);
 }
 
 function hasMountedRuntimeAndWorkspace(
   adapter: Pick<
     CustomerLifecycleAdapter,
-    "hasCustomerAgentRuntime" | "hasWorkspaceGitDir" | "hasGitRemote"
+    | "isBuilderGateway"
+    | "isConfiguredBuilderCustomer"
+    | "configuredBuilderOverlayPresent"
+    | "hasCustomerAgentRuntime"
+    | "hasWorkspaceGitDir"
+    | "hasGitRemote"
   >,
   slug: string,
 ): boolean {
+  if (adapter.isBuilderGateway?.()) {
+    return adapter.isConfiguredBuilderCustomer?.(slug) === true
+      && adapter.configuredBuilderOverlayPresent?.(slug) === true
+      && adapter.hasWorkspaceGitDir(slug)
+      && adapter.hasGitRemote(slug);
+  }
   return (
     (!adapter.hasCustomerAgentRuntime || adapter.hasCustomerAgentRuntime(slug))
     && adapter.hasWorkspaceGitDir(slug)
@@ -654,21 +695,32 @@ function startBrokerProfileRetry(
 export async function waitForOpenClawHealthz(input: {
   probeHealthz: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  now?: () => number;
 }): Promise<void> {
   const sleep = input.sleep
     ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = input.now ?? Date.now;
+  const deadline = input.timeoutMs === undefined ? null : now() + input.timeoutMs;
   while (true) {
     if (await input.probeHealthz()) return;
+    if (deadline !== null && now() >= deadline) {
+      throw new Error(`OpenClaw healthz did not answer within ${input.timeoutMs}ms`);
+    }
     await sleep(1_000);
   }
 }
 
+// A held process gate means OpenClaw is intentionally down, whatever the sticky
+// runtime status says: a source stopped for a handoff must drop out of the Service.
 export async function probeSurgeReadiness(input: {
   runtimeStatus: FleetRuntime["status"];
   handoffReleased: boolean;
   provisioning?: boolean;
+  processHeld?: boolean;
   probeHealthz: () => Promise<boolean>;
 }): Promise<{ ready: boolean; openclawUp: boolean }> {
+  if (input.processHeld === true) return { ready: false, openclawUp: false };
   const openclawUp = input.runtimeStatus === "ready" && input.provisioning !== true
     ? await input.probeHealthz()
     : input.runtimeStatus === "ready";
@@ -681,16 +733,21 @@ export async function probeSurgeReadiness(input: {
 function createSurgeReadinessHandler(input: {
   runtime: FleetRuntime;
   surgeReadiness: SurgeReadinessGate;
+  prelaunchState?: () => Promise<BuilderPrelaunchState>;
   probeHealthz: () => Promise<boolean>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
     try {
       const handoffReleased = await input.surgeReadiness.released();
+      const prelaunchState = input.prelaunchState
+        ? await input.prelaunchState()
+        : "none";
       const { ready, openclawUp } = await probeSurgeReadiness({
         runtimeStatus: input.runtime.status,
         handoffReleased,
         provisioning: input.runtime.activeProvisioning > 0,
+        processHeld: prelaunchState === "held" || prelaunchState === "hydrated",
         probeHealthz: input.probeHealthz,
       });
       res.status(ready ? 200 : 503).json({
@@ -698,6 +755,7 @@ function createSurgeReadinessHandler(input: {
         runtimeStatus: input.runtime.status,
         handoffReleased,
         openclawUp,
+        prelaunchState,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -718,16 +776,21 @@ function createSurgeReadinessHandler(input: {
 export function getEvictObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
   const dirs = adapter.listLocalCustomerDirs?.() ?? adapter.listLocalCustomerSlugs?.() ?? [];
   const migratingIn = adapter.customerMigratingIn;
-  return dirs.filter((s) => !migratingIn || !migratingIn(s)).sort((a, b) => a.localeCompare(b));
+  return dirs
+    .filter((slug) => {
+      if (migratingIn?.(slug)) return false;
+      return !(
+        adapter.isBuilderGateway?.() &&
+        adapter.isConfiguredBuilderCustomer?.(slug)
+      );
+    })
+    .sort((a, b) => a.localeCompare(b));
 }
 
-// Mount-observed: coach-wired, runtime-present, durable-workspace-ready, and marked complete.
-// Drives both reconciliation and mounted reporting so any lost runtime, checkout, or origin
-// re-enters desired−observed and is repaired instead of being reported as mounted forever.
 export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
-  const coachWired = adapter.listLocalCustomerSlugs?.() ?? [];
+  const locallyAdmitted = adapter.listLocalCustomerSlugs?.() ?? [];
   const marked = adapter.customerMountMarked;
-  return coachWired
+  return locallyAdmitted
     .filter(
       (slug) =>
         hasMountedRuntimeAndWorkspace(adapter, slug)
@@ -796,6 +859,25 @@ function retainLocalCustomer(input: EvictLocalCustomerInput): UnmountOutcome {
   return "noop";
 }
 
+function configuredBuilderOverlayIsOwned(
+  adapter: CustomerLifecycleAdapter,
+  slug: string,
+): boolean {
+  return adapter.isBuilderGateway?.() === true &&
+    adapter.isConfiguredBuilderCustomer?.(slug) === true;
+}
+
+function retainConfiguredBuilderOverlay(input: EvictLocalCustomerInput): UnmountOutcome {
+  const { adapter, slug } = input;
+  if (!adapter.configuredBuilderOverlayPresent?.(slug)) {
+    throw new Error(`[evict:${slug}] configured Builder system-config overlay is unavailable`);
+  }
+  adapter.clearMountMarker?.(slug);
+  adapter.clearCustomerMigratingIn?.(slug);
+  adapter.onUnmounted?.(slug);
+  return retainLocalCustomer(input);
+}
+
 async function evictKnownCustomer(
   input: EvictLocalCustomerInput,
   uid: string,
@@ -854,6 +936,9 @@ async function evictSlugOnlyCustomer(
 export async function evictLocalCustomer(
   input: EvictLocalCustomerInput,
 ): Promise<UnmountOutcome> {
+  if (configuredBuilderOverlayIsOwned(input.adapter, input.slug)) {
+    return retainConfiguredBuilderOverlay(input);
+  }
   const uid = await input.adapter.uidForSlug(input.slug);
   if (uid) return evictKnownCustomer(input, uid);
   try {
@@ -1170,6 +1255,9 @@ function startPodSurgeReadinessRecovery(input: {
   serviceName: string;
   namespace: string;
   port: number;
+  released?: () => Promise<boolean>;
+  release?: (targetPodUid: string) => Promise<void>;
+  reserved?: () => Promise<boolean>;
   log: (message: string) => void;
 }): () => void {
   const ownPodUid = process.env.POD_UID?.trim() || null;
@@ -1178,14 +1266,100 @@ function startPodSurgeReadinessRecovery(input: {
     return () => undefined;
   }
   return startSurgeReadinessSelfRelease({
-    released: input.surgeReadiness.released,
+    released: input.released ?? input.surgeReadiness.released,
     observe: () => observeReadySibling({
       healthUrl: `http://${input.serviceName}.${input.namespace}.svc.cluster.local:${input.port}/health`,
       ownPodUid,
     }),
-    release: () => input.surgeReadiness.release({ targetPodUid: ownPodUid }),
+    release: () => input.release?.(ownPodUid) ?? input.surgeReadiness.release({ targetPodUid: ownPodUid }),
+    ...(input.reserved ? { reserved: input.reserved } : {}),
     log: input.log,
   });
+}
+
+function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null {
+  const slug = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!slug || adapter.isBuilderGateway?.() !== true) return null;
+  return adapter.isConfiguredBuilderCustomer?.(slug) === true &&
+      adapter.configuredBuilderOverlayPresent?.(slug) === true
+    ? slug
+    : null;
+}
+
+function configuredBuilderMountProven(adapter: CustomerLifecycleAdapter): boolean {
+  const slug = configuredBuilderSlug(adapter);
+  return slug !== null && getMountObservedSlugs(adapter).includes(slug);
+}
+
+type BuilderPrelaunchState = "none" | "held" | "hydrated" | "starting" | "serving";
+
+async function builderPrelaunchState(
+  adapter: CustomerLifecycleAdapter,
+  processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
+): Promise<BuilderPrelaunchState> {
+  if (!processGate || configuredBuilderSlug(adapter) === null) return "none";
+  const state = await processGate.status();
+  if (state.mode === "held") {
+    return state.role === "target" && configuredBuilderMountProven(adapter)
+      ? "hydrated"
+      : "held";
+  }
+  return state.phase === "running" ? "serving" : "starting";
+}
+
+// Pending project checkouts never block the mount (see finalizeConvergedMount):
+// OpenClaw starts with the workspace and the reconcile loop converges the rest.
+async function attachConfiguredBuilderBeforeOpenClaw(input: {
+  adapter: CustomerLifecycleAdapter;
+  log?: (message: string) => void;
+}): Promise<string> {
+  const slug = configuredBuilderSlug(input.adapter);
+  if (!slug) throw new Error("configured Builder overlay is unavailable for prelaunch attach");
+  const uid = await input.adapter.uidForSlug(slug);
+  if (!uid) throw new Error(`configured Builder user is unavailable for prelaunch attach: ${slug}`);
+  const result = await addCustomerToGateway(input.adapter, uid, {
+    convergeContent: true,
+    deferRuntimeVerification: true,
+  });
+  if (result.pendingProjectClones.length > 0) {
+    input.log?.(
+      `[surge-handoff] configured Builder project checkouts still pending for ${slug}; ` +
+      `the reconcile loop converges them: ${result.pendingProjectClones.join(", ")}`,
+    );
+  }
+  input.adapter.writeMountMarker?.(slug);
+  if (!input.adapter.customerMountMarked?.(slug) || !configuredBuilderMountProven(input.adapter)) {
+    throw new Error(`configured Builder prelaunch mount proof failed for ${slug}`);
+  }
+  return slug;
+}
+
+// A healthy OpenClaw is what readiness proves; the coach's Mattermost account is
+// observed and reported, but a slow or down chat backend never holds the
+// Builder's own gateway hostage — the reconcile loop keeps verifying the channel.
+async function verifyConfiguredBuilderAfterOpenClaw(input: {
+  adapter: CustomerLifecycleAdapter;
+  waitForGatewayReady: () => Promise<void>;
+  log: (message: string) => void;
+}): Promise<string> {
+  const slug = configuredBuilderSlug(input.adapter);
+  if (!slug || !configuredBuilderMountProven(input.adapter)) {
+    throw new Error("configured Builder is not durably mounted after OpenClaw start");
+  }
+  await input.waitForGatewayReady();
+  if (input.adapter.customerCoachWiredInOpenclawConfig?.(slug)) {
+    const healthy = await input.adapter.waitForAccountHealthy({
+      slug,
+      timeoutMs: BUILDER_POST_START_ACCOUNT_TIMEOUT_MS,
+    });
+    if (!healthy) {
+      input.log(
+        `[surge-handoff] ⚠ configured Builder Mattermost coach is not healthy yet ` +
+        `after OpenClaw start; the reconcile loop keeps verifying it: ${slug}`,
+      );
+    }
+  }
+  return slug;
 }
 
 function wrapAdapterWithRuntime(
@@ -1231,32 +1405,188 @@ async function seedRuntimeMountedCustomers(params: {
   }
 }
 
-export async function startFleetController(
-  opts: StartFleetOptions,
-): Promise<StartedFleetController> {
-  const platformState = opts.platformState !== false;
-  const reportState = opts.reportState !== false;
-  const caps = resolveFleetCapabilities({
-    platformState,
-    reportState,
-    localReconcile: opts.localReconcile === true,
-    hasDb: !!opts.db,
-    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredFingerprints,
-  });
-  const stateDeps = createStateDeps(opts, caps.needsStateDeps);
-  const adapter = buildFleetAdapter(opts);
+function registerMigrationRoutes(
+  app: express.Express,
+  gatewayIdGuard: express.RequestHandler,
+  migrationDeps: MigrationHandlerDeps,
+  processControlDeps: SurgeOpenClawProcessHandlerDeps,
+): void {
+  app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
+  app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
+  app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
+  app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
+  app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
+  app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));
+  app.post(
+    "/export-activation-manifest/:gatewayId",
+    gatewayIdGuard,
+    createActivationManifestExportHandler(migrationDeps),
+  );
+  app.post("/prepare-import/:gatewayId", gatewayIdGuard, createPrepareImportHandler(migrationDeps));
+  app.post("/activate-import/:gatewayId", gatewayIdGuard, createActivateImportHandler(migrationDeps));
+  app.post("/prepare-rsync-import/:gatewayId", gatewayIdGuard, createPrepareRsyncImportHandler(migrationDeps));
+  app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
+  app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
+  app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
+  app.post(
+    "/hold-surge-openclaw/:gatewayId",
+    gatewayIdGuard,
+    createHoldSurgeOpenClawHandler(processControlDeps),
+  );
+  app.post(
+    "/resume-surge-openclaw/:gatewayId",
+    gatewayIdGuard,
+    createResumeSurgeOpenClawHandler(processControlDeps),
+  );
+  app.post(
+    "/unreserve-surge-openclaw/:gatewayId",
+    gatewayIdGuard,
+    createUnreserveSurgeOpenClawHandler(processControlDeps),
+  );
+  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
+  app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
+  app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
+  app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
+}
 
-  const runtime = createFleetRuntime();
-  const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
-  const surgeReadiness = createSurgeReadinessGate(openclawDir);
+interface BuilderSurgeGateWiring {
+  reserveSurgeTarget: (input: { migrationId: string; slug: string }) => Promise<void>;
+  markSurgePrelaunchHydrated: (input: { migrationId: string; slug: string }) => Promise<void>;
+  selfReleaseReserved: () => Promise<boolean>;
+  releaseSurgeReadiness: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
+  selfRelease: (targetPodUid: string) => Promise<void>;
+  selfReleaseLoopSettled: () => Promise<boolean>;
+}
 
-  const namespace = resolveK8sNamespace();
-  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
+function requireOwnPodUid(purpose: string): string {
+  const currentPodUid = process.env.POD_UID?.trim();
+  if (!currentPodUid) throw new Error(`POD_UID is required to ${purpose}`);
+  return currentPodUid;
+}
 
-const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
-  const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
+async function returnToHoldAfterFailure(
+  error: unknown,
+  hold: () => Promise<unknown>,
+  message: string,
+): Promise<never> {
+  try {
+    await hold();
+  } catch (holdError) {
+    throw new AggregateError([error, holdError], message);
+  }
+  throw error;
+}
 
-  const emitHeartbeat = async (status: HeartbeatSnapshot["status"]) => {
+function createBuilderSurgeGateWiring(input: {
+  adapter: CustomerLifecycleAdapter;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+  surgeReadiness: SurgeReadinessGate;
+  waitForGatewayReady: () => Promise<void>;
+  log: (message: string) => void;
+}): BuilderSurgeGateWiring {
+  const { adapter, processGate, surgeReadiness, waitForGatewayReady, log } = input;
+  const settleReleasedGate = async (): Promise<void> => {
+    try {
+      await processGate!.settle();
+    } catch (error) {
+      log(
+        `[surge-handoff] released configured Builder gate did not settle; ` +
+        `the next hold settles it implicitly: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+  return {
+    async reserveSurgeTarget({ migrationId, slug }) {
+      if (!processGate || configuredBuilderSlug(adapter) !== slug) return;
+      await processGate.hydrate({
+        migrationId,
+        slug,
+        targetPodUid: requireOwnPodUid("reserve the configured Builder migration target"),
+      });
+    },
+    async markSurgePrelaunchHydrated({ migrationId, slug }) {
+      if (!processGate) return;
+      const targetPodUid = requireOwnPodUid("mark configured Builder prelaunch hydration");
+      if (configuredBuilderSlug(adapter) !== slug || !configuredBuilderMountProven(adapter)) {
+        throw new Error(`configured Builder prelaunch mount proof is unavailable for ${slug}`);
+      }
+      await processGate.hydrate({ migrationId, slug, targetPodUid });
+    },
+    async releaseSurgeReadiness({ migrationId, targetPodUid }) {
+      const ownPodUid = process.env.POD_UID?.trim();
+      if (ownPodUid && ownPodUid !== targetPodUid) {
+        throw new Error(`target pod UID mismatch: expected ${ownPodUid}, received ${targetPodUid}`);
+      }
+      if (!processGate) {
+        await surgeReadiness.release({ targetPodUid });
+        return;
+      }
+      if (!ownPodUid) throw new Error("POD_UID is required to permit configured Builder OpenClaw");
+      const slug = configuredBuilderMountProven(adapter)
+        ? configuredBuilderSlug(adapter)!
+        : await attachConfiguredBuilderBeforeOpenClaw({ adapter, log });
+      const request = { migrationId, slug, targetPodUid };
+      try {
+        await processGate.permit(request);
+        await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
+        await surgeReadiness.release({ targetPodUid });
+      } catch (error) {
+        await returnToHoldAfterFailure(
+          error,
+          () => processGate.hold(request),
+          "configured Builder target failed to start and could not be returned to hold",
+        );
+      }
+      await settleReleasedGate();
+    },
+    async selfRelease(targetPodUid) {
+      if (!processGate) {
+        await surgeReadiness.release({ targetPodUid });
+        return;
+      }
+      if (requireOwnPodUid("self-release the configured Builder") !== targetPodUid) {
+        throw new Error("configured Builder self-release target pod UID mismatch");
+      }
+      const reservation = await processGate.status();
+      if (reservation.role !== "normal") {
+        throw new Error(
+          `configured Builder pod is reserved by migration ${reservation.migrationId}; ` +
+          "refusing self-release until its controller completes or rolls back",
+        );
+      }
+      await attachConfiguredBuilderBeforeOpenClaw({ adapter, log });
+      try {
+        await processGate.permitNormal();
+        await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
+        await surgeReadiness.release({ targetPodUid });
+      } catch (error) {
+        await returnToHoldAfterFailure(
+          error,
+          () => processGate.holdNormal(),
+          "configured Builder self-release failed and could not be returned to hold",
+        );
+      }
+    },
+    async selfReleaseLoopSettled() {
+      if (!(await surgeReadiness.released())) return false;
+      if (!processGate) return true;
+      return (await processGate.status()).mode === "permitted";
+    },
+    async selfReleaseReserved() {
+      if (!processGate) return false;
+      return (await processGate.status()).role !== "normal";
+    },
+  };
+}
+
+function createHeartbeatEmitter(input: {
+  stateDeps: FleetStateDeps | null;
+  opts: StartFleetOptions;
+  runtime: FleetRuntime;
+  internalUrl: string;
+}): (status: HeartbeatSnapshot["status"]) => Promise<void> {
+  const { stateDeps, opts, runtime, internalUrl } = input;
+  return async (status) => {
     if (!stateDeps) return;
     try {
       await writeGatewayHeartbeat(
@@ -1277,6 +1607,38 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       );
     }
   };
+}
+
+export async function startFleetController(
+  opts: StartFleetOptions,
+): Promise<StartedFleetController> {
+  const platformState = opts.platformState !== false;
+  const reportState = opts.reportState !== false;
+  const caps = resolveFleetCapabilities({
+    platformState,
+    reportState,
+    localReconcile: opts.localReconcile === true,
+    hasDb: !!opts.db,
+    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredFingerprints,
+  });
+  const stateDeps = createStateDeps(opts, caps.needsStateDeps);
+  const adapter = buildFleetAdapter(opts);
+
+  const runtime = createFleetRuntime();
+  const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
+  const surgeReadiness = createSurgeReadinessGate(openclawDir, process.env.POD_UID?.trim() || undefined);
+  const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
+  const builderProcessGate = adapter.isBuilderGateway?.() === true
+    ? opts.surgeOpenClawProcessGate ?? createSurgeOpenClawProcessSupervisorClient(openclawDir)
+    : null;
+
+  const namespace = resolveK8sNamespace();
+  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
+
+const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
+  const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
+
+  const emitHeartbeat = createHeartbeatEmitter({ stateDeps, opts, runtime, internalUrl });
 
   // Derived readiness mirror (D5): stamp on-disk presence onto the user doc for cheap
   // PWA queries. Nothing branches on it — it mirrors observed, never drives mounting.
@@ -1296,18 +1658,19 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     }
   };
 
-  const waitForGatewayReady = async (): Promise<void> => {
+  const probeHealthz = () => probeOpenClawHealth(`http://127.0.0.1:${gatewayPort}/healthz`);
+  const waitForOpenClawUp = async (timeoutMs?: number): Promise<void> => {
+    await waitForOpenClawHealthz({ probeHealthz, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
     if (runtime.status === "ready") return;
-    await waitForOpenClawHealthz({
-      probeHealthz: () => probeOpenClawHealth(
-        `http://127.0.0.1:${gatewayPort}/healthz`,
-      ),
-    });
     runtime.status = "ready";
     opts.log(
       `[fleet] OpenClaw healthz ready; transitioning gateways/${opts.gatewayId} to status=ready`,
     );
     await emitHeartbeat("ready");
+  };
+  const waitForGatewayReady = async (): Promise<void> => {
+    if (runtime.status === "ready") return;
+    await waitForOpenClawUp();
   };
 
   const app = express();
@@ -1336,13 +1699,20 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   app.get("/surge-ready", createSurgeReadinessHandler({
     runtime,
     surgeReadiness,
-    probeHealthz: () => probeOpenClawHealth(
-      `http://127.0.0.1:${gatewayPort}/healthz`,
-    ),
+    prelaunchState: async () => {
+      try {
+        return await builderPrelaunchState(wrappedAdapter, builderProcessGate);
+      } catch (error) {
+        opts.log(
+          `[surge-handoff] prelaunch state unavailable; reporting none: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
+        return "none";
+      }
+    },
+    probeHealthz,
     log: opts.log,
   }));
-
-  const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
 
   await seedRuntimeMountedCustomers({ opts, reportMounted: caps.reportMounted, wrappedAdapter, runtime });
 
@@ -1371,6 +1741,13 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     next();
   };
 
+  const surgeGate = createBuilderSurgeGateWiring({
+    adapter: wrappedAdapter,
+    processGate: builderProcessGate,
+    surgeReadiness,
+    waitForGatewayReady: () => waitForOpenClawUp(BUILDER_POST_START_HEALTH_TIMEOUT_MS),
+    log: opts.log,
+  });
   const migrationDeps = {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
@@ -1378,35 +1755,16 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
-    releaseSurgeReadiness: async ({ targetPodUid }: { targetPodUid: string }) => {
-      const ownPodUid = process.env.POD_UID;
-      if (ownPodUid && ownPodUid !== targetPodUid) {
-        throw new Error(`target pod UID mismatch: expected ${ownPodUid}, received ${targetPodUid}`);
-      }
-      await surgeReadiness.release({ targetPodUid });
-    },
+    reserveSurgeTarget: surgeGate.reserveSurgeTarget,
+    markSurgePrelaunchHydrated: surgeGate.markSurgePrelaunchHydrated,
+    releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
   };
-  app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
-  app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
-  app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
-  app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
-  app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
-  app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));
-  app.post(
-    "/export-activation-manifest/:gatewayId",
-    gatewayIdGuard,
-    createActivationManifestExportHandler(migrationDeps),
-  );
-  app.post("/prepare-import/:gatewayId", gatewayIdGuard, createPrepareImportHandler(migrationDeps));
-  app.post("/activate-import/:gatewayId", gatewayIdGuard, createActivateImportHandler(migrationDeps));
-  app.post("/prepare-rsync-import/:gatewayId", gatewayIdGuard, createPrepareRsyncImportHandler(migrationDeps));
-  app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
-  app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
-  app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
-  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
-  app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
-  app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
-  app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
+  registerMigrationRoutes(app, gatewayIdGuard, migrationDeps, {
+    publicKey: opts.publicKey,
+    configuredBuilder: (slug) => configuredBuilderSlug(wrappedAdapter) === slug,
+    processGate: builderProcessGate ?? undefined,
+    log: opts.log,
+  });
 
   registerByosubDeviceAuth(app, opts);
   registerAgentImportDoctor(app, opts);
@@ -1429,6 +1787,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     serviceName,
     namespace,
     port: boundPort,
+    released: surgeGate.selfReleaseLoopSettled,
+    release: surgeGate.selfRelease,
+    reserved: surgeGate.selfReleaseReserved,
     log: opts.log,
   });
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";

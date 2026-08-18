@@ -163,7 +163,7 @@ Use live tools. Skills hold schemas; ask `octogee_ask_ops` when unsure.
   `octogee_google_sheets_read`/`octogee_google_sheets_write`,
   `octogee_google_tasks_lists`/`octogee_google_tasks_list`/`octogee_google_tasks_add`/`octogee_google_tasks_add_approved`/`octogee_google_tasks_update`/`octogee_google_tasks_update_approved`, `octogee_google_contacts_read`.
 - Obsidian: `octogee_obsidian_read`, `octogee_obsidian_write`.
-- Customer runtimes cannot run host commands or code agents.
+- Host commands and code agents: Builder gateways only, never Barns.
 
 Capability preflight: before claiming Octogee or OpenClaw cannot do something, or
 suggesting local/manual work, external hosting, OAuth code, or user-managed credentials,

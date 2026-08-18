@@ -26,4 +26,16 @@ describe("surge readiness gate", () => {
     expect(JSON.parse(fs.readFileSync(path.join(root, ".surge-handoff-ready.json"), "utf8")))
       .toEqual({ targetPodUid: "pod-123" });
   });
+
+  it("does not trust a readiness marker written by another pod", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-surge-ready-"));
+    roots.push(root);
+    await fs.promises.writeFile(
+      path.join(root, ".surge-handoff-ready.json"),
+      JSON.stringify({ targetPodUid: "pod-old" }),
+    );
+
+    await expect(createSurgeReadinessGate(root, "pod-new").released()).resolves.toBe(false);
+    await expect(createSurgeReadinessGate(root, "pod-old").released()).resolves.toBe(true);
+  });
 });

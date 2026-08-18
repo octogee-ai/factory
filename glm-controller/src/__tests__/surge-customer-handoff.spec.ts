@@ -5,6 +5,7 @@ import {
   type SurgeAssignment,
   type SurgeCustomerHandoffDeps,
   type SurgePod,
+  type SurgePodHealth,
 } from "../surge-customer-handoff.js";
 import { decideRollStateMigration } from "../roll-state-migration.js";
 import type { OperationStatus } from "@octogee/shared/types/glm";
@@ -66,10 +67,17 @@ function harness(input: {
   sourceMountedCustomers?: string[];
   targetMountedCustomers?: string[];
   ownerOperations?: Record<string, { status: OperationStatus } | null>;
+  bootingUids?: string[];
+  prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
+  resumeSourceError?: Error;
+  stopSourceError?: Error;
+  holdTargetError?: Error;
+  holdTargetErrorFromCall?: number;
 } = {}) {
   const events: string[] = [];
   let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
   let targetReleased = input.targetReleased === true;
+  let sourceHeld = false;
   const operationId = "surge-default-target-uid";
   const deps: SurgeCustomerHandoffDeps = {
     listPods: vi.fn(async () => {
@@ -80,13 +88,35 @@ function harness(input: {
       };
     }),
     readPodHealth: vi.fn(async (pod) => ({
-      status: "ready",
+      status: input.bootingUids?.includes(pod.uid) ? "booting" as const : "ready" as const,
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
+      prelaunchState: input.prelaunchByUid?.[pod.uid] ??
+        (pod.uid !== targetPod.uid && sourceHeld ? "held" : "none"),
       mountedCustomers: pod.uid === targetPod.uid
         ? input.targetMountedCustomers ?? []
         : input.sourceMountedCustomers ?? assignments.map((item) => item.slug),
     })),
+    stopSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
+      events.push(`stop-source:${sourcePod.uid}:${slug}`);
+      if (input.stopSourceError) throw input.stopSourceError;
+      sourceHeld = true;
+    }),
+    resumeSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
+      events.push(`resume-source:${sourcePod.uid}:${slug}`);
+      if (input.resumeSourceError) throw input.resumeSourceError;
+      sourceHeld = false;
+    }),
+    holdTargetOpenClaw: vi.fn(async ({ targetPod: pod, slug }) => {
+      events.push(`hold-target:${pod.uid}:${slug}`);
+      const call = events.filter((event) => event.startsWith("hold-target:")).length;
+      if (input.holdTargetError && call >= (input.holdTargetErrorFromCall ?? 1)) {
+        throw input.holdTargetError;
+      }
+    }),
+    unreserveTargetOpenClaw: vi.fn(async ({ targetPod: pod, slug }) => {
+      events.push(`unreserve-target:${pod.uid}:${slug}`);
+    }),
     readAssignments: vi.fn(async () => assignments),
     markAssignment: vi.fn(async ({ uid, state, updatedByOperationId, expected }) => {
       events.push(`assignment:${uid}:${state}`);
@@ -106,6 +136,12 @@ function harness(input: {
     }),
     quiesce: vi.fn(async ({ slug }) => {
       events.push(`quiesce:${slug}`);
+    }),
+    flush: vi.fn(async ({ pod, slug, reason }) => {
+      events.push(`flush:${pod.uid}:${slug}:${reason}`);
+      return reason === "migration-final"
+        ? { systemConfigCommit: "a".repeat(40) }
+        : {};
     }),
     transfer: vi.fn(async ({ slug }) => {
       events.push(`transfer:${slug}`);
@@ -188,7 +224,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("uses the standard load for a planned disposable-gateway replacement", async () => {
+  it("finalizes a Builder source as quiesce, flush, reserve target, stop source, copy, verify", async () => {
     const h = harness({ assignments: [assignment("u1", "alice")] });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -202,6 +238,9 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
       "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
       "transfer:alice",
       "digest:old-uid:alice",
       "digest:target-uid:alice",
@@ -209,6 +248,8 @@ describe("surge customer handoff", () => {
     ]);
     expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
       loadStrategy: "standard",
+      configTransferMode: "configured-builder-system-config",
+      expectedSystemConfigCommit: "a".repeat(40),
     }));
   });
 
@@ -228,7 +269,123 @@ describe("surge customer handoff", () => {
 
     expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
       loadStrategy: "expedited",
+      configTransferMode: "configured-builder-system-config",
     }));
+  });
+
+  it("rolls back a failed Builder handoff by holding the target, resuming the source, then reopening", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      transferError: new Error("configured Builder durable path is invalid"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("configured Builder durable path is invalid");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "hold-target:target-uid:alice",
+      "resume-source:old-uid:alice",
+      "assignment:u1:serving",
+    ]);
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.assignments()).toEqual([
+      expect.objectContaining({ state: "serving", updatedByOperationId: h.operationId }),
+    ]);
+  });
+
+  it("keeps the roster gated when a Builder rollback cannot resume its source", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      transferError: new Error("rsync failed"),
+      resumeSourceError: new Error("source resume refused"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("configured Builder handoff failed and its source could not be resumed");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "hold-target:target-uid:alice",
+      "resume-source:old-uid:alice",
+    ]);
+    expect(h.assignments()).toEqual([
+      expect.objectContaining({ state: "quiescing", updatedByOperationId: h.operationId }),
+    ]);
+  });
+
+  it("restores the roster without a resume when the source stop never landed", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      stopSourceError: new Error("pod old lacks the required surge OpenClaw hold endpoint"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("lacks the required surge OpenClaw hold endpoint");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "hold-target:target-uid:alice",
+      "assignment:u1:serving",
+    ]);
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("source is not held; skipping resume"));
+    expect(h.assignments()).toEqual([
+      expect.objectContaining({ state: "serving", updatedByOperationId: h.operationId }),
+    ]);
+  });
+
+  it("still resumes the source when the rollback target hold fails", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      transferError: new Error("rsync failed"),
+      holdTargetError: new Error("target unreachable"),
+      holdTargetErrorFromCall: 2,
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("rsync failed");
+
+    expect(h.events).toContain("resume-source:old-uid:alice");
+    expect(h.events.at(-1)).toBe("assignment:u1:serving");
+    expect(h.deps.log).toHaveBeenCalledWith(
+      expect.stringContaining("rollback target hold failed"),
+    );
   });
 
   it("keeps a terminating shared-gateway source on the standard load", async () => {
@@ -247,6 +404,7 @@ describe("surge customer handoff", () => {
 
     expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
       loadStrategy: "standard",
+      configTransferMode: "activation-manifest",
     }));
   });
 
@@ -322,7 +480,11 @@ describe("surge customer handoff", () => {
 
   it("restores the roster to serving once the blank replacement is the only pod", async () => {
     const pods = [oldPod, targetPod];
-    const h = harness({ pods, assignments: [assignment("u1", "alice")] });
+    const h = harness({
+      pods,
+      assignments: [assignment("u1", "alice")],
+      targetMountedCustomers: ["alice"],
+    });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
@@ -348,6 +510,7 @@ describe("surge customer handoff", () => {
 
   it("gates but does not transfer an assigned customer that the source never mounted", async () => {
     const pods = [oldPod, targetPod];
+    const targetMountedCustomers: string[] = [];
     const h = harness({
       pods,
       assignments: [
@@ -355,6 +518,7 @@ describe("surge customer handoff", () => {
         assignment("u2", "posthog-smoke-v0"),
       ],
       sourceMountedCustomers: ["alice"],
+      targetMountedCustomers,
     });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -375,6 +539,7 @@ describe("surge customer handoff", () => {
     ]);
 
     pods.splice(0, pods.length, { ...targetPod, ready: true });
+    targetMountedCustomers.push("alice", "posthog-smoke-v0");
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
@@ -407,6 +572,7 @@ describe("surge customer handoff", () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
       targetReleased: true,
+      targetMountedCustomers: ["alice"],
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
         updatedByOperationId: "surge-default-target-uid",
@@ -421,6 +587,32 @@ describe("surge customer handoff", () => {
     })).resolves.toEqual({ ready: true });
 
     expect(h.events).toEqual(["assignment:u1:serving"]);
+  });
+
+  it("does not mark a source-less released replacement ready until every assigned customer is mounted", async () => {
+    const h = harness({
+      pods: [{ ...targetPod, ready: true }],
+      targetReleased: true,
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+      targetMountedCustomers: [],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0]).toMatchObject({
+      state: "quiescing",
+      updatedByOperationId: "surge-default-target-uid",
+    });
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("assigned mounted roster"));
   });
 
   it("waits with both pods gated after target readiness opens", async () => {
@@ -446,6 +638,7 @@ describe("surge customer handoff", () => {
     const pods: SurgePod[] = [targetPod];
     const h = harness({
       pods,
+      targetMountedCustomers: ["alice"],
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
         updatedByOperationId: "surge-default-target-uid",
@@ -674,6 +867,7 @@ describe("surge customer handoff", () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
       targetReleased: true,
+      targetMountedCustomers: ["alice"],
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
         updatedByOperationId: abandonedOperationId,
@@ -820,6 +1014,34 @@ describe("surge customer handoff", () => {
     ]);
   });
 
+  it("preserves configured Builder target state when its transfer fails", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      transferError: new Error("rsync failed"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("rsync failed");
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "hold-target:target-uid:alice",
+      "resume-source:old-uid:alice",
+      "assignment:u1:serving",
+    ]);
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+  });
+
   it("discards every target customer touched when a later transfer fails", async () => {
     const h = harness({
       transferError: new Error("bob rsync failed"),
@@ -875,6 +1097,177 @@ describe("surge customer handoff", () => {
       "digest:target-uid:bob",
       "release:target-uid",
     ]);
+  });
+
+  it("preserves a configured Builder target mount before replaying a handoff", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      targetMountedCustomers: ["alice"],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+  });
+
+  it("transfers into a held prelaunch Builder target whose OpenClaw is intentionally stopped", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "hydrated" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toContain("transfer:alice");
+    expect(h.events).toContain("release:target-uid");
+  });
+
+  it("keeps a booting non-prelaunch target out of transfer", async () => {
+    const booting = harness({
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [targetPod.uid],
+    });
+    await expect(reconcileSurgeCustomerHandoff(booting.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(booting.events).toEqual([]);
+
+    const starting = harness({
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "starting" },
+    });
+    await expect(reconcileSurgeCustomerHandoff(starting.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(starting.events).toEqual([]);
+  });
+
+  it("retries the handoff for a Builder target left released but held by a rollback race", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      targetReleased: true,
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "hydrated" },
+      targetMountedCustomers: ["alice"],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toContain("transfer:alice");
+    expect(h.events).toContain("release:target-uid");
+  });
+
+  it("resumes a held NotReady Builder source instead of waiting forever and restores its roster", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [oldPod.uid, targetPod.uid],
+      prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
+  });
+
+  it("does not read assignments for a Barn whose source is missing or NotReady", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      bootingUids: [oldPod.uid],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.deps.readAssignments).not.toHaveBeenCalled();
+    expect(h.events).toEqual([]);
+  });
+
+  it("leaves a NotReady non-held Builder source to recover on its own", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [oldPod.uid, targetPod.uid],
+      prelaunchByUid: { [oldPod.uid]: "serving", [targetPod.uid]: "hydrated" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+  });
+
+  it("unreserves a sourceless reserved Builder target so it may rebuild from durable state", async () => {
+    const h = harness({
+      pods: [targetPod],
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["unreserve-target:target-uid:alice"]);
   });
 
   it("gates only the stale target customer when retry cleanup fails", async () => {

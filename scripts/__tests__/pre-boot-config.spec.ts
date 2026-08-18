@@ -637,6 +637,79 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
   });
 });
 
+describe("applyPreBootPatches — Builder overlay", () => {
+  it("wires the platform broker into a Builder config while leaving Builder-owned tools, routes, and plugins intact", () => {
+    const config: any = {
+      tools: {
+        profile: "research",
+        allow: ["read", "discord_send"],
+        alsoAllow: ["discord_admin"],
+      },
+      agents: {
+        defaults: {
+          models: { "builder/provider-model": { label: "Builder model" } },
+        },
+        list: [{
+          id: "discord-helper",
+          tools: {
+            profile: "research",
+            allow: ["read", "discord_send"],
+            alsoAllow: ["discord_admin"],
+          },
+        }],
+      },
+      bindings: [
+        { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
+        { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+      ],
+      channels: {
+        discord: {
+          accounts: {
+            "builder-discord": {
+              tokenRef: { source: "exec", provider: "gcp-secret-manager", id: "byok-builder-openai" },
+              guildId: "builder-guild",
+            },
+          },
+        },
+      },
+      plugins: {
+        allow: ["discord-bridge"],
+        entries: {
+          "discord-bridge": {
+            enabled: true,
+            config: { guildId: "builder-guild", relayMentions: true },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "builder-provider": { baseUrl: "https://builder.example/v1", keep: true },
+        },
+      },
+    };
+    const before = structuredClone(config);
+
+    expect(applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
+      OPENROUTER_BASE_URL: "http://llm-broker/v1",
+      PLATFORM_OPENAI_BASE_URL: "http://llm-broker/v1",
+      ANTHROPIC_BASE_URL: "http://llm-broker",
+    })).toBe(true);
+
+    expect(config.tools).toEqual(before.tools);
+    expect(config.agents.list).toEqual(before.agents.list);
+    expect(config.bindings).toEqual(before.bindings);
+    expect(config.channels).toEqual(before.channels);
+    expect(config.plugins).toEqual(before.plugins);
+    expect(config.models.providers["builder-provider"]).toEqual(before.models.providers["builder-provider"]);
+    expect(config.models.providers.anthropic.baseUrl).toBe("http://llm-broker");
+    expect(config.agents.defaults.models).toMatchObject({
+      "builder/provider-model": { label: "Builder model" },
+      "anthropic/claude-sonnet-4-6": {},
+    });
+  });
+});
+
 describe("applyPreBootPatches — memory search embeddings", () => {
   it("moves legacy memorySearch into memory.search for stable and keyed rosters", () => {
     const stableSearch = { provider: "stable" };

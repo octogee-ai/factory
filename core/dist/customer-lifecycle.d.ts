@@ -61,6 +61,14 @@ export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
     log: (msg: string) => void;
     isBuilderGateway?: () => boolean;
+    /** True when this gateway is the configured disposable Builder for this exact slug. */
+    isConfiguredBuilderCustomer?: (slug: string) => boolean;
+    /**
+     * True when this pod owns a readable Builder system-config overlay for the
+     * requested customer. A complete Builder overlay is never repaired through
+     * the Shared customer config projection.
+     */
+    configuredBuilderOverlayPresent?: (slug: string) => boolean;
     /**
      * Re-run the platform broker-profile materialization for this customer's
      * agents. Only openclaw creates an agent's auth-profile store, so the mount's
@@ -104,6 +112,8 @@ export interface CustomerLifecycleAdapter {
     customerMigratingIn?: (slug: string) => boolean;
     /** Stamp the migrating-in pin (import handler, before activation). */
     markCustomerMigratingIn?: (slug: string) => void;
+    /** Clear the migration pin after a target-side import is aborted. */
+    clearCustomerMigratingIn?: (slug: string) => void;
     listMigratingInSlugs?: () => string[];
     loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
     seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
@@ -247,6 +257,7 @@ export interface AddCustomerOptions {
     customersDir?: string;
     mountDeadlineMs?: number;
     convergeContent?: boolean;
+    deferRuntimeVerification?: boolean;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
     signal?: AbortSignal;

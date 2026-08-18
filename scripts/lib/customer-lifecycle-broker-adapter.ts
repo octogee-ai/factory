@@ -60,7 +60,7 @@ import {
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 import {
   customerCoachAgentId,
-  readAgentSessions,
+  readAgentSessionsAtPath,
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
@@ -83,8 +83,12 @@ import {
   ensureSystemConfigRepo,
 } from "./gitea-admin-broker-client.js";
 import {
+  hasReadableOpenclawConfig,
   hasMountedMarker,
   clearMountedMarker,
+  clearMigratingInPin,
+  assertConfiguredBuilderPortableStatePlanOnDisk,
+  configuredBuilderPortableStatePlan,
   isMigratingInPinned,
   customerCoachWiredInOpenclawConfig,
   listLocalCoachWiredSlugs,
@@ -719,6 +723,7 @@ async function applyAddCustomerConfigPatch(
     },
     customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
     default: builderGateway,
+    hostCode: builderGateway ? "builder-full" : "customer-restricted",
     ...(platformOpenAiEmbeddingsEnabled()
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
       : {}),
@@ -990,13 +995,12 @@ async function quiesceCustomer(
   slug: string,
   timeoutMs: number,
 ): Promise<{ drained: boolean; runningCount: number }> {
-  const stateDir = resolveOpenClawStateDir();
   const deadline = Date.now() + timeoutMs;
   let runningCount = 0;
   while (Date.now() < deadline) {
     runningCount = 0;
-    for (const agentId of agentIdsForMigration(slug)) {
-      const sessions = await readAgentSessions(stateDir, agentId);
+    for (const sessionsPath of sessionPathsForMigration(slug)) {
+      const sessions = await readAgentSessionsAtPath(sessionsPath);
       runningCount += sessions.filter((s) => s.status === "running").length;
     }
     if (runningCount === 0) return { drained: true, runningCount: 0 };
@@ -1006,6 +1010,18 @@ async function quiesceCustomer(
   return { drained: false, runningCount };
 }
 
+function sessionPathsForMigration(slug: string): string[] {
+  const stateDir = resolveOpenClawStateDir();
+  if (isConfiguredGatewayBuilder(slug)) {
+    const plan = configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir);
+    assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
+    return plan.sessionStorePaths.map((relativePath) =>
+      path.join(stateDir, ...relativePath.split("/")));
+  }
+  return agentIdsForMigration(slug).map((agentId) =>
+    path.join(stateDir, "agents", agentId, "sessions", "sessions.json"));
+}
+
 function stateDirectoryEntries(directory: string): fs.Dirent[] {
   if (!fs.existsSync(directory)) return [];
   return fs.readdirSync(directory, { withFileTypes: true });
@@ -1013,6 +1029,11 @@ function stateDirectoryEntries(directory: string): fs.Dirent[] {
 
 function agentIdsForMigration(slug: string): string[] {
   const stateDir = resolveOpenClawStateDir();
+  if (isConfiguredGatewayBuilder(slug)) {
+    const plan = configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir);
+    assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
+    return plan.agentIds;
+  }
   const agentIds = new Set([customerCoachAgentId(slug)]);
   const addIfOwned = (agentId: string): void => {
     if (agentIdBelongsToSlug(agentId, slug)) agentIds.add(agentId);
@@ -1037,12 +1058,20 @@ function memoryPathsForAgent(agentId: string): Array<{ cwd: string; path: string
 
 async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path: string }>> {
   const stateDir = resolveOpenClawStateDir();
+  const builderPlan = isConfiguredGatewayBuilder(slug)
+    ? configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir)
+    : null;
+  if (builderPlan) assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
   const candidates = [
-    ...agentIdsForMigration(slug).map((agentId) => ({
-      cwd: stateDir,
-      path: path.join("agents", agentId),
-    })),
-    ...agentIdsForMigration(slug).flatMap((agentId) => memoryPathsForAgent(agentId)),
+    ...(builderPlan
+      ? builderPlan.paths.map((item) => ({ cwd: stateDir, path: item.relativePath }))
+      : [
+        ...agentIdsForMigration(slug).map((agentId) => ({
+          cwd: stateDir,
+          path: path.join("agents", agentId),
+        })),
+        ...agentIdsForMigration(slug).flatMap((agentId) => memoryPathsForAgent(agentId)),
+      ]),
     { cwd: OPENCLAW_DIR, path: path.join("customers", slug) },
     { cwd: OPENCLAW_DIR, path: path.join("customer-keys", slug) },
   ];
@@ -1063,7 +1092,11 @@ async function prepareImportDir(
   mode: CustomerStateImportMode,
 ): Promise<string> {
   const stateDir = resolveOpenClawStateDir();
-  const wipePaths = mode === "final" ? [] : [
+  const builderPlan = isConfiguredGatewayBuilder(slug)
+    ? configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir)
+    : null;
+  if (builderPlan) assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
+  const wipePaths = mode === "final" || builderPlan ? [] : [
     ...agentIdsForMigration(slug).flatMap((agentId) => [
       path.join(stateDir, "agents", agentId),
       path.join(stateDir, "memory", `${agentId}.sqlite`),
@@ -1073,14 +1106,26 @@ async function prepareImportDir(
     path.join(OPENCLAW_DIR, "customers", slug),
     path.join(OPENCLAW_DIR, MIGRATION_ACTIVATION_DIR, slug),
   ];
-  if (mode === "default") {
+  if (mode === "default" && !builderPlan) {
     wipePaths.push(path.join(OPENCLAW_DIR, "customer-keys", slug));
   }
   for (const p of wipePaths) {
     await fsp.rm(p, { recursive: true, force: true }).catch(() => undefined);
   }
   await fsp.mkdir(path.join(stateDir, "agents"), { recursive: true });
-  await fsp.mkdir(path.join(stateDir, "agents", customerCoachAgentId(slug), "agent"), { recursive: true });
+  if (builderPlan) {
+    for (const relativeAgentDir of builderPlan.agentDirs) {
+      await fsp.mkdir(path.join(stateDir, ...relativeAgentDir.split("/")), {
+        recursive: true,
+        mode: 0o700,
+      });
+    }
+    assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
+  } else {
+    await fsp.mkdir(path.join(stateDir, "agents", customerCoachAgentId(slug), "agent"), {
+      recursive: true,
+    });
+  }
   await fsp.mkdir(CUSTOMERS_DIR, { recursive: true });
   await fsp.mkdir(CUSTOMER_KEYS_DIR, { recursive: true });
   return OPENCLAW_DIR;
@@ -1231,6 +1276,25 @@ export function projectCheckoutScopeForRuntime(
     : WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
 }
 
+// The retained overlay keeps the Builder's config, but a customer that just
+// moved out must stop answering chat here: two coaches on one bot account is
+// what an unmount prevents. A held pod has no OpenClaw to stop, so an
+// unreachable gateway is a logged skip, not a failed cleanup.
+async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: string): Promise<void> {
+  try {
+    await stopStaleMattermostRoutingAccounts(ctx.rpc, {
+      currentSlug: slug,
+      desiredAccountIds: [],
+      evictionSlugs: [],
+    }, ctx.log);
+  } catch (error) {
+    ctx.log(
+      `[remove:${slug}] configured Builder chat accounts were not stopped ` +
+      `(OpenClaw held or unreachable): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 async function removeImportedCustomerBySlug(
   ctx: BrokerCtx,
   slug: string,
@@ -1241,6 +1305,14 @@ async function removeImportedCustomerBySlug(
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
   if (!wasMounted) return { wasMounted: false, steps: [] };
+  if (isConfiguredGatewayBuilder(slug)) {
+    clearMountedMarker(CUSTOMERS_DIR, slug);
+    clearMigratingInPin(CUSTOMERS_DIR, slug);
+    ctx.configRemovedForEviction.delete(slug);
+    await stopRetainedConfiguredBuilderAccounts(ctx, slug);
+    ctx.log(`[remove:${slug}] retained configured Builder overlay during imported cleanup`);
+    return { wasMounted: true, steps: [], retained: true };
+  }
   const remaining = await applyRemoveCustomerConfigPatch(
     ctx,
     slug,
@@ -1293,6 +1365,12 @@ export function buildBrokeredLifecycleAdapter(
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
     isBuilderGateway: opts.isBuilderGateway ?? (() => false),
+    isConfiguredBuilderCustomer: (slug) =>
+      Boolean(opts.isBuilderGateway?.()) && isConfiguredGatewayBuilder(slug),
+    configuredBuilderOverlayPresent: (slug) =>
+      Boolean(opts.isBuilderGateway?.()) &&
+      isConfiguredGatewayBuilder(slug) &&
+      hasReadableOpenclawConfig(OPENCLAW_CONFIG),
     materializeBrokerProfiles: (slug) =>
       materializeCustomerBrokerProfiles([`octogee-${slug}-coach`], slug, opts.log),
     projectCheckoutScope: (slug) =>
@@ -1304,15 +1382,19 @@ export function buildBrokeredLifecycleAdapter(
     hasCustomerAgentRuntime: (slug) =>
       fs.existsSync(path.join(AGENTS_DIR, `octogee-${slug}-coach`, "agent")),
     listLocalCustomerSlugs: () =>
-      listLocalCoachWiredSlugs(CUSTOMERS_DIR, (slug) =>
-        customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
-      ),
+      opts.isBuilderGateway?.()
+        ? listLocalCustomerDirs(CUSTOMERS_DIR).filter((slug) =>
+          isConfiguredGatewayBuilder(slug) && hasMountedMarker(CUSTOMERS_DIR, slug))
+        : listLocalCoachWiredSlugs(CUSTOMERS_DIR, (slug) =>
+          customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
+        ),
     listLocalCustomerDirs: () => listLocalCustomerDirs(CUSTOMERS_DIR),
     customerMountMarked: (slug) => hasMountedMarker(CUSTOMERS_DIR, slug),
     writeMountMarker: (slug) => writeMountedMarker(CUSTOMERS_DIR, slug),
     clearMountMarker: (slug) => clearMountedMarker(CUSTOMERS_DIR, slug),
     customerMigratingIn: (slug) => isMigratingInPinned(CUSTOMERS_DIR, slug, MIGRATING_IN_PIN_TTL_MS),
     markCustomerMigratingIn: (slug) => writeMigratingInPin(CUSTOMERS_DIR, slug),
+    clearCustomerMigratingIn: (slug) => clearMigratingInPin(CUSTOMERS_DIR, slug),
     listMigratingInSlugs: () => listMigratingInSlugs(CUSTOMERS_DIR, MIGRATING_IN_PIN_TTL_MS),
 
     loadUserSnapshot: async (uid) => {

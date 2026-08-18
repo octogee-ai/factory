@@ -156,6 +156,56 @@ describe("secret-resolver — defense-in-depth", () => {
     expect(out.stderr).toContain(`reject id="${id}"`);
   });
 
+  it("accepts the validated Builder's BYOK ref without a canonical coach dir and rejects a foreign Builder", async () => {
+    const builderAgentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-resolver-builder-"));
+    try {
+      fs.mkdirSync(path.join(builderAgentsDir, "discord-helper", "agent"), { recursive: true });
+      const ownId = "byok-alice-openai/latest";
+      const foreignId = "byok-eve-openai/latest";
+      const out = await runResolver({
+        ...envFor(),
+        OPENCLAW_AGENTS_DIR: builderAgentsDir,
+        GATEWAY_BUILDER_SLUG: "alice",
+      }, JSON.stringify({
+        protocolVersion: 1,
+        provider: "gcp-secret-manager",
+        ids: [ownId, foreignId],
+      }));
+      const response = parseResponse(out.stdout);
+
+      expect(out.stderr).toContain(`accept id="${ownId}"`);
+      expect(out.stderr).toContain(`reject id="${foreignId}"`);
+      if (response.errors?.[ownId]) {
+        expect(response.errors[ownId].message).not.toMatch(/^Refused by resolver:/);
+      }
+      expect(response.errors?.[foreignId]?.message).toMatch(/^Refused by resolver:/);
+    } finally {
+      fs.rmSync(builderAgentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the validated Builder slug when its custom runtime directory is not present yet", async () => {
+    const ownId = "byok-alice-anthropic/latest";
+    const foreignId = "byok-eve-anthropic/latest";
+    const out = await runResolver({
+      ...envFor(),
+      OPENCLAW_AGENTS_DIR: "/nonexistent/path/octogee-builder-resolver-test",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }, JSON.stringify({
+      protocolVersion: 1,
+      provider: "gcp-secret-manager",
+      ids: [ownId, foreignId],
+    }));
+    const response = parseResponse(out.stdout);
+
+    expect(out.stderr).toContain(`accept id="${ownId}"`);
+    expect(out.stderr).toContain(`reject id="${foreignId}"`);
+    if (response.errors?.[ownId]) {
+      expect(response.errors[ownId].message).not.toMatch(/^Refused by resolver:/);
+    }
+    expect(response.errors?.[foreignId]?.message).toMatch(/^Refused by resolver:/);
+  });
+
   it("rejects unsupported providers", async () => {
     const id = "byok-alice-mistral/latest";
     const stdin = JSON.stringify({

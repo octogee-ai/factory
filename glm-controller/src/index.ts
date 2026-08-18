@@ -2351,8 +2351,8 @@ function buildSurgeHandoffDeps(input: {
       assertSurgeAssignmentCoverage(retained, assignedUsers);
       return retained;
     },
-    readDurableSessionDigest: ({ pod, slug }) =>
-      readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug),
+    readDurableSessionDigest: ({ pod, slug, configTransferMode }) =>
+      readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug, configTransferMode),
     markAssignment: (assignment) => markAssignmentState(
       {
         db: db as unknown as FleetStateFirestore,

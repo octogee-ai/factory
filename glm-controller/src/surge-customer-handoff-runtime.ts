@@ -1,16 +1,19 @@
 import { randomBytes } from "node:crypto";
 import {
+  type FlushGatewayResponse,
+  type MigrationConfigTransferMode,
   MIGRATION_QUIESCE_TIMEOUT_MS,
   SIGNATURE_HEADER,
   type PrepareRsyncImportResponse,
 } from "@octogee/shared/types/fleet-controller";
 import { signFleetRequest } from "@octogee/core/fleet-signature";
 import { isValidUsername } from "@octogee/shared/types/identity";
-import type {
-  SurgeCustomerHandoffDeps,
-  SurgePod,
-  SurgePodHealth,
-  SurgePodSnapshot,
+import {
+  type SurgeCustomerHandoffDeps,
+  type SurgePod,
+  type SurgePodHealth,
+  type SurgePodSnapshot,
+  type SurgePrelaunchState,
 } from "./surge-customer-handoff.js";
 
 interface KubectlResult {
@@ -90,12 +93,14 @@ export async function listSurgePods(
   return parseSurgePodSnapshot(result.stdout);
 }
 
-const POD_SESSION_DIGEST_SCRIPT = [
-  'const fs=require("node:fs"),path=require("node:path"),crypto=require("node:crypto");',
-  'const root=path.join(process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),"agents",`octogee-${process.argv[1]}-coach`,"sessions");',
-  'const walk=(dir,rel="")=>{if(!fs.existsSync(dir))return [];const out=[];for(const item of fs.readdirSync(dir,{withFileTypes:true})){const child=rel?path.join(rel,item.name):item.name;const abs=path.join(dir,item.name);if(item.isDirectory())out.push(...walk(abs,child));else if(item.isFile())out.push(child);else throw new Error(`non-regular session path: ${child}`);}return out;};',
-  'const files=walk(root).sort((a,b)=>a.localeCompare(b)),hash=crypto.createHash("sha256");let totalBytes=0;',
-  'for(const relative of files){const contents=fs.readFileSync(path.join(root,relative));totalBytes+=contents.byteLength;hash.update(relative.split(path.sep).join("/"));hash.update("\\0");hash.update(contents);hash.update("\\0");}',
+export const POD_SESSION_DIGEST_SCRIPT = [
+  'import fs from "node:fs"; import path from "node:path"; import crypto from "node:crypto";',
+  'import { assertConfiguredBuilderPortableStatePlanOnDisk, configuredBuilderPortableStatePlanFromConfig } from "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js";',
+  'const state=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),slug=process.argv[1],mode=process.argv[2];',
+  'const walk=(dir,prefix="")=>{if(!fs.existsSync(dir))return [];const root=fs.lstatSync(dir);if(root.isSymbolicLink()||!root.isDirectory())throw new Error(`non-regular durable state path: ${prefix||"."}`);const out=[];for(const item of fs.readdirSync(dir,{withFileTypes:true})){const relative=prefix?path.join(prefix,item.name):item.name,abs=path.join(dir,item.name),stat=fs.lstatSync(abs);if(stat.isSymbolicLink())out.push([relative,abs,"link"]);else if(stat.isDirectory())out.push(...walk(abs,relative));else if(stat.isFile())out.push([relative,abs,"file"]);else throw new Error(`non-regular durable state path: ${relative}`);}return out;};',
+  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state);assertConfiguredBuilderPortableStatePlanOnDisk(state,plan);files=plan.paths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];});}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
+  'files.sort(([left],[right])=>left.localeCompare(right));const hash=crypto.createHash("sha256");let totalBytes=0;',
+  'for(const [relative,absolute,kind] of files){const contents=kind==="link"?Buffer.from(`symlink:${fs.readlinkSync(absolute)}`):fs.readFileSync(absolute);totalBytes+=contents.byteLength;hash.update(relative.split(path.sep).join("/"));hash.update("\\0");hash.update(contents);hash.update("\\0");}',
   'process.stdout.write(JSON.stringify({fileCount:files.length,totalBytes,sha256:hash.digest("hex")}));',
 ].join("");
 
@@ -130,6 +135,7 @@ export async function readPodDurableSessionDigest(
   namespace: string,
   pod: SurgePod,
   slug: string,
+  configTransferMode: MigrationConfigTransferMode = "activation-manifest",
 ): Promise<{ fileCount: number; totalBytes: number; sha256: string }> {
   if (!isValidUsername(slug)) throw new Error(`invalid customer slug for session digest: ${slug}`);
   const result = await runKubectl([
@@ -141,9 +147,11 @@ export async function readPodDurableSessionDigest(
     "gateway",
     "--",
     "node",
+    "--input-type=module",
     "-e",
     POD_SESSION_DIGEST_SCRIPT,
     slug,
+    configTransferMode,
   ]);
   if (result.code !== 0) {
     throw new Error(
@@ -220,10 +228,145 @@ export type SurgePodTransport = Pick<
   SurgeCustomerHandoffDeps,
   | "readPodHealth"
   | "quiesce"
+  | "stopSourceOpenClaw"
+  | "resumeSourceOpenClaw"
+  | "holdTargetOpenClaw"
+  | "unreserveTargetOpenClaw"
+  | "flush"
   | "transfer"
   | "discardTargetCustomer"
   | "releaseTarget"
 >;
+
+const SURGE_PRELAUNCH_STATES: readonly SurgePrelaunchState[] = [
+  "none",
+  "held",
+  "hydrated",
+  "starting",
+  "serving",
+];
+
+// A pod that predates the process gate omits the field; anything else must be
+// a known state or the whole health read is invalid.
+function parsePrelaunchState(value: unknown): SurgePrelaunchState | null {
+  if (value === undefined) return "none";
+  return (SURGE_PRELAUNCH_STATES as readonly unknown[]).includes(value)
+    ? value as SurgePrelaunchState
+    : null;
+}
+
+type SurgeControlCall = (
+  pod: SurgePod,
+  gatewayId: string,
+  path: string,
+  operationId: string,
+  body: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
+interface SurgeTransferRuntime {
+  control: SurgeControlCall;
+  randomKey: () => string;
+  log: (message: string) => void;
+}
+
+type SurgeTransferInput = Parameters<SurgeCustomerHandoffDeps["transfer"]>[0];
+
+async function abortTargetImport(
+  runtime: SurgeTransferRuntime,
+  input: SurgeTransferInput,
+  mode: "keys" | "final",
+): Promise<void> {
+  const { gatewayId, slug, operationId, targetPod, configTransferMode } = input;
+  await runtime.control(targetPod, gatewayId, "abort-rsync-import", operationId, {
+    migrationId: operationId,
+    slug,
+    rpcPhase: "abort-rsync-import",
+    mode,
+    ...(mode === "final" ? { configTransferMode } : {}),
+  }).catch((abortError) => {
+    runtime.log(
+      `[surge-handoff] abort failed pod=${targetPod.name} slug=${slug}: ` +
+      `${abortError instanceof Error ? abortError.message : String(abortError)}`,
+    );
+  });
+}
+
+async function transferMode(
+  runtime: SurgeTransferRuntime,
+  input: SurgeTransferInput,
+  mode: "keys" | "final",
+): Promise<void> {
+  const { gatewayId, slug, operationId, sourcePod, targetPod, loadStrategy, configTransferMode } = input;
+  const transferKey = runtime.randomKey();
+  let prepared = false;
+  try {
+    const prepare = await runtime.control(targetPod, gatewayId, "prepare-rsync-import", operationId, {
+      migrationId: operationId,
+      slug,
+      rpcPhase: "prepare-rsync-import",
+      mode,
+      transferUser: "migration",
+      transferKey,
+      sourcePodIp: sourcePod.podIP,
+      ...(mode === "final" ? { configTransferMode } : {}),
+    }) as unknown as PrepareRsyncImportResponse;
+    if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
+      throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
+    }
+    prepared = true;
+    await runtime.control(sourcePod, gatewayId, "push-rsync-state", operationId, {
+      migrationId: operationId,
+      slug,
+      rpcPhase: "push-rsync-state",
+      mode,
+      targetHost: targetPod.podIP,
+      targetPort: prepare.port,
+      transferUser: "migration",
+      transferKey,
+      ...(mode === "final"
+        ? {
+          configTransferMode,
+          ...(configTransferMode === "activation-manifest" ? { includeActivationManifest: true } : {}),
+        }
+        : {}),
+    });
+    await runtime.control(targetPod, gatewayId, "finish-rsync-import", operationId, {
+      migrationId: operationId,
+      slug,
+      rpcPhase: "finish-rsync-import",
+      mode,
+      ...(mode === "final" ? { loadStrategy, configTransferMode } : {}),
+    });
+  } catch (error) {
+    if (prepared) await abortTargetImport(runtime, input, mode);
+    throw error;
+  }
+}
+
+async function transferCustomerState(
+  runtime: SurgeTransferRuntime,
+  input: SurgeTransferInput,
+): Promise<void> {
+  const { gatewayId, slug, operationId, targetPod, configTransferMode, expectedSystemConfigCommit } = input;
+  if (configTransferMode === "configured-builder-system-config" && !expectedSystemConfigCommit) {
+    throw new Error(`configured Builder transfer is missing system config commit for ${slug}`);
+  }
+  await transferMode(runtime, input, "keys");
+  if (configTransferMode === "configured-builder-system-config") {
+    try {
+      await runtime.control(targetPod, gatewayId, "flush", operationId, {
+        migrationId: operationId,
+        slug,
+        reason: "migration-converge",
+        expectedSystemConfigCommit: expectedSystemConfigCommit!,
+      });
+    } catch (error) {
+      await abortTargetImport(runtime, input, "final");
+      throw error;
+    }
+  }
+  await transferMode(runtime, input, "final");
+}
 
 export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePodTransport {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
@@ -245,6 +388,32 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     body,
   });
 
+  const openClawProcessControl = async (input: {
+    pod: SurgePod;
+    gatewayId: string;
+    path: "hold-surge-openclaw" | "resume-surge-openclaw" | "unreserve-surge-openclaw";
+    operationId: string;
+    slug: string;
+    targetPodUid: string;
+    capability: string;
+  }): Promise<void> => {
+    try {
+      await control(input.pod, input.gatewayId, input.path, input.operationId, {
+        migrationId: input.operationId,
+        slug: input.slug,
+        targetPodUid: input.targetPodUid,
+      });
+    } catch (error) {
+      if (error instanceof SurgePodControlError && error.status === 404) {
+        throw new Error(
+          `pod ${input.pod.name} lacks the required surge OpenClaw ${input.capability} endpoint`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  };
+
   return {
     async readPodHealth(pod): Promise<SurgePodHealth | null> {
       try {
@@ -254,13 +423,15 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         ]);
         const health = await responseJson(healthResponse, `health pod=${pod.name}`);
         const ready = await readyResponse.json() as Record<string, unknown>;
+        const prelaunchState = parsePrelaunchState(ready.prelaunchState);
         if (
           (health.status !== "booting" && health.status !== "ready") ||
           typeof health.version !== "string" ||
           !Array.isArray(health.customers) ||
           !health.customers.every((slug) => typeof slug === "string") ||
           typeof ready.handoffReleased !== "boolean" ||
-          typeof ready.openclawUp !== "boolean"
+          typeof ready.openclawUp !== "boolean" ||
+          prelaunchState === null
         ) {
           throw new Error(`invalid surge health response from pod=${pod.name}`);
         }
@@ -268,6 +439,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           status: ready.openclawUp ? "ready" : "booting",
           version: health.version,
           handoffReleased: ready.handoffReleased,
+          prelaunchState,
           mountedCustomers: [...new Set(health.customers as string[])],
         };
       } catch (error) {
@@ -287,70 +459,76 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       });
     },
 
-    async transfer({ gatewayId, slug, operationId, sourcePod, targetPod, loadStrategy }) {
-      const transferMode = async (mode: "keys" | "final") => {
-        const transferKey = randomKey();
-        let prepared = false;
-        try {
-          const prepare = await control(
-            targetPod,
-            gatewayId,
-            "prepare-rsync-import",
-            operationId,
-            {
-              migrationId: operationId,
-              slug,
-              rpcPhase: "prepare-rsync-import",
-              mode,
-              transferUser: "migration",
-              transferKey,
-              sourcePodIp: sourcePod.podIP,
-            },
-          ) as unknown as PrepareRsyncImportResponse;
-          if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
-            throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
-          }
-          prepared = true;
-          await control(sourcePod, gatewayId, "push-rsync-state", operationId, {
-            migrationId: operationId,
-            slug,
-            rpcPhase: "push-rsync-state",
-            mode,
-            targetHost: targetPod.podIP,
-            targetPort: prepare.port,
-            transferUser: "migration",
-            transferKey,
-            ...(mode === "final" ? { includeActivationManifest: true } : {}),
-          });
-          await control(targetPod, gatewayId, "finish-rsync-import", operationId, {
-            migrationId: operationId,
-            slug,
-            rpcPhase: "finish-rsync-import",
-            mode,
-            ...(mode === "final" ? { loadStrategy } : {}),
-          });
-        } catch (error) {
-          if (prepared) {
-            await control(targetPod, gatewayId, "abort-rsync-import", operationId, {
-              migrationId: operationId,
-              slug,
-              rpcPhase: "abort-rsync-import",
-              mode,
-            }).catch((abortError) => {
-              opts.log(
-                `[surge-handoff] abort failed pod=${targetPod.name} slug=${slug}: ` +
-                `${abortError instanceof Error ? abortError.message : String(abortError)}`,
-              );
-            });
-          }
-          throw error;
-        }
-      };
-
-      await transferMode("keys");
-      await transferMode("final");
+    async stopSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
+      await openClawProcessControl({
+        pod: sourcePod,
+        gatewayId,
+        path: "hold-surge-openclaw",
+        operationId,
+        slug,
+        targetPodUid: targetPod.uid,
+        capability: "hold",
+      });
     },
 
+    async resumeSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
+      await openClawProcessControl({
+        pod: sourcePod,
+        gatewayId,
+        path: "resume-surge-openclaw",
+        operationId,
+        slug,
+        targetPodUid: targetPod.uid,
+        capability: "resume",
+      });
+    },
+
+    async holdTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
+      await openClawProcessControl({
+        pod: targetPod,
+        gatewayId,
+        path: "hold-surge-openclaw",
+        operationId,
+        slug,
+        targetPodUid: targetPod.uid,
+        capability: "reserve",
+      });
+    },
+
+    async unreserveTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
+      await openClawProcessControl({
+        pod: targetPod,
+        gatewayId,
+        path: "unreserve-surge-openclaw",
+        operationId,
+        slug,
+        targetPodUid: targetPod.uid,
+        capability: "unreserve",
+      });
+    },
+
+    async flush({
+      gatewayId,
+      slug,
+      operationId,
+      pod,
+      reason,
+      expectedSystemConfigCommit,
+    }) {
+      const response = await control(pod, gatewayId, "flush", operationId, {
+        migrationId: operationId,
+        slug,
+        reason,
+        ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+      }) as unknown as FlushGatewayResponse;
+      return {
+        ...(typeof response.systemConfigCommit === "string"
+          ? { systemConfigCommit: response.systemConfigCommit }
+          : {}),
+      };
+    },
+
+    transfer: (input) => transferCustomerState({ control, randomKey, log: opts.log }, input),
     async discardTargetCustomer({ gatewayId, slug, operationId, targetPod }) {
       const unmount = () => control(
         targetPod,

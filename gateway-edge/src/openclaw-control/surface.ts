@@ -35,7 +35,6 @@ import {
   openClawConfigSnapshotFromGetResponse,
   openClawControlPolicyError,
   openClawControlTimeoutError,
-  pinnedOpenClawRuntimeMatches,
   projectOpenClawServerFrameForProfile,
   type OpenClawConfigSnapshot,
   type OpenClawControlRpcDecision,
@@ -654,7 +653,7 @@ function canonicalReason(reason: string | undefined): OpenClawControlAuditReason
   if (reason === "request-timeout" || reason === "capability-unavailable") {
     return "upstream_unavailable";
   }
-  if (reason === "invalid-frame" || reason === "runtime-drift") return "protocol_invalid";
+  if (reason === "invalid-frame") return "protocol_invalid";
   return reason ? "method_denied" : "none";
 }
 
@@ -883,8 +882,7 @@ class OpenClawControlSocketBridge {
     }
     if (this.args.browser.readyState !== WebSocket.OPEN) return;
     const policyFailure = reason === "session-expired" || reason === "capability-revoked" ||
-      reason === "invalid-dashboard-frame" || reason === "protocol-invalid" ||
-      reason === "runtime-drift";
+      reason === "invalid-dashboard-frame" || reason === "protocol-invalid";
     this.args.browser.close(policyFailure ? 1008 : 1011, reason);
   }
 
@@ -993,10 +991,9 @@ class OpenClawControlSocketBridge {
       this.closeBoth("protocol-invalid");
       return;
     }
-    const id = typeof frame.id === "string" ? frame.id : undefined;
     if (response && this.drainQuarantined(response.id)) return;
     const request = response ? this.settlePending(response.id) : undefined;
-    if (!this.acceptInstalledMethods(frame, id)) return;
+    this.acceptInstalledMethods(frame);
     this.updateCurrentConfig(frame, request);
     this.recordUpstreamResult(frame, request);
     this.refreshConfigAfterMutation(frame, request);
@@ -1018,18 +1015,9 @@ class OpenClawControlSocketBridge {
     }
   }
 
-  private acceptInstalledMethods(frame: Record<string, unknown>, id: string | undefined): boolean {
+  private acceptInstalledMethods(frame: Record<string, unknown>): void {
     const methods = installedMethodsFromHello(frame);
-    if (!methods) return true;
-    if (!pinnedOpenClawRuntimeMatches(methods)) {
-      if (this.args.browser.readyState === WebSocket.OPEN) {
-        this.args.browser.send(openClawControlPolicyError({ id, type: "req" }, "runtime-drift"));
-      }
-      this.closeBoth("runtime-drift");
-      return false;
-    }
-    this.installedMethods = methods;
-    return true;
+    if (methods) this.installedMethods = methods;
   }
 
   private updateCurrentConfig(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
@@ -1049,7 +1037,7 @@ class OpenClawControlSocketBridge {
   private refreshConfigAfterMutation(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
     if (request?.category !== "config_mutation" || frame.ok !== true) return;
     const upstream = this.upstreamSocket();
-    if (upstream.readyState !== WebSocket.OPEN) return;
+    if (upstream.readyState !== WebSocket.OPEN || !this.installedMethods?.has("config.get")) return;
     const lease = this.args.limiter.acquireRequest(this.identity);
     if (!lease) return;
     const refreshId = `octogee-config-refresh-${randomUUID()}`;

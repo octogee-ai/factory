@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  POD_SESSION_DIGEST_SCRIPT,
   createSurgePodTransport,
   parseSurgePodSnapshot,
   readPodDurableSessionDigest,
 } from "../surge-customer-handoff-runtime.js";
 import type { SurgePod } from "../surge-customer-handoff.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
+
+const GATEWAY_ID = "gw-a";
 
 const source: SurgePod = {
   uid: "old",
@@ -21,6 +29,65 @@ const target: SurgePod = {
   ready: false,
   terminating: false,
 };
+
+const LOCAL_CORE_PORTABLE_PLAN = fileURLToPath(new URL(
+  "../../node_modules/@octogee/core/dist/local-coach-wired.js",
+  import.meta.url,
+));
+
+function runBuilderDigest(stateDir: string): { fileCount: number; totalBytes: number; sha256: string } {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      POD_SESSION_DIGEST_SCRIPT.replace(
+        "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js",
+        LOCAL_CORE_PORTABLE_PLAN,
+      ),
+      "alice",
+      "configured-builder-system-config",
+    ],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`digest subprocess failed: ${result.stderr || result.stdout}`);
+  }
+  return JSON.parse(result.stdout) as { fileCount: number; totalBytes: number; sha256: string };
+}
+
+function writeConfiguredBuilderState(stateDir: string): void {
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify({
+    agents: {
+      list: [{
+        id: "discord-helper",
+        agentDir: path.join(stateDir, "agents", "discord-helper", "runtime"),
+        workspace: path.join(stateDir, "workspaces", "discord-helper"),
+      }],
+    },
+    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+  }));
+  const files = [
+    ["agents/discord-helper/agent/legacy.json", "legacy"],
+    ["agents/discord-helper/runtime/auth.json", "agent-auth"],
+    ["workspaces/discord-helper/notes.md", "workspace"],
+    ["agents/discord-helper/sessions/sessions.json", "session"],
+    ["memory/discord-helper.sqlite", "sqlite"],
+  ] as const;
+  for (const [relativePath, contents] of files) {
+    const absolutePath = path.join(stateDir, relativePath);
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, contents);
+  }
+}
 
 describe("surge handoff Kubernetes projection", () => {
   it("keeps every observed UID while projecting usable pods independently", () => {
@@ -86,10 +153,65 @@ describe("surge handoff Kubernetes projection", () => {
       "gateway",
       "--",
       "node",
+      "--input-type=module",
       "-e",
       expect.any(String),
       "alice",
     ]));
+  });
+
+  it("runs the Builder durable-state planner from the scripts package context", async () => {
+    const runKubectl = vi.fn(async () => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify({ fileCount: 4, totalBytes: 40, sha256: "b".repeat(64) }),
+    }));
+
+    await readPodDurableSessionDigest(
+      runKubectl,
+      "octogee-test",
+      source,
+      "alice",
+      "configured-builder-system-config",
+    );
+
+    const args = runKubectl.mock.calls[0]?.[0] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      "node",
+      "--input-type=module",
+      "-e",
+      "configured-builder-system-config",
+    ]));
+    const script = args[args.indexOf("-e") + 1] ?? "";
+    expect(script).toContain(
+      "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js",
+    );
+    expect(script).toContain("configuredBuilderPortableStatePlanFromConfig");
+    expect(script).toContain("assertConfiguredBuilderPortableStatePlanOnDisk");
+  });
+
+  it("hashes matching explicit Builder agent, workspace, and session-store state on distinct pods", () => {
+    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
+    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
+    try {
+      writeConfiguredBuilderState(sourceState);
+      writeConfiguredBuilderState(targetState);
+
+      const sourceDigest = runBuilderDigest(sourceState);
+      const targetDigest = runBuilderDigest(targetState);
+
+      expect(sourceDigest).toEqual(targetDigest);
+      expect(sourceDigest.fileCount).toBe(5);
+
+      fs.writeFileSync(
+        path.join(targetState, "workspaces", "discord-helper", "notes.md"),
+        "changed workspace state",
+      );
+      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
+    } finally {
+      fs.rmSync(sourceState, { recursive: true, force: true });
+      fs.rmSync(targetState, { recursive: true, force: true });
+    }
   });
 });
 
@@ -135,6 +257,7 @@ describe("surge handoff direct pod transport", () => {
       status: "ready",
       version: "new",
       handoffReleased: false,
+      prelaunchState: "none",
       mountedCustomers: ["alice"],
     });
     await transport.transfer({
@@ -144,6 +267,7 @@ describe("surge handoff direct pod transport", () => {
       sourcePod: source,
       targetPod: target,
       loadStrategy: "expedited",
+      configTransferMode: "activation-manifest",
     });
     await transport.discardTargetCustomer({
       gatewayId: "default",
@@ -193,22 +317,82 @@ describe("surge handoff direct pod transport", () => {
       mode: "final",
       sourcePodIp: "10.0.0.1",
       transferKey: "final-transfer-key",
+      configTransferMode: "activation-manifest",
     });
     expect(calls[6]?.body).toMatchObject({
       mode: "final",
       targetHost: "10.0.0.2",
       targetPort: 30873,
       includeActivationManifest: true,
+      configTransferMode: "activation-manifest",
     });
     expect(calls[7]?.body).toMatchObject({
       mode: "final",
       loadStrategy: "expedited",
+      configTransferMode: "activation-manifest",
     });
     expect(calls[9]?.body).toEqual({
       migrationId: "surge-default-new",
       targetPodUid: "new",
     });
     expect(randomKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("converges a Builder system config before final import and clears only target migration observation on convergence failure", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, body });
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+      }
+      if (url.includes("/flush/")) {
+        return new Response(JSON.stringify({ error: "flush failed" }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      randomKey: vi.fn()
+        .mockReturnValueOnce("keys-transfer-key")
+        .mockReturnValueOnce("final-transfer-key"),
+      log: vi.fn(),
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+      loadStrategy: "standard",
+      configTransferMode: "configured-builder-system-config",
+      expectedSystemConfigCommit: "a".repeat(40),
+    })).rejects.toThrow("flush pod=new-pod: 500");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://10.0.0.2:3003/prepare-rsync-import/default",
+      "http://10.0.0.1:3003/push-rsync-state/default",
+      "http://10.0.0.2:3003/finish-rsync-import/default",
+      "http://10.0.0.2:3003/flush/default",
+      "http://10.0.0.2:3003/abort-rsync-import/default",
+    ]);
+    expect(calls[3]?.body).toEqual({
+      migrationId: "surge-default-new",
+      slug: "alice",
+      reason: "migration-converge",
+      expectedSystemConfigCommit: "a".repeat(40),
+    });
+    expect(calls[4]?.body).toEqual({
+      migrationId: "surge-default-new",
+      slug: "alice",
+      rpcPhase: "abort-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+    });
+    expect(calls.some((call) => call.url.includes("/unmount/"))).toBe(false);
   });
 
   it("does not transfer final state when the key transfer fails", async () => {
@@ -239,6 +423,7 @@ describe("surge handoff direct pod transport", () => {
       sourcePod: source,
       targetPod: target,
       loadStrategy: "standard",
+      configTransferMode: "activation-manifest",
     })).rejects.toThrow(/push-rsync-state.*404/u);
 
     expect(calls.map((call) => [call.url, call.body?.mode, call.body?.rpcPhase])).toEqual([
@@ -341,8 +526,93 @@ describe("surge handoff direct pod transport", () => {
       status: "booting",
       version: "new",
       handoffReleased: true,
+      prelaunchState: "none",
       mountedCustomers: [],
     });
+  });
+
+  it("carries a held prelaunch surge report so a stopped Builder target stays transferable", async () => {
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", version: "new", customers: [] }));
+      }
+      return new Response(JSON.stringify({
+        handoffReleased: false,
+        openclawUp: false,
+        prelaunchState: "hydrated",
+      }), { status: 503 });
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.readPodHealth(target)).resolves.toMatchObject({
+      status: "booting",
+      prelaunchState: "hydrated",
+    });
+  });
+
+  it("stops, resumes, reserves, and unreserves Builder OpenClaw through the process endpoints", async () => {
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push({
+        path: url.pathname,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return new Response(JSON.stringify({ ok: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+    const base = {
+      gatewayId: GATEWAY_ID,
+      slug: "alice",
+      operationId: "surge-gw-a-target",
+    };
+
+    await transport.stopSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
+    await transport.resumeSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
+    await transport.holdTargetOpenClaw!({ ...base, targetPod: target });
+    await transport.unreserveTargetOpenClaw!({ ...base, targetPod: target });
+
+    expect(calls.map((call) => call.path)).toEqual([
+      `/hold-surge-openclaw/${GATEWAY_ID}`,
+      `/resume-surge-openclaw/${GATEWAY_ID}`,
+      `/hold-surge-openclaw/${GATEWAY_ID}`,
+      `/unreserve-surge-openclaw/${GATEWAY_ID}`,
+    ]);
+    for (const call of calls) {
+      expect(call.body).toEqual({
+        migrationId: "surge-gw-a-target",
+        slug: "alice",
+        targetPodUid: target.uid,
+      });
+    }
+  });
+
+  it("names the missing process-control capability when a pod predates the endpoint", async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ error: "not found" }), { status: 404 }),
+    ) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.stopSourceOpenClaw!({
+      gatewayId: GATEWAY_ID,
+      slug: "alice",
+      operationId: "surge-gw-a-target",
+      sourcePod: source,
+      targetPod: target,
+    })).rejects.toThrow("lacks the required surge OpenClaw hold endpoint");
   });
 
   it("rejects pod health that does not prove the mounted customer inventory", async () => {

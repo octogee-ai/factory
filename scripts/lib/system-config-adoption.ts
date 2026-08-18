@@ -178,14 +178,16 @@ function changedJsonPaths(
   return paths;
 }
 
-function accountUsesMattermostSecret(accountId: string, value: unknown): boolean {
-  if (!isObject(value)) return false;
-  const botToken = value.botToken;
-  const expected = mattermostAccountSecretRef(accountId);
-  return isObject(botToken)
-    && botToken.source === expected.source
-    && botToken.provider === expected.provider
-    && botToken.id === expected.id;
+// A Builder overlay owns its account ids and may point any account at any key in
+// the tenant-scoped Mattermost secrets file, so the retained secrets are the keys
+// the adopted config references, not the account ids it happens to use.
+function referencedMattermostSecretKey(value: unknown): string | null {
+  if (!isObject(value) || !isObject(value.botToken)) return null;
+  const { source, provider, id } = value.botToken;
+  const canonical = mattermostAccountSecretRef("probe");
+  if (source !== canonical.source || provider !== canonical.provider) return null;
+  if (typeof id !== "string" || !id.startsWith("/") || id.length < 2) return null;
+  return id.slice(1).replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
 function desiredMattermostSecrets(
@@ -197,14 +199,13 @@ function desiredMattermostSecrets(
   const mattermost = isObject(channels.mattermost) ? channels.mattermost : {};
   const accounts = isObject(mattermost.accounts) ? mattermost.accounts : {};
   const next: Record<string, string> = {};
-  for (const [accountId, account] of Object.entries(accounts)) {
-    if (!accountUsesMattermostSecret(accountId, account) && extracted[accountId] === undefined) {
-      continue;
-    }
-    if (Object.prototype.hasOwnProperty.call(extracted, accountId)) {
-      next[accountId] = extracted[accountId];
-    } else if (Object.prototype.hasOwnProperty.call(current, accountId)) {
-      next[accountId] = current[accountId];
+  for (const account of Object.values(accounts)) {
+    const key = referencedMattermostSecretKey(account);
+    if (key === null) continue;
+    if (Object.prototype.hasOwnProperty.call(extracted, key)) {
+      next[key] = extracted[key];
+    } else if (Object.prototype.hasOwnProperty.call(current, key)) {
+      next[key] = current[key];
     }
   }
   return next;

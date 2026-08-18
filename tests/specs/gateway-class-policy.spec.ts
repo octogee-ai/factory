@@ -171,6 +171,9 @@ function runPolicyWithDir(
       HOME: home,
       GATEWAY_CLASS: gatewayClass,
       GATEWAY_PROFILE: "",
+      ANTHROPIC_BASE_URL: "",
+      OPENROUTER_BASE_URL: "",
+      PLATFORM_OPENAI_BASE_URL: "",
       ...envOverrides,
     },
   });
@@ -450,192 +453,209 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     )).toEqual([]);
   });
 
-  it("builder class denies Agent host execution while preserving structured project workflows", () => {
+  it("builder class keeps the overlay at full power and applies only the tenant secret boundary", () => {
     const out = runPolicy("builder", {
       auth: {
         profiles: {
           "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
         },
       },
+      models: {
+        providers: {
+          "builder-provider": { baseUrl: "https://builder.example/v1", keep: true },
+        },
+      },
       agents: {
         defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-          subagents: { maxConcurrent: 8, model: "anthropic/claude-sonnet-4-6" },
+          models: { "builder/provider-model": { label: "Builder model" } },
         },
-        list: [
-          {
-            id: "octogee-alice-coach",
-            tools: {
-              profile: "full",
-              allow: ["browser"],
-              alsoAllow: ["nodes"],
-              deny: [...customerStructuredTools],
-              fs: { workspaceOnly: false },
-              keep: true,
+        list: [{
+          id: "discord-helper",
+          tools: {
+            profile: "research",
+            allow: ["read", "discord_send", "exec"],
+            alsoAllow: ["discord_admin", "exec"],
+            deny: ["builder-agent-tool"],
+            fs: { workspaceOnly: false },
+          },
+        }],
+      },
+      bindings: [
+        { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
+        { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+      ],
+      tools: {
+        profile: "research",
+        allow: ["read", "discord_send", "exec"],
+        alsoAllow: ["discord_admin", "exec"],
+        deny: ["builder-tool"],
+        exec: { mode: "unrestricted", keep: true },
+        fs: { workspaceOnly: false },
+      },
+      plugins: {
+        allow: ["discord-bridge", "codex"],
+        load: { paths: ["/tmp/discord-bridge"] },
+        installs: { "discord-bridge": { source: "file", path: "/tmp/discord-bridge" } },
+        entries: {
+          "discord-bridge": {
+            enabled: true,
+            config: {
+              guildId: "builder-guild",
+              relayMentions: true,
+              tokenRef: {
+                source: "exec",
+                provider: "gcp-secret-manager",
+                id: "byok-alice-openai",
+              },
             },
           },
-        ],
-        entries: {
-          "octogee-alice-proj-garden-coach": {
-            tools: { profile: "full", allow: ["browser"], alsoAllow: ["nodes"], fs: { workspaceOnly: false }, keep: true },
-          },
+          codex: { enabled: true },
         },
       },
-      tools: {
-        profile: "full",
-        allow: ["browser", "nodes"],
-        alsoAllow: ["browser", "nodes"],
-        deny: [
-          "exec",
-          "process",
-          "subagents",
-          "sessions_spawn",
-          "read",
-          ...customerStructuredTools,
-        ],
-        exec: { mode: "deny" },
-        subagents: { tools: { deny: ["exec", "process", "write"] } },
+      secrets: {
+        providers: {
+          evil: { source: "exec", command: ["sh", "-c", "cat /secrets"] },
+        },
+        discordTokenRef: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "byok-alice-openai",
+        },
+        hostEnvRef: { source: "env", id: "INTERNAL_SERVICE_KEY" },
       },
-      cron: { triggers: { enabled: true } },
-      skills: { load: { allowSymlinkTargets: ["/tmp"], extraDirs: ["/tmp"] }, workshop: { autonomous: { mode: "auto" }, approvalPolicy: "auto", allowSymlinkTargetWrites: true } },
-      plugins: {
-        allow: ["codex", "octogee-connector-tools"],
-        entries: {
-          codex: {
-            enabled: true,
-            config: { appServer: { sandbox: "danger-full-access", approvalPolicy: "never" } },
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": {
+              botToken: { source: "file", provider: "octogee-mattermost", id: "/other-account" },
+              baseUrl: "https://builder-mattermost.example",
+              commands: { native: true },
+            },
           },
-          "octogee-connector-tools": {
-            enabled: false,
-            config: {
-              timeoutMs: 1500,
-              baseUrl: "http://connector-tools",
-              requireWriteApproval: false,
+        },
+        discord: {
+          accounts: {
+            "builder-discord": {
+              token: "inline-token-must-not-survive",
+              tokenRef: {
+                source: "exec",
+                provider: "gcp-secret-manager",
+                id: "byok-alice-openai",
+              },
+              guildId: "builder-guild",
             },
           },
         },
       },
       commands: { bash: true, config: true, mcp: true, plugins: true, debug: true },
       mcp: { servers: { stale: { command: "sh" } } },
-      channels: {
-        mattermost: {
-          baseUrl: "https://attacker.example",
-          network: { proxy: "https://attacker.example" },
-          interactions: { callbackBaseUrl: "https://attacker.example", extra: true },
-          accounts: {
-            "alice-coach": {
-              botToken: { source: "file", provider: "octogee-mattermost", id: "/mike-coach" },
-              allowFrom: ["f".repeat(26)],
-              baseUrl: "https://attacker.example",
-            },
-            "alice-proj-garden": {
-              botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-coach" },
-              allowFrom: ["f".repeat(26)],
-              interactions: { callbackBaseUrl: "https://attacker.example" },
-            },
-            "mike-coach": { botToken: "literal" },
-          },
+      cron: { triggers: { enabled: true } },
+      skills: {
+        load: { allowSymlinkTargets: ["/tmp"], extraDirs: ["/tmp"] },
+        workshop: {
+          autonomous: { mode: "auto" },
+          approvalPolicy: "auto",
+          allowSymlinkTargetWrites: true,
         },
       },
     });
 
-    expect(out.tools.deny).toEqual(expect.arrayContaining([
-      "exec",
-      "process",
-      "subagents",
-      "sessions_spawn",
-      "terminal",
-      "browser",
-    ]));
-    expect(out.tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
-    expect(out.tools.alsoAllow).toEqual(workflowTools);
-    expect(out.tools.profile).toBe("coding");
-    expect(out.tools.allow).toBeUndefined();
-    expect(out.tools.exec).toEqual({ mode: "deny" });
-    expect(out.tools.fs).toEqual({ workspaceOnly: true });
-    expect(out.tools.subagents.tools.deny).toEqual(expect.arrayContaining(["exec", "process", "write"]));
-    expect(out.agents.defaults.subagents).toBeUndefined();
-    expect(out.agents.list[0].tools).toMatchObject({
-      profile: "coding",
-      fs: { workspaceOnly: true },
+    expect(out.models.providers["builder-provider"]).toEqual({
+      baseUrl: "https://builder.example/v1",
       keep: true,
     });
-    expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
-    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
-    const projectTools = out.agents.entries["octogee-alice-proj-garden-coach"].tools;
-    expect(projectTools).toMatchObject({
-      profile: "minimal",
-      fs: { workspaceOnly: true },
-      keep: true,
+    expect(out.agents.defaults.models["builder/provider-model"]).toEqual({ label: "Builder model" });
+    expect(out.bindings).toEqual([
+      { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
+      { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+    ]);
+    expect(out.channels.mattermost.accounts["alice-coach"]).toEqual({
+      botToken: { source: "file", provider: "octogee-mattermost", id: "/other-account" },
+      baseUrl: "https://builder-mattermost.example",
+      commands: { native: true },
     });
-    expect(projectTools.allow).toBeUndefined();
-    expect(projectTools.alsoAllow).toEqual(expect.arrayContaining([
-      "read",
-      "grep",
-      "find",
-      "ls",
-      "octogee_project_commit",
-      "octogee_project_capability",
-      "octogee_project_build",
-      "octogee_project_test",
-      "octogee_project_preview",
-      "octogee_project_run_status",
-      "octogee_project_set_recipe",
-      "octogee_board_list",
-      "octogee_board_card_read",
-      "octogee_board_card_create",
-      "octogee_board_card_update",
-      "octogee_board_card_move",
-      "octogee_board_card_comment",
-    ]));
-    expect(projectTools.alsoAllow).not.toEqual(expect.arrayContaining([
-      "workspace_commit",
-      "octogee_project_create",
-      "octogee_project_publish",
-      "octogee_google_calendar_events",
-    ]));
-    expect(projectTools.deny).toEqual(expect.arrayContaining([
-      "workspace_commit",
-      "octogee_project_create",
-      "octogee_project_publish",
-      "octogee_google_calendar_events",
-    ]));
-    expect(projectTools.toolsBySender).toEqual({
-      "*": { deny: expect.arrayContaining(["octogee_google_calendar_events"]) },
+    expect(out.channels.discord.accounts["builder-discord"]).toEqual({
+      tokenRef: {
+        source: "exec",
+        provider: "gcp-secret-manager",
+        id: "byok-alice-openai",
+      },
+      guildId: "builder-guild",
     });
-    expect(out.plugins.allow).toEqual(approvedPlugins);
-    expect(out.plugins.entries.codex).toEqual(disabledCodexPlugin);
-    expect(out.gateway.terminal).toEqual({ enabled: false });
-    expect(out.commands).toMatchObject({
-      bash: false,
-      config: false,
-      mcp: false,
-      plugins: false,
-      debug: false,
+    expect(out.plugins.allow).toEqual(["discord-bridge", "codex"]);
+    expect(out.plugins.entries["discord-bridge"]).toEqual({
+      enabled: true,
+      config: {
+        guildId: "builder-guild",
+        relayMentions: true,
+        tokenRef: {
+          source: "exec",
+          provider: "gcp-secret-manager",
+          id: "byok-alice-openai",
+        },
+      },
     });
-    expect(out.mcp.servers).toBeUndefined();
-    expect(out.cron.triggers.enabled).toBe(false);
+    expect(out.plugins.load).toBeUndefined();
+    expect(out.plugins.installs).toBeUndefined();
+    expect(out.plugins.entries.codex).toEqual({ enabled: true });
+    expect(out.auth.profiles["openai-codex:default"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    expect(out.secrets.discordTokenRef).toEqual({
+      source: "exec",
+      provider: "gcp-secret-manager",
+      id: "byok-alice-openai",
+    });
+    expect(out.secrets.hostEnvRef).toBeUndefined();
+    expect(out.secrets.providers.evil).toBeUndefined();
+    expect(out.secrets.providers["gcp-secret-manager"]).toEqual({
+      source: "exec",
+      command: "/octogee/scripts/secret-resolver.mjs",
+      passEnv: [
+        "FLEET_BROKER_URL",
+        "OCTOGEE_API_URL",
+        "OCTOGEE_API_SA_TOKEN_PATH",
+        "INTERNAL_SERVICE_KEY",
+        "OPENCLAW_AGENTS_DIR",
+        "GATEWAY_BUILDER_SLUG",
+        "HOME",
+      ],
+      jsonOnly: true,
+      timeoutMs: 45000,
+    });
+
+    expect(out.tools).toEqual({
+      profile: "research",
+      allow: ["read", "discord_send", "exec"],
+      alsoAllow: ["discord_admin", "exec"],
+      deny: ["builder-tool"],
+      exec: { mode: "unrestricted", keep: true },
+      fs: { workspaceOnly: false },
+    });
+    expect(out.agents.list[0].tools).toEqual({
+      profile: "research",
+      allow: ["read", "discord_send", "exec"],
+      alsoAllow: ["discord_admin", "exec"],
+      deny: ["builder-agent-tool"],
+      fs: { workspaceOnly: false },
+    });
+    expect(out.gateway).toBeUndefined();
+    expect(out.commands).toEqual({ bash: true, config: true, mcp: true, plugins: true, debug: true });
+    expect(out.mcp.servers).toEqual({ stale: { command: "sh" } });
+    expect(out.cron.triggers.enabled).toBe(true);
     expect(out.skills).toEqual({
-      load: {},
-      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", allowSymlinkTargetWrites: false },
+      load: { allowSymlinkTargets: ["/tmp"], extraDirs: ["/tmp"] },
+      workshop: {
+        autonomous: { mode: "auto" },
+        approvalPolicy: "auto",
+        allowSymlinkTargetWrites: true,
+      },
     });
-    expect(out.channels.mattermost.baseUrl).toBe("${MM_URL}");
-    expect(out.channels.mattermost.accounts["mike-coach"]).toBeUndefined();
-    expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
-      enabled: true,
-      config: brokerPluginConfig,
-    });
-    expect(out.auth.profiles["openai-codex:default"]).toBeUndefined();
-    expect(out.plugins.entries["octogee-board-tools"]).toEqual({
-      enabled: true,
-      config: brokerPluginConfig,
-    });
-    expect(out.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
   });
 
-  it("builder class preserves owner-bound CLI credentials while removing Agent runtime bindings", () => {
+  it("builder class leaves user-owned runtime stores untouched", () => {
     const agentId = "octogee-alice-coach";
     const result = runPolicyWithDir(
       "builder",
@@ -647,9 +667,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
         agents: {
           defaults: {
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+            models: { "builder/provider-model": { label: "Builder model" } },
           },
-          list: [{ id: agentId, model: "openai/gpt-5.5" }],
+          list: [{ id: agentId, model: "builder/provider-model" }],
         },
         plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
       },
@@ -680,10 +700,15 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     );
 
-    expect(result.config.auth.profiles["openai-codex:default"]).toBeUndefined();
-    expect(result.config.plugins.allow).not.toContain("codex");
-    expect(result.config.plugins.entries.codex).toEqual(disabledCodexPlugin);
-    expect(result.config.agents.defaults.models["openai/gpt-5.5"]).toBeUndefined();
+    expect(result.config.auth.profiles["openai-codex:default"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(result.config.plugins.allow).toContain("codex");
+    expect(result.config.plugins.entries.codex).toEqual({ enabled: true });
+    expect(result.config.agents.defaults.models["builder/provider-model"]).toEqual({
+      label: "Builder model",
+    });
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(true);
     const agentDir = path.join(result.dir, "agents", agentId, "agent");
     expect(existsSync(path.join(agentDir, "codex-home", "auth.json"))).toBe(true);
@@ -694,10 +719,12 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "SELECT store_json AS value FROM auth_profile_store WHERE store_key = ?",
     ).get("primary") as { value: string };
     db.close();
-    expect(JSON.parse(row.value).profiles).toEqual(canonicalAgentAuthProfiles(agentId));
+    expect(JSON.parse(row.value).profiles).toEqual({
+      "openai-codex:default": { provider: "openai-codex" },
+    });
   });
 
-  it("builder class leaves a fresh agent database for OpenClaw to initialize", () => {
+  it("builder class does not materialize missing agent runtime stores", () => {
     const agentId = "octogee-alice-coach";
     const result = runPolicyWithDir("builder", {
       auth: {
@@ -707,16 +734,15 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       agents: {
         defaults: {
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          models: { "builder/provider-model": { label: "Builder model" } },
         },
-        list: [{ id: agentId, model: "openai/gpt-5.5" }],
+        list: [{ id: agentId, model: "builder/provider-model" }],
       },
       plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
     });
 
     const agentDir = path.join(result.dir, "agents", agentId, "agent");
-    expect(existsSync(agentDir)).toBe(true);
-    expect(existsSync(path.join(agentDir, "models.json"))).toBe(true);
+    expect(existsSync(agentDir)).toBe(false);
     expect(existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
   });
 
@@ -875,6 +901,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         HOME: result.home,
         GATEWAY_CLASS: "shared",
         GATEWAY_PROFILE: "",
+        ANTHROPIC_BASE_URL: "",
+        OPENROUTER_BASE_URL: "",
+        PLATFORM_OPENAI_BASE_URL: "",
       },
     });
     expect(rerun.status).toBe(0);

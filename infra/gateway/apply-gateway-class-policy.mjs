@@ -1367,6 +1367,101 @@ function applyCustomerPolicy(config) {
   disableCodex(config);
 }
 
+function preserveBuilderPluginConfiguration(config) {
+  if (!objectValue(config.plugins)) return;
+  delete config.plugins.load;
+  delete config.plugins.installs;
+}
+
+const BUILDER_SECRET_REF_PROVIDERS = new Set([
+  "gcp-secret-manager",
+  "octogee-mattermost",
+]);
+const INLINE_SECRET_KEYS = new Set([
+  "apiKey",
+  "key",
+  "token",
+  "secret",
+  "password",
+  "botToken",
+  "keyRef",
+  "tokenRef",
+]);
+
+function isSafeBuilderSecretRef(value) {
+  const ref = objectValue(value);
+  return (
+    ref &&
+    typeof ref.id === "string" &&
+    BUILDER_SECRET_REF_PROVIDERS.has(ref.provider) &&
+    ((ref.source === "exec" && ref.provider === "gcp-secret-manager") ||
+      (ref.source === "file" && ref.provider === "octogee-mattermost"))
+  );
+}
+
+function sanitizeBuilderSecretReferences(value) {
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0; index--) {
+      const child = value[index];
+      if (isSecretRef(child)) {
+        if (!isSafeBuilderSecretRef(child)) value.splice(index, 1);
+        continue;
+      }
+      sanitizeBuilderSecretReferences(child);
+    }
+    return;
+  }
+  const record = objectValue(value);
+  if (!record) return;
+  for (const [key, child] of Object.entries(record)) {
+    if (INLINE_SECRET_KEYS.has(key) && typeof child === "string") {
+      delete record[key];
+      continue;
+    }
+    if (isSecretRef(child)) {
+      if (!isSafeBuilderSecretRef(child)) delete record[key];
+      continue;
+    }
+    sanitizeBuilderSecretReferences(child);
+  }
+}
+
+function projectBuilderSecretProviders(config, openclawDir) {
+  sanitizeBuilderSecretReferences(config);
+  config.secrets ??= {};
+  const providers = objectValue(config.secrets.providers) ?? {};
+  config.secrets.providers = providers;
+  providers["gcp-secret-manager"] = {
+    source: "exec",
+    command: "/octogee/scripts/secret-resolver.mjs",
+    passEnv: [
+      "FLEET_BROKER_URL",
+      "OCTOGEE_API_URL",
+      "OCTOGEE_API_SA_TOKEN_PATH",
+      "INTERNAL_SERVICE_KEY",
+      "OPENCLAW_AGENTS_DIR",
+      "GATEWAY_BUILDER_SLUG",
+      "HOME",
+    ],
+    jsonOnly: true,
+    timeoutMs: 45000,
+  };
+  providers["octogee-mattermost"] = {
+    source: "file",
+    path: path.join(openclawDir, "secrets", "mattermost-accounts.json"),
+    mode: "json",
+  };
+}
+
+// A Builder gateway is the Builder's own OpenClaw. No platform credential lives
+// in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
+// and the codex BYOSUB plugin stay at the Builder's discretion; the platform
+// keeps only its plugin configuration boundary and tenant-scoped secret providers.
+function applyBuilderPolicy(config, openclawDir) {
+  preserveBuilderPluginConfiguration(config);
+  projectBuilderSecretProviders(config, openclawDir);
+}
+
 function resolveGatewayClass(env) {
   if (env.GATEWAY_CLASS === "builder") {
     return env.GATEWAY_CLASS;
@@ -1410,7 +1505,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
   }
   const gatewayClass = resolveGatewayClass(env);
   const before = JSON.stringify(config);
-  if (gatewayClass === "builder" || gatewayClass === "shared") {
+  if (gatewayClass === "shared") {
     const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
     projectCustomerPlugins(config);
     projectCustomerSecretProviders(config, openclawDir);
@@ -1427,6 +1522,8 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
       },
     );
     applyCustomerPolicy(config);
+  } else if (gatewayClass === "builder") {
+    applyBuilderPolicy(config, env.OPENCLAW_DIR ?? path.dirname(configPath));
   }
   if (JSON.stringify(config) === before) {
     return { applied: false, reason: "already-set", gatewayClass };

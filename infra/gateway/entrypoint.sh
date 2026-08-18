@@ -321,6 +321,12 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   fi
 fi
 
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  log "Pre-boot: initializing configured Builder agent runtime directories..."
+  "$TSX" /octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts \
+    || log "⚠ configured Builder agent runtime directories failed to initialize (exit $?); the OpenClaw supervisor re-runs this before every start"
+fi
+
 CUSTOMER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CUSTOMER_CRON_QUARANTINE" ]; then
   log "Pre-boot: quarantining unsafe persisted customer cron jobs..."
@@ -328,19 +334,28 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CUSTOMER_CRON_QUARANTINE"
 fi
 
 # ── Start OpenClaw before auxiliary runners compete for cold CPU ────────────
-log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
-openclaw gateway run --bind lan --port 18789 &
-OPENCLAW_PID=$!
+# Builder gateways delegate the OpenClaw process to the surge supervisor: a new
+# pod boots with OpenClaw held until the surge readiness path permits it, so the
+# entrypoint must not gate the auxiliary runners on OpenClaw health — the fleet
+# controller is what hydrates and releases a held pod.
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
+  supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
+else
+  log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
+  openclaw gateway run --bind lan --port 18789 &
+  OPENCLAW_PID=$!
 
-until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
-  if ! kill -0 "$OPENCLAW_PID" 2>/dev/null; then
-    log "OpenClaw exited before becoming healthy"
-    wait "$OPENCLAW_PID"
-    exit $?
-  fi
-  sleep 1
-done
-log "OpenClaw gateway healthy; starting auxiliary runners"
+  until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
+    if ! kill -0 "$OPENCLAW_PID" 2>/dev/null; then
+      log "OpenClaw exited before becoming healthy"
+      wait "$OPENCLAW_PID"
+      exit $?
+    fi
+    sleep 1
+  done
+  log "OpenClaw gateway healthy; starting auxiliary runners"
+fi
 
 # ── In-pod runners: supervised + observable ─────────────────────────────────
 # Each remaining runner is wrapped by supervise-runner.ts, which owns respawn AND writes

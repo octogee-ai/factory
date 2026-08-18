@@ -4,12 +4,7 @@ import {
 } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
 import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
-import advertisedMethods from "./openclaw-2026.8.1-beta.2-advertised-methods.json" with { type: "json" };
 import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
-
-export const OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS = Object.freeze(
-  advertisedMethods as readonly string[],
-);
 
 export type OpenClawControlRpcCategory =
   | "read"
@@ -28,7 +23,6 @@ export interface OpenClawControlRpcDecision {
   category: OpenClawControlRpcCategory;
   reason?:
     | "invalid-frame"
-    | "runtime-drift"
     | "method-unavailable"
     | "config-frozen"
     | "config-base-mismatch"
@@ -66,6 +60,11 @@ const READ_METHODS = new Set([
 ]);
 
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
+export const OPENCLAW_CONTROL_ALLOWED_METHODS = Object.freeze([
+  ...READ_METHODS,
+  ...CONFIG_MUTATION_METHODS,
+  "tools.invoke",
+]);
 const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
@@ -470,27 +469,82 @@ function configMutationDecision(
   };
 }
 
-export function pinnedOpenClawRuntimeMatches(installedMethods: ReadonlySet<string>): boolean {
-  if (installedMethods.size !== OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS.length) return false;
-  return OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS.every((method) => installedMethods.has(method));
+function parsedOpenClawControlRequest(
+  frame: unknown,
+): { request: Record<string, unknown>; method: string } | OpenClawControlRpcDecision {
+  const request = record(frame);
+  if (!request || request.type !== "req" || !boundedString(request.id, 256) ||
+    !boundedString(request.method, 256) || !record(request.params)) {
+    return { allowed: false, category: "unknown", reason: "invalid-frame" };
+  }
+  return { request, method: request.method as string };
+}
+
+function unavailableMethodDecision(): OpenClawControlRpcDecision {
+  return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
+}
+
+function nativeOwnerCategory(method: string): OpenClawControlRpcCategory {
+  if (READ_METHODS.has(method)) return "read";
+  if (CONFIG_MUTATION_METHODS.has(method)) return "config_mutation";
+  if (method === "tools.invoke") return "tools_invoke";
+  return "unknown";
+}
+
+// A native owner's config write keeps OpenClaw's own parameter contract (base
+// hash, shape) but never the platform wiring: the same invariants the durable
+// sync watcher would reject are denied here, before OpenClaw applies them live.
+function nativeOwnerConfigMutationDecision(
+  request: Record<string, unknown>,
+  context: OpenClawControlRpcPolicyContext,
+): OpenClawControlRpcDecision {
+  const category = "config_mutation";
+  if (context.configFrozen) return { allowed: false, category, reason: "config-frozen" };
+  const params = record(request.params);
+  const current = context.currentConfig;
+  const raw = params ? parsedRaw(params.raw) : null;
+  const replacePaths = params ? normalizedReplacePaths(params.replacePaths) : null;
+  if (!current || !raw || !replacePaths) {
+    return { allowed: false, category, reason: "config-invalid" };
+  }
+  const proposed = proposedMutationConfig(request.method, current.raw, raw, replacePaths);
+  if (platformInvariantViolations(proposed, context.invariantContext).length > 0) {
+    return { allowed: false, category, reason: "platform-invariant" };
+  }
+  return { allowed: true, category, proposedConfig: proposed, outbound: structuredClone(request) };
+}
+
+// A native owner gets their whole OpenClaw: every method its runtime
+// advertises forwards verbatim. What remains is transport safety — session
+// tenancy, origin, revocation, and protocol validity live in the surface — plus
+// the migration config freeze and the platform wiring invariants on config
+// writes, which hold for every principal.
+export function evaluateNativeOwnerOpenClawControlRpc(
+  frame: unknown,
+  context: OpenClawControlRpcPolicyContext,
+): OpenClawControlRpcDecision {
+  const parsed = parsedOpenClawControlRequest(frame);
+  if ("allowed" in parsed) return parsed;
+  if (!context.installedMethods.has(parsed.method)) return unavailableMethodDecision();
+  const category = nativeOwnerCategory(parsed.method);
+  if (category === "config_mutation") {
+    return nativeOwnerConfigMutationDecision(parsed.request, context);
+  }
+  return {
+    allowed: true,
+    category,
+    outbound: structuredClone(parsed.request),
+  };
 }
 
 export function evaluateOpenClawControlRpc(
   frame: unknown,
   context: OpenClawControlRpcPolicyContext,
 ): OpenClawControlRpcDecision {
-  const request = record(frame);
-  if (!request || request.type !== "req" || !boundedString(request.id, 256) ||
-    !boundedString(request.method, 256) || !record(request.params)) {
-    return { allowed: false, category: "unknown", reason: "invalid-frame" };
-  }
-  if (!pinnedOpenClawRuntimeMatches(context.installedMethods)) {
-    return { allowed: false, category: "unknown", reason: "runtime-drift" };
-  }
-  const method = request.method as string;
-  if (!context.installedMethods.has(method)) {
-    return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
-  }
+  const parsed = parsedOpenClawControlRequest(frame);
+  if ("allowed" in parsed) return parsed;
+  const { request, method } = parsed;
+  if (!context.installedMethods.has(method)) return unavailableMethodDecision();
   if (READ_METHODS.has(method)) {
     return { allowed: true, category: "read", outbound: structuredClone(request) };
   }
@@ -527,6 +581,9 @@ export function evaluateOpenClawControlRpcForProfile(
   context: OpenClawControlRpcPolicyContext,
   profile: OpenClawBrokerProfile,
 ): OpenClawControlRpcDecision {
+  if (profile === "native-owner") {
+    return evaluateNativeOwnerOpenClawControlRpc(frame, context);
+  }
   return profile === "delegated-read" || profile === "delegated-config"
     ? evaluateDelegatedOpenClawControlRpc(frame, context, profile)
     : evaluateOpenClawControlRpc(frame, context);

@@ -85,6 +85,18 @@ describe("buildCustomerAgent", () => {
     });
   });
 
+  it("locks a shared-gateway coach down but hands a Builder gateway coach its full OpenClaw", () => {
+    const shared = buildCustomerAgent(mkCustomer());
+    expect(shared.tools).toMatchObject({
+      profile: "coding",
+      deny: expect.arrayContaining(["exec", "process", "subagents", "terminal", "browser"]),
+      fs: { workspaceOnly: true },
+    });
+
+    const builder = buildCustomerAgent(mkCustomer({ hostCode: "builder-full" }));
+    expect(builder).not.toHaveProperty("tools");
+  });
+
   it("threads the customer's slug into the agent display name", () => {
     const agent = buildCustomerAgent(
       mkCustomer({ slug: "chris-shop", coach: { ...DEFAULT_COACH, name: "Scout" } }),

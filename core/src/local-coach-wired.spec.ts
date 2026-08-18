@@ -9,6 +9,10 @@ import {
   customerCoachWiredInOpenclawConfig,
   hasMountedMarker,
   clearMountedMarker,
+  assertConfiguredBuilderPortableStatePlanOnDisk,
+  configuredBuilderPortableStatePlanFromConfig,
+  configuredBuilderStatePlanAllowsEntry,
+  configuredSafeAgentIdsFromConfig,
   isMigratingInPinned,
   listLocalCoachWiredSlugs,
   listLocalCustomerDirs,
@@ -83,6 +87,197 @@ describe("readOpenclawConfig", () => {
 
   it("returns null when the config is missing / unparseable (no throw)", () => {
     expect(readOpenclawConfig("/no/such/openclaw.json")).toBeNull();
+  });
+});
+
+describe("configuredSafeAgentIdsFromConfig", () => {
+  it("returns only safe configured agent IDs from list and keyed entries", () => {
+    expect(configuredSafeAgentIdsFromConfig({
+      agents: {
+        list: [
+          { id: "discord-helper" },
+          { id: "octogee-alice-coach" },
+          { id: "../outside" },
+          { id: "" },
+        ],
+        entries: {
+          "discord-helper": {},
+          "project.bot": {},
+          "../outside": {},
+        },
+      },
+    })).toEqual(["discord-helper", "octogee-alice-coach", "project.bot"]);
+  });
+});
+
+describe("configuredBuilderPortableStatePlanFromConfig", () => {
+  const stateDir = "/home/node/.openclaw";
+
+  it("includes default workspaces, explicit in-root paths, and per-agent session stores", () => {
+    const plan = configuredBuilderPortableStatePlanFromConfig({
+      agents: {
+        list: [
+          { id: "discord-helper" },
+          {
+            id: "operator",
+            default: true,
+            agentDir: `${stateDir}/agents/operator/runtime`,
+            workspace: `${stateDir}/workspaces/operator`,
+          },
+        ],
+      },
+      session: { store: `${stateDir}/agents/{agentId}/sessions/sessions.json` },
+    }, stateDir);
+
+    expect(plan.agentIds).toEqual(["discord-helper", "operator"]);
+    expect(plan.agentDirs).toEqual([
+      "agents/discord-helper/agent",
+      "agents/operator/runtime",
+    ]);
+    expect(plan.sessionStorePaths).toEqual([
+      "agents/discord-helper/sessions/sessions.json",
+      "agents/operator/sessions/sessions.json",
+    ]);
+    expect(plan.paths).toEqual(expect.arrayContaining([
+      { relativePath: "agents/discord-helper", kind: "directory" },
+      { relativePath: "agents/operator", kind: "directory" },
+      { relativePath: "workspace-discord-helper", kind: "directory" },
+      { relativePath: "workspaces/operator", kind: "directory" },
+      { relativePath: "memory/discord-helper.sqlite", kind: "file" },
+      { relativePath: "memory/operator.sqlite", kind: "file" },
+    ]));
+    expect(configuredBuilderStatePlanAllowsEntry("workspace-discord-helper/MEMORY.md", plan)).toBe(true);
+    expect(configuredBuilderStatePlanAllowsEntry("agents/discord-helper/sessions/", plan)).toBe(true);
+    expect(configuredBuilderStatePlanAllowsEntry("outside/secret", plan)).toBe(false);
+  });
+
+  it("uses the upstream default workspace for the configured default agent", () => {
+    const plan = configuredBuilderPortableStatePlanFromConfig({
+      agents: { list: [{ id: "main", default: true }] },
+    }, stateDir);
+
+    expect(plan.paths).toContainEqual({ relativePath: "workspace", kind: "directory" });
+    expect(plan.sessionStorePaths).toEqual(["agents/main/sessions/sessions.json"]);
+  });
+
+  it("carries OpenClaw's implicit main agent for a missing or empty roster (load-time materialization)", () => {
+    const implicit = configuredBuilderPortableStatePlanFromConfig({}, stateDir);
+    const declaredEmpty = configuredBuilderPortableStatePlanFromConfig({
+      agents: { list: [] },
+    }, stateDir);
+    const emptyEntries = configuredBuilderPortableStatePlanFromConfig({
+      agents: { entries: {} },
+    }, stateDir);
+
+    expect(implicit.agentIds).toEqual(["main"]);
+    expect(implicit.paths).toContainEqual({ relativePath: "workspace", kind: "directory" });
+    expect(declaredEmpty.agentIds).toEqual(["main"]);
+    expect(emptyEntries.agentIds).toEqual(["main"]);
+  });
+
+  it("accepts the shipped Builder seed (empty roster + agents.defaults.workspace)", () => {
+    const seed = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      "utf8",
+    )) as Parameters<typeof configuredBuilderPortableStatePlanFromConfig>[0];
+
+    const plan = configuredBuilderPortableStatePlanFromConfig(seed, stateDir);
+
+    expect(plan.agentIds).toEqual(["main"]);
+    expect(plan.paths).toContainEqual({ relativePath: "workspace", kind: "directory" });
+  });
+
+  it("accepts the platform-managed coach and project-agent workspaces under customers/<slug>", () => {
+    const plan = configuredBuilderPortableStatePlanFromConfig({
+      agents: {
+        list: [
+          { id: "octogee-ceckert-coach", default: true, workspace: `${stateDir}/customers/ceckert` },
+          { id: "octogee-ceckert-proj-site-coach", workspace: `${stateDir}/customers/ceckert/projects/site` },
+        ],
+      },
+    }, stateDir);
+
+    expect(plan.paths).toContainEqual({ relativePath: "customers/ceckert", kind: "directory" });
+    expect(configuredBuilderStatePlanAllowsEntry("customers/ceckert/projects/site/README.md", plan)).toBe(true);
+    expect(() => configuredBuilderPortableStatePlanFromConfig({
+      agents: { list: [{ id: "octogee-ceckert-coach", workspace: `${stateDir}/customers/other` }] },
+    }, stateDir)).toThrow(/canonical workspace root/);
+  });
+
+  it("uses keyed entries as the active roster when a stale list is also present", () => {
+    const plan = configuredBuilderPortableStatePlanFromConfig({
+      agents: {
+        list: [
+          { id: "stale-coach" },
+          { id: "discord-helper", workspace: "/tmp/not-the-active-config" },
+        ],
+        entries: {
+          "discord-helper": {
+            agentDir: `${stateDir}/agents/discord-helper/runtime`,
+            workspace: `${stateDir}/workspaces/discord-helper`,
+          },
+        },
+      },
+      session: { store: `${stateDir}/agents/{agentId}/sessions/sessions.json` },
+    }, stateDir);
+
+    expect(plan.agentIds).toEqual(["discord-helper"]);
+    expect(plan.paths).toEqual(expect.arrayContaining([
+      { relativePath: "agents/discord-helper", kind: "directory" },
+      { relativePath: "workspaces/discord-helper", kind: "directory" },
+    ]));
+    expect(plan.paths).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: "agents/stale-coach" }),
+    ]));
+  });
+
+  it.each([
+    { agents: { list: [{ id: "discord-helper", workspace: "relative/workspace" }] } },
+    { agents: { list: [{ id: "discord-helper", agentDir: "~/agent" }] } },
+    { agents: { list: [{ id: "discord-helper", workspace: "/tmp/outside" }] } },
+    { agents: { list: [{ id: "discord-helper", agentDir: `${stateDir}/secrets/discord-helper` }] } },
+    { agents: { list: [{ id: "discord-helper", workspace: `${stateDir}/custom/discord-helper` }] } },
+    { agents: { list: [{ id: "discord-helper" }] }, session: { store: `${stateDir}/sessions.json` } },
+    { agents: { list: [{ id: "discord-helper" }] }, session: { store: `${stateDir}/sessions/{unknown}.json` } },
+    { agents: { list: [{ id: "Discord.Helper" }] } },
+  ])("rejects a nonportable Builder path %#", (config) => {
+    expect(() => configuredBuilderPortableStatePlanFromConfig(config, stateDir)).toThrow(
+      /portable Builder state path|outside the Builder OpenClaw state root|absolute \{agentId\}|canonical/,
+    );
+  });
+});
+
+describe("assertConfiguredBuilderPortableStatePlanOnDisk", () => {
+  function seededStateDir(): string {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-state-"));
+    tmp.push(stateDir);
+    fs.mkdirSync(path.join(stateDir, "customers/ceckert/workspace/node_modules/.bin"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "agents/octogee-ceckert-coach/agent"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "agents/octogee-ceckert-coach/sessions"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "memory"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "memory/octogee-ceckert-coach.sqlite"), "");
+    fs.writeFileSync(path.join(stateDir, "agents/octogee-ceckert-coach/sessions/sessions.json"), "{}");
+    return stateDir;
+  }
+  const plan = configuredBuilderPortableStatePlanFromConfig({
+    agents: { list: [{ id: "octogee-ceckert-coach", default: true, workspace: "/home/node/.openclaw/customers/ceckert" }] },
+  }, "/home/node/.openclaw");
+
+  it("tolerates symlinks inside customer content (npm .bin shims, cloned repos)", () => {
+    const stateDir = seededStateDir();
+    fs.writeFileSync(path.join(stateDir, "customers/ceckert/workspace/node_modules/tsc.js"), "");
+    fs.symlinkSync("../tsc.js", path.join(stateDir, "customers/ceckert/workspace/node_modules/.bin/tsc"));
+    fs.symlinkSync("/nonexistent/target", path.join(stateDir, "customers/ceckert/workspace/dangling"));
+
+    expect(() => assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan)).not.toThrow();
+  });
+
+  it("still rejects a plan directory that is a file and a plan file that is a directory", () => {
+    const stateDir = seededStateDir();
+    fs.rmSync(path.join(stateDir, "memory/octogee-ceckert-coach.sqlite"));
+    fs.mkdirSync(path.join(stateDir, "memory/octogee-ceckert-coach.sqlite"));
+
+    expect(() => assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan)).toThrow(/is not a file/);
   });
 });
 

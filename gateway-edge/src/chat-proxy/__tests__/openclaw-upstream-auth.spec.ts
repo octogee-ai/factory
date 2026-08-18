@@ -93,6 +93,14 @@ describe("openUpstream OpenClaw auth", () => {
 
       expect(captured.params?.auth).toEqual({ deviceToken: "device-token-abc123" });
       expect(captured.params?.auth?.token).toBeUndefined();
+      expect(captured.params?.scopes).toEqual([
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.questions",
+        "operator.pairing",
+      ]);
       expect(verifyConnectSignature(captured.params, identity, "device-token-abc123")).toBe(true);
     });
   });

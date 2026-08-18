@@ -79,6 +79,9 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
   return {
     log: (msg) => state.logs.push(msg),
 
+    isConfiguredBuilderCustomer: () => true,
+    configuredBuilderOverlayPresent: () => true,
+
     loadUserSnapshot: async () => state.user,
 
     setProvisioningStatus: async (_uid, status) => write("provisioning.openclaw.status", status),
@@ -858,8 +861,8 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 
 });
 
-describe("addCustomerToGateway — builder gateway short-circuits when status=complete", () => {
-  it("runs full content convergence for a mounted builder when its assigned snapshot changed", async () => {
+describe("addCustomerToGateway — configured Builder overlay", () => {
+  it("converges project checkouts without replacing a mounted Builder overlay when its snapshot changed", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -884,16 +887,16 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     const adapter = makeAdapter(state);
     adapter.isBuilderGateway = () => true;
     adapter.customerCoachWiredInOpenclawConfig = () => true;
+    adapter.customerMountMarked = () => true;
 
     const result = await addCustomerToGateway(adapter, "uid-test", {
       convergeContent: true,
     });
 
     expect(result.steps).toContain("project-clone");
-    expect(result.steps).toContain("config-patch");
     expect(result.pendingProjectClones).toEqual([]);
     expect(state.calls).toContain("cloneProjectRepo");
-    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
   it("verifies the SSH key but skips unrelated convergence when the durable workspace is ready", async () => {
@@ -935,6 +938,109 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     // short-circuit path — Copilot review on PR #1182 caught a regression
     // here. Without it, fleet/heartbeat reports no mounted customers.
     expect(state.calls).toContain("onMounted");
+  });
+
+  it("defers only runtime verification for a configured Builder overlay", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      deferRuntimeVerification: true,
+    });
+
+    expect(result.steps).not.toContain("verify-channel-ready");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(state.calls).toContain("onMounted");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+  });
+
+  it("recovers an unmarked configured Builder overlay without replacing its config during content convergence", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        agentRuntime: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+    adapter.customerMountMarked = () => false;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      convergeContent: true,
+    });
+
+    expect(result.steps).toEqual(["verify-channel-ready"]);
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(state.calls).toContain("onMounted");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("cloneWorkspaceRepo");
+  });
+
+  it("keeps a marked Builder content converge overlay-safe", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        agentRuntime: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+    adapter.customerMountMarked = () => true;
+    state.pendingProjects = [{ projectSlug: "launchroom", giteaRepoName: "launchroom" }];
+    state.cloneProjectLands = false;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", { convergeContent: true });
+
+    expect(result.pendingProjectClones).toEqual(["launchroom"]);
+    expect(state.calls).toContain("cloneProjectRepo");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
   it("resyncs a drifted Gitea SSH key before the complete/wired fast path returns", async () => {
@@ -981,7 +1087,31 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     expect(result.steps).toContain("config-patch");
   });
 
-  it("does NOT short-circuit when status=complete but openclaw.json has no agent yet on a builder gateway", async () => {
+  it("rehydrates a missing workspace below a configured Builder overlay without rewriting that overlay", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      emptyDisk(),
+    );
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.steps).toContain("ssh-key");
+    expect(result.steps).toContain("clone-workspace-repo");
+    expect(state.calls).toContain("cloneWorkspaceRepo");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).toContain("waitForAccountHealthy");
+  });
+
+  it("attaches a Discord-only Builder overlay without a canonical Mattermost coach", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -994,20 +1124,39 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     );
     const adapter = makeAdapter(state);
     adapter.isBuilderGateway = () => true;
-    adapter.customerCoachWiredInOpenclawConfig = () => false; // openclaw.json on this PVC doesn't know the agent
+    adapter.customerCoachWiredInOpenclawConfig = () => false;
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
-    // hasGitDir=false + repoUrl set → cloneWorkspaceRepo path
     expect(state.calls).toContain("generateCustomerSshKey");
     expect(state.calls).toContain("createGiteaUser");
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls).toContain("ensureGiteaOrg");
-    expect(state.calls).toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).toContain("waitForAccountHealthy");
-    expect(result.steps).toContain("ssh-key");
-    expect(result.steps).toContain("config-patch");
-    expect(result.steps).toContain("verify-channel-ready");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(state.calls).toContain("onMounted");
+    expect(result.pendingProjectClones).toEqual([]);
+    expect(result.steps).toContain("clone-workspace-repo");
+  });
+
+  it("fails without rewriting when a complete Builder overlay is unavailable", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      emptyDisk(),
+    );
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.configuredBuilderOverlayPresent = () => false;
+
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow(
+      /configured Builder system-config overlay is unavailable/u,
+    );
+
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
   it("repairs the canonical Git metadata without deleting a coach-wired workspace", async () => {
@@ -1043,7 +1192,7 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
     expect(result.steps).toContain("verify-channel-ready");
   });
 
-  it("does NOT short-circuit when the agent runtime dir is absent after an emptyDir restart", async () => {
+  it("does not rewrite an already configured Builder overlay when the agent runtime dir is absent", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1068,16 +1217,11 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
 
     await addCustomerToGateway(adapter, "uid-test");
 
-    expect(state.calls).toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).toContain("waitForAccountHealthy");
   });
 
-  it("crash-mid-flow recovery: SSH key on disk but openclaw.json missing agent → falls through to full flow", async () => {
-    // Copilot review on PR #1182 surfaced this scenario: a previous mount
-    // crashed AFTER generateCustomerSshKey but BEFORE applyAddCustomerConfigPatch
-    // landed the agent into openclaw.json. The SSH key check alone would
-    // short-circuit forever and verify would hang on an unregistered
-    // agent. The agent-in-openclaw-config check fixes it by re-running
-    // the full flow until config.patch lands.
+  it("does not overwrite a complete Builder overlay when its platform coach wiring is absent", async () => {
     const state = makeState(
       snap({
         status: "complete",
@@ -1090,23 +1234,21 @@ describe("addCustomerToGateway — builder gateway short-circuits when status=co
         customerDir: true,
         workspaceGitDir: true,
         gitRemote: true,
-        sshKey: true, // ← SSH key on disk from prior interrupted run
+        sshKey: true,
         templatesWritten: true,
         repoHasCommits: true,
       },
     );
     const adapter = makeAdapter(state);
     adapter.isBuilderGateway = () => true;
-    adapter.customerCoachWiredInOpenclawConfig = () => false; // ← but config.patch never finished
-    state.giteaRegisteredPubKey = "ssh-pubkey"; // matches what readLocalCustomerPubKey returns
+    adapter.customerCoachWiredInOpenclawConfig = () => false;
+    state.giteaRegisteredPubKey = "ssh-pubkey";
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
-    // The flow must run far enough to land the agent.
-    expect(state.calls).toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).toContain("waitForAccountHealthy");
-    expect(result.steps).toContain("config-patch");
-    expect(result.steps).toContain("verify-channel-ready");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(result.pendingProjectClones).toEqual([]);
   });
 });
 
@@ -1651,6 +1793,49 @@ describe("removeCustomerFromGateway", () => {
     expect(result.steps).toEqual([]);
     expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
     expect(state.calls).not.toContain("deleteCustomerDir");
+  });
+
+  it("retains an admitted Builder overlay when a known customer is evicted", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    const adapter: CustomerLifecycleAdapter = {
+      ...makeAdapter(state),
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      configuredBuilderOverlayPresent: () => true,
+      clearMountMarker: () => state.calls.push("clearMountMarker"),
+      clearCustomerMigratingIn: () => state.calls.push("clearCustomerMigratingIn"),
+    };
+
+    const result = await removeCustomerFromGateway(adapter, "uid-test");
+
+    expect(result).toEqual({ wasMounted: true, steps: [], retained: true });
+    expect(state.calls).toContain("clearMountMarker");
+    expect(state.calls).toContain("clearCustomerMigratingIn");
+    expect(state.calls).toContain("onUnmounted");
+    expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
+    expect(state.calls).not.toContain("deleteCustomerDir");
+  });
+
+  it("fails closed for the configured Builder when its overlay is unavailable", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    const adapter: CustomerLifecycleAdapter = {
+      ...makeAdapter(state),
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      configuredBuilderOverlayPresent: () => false,
+      clearMountMarker: () => state.calls.push("clearMountMarker"),
+      clearCustomerMigratingIn: () => state.calls.push("clearCustomerMigratingIn"),
+    };
+
+    await expect(removeCustomerFromGateway(adapter, "uid-test")).rejects.toThrow(
+      /configured Builder system-config overlay is unavailable/,
+    );
+
+    expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
+    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("clearMountMarker");
+    expect(state.calls).not.toContain("clearCustomerMigratingIn");
+    expect(state.calls).not.toContain("onUnmounted");
   });
 });
 

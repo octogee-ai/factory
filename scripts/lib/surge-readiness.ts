@@ -9,15 +9,26 @@ export interface SurgeReadinessGate {
   release: (input: { targetPodUid: string }) => Promise<void>;
 }
 
-export function createSurgeReadinessGate(openclawDir: string): SurgeReadinessGate {
+function markerMatchesPod(value: unknown, expectedPodUid: string | undefined): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const targetPodUid = (value as { targetPodUid?: unknown }).targetPodUid;
+  if (typeof targetPodUid !== "string" || !targetPodUid) return false;
+  return expectedPodUid === undefined || targetPodUid === expectedPodUid;
+}
+
+export function createSurgeReadinessGate(
+  openclawDir: string,
+  expectedPodUid?: string,
+): SurgeReadinessGate {
   const markerPath = path.join(openclawDir, MARKER);
   return {
     async released() {
       try {
-        await fs.access(markerPath);
-        return true;
+        const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as unknown;
+        return markerMatchesPod(marker, expectedPodUid);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        if (error instanceof SyntaxError) return false;
         throw error;
       }
     },

@@ -443,6 +443,27 @@ describe("readMountedCustomersFromAssignedState", () => {
       }),
     ).resolves.toEqual(["bob"]);
   });
+
+  it("seeds a Builder-owned overlay only after its local mount marker is written", async () => {
+    const db = mkDb([
+      { provisioning: { openclaw: { slug: "discord-builder" } } },
+      { provisioning: { openclaw: { slug: "unmounted-builder" } } },
+    ]);
+
+    await expect(
+      readMountedCustomersFromAssignedState(db, "gw-builder", {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug) => slug === "discord-builder",
+        hasCustomerDir: () => true,
+        configuredBuilderOverlayPresent: () => true,
+        customerMountMarked: (slug) => slug === "discord-builder",
+        customerCoachWiredInOpenclawConfig: () => false,
+        hasCustomerAgentRuntime: () => false,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+      }),
+    ).resolves.toEqual(["discord-builder"]);
+  });
 });
 
 function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
@@ -486,6 +507,17 @@ describe("observed split — evict keys off raw presence, mount off completion",
     expect(getEvictObservedSlugs(a)).toEqual([]);
   });
 
+  it("evict-observed retains only the admitted Builder overlay", () => {
+    const a = mkObservedAdapter({
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: (slug) => slug === "builder",
+      configuredBuilderOverlayPresent: () => false,
+      listLocalCustomerDirs: () => ["builder", "foreign", "partial"],
+    });
+
+    expect(getEvictObservedSlugs(a)).toEqual(["foreign", "partial"]);
+  });
+
   it("mount-observed excludes a coach-wired-but-unmarked slug (the post-config wedge)", () => {
     const a = mkObservedAdapter({
       listLocalCustomerSlugs: () => ["alice", "bob"], // both coach-wired
@@ -504,6 +536,21 @@ describe("observed split — evict keys off raw presence, mount off completion",
     });
 
     expect(getMountObservedSlugs(a)).toEqual(["healthy"]);
+  });
+
+  it("mount-observed requires a readable Builder overlay even when runtime directories exist", () => {
+    const a = mkObservedAdapter({
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      listLocalCustomerSlugs: () => ["discord-builder"],
+      customerMountMarked: () => true,
+      configuredBuilderOverlayPresent: () => false,
+      hasCustomerAgentRuntime: () => true,
+      hasWorkspaceGitDir: () => true,
+      hasGitRemote: () => true,
+    });
+
+    expect(getMountObservedSlugs(a)).toEqual([]);
   });
 
   it("mount-observed counts every coach-wired slug when no marker probe exists", () => {
@@ -660,6 +707,58 @@ describe("evictLocalCustomer — complete local teardown", () => {
 
     expect(onRetainedAfterConfigRemoval).toHaveBeenCalledWith("alice");
     expect(onLocalStateRemoved).not.toHaveBeenCalled();
+  });
+
+  it("retains a matching Builder overlay before the missing-user fallback can mutate it", async () => {
+    const onRetainedAfterConfigRemoval = vi.fn();
+    const onLocalStateRemoved = vi.fn();
+    const onUnmounted = vi.fn();
+    const clearMountMarker = vi.fn();
+    const clearCustomerMigratingIn = vi.fn();
+    const a = adapter({
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: (slug) => slug === "builder",
+      configuredBuilderOverlayPresent: (slug) => slug === "builder",
+      onUnmounted,
+      clearMountMarker,
+      clearCustomerMigratingIn,
+    });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "builder",
+      onRetainedAfterConfigRemoval,
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved,
+    })).resolves.toBe("noop");
+
+    expect(a.uidForSlug).not.toHaveBeenCalled();
+    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(clearMountMarker).toHaveBeenCalledWith("builder");
+    expect(clearCustomerMigratingIn).toHaveBeenCalledWith("builder");
+    expect(onUnmounted).toHaveBeenCalledWith("builder");
+    expect(onRetainedAfterConfigRemoval).toHaveBeenCalledWith("builder");
+    expect(onLocalStateRemoved).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a matching Builder owner with an unreadable overlay", async () => {
+    const a = adapter({
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      configuredBuilderOverlayPresent: () => false,
+    });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "builder",
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved: vi.fn(),
+    })).rejects.toThrow(/configured Builder system-config overlay is unavailable/);
+
+    expect(a.uidForSlug).not.toHaveBeenCalled();
+    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
   });
 });
 

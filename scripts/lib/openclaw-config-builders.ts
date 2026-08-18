@@ -32,6 +32,8 @@ const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "http://llm-broker:3010/v1";
 const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
+export type AgentHostCodePolicy = "customer-restricted" | "builder-full";
+
 function workspaceCoachTools(): Record<string, unknown> {
   return {
     profile: "coding",
@@ -107,6 +109,7 @@ export interface CustomerAgentInput {
   customerMmUserId?: string | null;
   default?: boolean;
   memorySearch?: Record<string, unknown>;
+  hostCode?: AgentHostCodePolicy;
 }
 
 export function buildCustomerAgent(
@@ -122,7 +125,9 @@ export function buildCustomerAgent(
     model: c.coach.model,
     identity: { name: c.coach.name, emoji: c.coach.emoji },
     heartbeat: { every: "60m", target: "last", lightContext: true },
-    tools: workspaceCoachTools(),
+    // A Builder gateway coach inherits the gateway-level tools of the Builder
+    // template; only a shared-gateway coach carries the customer lockdown.
+    ...(c.hostCode === "builder-full" ? {} : { tools: workspaceCoachTools() }),
   };
   if (c.default) {
     agent.default = true;

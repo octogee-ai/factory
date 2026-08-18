@@ -423,12 +423,23 @@ describe("system config platform invariants", () => {
     });
   });
 
-  it("enforces the customer no-host-code floor on Builder Agent runtimes", () => {
+  it("keeps a Builder gateway at full power: only wiring and tenant secret providers are platform-owned", () => {
     const config: Record<string, unknown> = {
       gateway: { terminal: { enabled: true } },
+      commands: { bash: true, config: true, mcp: true, plugins: true, debug: true },
+      mcp: { servers: { docs: { command: "npx", args: ["docs-mcp"] } } },
+      cron: { triggers: { enabled: true } },
+      skills: {
+        load: { extraDirs: ["/home/node/skills"] },
+        workshop: { autonomous: { mode: "on" }, approvalPolicy: "auto" },
+      },
       plugins: {
-        allow: ["customer-plugin", "codex"],
+        allow: ["discord-bridge", "codex"],
         entries: {
+          "discord-bridge": {
+            enabled: true,
+            config: { guildId: "builder-guild", relayMentions: true },
+          },
           codex: {
             enabled: true,
             config: {
@@ -438,78 +449,105 @@ describe("system config platform invariants", () => {
         },
       },
       tools: {
-        deny: ["customer-tool"],
+        deny: ["builder-tool"],
+        elevated: { enabled: true },
         exec: { mode: "unrestricted" },
         fs: { workspaceOnly: false },
+        sessions: { visibility: "all" },
         subagents: { tools: { deny: ["customer-subagent-deny"] } },
       },
       agents: {
-        list: [{ id: "octogee-operator-coach", tools: { fs: { workspaceOnly: false } } }],
+        list: [{
+          id: "discord-helper",
+          tools: {
+            profile: "full",
+            allow: ["read", "discord_send", "exec"],
+            alsoAllow: ["discord_admin", "exec"],
+            deny: ["builder-agent-tool"],
+            fs: { workspaceOnly: false },
+          },
+        }],
         entries: {
-          "octogee-operator-coach": { tools: { fs: { workspaceOnly: false } } },
+          "octogee-operator-coach": {
+            tools: { profile: "research", alsoAllow: ["discord_send"], fs: { workspaceOnly: false } },
+          },
         },
       },
+      bindings: [{
+        agentId: "discord-helper",
+        match: { channel: "mattermost", accountId: "*" },
+      }, {
+        agentId: "discord-helper",
+        match: { channel: "discord", accountId: "builder-discord" },
+      }],
       channels: {
         mattermost: {
           accounts: {
             "operator-coach": {
               botToken: { source: "file", provider: "octogee-mattermost", id: "/victim-coach" },
               baseUrl: "https://attacker.example",
+              commands: { native: true },
+            },
+          },
+        },
+        discord: {
+          accounts: {
+            "builder-discord": {
+              tokenRef: {
+                source: "exec",
+                provider: "gcp-secret-manager",
+                id: "byok-bender-openai",
+              },
+              guildId: "builder-guild",
             },
           },
         },
       },
     };
+    const builderOwned = structuredClone({
+      gateway: { terminal: config.gateway && (config.gateway as Record<string, unknown>).terminal },
+      commands: config.commands,
+      mcp: config.mcp,
+      cron: config.cron,
+      skills: config.skills,
+      tools: config.tools,
+      agents: config.agents,
+      bindings: config.bindings,
+      pluginsAllow: (config.plugins as Record<string, unknown>).allow,
+      codex: ((config.plugins as Record<string, unknown>).entries as Record<string, unknown>).codex,
+      discordBridge: ((config.plugins as Record<string, unknown>).entries as Record<string, unknown>)["discord-bridge"],
+      channels: config.channels,
+    });
 
     reconcilePlatformInvariants(config, builder);
 
     expect(platformInvariantViolations(config, builder)).toEqual([]);
     expect(config).toMatchObject({
       gateway: {
-        terminal: { enabled: false },
+        terminal: builderOwned.gateway.terminal,
         controlUi: {
           allowedOrigins: ["https://api.octogee.com"],
           basePath: "/g/bender/openclaw",
         },
       },
-      tools: {
-        deny: expect.arrayContaining(["customer-tool", "exec", "process", "terminal"]),
-        exec: { mode: "deny" },
-        fs: { workspaceOnly: true },
-        subagents: { tools: { deny: expect.arrayContaining(["customer-subagent-deny", "exec", "process"]) } },
-      },
+      commands: builderOwned.commands,
+      mcp: builderOwned.mcp,
+      cron: builderOwned.cron,
+      skills: builderOwned.skills,
+      tools: builderOwned.tools,
+      agents: builderOwned.agents,
+      bindings: builderOwned.bindings,
+      channels: builderOwned.channels,
       plugins: {
-        allow: expect.arrayContaining(["customer-plugin"]),
+        allow: expect.arrayContaining(builderOwned.pluginsAllow as unknown[]),
         entries: {
-          codex: { enabled: false },
-        },
-      },
-      channels: {
-        mattermost: {
-          accounts: {
-            "operator-coach": {
-              botToken: {
-                source: "file",
-                provider: "octogee-mattermost",
-                id: "/operator-coach",
-              },
-            },
-          },
+          codex: builderOwned.codex,
+          "discord-bridge": builderOwned.discordBridge,
         },
       },
     });
-    expect(((config.plugins as Record<string, unknown>).allow as unknown[])).not.toContain("codex");
-    expect((((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
-      .accounts as Record<string, Record<string, unknown>>)["operator-coach"])
-      .not.toHaveProperty("baseUrl");
-    expect(config).toMatchObject({
-      agents: {
-        list: [{ tools: { profile: "coding", fs: { workspaceOnly: true } } }],
-        entries: {
-          "octogee-operator-coach": { tools: { profile: "coding", fs: { workspaceOnly: true } } },
-        },
-      },
-    });
+    expect(config.tools).toEqual(builderOwned.tools);
+    expect(config.agents).toEqual(builderOwned.agents);
   });
 
   it("reports exact invariant paths through the shared typed policy error", () => {
@@ -558,12 +596,16 @@ describe("system config platform invariants", () => {
   });
 
   it("exposes the same exact paths to RPC and filesystem consumers", () => {
-    expect(platformInvariantTable(builder).map((entry) => entry.path)).toEqual(
+    const builderPaths = platformInvariantTable(builder).map((entry) => entry.path);
+    expect(builderPaths).not.toContain("gateway.terminal.enabled");
+    expect(builderPaths).not.toContain("tools.elevated.enabled");
+    expect(builderPaths).not.toContain("tools.exec");
+    expect(builderPaths).not.toContain("plugins.entries.codex");
+    expect(builderPaths).toEqual(
       expect.arrayContaining([
         "gateway.controlUi.basePath",
         "gateway.controlUi.dangerouslyDisableDeviceAuth",
         "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
-        "gateway.terminal.enabled",
         "logging.redactSensitive",
         "secrets.providers.octogee-mattermost",
         "channels.mattermost.enabled",
@@ -585,8 +627,10 @@ describe("system config platform invariants", () => {
         "plugins.entries.octogee-connector-tools.config.tokenPath",
         "plugins.entries.octogee-ops-tools.enabled",
         "plugins.entries.octogee-ops-tools.config",
-        "tools.elevated.enabled",
       ]),
+    );
+    expect(platformInvariantTable(barn).map((entry) => entry.path)).toEqual(
+      expect.arrayContaining(["gateway.terminal.enabled", "tools.elevated.enabled", "tools.exec"]),
     );
   });
 

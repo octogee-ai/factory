@@ -64,6 +64,8 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+const migrationTempRoots: string[] = [];
+
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
 const GATEWAY_ID = "gw-a";
@@ -263,6 +265,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
     onMounted: vi.fn(),
+    isConfiguredBuilderCustomer: vi.fn(() => true),
     waitForAccountHealthy: vi.fn(async () => true),
     hasCustomerDir: vi.fn(() => true),
     customerCoachWiredInOpenclawConfig: vi.fn(() => true),
@@ -301,8 +304,11 @@ beforeEach(() => {
   spawnMock.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
+  for (const root of migrationTempRoots.splice(0)) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 describe("surge handoff control", () => {
@@ -317,7 +323,10 @@ describe("surge handoff control", () => {
 
     expect(getStatus()).toBe(200);
     expect(getBody()).toEqual({ released: true, targetPodUid: "pod-123" });
-    expect(releaseSurgeReadiness).toHaveBeenCalledWith({ targetPodUid: "pod-123" });
+    expect(releaseSurgeReadiness).toHaveBeenCalledWith({
+      migrationId: SAMPLE_COMPLETE_SURGE.migrationId,
+      targetPodUid: "pod-123",
+    });
   });
 
   it("rejects an unsigned readiness release", async () => {
@@ -830,6 +839,46 @@ describe("createVerifyHandler", () => {
       checks: { mountMarked: false },
     });
   });
+
+  it("verifies an attached configured Builder overlay without requiring a canonical Mattermost coach", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    const adapter = mkAdapter({
+      isBuilderGateway: vi.fn(() => true),
+      configuredBuilderOverlayPresent: vi.fn(() => true),
+      hasWorkspaceGitDir: vi.fn(() => true),
+      hasGitRemote: vi.fn(() => true),
+      customerCoachWiredInOpenclawConfig: vi.fn(() => false),
+    });
+    const handler = createVerifyHandler(mkDeps({ adapter }));
+    const body = {
+      migrationId: "mig-builder-verify",
+      slug: "chris",
+      configTransferMode: "configured-builder-system-config",
+    };
+    const response = mkResponse();
+
+    await handler(
+      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      response.res,
+      vi.fn(),
+    );
+
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual({
+      migrationId: "mig-builder-verify",
+      slug: "chris",
+      ready: true,
+      configTransferMode: "configured-builder-system-config",
+      checks: {
+        customerDir: true,
+        configuredBuilderOverlay: true,
+        mountMarked: true,
+        workspaceGit: true,
+        gitRemote: true,
+      },
+    });
+    expect(adapter.waitForAccountHealthy).not.toHaveBeenCalled();
+  });
 });
 
 describe("createRestoreHandler", () => {
@@ -1250,6 +1299,8 @@ describe("queued-rsync migration control handlers", () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-chris-coach" },
+        { cwd: "/state", path: "agents/discord-helper" },
+        { cwd: "/state", path: "memory/discord-helper.sqlite" },
         { cwd: "/openclaw", path: "customers/chris" },
         { cwd: "/openclaw", path: "customer-keys/chris" },
       ]),
@@ -1597,6 +1648,73 @@ describe("queued-rsync migration control handlers", () => {
     expect(daemon.kill).toHaveBeenCalled();
   });
 
+  it("reserves the surge target only for a configured Builder final import, before opening its session, and fails closed", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    const adapter = mkAdapter({
+      isBuilderGateway: vi.fn(() => true),
+      prepareKeyImportDir: vi.fn(async () => "/openclaw-keys"),
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      markCustomerMigratingIn: vi.fn(),
+    });
+    const reserveSurgeTarget = vi.fn(async () => undefined);
+    const waitForRsyncReady = vi.fn(async () => undefined);
+    spawnMock.mockReturnValue(mkFakeChild());
+    const handler = createPrepareRsyncImportHandler(
+      mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady, reserveSurgeTarget }),
+    );
+    const prepare = async (body: PrepareRsyncImportRequestBody) => {
+      const response = mkResponse();
+      await handler(
+        mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+        response.res,
+        vi.fn(),
+      );
+      return response;
+    };
+    const surge: PrepareRsyncImportRequestBody = {
+      migrationId: "surge-gw-a-target",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+      transferUser: "migration",
+      transferKey: "a".repeat(64),
+    };
+    const activationKeys: PrepareRsyncImportRequestBody = {
+      migrationId: "surge-gw-a-target",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "keys",
+      transferUser: "migration",
+      transferKey: "a".repeat(64),
+    };
+
+    expect((await prepare(surge)).getStatus()).toBe(200);
+    expect(reserveSurgeTarget).toHaveBeenCalledWith({
+      migrationId: "surge-gw-a-target",
+      slug: "chris",
+    });
+
+    expect((await prepare(activationKeys)).getStatus()).toBe(200);
+    expect(reserveSurgeTarget).toHaveBeenCalledTimes(1);
+
+    reserveSurgeTarget.mockRejectedValueOnce(new Error("cannot hydrate a permitted surge OpenClaw process gate"));
+    expect((await prepare(surge)).getStatus()).toBe(500);
+    expect(adapter.prepareImportDir).toHaveBeenCalledTimes(1);
+
+    const abort: AbortRsyncImportRequestBody = {
+      migrationId: "surge-gw-a-target",
+      slug: "chris",
+      rpcPhase: "abort-rsync-import",
+      mode: "keys",
+    };
+    await createAbortRsyncImportHandler(mkDeps({ adapter }))(
+      mkRequest(abort, { signature: signFleetRequest(PRIVATE_KEY, abort.migrationId, JSON.stringify(abort)) }),
+      mkResponse().res,
+      vi.fn(),
+    );
+  });
+
   it("reclaims an interrupted rsync session only for its owning migration", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
@@ -1728,6 +1846,76 @@ describe("queued-rsync migration control handlers", () => {
     expect(args).toContain(`rsync://migration@${TARGET_POD_IP}:30873/state/`);
   });
 
+  it("does not materialize an activation manifest for a configured Builder final transfer", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    const exportOpenClawActivationManifest = vi.fn(async () => {
+      throw new Error("Builder transfer must not materialize an activation manifest");
+    });
+    const adapter = mkAdapter({
+      listExportPaths: vi.fn(async () => [
+        { cwd: "/state", path: "agents/octogee-chris-coach" },
+        { cwd: "/state", path: "agents/discord-helper" },
+        { cwd: "/state", path: "memory/discord-helper.sqlite" },
+        { cwd: "/openclaw", path: "customers/chris" },
+      ]),
+      exportOpenClawActivationManifest,
+    });
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const body: PushRsyncStateRequestBody = {
+      migrationId: "mig-builder-push",
+      slug: "chris",
+      rpcPhase: "push-rsync-state",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+      targetHost: TARGET_POD_IP,
+      targetPort: 30873,
+      transferUser: "migration",
+      transferKey: "b".repeat(64),
+    };
+    const handler = createPushRsyncStateHandler(mkDeps({ adapter }));
+    const response = mkResponse();
+
+    await handler(
+      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      response.res,
+      vi.fn(),
+    );
+
+    expect(response.getStatus()).toBe(200);
+    expect(exportOpenClawActivationManifest).not.toHaveBeenCalled();
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("/state/./agents/discord-helper");
+    expect(args).toContain("/state/./memory/discord-helper.sqlite");
+    expect(args.some((arg) => arg.includes(".octogee-migration-activation"))).toBe(false);
+  });
+
+  it("rejects a configured Builder transfer on a nonmatching gateway", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-builder-wrong-target",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+      transferUser: "migration",
+      transferKey: "b".repeat(64),
+    };
+    const handler = createPrepareRsyncImportHandler(mkDeps());
+    const response = mkResponse();
+
+    await handler(
+      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      response.res,
+      vi.fn(),
+    );
+
+    expect(response.getStatus()).toBe(409);
+    expect(response.getBody()).toEqual({
+      error: "configured Builder system config transfer requires the matching Builder gateway",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("createFinishRsyncImportHandler leaves expedited project convergence to reconciliation", async () => {
     const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
@@ -1805,6 +1993,186 @@ describe("queued-rsync migration control handlers", () => {
     const [copyCommand, copyArgs] = spawnMock.mock.calls[1] as [string, string[]];
     expect(copyCommand).toMatch(/\/rsync$/);
     expect(copyArgs.at(-1)).toBe("/openclaw/");
+  });
+
+  it("attaches and proves a configured Builder overlay without generic activation before finishing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-finish-"));
+    migrationTempRoots.push(stateDir);
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({
+      agents: { list: [{ id: "discord-helper" }] },
+    }));
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    vi.stubEnv("OPENCLAW_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const mounted: string[] = [];
+    const onMounted = vi.fn((slug: string) => {
+      if (!mounted.includes(slug)) mounted.push(slug);
+    });
+    const adapter = mkAdapter({
+      isBuilderGateway: vi.fn(() => true),
+      configuredBuilderOverlayPresent: vi.fn(() => true),
+      hasCustomerSshKey: vi.fn(() => true),
+      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 LOCAL chris@gateway"]),
+      hasWorkspaceGitDir: vi.fn(() => true),
+      hasGitRemote: vi.fn(() => true),
+      prepareImportDir: vi.fn(async () => stateDir),
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "unexpected" })),
+      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      markCustomerMigratingIn: vi.fn(),
+      writeMountMarker: vi.fn(),
+      customerMountMarked: vi.fn(() => true),
+      onMounted,
+    });
+    const daemon = mkFakeChild();
+    const copy = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(daemon).mockReturnValueOnce(copy);
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30873,
+      waitForRsyncReady: vi.fn(async () => undefined),
+      getMountedCustomers: () => mounted,
+    });
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-builder-finish",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+      transferUser: "migration",
+      transferKey: "d".repeat(64),
+    };
+    const prepareResponse = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(
+      mkRequest(prepareBody, {
+        signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, JSON.stringify(prepareBody)),
+      }),
+      prepareResponse.res,
+      vi.fn(),
+    );
+    expect(prepareResponse.getStatus()).toBe(200);
+
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: "mig-builder-finish",
+      slug: "chris",
+      rpcPhase: "finish-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+    };
+    const finishResponse = mkResponse();
+    await createFinishRsyncImportHandler(deps)(
+      mkRequest(finishBody, {
+        signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, JSON.stringify(finishBody)),
+      }),
+      finishResponse.res,
+      vi.fn(),
+    );
+
+    expect(finishResponse.getStatus()).toBe(200);
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+    expect(onMounted).toHaveBeenCalledWith("chris");
+    expect(mounted).toEqual(["chris"]);
+  });
+
+  it("rejects a final import whose config transfer mode does not match the prepared Builder session", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => "/openclaw") });
+    const daemon = mkFakeChild();
+    spawnMock.mockReturnValueOnce(daemon);
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30873,
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-builder-mismatch",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+      transferUser: "migration",
+      transferKey: "e".repeat(64),
+    };
+    await createPrepareRsyncImportHandler(deps)(
+      mkRequest(prepareBody, {
+        signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, JSON.stringify(prepareBody)),
+      }),
+      mkResponse().res,
+      vi.fn(),
+    );
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: "mig-builder-mismatch",
+      slug: "chris",
+      rpcPhase: "finish-rsync-import",
+      mode: "final",
+      configTransferMode: "activation-manifest",
+    };
+    const response = mkResponse();
+    await createFinishRsyncImportHandler(deps)(
+      mkRequest(finishBody, {
+        signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, JSON.stringify(finishBody)),
+      }),
+      response.res,
+      vi.fn(),
+    );
+
+    expect(response.getStatus()).toBe(409);
+    expect(response.getBody()).toEqual({
+      error: "rsync import config transfer mode does not match prepared session",
+    });
+    const abortBody: AbortRsyncImportRequestBody = {
+      migrationId: "mig-builder-mismatch",
+      slug: "chris",
+      rpcPhase: "abort-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+    };
+    await createAbortRsyncImportHandler(deps)(
+      mkRequest(abortBody, {
+        signature: signFleetRequest(PRIVATE_KEY, abortBody.migrationId, JSON.stringify(abortBody)),
+      }),
+      mkResponse().res,
+      vi.fn(),
+    );
+    expect(daemon.kill).toHaveBeenCalled();
+  });
+
+  it("clears only Builder migration observation when a final import is aborted", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    const clearMountMarker = vi.fn();
+    const clearCustomerMigratingIn = vi.fn();
+    const onUnmounted = vi.fn();
+    const adapter = mkAdapter({
+      clearMountMarker,
+      clearCustomerMigratingIn,
+      onUnmounted,
+    });
+    const body: AbortRsyncImportRequestBody = {
+      migrationId: "mig-builder-abort",
+      slug: "chris",
+      rpcPhase: "abort-rsync-import",
+      mode: "final",
+      configTransferMode: "configured-builder-system-config",
+    };
+    const response = mkResponse();
+
+    await createAbortRsyncImportHandler(mkDeps({ adapter }))(
+      mkRequest(body, {
+        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      }),
+      response.res,
+      vi.fn(),
+    );
+
+    expect(response.getStatus()).toBe(200);
+    expect(clearMountMarker).toHaveBeenCalledWith("chris");
+    expect(clearCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(onUnmounted).toHaveBeenCalledWith("chris");
+    expect(adapter.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(adapter.deleteCustomerDir).not.toHaveBeenCalled();
   });
 
   it("does not acknowledge a finished key import until its rsync listener exits", async () => {
@@ -2879,6 +3247,21 @@ describe("findPathTraversalViolation", () => {
       "memory/octogee-chris-proj-cityscout-coach.sqlite-wal",
       "memory/octogee-chris-proj-cityscout-coach.sqlite-shm",
     ], slug)).toBeNull();
+  });
+
+  it("accepts opaque Builder agent state only when the configured safe ID is allowlisted", () => {
+    const state = [
+      "agents/discord-helper/agent/auth.json",
+      "agents/discord-helper/sessions/session.json",
+      "memory/discord-helper.sqlite",
+    ];
+    expect(findPathTraversalViolation(state, slug, "final", ["discord-helper"])).toBeNull();
+    expect(findPathTraversalViolation(state, slug, "final")).toContain(
+      "outside the per-slug allowlist",
+    );
+    expect(findPathTraversalViolation(state, slug, "final", ["../outside"])).toContain(
+      "outside the per-slug allowlist",
+    );
   });
 
   it("accepts bare directory entries that match a prefix exactly", () => {

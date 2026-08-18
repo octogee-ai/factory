@@ -147,8 +147,9 @@ RUN chmod 1777 /tmp \
     && apt-get update && apt-get install -y --no-install-recommends gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Entrypoint + config template ───────────────────────────────────────────
+# ── Entrypoint + config templates ──────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
+COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/infra/gateway/openclaw.builder.template.json
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh

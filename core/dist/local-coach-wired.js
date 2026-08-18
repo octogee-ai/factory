@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_RE, } from "@octogee/shared/types/identity";
+import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_RE, parseAgentId, } from "@octogee/shared/types/identity";
 // Mirrors customerCoachAgentId in fleet-http-migration.ts — the coach agent-id convention.
 // Inlined to keep this module node:fs-only (importable into gateway-edge + scripts alike).
 const customerCoachAgentId = (slug) => `octogee-${slug}-coach`;
@@ -28,6 +28,363 @@ export function readOpenclawConfig(configPath) {
     }
     catch {
         return null;
+    }
+}
+export function hasReadableOpenclawConfig(configPath) {
+    return readOpenclawConfig(configPath) !== null;
+}
+const CONFIGURED_AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const PORTABLE_CONFIGURED_AGENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export function isSafeConfiguredAgentId(value) {
+    return typeof value === "string" && CONFIGURED_AGENT_ID_RE.test(value);
+}
+export function isPortableConfiguredAgentId(value) {
+    return isSafeConfiguredAgentId(value) && PORTABLE_CONFIGURED_AGENT_ID_RE.test(value);
+}
+function assertPortableConfiguredAgentId(value) {
+    if (!isPortableConfiguredAgentId(value)) {
+        throw new Error(`configured Builder agent id is not a portable canonical id: ${String(value)}`);
+    }
+}
+export function configuredSafeAgentIds(configPath) {
+    const config = readOpenclawConfig(configPath);
+    return config ? configuredSafeAgentIdsFromConfig(config) : [];
+}
+export function configuredSafeAgentIdsFromConfig(config) {
+    const ids = new Set();
+    for (const entry of config.agents?.list ?? []) {
+        if (!isRecord(entry) || typeof entry.id !== "string")
+            continue;
+        if (isSafeConfiguredAgentId(entry.id))
+            ids.add(entry.id);
+    }
+    for (const id of Object.keys(config.agents?.entries ?? {})) {
+        if (isSafeConfiguredAgentId(id))
+            ids.add(id);
+    }
+    return [...ids].sort((left, right) => left.localeCompare(right));
+}
+function recordValue(value, context) {
+    if (!isRecord(value))
+        throw new Error(`${context} must be an object`);
+    return value;
+}
+function configuredAgentRecords(config, agentId) {
+    const keyedEntries = config.agents?.entries;
+    if (keyedEntries !== undefined) {
+        const entry = keyedEntries[agentId];
+        return entry === undefined || entry === null
+            ? []
+            : [recordValue(entry, `agents.entries.${agentId}`)];
+    }
+    const records = [];
+    for (const entry of config.agents?.list ?? []) {
+        if (!isRecord(entry) || entry.id !== agentId)
+            continue;
+        records.push(entry);
+    }
+    if (records.length > 1) {
+        throw new Error(`configured Builder agent ${agentId} appears more than once in agents.list`);
+    }
+    return records;
+}
+function configuredPathField(records, field, context) {
+    for (const record of records) {
+        if (!Object.hasOwn(record, field))
+            continue;
+        const value = record[field];
+        if (typeof value !== "string" || value.length === 0) {
+            throw new Error(`${context}.${field} must be a non-empty string`);
+        }
+        return value;
+    }
+    return undefined;
+}
+function configuredDefaultAgent(records, agentId) {
+    for (const record of records) {
+        if (!Object.hasOwn(record, "default"))
+            continue;
+        if (typeof record.default !== "boolean") {
+            throw new Error(`configured Builder agent ${agentId}.default must be a boolean`);
+        }
+        if (record.default)
+            return true;
+    }
+    return false;
+}
+function portableRelativePath(stateDir, absolutePath, context) {
+    const root = path.resolve(stateDir);
+    const resolved = path.resolve(absolutePath);
+    const relative = path.relative(root, resolved);
+    if (relative.length === 0 ||
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)) {
+        throw new Error(`${context} is outside the Builder OpenClaw state root`);
+    }
+    const segments = relative.split(path.sep);
+    if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+        throw new Error(`${context} is not a portable Builder state path`);
+    }
+    return segments.join("/");
+}
+function resolveExplicitPortablePath(value, stateDir, context) {
+    if (value.trim() !== value ||
+        !path.isAbsolute(value) ||
+        value.startsWith("~") ||
+        value.includes("{") ||
+        value.includes("}") ||
+        value.split(/[\\/]/u).includes("..")) {
+        throw new Error(`${context} is not an absolute portable Builder state path`);
+    }
+    return portableRelativePath(stateDir, value, context);
+}
+function defaultPortablePath(stateDir, ...segments) {
+    return portableRelativePath(stateDir, path.join(path.resolve(stateDir), ...segments), "default path");
+}
+function defaultWorkspace(stateDir, agentId, isDefault, defaultWorkspacePath) {
+    if (defaultWorkspacePath !== undefined && isDefault)
+        return defaultWorkspacePath;
+    return defaultPortablePath(stateDir, isDefault ? "workspace" : `workspace-${agentId}`);
+}
+function configuredDefaultWorkspace(config, stateDir) {
+    const defaults = config.agents?.defaults;
+    if (defaults === undefined)
+        return undefined;
+    const record = recordValue(defaults, "agents.defaults");
+    if (!Object.hasOwn(record, "workspace"))
+        return undefined;
+    const workspace = record.workspace;
+    if (typeof workspace !== "string" || workspace.length === 0) {
+        throw new Error("agents.defaults.workspace must be a non-empty string");
+    }
+    const relative = resolveExplicitPortablePath(workspace, stateDir, "agents.defaults.workspace");
+    if (relative !== "workspace") {
+        throw new Error("agents.defaults.workspace must be the canonical Builder workspace");
+    }
+    return relative;
+}
+function assertPortableAgentDir(relativePath, agentId) {
+    if (!relativePath.startsWith(`agents/${agentId}/`)) {
+        throw new Error(`configured Builder agent ${agentId}.agentDir is outside its canonical agent root`);
+    }
+}
+// Platform-managed coach and project agents work inside the customer tree the
+// platform provisions (`customers/<slug>` and `customers/<slug>/projects/<id>`);
+// that tree already rides every carry as a durable prefix, so it is portable too.
+function platformManagedWorkspace(agentId) {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind === "coach")
+        return `customers/${parsed.username}`;
+    if (parsed.kind === "project")
+        return `customers/${parsed.username}/projects/${parsed.project}`;
+    return null;
+}
+function assertPortableWorkspace(relativePath, agentId, isDefault) {
+    const platformWorkspace = platformManagedWorkspace(agentId);
+    const allowed = new Set([
+        `workspace-${agentId}`,
+        `workspaces/${agentId}`,
+        ...(isDefault ? ["workspace"] : []),
+        ...(platformWorkspace ? [platformWorkspace] : []),
+    ]);
+    if (!allowed.has(relativePath)) {
+        throw new Error(`configured Builder agent ${agentId}.workspace is outside its canonical workspace root`);
+    }
+}
+function assertPortableSessionStore(relativePath, agentId) {
+    if (relativePath !== `agents/${agentId}/sessions/sessions.json`) {
+        throw new Error(`session.store for ${agentId} is outside its canonical session root`);
+    }
+}
+function configuredSessionStoreTemplate(config) {
+    const session = config.session;
+    if (session === undefined)
+        return undefined;
+    const record = recordValue(session, "session");
+    if (!Object.hasOwn(record, "store"))
+        return undefined;
+    const store = record.store;
+    if (typeof store !== "string" ||
+        store.length === 0 ||
+        !store.includes("{agentId}") ||
+        store.replaceAll("{agentId}", "").includes("{") ||
+        store.replaceAll("{agentId}", "").includes("}")) {
+        throw new Error("session.store must be an absolute {agentId} Builder state template");
+    }
+    return store;
+}
+function declaredBuilderAgentIds(config) {
+    const agents = config.agents;
+    if (agents?.entries !== undefined) {
+        const agentIds = [];
+        for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
+            if (entry === null || entry === undefined)
+                continue;
+            assertPortableConfiguredAgentId(agentId);
+            agentIds.push(agentId);
+        }
+        return agentIds.sort((left, right) => left.localeCompare(right));
+    }
+    const agentIds = [];
+    for (const entry of agents?.list ?? []) {
+        if (!isRecord(entry))
+            throw new Error("configured Builder agents.list entry must be an object");
+        assertPortableConfiguredAgentId(entry.id);
+        agentIds.push(entry.id);
+    }
+    return agentIds
+        .filter((agentId, index, ids) => ids.indexOf(agentId) === index)
+        .sort((left, right) => left.localeCompare(right));
+}
+function configuredBuilderAgentIds(config) {
+    const declared = declaredBuilderAgentIds(config);
+    return declared.length === 0 ? ["main"] : declared;
+}
+function dedupePortableStatePaths(paths) {
+    const directories = paths
+        .filter((item) => item.kind === "directory")
+        .sort((left, right) => left.relativePath.length - right.relativePath.length ||
+        left.relativePath.localeCompare(right.relativePath));
+    const retainedDirectories = [];
+    for (const directory of directories) {
+        if (retainedDirectories.some((parent) => directory.relativePath === parent.relativePath ||
+            directory.relativePath.startsWith(`${parent.relativePath}/`))) {
+            continue;
+        }
+        retainedDirectories.push(directory);
+    }
+    const retainedFiles = paths
+        .filter((item) => item.kind === "file")
+        .filter((file, index, files) => files.findIndex((candidate) => candidate.relativePath === file.relativePath) === index)
+        .filter((file) => !retainedDirectories.some((directory) => file.relativePath.startsWith(`${directory.relativePath}/`)))
+        .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    return [...retainedDirectories, ...retainedFiles]
+        .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+export function configuredBuilderPortableStatePlanFromConfig(config, stateDir) {
+    if (!path.isAbsolute(stateDir)) {
+        throw new Error("Builder OpenClaw state root must be absolute");
+    }
+    const agentIds = configuredBuilderAgentIds(config);
+    const defaultWorkspacePath = configuredDefaultWorkspace(config, stateDir);
+    const sessionStoreTemplate = configuredSessionStoreTemplate(config);
+    const declaredDefaultAgentIds = agentIds.filter((agentId) => configuredDefaultAgent(configuredAgentRecords(config, agentId), agentId));
+    if (declaredDefaultAgentIds.length > 1) {
+        throw new Error("configured Builder roster has more than one default agent");
+    }
+    const defaultAgentId = declaredDefaultAgentIds[0] ?? (agentIds.length === 1 ? agentIds[0] : null);
+    if (defaultWorkspacePath !== undefined && defaultAgentId === null) {
+        throw new Error("agents.defaults.workspace requires a unique default Builder agent");
+    }
+    const paths = [];
+    const agentDirs = new Set();
+    const sessionStorePaths = new Set();
+    for (const agentId of agentIds) {
+        const records = configuredAgentRecords(config, agentId);
+        const isDefault = defaultAgentId === agentId;
+        const explicitAgentDir = configuredPathField(records, "agentDir", `configured Builder agent ${agentId}`);
+        const agentDir = explicitAgentDir === undefined
+            ? defaultPortablePath(stateDir, "agents", agentId, "agent")
+            : resolveExplicitPortablePath(explicitAgentDir, stateDir, `configured Builder agent ${agentId}.agentDir`);
+        assertPortableAgentDir(agentDir, agentId);
+        const explicitWorkspace = configuredPathField(records, "workspace", `configured Builder agent ${agentId}`);
+        const workspace = explicitWorkspace === undefined
+            ? defaultWorkspace(stateDir, agentId, isDefault, defaultWorkspacePath)
+            : resolveExplicitPortablePath(explicitWorkspace, stateDir, `configured Builder agent ${agentId}.workspace`);
+        assertPortableWorkspace(workspace, agentId, isDefault);
+        const defaultAgentRoot = defaultPortablePath(stateDir, "agents", agentId);
+        paths.push({ relativePath: defaultAgentRoot, kind: "directory" }, { relativePath: agentDir, kind: "directory" }, { relativePath: workspace, kind: "directory" }, { relativePath: defaultPortablePath(stateDir, "memory", `${agentId}.sqlite`), kind: "file" });
+        agentDirs.add(agentDir);
+        const sessionStore = sessionStoreTemplate === undefined
+            ? defaultPortablePath(stateDir, "agents", agentId, "sessions", "sessions.json")
+            : resolveExplicitPortablePath(sessionStoreTemplate.replaceAll("{agentId}", agentId), stateDir, `session.store for ${agentId}`);
+        assertPortableSessionStore(sessionStore, agentId);
+        sessionStorePaths.add(sessionStore);
+        paths.push({ relativePath: path.posix.dirname(sessionStore), kind: "directory" });
+    }
+    return {
+        agentIds,
+        agentDirs: [...agentDirs].sort((left, right) => left.localeCompare(right)),
+        sessionStorePaths: [...sessionStorePaths].sort((left, right) => left.localeCompare(right)),
+        paths: dedupePortableStatePaths(paths),
+    };
+}
+export function configuredBuilderPortableStatePlan(configPath, stateDir) {
+    const config = readOpenclawConfig(configPath);
+    if (config === null)
+        throw new Error("configured Builder openclaw config is unreadable");
+    return configuredBuilderPortableStatePlanFromConfig(config, stateDir);
+}
+export function configuredBuilderStatePlanAllowsEntry(raw, plan) {
+    const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
+    return plan.paths.some((item) => {
+        if (item.kind === "directory") {
+            return entry === item.relativePath || entry.startsWith(`${item.relativePath}/`) ||
+                (raw.endsWith("/") && item.relativePath.startsWith(`${entry}/`));
+        }
+        return entry === item.relativePath ||
+            (raw.endsWith("/") && item.relativePath.startsWith(`${entry}/`));
+    });
+}
+function existingPathOrNull(absolutePath) {
+    try {
+        return fs.lstatSync(absolutePath);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        throw error;
+    }
+}
+function assertNoSymlinkPathPrefix(stateDir, relativePath) {
+    let current = path.resolve(stateDir);
+    const root = existingPathOrNull(current);
+    if (root === null)
+        return false;
+    if (root.isSymbolicLink() || !root.isDirectory()) {
+        throw new Error("Builder OpenClaw state root is not a real directory");
+    }
+    for (const segment of relativePath.split("/")) {
+        current = path.join(current, segment);
+        const entry = existingPathOrNull(current);
+        if (entry === null)
+            return false;
+        if (entry.isSymbolicLink()) {
+            throw new Error(`configured Builder durable state path contains a symlink: ${relativePath}`);
+        }
+    }
+    return true;
+}
+// Symlinks inside a portable tree ride the carry as symlinks (rsync -a) and are
+// digested by target, so a Builder workspace with node_modules/.bin stays
+// portable; only sockets, fifos, and devices are unrepresentable.
+function assertPortableStateTree(absolutePath, relativePath) {
+    const stat = fs.lstatSync(absolutePath);
+    if (stat.isSymbolicLink())
+        return;
+    if (!stat.isDirectory() && !stat.isFile()) {
+        throw new Error(`configured Builder durable state path is not regular: ${relativePath}`);
+    }
+    if (!stat.isDirectory())
+        return;
+    for (const entry of fs.readdirSync(absolutePath, { withFileTypes: true })) {
+        assertPortableStateTree(path.join(absolutePath, entry.name), `${relativePath}/${entry.name}`);
+    }
+}
+export function assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan) {
+    for (const item of plan.paths) {
+        if (!assertNoSymlinkPathPrefix(stateDir, item.relativePath))
+            continue;
+        const absolutePath = path.join(path.resolve(stateDir), item.relativePath);
+        const stat = fs.lstatSync(absolutePath);
+        if (item.kind === "directory" && !stat.isDirectory()) {
+            throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);
+        }
+        if (item.kind === "file" && !stat.isFile()) {
+            throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);
+        }
+        assertPortableStateTree(absolutePath, item.relativePath);
     }
 }
 /**
@@ -154,6 +511,10 @@ export function writeMigratingInPin(customersDir, slug) {
     fs.rmSync(mountedMarkerPath(customersDir, slug), { force: true });
     fs.writeFileSync(pinPath, "");
     migratingInProcessPins.set(processPinKey(customersDir, slug), { root, slug, atMs: Date.now() });
+}
+export function clearMigratingInPin(customersDir, slug) {
+    fs.rmSync(migratingInPinPath(customersDir, slug), { force: true });
+    migratingInProcessPins.delete(processPinKey(customersDir, slug));
 }
 export function listMigratingInSlugs(customersDir, ttlMs) {
     const slugs = new Set(listProcessPinnedSlugs(customersDir, ttlMs));

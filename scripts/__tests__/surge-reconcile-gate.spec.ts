@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   observeReadySibling,
+  selfReleaseRetryDelayMs,
   startAfterSurgeReadiness,
   startSurgeReadinessSelfRelease,
   SURGE_READINESS_HOLD_DEADLINE_MS,
@@ -140,9 +141,10 @@ describe("surge reconcile gate", () => {
     stop();
   });
 
-  it("waits 60 seconds after a previously seen Ready sibling disappears", async () => {
+  it("self-releases 60s after a previously seen Ready sibling disappears unless a reservation holds it", async () => {
     let now = 0;
     let observation: "sibling" | "none" = "sibling";
+    let reserved = true;
     let scheduled: (() => void) | null = null;
     const release = vi.fn(async () => undefined);
     const runScheduled = () => {
@@ -156,6 +158,7 @@ describe("surge reconcile gate", () => {
         ? { kind: "sibling", podUid: "source-uid" }
         : { kind: "none", reason: "connection refused" },
       release,
+      reserved: async () => reserved,
       schedule: (callback) => {
         scheduled = callback;
         return vi.fn();
@@ -175,12 +178,61 @@ describe("surge reconcile gate", () => {
 
     now = 60_000;
     runScheduled();
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    expect(release).not.toHaveBeenCalled();
+
+    reserved = false;
+    now = 61_000;
+    runScheduled();
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
 
     stop();
   });
 
-  it("releases at the hold cap while a Ready sibling keeps the absence debounce pinned", async () => {
+  it("backs off after a failed self-release instead of retrying every second", async () => {
+    const delays: number[] = [];
+    let scheduled: (() => void) | null = null;
+    let attempts = 0;
+    const release = vi.fn(async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("attach failed");
+    });
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => ({ kind: "none", reason: "connection refused" }),
+      release,
+      schedule: (callback, delayMs) => {
+        delays.push(delayMs);
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => 0,
+      log: vi.fn(),
+    });
+
+    for (let check = 0; check < 4; check += 1) {
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+      runScheduled();
+    }
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(3));
+    expect(delays).toEqual([
+      selfReleaseRetryDelayMs(0),
+      selfReleaseRetryDelayMs(0),
+      selfReleaseRetryDelayMs(1),
+      selfReleaseRetryDelayMs(2),
+    ]);
+    expect(selfReleaseRetryDelayMs(1)).toBeGreaterThan(selfReleaseRetryDelayMs(0));
+    expect(selfReleaseRetryDelayMs(10)).toBe(30_000);
+
+    stop();
+  });
+
+  it("does not self-release at the hold cap while a Ready sibling remains observable", async () => {
     let now = 0;
     let scheduled: (() => void) | null = null;
     const release = vi.fn(async () => undefined);
@@ -209,12 +261,12 @@ describe("surge reconcile gate", () => {
     }
     await vi.waitFor(() => expect(scheduled).not.toBeNull());
     expect(release).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("still holding readiness after 60s"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Ready sibling observed"));
 
     now = SURGE_READINESS_HOLD_DEADLINE_MS;
     runScheduled();
-    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("cap without a handoff release"));
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    expect(release).not.toHaveBeenCalled();
 
     stop();
   });
@@ -252,7 +304,7 @@ describe("surge reconcile gate", () => {
     stop();
   });
 
-  it("resets the source-loss debounce when the Ready sibling reappears", async () => {
+  it("restarts the absence window after a Ready sibling reappears and later disappears", async () => {
     let now = 0;
     const observations = ["sibling", "none", "sibling", "none", "none"] as const;
     let index = 0;

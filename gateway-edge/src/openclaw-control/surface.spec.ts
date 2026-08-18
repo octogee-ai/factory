@@ -20,7 +20,7 @@ import {
   openClawControlUpstreamPath,
 } from "./surface.js";
 import { OpenClawControlSessionManager } from "./session.js";
-import { OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS } from "./rpc-policy.js";
+import { OPENCLAW_CONTROL_ALLOWED_METHODS } from "./rpc-policy.js";
 import { OpenClawControlResourceLimiter } from "./limits.js";
 
 const servers: http.Server[] = [];
@@ -583,7 +583,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               ok: true,
               payload: {
                 type: "hello-ok",
-                features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+                features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
               },
             }));
           } else if (frame.method === "config.get") {
@@ -738,7 +738,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     },
   );
 
-  it("requires the exact Origin, rewrites connect, denies native owner exec tools, and scrubs frames/audit", async () => {
+  it("requires the exact Origin, rewrites connect, forwards native owner exec tools, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     let upstreamOrigin: string | undefined;
     const upstream = http.createServer();
@@ -765,9 +765,16 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               type: "hello-ok",
               auth: { token: "gateway-secret" },
               features: {
-                methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS],
+                methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS],
               },
             },
+          }));
+        } else if (frame.method === "tools.invoke") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: { output: "uid=1000(node)" },
           }));
         }
       });
@@ -883,22 +890,103 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         auth: { token: "gateway-secret" },
       }),
     }));
-    expect(upstreamFrames.some((frame) => frame.id === "owner-tool")).toBe(false);
+    expect(upstreamFrames).toContainEqual(expect.objectContaining({
+      id: "owner-tool",
+      method: "tools.invoke",
+      params: { name: "exec", args: { command: "id" } },
+    }));
     expect(browserFrames).toContainEqual(expect.objectContaining({
       id: "owner-tool",
-      ok: false,
-      error: expect.objectContaining({ code: "POLICY_DENIED" }),
+      ok: true,
+      payload: { output: "uid=1000(node)" },
     }));
     expect(upstreamOrigin).toBeUndefined();
     expect(JSON.stringify(browserFrames)).not.toContain("gateway-secret");
     expect(JSON.stringify(browserFrames)).not.toContain("browser-token");
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       category: "tools_invoke",
-      event: "rpc_deny",
-      outcome: "denied",
+      event: "rpc_allow",
+      outcome: "ok",
     }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain("exec");
     expect(JSON.stringify(audit.mock.calls)).not.toContain("command");
+  });
+
+  it("keeps a session open for extra methods and denies only an unavailable allowed method", async () => {
+    const upstreamFrames: Array<Record<string, unknown>> = [];
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        upstreamFrames.push(frame);
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: {
+                methods: [
+                  ...OPENCLAW_CONTROL_ALLOWED_METHODS.filter((method) => method !== "status"),
+                  "future.write",
+                ],
+              },
+            },
+          }));
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      audit: async () => {},
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    const denied = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("missing method was not denied")), 1_000);
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.event === "connect.challenge") {
+          browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          browser.send(JSON.stringify({ type: "req", id: "missing-status", method: "status", params: {} }));
+        } else if (frame.id === "missing-status") {
+          clearTimeout(deadline);
+          resolve(frame);
+        }
+      });
+    });
+
+    expect(denied).toMatchObject({
+      id: "missing-status",
+      ok: false,
+      error: {
+        code: "POLICY_DENIED",
+        message: expect.stringContaining("method-unavailable"),
+      },
+    });
+    expect(upstreamFrames.some((frame) => frame.id === "missing-status")).toBe(false);
+    expect(browser.readyState).toBe(WebSocket.OPEN);
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
   it("times out every forwarded RPC and releases the shared in-flight slot", async () => {
@@ -918,7 +1006,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
         }
@@ -985,7 +1073,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
         } else if (frame.method === "status") {
@@ -1082,7 +1170,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
         } else if (frame.method === "tools.invoke") {
@@ -1229,7 +1317,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
         } else if (frame.method === "status") {

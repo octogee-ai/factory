@@ -41,14 +41,14 @@
  *   1. Strict id grammar — reject anything that isn't `byok-{slug}-{provider}`
  *      with a known provider and a sane slug.
  *   2. Known-slug allowlist — only resolve for slugs that have a
- *      corresponding agent dir on disk. Stops "let me try slug=admin".
+ *      corresponding agent dir on disk or the validated Builder identity.
  *   3. Audit log — every accepted/rejected id goes to stderr with id +
  *      outcome so we have a forensic trail. Cloud Logging captures stderr.
  */
 import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "url";
-import { parseAgentId } from "../shared/dist/types/identity.js";
+import { isValidUsername, parseAgentId } from "../shared/dist/types/identity.js";
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so this
 // resolver materializes byok-* keys through the octogee-api broker
@@ -138,10 +138,12 @@ function parseAgentScopedId(id, pattern) {
  *  within a single resolver invocation. Same env var as the provisioner's
  *  AGENTS_DIR (scripts/lib/config.ts:18-19). */
 function loadKnownAgentRoster() {
+  const slugs = new Set();
+  const agentIds = new Set();
+  const builderSlug = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  if (builderSlug && isValidUsername(builderSlug)) slugs.add(builderSlug);
   try {
     const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });
-    const slugs = new Set();
-    const agentIds = new Set();
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       const parsed = parseAgentId(e.name);
@@ -154,14 +156,7 @@ function loadKnownAgentRoster() {
     process.stderr.write(
       `[secret-resolver] could not enumerate AGENTS_DIR (${AGENTS_DIR}): ${err?.message || err}\n`,
     );
-    // FAIL CLOSED. Return an empty set so every id with a slug-allowlist
-    // dependency is rejected. A misconfigured deploy must not silently
-    // collapse the defense to grammar-only — that turns "two-layer DiD"
-    // into "one layer plus a stderr line nobody alerts on." The trade-off
-    // is BYOT keys won't resolve until the deploy is fixed; that's a loud,
-    // visible failure (every BYOT call returns "Refused by resolver") which
-    // is exactly the signal we want.
-    return { slugs: new Set(), agentIds: new Set() };
+    return { slugs, agentIds };
   }
 }
 

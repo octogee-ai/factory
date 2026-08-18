@@ -3,7 +3,7 @@ import { reconcilePlatformInvariants } from "@octogee/core/system-config-invaria
 import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 import {
-  OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS,
+  OPENCLAW_CONTROL_ALLOWED_METHODS,
   evaluateDelegatedOpenClawControlRpc,
   projectOpenClawHelloForProfile,
   projectOpenClawServerFrameForProfile,
@@ -11,7 +11,6 @@ import {
   evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
   openClawConfigSnapshotFromGetResponse,
-  pinnedOpenClawRuntimeMatches,
 } from "./rpc-policy.js";
 
 const invariantContext = {
@@ -32,19 +31,20 @@ function validConfig(extra: Record<string, unknown> = {}): Record<string, unknow
 
 function policyContext(extra: Record<string, unknown> = {}) {
   return {
-    installedMethods: new Set(OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS),
+    installedMethods: new Set(OPENCLAW_CONTROL_ALLOWED_METHODS),
     invariantContext,
     ...extra,
   };
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
-  it("retains delegated restrictions while owners use the sanitized policy", () => {
+  it("retains delegated restrictions while a native owner gets their whole advertised runtime", () => {
     const unsafeDelegatedRead = request("config.patch", {
       raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 30 } } }),
       baseHash: "hash-1",
     });
     const context = policyContext({
+      installedMethods: new Set([...OPENCLAW_CONTROL_ALLOWED_METHODS, "terminal.open"]),
       currentConfig: { raw: validConfig(), hash: "hash-1" },
     });
 
@@ -53,32 +53,85 @@ describe("OpenClaw Dashboard RPC policy", () => {
       context,
       "delegated-read",
     )).toMatchObject({ allowed: false, reason: "method-unavailable" });
+    const ownerTool = request("tools.invoke", { name: "exec", args: { command: "id" } });
     expect(evaluateOpenClawControlRpcForProfile(
-      request("tools.invoke", { name: "exec", args: { command: "id" } }),
+      ownerTool,
       context,
       "native-owner",
-    )).toMatchObject({ allowed: false, reason: "tool-denied" });
+    )).toEqual({ allowed: true, category: "tools_invoke", outbound: ownerTool });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("terminal.open", { sessionId: "shell" }),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: true, category: "unknown" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("sessions.list"),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: false, reason: "method-unavailable" });
+  });
+
+  it("fences native owner config writes behind the migration freeze and the platform wiring invariants only", () => {
+    const current = validConfig({ agents: { defaults: { timeoutSeconds: 10 } } });
+    const context = policyContext({ currentConfig: { raw: current, hash: "hash-1" } });
+    const ownerEdit = request("config.patch", {
+      raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 30 } } }),
+      baseHash: "hash-1",
+      restartDelayMs: 500,
+    });
+    const rewire = request("config.patch", {
+      raw: JSON.stringify({ gateway: { bind: "loopback" } }),
+      baseHash: "hash-1",
+    });
+    const staleButOwnerShaped = request("config.apply", {
+      raw: JSON.stringify(current),
+      baseHash: "stale",
+    });
+
+    expect(evaluateOpenClawControlRpcForProfile(ownerEdit, policyContext({ ...context, configFrozen: true }), "native-owner"))
+      .toMatchObject({ allowed: false, category: "config_mutation", reason: "config-frozen" });
+    expect(evaluateOpenClawControlRpcForProfile(ownerEdit, context, "native-owner"))
+      .toMatchObject({ allowed: true, category: "config_mutation", outbound: ownerEdit });
+    expect(evaluateOpenClawControlRpcForProfile(rewire, context, "native-owner"))
+      .toMatchObject({ allowed: false, category: "config_mutation", reason: "platform-invariant" });
+    expect(evaluateOpenClawControlRpcForProfile(staleButOwnerShaped, context, "native-owner"))
+      .toMatchObject({ allowed: true, category: "config_mutation" });
+    expect(evaluateOpenClawControlRpcForProfile(ownerEdit, policyContext(), "native-owner"))
+      .toMatchObject({ allowed: false, category: "config_mutation", reason: "config-invalid" });
   });
 
 
-  it("fails closed unless hello advertises the exact pinned runtime method set", () => {
-    const methods = [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS];
+  it("tolerates extra advertised methods while retaining the explicit policy allowlist", () => {
+    const methods = [...OPENCLAW_CONTROL_ALLOWED_METHODS, "future.write"];
     const hello = {
       type: "res",
       ok: true,
       payload: { type: "hello-ok", features: { methods } },
     };
     expect(installedMethodsFromHello(hello)).toEqual(new Set(methods));
-    expect(pinnedOpenClawRuntimeMatches(new Set(methods))).toBe(true);
-    expect(pinnedOpenClawRuntimeMatches(new Set(methods.slice(1)))).toBe(false);
-    expect(pinnedOpenClawRuntimeMatches(new Set([...methods, "future.write"]))).toBe(false);
     expect(evaluateOpenClawControlRpc(request("config.get"), {
       ...policyContext(),
-      installedMethods: new Set(methods.slice(1)),
-    })).toMatchObject({ allowed: false, reason: "runtime-drift", category: "unknown" });
+      installedMethods: new Set(methods),
+    })).toMatchObject({ allowed: true, category: "read" });
+    expect(evaluateOpenClawControlRpc(request("future.write"), {
+      ...policyContext(),
+      installedMethods: new Set(methods),
+    })).toMatchObject({ allowed: false, reason: "method-unavailable", category: "forbidden_mutation" });
   });
 
-  it("allows only pinned reads plus the three native config mutation methods", () => {
+  it("denies a missing allowed method without invalidating other runtime methods", () => {
+    const methods = new Set(OPENCLAW_CONTROL_ALLOWED_METHODS.filter((method) => method !== "status"));
+    expect(evaluateOpenClawControlRpc(request("config.get"), {
+      ...policyContext(),
+      installedMethods: methods,
+    })).toMatchObject({ allowed: true, category: "read" });
+    expect(evaluateOpenClawControlRpc(request("status"), {
+      ...policyContext(),
+      installedMethods: methods,
+    })).toMatchObject({ allowed: false, reason: "method-unavailable", category: "forbidden_mutation" });
+  });
+
+  it("allows only explicit reads plus the three native config mutation methods", () => {
     for (const method of [
       "health",
       "status",
@@ -134,7 +187,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
     )).toMatchObject({ allowed: false, category: "tools_invoke" });
   });
 
-  it("pins the captured delegated Dashboard inventory to the exact runtime contract", () => {
+  it("retains the captured delegated Dashboard inventory policy", () => {
     expect(delegatedInventory.runtimeVersion).toBe("2026.7.1");
     expect(delegatedInventory.capturedRoutes).toEqual([
       "/overview", "/agents", "/channels", "/models", "/config",
@@ -145,24 +198,18 @@ describe("OpenClaw Dashboard RPC policy", () => {
       "config.apply",
       "config.patch",
     ]);
-    for (const method of [
-      ...delegatedInventory.delegatedConfigMethods,
-      ...delegatedInventory.explicitlyExcludedMethods,
-    ]) {
-      expect(OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS).toContain(method);
-    }
     expect(delegatedInventory.explicitlyExcludedMethods).toEqual(expect.arrayContaining([
       "tools.invoke", "sessions.list", "terminal.open", "secrets.resolve",
     ]));
   });
 
-  it("filters hello discovery to the exact methods honest for each delegated profile", () => {
+  it("filters hello discovery to the methods honest for each delegated profile", () => {
     const hello = {
       type: "res",
       ok: true,
       payload: {
         type: "hello-ok",
-        features: { methods: [...OPENCLAW_CONTROL_PINNED_ADVERTISED_METHODS] },
+        features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
       },
     };
     const viewer = projectOpenClawHelloForProfile(hello, "delegated-read");
@@ -491,13 +538,13 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide([{ id: "main", name: "Primary", model: "openai/gpt-5.1" }]))
       .toMatchObject({ allowed: true });
     expect(decide([{ id: "helper", name: "Helper", model: "openai/gpt-5.1" }]))
-      .toMatchObject({ allowed: false, reason: "platform-invariant" });
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([{ id: "main", default: false }]))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide([
       { id: "main" },
       { id: "helper", name: "Helper", model: "openai/gpt-5.1" },
-    ])).toMatchObject({ allowed: false, reason: "platform-invariant" });
+    ])).toMatchObject({ allowed: false, reason: "config-unsafe-path" });
   });
 
   it("lets helpers edit keyed roster labels and models but never roster membership", () => {
@@ -535,7 +582,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(decide({ "octogee-ceckert-coach": { default: false } }))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide({ "octogee-helper-coach": { name: "Helper", model: "openai/gpt-5.1" } }))
-      .toMatchObject({ allowed: false, reason: "platform-invariant" });
+      .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide({ "octogee-aug04-coach": null }))
       .toMatchObject({ allowed: false, reason: "config-unsafe-path" });
     expect(decide({ "octogee-ceckert-coach": [{ name: "Smuggled" }] }))

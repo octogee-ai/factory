@@ -280,8 +280,55 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it("preserves a dedicated builder key while unmounting its migrated customer", async () => {
-    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+  it("carries the configured Builder agent root, workspace, and session store as one portable plan", async () => {
+    await withRuntimeMock(async ({ tempRoot }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+      const customAgentDir = path.join(tempRoot, "agents", "discord-helper", "runtime");
+      const workspace = path.join(tempRoot, "workspaces", "discord-helper");
+      const sessions = path.join(tempRoot, "agents", "discord-helper", "sessions", "sessions.json");
+      await fs.writeFile(path.join(tempRoot, "openclaw.json"), JSON.stringify({
+        agents: {
+          list: [{
+            id: "discord-helper",
+            agentDir: customAgentDir,
+            workspace,
+          }],
+        },
+        session: { store: path.join(tempRoot, "agents", "{agentId}", "sessions", "sessions.json") },
+      }));
+      for (const [absolutePath, contents] of [
+        [path.join(customAgentDir, "auth.json"), "agent-auth"],
+        [path.join(workspace, "NOTES.md"), "workspace"],
+        [sessions, JSON.stringify({ sessions: [] })],
+        [path.join(tempRoot, "memory", "discord-helper.sqlite"), "sqlite"],
+      ]) {
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, contents);
+      }
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
+      });
+
+      await expect(adapter.listExportPaths("alice")).resolves.toEqual(expect.arrayContaining([
+        { cwd: tempRoot, path: path.join("agents", "discord-helper") },
+        { cwd: tempRoot, path: path.join("workspaces", "discord-helper") },
+        { cwd: tempRoot, path: path.join("memory", "discord-helper.sqlite") },
+      ]));
+
+      await fs.rm(customAgentDir, { recursive: true, force: true });
+      await adapter.prepareImportDir("alice", "final");
+      expect(fsSync.existsSync(customAgentDir)).toBe(true);
+    });
+  });
+
+  it("retains a configured Builder overlay during imported cleanup, stopping only its chat accounts", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
       vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
       const customerDir = path.join(tempRoot, "customers", "alice");
@@ -290,7 +337,10 @@ describe("customer lifecycle config patch agent directories", () => {
       await fs.mkdir(customerDir, { recursive: true });
       await fs.mkdir(agentDir, { recursive: true });
       await fs.mkdir(path.dirname(customerKey), { recursive: true });
+      await fs.mkdir(path.join(customerDir, ".system"), { recursive: true });
       await fs.writeFile(customerKey, "private-key");
+      await fs.writeFile(path.join(customerDir, ".system", ".mounted"), "");
+      await fs.writeFile(path.join(customerDir, ".system", ".migrating-in"), "");
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -318,15 +368,19 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
-      await adapter.removeImportedCustomerBySlug("alice");
-
-      expect(agentsDelete).toHaveBeenCalledWith({ agentId: "octogee-alice-coach", deleteFiles: false });
-      expect(channelsStop).toHaveBeenCalledWith({
-        channel: "mattermost",
-        accountId: "alice-coach",
+      await expect(adapter.removeImportedCustomerBySlug("alice")).resolves.toMatchObject({
+        wasMounted: true,
+        retained: true,
       });
-      expect(fsSync.existsSync(customerDir)).toBe(false);
+
+      expect(agentsDelete).not.toHaveBeenCalled();
+      expect(channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
+      expect(applyConfigPatch).not.toHaveBeenCalled();
+      expect(fsSync.existsSync(customerDir)).toBe(true);
       expect(fsSync.existsSync(customerKey)).toBe(true);
+      expect(fsSync.existsSync(agentDir)).toBe(true);
+      expect(fsSync.existsSync(path.join(customerDir, ".system", ".mounted"))).toBe(false);
+      expect(fsSync.existsSync(path.join(customerDir, ".system", ".migrating-in"))).toBe(false);
     });
   });
 });

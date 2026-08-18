@@ -19,6 +19,7 @@ import {
   type FlushGatewayRequestBody,
   type FlushGatewayResponse,
   type CompleteSurgeHandoffRequestBody,
+  type MigrationConfigTransferMode,
   type MigrationLoadStrategy,
   type MigrationRequestBody,
   type MigrationTransferMode,
@@ -57,6 +58,7 @@ import { pickPlanInputs } from "../../shared/types/billing.js";
 import { verifyFleetRequest } from "./fleet-signature.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
+  addCustomerToGateway,
   cloneMissingProjects,
   removeCustomerFromGateway,
   restoreCustomerRuntimeFromSnapshot,
@@ -73,9 +75,19 @@ import {
   readSystemConfigWatchFenceGeneration,
 } from "./system-config-watch-state.js";
 import { OPENCLAW_DIR } from "./config.js";
+import { openClawConfigPath } from "./openclaw-config-path.js";
+import {
+  assertConfiguredBuilderPortableStatePlanOnDisk,
+  configuredBuilderPortableStatePlan,
+  configuredBuilderStatePlanAllowsEntry,
+  isSafeConfiguredAgentId,
+  type ConfiguredBuilderPortableStatePlan,
+} from "./local-coach-wired.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
+const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
+const ACTIVATION_MANIFEST_TRANSFER = "activation-manifest" as const;
 
 export interface MigrationHandlerDeps {
   publicKey: string;
@@ -101,7 +113,9 @@ flushLocalState?: (input: {
   reason: string;
   expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
-releaseSurgeReadiness?: (input: { targetPodUid: string }) => Promise<void>;
+releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
+reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
+markSurgePrelaunchHydrated?: (input: { migrationId: string; slug: string }) => Promise<void>;
 pauseSystemConfigWatch?: (slug: string) => Promise<string | void>;
 readSystemConfigWatchFence?: (slug: string) => Promise<string | null>;
 resumeSystemConfigWatch?: (
@@ -198,6 +212,52 @@ async function activateImportedCustomerForMigration(input: {
   }
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
+  }
+}
+
+async function requireAttachableConfiguredBuilder(
+  adapter: MigrationHandlerDeps["adapter"],
+  slug: string,
+): Promise<string> {
+  if (
+    !adapter.isBuilderGateway?.() ||
+    !adapter.isConfiguredBuilderCustomer?.(slug) ||
+    !adapter.configuredBuilderOverlayPresent?.(slug)
+  ) {
+    throw new Error(`[migration-http] configured Builder overlay is not attachable for ${slug}`);
+  }
+  const uid = await adapter.uidForSlug(slug);
+  if (!uid) {
+    throw new Error(`[migration-http] no user doc for configured Builder ${slug}`);
+  }
+  return uid;
+}
+
+async function attachConfiguredBuilderImportedCustomer(input: {
+  deps: MigrationHandlerDeps;
+  slug: string;
+  signal: AbortSignal;
+}): Promise<void> {
+  const { deps, slug, signal } = input;
+  const uid = await requireAttachableConfiguredBuilder(deps.adapter, slug);
+  const result = await addCustomerToGateway(deps.adapter, uid, {
+    convergeContent: true,
+    deferRuntimeVerification: true,
+    signal,
+  });
+  if (result.pendingProjectClones.length > 0) {
+    deps.log?.(
+      `[migration-http] configured Builder project checkouts still pending for ${slug}; ` +
+      `the reconcile loop converges them: ${result.pendingProjectClones.join(", ")}`,
+    );
+  }
+  deps.adapter.writeMountMarker?.(slug);
+  if (!deps.adapter.customerMountMarked?.(slug)) {
+    throw new Error(`[migration-http] configured Builder mount marker was not written for ${slug}`);
+  }
+  deps.adapter.onMounted?.(slug);
+  if (!deps.getMountedCustomers?.().includes(slug)) {
+    throw new Error(`[migration-http] configured Builder was not mounted for ${slug}`);
   }
 }
 
@@ -327,13 +387,19 @@ export function createCompleteSurgeHandoffHandler(
       return;
     }
     try {
-      await deps.releaseSurgeReadiness({ targetPodUid: body.targetPodUid });
+      await deps.releaseSurgeReadiness({
+        migrationId: body.migrationId,
+        targetPodUid: body.targetPodUid,
+      });
       log(`[surge-handoff] readiness released targetPodUid=${body.targetPodUid}`);
       res.status(200).json({ released: true, targetPodUid: body.targetPodUid });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[surge-handoff] readiness release failed: ${message}`);
-      res.status(500).json({ error: "surge readiness release failed", message });
+      res.status(500).json({
+        error: "surge readiness release failed",
+        message,
+      });
     }
   };
 }
@@ -1020,6 +1086,7 @@ interface RSyncImportSession {
   migrationId: string;
   slug: string;
   mode: MigrationTransferMode;
+  configTransferMode: MigrationConfigTransferMode;
   stageDir: string;
   importDir: string;
   configPath: string;
@@ -1041,6 +1108,10 @@ function isMigrationTransferMode(value: unknown): value is MigrationTransferMode
   return value === "keys" || value === "pre" || value === "final";
 }
 
+function isMigrationConfigTransferMode(value: unknown): value is MigrationConfigTransferMode {
+  return value === ACTIVATION_MANIFEST_TRANSFER || value === BUILDER_SYSTEM_CONFIG_TRANSFER;
+}
+
 function validateTransferMode(
   mode: unknown,
   res: Response,
@@ -1048,6 +1119,39 @@ function validateTransferMode(
   if (isMigrationTransferMode(mode)) return mode;
   res.status(400).json({ error: "invalid migration mode" });
   return null;
+}
+
+function validateRsyncConfigTransferMode(
+  value: unknown,
+  mode: MigrationTransferMode,
+  res: Response,
+): MigrationConfigTransferMode | null {
+  if (mode !== "final") {
+    if (value === undefined) return ACTIVATION_MANIFEST_TRANSFER;
+    res.status(400).json({ error: "configTransferMode is valid only for final imports" });
+    return null;
+  }
+  if (value === undefined || value === ACTIVATION_MANIFEST_TRANSFER) return ACTIVATION_MANIFEST_TRANSFER;
+  if (isMigrationConfigTransferMode(value)) return value;
+  res.status(400).json({ error: "invalid configTransferMode" });
+  return null;
+}
+
+function requireConfiguredBuilderSystemConfigTransfer(
+  slug: string,
+  configTransferMode: MigrationConfigTransferMode,
+  res: Response,
+): boolean {
+  if (
+    configTransferMode !== BUILDER_SYSTEM_CONFIG_TRANSFER ||
+    isConfiguredGatewayBuilder(slug)
+  ) {
+    return true;
+  }
+  res.status(409).json({
+    error: "configured Builder system config transfer requires the matching Builder gateway",
+  });
+  return false;
 }
 
 function validateMigrationLoadStrategy(
@@ -1369,23 +1473,62 @@ async function copyStageToOpenClaw(stageDir: string, importDir: string): Promise
   );
 }
 
+interface RsyncPhaseRequest<T extends MigrationRequestBody> {
+  body: T;
+  mode: MigrationTransferMode;
+  configTransferMode: MigrationConfigTransferMode;
+}
+
+function parseRsyncPhaseRequest<
+  T extends MigrationRequestBody & {
+    rpcPhase?: unknown;
+    mode?: unknown;
+    configTransferMode?: unknown;
+  },
+>(
+  req: Request,
+  res: Response,
+  deps: MigrationHandlerDeps,
+  phase: RsyncMigrationRpcPhase,
+  log: (msg: string) => void,
+): RsyncPhaseRequest<T> | null {
+  const body = parseAndVerifyJsonBody<T>(req, res, deps.publicKey, log);
+  if (!body) return null;
+  if (!validateRsyncRpcPhase(body.rpcPhase, phase, res)) return null;
+  const mode = validateTransferMode(body.mode, res);
+  if (!mode) return null;
+  const configTransferMode = validateRsyncConfigTransferMode(body.configTransferMode, mode, res);
+  if (!configTransferMode) return null;
+  if (!requireConfiguredBuilderSystemConfigTransfer(body.slug, configTransferMode, res)) return null;
+  return { body, mode, configTransferMode };
+}
+
+function validateRsyncTransferCredentials(
+  body: { transferUser?: unknown; transferKey?: unknown },
+  res: Response,
+): { transferUser: string; transferKey: string } | null {
+  const transferUser = validateRsyncCredential(body.transferUser, "transferUser", res);
+  if (!transferUser) return null;
+  const transferKey = validateRsyncCredential(body.transferKey, "transferKey", res);
+  if (!transferKey) return null;
+  return { transferUser, transferKey };
+}
+
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<PrepareRsyncImportRequestBody>(
+    const parsed = parseRsyncPhaseRequest<PrepareRsyncImportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
+      "prepare-rsync-import",
       log,
     );
-    if (!body) return;
-    if (!validateRsyncRpcPhase(body.rpcPhase, "prepare-rsync-import", res)) return;
-    const mode = validateTransferMode(body.mode, res);
-    if (!mode) return;
-    const transferUser = validateRsyncCredential(body.transferUser, "transferUser", res);
-    if (!transferUser) return;
-    const transferKey = validateRsyncCredential(body.transferKey, "transferKey", res);
-    if (!transferKey) return;
+    if (!parsed) return;
+    const { body, mode, configTransferMode } = parsed;
+    const credentials = validateRsyncTransferCredentials(body, res);
+    if (!credentials) return;
+    const { transferUser, transferKey } = credentials;
     if (body.sourcePodIp !== undefined && !net.isIP(body.sourcePodIp)) {
       res.status(400).json({ error: "invalid sourcePodIp" });
       return;
@@ -1394,6 +1537,9 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     try {
+      if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+        await deps.reserveSurgeTarget?.({ migrationId: body.migrationId, slug: body.slug });
+      }
       await stopConflictingRsyncSession(body.migrationId, port);
       const importDir = mode === "keys"
         ? await deps.adapter.prepareKeyImportDir(body.slug)
@@ -1419,6 +1565,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         migrationId: body.migrationId,
         slug: body.slug,
         mode,
+        configTransferMode,
         stageDir,
         importDir,
         configPath,
@@ -1462,24 +1609,29 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
   const log = deps.log ?? ((msg) => console.log(msg));
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<PushRsyncStateRequestBody>(
+    const parsed = parseRsyncPhaseRequest<PushRsyncStateRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
+      "push-rsync-state",
       log,
     );
-    if (!body) return;
-    if (!validateRsyncRpcPhase(body.rpcPhase, "push-rsync-state", res)) return;
-    const mode = validateTransferMode(body.mode, res);
-    if (!mode) return;
+    if (!parsed) return;
+    const { body, mode, configTransferMode } = parsed;
+    if (
+      configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER &&
+      body.includeActivationManifest === true
+    ) {
+      res.status(400).json({ error: "configured Builder system config transfer cannot include activation manifest" });
+      return;
+    }
     const targetHost = validateRsyncTargetHost(body.targetHost, res);
     if (!targetHost) return;
     const targetPort = validateRsyncPort(body.targetPort, res);
     if (targetPort === null) return;
-    const transferUser = validateRsyncCredential(body.transferUser, "transferUser", res);
-    if (!transferUser) return;
-    const transferKey = validateRsyncCredential(body.transferKey, "transferKey", res);
-    if (!transferKey) return;
+    const credentials = validateRsyncTransferCredentials(body, res);
+    if (!credentials) return;
+    const { transferUser, transferKey } = credentials;
 
     let cleanupActivationManifest: () => Promise<void> = async () => {};
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-push-${body.migrationId}-`));
@@ -1494,7 +1646,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       }
       await checkpointAgentStoresForCarry({ sources, log });
 
-      const activationManifest = mode !== "final"
+      const activationManifest = mode !== "final" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
       cleanupActivationManifest = activationManifest.cleanup;
@@ -1540,25 +1692,84 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
   };
 }
 
+async function validateStagedRsyncImport(
+  session: RSyncImportSession,
+  slug: string,
+  mode: MigrationTransferMode,
+  configTransferMode: MigrationConfigTransferMode,
+): Promise<string | null> {
+  const entries = await listRelativeEntries(session.stageDir);
+  const configuredBuilderStateDir = resolveOpenClawStateDir();
+  const configuredBuilderStatePlan = configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
+    ? configuredBuilderPortableStatePlan(openClawConfigPath(), configuredBuilderStateDir)
+    : undefined;
+  const violation = findPathTraversalViolation(entries, slug, mode, [], configuredBuilderStatePlan);
+  if (violation !== null) return violation;
+  const staged = await listSqliteStores(session.stageDir);
+  const unreadable = await findUnreadableStore({ storePaths: staged, relativeTo: session.stageDir });
+  if (unreadable) {
+    return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+  }
+  if (configuredBuilderStatePlan) {
+    if (path.resolve(configuredBuilderStateDir) !== path.resolve(session.importDir)) {
+      throw new Error("configured Builder state root does not match the import root");
+    }
+    assertConfiguredBuilderPortableStatePlanOnDisk(session.stageDir, configuredBuilderStatePlan);
+    assertConfiguredBuilderPortableStatePlanOnDisk(session.importDir, configuredBuilderStatePlan);
+  }
+  await clearSqliteSidecars(
+    staged.map((store) => path.join(session.importDir, path.relative(session.stageDir, store))),
+  );
+  return null;
+}
+
+async function activateFinishedRsyncImport(input: {
+  deps: MigrationHandlerDeps;
+  body: FinishRsyncImportRequestBody;
+  configTransferMode: MigrationConfigTransferMode;
+  loadStrategy: MigrationLoadStrategy;
+  signal: AbortSignal;
+}): Promise<void> {
+  const { deps, body, configTransferMode, loadStrategy, signal } = input;
+  deps.adapter.markCustomerMigratingIn?.(body.slug);
+  if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
+    await activateImportedCustomerForMigration({
+      deps,
+      slug: body.slug,
+      mode: "final",
+      loadStrategy,
+      signal,
+    });
+    deps.adapter.writeMountMarker?.(body.slug);
+    deps.adapter.onMounted?.(body.slug);
+    return;
+  }
+  await attachConfiguredBuilderImportedCustomer({ deps, slug: body.slug, signal });
+  await deps.markSurgePrelaunchHydrated?.({ migrationId: body.migrationId, slug: body.slug });
+}
+
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<FinishRsyncImportRequestBody>(
+    const parsed = parseRsyncPhaseRequest<FinishRsyncImportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
+      "finish-rsync-import",
       log,
     );
-    if (!body) return;
-    if (!validateRsyncRpcPhase(body.rpcPhase, "finish-rsync-import", res)) return;
-    const mode = validateTransferMode(body.mode, res);
-    if (!mode) return;
+    if (!parsed) return;
+    const { body, mode, configTransferMode } = parsed;
     const loadStrategy = validateMigrationLoadStrategy(body.loadStrategy, res);
     if (!loadStrategy) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     const session = rsyncImportSessions.get(key);
     if (!session) {
       res.status(404).json({ error: "rsync import session not found" });
+      return;
+    }
+    if (session.configTransferMode !== configTransferMode) {
+      res.status(409).json({ error: "rsync import config transfer mode does not match prepared session" });
       return;
     }
     const { controller, detach } = attachImportDisconnectHandlers(
@@ -1569,45 +1780,23 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     );
     try {
       await stopRsyncDaemon(session.child);
-      const entries = await listRelativeEntries(session.stageDir);
-      const violation = findPathTraversalViolation(entries, body.slug, mode);
-      if (violation !== null) {
+      const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode);
+      if (rejection !== null) {
         log(
-          `[migration-rsync] ⚠ finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${violation}`,
+          `[migration-rsync] ⚠ finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${rejection}`,
         );
-        res.status(400).json({ error: "rsync import failed validation", message: violation });
+        res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
-      const staged = await listSqliteStores(session.stageDir);
-      const unreadable = await findUnreadableStore({
-        storePaths: staged,
-        relativeTo: session.stageDir,
-      });
-      if (unreadable) {
-        const message = `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
-        log(
-          `[migration-rsync] ⚠ finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${message}`,
-        );
-        res.status(400).json({ error: "rsync import failed validation", message });
-        return;
-      }
-      await clearSqliteSidecars(
-        staged.map((store) =>
-          path.join(session.importDir, path.relative(session.stageDir, store)),
-        ),
-      );
       await copyStageToOpenClaw(session.stageDir, session.importDir);
       if (mode === "final") {
-        deps.adapter.markCustomerMigratingIn?.(body.slug);
-        await activateImportedCustomerForMigration({
+        await activateFinishedRsyncImport({
           deps,
-          slug: body.slug,
-          mode,
+          body,
+          configTransferMode,
           loadStrategy,
           signal: controller.signal,
         });
-        deps.adapter.writeMountMarker?.(body.slug);
-        deps.adapter.onMounted?.(body.slug);
       }
       const response: ImportResponse = {
         migrationId: body.migrationId,
@@ -1640,10 +1829,76 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     if (!validateRsyncRpcPhase(body.rpcPhase, "abort-rsync-import", res)) return;
     const mode = validateTransferMode(body.mode, res);
     if (!mode) return;
+    const configTransferMode = validateRsyncConfigTransferMode(body.configTransferMode, mode, res);
+    if (!configTransferMode) return;
+    if (!requireConfiguredBuilderSystemConfigTransfer(body.slug, configTransferMode, res)) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     await stopRsyncSession(rsyncImportSessions.get(key)).catch(() => undefined);
+    if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+      deps.adapter.clearMountMarker?.(body.slug);
+      deps.adapter.clearCustomerMigratingIn?.(body.slug);
+      deps.adapter.onUnmounted?.(body.slug);
+    }
     log(`[migration-rsync] abort-import migrationId=${body.migrationId} slug=${body.slug}`);
     res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+  };
+}
+
+function configuredBuilderVerifyChecks(
+  deps: MigrationHandlerDeps,
+  slug: string,
+): Extract<VerifyMigrationResponse, { configTransferMode: "configured-builder-system-config" }>["checks"] {
+  return {
+    customerDir: deps.adapter.hasCustomerDir(slug),
+    configuredBuilderOverlay:
+      deps.adapter.isBuilderGateway?.() === true &&
+      deps.adapter.isConfiguredBuilderCustomer?.(slug) === true &&
+      deps.adapter.configuredBuilderOverlayPresent?.(slug) === true,
+    mountMarked: deps.adapter.customerMountMarked?.(slug) ?? false,
+    workspaceGit: deps.adapter.hasWorkspaceGitDir(slug),
+    gitRemote: deps.adapter.hasGitRemote(slug),
+  };
+}
+
+async function activationManifestVerifyChecks(
+  deps: MigrationHandlerDeps,
+  body: VerifyMigrationRequestBody,
+): Promise<Extract<VerifyMigrationResponse, { configTransferMode?: "activation-manifest" }>["checks"]> {
+  const coachWired =
+    deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug)
+    ?? deps.getMountedCustomers?.().includes(body.slug)
+    ?? false;
+  return {
+    customerDir: deps.adapter.hasCustomerDir(body.slug),
+    coachWired,
+    mountMarked: deps.adapter.customerMountMarked?.(body.slug) ?? coachWired,
+    accountHealthy: await deps.adapter.waitForAccountHealthy({
+      slug: body.slug,
+      timeoutMs: body.timeoutMs ?? MIGRATION_VERIFY_TIMEOUT_MS,
+    }),
+  };
+}
+
+async function verifyMigrationResponse(
+  deps: MigrationHandlerDeps,
+  body: VerifyMigrationRequestBody,
+): Promise<VerifyMigrationResponse> {
+  if (body.configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+    const checks = configuredBuilderVerifyChecks(deps, body.slug);
+    return {
+      migrationId: body.migrationId,
+      slug: body.slug,
+      ready: Object.values(checks).every(Boolean),
+      configTransferMode: BUILDER_SYSTEM_CONFIG_TRANSFER,
+      checks,
+    };
+  }
+  const checks = await activationManifestVerifyChecks(deps, body);
+  return {
+    migrationId: body.migrationId,
+    slug: body.slug,
+    ready: Object.values(checks).every(Boolean),
+    checks,
   };
 }
 
@@ -1657,30 +1912,27 @@ export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler 
       log,
     );
     if (!body) return;
-
+    if (
+      body.configTransferMode !== undefined &&
+      !isMigrationConfigTransferMode(body.configTransferMode)
+    ) {
+      res.status(400).json({ error: "invalid configTransferMode" });
+      return;
+    }
+    if (
+      body.configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER &&
+      !requireConfiguredBuilderSystemConfigTransfer(body.slug, body.configTransferMode, res)
+    ) {
+      return;
+    }
     try {
-      const customerDir = deps.adapter.hasCustomerDir(body.slug);
-      const coachWired =
-        deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug)
-        ?? deps.getMountedCustomers?.().includes(body.slug)
-        ?? false;
-      const mountMarked = deps.adapter.customerMountMarked?.(body.slug) ?? coachWired;
-      const accountHealthy = await deps.adapter.waitForAccountHealthy({
-        slug: body.slug,
-        timeoutMs: body.timeoutMs ?? MIGRATION_VERIFY_TIMEOUT_MS,
-      });
-      const checks = { customerDir, coachWired, mountMarked, accountHealthy };
-      const ready = customerDir && coachWired && mountMarked && accountHealthy;
-      const response: VerifyMigrationResponse = {
-        migrationId: body.migrationId,
-        slug: body.slug,
-        ready,
-        checks,
-      };
+      const response = await verifyMigrationResponse(deps, body);
       log(
-        `[migration-http] verify migrationId=${body.migrationId} slug=${body.slug} ready=${ready} checks=${JSON.stringify(checks)}`,
+        `[migration-http] verify migrationId=${body.migrationId} slug=${body.slug} ` +
+        `mode=${response.configTransferMode ?? ACTIVATION_MANIFEST_TRANSFER} ` +
+        `ready=${response.ready} checks=${JSON.stringify(response.checks)}`,
       );
-      res.status(ready ? 200 : 409).json(response);
+      res.status(response.ready ? 200 : 409).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] ❌ verify migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
@@ -2008,31 +2260,51 @@ async function extractTarToDir(tarPath: string, dest: string): Promise<void> {
   });
 }
 
-export function findPathTraversalViolation(
-  entries: readonly string[],
-  slug: string,
-  mode: MigrationImportMode = "default",
-): string | null {
+function allowedMigrationPrefixes(slug: string, mode: MigrationImportMode): string[] {
   const durablePrefixes = [
     `customers/${slug}/`,
     `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
   ];
-  let allowedPrefixes = [...durablePrefixes, `customer-keys/${slug}/`];
-  if (mode === "keys") allowedPrefixes = [`customer-keys/${slug}/`];
-  if (mode === "pre" || mode === "final") allowedPrefixes = durablePrefixes;
+  if (mode === "keys") return [`customer-keys/${slug}/`];
+  if (mode === "pre" || mode === "final") return durablePrefixes;
+  return [...durablePrefixes, `customer-keys/${slug}/`];
+}
+
+function agentStateEntryAllowed(input: {
+  raw: string;
+  entry: string;
+  slug: string;
+  mode: MigrationImportMode;
+  configuredAgentIds: readonly string[];
+  configuredBuilderStatePlan: ConfiguredBuilderPortableStatePlan | undefined;
+}): boolean {
+  if (input.mode === "keys") return false;
+  return input.configuredBuilderStatePlan
+    ? configuredBuilderStatePlanAllowsEntry(input.raw, input.configuredBuilderStatePlan)
+    : isOwnedAgentStatePath(input.raw, input.entry, input.slug, input.configuredAgentIds);
+}
+
+export function findPathTraversalViolation(
+  entries: readonly string[],
+  slug: string,
+  mode: MigrationImportMode = "default",
+  configuredAgentIds: readonly string[] = [],
+  configuredBuilderStatePlan?: ConfiguredBuilderPortableStatePlan,
+): string | null {
+  const allowedPrefixes = allowedMigrationPrefixes(slug, mode);
+  const stateTransfer = mode === "pre" || mode === "final";
   for (const raw of entries) {
     const entry = raw.endsWith("/") ? raw.slice(0, -1) : raw;
     if (entry.startsWith("/")) {
       return `absolute path in tarball: ${raw}`;
     }
-
     if (entry.split("/").includes("..")) {
       return `path traversal '..' in tarball: ${raw}`;
     }
     const allowed =
-      (mode !== "keys" && isOwnedAgentStatePath(raw, entry, slug)) ||
+      agentStateEntryAllowed({ raw, entry, slug, mode, configuredAgentIds, configuredBuilderStatePlan }) ||
       allowedPrefixes.some((p) => matchesAllowedMigrationPath(raw, entry, p)) ||
-      ((mode === "pre" || mode === "final") && raw === "customer-keys/");
+      (stateTransfer && raw === "customer-keys/");
     if (!allowed) {
       const allowlist = allowedPrefixes.map((prefix) => prefix.replace(/\/$/u, "")).join(", ");
       return `path '${raw}' is outside the per-slug allowlist (${allowlist})`;
@@ -2041,10 +2313,17 @@ export function findPathTraversalViolation(
   return null;
 }
 
-function isOwnedAgentStatePath(raw: string, entry: string, slug: string): boolean {
+function isOwnedAgentStatePath(
+  raw: string,
+  entry: string,
+  slug: string,
+  configuredAgentIds: readonly string[],
+): boolean {
+  const configured = new Set(configuredAgentIds.filter(isSafeConfiguredAgentId));
   const segments = entry.split("/");
   if (segments[0] === "agents") {
     if (segments.length === 1) return raw.endsWith("/");
+    if (configured.has(segments[1]!)) return true;
     const parsed = parseAgentId(segments[1]!);
     return parsed.kind !== "unknown" && parsed.username === slug;
   }
@@ -2055,7 +2334,9 @@ function isOwnedAgentStatePath(raw: string, entry: string, slug: string): boolea
     segments[1]!.endsWith(candidate),
   );
   if (!suffix) return false;
-  const parsed = parseAgentId(segments[1]!.slice(0, -suffix.length));
+  const agentId = segments[1]!.slice(0, -suffix.length);
+  if (configured.has(agentId)) return true;
+  const parsed = parseAgentId(agentId);
   return parsed.kind !== "unknown" && parsed.username === slug;
 }
 
@@ -2163,7 +2444,14 @@ export async function readAgentSessions(
   stateDir: string,
   agentId: string,
 ): Promise<SessionsJson["sessions"]> {
-  const sessionsPath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  return readAgentSessionsAtPath(
+    path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
+  );
+}
+
+export async function readAgentSessionsAtPath(
+  sessionsPath: string,
+): Promise<SessionsJson["sessions"]> {
   try {
     const raw = await fs.readFile(sessionsPath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;

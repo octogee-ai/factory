@@ -447,7 +447,16 @@ export function platformInvariantTable(
       value,
     })),
   ];
-  return [...base, ...customerToolInvariants()];
+  const platformProjection = context.gatewayClass === "builder"
+    ? base.filter((invariant) => invariant.kind !== "mattermost-account-projection")
+    : base;
+  // A Builder gateway is the Builder's own OpenClaw: no platform credential lives
+  // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
+  // and the codex BYOSUB plugin stay at the Builder's discretion. The platform
+  // keeps only wiring and tenant-scoped secret providers.
+  return context.gatewayClass === "builder"
+    ? platformProjection
+    : [...platformProjection, ...customerToolInvariants()];
 }
 
 function asObject(value: unknown): JsonObject | null {

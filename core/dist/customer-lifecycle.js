@@ -187,15 +187,44 @@ function throwIfAborted(signal, uid) {
         throw reason;
     throw new Error(`[add:${uid}] aborted: ${String(reason ?? "operation cancelled")}`);
 }
-function builderGatewayIsReadyForFastAttach(adapter, snapshot, convergeContent) {
+function configuredBuilderOverlayIsReady(adapter, snapshot) {
     const { slug } = snapshot;
     return snapshot.status === "complete"
-        && !convergeContent
         && Boolean(adapter.isBuilderGateway?.())
-        && Boolean(adapter.customerCoachWiredInOpenclawConfig?.(slug))
-        && Boolean(adapter.hasCustomerAgentRuntime?.(slug))
-        && adapter.hasWorkspaceGitDir(slug)
-        && adapter.hasGitRemote(slug);
+        && Boolean(adapter.isConfiguredBuilderCustomer?.(slug));
+}
+async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
+    const { slug, uid } = snapshot;
+    const ctx = buildCustomerContext(snapshot, opts.customersDir);
+    const steps = [];
+    opts.markStep("ssh-key");
+    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    throwIfAborted(opts.signal, uid);
+    opts.markStep("workspace-repo");
+    steps.push(...(await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)));
+    throwIfAborted(opts.signal, uid);
+    opts.markStep("project-clones");
+    const projectClones = opts.convergeContent && rehydratesProjectCheckouts(adapter, snapshot)
+        ? await cloneMissingProjects(adapter, slug)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
+    throwIfAborted(opts.signal, uid);
+    const platformCoachWired = adapter.customerCoachWiredInOpenclawConfig?.(slug) ?? false;
+    if (platformCoachWired && !opts.deferRuntimeVerification) {
+        adapter.log(`[add:${slug}] configured Builder overlay retained — verifying MM coach without a config patch`);
+        opts.markStep(VERIFY_CHANNEL_READY);
+        await verifyChannelReady(adapter, slug, opts.verifyTimeoutMs);
+        steps.push(VERIFY_CHANNEL_READY);
+    }
+    else if (!platformCoachWired) {
+        adapter.log(`[add:${slug}] configured Builder overlay has no platform MM coach wiring; retaining it without a config patch`);
+    }
+    else {
+        adapter.log(`[add:${slug}] configured Builder overlay runtime verification deferred without a config patch`);
+    }
+    if (adapter.onMounted)
+        adapter.onMounted(slug);
+    return { newCustomer: false, steps, pendingProjectClones: projectClones.pending };
 }
 async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
@@ -209,22 +238,18 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     let snapshot = prepared.snapshot;
     const { ctx, newCustomer } = prepared;
     const { slug } = snapshot;
-    if (builderGatewayIsReadyForFastAttach(adapter, snapshot, opts.convergeContent)) {
-        markStep("ssh-key");
-        steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
-        throwIfAborted(signal, uid);
-        adapter.log(`[add:${slug}] builder gateway, status=complete, coach and durable workspace ready — verifying MM coach only`);
-        throwIfAborted(signal, uid);
-        markStep(VERIFY_CHANNEL_READY);
-        await verifyChannelReady(adapter, slug, verifyTimeoutMs);
-        // Fleet heartbeat must include this customer as mounted — same as
-        // the non-short-circuit path which calls onMounted after config.patch.
-        if (adapter.onMounted)
-            adapter.onMounted(slug);
-        steps.push(VERIFY_CHANNEL_READY);
-        // This short-circuit never reaches cloneMissingProjects, so it makes no claim about
-        // project checkouts — reporting them pending here would re-ensure forever.
-        return { newCustomer: false, steps, pendingProjectClones: [] };
+    if (configuredBuilderOverlayIsReady(adapter, snapshot)) {
+        if (!adapter.configuredBuilderOverlayPresent?.(slug)) {
+            throw new Error(`[add:${slug}] configured Builder system-config overlay is unavailable`);
+        }
+        return attachConfiguredBuilderOverlay(adapter, snapshot, {
+            verifyTimeoutMs,
+            customersDir,
+            convergeContent: opts.convergeContent,
+            deferRuntimeVerification: opts.deferRuntimeVerification,
+            signal,
+            markStep,
+        });
     }
     if (snapshot.status !== "complete") {
         markStep("claim-slot");
@@ -616,6 +641,21 @@ async function notifyOpsIfNew(adapter, ctx, newCustomer) {
         return [];
     }
 }
+function retainConfiguredBuilderOverlay(adapter, slug, steps) {
+    if (!adapter.configuredBuilderOverlayPresent?.(slug)) {
+        throw new Error(`[remove:${slug}] configured Builder system-config overlay is unavailable`);
+    }
+    adapter.clearMountMarker?.(slug);
+    adapter.clearCustomerMigratingIn?.(slug);
+    adapter.onUnmounted?.(slug);
+    adapter.log(`[remove:${slug}] retained configured Builder system-config overlay`);
+    return { wasMounted: true, steps, retained: true };
+}
+async function evictionWasCancelled(slug, remaining, currentEvictionBatch) {
+    if (remaining && !remaining.includes(slug))
+        return true;
+    return currentEvictionBatch !== undefined && !(await currentEvictionBatch()).includes(slug);
+}
 export async function removeCustomerFromGateway(adapter, uid, opts = {}) {
     const steps = [];
     const snapshot = await adapter.loadUserSnapshot(uid);
@@ -628,17 +668,13 @@ export async function removeCustomerFromGateway(adapter, uid, opts = {}) {
         adapter.log(`[remove:${slug}] nothing to do (no dir, status=${snapshot.status})`);
         return { wasMounted: false, steps };
     }
-    const coachAgentId = `octogee-${slug}-coach`;
-    const remaining = opts.evictionBatch
-        ? await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId, opts.evictionBatch, opts.currentEvictionBatch)
-        : await adapter.applyRemoveCustomerConfigPatch(slug, coachAgentId, undefined, opts.currentEvictionBatch);
+    if (adapter.isBuilderGateway?.() && adapter.isConfiguredBuilderCustomer?.(slug)) {
+        return retainConfiguredBuilderOverlay(adapter, slug, steps);
+    }
+    const remaining = await adapter.applyRemoveCustomerConfigPatch(slug, `octogee-${slug}-coach`, opts.evictionBatch, opts.currentEvictionBatch);
     steps.push("config-patch-remove");
     adapter.log(`[remove:${slug}] removed from openclaw config`);
-    if (remaining && !remaining.includes(slug)) {
-        adapter.cancelPendingEviction?.(slug);
-        return { wasMounted: true, steps, retained: true };
-    }
-    if (opts.currentEvictionBatch && !(await opts.currentEvictionBatch()).includes(slug)) {
+    if (await evictionWasCancelled(slug, remaining, opts.currentEvictionBatch)) {
         adapter.cancelPendingEviction?.(slug);
         return { wasMounted: true, steps, retained: true };
     }

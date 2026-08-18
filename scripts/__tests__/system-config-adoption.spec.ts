@@ -122,7 +122,7 @@ describe("system config adoption", () => {
     expect(checkpoint).not.toHaveBeenCalled();
   });
 
-  it("rewrites coach and project account refs, drops foreign accounts, and strips endpoints", async () => {
+  it("keeps a Builder overlay's authored accounts and every referenced secret while projecting platform wiring", async () => {
     const h = fixture();
     fs.writeFileSync(h.sourcePath, JSON.stringify({
       agents: {
@@ -141,7 +141,7 @@ describe("system config adoption", () => {
                 provider: "octogee-mattermost",
                 id: "/ceckert-proj-garden",
               },
-              baseUrl: "https://attacker.example",
+              baseUrl: "https://mm.builder.example",
             },
             "ceckert-proj-garden": {
               botToken: {
@@ -149,10 +149,13 @@ describe("system config adoption", () => {
                 provider: "octogee-mattermost",
                 id: "/ceckert-coach",
               },
-              interactions: { callbackBaseUrl: "https://attacker.example" },
+              interactions: { callbackBaseUrl: "https://hooks.builder.example" },
             },
-            "mike-coach": {
-              botToken: { source: "file", provider: "octogee-mattermost", id: "/mike-coach" },
+            "support-bot": {
+              botToken: { source: "file", provider: "octogee-mattermost", id: "/support-bot" },
+            },
+            "unreferenced-secret-holder": {
+              botToken: "${MM_BOT_TOKEN}",
             },
           },
         },
@@ -163,7 +166,8 @@ describe("system config adoption", () => {
     fs.writeFileSync(secretsPath, JSON.stringify({
       "ceckert-coach": "coach-pat",
       "ceckert-proj-garden": "project-pat",
-      "mike-coach": "foreign-pat",
+      "support-bot": "support-pat",
+      "orphaned": "stale-pat",
     }));
     const validateConfig = vi.fn((candidatePath: string) => {
       const candidate = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
@@ -176,30 +180,23 @@ describe("system config adoption", () => {
         },
         accounts: {
           "ceckert-coach": {
-            botToken: {
-              source: "file",
-              provider: "octogee-mattermost",
-              id: "/ceckert-coach",
-            },
+            botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-proj-garden" },
+            baseUrl: "https://mm.builder.example",
           },
           "ceckert-proj-garden": {
-            botToken: {
-              source: "file",
-              provider: "octogee-mattermost",
-              id: "/ceckert-proj-garden",
-            },
+            botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
+            interactions: { callbackBaseUrl: "https://hooks.builder.example" },
+          },
+          "support-bot": {
+            botToken: { source: "file", provider: "octogee-mattermost", id: "/support-bot" },
           },
         },
       });
-      expect(candidate.channels.mattermost.accounts).not.toHaveProperty("mike-coach");
-      expect(candidate.channels.mattermost.accounts["ceckert-coach"])
-        .not.toHaveProperty("baseUrl");
-      expect(candidate.channels.mattermost.accounts["ceckert-proj-garden"])
-        .not.toHaveProperty("interactions");
       const validationSecrets = candidate.secrets.providers["octogee-mattermost"].path;
       expect(JSON.parse(fs.readFileSync(validationSecrets, "utf8"))).toEqual({
         "ceckert-coach": "coach-pat",
         "ceckert-proj-garden": "project-pat",
+        "support-bot": "support-pat",
       });
     });
 

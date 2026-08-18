@@ -164,6 +164,18 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).toContain("OpenClaw gateway healthy; starting auxiliary runners");
   });
 
+  it("delegates the Builder OpenClaw process to the hold-capable surge supervisor", () => {
+    const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
+    const directStartIdx = entrypoint.indexOf("openclaw gateway run");
+    expect(supervisorIdx).toBeGreaterThan(-1);
+    const branch = entrypoint.slice(entrypoint.lastIndexOf("if [", supervisorIdx), supervisorIdx);
+    expect(branch).toMatch(/GATEWAY_CLASS_EFFECTIVE[^\n]*= "builder"/);
+    expect(supervisorIdx).toBeLessThan(directStartIdx);
+    const builderBranch = entrypoint.slice(supervisorIdx, directStartIdx);
+    expect(builderBranch).not.toMatch(/until curl/);
+    expect(entrypoint).not.toContain("OPENCLAW_SKIP_CHANNELS");
+  });
+
   it("does not launch OpenClaw validation, Doctor, checkpoint, or session migration CLIs during boot", () => {
     expect(entrypoint).not.toContain("openclaw config validate");
     expect(entrypoint).not.toContain("openclaw secrets audit");

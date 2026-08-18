@@ -85,6 +85,7 @@ export interface PushStateRequestBody extends MigrationRequestBody {
 }
 export type MigrationTransferMode = "keys" | "pre" | "final";
 export type MigrationLoadStrategy = "standard" | "expedited";
+export type MigrationConfigTransferMode = "activation-manifest" | "configured-builder-system-config";
 export declare const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
 export interface PrepareImportRequestBody extends MigrationRequestBody {
     mode: MigrationTransferMode;
@@ -113,6 +114,7 @@ export type RsyncMigrationRpcPhase = "prepare-rsync-import" | "push-rsync-state"
 export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
     rpcPhase: "prepare-rsync-import";
     mode: MigrationTransferMode;
+    configTransferMode?: MigrationConfigTransferMode;
     transferUser: string;
     transferKey: string;
     sourcePodIp?: string;
@@ -128,6 +130,7 @@ export interface PrepareRsyncImportResponse {
 export interface PushRsyncStateRequestBody extends MigrationRequestBody {
     rpcPhase: "push-rsync-state";
     mode: MigrationTransferMode;
+    configTransferMode?: MigrationConfigTransferMode;
     targetHost: string;
     targetPort: number;
     transferUser: string;
@@ -137,11 +140,13 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
     rpcPhase: "finish-rsync-import";
     mode: MigrationTransferMode;
+    configTransferMode?: MigrationConfigTransferMode;
     loadStrategy?: MigrationLoadStrategy;
 }
 export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
     rpcPhase: "abort-rsync-import";
     mode: MigrationTransferMode;
+    configTransferMode?: MigrationConfigTransferMode;
 }
 export interface QuiesceRequestBody extends MigrationRequestBody {
     timeoutMs?: number;
@@ -194,18 +199,32 @@ export interface RestoreMigrationResponse {
 }
 export interface VerifyMigrationRequestBody extends MigrationRequestBody {
     timeoutMs?: number;
+    configTransferMode?: MigrationConfigTransferMode;
 }
-export interface VerifyMigrationResponse {
+export type VerifyMigrationResponse = {
     migrationId: string;
     slug: string;
     ready: boolean;
+    configTransferMode?: "activation-manifest";
     checks: {
         customerDir: boolean;
         coachWired: boolean;
         mountMarked: boolean;
         accountHealthy: boolean;
     };
-}
+} | {
+    migrationId: string;
+    slug: string;
+    ready: boolean;
+    configTransferMode: "configured-builder-system-config";
+    checks: {
+        customerDir: boolean;
+        configuredBuilderOverlay: boolean;
+        mountMarked: boolean;
+        workspaceGit: boolean;
+        gitRemote: boolean;
+    };
+};
 export declare const MIGRATION_ID_HEADER = "X-Migration-Id";
 export declare const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
 export declare const MIGRATION_MODE_HEADER = "X-Migration-Mode";

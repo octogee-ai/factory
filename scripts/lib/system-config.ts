@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -38,6 +39,7 @@ import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
 } from "./system-config-invariants.js";
+import { CUSTOMER_CODE_DENIED_TOOLS } from "@octogee/core/system-config-invariants";
 import {
   attributedCommitArgs,
   convergeSystemConfigToRemoteCommit,
@@ -54,8 +56,10 @@ import {
 import {
   assertSystemConfigGitignore,
   assertSystemConfigMetadata,
+  CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
   readSystemConfigCommitBlob,
   SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
+  SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
@@ -67,7 +71,6 @@ function acceptRuntimeManagedConfig(): void {
   return;
 }
 
-const CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION = 1;
 const SYSTEM_CONFIG_PATHSPEC_ARGS = ["openclaw.json", ".octogee.json", ".gitignore"];
 const SYSTEM_CONFIG_GITIGNORE = "*.bak\n*.tmp\n";
 const GIT_SHA_RE = /^[0-9a-f]{40,64}$/;
@@ -382,6 +385,125 @@ export function removeLegacyMacState(
   }
 }
 
+function deleteWhenExactly(record: UnknownRecord | null, key: string, expected: unknown): boolean {
+  if (!record || !Object.prototype.hasOwnProperty.call(record, key)) return false;
+  if (!isDeepStrictEqual(record[key], expected)) return false;
+  delete record[key];
+  return true;
+}
+
+function deleteWhenEmpty(parent: UnknownRecord | null, key: string): void {
+  const child = asRecord(parent?.[key]);
+  if (parent && child && Object.keys(child).length === 0) delete parent[key];
+}
+
+function withoutTools(value: unknown, removed: readonly string[]): { list: unknown[]; changed: boolean } | null {
+  if (!Array.isArray(value)) return null;
+  const list = value.filter((tool) => !removed.includes(tool as string));
+  return { list, changed: list.length !== value.length };
+}
+
+function liftHostCodeToolFences(tools: UnknownRecord | null): boolean {
+  if (!tools) return false;
+  let changed = false;
+  const deny = withoutTools(tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
+  if (deny?.changed) {
+    changed = true;
+    if (deny.list.length === 0) delete tools.deny;
+    else tools.deny = deny.list;
+  }
+  changed = deleteWhenExactly(tools, "exec", { mode: "deny" }) || changed;
+  changed = deleteWhenExactly(tools, "elevated", { enabled: false }) || changed;
+  changed = deleteWhenExactly(asRecord(tools.fs), "workspaceOnly", true) || changed;
+  deleteWhenEmpty(tools, "fs");
+  changed = deleteWhenExactly(asRecord(tools.sessions), "visibility", "self") || changed;
+  deleteWhenEmpty(tools, "sessions");
+  const subagentTools = asRecord(asRecord(tools.subagents)?.tools);
+  const subagentDeny = withoutTools(subagentTools?.deny, ["exec", "process"]);
+  if (subagentTools && subagentDeny?.changed) {
+    changed = true;
+    if (subagentDeny.list.length === 0) delete subagentTools.deny;
+    else subagentTools.deny = subagentDeny.list;
+  }
+  deleteWhenEmpty(asRecord(tools.subagents), "tools");
+  deleteWhenEmpty(tools, "subagents");
+  return changed;
+}
+
+function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
+  const slug = env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!slug) return false;
+  const coach = rosterAgentEntry(asRecord(config.agents), `octogee-${slug}-coach`);
+  if (!coach) return false;
+  const changed = liftHostCodeToolFences(asRecord(coach.tools));
+  deleteWhenEmpty(coach, "tools");
+  return changed;
+}
+
+function liftGatewayCommandFences(config: UnknownRecord): boolean {
+  let changed = false;
+  const gateway = asRecord(config.gateway);
+  if (deleteWhenExactly(gateway, "terminal", { enabled: false })) {
+    gateway!.terminal = { enabled: true };
+    changed = true;
+  }
+  const commands = asRecord(config.commands);
+  for (const command of ["bash", "config", "mcp", "plugins", "debug"]) {
+    changed = deleteWhenExactly(commands, command, false) || changed;
+  }
+  return changed;
+}
+
+function liftAutomationFences(config: UnknownRecord): boolean {
+  let changed = deleteWhenExactly(asRecord(config.cron), "triggers", { enabled: false });
+  deleteWhenEmpty(config, "cron");
+  const skills = asRecord(config.skills);
+  changed = deleteWhenExactly(skills, "load", {}) || changed;
+  changed = deleteWhenExactly(skills, "workshop", {
+    autonomous: { mode: "off" },
+    approvalPolicy: "pending",
+    allowSymlinkTargetWrites: false,
+  }) || changed;
+  deleteWhenEmpty(config, "skills");
+  return changed;
+}
+
+function liftCodexGate(config: UnknownRecord): boolean {
+  const plugins = asRecord(config.plugins);
+  const entries = asRecord(plugins?.entries);
+  let changed = false;
+  if (deleteWhenExactly(entries, "codex", {
+    enabled: false,
+    config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
+  })) {
+    entries!.codex = { enabled: true };
+    changed = true;
+  }
+  if (plugins && Array.isArray(plugins.allow) && !plugins.allow.includes("codex") &&
+      asRecord(entries?.codex)?.enabled === true) {
+    plugins.allow = [...plugins.allow, "codex"];
+    changed = true;
+  }
+  return changed;
+}
+
+// One-time roll-forward for durable Builder configs seeded before Builder
+// gateways ran at full power. Every removal matches the exact shape the
+// platform used to stamp, so anything the Builder authored survives untouched.
+export function liftPlatformHostCodeLockdown(
+  config: UnknownRecord,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const changes = [
+    liftHostCodeToolFences(asRecord(config.tools)),
+    liftBuilderCoachToolFences(config, env),
+    liftGatewayCommandFences(config),
+    liftAutomationFences(config),
+    liftCodexGate(config),
+  ];
+  return changes.includes(true);
+}
+
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
   const pubKey = generateCustomerSshKey(slug);
   await createGiteaUser(slug, pubKey);
@@ -600,6 +722,32 @@ export function extractLegacyMattermostAccountSecrets(config: UnknownRecord): Re
   return secrets;
 }
 
+function trackedSchemaVersion(metadata: UnknownRecord | undefined): number | undefined {
+  const schemaVersion = metadata?.schemaVersion;
+  if (schemaVersion === undefined) return undefined;
+  if (!Number.isInteger(schemaVersion) || (schemaVersion as number) < 0 ||
+      (schemaVersion as number) > CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION) {
+    throw new Error(`[system_config] unsupported schemaVersion ${String(schemaVersion)}`);
+  }
+  return schemaVersion as number;
+}
+
+function ensureSystemConfigGitignore(repoDir: string): void {
+  const gitignorePath = path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME);
+  if (!fs.existsSync(gitignorePath)) fs.writeFileSync(gitignorePath, SYSTEM_CONFIG_GITIGNORE, "utf-8");
+}
+
+function readTrackedConfigObject(contents: string): UnknownRecord | null {
+  try {
+    const parsed = JSON.parse(contents) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as UnknownRecord
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function reconcileTrackedOpenClawConfig(
   repoConfigPath: string,
   openclawDir: string,
@@ -608,40 +756,32 @@ async function reconcileTrackedOpenClawConfig(
   const repoDir = path.dirname(repoConfigPath);
   const metadataPath = path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME);
   const metadata = readSystemConfigMetadata(metadataPath);
-  const schemaVersion = metadata?.schemaVersion;
-  if (schemaVersion !== undefined &&
-      (!Number.isInteger(schemaVersion) || (schemaVersion as number) < 0 || (schemaVersion as number) > CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION)) {
-    throw new Error(`[system_config] unsupported schemaVersion ${String(schemaVersion)}`);
-  }
+  const schemaVersion = trackedSchemaVersion(metadata);
   if (schemaVersion === CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION) {
-    if (!fs.existsSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME))) {
-      fs.writeFileSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), SYSTEM_CONFIG_GITIGNORE, "utf-8");
-    }
+    ensureSystemConfigGitignore(repoDir);
     return false;
   }
   const before = fs.readFileSync(repoConfigPath, "utf-8");
-  let tracked: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(before) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-    tracked = parsed as Record<string, unknown>;
-  } catch {
-    return false;
-  }
+  const tracked = readTrackedConfigObject(before);
+  if (!tracked) return false;
 
-  removeLegacyMacConfig(tracked, env);
-  const secrets = extractLegacyMattermostAccountSecrets(tracked);
-  if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
+  const macLaneRemoved = schemaVersion !== undefined &&
+    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED;
+  if (!macLaneRemoved) {
+    removeLegacyMacConfig(tracked, env);
+    const secrets = extractLegacyMattermostAccountSecrets(tracked);
+    if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
+  }
+  liftPlatformHostCodeLockdown(tracked, env);
   const after = `${JSON.stringify(tracked, null, 2)}\n`;
   if (after !== before) atomicWrite(repoConfigPath, after);
+  const keepPendingCleanup = !macLaneRemoved || metadata?.pendingStateCleanup !== undefined;
   atomicWrite(metadataPath, `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    lastMigration: "remove-mac-and-externalize-mattermost-tokens",
-    pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
+    lastMigration: "lift-platform-host-code-lockdown",
+    ...(keepPendingCleanup ? { pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP } : {}),
   }, null, 2)}\n`);
-  if (!fs.existsSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME))) {
-    fs.writeFileSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), SYSTEM_CONFIG_GITIGNORE, "utf-8");
-  }
+  ensureSystemConfigGitignore(repoDir);
   return true;
 }
 
@@ -656,6 +796,16 @@ export async function reconcileSystemConfigSchema(
   );
 }
 
+// Durable system_config exists only for Builder gateways, whose seed is the
+// full-power Builder template; the shared template remains the explicit
+// override for tooling that seeds a Barn-shaped config on purpose.
+export function defaultSystemConfigTemplatePath(env: NodeJS.ProcessEnv = process.env): string {
+  const gatewayDir = path.join(TEMPLATES_DIR, "..", "infra", "gateway");
+  return env.GATEWAY_CLASS === "builder"
+    ? path.join(gatewayDir, "openclaw.builder.template.json")
+    : path.join(gatewayDir, "openclaw.template.json");
+}
+
 export async function restoreSystemConfigForSlug(
   slug: string,
   opts: SystemConfigRestoreOptions = {},
@@ -667,8 +817,8 @@ export async function restoreSystemConfigForSlug(
 
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
   const repoDir = systemConfigDir(openclawDir);
-  const templatePath = opts.templatePath ?? path.join(TEMPLATES_DIR, "..", "infra", "gateway", "openclaw.template.json");
   const env = opts.env ?? process.env;
+  const templatePath = opts.templatePath ?? defaultSystemConfigTemplatePath(env);
 
   await ensureIdentityAndRepo(slug, log);
   if (!cloneOrReuseSystemConfigRepo(slug, repoDir, templatePath, env, log)) {

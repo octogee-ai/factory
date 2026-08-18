@@ -36,14 +36,13 @@ function log(msg: string): void {
   console.log(`${ts} [pre-boot] ${msg}`);
 }
 
+// Builders reach platform credits through the LLM broker exactly like Barns;
+// only BYOSUB bypasses it, and no gateway class ever holds a provider key.
 export function shouldMaterializeAnthropicBrokerProfiles(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const gatewayClass = env.GATEWAY_CLASS ?? "";
-  return (
-    gatewayClass === "shared" ||
-    gatewayClass === "builder"
-  );
+  return gatewayClass === "shared" || gatewayClass === "builder";
 }
 
 export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
@@ -525,9 +524,10 @@ export function applyPreBootPatches(
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void = () => {},
 ): boolean {
+  const builderGateway = env.GATEWAY_CLASS?.trim() === "builder";
   return [
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
-    applyToolsProfilePatch(config, logFn),
+    builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applySharedMattermostRoutingSafetyPatch(config, env, logFn),
     applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
