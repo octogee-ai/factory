@@ -687,7 +687,7 @@ function seedProjectDoc() {
     id: "orbit",
     slug: "orbit",
     provisioningState: "active",
-    agent: { enabled: true },
+    agent: { mode: "scoped", enabled: false },
   });
   h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", { mmUserId: "project-agent-mm" });
 }
@@ -781,12 +781,12 @@ describe("createProjectSessionChannel", () => {
     ]);
   });
 
-  it("keeps human project chat working when the scoped agent is disabled", async () => {
+  it("keeps human project chat working when the project is explicitly agentless", async () => {
     h.docs.set(PROJECT_DOC_PATH, {
       id: "orbit",
       slug: "orbit",
       provisioningState: "active",
-      agent: { enabled: false },
+      agent: { mode: "agentless", enabled: true },
     });
     h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
       mmUserId: "stale-project-agent-mm",

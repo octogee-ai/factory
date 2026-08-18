@@ -12,6 +12,16 @@ export interface ProjectRepoSource {
     owner: string;
     repo: string;
 }
+export type ProjectAgentMode = 'scoped' | 'agentless';
+export type ProjectAgentStatus = 'provisioning' | 'ready' | 'retiring' | 'agentless' | 'error';
+export interface ProjectAgentConfig {
+    enabled: boolean;
+    mode?: ProjectAgentMode;
+    status?: ProjectAgentStatus;
+    lastError?: string | null;
+    updatedAt?: unknown;
+}
+export declare function projectAgentEnabled(value: unknown): boolean;
 export declare function projectCheckoutEnabled(value: unknown): boolean;
 export declare function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null;
 export interface Project {
@@ -40,6 +50,7 @@ export interface Project {
         status: "active" | "archived";
         archivedAt?: unknown;
     };
+    agent?: ProjectAgentConfig;
     canvasFile: string;
     recipe?: ProjectRecipeId | null;
     publishedUrl: string | null;

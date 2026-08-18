@@ -9,7 +9,7 @@ import {
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
+import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
   createCachedFreeTierModelResolver,
@@ -1528,7 +1528,7 @@ function installSnapshotRoutes(
         const agent = agentByProject.get(projectId);
         return {
           projectId,
-          projectAgentEnabled: agent?.enabled === true,
+          projectAgentEnabled: projectAgentEnabled(agent),
           projectAgentMmUserId: agent?.mmUserId ?? null,
           channelIds,
         };

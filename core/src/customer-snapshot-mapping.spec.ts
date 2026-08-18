@@ -257,6 +257,23 @@ describe("mapProjectAgentState", () => {
     });
   });
 
+  it("uses project agent mode before a stale legacy enabled flag", () => {
+    expect(
+      mapProjectAgentState(
+        "orbit",
+        { agent: { mode: "scoped", enabled: false } },
+        undefined,
+      ),
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null });
+    expect(
+      mapProjectAgentState(
+        "orbit",
+        { agent: { mode: "agentless", enabled: true } },
+        { mmUserId: "bot-1", personalToken: "pat-1" },
+      ),
+    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1" });
+  });
+
   it("projects an archived project's agent as retire-pending instead of runnable", () => {
     expect(
       mapProjectAgentState(

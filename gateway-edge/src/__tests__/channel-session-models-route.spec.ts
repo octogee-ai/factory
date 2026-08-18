@@ -117,15 +117,28 @@ describe("channel session model routes", () => {
     expect(h.auditUpdates).toHaveLength(1);
   });
 
-  it("uses a project Agent only when enabled with a complete minted credential", async () => {
+  it("uses a scoped project Agent only when it has a complete minted credential", async () => {
     h.channelPath = "workspaces/alice/projects/orbit/channels/general";
-    h.docs.set("workspaces/alice/projects/orbit", { agent: { enabled: true } });
+    h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "scoped", enabled: false } });
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26) });
     const coach = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
     expect(coach.body.agentId).toBe("octogee-alice-coach");
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26), personalToken: "u".repeat(32) });
     const project = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
     expect(project.body.agentId).toBe("octogee-alice-proj-orbit-coach");
+  });
+
+  it("keeps an agentless project on the workspace coach despite a stale enabled flag", async () => {
+    h.channelPath = "workspaces/alice/projects/orbit/channels/general";
+    h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "agentless", enabled: true } });
+    h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", {
+      mmUserId: "q".repeat(26),
+      personalToken: "u".repeat(32),
+    });
+
+    const response = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
+
+    expect(response.body.agentId).toBe("octogee-alice-coach");
   });
 
   it("fails closed on duplicate channel bindings and stale Agent preconditions", async () => {

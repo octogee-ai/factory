@@ -46,6 +46,32 @@ export interface ProjectRepoSource {
   repo: string;
 }
 
+export type ProjectAgentMode = 'scoped' | 'agentless';
+
+export type ProjectAgentStatus =
+  | 'provisioning'
+  | 'ready'
+  | 'retiring'
+  | 'agentless'
+  | 'error';
+
+export interface ProjectAgentConfig {
+  enabled: boolean;
+  mode?: ProjectAgentMode;
+  status?: ProjectAgentStatus;
+  lastError?: string | null;
+  updatedAt?: unknown;
+}
+
+export function projectAgentEnabled(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const agent = value as { mode?: unknown; enabled?: unknown };
+  if (agent.mode === 'scoped') return true;
+  if (agent.mode === 'agentless') return false;
+  if (agent.mode !== undefined) return false;
+  return agent.enabled === true;
+}
+
 export function projectCheckoutEnabled(value: unknown): boolean {
   return value !== false;
 }
@@ -96,6 +122,7 @@ checkoutEnabled?: boolean;
     status: "active" | "archived";
     archivedAt?: unknown;
   };
+  agent?: ProjectAgentConfig;
 
 canvasFile: string;
   recipe?: ProjectRecipeId | null;

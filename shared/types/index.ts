@@ -1,5 +1,8 @@
 export type {
   Project,
+  ProjectAgentConfig,
+  ProjectAgentMode,
+  ProjectAgentStatus,
   ProjectRecipeId,
   ProjectRepoSource,
   ProjectVisibility,
@@ -7,7 +10,12 @@ export type {
   ProjectProvisioningState,
   ProjectType,
 } from './project.js';
-export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId } from './project.js';
+export {
+  DEFAULT_PROJECT_RECIPE,
+  PROJECT_RECIPE_IDS,
+  isProjectRecipeId,
+  projectAgentEnabled,
+} from './project.js';
 
 export type {
   ProjectRetentionPlan,

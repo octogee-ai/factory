@@ -36,7 +36,7 @@ const records = {
   "workspaces/victim": { ownerUid: "owner-victim" },
   "users/owner-acme/secrets/coachMattermost": { personalToken: "acme-coach-pat" },
   "users/owner-acme/secrets/projectAgentMattermost-orbit": { personalToken: "acme-orbit-pat" },
-  "workspaces/acme/projects/orbit": { agent: { enabled: true } },
+  "workspaces/acme/projects/orbit": { agent: { mode: "scoped", enabled: false } },
   "users/owner-victim/secrets/coachMattermost": { personalToken: "victim-coach-pat" },
 };
 
@@ -71,11 +71,11 @@ describe("workspace commit agent proof", () => {
     )).toBe(false);
   });
 
-  it("rejects a disabled project agent even if its old credential still exists", async () => {
+  it("rejects an agentless project agent even if its old credential and enabled flag still exist", async () => {
     const own = { agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" };
     const disabled = {
       ...records,
-      "workspaces/acme/projects/orbit": { agent: { enabled: false } },
+      "workspaces/acme/projects/orbit": { agent: { mode: "agentless", enabled: true } },
     };
     expect(await verifyWorkspaceCommitProof(
       proof(own, "acme-orbit-pat"), own, fakeDb(disabled), () => NOW,

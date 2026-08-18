@@ -11,6 +11,7 @@ import {
   CUSTOM_CHANNEL_MIN_LENGTH,
   CUSTOM_CHANNEL_MAX_LENGTH,
 } from "@octogee/shared/types/identity";
+import { projectAgentEnabled } from "@octogee/shared/types/project";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 const MM_DISPLAY_NAME_MAX_LENGTH = 64;
@@ -117,7 +118,7 @@ async function projectAgentChannelMember(
   project: string,
   projectData: FirebaseFirestore.DocumentData | undefined,
 ): Promise<{ ok: true; mmUserId: string | null } | { ok: false; error: string }> {
-  const enabled = (projectData?.agent as { enabled?: unknown } | undefined)?.enabled === true;
+  const enabled = projectAgentEnabled(projectData?.agent);
   if (!enabled) return { ok: true, mmUserId: null };
   const secret = await db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(project)}`).get();
   const mmUserId = secret.data()?.mmUserId;

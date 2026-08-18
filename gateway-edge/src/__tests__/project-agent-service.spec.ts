@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
   sets: [] as Array<{ path: string; data: Record<string, unknown>; options?: Record<string, unknown> }>,
   updates: [] as Array<{ path: string; data: Record<string, unknown> }>,
+  updateFailures: new Map<string, Error>(),
   deletes: [] as string[],
   mmApi: vi.fn(),
   addActivityPairMember: vi.fn(),
@@ -22,6 +23,8 @@ function docRef(path: string) {
       h.sets.push({ path, data, options });
     },
     update: async (data: Record<string, unknown>) => {
+      const failure = h.updateFailures.get(path);
+      if (failure) throw failure;
       h.updates.push({ path, data });
     },
     delete: async () => {
@@ -86,6 +89,27 @@ function actor(overrides: Record<string, unknown> = {}) {
 }
 
 const PROJECT_PATH = "workspaces/mira/projects/orbit";
+
+function projectAgentStateWrite(
+  enabled: boolean,
+  status: "provisioning" | "ready" | "retiring" | "agentless" | "error",
+  { lastError = null }: { lastError?: string | null } = {},
+) {
+  return {
+    path: PROJECT_PATH,
+    data: {
+      agent: {
+        enabled,
+        mode: enabled ? "scoped" : "agentless",
+        status,
+        lastError,
+        updatedAt: "SERVER_TS",
+      },
+    },
+    options: { merge: true },
+  };
+}
+
 const ROSTER_UNION = {
   path: "users/owner-1",
   data: {
@@ -107,6 +131,7 @@ beforeEach(() => {
   h.docs.clear();
   h.sets.length = 0;
   h.updates.length = 0;
+  h.updateFailures.clear();
   h.deletes.length = 0;
   h.mmApi.mockReset();
   h.addActivityPairMember.mockReset().mockResolvedValue(undefined);
@@ -183,7 +208,10 @@ describe("setProjectAgentEnabled — enable", () => {
       status: 502,
       body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
     });
-    expect(h.sets.some((s) => s.path === PROJECT_PATH)).toBe(true);
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    }));
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
     expect(h.logger.error).toHaveBeenCalled();
   });
@@ -231,11 +259,8 @@ describe("setProjectAgentEnabled — enable", () => {
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
-    expect(h.sets).toContainEqual({
-      path: PROJECT_PATH,
-      data: { agent: { enabled: true, updatedAt: "SERVER_TS" } },
-      options: { merge: true },
-    });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "ready"));
     expect(h.createProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
       uid: "owner-1",
       username: "mira",
@@ -250,7 +275,7 @@ describe("setProjectAgentEnabled — enable", () => {
     );
     expect(result).toEqual({
       status: 200,
-      body: { success: true, enabled: true, provisioned: true },
+      body: { success: true, enabled: true, mode: "scoped", status: "ready", provisioned: true },
     });
   });
 
@@ -268,7 +293,10 @@ describe("setProjectAgentEnabled — enable", () => {
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
-    expect(h.sets.some((s) => s.path === PROJECT_PATH)).toBe(true);
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    }));
     expect(h.updates).toEqual([ROSTER_UNION]);
     expect(result).toEqual({
       status: 502,
@@ -288,6 +316,9 @@ describe("setProjectAgentEnabled — enable", () => {
       status: 502,
       body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
     });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    }));
     expect(h.logger.error).toHaveBeenCalled();
   });
 
@@ -305,6 +336,9 @@ describe("setProjectAgentEnabled — enable", () => {
       status: 422,
       body: { error: "Your chat account could not be found. Please contact support to restore access." },
     });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+      lastError: "Your chat account could not be found. Please contact support to restore access.",
+    }));
     expect(h.logger.error).toHaveBeenCalled();
   });
 });
@@ -319,11 +353,8 @@ describe("setProjectAgentEnabled — disable", () => {
 
     const result = await setProjectAgentEnabled(actor(), "orbit", false);
 
-    expect(h.sets).toContainEqual({
-      path: PROJECT_PATH,
-      data: { agent: { enabled: false, updatedAt: "SERVER_TS" } },
-      options: { merge: true },
-    });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "retiring"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "agentless"));
     expect(h.retireProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
       uid: "owner-1",
       project: "orbit",
@@ -332,7 +363,7 @@ describe("setProjectAgentEnabled — disable", () => {
     expect(h.updates).toEqual([ROSTER_REMOVAL]);
     expect(result).toEqual({
       status: 200,
-      body: { success: true, enabled: false, provisioned: false },
+      body: { success: true, enabled: false, mode: "agentless", status: "agentless", provisioned: false },
     });
   });
 
@@ -349,7 +380,7 @@ describe("setProjectAgentEnabled — disable", () => {
     expect(h.updates).toEqual([ROSTER_REMOVAL]);
     expect(result).toEqual({
       status: 200,
-      body: { success: true, enabled: false, provisioned: false },
+      body: { success: true, enabled: false, mode: "agentless", status: "agentless", provisioned: false },
     });
   });
 
@@ -368,6 +399,43 @@ describe("setProjectAgentEnabled — disable", () => {
       status: 502,
       body: { error: "Agent disabled, but retiring the bot failed - toggle again to retry" },
     });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "error", {
+      lastError: "Agent disabled, but retiring the bot failed - toggle again to retry",
+    }));
+  });
+
+  it("records an agentless error instead of claiming success when the bot secret is malformed", async () => {
+    seedProject();
+    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", { personalToken: "pat-1" });
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", false);
+
+    expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: 502,
+      body: { error: "Agent disabled, but retiring the bot failed - toggle again to retry" },
+    });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "retiring"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "error", {
+      lastError: "Agent disabled, but retiring the bot failed - toggle again to retry",
+    }));
+  });
+
+  it("records an error state when the gateway roster cannot converge", async () => {
+    seedProject();
+    h.updateFailures.set("users/owner-1", new Error("Firestore unavailable"));
+
+    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+
+    expect(h.createProjectAgentBot).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: 502,
+      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+    });
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    }));
   });
 });
 

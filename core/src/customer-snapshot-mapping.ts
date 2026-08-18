@@ -2,6 +2,7 @@ import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { projectAgentEnabled } from "@octogee/shared/types/project";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -40,8 +41,7 @@ export function mapProjectAgentState(
   secretData: Record<string, unknown> | undefined,
 ): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } | null {
   const agent = projectData.agent;
-  const requestedEnabled =
-    !!agent && typeof agent === "object" && (agent as { enabled?: unknown }).enabled === true;
+  const requestedEnabled = projectAgentEnabled(agent);
   const commercialLifecycle = projectData.commercialLifecycle;
   const archived =
     !!commercialLifecycle &&

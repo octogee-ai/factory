@@ -1,5 +1,5 @@
-export type { Project, ProjectRecipeId, ProjectRepoSource, ProjectVisibility, ProjectStatus, ProjectProvisioningState, ProjectType, } from './project.js';
-export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId } from './project.js';
+export type { Project, ProjectAgentConfig, ProjectAgentMode, ProjectAgentStatus, ProjectRecipeId, ProjectRepoSource, ProjectVisibility, ProjectStatus, ProjectProvisioningState, ProjectType, } from './project.js';
+export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId, projectAgentEnabled, } from './project.js';
 export type { ProjectRetentionPlan, ProjectRetentionState, ProjectRetentionStatus, } from './project-retention.js';
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
 export type { LegalDocId, LegalDoc, LegalAcceptanceContext, LegalAcceptanceMethod, LegalAcceptanceRecord, LegalAcceptanceClaim, } from './legal.js';

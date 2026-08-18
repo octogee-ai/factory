@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import rateLimit from "express-rate-limit";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { projectAgentId, workspaceCoachAgentId } from "@octogee/shared/types/identity";
+import { projectAgentEnabled } from "@octogee/shared/types/project";
 import {
   channelSessionModelCommand,
   parseChannelSessionModelOperation,
@@ -71,7 +72,7 @@ function activeProjectAgentMmUserId(
   projectData: FirebaseFirestore.DocumentData | undefined,
   credential: FirebaseFirestore.DocumentData | undefined,
 ): string | null {
-  if (projectData?.agent?.enabled !== true) return null;
+  if (!projectAgentEnabled(projectData?.agent)) return null;
   if (typeof credential?.mmUserId !== "string" || !MATTERMOST_ID.test(credential.mmUserId)) return null;
   if (typeof credential.personalToken !== "string" || !credential.personalToken) return null;
   return credential.mmUserId;

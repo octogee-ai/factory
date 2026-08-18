@@ -41,7 +41,13 @@ describe("POST /api/projects/:wid/:pid/agent", () => {
   it("relays the toggle to the service for the caller's own workspace", async () => {
     h.setProjectAgentEnabled.mockResolvedValue({
       status: 200,
-      body: { success: true, enabled: true, provisioned: true },
+      body: {
+        success: true,
+        enabled: true,
+        mode: "scoped",
+        status: "ready",
+        provisioned: true,
+      },
     });
 
     const resp = await request(app())
@@ -49,6 +55,13 @@ describe("POST /api/projects/:wid/:pid/agent", () => {
       .send({ enabled: true });
 
     expect(resp.status).toBe(200);
+    expect(resp.body).toEqual({
+      success: true,
+      enabled: true,
+      mode: "scoped",
+      status: "ready",
+      provisioned: true,
+    });
     expect(h.setProjectAgentEnabled).toHaveBeenCalledWith(
       { uid: "owner-1", userData: { username: "mira" }, workspaceId: "mira" },
       "orbit",

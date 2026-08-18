@@ -53,9 +53,6 @@ export interface FleetBrokerConfiguredBuilderBootstrap {
   projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }
 
-// Vegas: per-project agent state as served to gateways. `token`/`mmUserId`
-// come from users/{uid}/secrets/projectAgentMattermost-{pid} (null until the
-// bot is minted); `enabled` mirrors the server-managed project-doc agent flag.
 export interface FleetBrokerProjectAgent {
   projectId: string;
   enabled: boolean;
