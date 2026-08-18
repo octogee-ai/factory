@@ -71,7 +71,7 @@ const PLATFORM_PLUGIN_CONFIG_FIELDS = {
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_prompt_build": 3000,
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run": 3000,
 };
-const CUSTOMER_CODE_DENIED_TOOLS = [
+export const CUSTOMER_CODE_DENIED_TOOLS = [
     "exec",
     "process",
     "subagents",
@@ -106,7 +106,7 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
     "octogee_board_card_move",
     "octogee_board_card_comment",
 ];
-const CUSTOMER_WORKFLOW_TOOLS = [
+export const CUSTOMER_WORKFLOW_TOOLS = [
     "octogee_project_create",
     "octogee_project_commit",
     "octogee_project_list",
@@ -163,8 +163,8 @@ const CUSTOMER_WORKFLOW_TOOLS = [
     "octogee_obsidian_read",
     "octogee_obsidian_write",
 ];
-const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
-const PROJECT_AGENT_ALLOWED_TOOLS = [
+export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
+export const PROJECT_AGENT_ALLOWED_TOOLS = [
     "read",
     "grep",
     "find",
@@ -191,7 +191,7 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
     "octogee_board_card_move",
     "octogee_board_card_comment",
 ];
-const PROJECT_AGENT_DENIED_TOOLS = [
+export const PROJECT_AGENT_DENIED_TOOLS = [
     ...PRODUCTIVITY_TOOL_NAMES,
     "exec",
     "process",
@@ -505,6 +505,12 @@ function forceAgentToolPolicy(config, agent, agentId) {
         ];
     tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
     delete tools.allow;
+}
+export function reconcileCustomerAgentEntry(agentId, entry) {
+    const agent = structuredClone(entry);
+    forceAgentWorkspaceOnly(agent);
+    forceAgentToolPolicy({}, agent, agentId);
+    return agent;
 }
 function accountIdForAgentId(agentId) {
     const parsed = parseAgentId(agentId);

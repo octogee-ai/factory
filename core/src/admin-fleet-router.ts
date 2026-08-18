@@ -4593,10 +4593,10 @@ type ActivationLeaseReturnOutcome =
   | { kind: "adopted" }
   | { kind: "requested" };
 
-type ActivationLeaseCancellationOutcome =
+type ReasonedActivationLeaseMutationOutcome =
   | { kind: "not-found" }
   | { kind: "conflict"; reason: string }
-  | { kind: "cancelled" };
+  | { kind: "retried" | "cancelled" };
 
 function classifyActivationLeaseTermination(
   result: ActivationLeaseTerminationOutcome,
@@ -4637,8 +4637,8 @@ function classifyActivationLeaseReturn(
   return { outcome: "completed" };
 }
 
-function classifyActivationLeaseCancellation(
-  result: ActivationLeaseCancellationOutcome,
+function classifyReasonedActivationLeaseMutation(
+  result: ReasonedActivationLeaseMutationOutcome,
 ): NormalFleetMutationResult {
   if (result.kind === "not-found") {
     return { outcome: "failed", error: ERR_USER_NOT_FOUND };
@@ -4971,6 +4971,170 @@ async function requestActivationLeaseTermination(
       input.requestedBy,
   });
   return { kind: "requested" };
+}
+
+function rearmableBuilderReturnOperation(input: {
+  operation: GlmDoc | undefined;
+  uid: string;
+  targetGatewayId: string;
+}): boolean {
+  const operation = input.operation;
+  if (!operation || !isPlainRecord(operation.input)) return false;
+  const operationInput = operation.input;
+  const terminalStatus = operation.status === "failed" || operation.status === "rolled-back";
+  return [
+    operation.kind === OP_KIND_MIGRATE_CUSTOMER,
+    terminalStatus,
+    operation.rolledBack === true,
+    operation.origin === "automatic",
+    operation.createdBy === "glm-controller-placement-policy",
+    operation.inputUid === input.uid,
+    operation.gatewayId === operationInput.toGatewayId,
+    operationInput.uid === input.uid,
+    operationInput.fromGatewayId === input.targetGatewayId,
+    operationInput.source === "builder-activation-lease",
+    typeof operationInput.toGatewayId === "string" && operationInput.toGatewayId.length > 0,
+    operation.customerMigrationV2 === undefined,
+  ].every(Boolean);
+}
+
+type BuilderReturnRetryLease = {
+  lease: GlmDoc;
+  targetGatewayId: string;
+  returnOperationId: string;
+};
+
+function retryableBuilderReturnLease(
+  data: GlmDoc,
+  operationId: string,
+): BuilderReturnRetryLease | null {
+  const resolved = activationLeaseFromUser(data);
+  const lease = resolved?.lease;
+  const targetGatewayId = asStringOrNull(lease?.targetGatewayId);
+  const returnOperationId = asStringOrNull(lease?.returnOperationId);
+  if (
+    !lease ||
+    lease.status !== "returning" ||
+    !targetGatewayId ||
+    asStringOrNull(resolved?.openclaw.gatewayId) !== targetGatewayId ||
+    returnOperationId !== `builder-return-${targetGatewayId}` ||
+    operationId !== returnOperationId
+  ) {
+    return null;
+  }
+  return { lease, targetGatewayId, returnOperationId };
+}
+
+type BuilderReturnRetryState = {
+  assignmentExists: boolean;
+  assignment: GlmDoc | undefined;
+  targetExists: boolean;
+  target: GlmDoc | undefined;
+  operation: GlmDoc | undefined;
+};
+
+async function readBuilderReturnRetryState(
+  db: Firestore,
+  transaction: Transaction,
+  input: { uid: string; targetGatewayId: string; returnOperationId: string },
+): Promise<BuilderReturnRetryState> {
+  const [assignmentSnapshot, targetSnapshot, operationSnapshot] = await Promise.all([
+    transaction.get(db.doc(`gateways/${input.targetGatewayId}/assignments/${input.uid}`)),
+    transaction.get(db.collection(GATEWAYS_COLLECTION).doc(input.targetGatewayId)),
+    transaction.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(input.returnOperationId)),
+  ]);
+  return {
+    assignmentExists: assignmentSnapshot.exists,
+    assignment: assignmentSnapshot.exists ? assignmentSnapshot.data() as GlmDoc : undefined,
+    targetExists: targetSnapshot.exists,
+    target: targetSnapshot.exists ? targetSnapshot.data() as GlmDoc : undefined,
+    operation: operationSnapshot.exists ? operationSnapshot.data() as GlmDoc : undefined,
+  };
+}
+
+function matchesBuilderReturnRetryState(input: {
+  state: BuilderReturnRetryState;
+  uid: string;
+  targetGatewayId: string;
+  lease: GlmDoc;
+}): boolean {
+  return [
+    sharedAssignmentServesBuilder({
+      exists: input.state.assignmentExists,
+      assignment: input.state.assignment,
+      uid: input.uid,
+      gatewayId: input.targetGatewayId,
+    }),
+    input.state.target?.gatewayClass === "builder",
+    !isOperatorManaged(input.state.target?.managedBy),
+    disposableRuntimeMatchesTermination({
+      exists: input.state.targetExists,
+      target: input.state.target,
+      uid: input.uid,
+      leaseId: asStringOrNull(input.lease.leaseId) ?? "",
+      generation: typeof input.lease.generation === "number" ? input.lease.generation : 0,
+    }),
+    rearmableBuilderReturnOperation({
+      operation: input.state.operation,
+      uid: input.uid,
+      targetGatewayId: input.targetGatewayId,
+    }),
+  ].every(Boolean);
+}
+
+function rearmBuilderReturnOperation(
+  db: Firestore,
+  transaction: Transaction,
+  returnOperationId: string,
+): void {
+  transaction.update(
+    db.collection(GLM_OPERATIONS_COLLECTION).doc(returnOperationId),
+    {
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+      steps: [],
+      error: FieldValue.delete(),
+      expireAt: FieldValue.delete(),
+      rolledBack: FieldValue.delete(),
+      output: FieldValue.delete(),
+      lastProgressAt: FieldValue.delete(),
+      waitingOn: FieldValue.delete(),
+      nextAttemptAt: FieldValue.delete(),
+    },
+  );
+}
+
+async function retryActivationLeaseReturn(
+  db: Firestore,
+  transaction: Transaction,
+  input: {
+    uid: string;
+    operationId: string;
+  },
+): Promise<ReasonedActivationLeaseMutationOutcome> {
+  const userRef = db.collection("users").doc(input.uid);
+  const userSnapshot = await transaction.get(userRef);
+  if (!userSnapshot.exists) return { kind: "not-found" };
+  const retryLease = retryableBuilderReturnLease(userSnapshot.data() as GlmDoc, input.operationId);
+  if (!retryLease) {
+    return { kind: "conflict", reason: "Builder return is no longer retryable" };
+  }
+  const state = await readBuilderReturnRetryState(db, transaction, {
+    uid: input.uid,
+    targetGatewayId: retryLease.targetGatewayId,
+    returnOperationId: retryLease.returnOperationId,
+  });
+  if (!matchesBuilderReturnRetryState({
+    state,
+    uid: input.uid,
+    targetGatewayId: retryLease.targetGatewayId,
+    lease: retryLease.lease,
+  })) {
+    return { kind: "conflict", reason: "Builder return no longer matches its original lease" };
+  }
+  rearmBuilderReturnOperation(db, transaction, retryLease.returnOperationId);
+  return { kind: "retried" };
 }
 
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
@@ -5807,7 +5971,7 @@ router.post(
           target: { uid, leaseId, generation },
           preActionStatus: {},
           mutation: { kind: "cancel-activation-lease", uid, leaseId, generation },
-          classifyResult: classifyActivationLeaseCancellation,
+          classifyResult: classifyReasonedActivationLeaseMutation,
           action: async () => db.runTransaction(async (transaction) => {
             const snapshot = await transaction.get(userRef);
             if (!snapshot.exists) return { kind: "not-found" as const };
@@ -6000,6 +6164,64 @@ router.post(
           generation: body.generation,
           ...(outcome.kind === "adopted" ? { adopted: true } : {}),
         });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  router.post(
+    "/customers/:uid/activation-lease/return/retry",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body = isPlainRecord(req.body) ? req.body : {};
+        if (
+          Object.keys(body).length !== 1 ||
+          typeof body.operationId !== "string" ||
+          body.operationId.length === 0
+        ) {
+          res.status(400).json({ error: "operationId is required" });
+          return;
+        }
+        const operationId = body.operationId;
+        const uid = req.params.uid as string;
+        const inFlight = await findInFlightMigrateOp(uid);
+        if (inFlight) {
+          res.status(409).json({
+            error: "a migration for this customer is already pending or running",
+            operationId: inFlight.id,
+            uid,
+          });
+          return;
+        }
+        const outcome = await runAdminFleetMutation({
+          req,
+          what: "retry builder activation lease return",
+          why: ADMIN_FLEET_REQUEST_REASON,
+          target: { uid, operationId },
+          preActionStatus: {},
+          mutation: {
+            kind: "retry-return-activation-lease",
+            uid,
+            operationId,
+          },
+          classifyResult: classifyReasonedActivationLeaseMutation,
+          action: async () => db.runTransaction((transaction) =>
+            retryActivationLeaseReturn(db, transaction, {
+              uid,
+              operationId,
+            })
+          ),
+        });
+        if (outcome.kind === "not-found") {
+          res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+          return;
+        }
+        if (outcome.kind === "conflict") {
+          res.status(409).json({ error: outcome.reason });
+          return;
+        }
+        res.status(202).json({ status: "return-retried", operationId });
       } catch (e) {
         next(e);
       }

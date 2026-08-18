@@ -140,7 +140,7 @@ const PLATFORM_PLUGIN_CONFIG_FIELDS: Readonly<Record<string, unknown>> = {
   "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run": 3000,
 };
 
-const CUSTOMER_CODE_DENIED_TOOLS = [
+export const CUSTOMER_CODE_DENIED_TOOLS = [
   "exec",
   "process",
   "subagents",
@@ -177,7 +177,7 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_board_card_comment",
 ] as const;
 
-const CUSTOMER_WORKFLOW_TOOLS = [
+export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
@@ -235,10 +235,10 @@ const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_obsidian_write",
 ] as const;
 
-const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
+export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 
-const PROJECT_AGENT_ALLOWED_TOOLS = [
+export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
   "grep",
   "find",
@@ -266,7 +266,7 @@ const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_board_card_comment",
 ] as const;
 
-const PROJECT_AGENT_DENIED_TOOLS = [
+export const PROJECT_AGENT_DENIED_TOOLS = [
   ...PRODUCTIVITY_TOOL_NAMES,
   "exec",
   "process",
@@ -597,6 +597,16 @@ function forceAgentToolPolicy(config: JsonObject, agent: JsonObject, agentId: st
     ];
   tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
   delete tools.allow;
+}
+
+export function reconcileCustomerAgentEntry(
+  agentId: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown> {
+  const agent = structuredClone(entry);
+  forceAgentWorkspaceOnly(agent);
+  forceAgentToolPolicy({}, agent, agentId);
+  return agent;
 }
 
 function accountIdForAgentId(agentId: string): string | null {

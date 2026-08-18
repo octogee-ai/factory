@@ -1,6 +1,13 @@
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
 import {
+  CUSTOMER_CODE_DENIED_TOOLS,
+  CUSTOMER_WORKFLOW_TOOLS as WORKSPACE_COACH_ALLOWED_TOOLS,
+  PRODUCTIVITY_TOOL_NAMES,
+  PROJECT_AGENT_ALLOWED_TOOLS,
+  PROJECT_AGENT_DENIED_TOOLS,
+} from "@octogee/core/system-config-invariants";
+import {
   mattermostAccountSecretRef,
   type MattermostAccountSecretRef,
 } from "./mattermost-account-secrets.js";
@@ -10,6 +17,12 @@ export {
   platformOpenAiEmbeddingSecretId,
   rebindPlatformEmbeddingRefs,
 } from "@octogee/core/platform-embedding-refs";
+export {
+  PRODUCTIVITY_TOOL_NAMES,
+  PROJECT_AGENT_ALLOWED_TOOLS,
+  PROJECT_AGENT_DENIED_TOOLS,
+  WORKSPACE_COACH_ALLOWED_TOOLS,
+};
 
 const PLATFORM_EMBEDDING_PROVIDER = "openai-compatible";
 // In-cluster K8s Service DNS (llm-broker), same as the Helm default it
@@ -19,133 +32,11 @@ const DEFAULT_OPENAI_EMBEDDINGS_BASE_URL = "http://llm-broker:3010/v1";
 const DEFAULT_OPENAI_EMBEDDINGS_MODEL = "text-embedding-3-small";
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
-export const PRODUCTIVITY_TOOL_NAMES = [
-  "octogee_google_calendar_events",
-  "octogee_google_calendar_create",
-  "octogee_google_calendar_create_approved",
-  "octogee_google_calendar_update",
-  "octogee_google_calendar_update_approved",
-  "octogee_google_calendar_delete",
-  "octogee_google_calendar_delete_approved",
-  "octogee_google_gmail_search",
-  "octogee_google_gmail_get",
-  "octogee_google_gmail_triage",
-  "octogee_google_gmail_triage_approved",
-  "octogee_google_gmail_draft_create",
-  "octogee_google_gmail_draft_create_approved",
-  "octogee_google_gmail_draft_send",
-  "octogee_google_gmail_draft_send_approved",
-  "octogee_google_drive_read",
-  "octogee_google_docs_read",
-  "octogee_google_docs_write",
-  "octogee_google_contacts_read",
-  "octogee_google_tasks_lists",
-  "octogee_google_tasks_list",
-  "octogee_google_tasks_add",
-  "octogee_google_tasks_add_approved",
-  "octogee_google_tasks_update",
-  "octogee_google_tasks_update_approved",
-  "octogee_google_sheets_read",
-  "octogee_google_sheets_write",
-  "octogee_obsidian_read",
-  "octogee_obsidian_write",
-] as const;
-
-export const RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS = [
-  "preview_start",
-  "preview_stop",
-  "preview_list",
-  "octogee_publish",
-] as const;
-
-export const WORKSPACE_COACH_ALLOWED_TOOLS = [
-  "octogee_project_create",
-  "octogee_project_commit",
-  "octogee_project_list",
-  "octogee_project_set_recipe",
-  "octogee_project_capability",
-  "octogee_project_build",
-  "octogee_project_test",
-  "octogee_project_preview",
-  "octogee_project_run_status",
-  "octogee_project_publish",
-  "octogee_board_list",
-  "octogee_board_card_read",
-  "octogee_board_card_create",
-  "octogee_board_card_update",
-  "octogee_board_card_move",
-  "octogee_board_card_comment",
-  "delegated_access",
-  "workspace_commit",
-  "brave_search",
-  "tavily_search",
-  "tavily_extract",
-  "octogee_chat_search",
-  "octogee_chat_history",
-  "octogee_chat_set_identity",
-  "octogee_status",
-  "octogee_ask_ops",
-  ...PRODUCTIVITY_TOOL_NAMES,
-] as const;
-
-export const PROJECT_AGENT_ALLOWED_TOOLS = [
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "write",
-  "edit",
-  "apply_patch",
-  "web_search",
-  "web_fetch",
-  "brave_search",
-  "tavily_search",
-  "tavily_extract",
-  "octogee_project_commit",
-  "octogee_project_capability",
-  "octogee_project_build",
-  "octogee_project_test",
-  "octogee_project_preview",
-  "octogee_project_run_status",
-  "octogee_project_set_recipe",
-  "octogee_board_list",
-  "octogee_board_card_read",
-  "octogee_board_card_create",
-  "octogee_board_card_update",
-  "octogee_board_card_move",
-  "octogee_board_card_comment",
-] as const;
-
-export const PROJECT_AGENT_DENIED_TOOLS = [
-  ...PRODUCTIVITY_TOOL_NAMES,
-  "exec",
-  "process",
-  "subagents",
-  "sessions_spawn",
-  "terminal",
-  ...RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
-  "workspace_commit",
-  "octogee_project_create",
-  "octogee_project_publish",
-  "delegated_access",
-  "octogee_status",
-  "octogee_chat_search",
-  "octogee_chat_history",
-  "octogee_chat_set_identity",
-  "bundle-mcp",
-  "automations",
-  "skill_workshop",
-  "conversations_list",
-  "conversations_send",
-  "conversations_turn",
-  "browser",
-] as const;
-
 function workspaceCoachTools(): Record<string, unknown> {
   return {
     profile: "coding",
     alsoAllow: WORKSPACE_COACH_ALLOWED_TOOLS,
-    deny: RETIRED_LOCAL_PROJECT_EXECUTION_TOOLS,
+    deny: [...CUSTOMER_CODE_DENIED_TOOLS],
     fs: { workspaceOnly: true },
     toolsBySender: {},
   };
@@ -540,7 +431,9 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
     tools: {
       profile: "minimal",
       alsoAllow: [],
+      deny: [...CUSTOMER_CODE_DENIED_TOOLS],
       fs: { workspaceOnly: true },
+      toolsBySender: {},
     },
   };
 }
@@ -627,6 +520,7 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
           deny: PROJECT_AGENT_DENIED_TOOLS,
           exec: { mode: "deny", host: "node" },
           fs: { workspaceOnly: true },
+          toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
         },
       };
     });
