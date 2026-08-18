@@ -2,6 +2,9 @@ import { type GatewayDesiredStatus } from "./glm.js";
 export declare const PRIMARY_SHARED_GATEWAY_ID = "shared-a";
 export declare const STANDARD_SHARED_GATEWAY_IDS: readonly ["shared-a", "shared-b", "shared-c", "shared-d"];
 export declare const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
+export declare const MIN_SHARED_GATEWAY_MIN_HOT_MEMBERS = 1;
+/** Two hot members where the pool allows it, never more than the pool has. */
+export declare function defaultMinHotMembers(memberCount: number): number;
 export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export declare const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 export interface SharedGatewayAutoscalingConfig {

@@ -7,6 +7,11 @@ export const STANDARD_SHARED_GATEWAY_IDS = [
     "shared-d",
 ];
 export const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
+export const MIN_SHARED_GATEWAY_MIN_HOT_MEMBERS = 1;
+/** Two hot members where the pool allows it, never more than the pool has. */
+export function defaultMinHotMembers(memberCount) {
+    return Math.min(DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS, memberCount);
+}
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 function isRecord(value) {
@@ -41,14 +46,14 @@ export function parseSharedGatewayPoolConfig(value) {
 function isValidMinHotMembers(value, memberCount) {
     return typeof value === "number" &&
         Number.isInteger(value) &&
-        value >= DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS &&
+        value >= MIN_SHARED_GATEWAY_MIN_HOT_MEMBERS &&
         value <= memberCount;
 }
 function isValidBuildersPerGateway(value) {
     return typeof value === "number" && Number.isInteger(value) && value >= 2;
 }
 export function parseSharedGatewayAutoscalingConfig(value, memberCount) {
-    if (!Number.isInteger(memberCount) || memberCount < DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS) {
+    if (!Number.isInteger(memberCount) || memberCount < MIN_SHARED_GATEWAY_MIN_HOT_MEMBERS) {
         return null;
     }
     if (value !== undefined && !isRecord(value))
@@ -57,7 +62,7 @@ export function parseSharedGatewayAutoscalingConfig(value, memberCount) {
     if (!isRecord(config))
         return null;
     const enabled = config.enabled ?? DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED;
-    const minHotMembers = config.minHotMembers ?? DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS;
+    const minHotMembers = config.minHotMembers ?? defaultMinHotMembers(memberCount);
     const buildersPerGateway = config.buildersPerGateway ?? DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY;
     if (typeof enabled !== "boolean" ||
         !isValidMinHotMembers(minHotMembers, memberCount) ||

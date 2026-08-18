@@ -811,7 +811,7 @@ async function applyAddCustomerConfigPatch(
         );
         return {
           agents: {
-            ...(builderGateway ? { ownership: "explicit" } : {}),
+            ownership: "explicit",
             ...(agentDefaults ? { defaults: agentDefaults } : {}),
             ...customerAgentRosterPatch(
               current,

@@ -247,14 +247,20 @@ export async function readGatewayArtifact(
   return gatewayArtifactFromReleasePayload(artifact);
 }
 
-export async function readGatewayRuntimeHeartbeat(
+export async function readGatewayRuntimeDoc(
   db: FirestoreReader,
   gateway: GatewayDoc,
-): Promise<Record<string, unknown> | null> {
+): Promise<unknown> {
   const runtimeSnap = await db
     .doc(`${GLM_GATEWAYS_COLLECTION}/${gateway.gatewayId}`)
     .get();
-  const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
+  return runtimeSnap.exists ? runtimeSnap.data() : undefined;
+}
+
+export function gatewayRuntimeHeartbeatOf(
+  runtime: unknown,
+  gateway: GatewayDoc,
+): Record<string, unknown> | null {
   if (
     !isGatewayRuntimeDoc(runtime) ||
     runtime.gatewayId !== gateway.gatewayId ||
@@ -264,6 +270,13 @@ export async function readGatewayRuntimeHeartbeat(
     return null;
   }
   return runtime.heartbeat;
+}
+
+export async function readGatewayRuntimeHeartbeat(
+  db: FirestoreReader,
+  gateway: GatewayDoc,
+): Promise<Record<string, unknown> | null> {
+  return gatewayRuntimeHeartbeatOf(await readGatewayRuntimeDoc(db, gateway), gateway);
 }
 
 export function mergeGatewayConfigWithArtifact(

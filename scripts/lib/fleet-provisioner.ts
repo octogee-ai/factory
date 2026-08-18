@@ -88,7 +88,7 @@ import { probeOpenClawHealth } from "./system-config-runtime-health.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
-const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 120_000;
+const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
 
 export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
@@ -711,16 +711,14 @@ export async function waitForOpenClawHealthz(input: {
   }
 }
 
-// A held process gate means OpenClaw is intentionally down, whatever the sticky
-// runtime status says: a source stopped for a handoff must drop out of the Service.
 export async function probeSurgeReadiness(input: {
   runtimeStatus: FleetRuntime["status"];
   handoffReleased: boolean;
   provisioning?: boolean;
-  processHeld?: boolean;
+  processSettled?: boolean;
   probeHealthz: () => Promise<boolean>;
 }): Promise<{ ready: boolean; openclawUp: boolean }> {
-  if (input.processHeld === true) return { ready: false, openclawUp: false };
+  if (input.processSettled === false) return { ready: false, openclawUp: false };
   const openclawUp = input.runtimeStatus === "ready" && input.provisioning !== true
     ? await input.probeHealthz()
     : input.runtimeStatus === "ready";
@@ -747,7 +745,7 @@ function createSurgeReadinessHandler(input: {
         runtimeStatus: input.runtime.status,
         handoffReleased,
         provisioning: input.runtime.activeProvisioning > 0,
-        processHeld: prelaunchState === "held" || prelaunchState === "hydrated",
+        processSettled: prelaunchState === "none" || prelaunchState === "serving",
         probeHealthz: input.probeHealthz,
       });
       res.status(ready ? 200 : 503).json({
@@ -1699,17 +1697,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   app.get("/surge-ready", createSurgeReadinessHandler({
     runtime,
     surgeReadiness,
-    prelaunchState: async () => {
-      try {
-        return await builderPrelaunchState(wrappedAdapter, builderProcessGate);
-      } catch (error) {
-        opts.log(
-          `[surge-handoff] prelaunch state unavailable; reporting none: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-        );
-        return "none";
-      }
-    },
+    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
     probeHealthz,
     log: opts.log,
   }));

@@ -338,6 +338,49 @@ describe("surge OpenClaw process supervisor", () => {
     await supervisor.stop();
   });
 
+  it("answers status while a permit is still cloning and starting OpenClaw", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    let enteredPrepare = () => {};
+    let releasePrepare = () => {};
+    const prepareEntered = new Promise<void>((resolve) => { enteredPrepare = resolve; });
+    const prepareBlocked = new Promise<void>((resolve) => { releasePrepare = resolve; });
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget: async () => {
+        enteredPrepare();
+        await prepareBlocked;
+      },
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      probeHealthz: healthzOf(children),
+      healthTimeoutMs: 1_000,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    const permit = client.permit(request);
+    await prepareEntered;
+
+    await expect(client.status()).resolves.toMatchObject({ mode: "permitted" });
+
+    releasePrepare();
+    await expect(permit).resolves.toMatchObject({ phase: "running" });
+    await supervisor.stop();
+  });
+
   it("escalates to SIGKILL when OpenClaw ignores SIGTERM past the stop grace", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const children: FakeChild[] = [];

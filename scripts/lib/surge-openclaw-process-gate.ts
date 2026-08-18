@@ -480,12 +480,18 @@ function collectSupervisorResponse(
   });
 }
 
+// Mutations take no deadline: abandoning one loses the transition it applies.
+export const SURGE_OPENCLAW_PROCESS_READ_TIMEOUT_MS = 5_000;
+
 export function createSurgeOpenClawProcessSupervisorClient(
   openclawDir: string,
   deps: { request?: typeof http.request; socketPath?: string } = {},
 ): SurgeOpenClawProcessSupervisorClient {
   const socketPath = deps.socketPath ?? surgeOpenClawProcessSocketPath(openclawDir);
-  const call = (input: SurgeOpenClawProcessSupervisorRequest): Promise<SurgeOpenClawProcessGateState> => {
+  const call = (
+    input: SurgeOpenClawProcessSupervisorRequest,
+    timeoutMs?: number,
+  ): Promise<SurgeOpenClawProcessGateState> => {
     if (!isSurgeOpenClawProcessSupervisorAction(input.action)) {
       return Promise.reject(new Error("invalid surge OpenClaw process supervisor action"));
     }
@@ -501,12 +507,19 @@ export function createSurgeOpenClawProcessSupervisorClient(
           "content-length": Buffer.byteLength(body),
         },
       }, (res) => collectSupervisorResponse(res, resolve, reject));
+      if (timeoutMs !== undefined) {
+        req.setTimeout(timeoutMs, () => {
+          req.destroy(new Error(
+            `surge OpenClaw process supervisor ${input.action} timed out after ${timeoutMs}ms`,
+          ));
+        });
+      }
       req.once("error", reject);
       req.end(body);
     });
   };
   return {
-    status: () => call({ action: "status" }),
+    status: () => call({ action: "status" }, SURGE_OPENCLAW_PROCESS_READ_TIMEOUT_MS),
     hold: (input) => call({ action: "hold", ...input }),
     holdNormal: () => call({ action: "hold-normal" }),
     hydrate: (input) => call({ action: "hydrate", ...input }),

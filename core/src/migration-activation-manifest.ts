@@ -544,15 +544,18 @@ export async function applyOpenClawActivationManifest(
           rebindPlatformEmbeddingRefs(nextAgents),
         );
         return {
-          agents: normalizedAuthInheritanceAnchor
-            ? {
-              ...rosterPatch,
-              ownership: "explicit",
-              defaults: {
-                authInheritance: { agentId: normalizedAuthInheritanceAnchor.agentId },
-              },
-            }
-            : rosterPatch,
+          // openclaw rejects a multi-agent roster that declares no ownership.
+          agents: {
+            ...rosterPatch,
+            ownership: "explicit",
+            ...(normalizedAuthInheritanceAnchor
+              ? {
+                defaults: {
+                  authInheritance: { agentId: normalizedAuthInheritanceAnchor.agentId },
+                },
+              }
+              : {}),
+          },
           bindings: [
             ...filterOutCustomerBindings(currentBindings, manifest.slug),
             ...activationAgents.flatMap((entry) => entry.bindings),

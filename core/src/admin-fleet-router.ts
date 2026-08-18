@@ -84,7 +84,7 @@ import {
 import {
   DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
   DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
-  DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+  defaultMinHotMembers,
   parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
   type SharedGatewayAutoscalingConfig,
@@ -1047,7 +1047,7 @@ function buildOnboardingPlacementResponse(opts: {
       sharedGatewayIds: [...opts.config.sharedGatewayIds],
       sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling ?? {
         enabled: DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-        minHotMembers: DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+        minHotMembers: defaultMinHotMembers(opts.config.sharedGatewayIds.length),
         buildersPerGateway: DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
       },
     },

@@ -1987,6 +1987,34 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
+  it("declares roster ownership on a Barn, which is multi-agent once a customer lands", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    delete process.env.GATEWAY_BUILDER_SLUG;
+    try {
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(),
+        rpc: mkGatewayRpc(),
+        log: vi.fn(),
+      });
+
+      await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+
+      const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+        buildPatch: (current: unknown) => { agents: { ownership: string } };
+      };
+      const patch = args.buildPatch({
+        agents: { list: [{ id: "octogee-unmatched-route" }] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      });
+
+      expect(patch.agents.ownership).toBe("explicit");
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
   it("retains the Builder auth anchor during regular list-roster reconciliation", async () => {
     const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
     process.env.GATEWAY_BUILDER_SLUG = "alice";

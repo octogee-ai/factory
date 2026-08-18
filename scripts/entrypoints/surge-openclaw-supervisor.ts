@@ -15,7 +15,7 @@ import {
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 
-const DEFAULT_HEALTH_TIMEOUT_MS = 120_000;
+const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
 const ORPHAN_REAP_POLL_MS = 250;
 const SURGE_OPENCLAW_PID_FILE = ".surge-openclaw-process.pid";
@@ -466,8 +466,12 @@ export async function startSurgeOpenClawSupervisor(
     if (request.action === "unreserve") return unreserve(input);
     return resume(input);
   };
+  // A gate read must never queue behind a start or stop; the readiness probe
+  // calls it while a permit holds the lane.
   const server = createServer(supervisorRequestListener(
-    (request) => runSerial(() => dispatch(request)),
+    (request) => request.action === "status"
+      ? dispatch(request)
+      : runSerial(() => dispatch(request)),
     opts.log,
   ));
   await new Promise<void>((resolve, reject) => {

@@ -2278,7 +2278,8 @@ describe("onboarding placement (post-cohorts)", () => {
       sharedGatewayIds: ["gw-missing"],
       sharedGatewayAutoscaling: {
         enabled: true,
-        minHotMembers: 2,
+        // A one-member pool cannot hold two hot members; the default clamps.
+        minHotMembers: 1,
         buildersPerGateway: 4,
       },
     });
@@ -2586,9 +2587,20 @@ describe("onboarding placement (post-cohorts)", () => {
       buildersPerGateway: 6,
     });
 
+    // A single hot Barn is a valid, deliberately cheaper shape.
     await request(app)
       .patch("/onboarding-placement/autoscaling")
       .send({ enabled: true, minHotMembers: 1, buildersPerGateway: 4 })
+      .expect(200);
+
+    await request(app)
+      .patch("/onboarding-placement/autoscaling")
+      .send({ enabled: true, minHotMembers: 0, buildersPerGateway: 4 })
+      .expect(400);
+
+    await request(app)
+      .patch("/onboarding-placement/autoscaling")
+      .send({ enabled: true, minHotMembers: 5, buildersPerGateway: 4 })
       .expect(400);
   });
 
@@ -2615,7 +2627,7 @@ describe("onboarding placement (post-cohorts)", () => {
       sharedGatewayIds: ["gw-default"],
       sharedGatewayAutoscaling: {
         enabled: true,
-        minHotMembers: 2,
+        minHotMembers: 1,
         buildersPerGateway: 4,
       },
     });

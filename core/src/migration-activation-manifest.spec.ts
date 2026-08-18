@@ -374,6 +374,38 @@ describe("migration activation manifest", () => {
     ]);
   });
 
+  it("declares explicit roster ownership on a Barn activation that carries no auth anchor", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: {
+            entries: {
+              "octogee-unmatched-route": { name: "Unmatched Mattermost route" },
+              "octogee-bob-coach": { model: "foreign" },
+            },
+          },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { entries: Record<string, unknown>; ownership?: string; defaults?: unknown };
+    };
+    expect(patch.agents.ownership).toBe("explicit");
+    expect(patch.agents.defaults).toBeUndefined();
+  });
+
   it("anchors Builder auth inheritance while retaining the coach routing default", async () => {
     const anchor = {
       id: "octogee-unmatched-route",

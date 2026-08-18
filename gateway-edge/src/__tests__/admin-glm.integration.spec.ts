@@ -565,7 +565,7 @@ describe("Admin onboarding placement", () => {
       sharedGatewayIds: ["gw-target"],
       sharedGatewayAutoscaling: {
         enabled: true,
-        minHotMembers: 2,
+        minHotMembers: 1,
         buildersPerGateway: 4,
       },
     });

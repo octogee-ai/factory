@@ -9,7 +9,7 @@ import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-d
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousBuilderPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
-import { DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED, DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY, DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS, parseSharedGatewayAutoscalingConfig, parseSharedGatewayPoolConfig, } from "@octogee/shared/types/shared-gateway-pool";
+import { DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED, DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY, defaultMinHotMembers, parseSharedGatewayAutoscalingConfig, parseSharedGatewayPoolConfig, } from "@octogee/shared/types/shared-gateway-pool";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
@@ -574,7 +574,7 @@ function buildOnboardingPlacementResponse(opts) {
             sharedGatewayIds: [...opts.config.sharedGatewayIds],
             sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling ?? {
                 enabled: DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-                minHotMembers: DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS,
+                minHotMembers: defaultMinHotMembers(opts.config.sharedGatewayIds.length),
                 buildersPerGateway: DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
             },
         },

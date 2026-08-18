@@ -51,6 +51,8 @@ export interface GatewayAuthorization {
 }
 export declare function gatewayArtifactFromReleasePayload(payload: ReleasePayload): GatewayArtifact;
 export declare function readGatewayArtifact(db: FirestoreReader, gatewayId: string, release: number | null): Promise<GatewayArtifact | null>;
+export declare function readGatewayRuntimeDoc(db: FirestoreReader, gateway: GatewayDoc): Promise<unknown>;
+export declare function gatewayRuntimeHeartbeatOf(runtime: unknown, gateway: GatewayDoc): Record<string, unknown> | null;
 export declare function readGatewayRuntimeHeartbeat(db: FirestoreReader, gateway: GatewayDoc): Promise<Record<string, unknown> | null>;
 export declare function mergeGatewayConfigWithArtifact(config: GatewayMutableConfig, artifact: GatewayArtifact): RenderedGatewayConfig;
 export declare function gatewayAuthorizationFromRootDocument(data: unknown, gatewayId: string): GatewayAuthorization | null;

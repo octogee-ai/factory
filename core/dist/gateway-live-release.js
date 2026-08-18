@@ -132,11 +132,13 @@ export async function readGatewayArtifact(db, gatewayId, release) {
     }
     return gatewayArtifactFromReleasePayload(artifact);
 }
-export async function readGatewayRuntimeHeartbeat(db, gateway) {
+export async function readGatewayRuntimeDoc(db, gateway) {
     const runtimeSnap = await db
         .doc(`${GLM_GATEWAYS_COLLECTION}/${gateway.gatewayId}`)
         .get();
-    const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
+    return runtimeSnap.exists ? runtimeSnap.data() : undefined;
+}
+export function gatewayRuntimeHeartbeatOf(runtime, gateway) {
     if (!isGatewayRuntimeDoc(runtime) ||
         runtime.gatewayId !== gateway.gatewayId ||
         runtime.lifecycle !== "serving" ||
@@ -144,6 +146,9 @@ export async function readGatewayRuntimeHeartbeat(db, gateway) {
         return null;
     }
     return runtime.heartbeat;
+}
+export async function readGatewayRuntimeHeartbeat(db, gateway) {
+    return gatewayRuntimeHeartbeatOf(await readGatewayRuntimeDoc(db, gateway), gateway);
 }
 export function mergeGatewayConfigWithArtifact(config, artifact) {
     return {

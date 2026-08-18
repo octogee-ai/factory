@@ -16,7 +16,8 @@ import {
 import {
   readGatewayArtifact,
   readGatewayAuthorization,
-  readGatewayRuntimeHeartbeat,
+  gatewayRuntimeHeartbeatOf,
+  readGatewayRuntimeDoc,
   gatewayAuthorizationFromRootDocument,
   type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
@@ -69,6 +70,7 @@ function builderViewOf({
   access,
   imageTag,
   heartbeat,
+  runtime,
   isCurrentAssignment,
 }: {
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>;
@@ -76,6 +78,7 @@ function builderViewOf({
   access: ResolvedGatewayAccess;
   imageTag: string | undefined;
   heartbeat: Record<string, unknown> | null;
+  runtime: unknown;
   isCurrentAssignment: boolean;
 }): BuilderGatewayListEntry {
   const { gateway, config } = authorization;
@@ -92,6 +95,10 @@ function builderViewOf({
     profile: explicitProfile,
   });
   const configStatus = projectOpenClawConfigStatus(heartbeat);
+  const controlUiEnabled = access.dashboard && isGatewayClassControlUiAccessEnabled(
+    gatewayClass,
+    config.builderAccess ?? undefined,
+  );
   return {
     gatewayId: gateway.gatewayId,
     workspaceSlug: scope.workspaceSlug,
@@ -104,10 +111,13 @@ function builderViewOf({
       gatewayClass,
       config.builderAccess ?? undefined,
     ),
-    controlUiEnabled: access.dashboard && isGatewayClassControlUiAccessEnabled(
-      gatewayClass,
-      config.builderAccess ?? undefined,
-    ),
+    controlUiEnabled,
+    controlUiReady: openClawControlReachable({
+      authorization,
+      runtime,
+      controlUiEnabled,
+      isCurrentAssignment,
+    }),
     isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
     via: accessRole(access),
@@ -284,11 +294,12 @@ async function builderGatewayEntry(
   if (!scope) return null;
   const access = await principalAccess(scope, uid, (path) => db.doc(path).get());
   if (access.kind === "denied") return null;
-  const [artifact, heartbeat, ownerAssignment] = await Promise.all([
+  const [artifact, runtime, ownerAssignment] = await Promise.all([
     readGatewayArtifact(db, authorization.gateway.gatewayId, authorization.gateway.liveRelease),
-    readGatewayRuntimeHeartbeat(db, authorization.gateway),
+    readGatewayRuntimeDoc(db, authorization.gateway),
     db.collection("users").doc(scope.ownerUid).get(),
   ]);
+  const heartbeat = gatewayRuntimeHeartbeatOf(runtime, authorization.gateway);
   const isCurrentAssignment = ownerAssignment?.exists === true && userAssignmentMatchesGateway(
     ownerAssignment.data(),
     authorization.gateway.gatewayId,
@@ -302,6 +313,7 @@ async function builderGatewayEntry(
       access,
       imageTag: artifact?.imageTag,
       heartbeat,
+      runtime,
       isCurrentAssignment,
     }),
   };
@@ -398,6 +410,30 @@ function servingRevisionId(
   return gateway.gatewayId;
 }
 
+function openClawControlRuntimeReachable(
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  runtime: unknown,
+): boolean {
+  const revisionId = servingRevisionId(authorization);
+  if (!revisionId) return false;
+  return isOpenClawControlRevisionRuntimeReady(runtime, {
+    gatewayId: authorization.gateway.gatewayId,
+    revisionId,
+  });
+}
+
+/** Every condition `mintOpenClawTicket` would reject on, answered from the list. */
+function openClawControlReachable(input: {
+  authorization: Extract<GatewayAuthorization, { kind: "durable" }>;
+  runtime: unknown;
+  controlUiEnabled: boolean;
+  isCurrentAssignment: boolean;
+}): boolean {
+  return input.controlUiEnabled &&
+    input.isCurrentAssignment &&
+    openClawControlRuntimeReachable(input.authorization, input.runtime);
+}
+
 async function mintOpenClawTicket(
   gatewayId: string,
   workspaceSlug: string,
@@ -441,9 +477,9 @@ async function mintOpenClawTicket(
     const revisionId = servingRevisionId(serving);
     if (!revisionId) return { kind: NOT_READY };
     const revisionSnap = await tx.get(db.doc(`glmGateways/${revisionId}`));
-    if (!isOpenClawControlRevisionRuntimeReady(
+    if (!openClawControlRuntimeReachable(
+      serving,
       revisionSnap.exists ? revisionSnap.data() : undefined,
-      { gatewayId, revisionId },
     )) return { kind: NOT_READY };
     const minted = createOpenClawControlTicket({
       uid,
