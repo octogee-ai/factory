@@ -51,9 +51,36 @@ function createOutcomeReporter(
   };
 }
 
+export interface FleetStateRequest {
+  baseUrl: string;
+  gatewayId: string;
+  privateKey: string;
+  timeoutMs: number;
+  fetchImpl: typeof fetch;
+  newRequestId: () => string;
+}
+
 // Cowboy is the only holder of the fleet controller private key, so this signed
 // read is what separates the trusted fleet authority from any pod that the
-// gateway ingress policy lets reach the controller port.
+// gateway ingress policy lets reach the controller port. Callers address either
+// the gateway Service or one pod, and each keeps its own failure reporting.
+export async function requestFleetState(input: FleetStateRequest): Promise<Response> {
+  const body: FleetStateRequestBody = {
+    requestId: input.newRequestId(),
+    gatewayId: input.gatewayId,
+  };
+  const rawBody = JSON.stringify(body);
+  return input.fetchImpl(`${input.baseUrl}${FLEET_STATE_PATH}/${input.gatewayId}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [SIGNATURE_HEADER]: signFleetRequest(input.privateKey, body.requestId, rawBody),
+    },
+    body: rawBody,
+    signal: AbortSignal.timeout(input.timeoutMs),
+  });
+}
+
 export function createFleetStateFetcher(
   deps: FleetStateFetcherDeps,
 ): (gatewayId: string) => Promise<GatewayFleetState | null> {
@@ -61,23 +88,15 @@ export function createFleetStateFetcher(
   const newRequestId = deps.newRequestId ?? randomUUID;
   const report = createOutcomeReporter(deps.log);
   return async (gatewayId) => {
-    const body: FleetStateRequestBody = { requestId: newRequestId(), gatewayId };
-    const rawBody = JSON.stringify(body);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), deps.timeoutMs);
     try {
-      const res = await fetchImpl(
-        `${deps.resolveBaseUrl(gatewayId)}${FLEET_STATE_PATH}/${gatewayId}`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            [SIGNATURE_HEADER]: signFleetRequest(deps.privateKey, body.requestId, rawBody),
-          },
-          body: rawBody,
-          signal: controller.signal,
-        },
-      );
+      const res = await requestFleetState({
+        baseUrl: deps.resolveBaseUrl(gatewayId),
+        gatewayId,
+        privateKey: deps.privateKey,
+        timeoutMs: deps.timeoutMs,
+        fetchImpl,
+        newRequestId,
+      });
       if (!res.ok) {
         report(
           gatewayId,
@@ -106,8 +125,6 @@ export function createFleetStateFetcher(
           `${error instanceof Error ? error.message : String(error)}`,
       );
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   };
 }

@@ -226,6 +226,9 @@ describe("surge handoff direct pod transport", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
       if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "pod-uid", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
         return new Response(JSON.stringify({
           status: "ready",
           version: url.includes("10.0.0.2") ? "new" : "old",
@@ -253,7 +256,7 @@ describe("surge handoff direct pod transport", () => {
       log: vi.fn(),
     });
 
-    await expect(transport.readPodHealth(target)).resolves.toEqual({
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
       status: "ready",
       version: "new",
       handoffReleased: false,
@@ -284,6 +287,7 @@ describe("surge handoff direct pod transport", () => {
     expect(calls.map((call) => call.url)).toEqual([
       "http://10.0.0.2:3003/health",
       "http://10.0.0.2:3003/surge-ready",
+      `http://10.0.0.2:3003/fleet-state/${GATEWAY_ID}`,
       "http://10.0.0.2:3003/prepare-rsync-import/default",
       "http://10.0.0.1:3003/push-rsync-state/default",
       "http://10.0.0.2:3003/finish-rsync-import/default",
@@ -293,7 +297,7 @@ describe("surge handoff direct pod transport", () => {
       "http://10.0.0.2:3003/unmount/default",
       "http://10.0.0.2:3003/complete-surge-handoff/default",
     ]);
-    expect(calls.slice(2, 8).map((call) => call.body?.rpcPhase)).toEqual([
+    expect(calls.slice(3, 9).map((call) => call.body?.rpcPhase)).toEqual([
       "prepare-rsync-import",
       "push-rsync-state",
       "finish-rsync-import",
@@ -301,37 +305,37 @@ describe("surge handoff direct pod transport", () => {
       "push-rsync-state",
       "finish-rsync-import",
     ]);
-    expect(calls[2]?.body).toMatchObject({
+    expect(calls[3]?.body).toMatchObject({
       slug: "alice",
       mode: "keys",
       sourcePodIp: "10.0.0.1",
       transferKey: "keys-transfer-key",
     });
-    expect(calls[3]?.body).toMatchObject({
+    expect(calls[4]?.body).toMatchObject({
       mode: "keys",
       targetHost: "10.0.0.2",
       targetPort: 30873,
     });
-    expect(calls[5]?.body).toMatchObject({
+    expect(calls[6]?.body).toMatchObject({
       slug: "alice",
       mode: "final",
       sourcePodIp: "10.0.0.1",
       transferKey: "final-transfer-key",
       configTransferMode: "activation-manifest",
     });
-    expect(calls[6]?.body).toMatchObject({
+    expect(calls[7]?.body).toMatchObject({
       mode: "final",
       targetHost: "10.0.0.2",
       targetPort: 30873,
       includeActivationManifest: true,
       configTransferMode: "activation-manifest",
     });
-    expect(calls[7]?.body).toMatchObject({
+    expect(calls[8]?.body).toMatchObject({
       mode: "final",
       loadStrategy: "expedited",
       configTransferMode: "activation-manifest",
     });
-    expect(calls[9]?.body).toEqual({
+    expect(calls[10]?.body).toEqual({
       migrationId: "surge-default-new",
       targetPodUid: "new",
     });
@@ -509,6 +513,9 @@ describe("surge handoff direct pod transport", () => {
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
       if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "pod-uid", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
         return new Response(JSON.stringify({ status: "ready", version: "new", customers: [] }));
       }
       return new Response(JSON.stringify({
@@ -522,7 +529,7 @@ describe("surge handoff direct pod transport", () => {
       log: vi.fn(),
     });
 
-    await expect(transport.readPodHealth(target)).resolves.toEqual({
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
       status: "booting",
       version: "new",
       handoffReleased: true,
@@ -535,6 +542,9 @@ describe("surge handoff direct pod transport", () => {
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
       if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "pod-uid", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
         return new Response(JSON.stringify({ status: "ready", version: "new", customers: [] }));
       }
       return new Response(JSON.stringify({
@@ -549,7 +559,7 @@ describe("surge handoff direct pod transport", () => {
       log: vi.fn(),
     });
 
-    await expect(transport.readPodHealth(target)).resolves.toMatchObject({
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toMatchObject({
       status: "booting",
       prelaunchState: "hydrated",
     });
@@ -619,9 +629,13 @@ describe("surge handoff direct pod transport", () => {
     const log = vi.fn();
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
-      return url.endsWith("/health")
-        ? new Response(JSON.stringify({ status: "ready", version: "new" }))
-        : new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "pod-uid", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
+        return new Response(JSON.stringify({ status: "ready", version: "new" }));
+      }
+      return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
     }) as unknown as typeof globalThis.fetch;
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
@@ -629,7 +643,100 @@ describe("surge handoff direct pod transport", () => {
       log,
     });
 
-    await expect(transport.readPodHealth(target)).resolves.toBeNull();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("invalid surge health response"));
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toBeNull();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("invalid fleet state response"));
+  });
+
+  it("reads the roster and image tag from the signed fleet state, not the slim /health probe", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({
+        url,
+        body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined,
+      });
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "new", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
+        return new Response(JSON.stringify({
+          status: "ready",
+          version: "new",
+          customers: ["alice", "alice", "bob"],
+        }));
+      }
+      return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
+      status: "ready",
+      version: "new",
+      handoffReleased: false,
+      prelaunchState: "none",
+      mountedCustomers: ["alice", "bob"],
+    });
+    const fleetStateCall = calls.find((call) => call.url.includes("/fleet-state/"));
+    expect(fleetStateCall?.url).toBe(`http://10.0.0.2:3003/fleet-state/${GATEWAY_ID}`);
+    expect(fleetStateCall?.body).toMatchObject({ gatewayId: GATEWAY_ID });
+  });
+
+  it("falls back to the roster a pod predating the signed route still serves on /health", async () => {
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      if (url.includes("/fleet-state/")) {
+        return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+      }
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({
+          status: "ready",
+          gatewayId: GATEWAY_ID,
+          version: "old",
+          customers: ["alice"],
+        }));
+      }
+      return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log: vi.fn(),
+    });
+
+    await expect(transport.readPodHealth(source, GATEWAY_ID)).resolves.toEqual({
+      status: "ready",
+      version: "old",
+      handoffReleased: false,
+      prelaunchState: "none",
+      mountedCustomers: ["alice"],
+    });
+  });
+
+  it("names an unsigned-read rejection so a fleet key skew is not read as an absent pod", async () => {
+    const log = vi.fn();
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ready", podUid: "new", startedAt: 1 }));
+      }
+      if (url.includes("/fleet-state/")) {
+        return new Response(JSON.stringify({ error: "invalid signature" }), { status: 401 });
+      }
+      return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      log,
+    });
+
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toBeNull();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("does not match Cowboy's signing key"),
+    );
   });
 });

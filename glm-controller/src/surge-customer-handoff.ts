@@ -76,7 +76,7 @@ const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
 export interface SurgeCustomerHandoffDeps {
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
-  readPodHealth: (pod: SurgePod) => Promise<SurgePodHealth | null>;
+  readPodHealth: (pod: SurgePod, gatewayId: string) => Promise<SurgePodHealth | null>;
   readAssignments: (gatewayId: string) => Promise<SurgeAssignment[]>;
   markAssignment: (input: {
     gatewayId: string;
@@ -602,7 +602,7 @@ async function releaseTargetWithConfirmation(
   try {
     await deps.releaseTarget(input);
   } catch (error) {
-    const health = await deps.readPodHealth(input.pod);
+    const health = await deps.readPodHealth(input.pod, input.gatewayId);
     if (health?.handoffReleased) {
       deps.log(
         `[surge-handoff] confirmed target release after response failure ` +
@@ -741,8 +741,8 @@ async function migrateAssignedState(
 ): Promise<void> {
   const { input, assignments, sourcePod, targetPod, ownedBy, heldSourceSlugs } = context;
   const [sourceHealth, targetHealth] = await Promise.all([
-    deps.readPodHealth(sourcePod),
-    deps.readPodHealth(targetPod),
+    deps.readPodHealth(sourcePod, input.gatewayId),
+    deps.readPodHealth(targetPod, input.gatewayId),
   ]);
   if (!sourceHealth) {
     throw new Error(`source health unavailable before handoff on ${input.gatewayId}`);
@@ -832,8 +832,9 @@ async function resumeHeldSources(
 async function sourceStillHeld(
   deps: SurgeCustomerHandoffDeps,
   sourcePod: SurgePod,
+  gatewayId: string,
 ): Promise<boolean> {
-  const health = await deps.readPodHealth(sourcePod);
+  const health = await deps.readPodHealth(sourcePod, gatewayId);
   return health === null || health.prelaunchState === "held";
 }
 
@@ -866,7 +867,7 @@ async function rollBackConfiguredBuilderHandoff(
       );
     }
   }
-  if (heldSourceSlugs.length > 0 && await sourceStillHeld(deps, sourcePod)) {
+  if (heldSourceSlugs.length > 0 && await sourceStillHeld(deps, sourcePod, input.gatewayId)) {
     try {
       await resumeHeldSources(deps, {
         gatewayId: input.gatewayId,
@@ -1120,7 +1121,7 @@ export async function reconcileSurgeCustomerHandoff(
   const { pods, observedPodUids } = await deps.listPods(input.gatewayId);
   const healthEntries = await Promise.all(pods.map(async (pod) => [
     pod.uid,
-    await deps.readPodHealth(pod),
+    await deps.readPodHealth(pod, input.gatewayId),
   ] as const));
   const healthByUid = new Map(
     healthEntries.filter((entry): entry is readonly [string, SurgePodHealth] => entry[1] !== null),

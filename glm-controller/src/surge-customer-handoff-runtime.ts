@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   type FlushGatewayResponse,
   type MigrationConfigTransferMode,
@@ -8,6 +8,8 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import { isValidUsername } from "@octogee/shared/types/identity";
+import { describeFleetStateRejection, requestFleetState } from "./fleet-state-client.js";
+import { parseFleetStateResponse, type GatewayFleetState } from "./gateway-heartbeat-poller.js";
 import {
   SurgeOpenClawProcessEndpointMissingError,
   type SurgeCustomerHandoffDeps,
@@ -169,6 +171,8 @@ export async function readPodDurableSessionDigest(
   return parseSessionDigest(parsed, `pod=${pod.name} slug=${slug}`);
 }
 
+const FLEET_STATE_READ_TIMEOUT_MS = 5_000;
+
 function podBaseUrl(pod: SurgePod): string {
   const host = pod.podIP.includes(":") ? `[${pod.podIP}]` : pod.podIP;
   return `http://${host}:3003`;
@@ -220,6 +224,40 @@ async function postSigned(
     },
   );
   return responseJson(response, `${opts.path} pod=${opts.pod.name}`);
+}
+
+// The roster and the image tag left the unauthenticated /health probe, so the
+// handoff reads them the same signed way the heartbeat poller does — addressed at
+// one pod, because a surge has two pods answering for one gatewayId. A 404 is the
+// one answer that is not a fault: it names a pod predating the split, which still
+// carries the roster on /health and is what readPodHealth falls back to. Any other
+// rejection is a real fault and must not read as absence.
+async function readPodFleetState(
+  opts: {
+    fetch: typeof globalThis.fetch;
+    privateKey: string;
+    pod: SurgePod;
+    gatewayId: string;
+  },
+): Promise<GatewayFleetState | null> {
+  const response = await requestFleetState({
+    baseUrl: podBaseUrl(opts.pod),
+    gatewayId: opts.gatewayId,
+    privateKey: opts.privateKey,
+    timeoutMs: FLEET_STATE_READ_TIMEOUT_MS,
+    fetchImpl: opts.fetch,
+    newRequestId: randomUUID,
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(
+      `fleet state pod=${opts.pod.name}: ${response.status} — ` +
+      describeFleetStateRejection(response.status),
+    );
+  }
+  const state = parseFleetStateResponse(await response.json());
+  if (!state) throw new Error(`invalid fleet state response from pod=${opts.pod.name}`);
+  return state;
 }
 
 export interface SurgePodTransportOptions {
@@ -420,20 +458,23 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
   };
 
   return {
-    async readPodHealth(pod): Promise<SurgePodHealth | null> {
+    async readPodHealth(pod, gatewayId): Promise<SurgePodHealth | null> {
       try {
-        const [healthResponse, readyResponse] = await Promise.all([
+        const [healthResponse, readyResponse, signedState] = await Promise.all([
           fetchImpl(`${podBaseUrl(pod)}/health`, { signal: AbortSignal.timeout(5_000) }),
           fetchImpl(`${podBaseUrl(pod)}/surge-ready`, { signal: AbortSignal.timeout(5_000) }),
+          readPodFleetState({ fetch: fetchImpl, privateKey: opts.privateKey, pod, gatewayId }),
         ]);
         const health = await responseJson(healthResponse, `health pod=${pod.name}`);
         const ready = await readyResponse.json() as Record<string, unknown>;
         const prelaunchState = parsePrelaunchState(ready.prelaunchState);
+        // The pods this roll retires predate the signed route, and a Builder's
+        // state only survives the handoff — so their /health roster is still read.
+        // Delete this fallback once no pod answers 404 above.
+        const state = signedState ?? parseFleetStateResponse(health);
         if (
           (health.status !== "booting" && health.status !== "ready") ||
-          typeof health.version !== "string" ||
-          !Array.isArray(health.customers) ||
-          !health.customers.every((slug) => typeof slug === "string") ||
+          typeof state?.version !== "string" ||
           typeof ready.handoffReleased !== "boolean" ||
           typeof ready.openclawUp !== "boolean" ||
           prelaunchState === null
@@ -442,10 +483,10 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         }
         return {
           status: ready.openclawUp ? "ready" : "booting",
-          version: health.version,
+          version: state.version,
           handoffReleased: ready.handoffReleased,
           prelaunchState,
-          mountedCustomers: [...new Set(health.customers as string[])],
+          mountedCustomers: [...new Set(state.customers)],
         };
       } catch (error) {
         opts.log(
