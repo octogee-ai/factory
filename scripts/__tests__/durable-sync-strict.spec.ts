@@ -24,6 +24,7 @@ vi.mock("../lib/config.js", () => ({
 
 const {
   externalizeCustomerGitDir,
+  reconcileImportedWorkspace,
   retryAllCustomerRepositoryPushes,
   syncAllCustomerRepositories,
   syncAllWorkspaces,
@@ -71,7 +72,10 @@ describe("strict durable sync", () => {
   function initPushableRepo(repo: string, remote: string): void {
     fs.mkdirSync(repo, { recursive: true });
     fs.mkdirSync(remote, { recursive: true });
-    execFileSync("git", ["init", "-q", "--bare"], { cwd: remote });
+    // -b main: a bare repo without it inherits the host's default initial branch,
+    // so on a runner that still defaults to master a clone of this remote lands on
+    // an unborn master and can never push main.
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: repo });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
@@ -259,5 +263,216 @@ describe("strict durable sync", () => {
         upload: vi.fn(async () => { throw new Error("storage unavailable"); }),
       }),
     })).rejects.toThrow(/alice.*storage unavailable/i);
+  });
+});
+
+describe("workspace divergence", () => {
+  const testGitExec = (cwd: string, argv: string[]): string | null => {
+    try {
+      return execFileSync("git", argv, { cwd, encoding: "utf8" }).trim();
+    } catch {
+      return null;
+    }
+  };
+  const prepareTestRepository = (repoDir: string): void => {
+    const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+    const gitDir = externalizeCustomerGitDir(repoDir, {
+      fetchCanonical: (_worktree, freshGitDir) => {
+        if (!fs.existsSync(remote)) return;
+        execFileSync("git", [
+          "--git-dir", freshGitDir,
+          "fetch", remote,
+          "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+      },
+    });
+    if (!gitDir) throw new Error(`missing customer identity for ${repoDir}`);
+    execFileSync("git", ["config", "--file", path.join(gitDir, "config"), "remote.origin.url", remote]);
+  };
+
+  function initWorkspaceWithRemote(slug: string): { workspace: string; remote: string } {
+    const workspace = path.join(paths.customers, slug);
+    const remote = path.join(paths.root, "remotes", `${slug}.git`);
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(remote, { recursive: true });
+    // -b main: a bare repo without it inherits the host's default initial branch,
+    // so on a runner that still defaults to master a clone of this remote lands on
+    // an unborn master and can never push main.
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: remote });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: workspace });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: workspace });
+    fs.writeFileSync(path.join(workspace, "README.md"), "shared base\n");
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "shared base"], { cwd: workspace });
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: workspace });
+    prepareTestRepository(workspace);
+    return { workspace, remote };
+  }
+
+  function commitLocally(repo: string, file: string, body: string): void {
+    fs.writeFileSync(path.join(repo, file), body);
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "-m", `auto: ${file}`], { cwd: repo });
+  }
+
+  // A second pod pushing the same workspace is what forks it — the remote gains a
+  // commit this worktree will never contain.
+  function advanceRemoteFromASibling(slug: string, remote: string): void {
+    const sibling = path.join(paths.root, `sibling-${slug}`);
+    execFileSync("git", ["clone", "-q", remote, sibling]);
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: sibling });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: sibling });
+    commitLocally(sibling, "SIBLING.md", "written by the other pod\n");
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: sibling });
+  }
+
+  it("withholds the push from a diverged workspace instead of retrying a rejected one", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "written here\n");
+    advanceRemoteFromASibling("alice", remote);
+    const localHead = testGitExec(workspace, ["rev-parse", "HEAD"]);
+    const remoteHead = testGitExec(remote, ["rev-parse", "main"]);
+    const attempted: string[][] = [];
+    const recordingGitExec = (cwd: string, argv: string[]): string | null => {
+      if (argv[0] === "push") attempted.push(argv);
+      return testGitExec(cwd, argv);
+    };
+
+    const report = await retryAllCustomerRepositoryPushes({
+      gitExec: recordingGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(attempted).toEqual([]);
+    expect(report.diverged).toEqual(["alice"]);
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"])).toBe(localHead);
+    expect(testGitExec(remote, ["rev-parse", "main"])).toBe(remoteHead);
+  });
+
+  it("does not push a workspace that is only behind the remote", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+    const attempted: string[][] = [];
+    const recordingGitExec = (cwd: string, argv: string[]): string | null => {
+      if (argv[0] === "push") attempted.push(argv);
+      return testGitExec(cwd, argv);
+    };
+
+    const report = await retryAllCustomerRepositoryPushes({
+      gitExec: recordingGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(attempted).toEqual([]);
+    expect(report.diverged).toEqual([]);
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .not.toBe(testGitExec(remote, ["rev-parse", "main"]));
+  });
+
+  it("still pushes a workspace holding commits the remote does not have", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "written here\n");
+
+    const report = await retryAllCustomerRepositoryPushes({
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(report.diverged).toEqual([]);
+    expect(testGitExec(remote, ["rev-parse", "main"]))
+      .toBe(testGitExec(workspace, ["rev-parse", "HEAD"]));
+  });
+
+  it("fails a strict flush on divergence rather than reporting a durable checkpoint", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "written here\n");
+    advanceRemoteFromASibling("alice", remote);
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice.*diverged/iu);
+    expect(workspace).toBeTruthy();
+  });
+
+  it("resets a diverged imported workspace onto the remote it must push to next", () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "stale import checkpoint\n");
+    advanceRemoteFromASibling("alice", remote);
+
+    const state = reconcileImportedWorkspace("alice", {
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(state).toBe("diverged");
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .toBe(testGitExec(remote, ["rev-parse", "main"]));
+    expect(fs.existsSync(path.join(workspace, "SIBLING.md"))).toBe(true);
+    expect(fs.existsSync(path.join(workspace, "LOCAL.md"))).toBe(false);
+  });
+
+  it("fast-forwards an imported workspace that is merely behind", () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+
+    const state = reconcileImportedWorkspace("alice", {
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(state).toBe("behind");
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .toBe(testGitExec(remote, ["rev-parse", "main"]));
+  });
+
+  it("leaves an imported workspace holding unpushed commits alone", () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "not yet pushed\n");
+    const localHead = testGitExec(workspace, ["rev-parse", "HEAD"]);
+
+    const state = reconcileImportedWorkspace("alice", {
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(state).toBe("ahead");
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"])).toBe(localHead);
+    expect(testGitExec(remote, ["rev-parse", "main"])).not.toBe(localHead);
+  });
+
+  it("never resets a project repository, only the workspace", () => {
+    const { workspace } = initWorkspaceWithRemote("alice");
+    fs.writeFileSync(path.join(workspace, ".gitignore"), "projects/\n");
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-q", "-m", "ignore projects"], { cwd: workspace });
+    const project = path.join(workspace, "projects", "launch");
+    const projectRemote = path.join(paths.root, "remotes", "launch.git");
+    fs.mkdirSync(project, { recursive: true });
+    fs.mkdirSync(projectRemote, { recursive: true });
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: projectRemote });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: project });
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: project });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: project });
+    execFileSync("git", ["remote", "add", "origin", projectRemote], { cwd: project });
+    commitLocally(project, "README.md", "real project history\n");
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: project });
+    advanceRemoteFromASibling("launch", projectRemote);
+    commitLocally(project, "WIP.md", "diverging project work\n");
+    const projectHead = testGitExec(project, ["rev-parse", "HEAD"]);
+
+    reconcileImportedWorkspace("alice", {
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(testGitExec(project, ["rev-parse", "HEAD"])).toBe(projectHead);
+    expect(fs.existsSync(path.join(project, "WIP.md"))).toBe(true);
   });
 });

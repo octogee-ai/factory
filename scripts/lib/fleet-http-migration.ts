@@ -76,6 +76,7 @@ import {
   readSystemConfigWatchFenceGeneration,
 } from "./system-config-watch-state.js";
 import { OPENCLAW_DIR } from "./config.js";
+import { reconcileImportedWorkspace } from "./git.js";
 import { openClawConfigPath } from "./openclaw-config-path.js";
 import {
   assertConfiguredBuilderPortableStatePlanOnDisk,
@@ -123,6 +124,7 @@ resumeSystemConfigWatch?: (
   slug: string,
   expectedGeneration?: string | null,
 ) => Promise<boolean | void>;
+reconcileImportedWorkspace?: (slug: string) => void;
 }
 
 async function pauseSystemConfigWatchForBuilder(
@@ -1771,6 +1773,9 @@ async function activateFinishedRsyncImport(input: {
 }): Promise<string | undefined> {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
+  // Before anything can serve from the imported tree: the snapshot predates the
+  // source's own last push, and only here is no Agent holding the worktree.
+  (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
     const verificationPending = await activateImportedCustomerForMigration({
       deps,

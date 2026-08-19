@@ -2,7 +2,7 @@ export interface GatewayPreStopFlushDeps {
   gatewayId: string;
   gatewayClass: string;
   quiesceSessions?: () => Promise<void>;
-  syncWorkspaces: () => Promise<void>;
+  syncWorkspaces: () => Promise<unknown>;
   syncBlobs?: () => Promise<void>;
   syncSystemConfig?: () => Promise<void | { acceptedCommit: string }>;
   releaseGiteaKey?: () => Promise<void>;

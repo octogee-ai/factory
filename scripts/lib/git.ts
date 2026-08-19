@@ -1614,24 +1614,57 @@ function commitLocalChanges(
   return committed;
 }
 
-function rebaseFromOriginIfPresent(
-  coachDir: string,
+export type WorkspaceRemoteState =
+  | "no-remote-branch"
+  | "in-sync"
+  | "ahead"
+  | "behind"
+  | "diverged"
+  | "unknown";
+
+// "The remote head differs from ours" is three different situations and only one
+// of them is pushable. Reading them as one made a stale worktree fire a rejected
+// push every sync tick forever, so ancestry decides: only commits the remote does
+// not already contain are ours to push.
+function classifyRemoteState(
+  repoDir: string,
   keyArg: string | undefined,
   runGit: GitRunner,
   githubToken?: string | null,
-): void {
-  const remoteMain = runGit(
-    coachDir,
-    ["ls-remote", "--heads", "origin", "main"],
-    keyArg,
-    githubToken,
+): WorkspaceRemoteState {
+  const localHead = runGit(repoDir, ["rev-parse", "HEAD"]);
+  if (!localHead) return "unknown";
+  const remoteMain = runGit(repoDir, ["ls-remote", "--heads", "origin", "main"], keyArg, githubToken);
+  if (remoteMain === null) return "unknown";
+  if (remoteMain === "") return "no-remote-branch";
+  if (remoteMain.split(/\s+/u)[0] === localHead) return "in-sync";
+  if (runGit(repoDir, ["fetch", "origin", "main"], keyArg, githubToken) === null) return "unknown";
+  const counts = runGit(repoDir, ["rev-list", "--left-right", "--count", "HEAD...FETCH_HEAD"]);
+  const [ahead, behind] = (counts ?? "").split(/\s+/u).map((value) => Number.parseInt(value, 10));
+  if (!Number.isInteger(ahead) || !Number.isInteger(behind)) return "unknown";
+  if (ahead > 0 && behind > 0) return "diverged";
+  if (ahead > 0) return "ahead";
+  return behind > 0 ? "behind" : "in-sync";
+}
+
+// A diverged worktree cannot be repaired from here: reconciling it means writing
+// to a tree a customer's Agent owns, which this process refuses outside an import.
+// Reporting once per remote head keeps a permanent condition from reading as fresh
+// news every tick; the label also travels out on the sync report.
+const reportedDivergence = new Map<string, string>();
+
+function reportDivergedWorkspace(repoDir: string, label: string, runGit: GitRunner): void {
+  const remoteHead = runGit(repoDir, ["rev-parse", "FETCH_HEAD"]) ?? "unknown";
+  if (reportedDivergence.get(repoDir) === remoteHead) return;
+  reportedDivergence.set(repoDir, remoteHead);
+  log(
+    `⚠ [git-sync] ${label}: local history diverged from origin/main — ` +
+    `withholding push, no automatic checkout of a worktree the Agent owns`,
   );
-  if (!remoteMain) return;
-  const localHead = runGit(coachDir, ["rev-parse", "HEAD"]);
-  const remoteHead = remoteMain.split(/\s+/u)[0];
-  if (localHead && remoteHead !== localHead) {
-    log(`⚠ [git-sync] remote main changed; refusing automatic checkout/rebase of an untrusted worktree`);
-  }
+}
+
+function clearDivergenceReport(repoDir: string): void {
+  reportedDivergence.delete(repoDir);
 }
 
 function pushAndLog(
@@ -1649,19 +1682,6 @@ function pushAndLog(
     log(`⚠ [git-sync] ${label}: push failed`);
     return false;
   }
-}
-
-function hasUnpushedLocalCommit(
-  repoDir: string,
-  keyArg: string | undefined,
-  runGit: GitRunner,
-  githubToken?: string | null,
-): boolean {
-  const localHead = runGit(repoDir, ["rev-parse", "HEAD"]);
-  if (!localHead) return false;
-  const remoteMain = runGit(repoDir, ["ls-remote", "--heads", "origin", "main"], keyArg, githubToken);
-  if (remoteMain === null || remoteMain === "") return true;
-  return remoteMain.split(/\s+/u)[0] !== localHead;
 }
 
 interface WorkspaceSyncLease {
@@ -1725,6 +1745,18 @@ function requirePushedInStrictSync(target: RepositorySyncTarget, strict: boolean
   if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
 }
 
+// Behind or in sync means the remote already holds everything local has, so a
+// push carries nothing; a strict flush pushes regardless, because that is what
+// proves the checkpoint durable.
+function pushCarriesSomething(
+  committed: boolean,
+  strict: boolean,
+  state: WorkspaceRemoteState,
+): boolean {
+  return committed || strict ||
+    state === "ahead" || state === "no-remote-branch" || state === "unknown";
+}
+
 // eslint-disable-next-line max-params -- sync policy and injected mutation controls are intentionally explicit
 function syncOneRepository(
   slug: string,
@@ -1735,11 +1767,12 @@ function syncOneRepository(
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
   githubToken?: string | null,
-): void {
+): WorkspaceRemoteState | null {
   if (!repositoryMetadataExists(target.dir)) {
     if (strict) throw new Error(`${target.label}: git metadata is missing`);
-    return;
+    return null;
   }
+  let observed: WorkspaceRemoteState | null = null;
   runWorkspaceSyncMutation(target.dir, target.label, () => {
     const identity = customerGitIdentity(target.dir);
     const source = identity ? trustedCustomerGitSource(identity) : null;
@@ -1769,13 +1802,84 @@ function syncOneRepository(
     const committed = commitPendingChanges
       ? commitLocalChanges(target.dir, target.label, strict, runGit)
       : false;
-    rebaseFromOriginIfPresent(target.dir, keyArg, runGit, githubToken);
+    const remoteState = classifyRemoteState(target.dir, keyArg, runGit, githubToken);
+    observed = remoteState;
+    if (remoteState === "diverged") {
+      reportDivergedWorkspace(target.dir, target.label, runGit);
+      if (strict) throw new Error(`${target.label}: local history diverged from origin/main`);
+      return;
+    }
+    clearDivergenceReport(target.dir);
 
-    if (committed || strict || hasUnpushedLocalCommit(target.dir, keyArg, runGit, githubToken)) {
+    if (pushCarriesSomething(committed, strict, remoteState)) {
       const pushed = pushAndLog(target.dir, target.label, keyArg, runGit, githubToken);
       requirePushedInStrictSync(target, strict, pushed);
     }
   }, { strict, acquire });
+  return observed;
+}
+
+// A freshly imported workspace carries the snapshot the source took before the
+// source's own last push, so it can land behind — or forked from — the remote it
+// must push to next, and the sync above can never repair that from a live pod.
+// This is the one moment repairing is safe: the import has landed, OpenClaw is
+// still held, no Agent owns the tree, and the mutation lease is ours.
+//
+// Only the workspace repo is reconciled. Its history is machine-written
+// checkpoints of a tree we already hold; a project repo is real customer history
+// — and may be backed by the customer's own GitHub — so it is never reset.
+export function reconcileImportedWorkspace(
+  slug: string,
+  opts: {
+    gitExec?: GitRunner;
+    prepareRepository?: typeof setRepoSshCommand;
+    acquireWorkspaceMutationLease?: WorkspaceSyncLeaseFactory;
+  } = {},
+): WorkspaceRemoteState | null {
+  const target = workspaceSyncTarget(slug);
+  if (!repositoryMetadataExists(target.dir)) return null;
+  const identity = customerGitIdentity(target.dir);
+  if (identity && trustedCustomerGitSource(identity)?.kind === "github") {
+    dlog(`[git-sync] ${target.label}: GitHub-backed workspace — import reconcile skipped`);
+    return null;
+  }
+  const runGit = opts.gitExec ?? gitExec;
+  let observed: WorkspaceRemoteState | null = null;
+  runWorkspaceSyncMutation(target.dir, target.label, () => {
+    (opts.prepareRepository ?? setRepoSshCommand)(target.dir, slug, {});
+    if (getOriginRemoteSilent(target.dir, runGit) === null) return;
+    const sshKey = customerSshKeyPath(slug);
+    const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
+    const state = classifyRemoteState(target.dir, keyArg, runGit, undefined);
+    observed = state;
+    if (state === "behind") advanceImportedWorkspace(target, runGit);
+    else if (state === "diverged") resetImportedWorkspace(target, runGit);
+    if (state === "behind" || state === "diverged") clearDivergenceReport(target.dir);
+  }, { acquire: opts.acquireWorkspaceMutationLease });
+  return observed;
+}
+
+// Fast-forward only: nothing local is discarded, and git refuses rather than
+// overwrite a tree the import left dirty.
+function advanceImportedWorkspace(target: RepositorySyncTarget, runGit: GitRunner): void {
+  if (runGit(target.dir, ["merge", "--ff-only", "FETCH_HEAD"]) === null) {
+    log(`⚠ [git-sync] ${target.label}: import reconcile could not fast-forward to origin/main`);
+    return;
+  }
+  log(`[git-sync] ${target.label}: import reconcile fast-forwarded to origin/main`);
+}
+
+function resetImportedWorkspace(target: RepositorySyncTarget, runGit: GitRunner): void {
+  const discarded = (runGit(target.dir, ["log", "--oneline", "FETCH_HEAD..HEAD"]) ?? "")
+    .split("\n").filter(Boolean);
+  if (runGit(target.dir, ["reset", "--hard", "FETCH_HEAD"]) === null) {
+    log(`⚠ [git-sync] ${target.label}: import reconcile could not reset onto origin/main`);
+    return;
+  }
+  log(
+    `[git-sync] ${target.label}: import reconcile reset onto origin/main, discarding ` +
+    `${discarded.length} local checkpoint(s): ${discarded.join("; ")}`,
+  );
 }
 
 function workspaceSyncTarget(slug: string): RepositorySyncTarget {
@@ -1807,8 +1911,9 @@ async function syncRepositoryTargets(
   prepareRepository: typeof setRepoSshCommand,
   acquire: WorkspaceSyncLeaseFactory | undefined,
   resolveGithubToken: ((slug: string) => Promise<string | null>) | undefined,
-): Promise<void> {
+): Promise<WorkspaceSyncReport> {
   const failures: string[] = [];
+  const diverged: string[] = [];
   const githubTargets = new Set(targets.filter((target) => {
     const identity = customerGitIdentity(target.dir);
     return identity ? trustedCustomerGitSource(identity)?.kind === "github" : false;
@@ -1830,7 +1935,7 @@ async function syncRepositoryTargets(
         const detail = githubTokenError ? `: ${githubTokenError}` : "";
         throw new Error(`${target.label}: GitHub credential unavailable${detail}`);
       }
-      syncOneRepository(
+      const state = syncOneRepository(
         slug,
         target,
         strict,
@@ -1840,6 +1945,7 @@ async function syncRepositoryTargets(
         acquire,
         needsGithubToken ? githubToken : undefined,
       );
+      if (state === "diverged") diverged.push(target.label);
     } catch (err) {
       const failure = errMessage(err);
       log(`⚠ [git-sync] ${failure}`);
@@ -1849,6 +1955,13 @@ async function syncRepositoryTargets(
   if (strict && failures.length > 0) {
     throw new Error(`[git-sync] durable flush failed: ${failures.join("; ")}`);
   }
+  return { diverged };
+}
+
+// Divergence is the one outcome a caller must act on: the sync cannot clear it,
+// so it travels out to whoever can report it off-pod.
+export interface WorkspaceSyncReport {
+  diverged: string[];
 }
 
 export interface SyncCustomerRepositoriesOptions {
@@ -1863,8 +1976,8 @@ export interface SyncCustomerRepositoriesOptions {
 export async function syncCustomerRepositoriesForSlug(
   slug: string,
   opts: SyncCustomerRepositoriesOptions = {},
-): Promise<void> {
-  await syncRepositoryTargets(
+): Promise<WorkspaceSyncReport> {
+  return syncRepositoryTargets(
     slug,
     [workspaceSyncTarget(slug), ...projectSyncTargets(slug)],
     opts.strict === true,
@@ -1878,17 +1991,18 @@ export async function syncCustomerRepositoriesForSlug(
 
 export async function retryAllCustomerRepositoryPushes(
   opts: Omit<SyncCustomerRepositoriesOptions, "recoverUnpushedOnly"> = {},
-): Promise<void> {
-  await syncAllCustomerRepositories({ ...opts, recoverUnpushedOnly: true });
+): Promise<WorkspaceSyncReport> {
+  return syncAllCustomerRepositories({ ...opts, recoverUnpushedOnly: true });
 }
 
 export async function syncAllCustomerRepositories(
   opts: SyncCustomerRepositoriesOptions = {},
-): Promise<void> {
+): Promise<WorkspaceSyncReport> {
   const failures: string[] = [];
+  const diverged: string[] = [];
   for (const slug of listOnDiskCustomerSlugs()) {
     try {
-      await syncCustomerRepositoriesForSlug(slug, opts);
+      diverged.push(...(await syncCustomerRepositoriesForSlug(slug, opts)).diverged);
     } catch (err) {
       failures.push(errMessage(err));
     }
@@ -1896,6 +2010,7 @@ export async function syncAllCustomerRepositories(
   if (opts.strict && failures.length > 0) {
     throw new Error(`[git-sync] durable flush failed: ${failures.join("; ")}`);
   }
+  return { diverged };
 }
 
 // Workspace auto-sync is pure SSH/git on the per-customer key — no admin token.

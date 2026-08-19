@@ -247,13 +247,15 @@ describe("workspace autosync remote migration", () => {
 
     expect(resolveGithubToken).toHaveBeenCalledOnce();
     expect(resolveGithubToken).toHaveBeenCalledWith(SLUG);
+    const networkCommands = ["ls-remote", "fetch", "push"];
     const calls = runGit.mock.calls;
-    expect(calls.filter(([, args]) => ["ls-remote", "push"].includes(args[0]!)))
+    expect(calls.filter(([, args]) => networkCommands.includes(args[0]!)))
       .toEqual(expect.arrayContaining([
         expect.arrayContaining([project, expect.arrayContaining(["ls-remote"]), undefined, MATERIALIZED_TOKEN]),
+        expect.arrayContaining([project, expect.arrayContaining(["fetch"]), undefined, MATERIALIZED_TOKEN]),
         expect.arrayContaining([project, expect.arrayContaining(["push"]), undefined, MATERIALIZED_TOKEN]),
       ]));
-    expect(calls.filter(([, args]) => !["ls-remote", "push"].includes(args[0]!)))
+    expect(calls.filter(([, args]) => !networkCommands.includes(args[0]!)))
       .toEqual(expect.not.arrayContaining([
         expect.arrayContaining([expect.anything(), expect.anything(), expect.anything(), MATERIALIZED_TOKEN]),
       ]));
