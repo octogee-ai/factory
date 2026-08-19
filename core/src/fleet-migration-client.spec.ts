@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { signFleetRequest } from "./fleet-signature";
+import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys";
 import {
   CONFIG_PATCH_DEADLINE_MS,
@@ -143,7 +143,11 @@ describe("MigrationClient.quiesce", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://fleet-test.example.com/quiesce/gw-source");
     expect(calls[0].method).toBe("POST");
-    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(
+      PRIVATE_KEY,
+      gatewayScopedJobId("m1", "gw-source"),
+      calls[0].body!,
+    );
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice", timeoutMs: 30_000 });
@@ -314,7 +318,7 @@ describe("MigrationClient.flushGateway", () => {
       expectedSystemConfigCommit: acceptedCommit,
     });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()])
-      .toBe(signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!));
+      .toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "target"), calls[0].body!));
   });
 });
 
@@ -336,7 +340,7 @@ describe("MigrationClient.unmount", () => {
     expect(calls[0].url).toBe("https://fleet.example.com/unmount/gw-source");
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice" });
-    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-source"), calls[0].body!);
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
   });
 
@@ -392,7 +396,7 @@ describe("MigrationClient.restoreTarget", () => {
       snapshot: { uid: "uid-alice", slug: "alice", coachToken: "coach-token" },
     });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
-      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
+      signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-green"), calls[0].body!),
     );
   });
 });
@@ -427,9 +431,17 @@ describe("MigrationClient.transferState", () => {
       slug: "alice",
       targetGatewayId: "gw-to",
       targetUrl: "https://fleet-to.example.com",
-      targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
+      targetImportSignature: signFleetRequest(
+        PRIVATE_KEY,
+        gatewayScopedJobId("m1", "gw-to"),
+        "alice",
+      ),
     });
-    const expectedSig = signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!);
+    const expectedSig = signFleetRequest(
+      PRIVATE_KEY,
+      gatewayScopedJobId("m1", "gw-from"),
+      calls[0].body!,
+    );
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
     expect(res.imported).toBe(true);
   });
@@ -462,10 +474,14 @@ describe("MigrationClient.transferState", () => {
       mode: "final",
       includeActivationManifest: true,
       projectCheckoutScope: "workspace-only",
-      targetImportSignature: signFleetRequest(PRIVATE_KEY, "m1", "alice"),
+      targetImportSignature: signFleetRequest(
+        PRIVATE_KEY,
+        gatewayScopedJobId("m1", "gw-to"),
+        "alice",
+      ),
     });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
-      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
+      signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-from"), calls[0].body!),
     );
   });
 
@@ -548,7 +564,7 @@ describe("MigrationClient.verifyTarget", () => {
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice", timeoutMs: 7_000 });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
-      signFleetRequest(PRIVATE_KEY, "m1", calls[0].body!),
+      signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-green"), calls[0].body!),
     );
   });
 

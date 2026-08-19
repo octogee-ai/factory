@@ -3,29 +3,26 @@
  *
  * Gateway pods hold NO platform Firestore credentials. The pod cannot read the
  * assigned roster directly or write its own heartbeat. Instead, Cowboy (the
- * trusted fleet authority) polls each gateway's `/health` for its locally-present
- * coach-wired customers, and does the trusted-side roster work:
+ * trusted fleet authority) polls each gateway's signed `/fleet-state` for its
+ * locally-present coach-wired customers, and does the trusted-side roster work:
  *  - reporting: writes gateways/{id}.mountedCustomers = present ∩ assigned;
  *  - eviction: tears down a departed customer's LOCAL footprint (present − assigned)
  *    by calling the pod's existing /unmount RPC — a local-only teardown that needs
  *    no platform credentials. Debounced by a consecutive-streak so a transient
  *    assigned-state blip never blind-evicts.
  *
+ * The roster is signature-gated because the unauthenticated `/health` probe on the
+ * same port is reachable by every pod the fleet ingress policy admits.
+ *
  * Identity fields (version/startedAt/internalUrl, status=ready) stay owned by the
  * reconcile path (publishPlatformGatewayReady). This poller owns the live telemetry
  * — status, the honest mounted set, lastHeartbeatAt — and a successful poll IS the
- * liveness signal (it only writes when /health responds).
+ * liveness signal (it only writes when /fleet-state responds).
 */
-
-import {
-  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
-  OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
-  type GatewayConfigStatus,
-} from "@octogee/shared/types/fleet-controller";
 
 export const EVICT_AFTER_STREAK = 2;
 
-export interface GatewayHealth {
+export interface GatewayFleetState {
   status: string;
   version?: string;
   openclawVersion?: string;
@@ -37,7 +34,6 @@ export interface GatewayHealth {
   /** Slugs mid-migration-import (coach-wired here but cutover hasn't moved their assignment
    *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
   migratingIn?: string[];
-  configStatus?: GatewayConfigStatus;
 }
 
 export interface GatewayHeartbeatRecord {
@@ -47,14 +43,13 @@ export interface GatewayHeartbeatRecord {
   openclawVersion?: string;
   /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
   startedAt?: number;
-  configStatus?: GatewayConfigStatus;
 }
 
 export interface GatewayHeartbeatPollerDeps {
   /** Gateways Cowboy should report for (running/desired-live). */
   listGatewayIds: () => Promise<string[]>;
-  /** GET the gateway's /health; null when unreachable (do not clobber the doc). */
-  fetchHealth: (gatewayId: string) => Promise<GatewayHealth | null>;
+  /** Signed read of the gateway's /fleet-state; null when unreachable (do not clobber the doc). */
+  fetchFleetState: (gatewayId: string) => Promise<GatewayFleetState | null>;
   /** Slugs assigned to this gateway in Firestore (users gatewayId==id, complete). */
   readAssignedSlugs: (gatewayId: string) => Promise<string[]>;
   /** Persist live telemetry; the impl stamps lastHeartbeatAt. */
@@ -99,11 +94,11 @@ export function departedFromAssigned(present: string[], assigned: string[]): str
 }
 
 /**
- * Parse + validate a gateway /health body. Returns null for anything malformed
+ * Parse + validate a gateway /fleet-state body. Returns null for anything malformed
  * (non-object, missing/empty status, non-array customers) so the poller treats a
- * garbled /health like an unreachable gateway — it never writes fabricated state.
+ * garbled body like an unreachable gateway — it never writes fabricated state.
  */
-export function parseHealthResponse(json: unknown): GatewayHealth | null {
+export function parseFleetStateResponse(json: unknown): GatewayFleetState | null {
   if (typeof json !== "object" || json === null) return null;
   const body = json as {
     status?: unknown;
@@ -112,7 +107,6 @@ export function parseHealthResponse(json: unknown): GatewayHealth | null {
     version?: unknown;
     openclawVersion?: unknown;
     migratingIn?: unknown;
-    configStatus?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
@@ -122,13 +116,12 @@ export function parseHealthResponse(json: unknown): GatewayHealth | null {
   return {
     status: body.status,
     customers,
-    ...healthStringField("version", body.version, false),
-    ...healthStringField("openclawVersion", body.openclawVersion, true),
+    ...stateStringField("version", body.version, false),
+    ...stateStringField("openclawVersion", body.openclawVersion, true),
     ...(typeof body.startedAt === "number" ? { startedAt: body.startedAt } : {}),
     ...(Array.isArray(body.migratingIn)
       ? { migratingIn: body.migratingIn.filter(isString) }
       : {}),
-    ...configStatusField(body.configStatus),
   };
 }
 
@@ -136,53 +129,13 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function healthStringField<K extends "version" | "openclawVersion">(
+function stateStringField<K extends "version" | "openclawVersion">(
   key: K,
   value: unknown,
   requireNonEmpty: boolean,
-): Partial<Pick<GatewayHealth, K>> {
+): Partial<Pick<GatewayFleetState, K>> {
   if (typeof value !== "string" || (requireNonEmpty && value.length === 0)) return {};
-  return { [key]: value } as Partial<Pick<GatewayHealth, K>>;
-}
-
-function configStatusField(
-  value: unknown,
-): Partial<Pick<GatewayHealth, "configStatus">> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const status = value as GatewayConfigStatus;
-  const validVersion = status.openclawVersion === undefined ||
-    typeof status.openclawVersion === "string";
-  const validForkSha = status.openclawForkSha === undefined ||
-    typeof status.openclawForkSha === "string";
-  return validVersion && validForkSha && hasValidDashboardControlStatus(status)
-    ? { configStatus: status }
-    : {};
-}
-
-function hasValidDashboardControlStatus(status: GatewayConfigStatus): boolean {
-  if (status.dashboardControlState === undefined) {
-    return status.dashboardControlProtocol === undefined &&
-      status.dashboardControlObservedAt === undefined;
-  }
-  if (
-    status.dashboardControlState !== "ready" &&
-    status.dashboardControlState !== "missing" &&
-    status.dashboardControlState !== "stale" &&
-    status.dashboardControlState !== "invalid"
-  ) {
-    return false;
-  }
-  if (status.dashboardControlState !== "ready") {
-    return status.dashboardControlProtocol === undefined &&
-      status.dashboardControlObservedAt === undefined;
-  }
-  const observedAt = status.dashboardControlObservedAt;
-  return status.dashboardControlProtocol?.protocol === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL &&
-    status.dashboardControlProtocol.version === OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION &&
-    typeof observedAt === "string" &&
-    observedAt.length <= 40 &&
-    Number.isFinite(Date.parse(observedAt)) &&
-    new Date(observedAt).toISOString() === observedAt;
+  return { [key]: value } as Partial<Pick<GatewayFleetState, K>>;
 }
 
 async function evictDepartedForGateway(
@@ -253,19 +206,18 @@ export async function pollGatewayHeartbeatsOnce(
 
   for (const gatewayId of gatewayIds) {
     try {
-      const health = await deps.fetchHealth(gatewayId);
-      if (!health) continue;
+      const state = await deps.fetchFleetState(gatewayId);
+      if (!state) continue;
       const assigned = await deps.readAssignedSlugs(gatewayId);
       const record: GatewayHeartbeatRecord = {
-        status: health.status,
-        mountedCustomers: intersectMounted(health.customers, assigned),
+        status: state.status,
+        mountedCustomers: intersectMounted(state.customers, assigned),
       };
-      if (typeof health.version === "string") record.version = health.version;
-      if (typeof health.openclawVersion === "string") {
-        record.openclawVersion = health.openclawVersion;
+      if (typeof state.version === "string") record.version = state.version;
+      if (typeof state.openclawVersion === "string") {
+        record.openclawVersion = state.openclawVersion;
       }
-      if (typeof health.startedAt === "number") record.startedAt = health.startedAt;
-      if (health.configStatus) record.configStatus = health.configStatus;
+      if (typeof state.startedAt === "number") record.startedAt = state.startedAt;
       await deps.writeHeartbeat(gatewayId, record);
       if (deps.ownsEviction && !(await deps.ownsEviction(gatewayId))) {
         streaks.delete(gatewayId);
@@ -274,7 +226,7 @@ export async function pollGatewayHeartbeatsOnce(
       await evictDepartedForGateway(
         deps,
         gatewayId,
-        { footprint: health.customers, assigned, migratingIn: health.migratingIn ?? [] },
+        { footprint: state.customers, assigned, migratingIn: state.migratingIn ?? [] },
         { streaks, inFlight },
       );
     } catch (err) {

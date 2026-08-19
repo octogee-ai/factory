@@ -9,6 +9,14 @@ export function canonicalPayload(jobId: string, rawBody: string): string {
   return `${jobId}\n${rawBody}`;
 }
 
+// Binds a pod-addressed RPC signature to the gateway it is meant for. The request
+// path is not signed, so without this scoping a pod that legitimately receives one
+// signed call can relay the same body and signature to a sibling gateway, which
+// would verify it and act.
+export function gatewayScopedJobId(jobId: string, gatewayId: string): string {
+  return `${jobId}@${gatewayId}`;
+}
+
 export function signFleetRequest(
   privateKeyPem: string,
   jobId: string,

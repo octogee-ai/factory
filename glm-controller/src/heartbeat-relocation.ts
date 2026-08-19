@@ -10,7 +10,6 @@
 // to the legacy flat doc.
 
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
-import type { GatewayConfigStatus } from "@octogee/shared/types/fleet-controller";
 
 export const HEARTBEAT_FIELD = "heartbeat";
 
@@ -41,7 +40,6 @@ export interface PollerHeartbeatRecord {
   startedAt?: number;
   version?: string;
   openclawVersion?: string;
-  configStatus?: GatewayConfigStatus;
 }
 
 // glmGateways/{id} merge payload for the poller's live telemetry.
@@ -59,9 +57,6 @@ export function revisionHeartbeatMerge(
   if (typeof record.openclawVersion === "string") {
     heartbeat.openclawVersion = record.openclawVersion;
   }
-  if (record.configStatus) {
-    heartbeat.configStatus = { ...record.configStatus, observedAt: lastHeartbeatAt };
-  }
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 
@@ -78,12 +73,7 @@ function withoutPollerStamps(heartbeat: Record<string, unknown>): Record<string,
   const comparable: Record<string, unknown> = {};
   for (const [field, value] of Object.entries(heartbeat)) {
     if (field === "lastHeartbeatAt") continue;
-    const configStatus = field === "configStatus" ? plainRecord(value) : null;
-    comparable[field] = configStatus
-      ? Object.fromEntries(
-        Object.entries(configStatus).filter(([marker]) => marker !== "observedAt"),
-      )
-      : value;
+    comparable[field] = value;
   }
   return comparable;
 }

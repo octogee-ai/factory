@@ -13,9 +13,13 @@ import {
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
+  FLEET_STATE_PATH,
   GATEWAY_HEARTBEAT_INTERVAL_MS,
+  type FleetHealthResponse,
+  type FleetStateResponse,
   type FlushGatewayResponse,
 } from "../../shared/types/fleet-controller.js";
+import { createFleetStateHandler } from "./fleet-state-http.js";
 import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
@@ -527,17 +531,6 @@ function hasMountedRuntimeAndWorkspace(
   );
 }
 
-// In-pod migration RPC path guard (GATEWAY-RELEASES-SPEC transport/tenant
-// split): the path carries the BARE tenant gatewayId and must equal the pod's
-// GATEWAY_ID. A revision id ({gw}-r{n}) in the path is REJECTED — transport is
-// addressed by the K8s Service (revision), never smuggled into the tenant path.
-export function pathGatewayIdMatchesPod(
-  pathGatewayId: string | string[] | undefined,
-  podGatewayId: string,
-): boolean {
-  return pathGatewayId === podGatewayId;
-}
-
 // The K8s Service name this pod publishes as its heartbeat internalUrl — the
 // chart's stable bare-id Service (GATEWAY-SIMPLE-ROLL-SPEC).
 export function gatewayServiceName(input: { gatewayId: string }): string {
@@ -569,7 +562,23 @@ export function buildFleetHeartbeatSnapshot(input: {
   };
 }
 
+// The kubelet probes this and cannot sign, and the fleet ingress policy admits
+// every gateway pod on this port, so the probe body stays tenant-free: mounted
+// slugs and the gatewayId (which names its Builder) belong to the signed
+// buildFleetStateResponse below.
 export function buildFleetHealthResponse(input: {
+  status: FleetRuntime["status"];
+  podUid: string | null;
+  startedAt: number;
+}): FleetHealthResponse {
+  return {
+    status: input.status,
+    podUid: input.podUid,
+    startedAt: input.startedAt,
+  };
+}
+
+export function buildFleetStateResponse(input: {
   status: FleetRuntime["status"];
   gatewayId: string;
   podUid: string | null;
@@ -578,7 +587,7 @@ export function buildFleetHealthResponse(input: {
   startedAt: number;
   customers: string[];
   migratingIn: string[];
-}): Record<string, unknown> {
+}): FleetStateResponse {
   return {
     status: input.status,
     gatewayId: input.gatewayId,
@@ -1403,48 +1412,46 @@ async function seedRuntimeMountedCustomers(params: {
   }
 }
 
+// Every handler below proves a fleet-controller signature before it looks at the
+// path's gatewayId (rejectMisaddressedGateway), so an unsigned caller cannot use
+// the rejection to learn which gateway answers here.
 function registerMigrationRoutes(
   app: express.Express,
-  gatewayIdGuard: express.RequestHandler,
   migrationDeps: MigrationHandlerDeps,
   processControlDeps: SurgeOpenClawProcessHandlerDeps,
 ): void {
-  app.post("/restore/:gatewayId", gatewayIdGuard, createRestoreHandler(migrationDeps));
-  app.post("/quiesce/:gatewayId", gatewayIdGuard, createQuiesceHandler(migrationDeps));
-  app.post("/flush/:gatewayId", gatewayIdGuard, createFlushHandler(migrationDeps));
-  app.post("/verify/:gatewayId", gatewayIdGuard, createVerifyHandler(migrationDeps));
-  app.post("/export/:gatewayId", gatewayIdGuard, createExportHandler(migrationDeps));
-  app.post("/export-paths/:gatewayId", gatewayIdGuard, createExportPathsHandler(migrationDeps));
+  app.post("/restore/:gatewayId", createRestoreHandler(migrationDeps));
+  app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
+  app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
+  app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));
+  app.post("/export/:gatewayId", createExportHandler(migrationDeps));
+  app.post("/export-paths/:gatewayId", createExportPathsHandler(migrationDeps));
   app.post(
     "/export-activation-manifest/:gatewayId",
-    gatewayIdGuard,
     createActivationManifestExportHandler(migrationDeps),
   );
-  app.post("/prepare-import/:gatewayId", gatewayIdGuard, createPrepareImportHandler(migrationDeps));
-  app.post("/activate-import/:gatewayId", gatewayIdGuard, createActivateImportHandler(migrationDeps));
-  app.post("/prepare-rsync-import/:gatewayId", gatewayIdGuard, createPrepareRsyncImportHandler(migrationDeps));
-  app.post("/push-rsync-state/:gatewayId", gatewayIdGuard, createPushRsyncStateHandler(migrationDeps));
-  app.post("/finish-rsync-import/:gatewayId", gatewayIdGuard, createFinishRsyncImportHandler(migrationDeps));
-  app.post("/abort-rsync-import/:gatewayId", gatewayIdGuard, createAbortRsyncImportHandler(migrationDeps));
+  app.post("/prepare-import/:gatewayId", createPrepareImportHandler(migrationDeps));
+  app.post("/activate-import/:gatewayId", createActivateImportHandler(migrationDeps));
+  app.post("/prepare-rsync-import/:gatewayId", createPrepareRsyncImportHandler(migrationDeps));
+  app.post("/push-rsync-state/:gatewayId", createPushRsyncStateHandler(migrationDeps));
+  app.post("/finish-rsync-import/:gatewayId", createFinishRsyncImportHandler(migrationDeps));
+  app.post("/abort-rsync-import/:gatewayId", createAbortRsyncImportHandler(migrationDeps));
   app.post(
     "/hold-surge-openclaw/:gatewayId",
-    gatewayIdGuard,
     createHoldSurgeOpenClawHandler(processControlDeps),
   );
   app.post(
     "/resume-surge-openclaw/:gatewayId",
-    gatewayIdGuard,
     createResumeSurgeOpenClawHandler(processControlDeps),
   );
   app.post(
     "/unreserve-surge-openclaw/:gatewayId",
-    gatewayIdGuard,
     createUnreserveSurgeOpenClawHandler(processControlDeps),
   );
-  app.post("/complete-surge-handoff/:gatewayId", gatewayIdGuard, createCompleteSurgeHandoffHandler(migrationDeps));
-  app.post("/push-state/:gatewayId", gatewayIdGuard, createPushStateHandler(migrationDeps));
-  app.post("/import/:gatewayId", gatewayIdGuard, createImportHandler(migrationDeps));
-  app.post("/unmount/:gatewayId", gatewayIdGuard, createUnmountHandler(migrationDeps));
+  app.post("/complete-surge-handoff/:gatewayId", createCompleteSurgeHandoffHandler(migrationDeps));
+  app.post("/push-state/:gatewayId", createPushStateHandler(migrationDeps));
+  app.post("/import/:gatewayId", createImportHandler(migrationDeps));
+  app.post("/unmount/:gatewayId", createUnmountHandler(migrationDeps));
 }
 
 interface BuilderSurgeGateWiring {
@@ -1684,6 +1691,17 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   app.get("/health", (_req, res) => {
     res.json(buildFleetHealthResponse({
       status: runtime.status,
+      podUid: process.env.POD_UID ?? null,
+      startedAt: PROCESS_STARTED_AT_MS,
+    }));
+  });
+
+  app.post(`${FLEET_STATE_PATH}/:gatewayId`, createFleetStateHandler({
+    publicKey: opts.publicKey,
+    gatewayId: opts.gatewayId,
+    log: opts.log,
+    readState: () => buildFleetStateResponse({
+      status: runtime.status,
       gatewayId: opts.gatewayId,
       podUid: process.env.POD_UID ?? null,
       version: opts.version,
@@ -1691,8 +1709,8 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       startedAt: PROCESS_STARTED_AT_MS,
       customers: getMountObservedSlugs(adapter),
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-    }));
-  });
+    }),
+  }));
 
   app.get("/surge-ready", createSurgeReadinessHandler({
     runtime,
@@ -1714,21 +1732,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
 
   const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log);
 
-  const gatewayIdGuard: express.RequestHandler = (req, res, next) => {
-    if (!pathGatewayIdMatchesPod(req.params.gatewayId, opts.gatewayId)) {
-      opts.log(
-        `[fleet-http] ⚠ path gatewayId=${req.params.gatewayId} does not match this pod's gatewayId=${opts.gatewayId} — rejecting`,
-      );
-      res.status(400).json({
-        error: "path gatewayId does not match this gateway",
-        pathGatewayId: req.params.gatewayId,
-        podGatewayId: opts.gatewayId,
-      });
-      return;
-    }
-    next();
-  };
-
   const surgeGate = createBuilderSurgeGateWiring({
     adapter: wrappedAdapter,
     processGate: builderProcessGate,
@@ -1747,8 +1750,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     markSurgePrelaunchHydrated: surgeGate.markSurgePrelaunchHydrated,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
   };
-  registerMigrationRoutes(app, gatewayIdGuard, migrationDeps, {
+  registerMigrationRoutes(app, migrationDeps, {
     publicKey: opts.publicKey,
+    gatewayId: opts.gatewayId,
     configuredBuilder: (slug) => configuredBuilderSlug(wrappedAdapter) === slug,
     processGate: builderProcessGate ?? undefined,
     log: opts.log,

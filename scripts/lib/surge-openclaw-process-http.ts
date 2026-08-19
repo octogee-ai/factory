@@ -2,7 +2,8 @@ import type { Request, RequestHandler, Response } from "express";
 
 import { isValidUsername } from "../../shared/types/identity.js";
 import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
-import { verifyFleetRequest } from "./fleet-signature.js";
+import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
+import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
 import type {
   SurgeOpenClawProcessRequest,
   SurgeOpenClawProcessSupervisorClient,
@@ -12,6 +13,7 @@ type SurgeOpenClawProcessOperation = "hold" | "resume" | "unreserve";
 
 export interface SurgeOpenClawProcessHandlerDeps {
   publicKey: string;
+  gatewayId: string;
   configuredBuilder: (slug: string) => boolean;
   processGate?: Pick<SurgeOpenClawProcessSupervisorClient, SurgeOpenClawProcessOperation>;
   log?: (message: string) => void;
@@ -45,9 +47,17 @@ function parseAndVerify(
     return null;
   }
   const signature = req.header(SIGNATURE_HEADER);
-  if (!verifyFleetRequest(deps.publicKey, request.migrationId, rawBody, signature ?? undefined)) {
+  if (!verifyFleetRequest(
+    deps.publicKey,
+    gatewayScopedJobId(request.migrationId, deps.gatewayId),
+    rawBody,
+    signature ?? undefined,
+  )) {
     deps.log?.(`[surge-handoff] bad OpenClaw process control signature migrationId=${request.migrationId}`);
     res.status(401).json({ error: "invalid signature" });
+    return null;
+  }
+  if (rejectMisaddressedGateway(req, res, deps.gatewayId, deps.log ?? (() => undefined))) {
     return null;
   }
   return request;

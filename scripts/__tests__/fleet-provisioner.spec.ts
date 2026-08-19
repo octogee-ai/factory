@@ -7,6 +7,7 @@ import {
   CLONE_RETRY_DELAYS_MS,
   buildFleetHeartbeatSnapshot,
   buildFleetHealthResponse,
+  buildFleetStateResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
   customerEnsureRetryReady,
@@ -25,7 +26,6 @@ import {
   selectStableContentStale,
   getEvictObservedSlugs,
   getMountObservedSlugs,
-  pathGatewayIdMatchesPod,
   probeSurgeReadiness,
   reconcileAddCustomerOptions,
   readMountedCustomersFromAssignedState,
@@ -875,19 +875,29 @@ describe("in-pod gateway heartbeat", () => {
     expect(probeHealthz).not.toHaveBeenCalled();
   });
 
-  it("reports the OpenClaw runtime version through the poller health endpoint", () => {
+  it("reports the OpenClaw runtime version through the signed fleet state endpoint", () => {
     expect(
-      buildFleetHealthResponse({
+      buildFleetStateResponse({
         status: "ready",
         gatewayId: "default",
         podUid: "pod-uid-1",
         version: "sha-1",
         openclawVersion: "2026.7.1",
         startedAt: 42,
-        customers: [],
+        customers: ["alice"],
         migratingIn: [],
       }),
-    ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1" });
+    ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1", customers: ["alice"] });
+  });
+
+  it("keeps the unauthenticated probe body free of tenant identity", () => {
+    const probe = buildFleetHealthResponse({
+      status: "ready",
+      podUid: "pod-uid-1",
+      startedAt: 42,
+    });
+
+    expect(probe).toEqual({ status: "ready", podUid: "pod-uid-1", startedAt: 42 });
   });
 
   it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
@@ -922,21 +932,6 @@ describe("in-pod gateway heartbeat", () => {
   it("points the heartbeat internalUrl at the stable bare-id Service", () => {
     expect(gatewayServiceName({ gatewayId: "default" })).toBe("octogee-gateway-default");
     expect(() => gatewayServiceName({ gatewayId: "" })).toThrow("gatewayId is required");
-  });
-});
-
-describe("in-pod migration path guard (transport/tenant split)", () => {
-  it("accepts the bare gateway id that matches the pod's GATEWAY_ID", () => {
-    expect(pathGatewayIdMatchesPod("default", "default")).toBe(true);
-  });
-
-  it("REJECTS a revision id in the path — transport is addressed by Service, not the tenant path", () => {
-    expect(pathGatewayIdMatchesPod("default-r2", "default")).toBe(false);
-  });
-
-  it("rejects a mismatched gateway id and an absent path param", () => {
-    expect(pathGatewayIdMatchesPod("other", "default")).toBe(false);
-    expect(pathGatewayIdMatchesPod(undefined, "default")).toBe(false);
   });
 });
 

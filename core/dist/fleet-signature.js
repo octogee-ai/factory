@@ -2,6 +2,13 @@ import { createPrivateKey, createPublicKey, sign as cryptoSign, verify as crypto
 export function canonicalPayload(jobId, rawBody) {
     return `${jobId}\n${rawBody}`;
 }
+// Binds a pod-addressed RPC signature to the gateway it is meant for. The request
+// path is not signed, so without this scoping a pod that legitimately receives one
+// signed call can relay the same body and signature to a sibling gateway, which
+// would verify it and act.
+export function gatewayScopedJobId(jobId, gatewayId) {
+    return `${jobId}@${gatewayId}`;
+}
 export function signFleetRequest(privateKeyPem, jobId, rawBody) {
     const payload = Buffer.from(canonicalPayload(jobId, rawBody), "utf8");
     return cryptoSign(null, payload, createPrivateKey(normalizeKeyMaterial(privateKeyPem)))

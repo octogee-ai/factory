@@ -6,7 +6,7 @@ import {
   SIGNATURE_HEADER,
   type PrepareRsyncImportResponse,
 } from "@octogee/shared/types/fleet-controller";
-import { signFleetRequest } from "@octogee/core/fleet-signature";
+import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import { isValidUsername } from "@octogee/shared/types/identity";
 import {
   SurgeOpenClawProcessEndpointMissingError,
@@ -209,7 +209,11 @@ async function postSigned(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        [SIGNATURE_HEADER]: signFleetRequest(opts.privateKey, opts.operationId, rawBody),
+        [SIGNATURE_HEADER]: signFleetRequest(
+          opts.privateKey,
+          gatewayScopedJobId(opts.operationId, opts.gatewayId),
+          rawBody,
+        ),
       },
       body: rawBody,
       signal: AbortSignal.timeout(330_000),

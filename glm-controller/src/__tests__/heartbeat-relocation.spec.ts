@@ -48,21 +48,14 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
     });
   });
 
-  it("timestamps each accepted config marker without erasing a separately published marker", () => {
+  it("leaves the separately published config marker untouched", () => {
     const timestamp = { toMillis: () => 1000 };
     const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 2 as const };
-    expect(revisionHeartbeatMerge({
-      status: "ready",
-      mountedCustomers: [],
-      configStatus: { controlProtocol },
-    }, timestamp).heartbeat.configStatus).toEqual({
-      controlProtocol,
-      observedAt: timestamp,
-    });
     const pollerMerge = revisionHeartbeatMerge({
       status: "ready",
       mountedCustomers: [],
     }, timestamp);
+
     expect(pollerMerge.heartbeat).not.toHaveProperty("configStatus");
     expect({
       configStatus: {
@@ -112,11 +105,8 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
     openclawVersion: "2026.7.1",
   };
 
-  function candidate(configStatus?: Record<string, unknown>): Record<string, unknown> {
-    const merge = revisionHeartbeatMerge(
-      configStatus ? { ...REPORTED, configStatus } : REPORTED,
-      SERVER_TIMESTAMP,
-    );
+  function candidate(): Record<string, unknown> {
+    const merge = revisionHeartbeatMerge(REPORTED, SERVER_TIMESTAMP);
     merge.heartbeat.internalUrl = INTERNAL_URL;
     return merge.heartbeat;
   }
@@ -182,29 +172,18 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
     )).toBe(true);
   });
 
-  it("compares the pod-authored configStatus while ignoring the poller's own observedAt stamp", () => {
-    const reported = {
-      runtimeReady: true,
-      openclawVersion: "2026.7.1",
-      dashboardControlState: "ready",
-      dashboardControlObservedAt: "2026-08-02T14:00:00.000Z",
-    };
-    expect(heartbeatMergeIsRedundant(
-      stored({ configStatus: { ...reported, observedAt: NOW - GATEWAY_HEARTBEAT_INTERVAL_MS } }),
-      candidate(reported),
-      NOW,
-    )).toBe(true);
+  it("never rewrites over the broker-authored configStatus it does not own", () => {
     expect(heartbeatMergeIsRedundant(
       stored({
         configStatus: {
-          ...reported,
-          dashboardControlObservedAt: "2026-08-02T13:59:45.000Z",
+          runtimeReady: true,
+          openclawVersion: "2026.7.1",
           observedAt: NOW - GATEWAY_HEARTBEAT_INTERVAL_MS,
         },
       }),
-      candidate(reported),
+      candidate(),
       NOW,
-    )).toBe(false);
+    )).toBe(true);
   });
 
   it("keeps a full poll interval of headroom under the fleet staleness bound", () => {

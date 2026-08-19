@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { signFleetRequest } from "../lib/fleet-signature.js";
+import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import {
   createHoldSurgeOpenClawHandler,
   createResumeSurgeOpenClawHandler,
@@ -11,6 +11,12 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
+const GATEWAY_ID = "builder-ceckert-test";
+
+// Cowboy scopes each pod-addressed signature to the gateway it addresses.
+function signForPod(jobId: string, rawBody: string, gatewayId: string = GATEWAY_ID): string {
+  return signFleetRequest(PRIVATE_KEY, gatewayScopedJobId(jobId, gatewayId), rawBody);
+}
 
 function response() {
   let status = 200;
@@ -25,10 +31,11 @@ function response() {
   };
 }
 
-function request(body: Record<string, unknown>, signature?: string) {
+function request(body: Record<string, unknown>, signature?: string, pathGatewayId = GATEWAY_ID) {
   const rawBody = JSON.stringify(body);
   return {
     rawBody,
+    params: { gatewayId: pathGatewayId },
     header: (name: string) => name.toLowerCase() === SIGNATURE_HEADER.toLowerCase() ? signature : undefined,
   };
 }
@@ -46,6 +53,7 @@ describe("surge OpenClaw process control handlers", () => {
     const hold = vi.fn(async () => GATE_STATE);
     const handler = createHoldSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
+      gatewayId: GATEWAY_ID,
       configuredBuilder: (slug) => slug === "ceckert-test",
       processGate: { hold, resume: vi.fn(), unreserve: vi.fn() },
     });
@@ -58,9 +66,7 @@ describe("surge OpenClaw process control handlers", () => {
     const res = response();
 
     await handler(
-      { rawBody: raw, header: (name: string) => name.toLowerCase() === SIGNATURE_HEADER.toLowerCase()
-        ? signFleetRequest(PRIVATE_KEY, body.migrationId, raw)
-        : undefined } as never,
+      request(body, signForPod(body.migrationId, raw)) as never,
       res as never,
       vi.fn(),
     );
@@ -76,6 +82,7 @@ describe("surge OpenClaw process control handlers", () => {
     const resume = vi.fn();
     const handler = createResumeSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
+      gatewayId: GATEWAY_ID,
       configuredBuilder: () => false,
       processGate: { hold: vi.fn(), resume, unreserve: vi.fn() },
     });
@@ -91,7 +98,7 @@ describe("surge OpenClaw process control handlers", () => {
     const signedRes = response();
     const raw = JSON.stringify(body);
     await handler(
-      request(body, signFleetRequest(PRIVATE_KEY, body.migrationId, raw)) as never,
+      request(body, signForPod(body.migrationId, raw)) as never,
       signedRes as never,
       vi.fn(),
     );
@@ -106,6 +113,7 @@ describe("surge OpenClaw process control handlers", () => {
     }));
     const handler = createUnreserveSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
+      gatewayId: GATEWAY_ID,
       configuredBuilder: (slug) => slug === "ceckert-test",
       processGate: { hold: vi.fn(), resume: vi.fn(), unreserve },
     });
@@ -118,7 +126,7 @@ describe("surge OpenClaw process control handlers", () => {
     const res = response();
 
     await handler(
-      request(body, signFleetRequest(PRIVATE_KEY, body.migrationId, raw)) as never,
+      request(body, signForPod(body.migrationId, raw)) as never,
       res as never,
       vi.fn(),
     );

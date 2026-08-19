@@ -30,7 +30,7 @@ import {
   sendPushStateImportResponse,
   type MigrationHandlerDeps,
 } from "../lib/fleet-http-migration.js";
-import { signFleetRequest } from "../lib/fleet-signature.js";
+import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import {
   SIGNATURE_HEADER,
   MIGRATION_ID_HEADER,
@@ -97,7 +97,7 @@ const SAMPLE_PUSH: PushStateRequestBody = {
   slug: "chris",
   targetGatewayId: "gw-b",
   targetUrl: "http://target-gateway:18789",
-  targetImportSignature: signFleetRequest(PRIVATE_KEY, "mig-1", "chris"),
+  targetImportSignature: signForPod("mig-1", "chris"),
 };
 
 const RESTORE_SNAPSHOT = {
@@ -123,15 +123,27 @@ const RESTORE_SNAPSHOT = {
   coachMmUserId: "mm-coach",
 } as const;
 
+// Cowboy scopes every pod-addressed signature to the gateway it addresses; the
+// handlers reject anything minted for a sibling.
+function signForPod(jobId: string, rawBody: string, gatewayId: string = GATEWAY_ID): string {
+  return signFleetRequest(PRIVATE_KEY, gatewayScopedJobId(jobId, gatewayId), rawBody);
+}
+
 function mkRequest<T>(
   body: T,
-  opts: { signature?: string; rawBody?: string; localAddress?: string } = {},
+  opts: {
+    signature?: string;
+    rawBody?: string;
+    localAddress?: string;
+    pathGatewayId?: string;
+  } = {},
 ): Request {
   const rawBody = opts.rawBody ?? JSON.stringify(body);
   const headers: Record<string, string> = {};
   if (opts.signature !== undefined) headers[SIGNATURE_HEADER.toLowerCase()] = opts.signature;
   return {
     header: (name: string) => headers[name.toLowerCase()],
+    params: { gatewayId: opts.pathGatewayId ?? GATEWAY_ID },
     rawBody,
     socket: {
       localAddress: opts.localAddress,
@@ -146,6 +158,7 @@ function mkImportRequest(opts: {
   mode?: string;
   signature?: string;
   body?: Readable;
+  pathGatewayId?: string;
 }): Request {
   const headers: Record<string, string> = {};
   if (opts.migrationId !== undefined) headers[MIGRATION_ID_HEADER.toLowerCase()] = opts.migrationId;
@@ -156,6 +169,7 @@ function mkImportRequest(opts: {
 const body = opts.body ?? Readable.from(["dummy-tar-bytes"]);
   return Object.assign(body, {
     header: (name: string) => headers[name.toLowerCase()],
+    params: { gatewayId: opts.pathGatewayId ?? GATEWAY_ID },
   }) as unknown as Request;
 }
 
@@ -316,7 +330,7 @@ describe("surge handoff control", () => {
     const releaseSurgeReadiness = vi.fn(async () => undefined);
     const handler = createCompleteSurgeHandoffHandler(mkDeps({ releaseSurgeReadiness }));
     const rawBody = JSON.stringify(SAMPLE_COMPLETE_SURGE);
-    const signature = signFleetRequest(PRIVATE_KEY, SAMPLE_COMPLETE_SURGE.migrationId, rawBody);
+    const signature = signForPod(SAMPLE_COMPLETE_SURGE.migrationId, rawBody);
     const { res, getStatus, getBody } = mkResponse();
 
     await handler(mkRequest(SAMPLE_COMPLETE_SURGE, { signature }), res, vi.fn());
@@ -419,10 +433,52 @@ describe("createQuiesceHandler", () => {
     expect(getStatus()).toBe(400);
   });
 
+  it("checks the path gatewayId only after the signature, so an unsigned probe cannot identify the pod", async () => {
+    const handler = createQuiesceHandler(mkDeps());
+    const unsigned = mkRequest(SAMPLE_QUIESCE, { pathGatewayId: "someone-else" });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(unsigned, res, vi.fn());
+
+    expect(getStatus()).toBe(401);
+    expect(getBody()).toEqual({ error: "invalid signature" });
+  });
+
+  it("refuses a signature minted for a sibling gateway, so a relayed capture cannot act here", async () => {
+    const handler = createQuiesceHandler(mkDeps());
+    const rawBody = JSON.stringify(SAMPLE_QUIESCE);
+    // What a sibling pod would hold after receiving its own signed quiesce: a
+    // valid Cowboy signature whose scope names that other gateway.
+    const relayed = mkRequest(SAMPLE_QUIESCE, {
+      signature: signForPod(SAMPLE_QUIESCE.migrationId, rawBody, "someone-else"),
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(relayed, res, vi.fn());
+
+    expect(getStatus()).toBe(401);
+    expect(getBody()).toEqual({ error: "invalid signature" });
+  });
+
+  it("rejects a signed quiesce addressed to another gateway without naming this one", async () => {
+    const handler = createQuiesceHandler(mkDeps());
+    const rawBody = JSON.stringify(SAMPLE_QUIESCE);
+    const req = mkRequest(SAMPLE_QUIESCE, {
+      signature: signForPod(SAMPLE_QUIESCE.migrationId, rawBody),
+      pathGatewayId: "someone-else",
+    });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(JSON.stringify(getBody())).not.toContain(GATEWAY_ID);
+  });
+
   it("rejects missing migrationId/slug with 400", async () => {
     const handler = createQuiesceHandler(mkDeps());
     const req = mkRequest({} as QuiesceRequestBody, {
-      signature: signFleetRequest(PRIVATE_KEY, "x", "{}"),
+      signature: signForPod("x", "{}"),
     });
     const { res, getStatus } = mkResponse();
     await handler(req, res, vi.fn());
@@ -433,7 +489,7 @@ describe("createQuiesceHandler", () => {
     const handler = createQuiesceHandler(mkDeps());
     const body: QuiesceRequestBody = { migrationId: "m", slug: "../etc" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -445,7 +501,7 @@ describe("createQuiesceHandler", () => {
     const adapter = mkAdapter();
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -465,7 +521,7 @@ describe("createQuiesceHandler", () => {
     });
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -478,7 +534,7 @@ describe("createQuiesceHandler", () => {
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const body: QuiesceRequestBody = { migrationId: "m", slug: "chris" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res } = mkResponse();
     await handler(req, res, vi.fn());
@@ -493,7 +549,7 @@ describe("createQuiesceHandler", () => {
     });
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_QUIESCE.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_QUIESCE.migrationId, rawBody);
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -517,7 +573,7 @@ describe("createFlushHandler", () => {
     const handler = createFlushHandler(mkDeps({ adapter, flushLocalState }));
     const body = { migrationId: "mig-1", slug: "chris", reason: "migration-final" };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus } = mkResponse();
 
@@ -542,7 +598,7 @@ describe("createFlushHandler", () => {
     const handler = createFlushHandler(mkDeps({ flushLocalState }));
     const body = { migrationId: "mig-1", slug: "chris", reason: "idle" };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -563,7 +619,7 @@ describe("createFlushHandler", () => {
     const handler = createFlushHandler(mkDeps());
     const body = { migrationId: "mig-1", slug: "chris" };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -593,7 +649,7 @@ describe("createFlushHandler", () => {
       expectedSystemConfigCommit,
     };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus } = mkResponse();
 
@@ -628,7 +684,7 @@ describe("createFlushHandler", () => {
       expectedSystemConfigCommit,
     };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus } = mkResponse();
 
@@ -662,7 +718,7 @@ describe("createFlushHandler", () => {
       expectedSystemConfigCommit,
     };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus } = mkResponse();
 
@@ -723,11 +779,7 @@ describe("createFlushHandler", () => {
     const flushResponse = mkResponse();
     const flushing = createFlushHandler(deps)(
       mkRequest(flushBody, {
-        signature: signFleetRequest(
-          PRIVATE_KEY,
-          flushBody.migrationId,
-          JSON.stringify(flushBody),
-        ),
+        signature: signForPod(flushBody.migrationId, JSON.stringify(flushBody)),
       }),
       flushResponse.res,
       vi.fn(),
@@ -738,11 +790,7 @@ describe("createFlushHandler", () => {
     const unmountResponse = mkResponse();
     await createUnmountHandler(deps)(
       mkRequest(SAMPLE_UNMOUNT, {
-        signature: signFleetRequest(
-          PRIVATE_KEY,
-          SAMPLE_UNMOUNT.migrationId,
-          unmountRaw,
-        ),
+        signature: signForPod(SAMPLE_UNMOUNT.migrationId, unmountRaw),
       }),
       unmountResponse.res,
       vi.fn(),
@@ -772,7 +820,7 @@ describe("createFlushHandler", () => {
       ...extra,
     };
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
     });
     const { res, getStatus } = mkResponse();
 
@@ -798,7 +846,7 @@ describe("createVerifyHandler", () => {
     const handler = createVerifyHandler(mkDeps({ adapter }));
     const body = { migrationId: "mig-1", slug: "chris", timeoutMs: 5_000 };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -828,7 +876,7 @@ describe("createVerifyHandler", () => {
     const handler = createVerifyHandler(mkDeps({ adapter }));
     const body = { migrationId: "mig-1", slug: "chris" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -858,7 +906,7 @@ describe("createVerifyHandler", () => {
     const response = mkResponse();
 
     await handler(
-      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
       response.res,
       vi.fn(),
     );
@@ -949,7 +997,7 @@ describe("createRestoreHandler", () => {
       },
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     try {
@@ -1028,7 +1076,7 @@ describe("createRestoreHandler", () => {
       snapshot: RESTORE_SNAPSHOT,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus } = mkResponse();
 
@@ -1054,7 +1102,7 @@ describe("createRestoreHandler", () => {
       snapshot: { ...RESTORE_SNAPSHOT, slug: "mallory" },
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1072,7 +1120,7 @@ describe("createRestoreHandler", () => {
       snapshot: null,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1103,7 +1151,7 @@ describe("createUnmountHandler", () => {
       resumeSystemConfigWatch,
     }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1129,7 +1177,7 @@ describe("createUnmountHandler", () => {
       resumeSystemConfigWatch,
     }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -1147,7 +1195,7 @@ describe("createUnmountHandler", () => {
     const adapter = mkAdapter({ removeImportedCustomerBySlug });
     const handler = createUnmountHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -1167,7 +1215,7 @@ const adapter = mkAdapter();
     const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
     const handler = createUnmountHandler(mkDeps({ adapter, pauseSystemConfigWatch }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1194,7 +1242,7 @@ const adapter = mkAdapter();
       resumeSystemConfigWatch,
     }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: sig });
     const { res, getStatus } = mkResponse();
 
@@ -1218,7 +1266,7 @@ const adapter = mkAdapter();
     }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
     const req = mkRequest(SAMPLE_UNMOUNT, {
-      signature: signFleetRequest(PRIVATE_KEY, SAMPLE_UNMOUNT.migrationId, rawBody),
+      signature: signForPod(SAMPLE_UNMOUNT.migrationId, rawBody),
     });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -1248,7 +1296,7 @@ describe("createExportHandler", () => {
     });
     const handler = createExportHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_EXPORT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_EXPORT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1274,7 +1322,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
 
     const handler = createExportHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_EXPORT.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_EXPORT.migrationId, rawBody);
     const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
     const { res, getStatus, getHeaders } = mkResponse();
     await handler(req, res, vi.fn());
@@ -1311,7 +1359,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "keys",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createExportPathsHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1342,7 +1390,7 @@ describe("queued-rsync migration control handlers", () => {
         mode,
       };
       const rawBody = JSON.stringify(body);
-      const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+      const sig = signForPod(body.migrationId, rawBody);
       const handler = createExportPathsHandler(mkDeps({ adapter }));
       const req = mkRequest(body, { signature: sig });
       const { res, getStatus, getBody } = mkResponse();
@@ -1373,7 +1421,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "bogus",
     } as unknown as ExportPathsRequestBody;
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createExportPathsHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1398,7 +1446,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "keys",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPrepareImportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1422,7 +1470,7 @@ describe("queued-rsync migration control handlers", () => {
       slug: "chris",
     } as unknown as PrepareImportRequestBody;
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPrepareImportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1447,7 +1495,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "pre",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPrepareImportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus } = mkResponse();
@@ -1478,7 +1526,7 @@ describe("queued-rsync migration control handlers", () => {
       slug: "chris",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createActivationManifestExportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1514,7 +1562,7 @@ describe("queued-rsync migration control handlers", () => {
       slug: "chris",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createActivateImportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1557,7 +1605,7 @@ describe("queued-rsync migration control handlers", () => {
       slug: "chris",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createActivateImportHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1590,7 +1638,7 @@ describe("queued-rsync migration control handlers", () => {
       sourcePodIp: SOURCE_POD_IP,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPrepareRsyncImportHandler(
       mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady }),
     );
@@ -1641,7 +1689,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "pre",
     };
     const abortRaw = JSON.stringify(abortBody);
-    const abortSig = signFleetRequest(PRIVATE_KEY, abortBody.migrationId, abortRaw);
+    const abortSig = signForPod(abortBody.migrationId, abortRaw);
     const abortReq = mkRequest(abortBody, { signature: abortSig });
     const abortRes = mkResponse();
     await abortHandler(abortReq, abortRes.res, vi.fn());
@@ -1665,7 +1713,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepare = async (body: PrepareRsyncImportRequestBody) => {
       const response = mkResponse();
       await handler(
-        mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+        mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
         response.res,
         vi.fn(),
       );
@@ -1709,7 +1757,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "keys",
     };
     await createAbortRsyncImportHandler(mkDeps({ adapter }))(
-      mkRequest(abort, { signature: signFleetRequest(PRIVATE_KEY, abort.migrationId, JSON.stringify(abort)) }),
+      mkRequest(abort, { signature: signForPod(abort.migrationId, JSON.stringify(abort)) }),
       mkResponse().res,
       vi.fn(),
     );
@@ -1742,7 +1790,7 @@ describe("queued-rsync migration control handlers", () => {
     try {
       await handler(
         mkRequest(interrupted, {
-          signature: signFleetRequest(PRIVATE_KEY, interrupted.migrationId, interruptedRaw),
+          signature: signForPod(interrupted.migrationId, interruptedRaw),
         }),
         interruptedResponse.res,
         vi.fn(),
@@ -1759,7 +1807,7 @@ describe("queued-rsync migration control handlers", () => {
       const resumedResponse = mkResponse();
       await handler(
         mkRequest(resumed, {
-          signature: signFleetRequest(PRIVATE_KEY, resumed.migrationId, resumedRaw),
+          signature: signForPod(resumed.migrationId, resumedRaw),
         }),
         resumedResponse.res,
         vi.fn(),
@@ -1776,7 +1824,7 @@ describe("queued-rsync migration control handlers", () => {
       const otherResponse = mkResponse();
       await handler(
         mkRequest(otherMigration, {
-          signature: signFleetRequest(PRIVATE_KEY, otherMigration.migrationId, otherRaw),
+          signature: signForPod(otherMigration.migrationId, otherRaw),
         }),
         otherResponse.res,
         vi.fn(),
@@ -1827,7 +1875,7 @@ describe("queued-rsync migration control handlers", () => {
       includeActivationManifest: true,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPushRsyncStateHandler(mkDeps({ adapter }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1876,7 +1924,7 @@ describe("queued-rsync migration control handlers", () => {
     const response = mkResponse();
 
     await handler(
-      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
       response.res,
       vi.fn(),
     );
@@ -1904,7 +1952,7 @@ describe("queued-rsync migration control handlers", () => {
     const response = mkResponse();
 
     await handler(
-      mkRequest(body, { signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)) }),
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
       response.res,
       vi.fn(),
     );
@@ -1937,7 +1985,7 @@ describe("queued-rsync migration control handlers", () => {
       transferKey: "c".repeat(64),
     };
     const prepareRaw = JSON.stringify(prepareBody);
-    const prepareSig = signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, prepareRaw);
+    const prepareSig = signForPod(prepareBody.migrationId, prepareRaw);
     const deps = mkDeps({
       adapter,
       migrationRsyncPort: 30873,
@@ -1973,7 +2021,7 @@ describe("queued-rsync migration control handlers", () => {
       loadStrategy: "expedited",
     };
     const finishRaw = JSON.stringify(finishBody);
-    const finishSig = signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw);
+    const finishSig = signForPod(finishBody.migrationId, finishRaw);
     const finishHandler = createFinishRsyncImportHandler(deps);
     const finishReq = mkRequest(finishBody, { signature: finishSig });
     const { res, getStatus, getBody } = mkResponse();
@@ -2046,7 +2094,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepareResponse = mkResponse();
     await createPrepareRsyncImportHandler(deps)(
       mkRequest(prepareBody, {
-        signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, JSON.stringify(prepareBody)),
+        signature: signForPod(prepareBody.migrationId, JSON.stringify(prepareBody)),
       }),
       prepareResponse.res,
       vi.fn(),
@@ -2063,7 +2111,7 @@ describe("queued-rsync migration control handlers", () => {
     const finishResponse = mkResponse();
     await createFinishRsyncImportHandler(deps)(
       mkRequest(finishBody, {
-        signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, JSON.stringify(finishBody)),
+        signature: signForPod(finishBody.migrationId, JSON.stringify(finishBody)),
       }),
       finishResponse.res,
       vi.fn(),
@@ -2098,7 +2146,7 @@ describe("queued-rsync migration control handlers", () => {
     };
     await createPrepareRsyncImportHandler(deps)(
       mkRequest(prepareBody, {
-        signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, JSON.stringify(prepareBody)),
+        signature: signForPod(prepareBody.migrationId, JSON.stringify(prepareBody)),
       }),
       mkResponse().res,
       vi.fn(),
@@ -2113,7 +2161,7 @@ describe("queued-rsync migration control handlers", () => {
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(
       mkRequest(finishBody, {
-        signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, JSON.stringify(finishBody)),
+        signature: signForPod(finishBody.migrationId, JSON.stringify(finishBody)),
       }),
       response.res,
       vi.fn(),
@@ -2132,7 +2180,7 @@ describe("queued-rsync migration control handlers", () => {
     };
     await createAbortRsyncImportHandler(deps)(
       mkRequest(abortBody, {
-        signature: signFleetRequest(PRIVATE_KEY, abortBody.migrationId, JSON.stringify(abortBody)),
+        signature: signForPod(abortBody.migrationId, JSON.stringify(abortBody)),
       }),
       mkResponse().res,
       vi.fn(),
@@ -2161,7 +2209,7 @@ describe("queued-rsync migration control handlers", () => {
 
     await createAbortRsyncImportHandler(mkDeps({ adapter }))(
       mkRequest(body, {
-        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, JSON.stringify(body)),
+        signature: signForPod(body.migrationId, JSON.stringify(body)),
       }),
       response.res,
       vi.fn(),
@@ -2198,7 +2246,7 @@ describe("queued-rsync migration control handlers", () => {
     const prepareRaw = JSON.stringify(prepareBody);
     const prepareHandler = createPrepareRsyncImportHandler(deps);
     await prepareHandler(
-      mkRequest(prepareBody, { signature: signFleetRequest(PRIVATE_KEY, prepareBody.migrationId, prepareRaw) }),
+      mkRequest(prepareBody, { signature: signForPod(prepareBody.migrationId, prepareRaw) }),
       mkResponse().res,
       vi.fn(),
     );
@@ -2213,7 +2261,7 @@ describe("queued-rsync migration control handlers", () => {
     const finishHandler = createFinishRsyncImportHandler(deps);
     const finishResponse = mkResponse();
     const finish = finishHandler(
-      mkRequest(finishBody, { signature: signFleetRequest(PRIVATE_KEY, finishBody.migrationId, finishRaw) }),
+      mkRequest(finishBody, { signature: signForPod(finishBody.migrationId, finishRaw) }),
       finishResponse.res,
       vi.fn(),
     );
@@ -2299,7 +2347,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     return {
       handler: createPushRsyncStateHandler(mkDeps({ adapter })),
       req: mkRequest(body, {
-        signature: signFleetRequest(PRIVATE_KEY, migrationId, JSON.stringify(body)),
+        signature: signForPod(migrationId, JSON.stringify(body)),
       }),
     };
   }
@@ -2373,7 +2421,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     };
     await createPrepareRsyncImportHandler(deps)(
       mkRequest(body, {
-        signature: signFleetRequest(PRIVATE_KEY, input.migrationId, JSON.stringify(body)),
+        signature: signForPod(input.migrationId, JSON.stringify(body)),
       }),
       mkResponse().res,
       vi.fn(),
@@ -2399,7 +2447,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(
       mkRequest(body, {
-        signature: signFleetRequest(PRIVATE_KEY, migrationId, JSON.stringify(body)),
+        signature: signForPod(migrationId, JSON.stringify(body)),
       }),
       response.res,
       vi.fn(),
@@ -2473,7 +2521,7 @@ describe("createPushStateHandler", () => {
       expect(String(input)).toBe("http://target-gateway:18789/import/gw-b");
       const headers = init?.headers as Record<string, string>;
       expect(headers["content-type"]).toBe("application/x-tar");
-      expect(headers[SIGNATURE_HEADER]).toBe(signFleetRequest(PRIVATE_KEY, "mig-1", "chris"));
+      expect(headers[SIGNATURE_HEADER]).toBe(signForPod("mig-1", "chris"));
       expect(headers[MIGRATION_ID_HEADER]).toBe("mig-1");
       expect(headers[MIGRATION_SLUG_HEADER]).toBe("chris");
       expect(init?.body).toBe(fakeChild.stdout);
@@ -2487,7 +2535,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2527,7 +2575,7 @@ describe("createPushStateHandler", () => {
       const rawBody = JSON.stringify(body);
       const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
       const req = mkRequest(body, {
-        signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+        signature: signForPod(body.migrationId, rawBody),
       });
       const { res, getStatus } = mkResponse();
 
@@ -2563,7 +2611,7 @@ describe("createPushStateHandler", () => {
     const rawBody = JSON.stringify(body);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, {
-      signature: signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody),
+      signature: signForPod(body.migrationId, rawBody),
     });
     const { res, getStatus } = mkResponse();
 
@@ -2603,7 +2651,7 @@ describe("createPushStateHandler", () => {
 
     const body: PushStateRequestBody = { ...SAMPLE_PUSH, mode: "keys" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus } = mkResponse();
@@ -2650,7 +2698,7 @@ describe("createPushStateHandler", () => {
       targetImportSignature: "target-import-sig",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus } = mkResponse();
@@ -2700,7 +2748,7 @@ describe("createPushStateHandler", () => {
       includeActivationManifest: true,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -2743,7 +2791,7 @@ describe("createPushStateHandler", () => {
       includeActivationManifest: true,
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, body.migrationId, rawBody);
+    const sig = signForPod(body.migrationId, rawBody);
     const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -2759,7 +2807,7 @@ describe("createPushStateHandler", () => {
   it("rejects a missing targetGatewayId before spawning tar", async () => {
     const body = { migrationId: "mig-1", slug: "chris", targetUrl: "http://target" };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", rawBody);
+    const sig = signForPod("mig-1", rawBody);
     const handler = createPushStateHandler(mkDeps());
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -2778,7 +2826,7 @@ describe("createPushStateHandler", () => {
       targetUrl: "http://target",
     };
     const rawBody = JSON.stringify(body);
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", rawBody);
+    const sig = signForPod("mig-1", rawBody);
     const handler = createPushStateHandler(mkDeps());
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -2798,7 +2846,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2829,7 +2877,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2853,7 +2901,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2875,7 +2923,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2911,7 +2959,7 @@ describe("createPushStateHandler", () => {
 
     const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
 
@@ -2945,7 +2993,7 @@ describe("createPushStateHandler", () => {
       mkDeps({ fetch: fetchMock, pushStateTimeoutMs: 5 }),
     );
     const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signFleetRequest(PRIVATE_KEY, SAMPLE_PUSH.migrationId, rawBody);
+    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
     const req = mkRequest(SAMPLE_PUSH, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -2998,7 +3046,7 @@ describe("createImportHandler", () => {
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -3035,7 +3083,7 @@ describe("createImportHandler", () => {
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -3067,7 +3115,7 @@ describe("createImportHandler", () => {
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -3094,7 +3142,7 @@ describe("createImportHandler", () => {
     spawnMock.mockReturnValueOnce(fakeListChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
@@ -3123,7 +3171,7 @@ describe("createImportHandler", () => {
         resumeSystemConfigWatch,
       }),
     );
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",
@@ -3178,7 +3226,7 @@ describe("createImportHandler", () => {
     spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
     const { res, getStatus } = mkResponse();
 
@@ -3199,7 +3247,7 @@ await activateStarted;
     spawnMock.mockReturnValueOnce(fakeChild);
 
     const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signFleetRequest(PRIVATE_KEY, "mig-1", "chris");
+    const sig = signForPod("mig-1", "chris");
     const req = mkImportRequest({
       migrationId: "mig-1",
       slug: "chris",

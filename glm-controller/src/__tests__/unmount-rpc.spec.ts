@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
-import { verifyFleetRequest } from "@octogee/core/fleet-signature";
+import { gatewayScopedJobId, verifyFleetRequest } from "@octogee/core/fleet-signature";
 import {
   buildGatewayHeartbeatPollerDeps,
   callUnmountRpc,
@@ -128,8 +128,22 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
     const headers = capturedInit?.headers as Record<string, string>;
     const signature = headers[SIGNATURE_HEADER];
     expect(
-      verifyFleetRequest(FLEET_KEY_PAIR.publicKey, body.migrationId, rawBody, signature),
+      verifyFleetRequest(
+        FLEET_KEY_PAIR.publicKey,
+        gatewayScopedJobId(body.migrationId, "bender"),
+        rawBody,
+        signature,
+      ),
     ).toBe(true);
+    // Scoped to the gateway it evicts on, so the evicted pod cannot relay it onward.
+    expect(
+      verifyFleetRequest(
+        FLEET_KEY_PAIR.publicKey,
+        gatewayScopedJobId(body.migrationId, "shared-a"),
+        rawBody,
+        signature,
+      ),
+    ).toBe(false);
     expect(
       verifyFleetRequest("gateway-token", body.migrationId, rawBody, signature),
     ).toBe(false);

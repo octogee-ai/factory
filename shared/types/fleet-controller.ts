@@ -72,6 +72,39 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 
+// Unauthenticated probe body. Reachable by the kubelet (which cannot sign) and by
+// every pod the fleet ingress policy admits on the controller port, so it carries
+// no tenant identity: no roster, no gatewayId, no image versions. podUid is the
+// pod's own K8s UID — what a sibling needs to tell itself apart from a live
+// revision of the same gateway (see surge-reconcile-gate observeReadySibling).
+export interface FleetHealthResponse {
+  status: string;
+  podUid: string | null;
+  startedAt: number;
+}
+
+// Tenant-bearing fleet state. Signed with the fleet controller key, which only
+// Cowboy holds — gateway pods carry the public half, so a Builder with a shell in
+// their own pod cannot mint one. gatewayId is signed into the body so a captured
+// signature cannot be replayed against a different pod.
+export interface FleetStateRequestBody {
+  requestId: string;
+  gatewayId: string;
+}
+
+export interface FleetStateResponse {
+  status: string;
+  gatewayId: string;
+  podUid: string | null;
+  version: string;
+  openclawVersion: string;
+  startedAt: number;
+  customers: string[];
+  migratingIn: string[];
+}
+
+export const FLEET_STATE_PATH = "/fleet-state";
+
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge" as const;
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1 as const;
 export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE =

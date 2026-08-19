@@ -2,16 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import {
   departedFromAssigned,
   intersectMounted,
-  parseHealthResponse,
+  parseFleetStateResponse,
   pollGatewayHeartbeatsOnce,
   type EvictionInFlight,
   type EvictionStreaks,
   type GatewayHeartbeatPollerDeps,
 } from "../gateway-heartbeat-poller.js";
 
-describe("parseHealthResponse", () => {
-  it("parses a well-formed /health body", () => {
-    expect(parseHealthResponse({ status: "ready", customers: ["a", "b"] })).toEqual({
+describe("parseFleetStateResponse", () => {
+  it("parses a well-formed /fleet-state body", () => {
+    expect(parseFleetStateResponse({ status: "ready", customers: ["a", "b"] })).toEqual({
       status: "ready",
       customers: ["a", "b"],
     });
@@ -19,38 +19,38 @@ describe("parseHealthResponse", () => {
 
   it("filters non-string entries out of customers", () => {
     expect(
-      parseHealthResponse({ status: "ready", customers: ["a", 1, null, "b"] }),
+      parseFleetStateResponse({ status: "ready", customers: ["a", 1, null, "b"] }),
     ).toEqual({ status: "ready", customers: ["a", "b"] });
   });
 
   it("returns null for malformed bodies (skipped like unreachable, never fabricated)", () => {
-    expect(parseHealthResponse(null)).toBeNull();
-    expect(parseHealthResponse("ready")).toBeNull();
-    expect(parseHealthResponse({ customers: ["a"] })).toBeNull(); // missing status
-    expect(parseHealthResponse({ status: "", customers: ["a"] })).toBeNull(); // empty status
-    expect(parseHealthResponse({ status: 1, customers: ["a"] })).toBeNull(); // non-string status
-    expect(parseHealthResponse({ status: "ready" })).toBeNull(); // missing customers
-    expect(parseHealthResponse({ status: "ready", customers: "a" })).toBeNull(); // non-array
+    expect(parseFleetStateResponse(null)).toBeNull();
+    expect(parseFleetStateResponse("ready")).toBeNull();
+    expect(parseFleetStateResponse({ customers: ["a"] })).toBeNull(); // missing status
+    expect(parseFleetStateResponse({ status: "", customers: ["a"] })).toBeNull(); // empty status
+    expect(parseFleetStateResponse({ status: 1, customers: ["a"] })).toBeNull(); // non-string status
+    expect(parseFleetStateResponse({ status: "ready" })).toBeNull(); // missing customers
+    expect(parseFleetStateResponse({ status: "ready", customers: "a" })).toBeNull(); // non-array
   });
 
   it("carries startedAt when /health reports a number, ignores a non-number", () => {
     expect(
-      parseHealthResponse({ status: "ready", customers: [], startedAt: 1700 }),
+      parseFleetStateResponse({ status: "ready", customers: [], startedAt: 1700 }),
     ).toEqual({ status: "ready", customers: [], startedAt: 1700 });
     expect(
-      parseHealthResponse({ status: "ready", customers: [], startedAt: "x" }),
+      parseFleetStateResponse({ status: "ready", customers: [], startedAt: "x" }),
     ).toEqual({ status: "ready", customers: [] });
   });
 
   it("carries the running build version used by revision readiness", () => {
     expect(
-      parseHealthResponse({ status: "ready", customers: [], version: "93073bd" }),
+      parseFleetStateResponse({ status: "ready", customers: [], version: "93073bd" }),
     ).toEqual({ status: "ready", customers: [], version: "93073bd" });
   });
 
   it("carries the OpenClaw runtime version used by retirement fencing", () => {
     expect(
-      parseHealthResponse({
+      parseFleetStateResponse({
         status: "ready",
         customers: [],
         openclawVersion: "2026.7.1",
@@ -64,36 +64,17 @@ describe("parseHealthResponse", () => {
 
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
-      parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
+      parseFleetStateResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
     ).toEqual({ status: "ready", customers: ["a"], migratingIn: ["a", "b"] });
-    expect(parseHealthResponse({ status: "ready", customers: ["a"] })).toEqual({
+    expect(parseFleetStateResponse({ status: "ready", customers: ["a"] })).toEqual({
       status: "ready",
       customers: ["a"],
     });
     expect(
-      parseHealthResponse({ status: "ready", customers: ["a"], migratingIn: "a" }),
+      parseFleetStateResponse({ status: "ready", customers: ["a"], migratingIn: "a" }),
     ).toEqual({ status: "ready", customers: ["a"] });
   });
 
-  it("carries only a structurally valid nested configStatus marker", () => {
-    const configStatus = {
-      openclawVersion: "2026.7.1",
-      openclawForkSha: "abc123",
-      dashboardControlState: "ready",
-      dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
-      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
-    };
-    expect(parseHealthResponse({ status: "ready", customers: [], configStatus })).toEqual({
-      status: "ready",
-      customers: [],
-      configStatus,
-    });
-    expect(parseHealthResponse({
-      status: "ready",
-      customers: [],
-      configStatus: { openclawVersion: 7, dashboardControlState: "ready" },
-    })).toEqual({ status: "ready", customers: [] });
-  });
 });
 
 describe("intersectMounted", () => {
@@ -118,7 +99,7 @@ function makeDeps(
 ): GatewayHeartbeatPollerDeps {
   return {
     listGatewayIds: vi.fn(async () => ["bender"]),
-    fetchHealth: vi.fn(async () => ({
+    fetchFleetState: vi.fn(async () => ({
       status: "ready",
       customers: ["ceckert", "ghost"],
     })),
@@ -141,7 +122,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
 
   it("persists startedAt from /health so the shell reaper can detect a roll", async () => {
     const deps = makeDeps({
-      fetchHealth: vi.fn(async () => ({
+      fetchFleetState: vi.fn(async () => ({
         status: "ready",
         customers: ["ceckert"],
         startedAt: 1700000,
@@ -157,7 +138,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
 
   it("persists the build version from /health so a revision can become ready", async () => {
     const deps = makeDeps({
-      fetchHealth: vi.fn(async () => ({
+      fetchFleetState: vi.fn(async () => ({
         status: "ready",
         customers: ["ceckert"],
         version: "93073bd",
@@ -173,7 +154,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
 
   it("persists the OpenClaw runtime version from /health", async () => {
     const deps = makeDeps({
-      fetchHealth: vi.fn(async () => ({
+      fetchFleetState: vi.fn(async () => ({
         status: "ready",
         customers: ["ceckert"],
         openclawVersion: "2026.7.1",
@@ -187,50 +168,8 @@ describe("pollGatewayHeartbeatsOnce", () => {
     });
   });
 
-  it("persists the config control protocol marker for controller-side enforcement", async () => {
-    const configStatus = {
-      controlProtocol: { protocol: "durable-openclaw-config" as const, version: 2 as const },
-      freezeState: "freezing" as const,
-      openclawVersion: "2026.7.1",
-      openclawForkSha: "abc123",
-      dashboardControlState: "ready" as const,
-      dashboardControlProtocol: {
-        protocol: "openclaw-dashboard-bridge" as const,
-        version: 1 as const,
-      },
-      dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
-    };
-    const deps = makeDeps({
-      fetchHealth: vi.fn(async () => ({
-        status: "ready",
-        customers: ["ceckert"],
-        configStatus,
-      })),
-    });
-    await pollGatewayHeartbeatsOnce(deps);
-    expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
-      status: "ready",
-      mountedCustomers: ["ceckert"],
-      configStatus,
-    });
-  });
-
-  it("rejects a ready Dashboard capability without its exact observed protocol tuple", () => {
-    expect(parseHealthResponse({
-      status: "ready",
-      customers: [],
-      configStatus: {
-        controlProtocol: { protocol: "durable-openclaw-config", version: 2 },
-        freezeState: "frozen",
-        dashboardControlState: "ready",
-        dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 2 },
-        dashboardControlObservedAt: "2026-07-15T14:00:00.000Z",
-      },
-    })).toEqual({ status: "ready", customers: [] });
-  });
-
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {
-    const deps = makeDeps({ fetchHealth: vi.fn(async () => null) });
+    const deps = makeDeps({ fetchFleetState: vi.fn(async () => null) });
     await pollGatewayHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
   });
@@ -238,7 +177,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
   it("isolates per-gateway failures so one bad gateway does not block the rest", async () => {
     const deps = makeDeps({
       listGatewayIds: vi.fn(async () => ["bad", "good"]),
-      fetchHealth: vi.fn(async (id: string) => {
+      fetchFleetState: vi.fn(async (id: string) => {
         if (id === "bad") throw new Error("connection refused");
         return { status: "ready", customers: ["x"] };
       }),
@@ -317,7 +256,7 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     // target before cutover moves its assignment. Cowboy must not drain the fresh import.
     const deps = evictDeps({
       evictAfterStreak: 1,
-      fetchHealth: vi.fn(async () => ({
+      fetchFleetState: vi.fn(async () => ({
         status: "ready",
         customers: ["ceckert", "ghost"],
         migratingIn: ["ghost"],

@@ -55,7 +55,8 @@ import {
   SQLITE_SIDECAR_EXCLUDE_ARGS,
 } from "./agent-store-carry.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
-import { verifyFleetRequest } from "./fleet-signature.js";
+import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
+import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
   addCustomerToGateway,
@@ -314,7 +315,7 @@ function rejectInvalidSlug(slug: string, res: Response): boolean {
 function parseAndVerifyJsonBody<T extends MigrationRequestBody>(
   req: Request,
   res: Response,
-  publicKey: string,
+  deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
   log: (msg: string) => void,
 ): T | null {
   const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
@@ -333,19 +334,25 @@ function parseAndVerifyJsonBody<T extends MigrationRequestBody>(
 
   const sigHeader = req.header(SIGNATURE_HEADER);
 
-const sigValid = verifyFleetRequest(publicKey, body.migrationId, rawBody, sigHeader ?? undefined);
+const sigValid = verifyFleetRequest(
+    deps.publicKey,
+    gatewayScopedJobId(body.migrationId, deps.gatewayId),
+    rawBody,
+    sigHeader ?? undefined,
+  );
   if (!sigValid) {
     log(`[migration-http] ⚠ bad signature migrationId=${body.migrationId} slug=${body.slug}`);
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
+  if (rejectMisaddressedGateway(req, res, deps.gatewayId, log)) return null;
   return body;
 }
 
 function parseAndVerifySurgeBody(
   req: Request,
   res: Response,
-  publicKey: string,
+  deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
   log: (msg: string) => void,
 ): CompleteSurgeHandoffRequestBody | null {
   const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
@@ -367,11 +374,17 @@ function parseAndVerifySurgeBody(
     return null;
   }
   const signature = req.header(SIGNATURE_HEADER);
-  if (!verifyFleetRequest(publicKey, body.migrationId, rawBody, signature ?? undefined)) {
+  if (!verifyFleetRequest(
+    deps.publicKey,
+    gatewayScopedJobId(body.migrationId, deps.gatewayId),
+    rawBody,
+    signature ?? undefined,
+  )) {
     log(`[surge-handoff] bad signature migrationId=${body.migrationId}`);
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
+  if (rejectMisaddressedGateway(req, res, deps.gatewayId, log)) return null;
   return body;
 }
 
@@ -380,7 +393,7 @@ export function createCompleteSurgeHandoffHandler(
 ): RequestHandler {
   const log = deps.log ?? ((message) => console.log(message));
   return async (req, res) => {
-    const body = parseAndVerifySurgeBody(req, res, deps.publicKey, log);
+    const body = parseAndVerifySurgeBody(req, res, deps, log);
     if (!body) return;
     if (!deps.releaseSurgeReadiness) {
       res.status(500).json({ error: "surge readiness is not configured" });
@@ -408,10 +421,14 @@ function verifyHeaderSignature(
   migrationId: string,
   slug: string,
   sigHeader: string | undefined,
-  publicKey: string,
+  deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
 ): boolean {
-
-return verifyFleetRequest(publicKey, migrationId, slug, sigHeader);
+  return verifyFleetRequest(
+    deps.publicKey,
+    gatewayScopedJobId(migrationId, deps.gatewayId),
+    slug,
+    sigHeader,
+  );
 }
 
 function tarArgsForSources(
@@ -473,7 +490,7 @@ function spawnTarStream(
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<QuiesceRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<QuiesceRequestBody>(req, res, deps, log);
     if (!body) return;
 
     try {
@@ -499,7 +516,7 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
 export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<FlushGatewayRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<FlushGatewayRequestBody>(req, res, deps, log);
     if (!body) return;
 
     if (!deps.flushLocalState) {
@@ -597,7 +614,7 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
     const body = parseAndVerifyJsonBody<RestoreMigrationRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -646,7 +663,7 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
 export function createExportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
     if (!body) return;
 
     try {
@@ -704,7 +721,7 @@ export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHan
     const body = parseAndVerifyJsonBody<ExportPathsRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -748,7 +765,7 @@ export function createActivationManifestExportHandler(
     const body = parseAndVerifyJsonBody<ActivationManifestExportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -796,7 +813,7 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
     const body = parseAndVerifyJsonBody<PrepareImportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -833,7 +850,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
     const body = parseAndVerifyJsonBody<ActivateImportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -1492,7 +1509,7 @@ function parseRsyncPhaseRequest<
   phase: RsyncMigrationRpcPhase,
   log: (msg: string) => void,
 ): RsyncPhaseRequest<T> | null {
-  const body = parseAndVerifyJsonBody<T>(req, res, deps.publicKey, log);
+  const body = parseAndVerifyJsonBody<T>(req, res, deps, log);
   if (!body) return null;
   if (!validateRsyncRpcPhase(body.rpcPhase, phase, res)) return null;
   const mode = validateTransferMode(body.mode, res);
@@ -1822,7 +1839,7 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     const body = parseAndVerifyJsonBody<AbortRsyncImportRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -1908,7 +1925,7 @@ export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler 
     const body = parseAndVerifyJsonBody<VerifyMigrationRequestBody>(
       req,
       res,
-      deps.publicKey,
+      deps,
       log,
     );
     if (!body) return;
@@ -1946,7 +1963,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps, log);
     if (!body) return;
     const target = validatePushStateBody(body, res);
     if (!target) return;
@@ -2082,11 +2099,12 @@ function validateImportRequest(
   }
   if (rejectInvalidSlug(slug, res)) return null;
   const sigHeader = req.header(SIGNATURE_HEADER);
-  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps.publicKey)) {
+  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps)) {
     log(`[migration-http] ⚠ bad signature on import migrationId=${migrationId} slug=${slug}`);
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
+  if (rejectMisaddressedGateway(req, res, deps.gatewayId, log)) return null;
   const mode = parseMigrationImportMode(req.header(MIGRATION_MODE_HEADER));
   return { migrationId, slug, mode };
 }
@@ -2353,7 +2371,7 @@ function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: 
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
-    const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps.publicKey, log);
+    const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps, log);
     if (!body) return;
 
     try {

@@ -1,4 +1,4 @@
-import { signFleetRequest } from "./fleet-signature.js";
+import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature.js";
 import { SIGNATURE_HEADER, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATION_VERIFY_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
 export class MigrationRpcError extends Error {
     status;
@@ -28,14 +28,8 @@ export function isDefinitiveConfigRpcRejection(error) {
                 rpc.status !== 408 &&
                 rpc.status !== 429);
 }
-export function createMigrationClient(deps) {
-    const fetchImpl = deps.fetch ?? globalThis.fetch;
-    const log = deps.log ?? (() => undefined);
-    const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
-    const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
-    const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
-    const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
-    const fetchWithTimeout = async (label, url, init, timeoutMs) => {
+function createFetchWithTimeout(fetchImpl) {
+    return async (label, url, init, timeoutMs) => {
         const controller = new AbortController();
         let didTimeout = false;
         const timer = setTimeout(() => {
@@ -56,11 +50,13 @@ export function createMigrationClient(deps) {
             clearTimeout(timer);
         }
     };
-    const postSignedJson = async (transportId, path, migrationId, body, timeoutMs) => {
-        const rawBody = JSON.stringify(body);
-        const signature = signFleetRequest(deps.privateKey, migrationId, rawBody);
-        const url = `${deps.resolveGatewayUrl(transportId)}${path}`;
-        const res = await fetchWithTimeout(path, url, {
+}
+function createSignedJsonPoster(deps) {
+    return async (request) => {
+        const { path, timeoutMs } = request;
+        const rawBody = JSON.stringify(request.body);
+        const signature = signFleetRequest(deps.privateKey, gatewayScopedJobId(request.migrationId, request.gatewayId), rawBody);
+        const res = await deps.fetchWithTimeout(path, `${deps.resolveGatewayUrl(request.transportId)}${path}`, {
             method: "POST",
             headers: {
                 "content-type": "application/json",
@@ -80,14 +76,40 @@ export function createMigrationClient(deps) {
             });
         }
     };
+}
+export function createMigrationClient(deps) {
+    const log = deps.log ?? (() => undefined);
+    const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
+    const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
+    const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
+    const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
+    const postSignedJson = createSignedJsonPoster({
+        privateKey: deps.privateKey,
+        resolveGatewayUrl: deps.resolveGatewayUrl,
+        fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
+    });
     return {
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
-            const res = await postSignedJson(transportId ?? gatewayId, `/restore/${gatewayId}`, migrationId, { migrationId, uid, slug, snapshot }, transferMs);
+            const res = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/restore/${gatewayId}`,
+                gatewayId,
+                migrationId,
+                body: { migrationId, uid, slug, snapshot },
+                timeoutMs: transferMs,
+            });
             log(`[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`);
             return res;
         },
         async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
-            const res = await postSignedJson(transportId ?? gatewayId, `/quiesce/${gatewayId}`, migrationId, timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs }, quiesceMs);
+            const res = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/quiesce/${gatewayId}`,
+                gatewayId,
+                migrationId,
+                body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+                timeoutMs: quiesceMs,
+            });
             if (!res.drained) {
                 throw new Error(`quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`);
             }
@@ -95,39 +117,67 @@ export function createMigrationClient(deps) {
             return res;
         },
         async flushGateway({ migrationId, gatewayId, transportId, slug, reason, expectedSystemConfigCommit, }) {
-            const res = await postSignedJson(transportId ?? gatewayId, `/flush/${gatewayId}`, migrationId, {
+            const res = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/flush/${gatewayId}`,
+                gatewayId,
                 migrationId,
-                slug,
-                reason,
-                ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
-            }, transferMs);
+                body: {
+                    migrationId,
+                    slug,
+                    reason,
+                    ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+                },
+                timeoutMs: transferMs,
+            });
             log(`[migration-client] ✅ flushGateway migrationId=${migrationId} slug=${slug} gateway=${gatewayId} ok=${res.ok}`);
             return res;
         },
         async unmount({ migrationId, gatewayId, transportId, slug }) {
-            const res = await postSignedJson(transportId ?? gatewayId, `/unmount/${gatewayId}`, migrationId, { migrationId, slug }, unmountMs);
+            const res = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/unmount/${gatewayId}`,
+                gatewayId,
+                migrationId,
+                body: { migrationId, slug },
+                timeoutMs: unmountMs,
+            });
             log(`[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`);
             return res;
         },
         async transferState({ migrationId, fromGatewayId, toGatewayId, fromTransportId, toTransportId, slug, mode, includeActivationManifest, projectCheckoutScope, }) {
             const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
-            const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
-            const parsed = await postSignedJson(fromTransportId ?? fromGatewayId, `/push-state/${fromGatewayId}`, migrationId, {
+            const targetImportSignature = signFleetRequest(deps.privateKey, gatewayScopedJobId(migrationId, toGatewayId), slug);
+            const parsed = await postSignedJson({
+                transportId: fromTransportId ?? fromGatewayId,
+                path: `/push-state/${fromGatewayId}`,
+                gatewayId: fromGatewayId,
                 migrationId,
-                slug,
-                targetGatewayId: toGatewayId,
-                targetUrl,
-                targetImportSignature,
-                ...(mode ? { mode } : {}),
-                ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
-                ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
-            }, transferMs);
+                body: {
+                    migrationId,
+                    slug,
+                    targetGatewayId: toGatewayId,
+                    targetUrl,
+                    targetImportSignature,
+                    ...(mode ? { mode } : {}),
+                    ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
+                    ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
+                },
+                timeoutMs: transferMs,
+            });
             log(`[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`);
             return parsed;
         },
         async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
             const requestTimeoutMs = timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
-            const res = await postSignedJson(transportId ?? gatewayId, `/verify/${gatewayId}`, migrationId, timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs }, requestTimeoutMs);
+            const res = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/verify/${gatewayId}`,
+                gatewayId,
+                migrationId,
+                body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+                timeoutMs: requestTimeoutMs,
+            });
             if (!res.ready) {
                 throw new Error(`target verify failed on ${gatewayId} for slug=${slug}: ${JSON.stringify(res.checks)}`);
             }

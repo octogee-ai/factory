@@ -17,7 +17,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
-import { signFleetRequest } from "@octogee/core/fleet-signature";
+import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 
 const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 const DEFAULT_WORKER_ID = `glm-${process.pid}`;
@@ -151,12 +151,17 @@ function postSignedJson<Resp>(
     transportId: string;
     baseUrl?: string;
     path: string;
+    gatewayId: string;
     migrationId: string;
     body: Record<string, unknown>;
   },
 ): Promise<Resp> {
   const rawBody = JSON.stringify(opts.body);
-  const signature = signFleetRequest(deps.privateKey, opts.migrationId, rawBody);
+  const signature = signFleetRequest(
+    deps.privateKey,
+    gatewayScopedJobId(opts.migrationId, opts.gatewayId),
+    rawBody,
+  );
   const url = `${opts.baseUrl ?? deps.resolveGatewayUrl(opts.transportId)}${opts.path}`;
   return deps.fetchImpl(url, {
     method: "POST",
@@ -358,6 +363,7 @@ export function createRsyncMigrationTransfer(
         transportId: opts.transportId,
         baseUrl: opts.baseUrl,
         path: `${opts.pathSuffix}/${opts.gatewayId}`,
+        gatewayId: opts.gatewayId,
         migrationId: opts.migrationId,
         body: opts.body,
       },

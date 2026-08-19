@@ -13,6 +13,7 @@ export const MIGRATION_VERIFY_TIMEOUT_MS = VERIFY_ACCOUNT_TIMEOUT_MS + 30_000;
 // local-coach-wired.ts (the pin) and fleet-provisioner getEvictObservedSlugs (the skip).
 export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export const FLEET_STATE_PATH = "/fleet-state";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1;
 export const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE = "dashboard_bridge.capability.json";

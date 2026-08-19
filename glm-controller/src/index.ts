@@ -29,10 +29,10 @@ import {
   isGatewayImageTag,
 } from "@octogee/shared/types/image-tag";
 import {
-  parseHealthResponse,
   startGatewayHeartbeatPoller,
   type GatewayHeartbeatPollerDeps,
 } from "./gateway-heartbeat-poller.js";
+import { createFleetStateFetcher } from "./fleet-state-client.js";
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
@@ -185,7 +185,7 @@ import {
   verifyCustomerFirestoreErasure,
 } from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
-import { signFleetRequest } from "@octogee/core/fleet-signature";
+import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   readAssignedSlugsForGateway,
   slugFromAssignedUser,
@@ -2024,10 +2024,18 @@ async function runClaimedOperation(
 function buildHeartbeatPollerCoreDeps(
   db: Firestore,
   log: (msg: string) => void,
+  privateKey: string,
   informer: FleetInformer,
   listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
 ): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
   const polledHeartbeats = new Map<string, unknown>();
+  const fetchFleetState = createFleetStateFetcher({
+    privateKey,
+    resolveBaseUrl: (gatewayId) =>
+      `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`,
+    timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
+    log,
+  });
   return {
     listGatewayIds: async () => {
       const docs = informer.glmGateways() ?? await listGatewayDocs();
@@ -2035,20 +2043,7 @@ function buildHeartbeatPollerCoreDeps(
       for (const doc of docs) polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
       return heartbeatPollInstanceIds(docs);
     },
-    fetchHealth: async (gatewayId) => {
-      const url = `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}/health`;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), GATEWAY_HEALTH_TIMEOUT_MS);
-      try {
-        const res = await fetch(url, { signal: controller.signal });
-        if (!res.ok) return null;
-        return parseHealthResponse(await res.json());
-      } catch {
-        return null;
-      } finally {
-        clearTimeout(timer);
-      }
-    },
+    fetchFleetState,
     readAssignedSlugs: async (instanceId) => {
       const mirroredRuntime = informer.glmGateways()?.find((doc) => doc.id === instanceId);
       const runtime = mirroredRuntime
@@ -2093,7 +2088,7 @@ export function buildGatewayHeartbeatPollerDeps(
   informer: FleetInformer,
 ): GatewayHeartbeatPollerDeps {
   return {
-    ...buildHeartbeatPollerCoreDeps(db, log, informer, async () => {
+    ...buildHeartbeatPollerCoreDeps(db, log, privateKey, informer, async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
       return snap.docs;
     }),
@@ -3941,7 +3936,11 @@ export async function callUnmountRpc(
   const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
   const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
-  const signature = signFleetRequest(privateKey, migrationId, body);
+  const signature = signFleetRequest(
+    privateKey,
+    gatewayScopedJobId(migrationId, gatewayId),
+    body,
+  );
   const controller = new AbortController();
   let didTimeout = false;
   const timer = setTimeout(() => {

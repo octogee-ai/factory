@@ -42,6 +42,26 @@ export declare const MIGRATION_UNMOUNT_TIMEOUT_MS: number;
 export declare const MIGRATION_VERIFY_TIMEOUT_MS: number;
 export declare const MIGRATING_IN_PIN_TTL_MS: number;
 export declare const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export interface FleetHealthResponse {
+    status: string;
+    podUid: string | null;
+    startedAt: number;
+}
+export interface FleetStateRequestBody {
+    requestId: string;
+    gatewayId: string;
+}
+export interface FleetStateResponse {
+    status: string;
+    gatewayId: string;
+    podUid: string | null;
+    version: string;
+    openclawVersion: string;
+    startedAt: number;
+    customers: string[];
+    migratingIn: string[];
+}
+export declare const FLEET_STATE_PATH = "/fleet-state";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL: "openclaw-dashboard-bridge";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION: 1;
 export declare const OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_FILE: "dashboard_bridge.capability.json";

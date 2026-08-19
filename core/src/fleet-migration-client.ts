@@ -1,6 +1,6 @@
 
 
-import { signFleetRequest } from "./fleet-signature.js";
+import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature.js";
 import {
   SIGNATURE_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
@@ -135,20 +135,15 @@ export function isDefinitiveConfigRpcRejection(error: unknown): boolean {
       rpc.status !== 429);
 }
 
-export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const log = deps.log ?? (() => undefined);
-  const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
-  const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
-  const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
-  const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
+type FetchWithTimeout = (
+  label: string,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+) => Promise<Response>;
 
-  const fetchWithTimeout = async (
-    label: string,
-    url: string,
-    init: RequestInit,
-    timeoutMs: number,
-  ): Promise<Response> => {
+function createFetchWithTimeout(fetchImpl: typeof globalThis.fetch): FetchWithTimeout {
+  return async (label, url, init, timeoutMs) => {
     const controller = new AbortController();
     let didTimeout = false;
     const timer = setTimeout(() => {
@@ -170,20 +165,36 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       clearTimeout(timer);
     }
   };
+}
 
-  const postSignedJson = async <Resp>(
-    transportId: string,
-    path: string,
-    migrationId: string,
-    body: Record<string, unknown>,
-    timeoutMs: number,
-  ): Promise<Resp> => {
-    const rawBody = JSON.stringify(body);
-    const signature = signFleetRequest(deps.privateKey, migrationId, rawBody);
-    const url = `${deps.resolveGatewayUrl(transportId)}${path}`;
-    const res = await fetchWithTimeout(
+// gatewayId is the pod the call addresses: the signature is scoped to it so a pod
+// cannot relay a call it received to a sibling gateway. transportId addresses the
+// K8s Service (a revision), which is why the two are separate.
+interface SignedGatewayPost {
+  transportId: string;
+  path: string;
+  gatewayId: string;
+  migrationId: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}
+
+function createSignedJsonPoster(deps: {
+  privateKey: string;
+  resolveGatewayUrl: (transportId: string) => string;
+  fetchWithTimeout: FetchWithTimeout;
+}): <Resp>(request: SignedGatewayPost) => Promise<Resp> {
+  return async <Resp>(request: SignedGatewayPost): Promise<Resp> => {
+    const { path, timeoutMs } = request;
+    const rawBody = JSON.stringify(request.body);
+    const signature = signFleetRequest(
+      deps.privateKey,
+      gatewayScopedJobId(request.migrationId, request.gatewayId),
+      rawBody,
+    );
+    const res = await deps.fetchWithTimeout(
       path,
-      url,
+      `${deps.resolveGatewayUrl(request.transportId)}${path}`,
       {
         method: "POST",
         headers: {
@@ -204,16 +215,30 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       });
     }
   };
+}
+
+export function createMigrationClient(deps: MigrationClientDeps): MigrationClient {
+  const log = deps.log ?? (() => undefined);
+  const quiesceMs = deps.timeouts?.quiesceMs ?? MIGRATION_QUIESCE_TIMEOUT_MS;
+  const transferMs = deps.timeouts?.transferMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
+  const unmountMs = deps.timeouts?.unmountMs ?? MIGRATION_UNMOUNT_TIMEOUT_MS;
+  const verifyMs = deps.timeouts?.verifyMs ?? MIGRATION_VERIFY_TIMEOUT_MS;
+  const postSignedJson = createSignedJsonPoster({
+    privateKey: deps.privateKey,
+    resolveGatewayUrl: deps.resolveGatewayUrl,
+    fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
+  });
 
   return {
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
-      const res = await postSignedJson<RestoreMigrationResponse>(
-        transportId ?? gatewayId,
-        `/restore/${gatewayId}`,
+      const res = await postSignedJson<RestoreMigrationResponse>({
+        transportId: transportId ?? gatewayId,
+        path: `/restore/${gatewayId}`,
+        gatewayId,
         migrationId,
-        { migrationId, uid, slug, snapshot },
-        transferMs,
-      );
+        body: { migrationId, uid, slug, snapshot },
+        timeoutMs: transferMs,
+      });
       log(
         `[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`,
       );
@@ -221,13 +246,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     },
 
     async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
-      const res = await postSignedJson<QuiesceResponse>(
-        transportId ?? gatewayId,
-        `/quiesce/${gatewayId}`,
+      const res = await postSignedJson<QuiesceResponse>({
+        transportId: transportId ?? gatewayId,
+        path: `/quiesce/${gatewayId}`,
+        gatewayId,
         migrationId,
-        timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
-        quiesceMs,
-      );
+        body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+        timeoutMs: quiesceMs,
+      });
       if (!res.drained) {
         throw new Error(
           `quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`,
@@ -245,18 +271,19 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       reason,
       expectedSystemConfigCommit,
     }) {
-      const res = await postSignedJson<FlushGatewayResponse>(
-        transportId ?? gatewayId,
-        `/flush/${gatewayId}`,
+      const res = await postSignedJson<FlushGatewayResponse>({
+        transportId: transportId ?? gatewayId,
+        path: `/flush/${gatewayId}`,
+        gatewayId,
         migrationId,
-        {
+        body: {
           migrationId,
           slug,
           reason,
           ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
         },
-        transferMs,
-      );
+        timeoutMs: transferMs,
+      });
       log(
         `[migration-client] ✅ flushGateway migrationId=${migrationId} slug=${slug} gateway=${gatewayId} ok=${res.ok}`,
       );
@@ -264,13 +291,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     },
 
     async unmount({ migrationId, gatewayId, transportId, slug }) {
-      const res = await postSignedJson<UnmountResponse>(
-        transportId ?? gatewayId,
-        `/unmount/${gatewayId}`,
+      const res = await postSignedJson<UnmountResponse>({
+        transportId: transportId ?? gatewayId,
+        path: `/unmount/${gatewayId}`,
+        gatewayId,
         migrationId,
-        { migrationId, slug },
-        unmountMs,
-      );
+        body: { migrationId, slug },
+        timeoutMs: unmountMs,
+      });
       log(
         `[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`,
       );
@@ -289,12 +317,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       projectCheckoutScope,
     }) {
       const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
-      const targetImportSignature = signFleetRequest(deps.privateKey, migrationId, slug);
-      const parsed = await postSignedJson<ImportResponse>(
-        fromTransportId ?? fromGatewayId,
-        `/push-state/${fromGatewayId}`,
+      const targetImportSignature = signFleetRequest(
+        deps.privateKey,
+        gatewayScopedJobId(migrationId, toGatewayId),
+        slug,
+      );
+      const parsed = await postSignedJson<ImportResponse>({
+        transportId: fromTransportId ?? fromGatewayId,
+        path: `/push-state/${fromGatewayId}`,
+        gatewayId: fromGatewayId,
         migrationId,
-        {
+        body: {
           migrationId,
           slug,
           targetGatewayId: toGatewayId,
@@ -304,8 +337,8 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
           ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
           ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
         },
-        transferMs,
-      );
+        timeoutMs: transferMs,
+      });
       log(
         `[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
       );
@@ -315,13 +348,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
       const requestTimeoutMs =
         timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
-      const res = await postSignedJson<VerifyMigrationResponse>(
-        transportId ?? gatewayId,
-        `/verify/${gatewayId}`,
+      const res = await postSignedJson<VerifyMigrationResponse>({
+        transportId: transportId ?? gatewayId,
+        path: `/verify/${gatewayId}`,
+        gatewayId,
         migrationId,
-        timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
-        requestTimeoutMs,
-      );
+        body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+        timeoutMs: requestTimeoutMs,
+      });
       if (!res.ready) {
         throw new Error(
           `target verify failed on ${gatewayId} for slug=${slug}: ${JSON.stringify(res.checks)}`,

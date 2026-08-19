@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   canonicalPayload,
+  gatewayScopedJobId,
   signFleetRequest,
   verifyFleetRequest,
 } from "./fleet-signature.js";
@@ -73,5 +74,40 @@ describe("signFleetRequest / verifyFleetRequest", () => {
     expect(verifyFleetRequest(PUBLIC_KEY, "job1", "{}", "zzzz".repeat(16))).toBe(
       false,
     );
+  });
+});
+
+describe("gatewayScopedJobId", () => {
+  it("binds a signature to the gateway it addresses", () => {
+    const rawBody = JSON.stringify({ migrationId: "m1", slug: "alice" });
+    const signature = signFleetRequest(
+      PRIVATE_KEY,
+      gatewayScopedJobId("m1", "builder-jack"),
+      rawBody,
+    );
+
+    expect(verifyFleetRequest(
+      PUBLIC_KEY,
+      gatewayScopedJobId("m1", "builder-jack"),
+      rawBody,
+      signature,
+    )).toBe(true);
+  });
+
+  it("refuses the same body and signature replayed at another gateway", () => {
+    const rawBody = JSON.stringify({ migrationId: "m1", slug: "alice" });
+    const signature = signFleetRequest(
+      PRIVATE_KEY,
+      gatewayScopedJobId("m1", "builder-jack"),
+      rawBody,
+    );
+
+    expect(verifyFleetRequest(
+      PUBLIC_KEY,
+      gatewayScopedJobId("m1", "shared-a"),
+      rawBody,
+      signature,
+    )).toBe(false);
+    expect(verifyFleetRequest(PUBLIC_KEY, "m1", rawBody, signature)).toBe(false);
   });
 });
