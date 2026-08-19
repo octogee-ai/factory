@@ -10,6 +10,7 @@ import {
   planGatewayConvergence,
   provisioningRuntimeDoc,
   requiresSurgeCustomerMigration,
+  supersedingGatewayImageTag,
   type DurableGateway,
 } from "../converge-gateway.js";
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
@@ -667,5 +668,72 @@ describe("provisioningRuntimeDoc", () => {
     });
     expect(newRelease.lifecycle).toBe("serving");
     expect(newRelease.release).toBe(3);
+  });
+});
+
+describe("supersedingGatewayImageTag", () => {
+  const desiredImage = { imageRepository: REPO, imageTag: "def5678" };
+
+  it("names the image a pending release will put on the pod", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 2, latestRelease: 3 }),
+      desiredImage,
+      pendingArtifact: artifact({ imageTag: "aaa1111" }),
+    })).toBe("aaa1111");
+  });
+
+  it("names the pending Builder image for a Builder gateway", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({
+        desiredRelease: 2,
+        latestRelease: 3,
+        gatewayClass: "builder",
+        imageProfile: "builder",
+      }),
+      desiredImage: { imageRepository: BUILDER_REPO, imageTag: "def5678" },
+      pendingArtifact: artifact({
+        imageTag: "aaa1111",
+        profileImages: { builder: { imageRepository: BUILDER_REPO, imageTag: "bbb2222" } },
+      }),
+    })).toBe("bbb2222");
+  });
+
+  it("stays silent when no release is pending", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 3, latestRelease: 3 }),
+      desiredImage,
+      pendingArtifact: artifact({ imageTag: "aaa1111" }),
+    })).toBeUndefined();
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 3, latestRelease: 2 }),
+      desiredImage,
+      pendingArtifact: artifact({ imageTag: "aaa1111" }),
+    })).toBeUndefined();
+  });
+
+  it("stays silent when the pending release keeps the same image", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 2, latestRelease: 3 }),
+      desiredImage,
+      pendingArtifact: artifact(),
+    })).toBeUndefined();
+  });
+
+  it("stays silent when the pending release names no image for this gateway", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({
+        desiredRelease: 2,
+        latestRelease: 3,
+        gatewayClass: "builder",
+        imageProfile: "builder",
+      }),
+      desiredImage: { imageRepository: BUILDER_REPO, imageTag: "def5678" },
+      pendingArtifact: artifact({ imageTag: "aaa1111", profileImages: undefined }),
+    })).toBeUndefined();
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 2, latestRelease: 3 }),
+      desiredImage,
+      pendingArtifact: null,
+    })).toBeUndefined();
   });
 });

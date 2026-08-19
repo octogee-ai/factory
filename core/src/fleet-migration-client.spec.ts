@@ -402,6 +402,36 @@ describe("MigrationClient.restoreTarget", () => {
 });
 
 describe("MigrationClient.transferState", () => {
+  it("names the post-commit step an imported customer could not confirm", async () => {
+    const logs: string[] = [];
+    const { fakeFetch } = captureFetch(() =>
+      new Response(
+        JSON.stringify({
+          migrationId: "m1",
+          slug: "alice",
+          imported: true,
+          verificationPending: "connect response timed out after 30000ms",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const client = createMigrationClient({
+      privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://fleet.example.com",
+      fetch: fakeFetch,
+      log: (message) => logs.push(message),
+    });
+    await expect(client.transferState({
+      migrationId: "m1",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+    })).resolves.toMatchObject({ imported: true });
+
+    expect(logs.some((line) => line.includes("verification pending"))).toBe(true);
+  });
+
   it("tells the source gateway to push directly to the target gateway", async () => {
     const { calls, fakeFetch } = captureFetch(() =>
       new Response(

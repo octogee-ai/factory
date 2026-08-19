@@ -416,6 +416,46 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
 
+  it("keeps a committed activation when the reload outlasts a post-commit step", async () => {
+    const log = vi.fn();
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] },
+      })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      secretsReload: vi.fn(async () => {
+        throw new OpenclawWireError("timeout", "connect response timed out after 30000ms");
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({
+      appliedFingerprint: expect.any(String),
+      verificationPending: expect.stringContaining("connect response timed out"),
+    });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("activation committed; verification incomplete"),
+    );
+  });
+
+  it("fails a committed activation when the migration itself was cancelled", async () => {
+    const controller = new AbortController();
+    const cancelled = new Error("migration cancelled");
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      secretsReload: vi.fn(async () => {
+        controller.abort(cancelled);
+        throw cancelled;
+      }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.activateImportedCustomer("tester10", { signal: controller.signal }),
+    ).rejects.toBe(cancelled);
+  });
+
   it("waits for the imported config to apply before reloading its secret runtime", async () => {
     const configGet = vi.fn()
       .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
@@ -450,6 +490,28 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.removeActivationManifest.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("rides out a reload that refuses connections while waiting for the applied config", async () => {
+    const configGet = vi.fn()
+      .mockRejectedValueOnce(new OpenclawWireError("timeout", "connect response timed out after 30000ms"))
+      .mockResolvedValueOnce({
+        ...configSnapshot({}),
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-old",
+      })
+      .mockRejectedValueOnce(new OpenclawWireError("timeout", "connect response timed out after 30000ms"))
+      .mockResolvedValue({
+        ...configSnapshot({}),
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+      });
+    const rpc = { configGet } as unknown as Pick<GatewayRpcClient, "configGet">;
+
+    await expect(
+      waitForAppliedConfigRevision(rpc, "tester10", { pollIntervalMs: 0 }),
+    ).resolves.toBeUndefined();
+    expect(configGet).toHaveBeenCalledTimes(4);
   });
 
   it("fails the import wait when the runtime never applies the persisted config", async () => {
@@ -597,7 +659,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
   });
 
-  it("preserves the activation manifest when secrets.reload does not acknowledge success", async () => {
+  it("reports pending verification and preserves the manifest when secrets.reload does not acknowledge success", async () => {
     const rpc = {
       channelsStatus: vi.fn(async () => ({
         channelAccounts: {
@@ -609,9 +671,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
-    await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(
-      /secrets\.reload did not acknowledge success/,
-    );
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({
+      verificationPending: expect.stringMatching(/secrets\.reload did not acknowledge success/),
+    });
 
     expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
     expect(rpc.channelsStatus).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import {
   acquireSystemConfigMutationLease,
   acquireSystemConfigShellCapabilitySync,
@@ -253,7 +254,7 @@ describe("fleet-controller entrypoint config", () => {
     }
   });
 
-  it("uses a two-minute RPC timeout while retaining the provisioning mutation gate", async () => {
+  it("budgets its connect for a config reload while retaining the provisioning mutation gate", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-timeout-"));
     const configPatch = vi.fn(async () => ({ ok: true as const, hash: "next" }));
     const createRpc = vi.fn(() => ({
@@ -273,6 +274,7 @@ describe("fleet-controller entrypoint config", () => {
       expect(createRpc).toHaveBeenCalledWith({
         allowLegacyGatewayTokenFallback: true,
         callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+        connectTimeoutMs: CONFIG_RELOAD_DEADLINE_MS,
       });
       await expect(rpc.configPatch({ agents: {} }, "current"))
         .rejects.toThrow(/shell-active/i);

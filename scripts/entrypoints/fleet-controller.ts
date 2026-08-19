@@ -1,3 +1,4 @@
+import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import {
   AGENT_PREFIX,
   AGENTS_DIR,
@@ -200,14 +201,20 @@ export function createFleetControllerMutationGatedRpc(
   openclawDir: string = OPENCLAW_DIR,
   createRpc?: typeof createGatewayRpc,
 ): GatewayRpcClient {
+  // Every RPC opens its own socket, and the runtime this one talks to reloads
+  // whenever a config patch lands — re-registering its whole plugin surface before
+  // it answers a handshake again. The connect budget is therefore a reload budget;
+  // a request-sized one turns any post-patch call into a hard failure.
   const runtimeRpc = createRpc
     ? createRpc({
         allowLegacyGatewayTokenFallback: true,
         callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+        connectTimeoutMs: CONFIG_RELOAD_DEADLINE_MS,
       })
     : createGatewayRpc({
         allowLegacyGatewayTokenFallback: true,
         callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
+        connectTimeoutMs: CONFIG_RELOAD_DEADLINE_MS,
       });
   return createSystemConfigMutationGatedRpc(runtimeRpc, openclawDir);
 }

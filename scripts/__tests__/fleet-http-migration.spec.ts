@@ -2043,6 +2043,69 @@ describe("queued-rsync migration control handlers", () => {
     expect(copyArgs.at(-1)).toBe("/openclaw/");
   });
 
+  it("keeps a committed import whose activation could not finish verifying", async () => {
+    const adapter = mkAdapter({
+      prepareImportDir: vi.fn(async () => "/openclaw"),
+      activateImportedCustomer: vi.fn(async () => ({
+        appliedFingerprint: "fp-chris",
+        verificationPending: "connect response timed out after 30000ms",
+      })),
+      markCustomerMigratingIn: vi.fn(),
+      onMounted: vi.fn(),
+    });
+    const daemon = mkFakeChild();
+    const copy = mkFakeChild({ exitCode: 0 });
+    spawnMock.mockReturnValueOnce(daemon).mockReturnValueOnce(copy);
+    const deps = mkDeps({
+      adapter,
+      migrationRsyncPort: 30874,
+      waitForRsyncReady: vi.fn(async () => undefined),
+      pauseSystemConfigWatch: vi.fn(async (_slug: string) => undefined),
+      resumeSystemConfigWatch: vi.fn(async (_slug: string) => undefined),
+    });
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-pending",
+      slug: "chris",
+      rpcPhase: "prepare-rsync-import",
+      mode: "final",
+      transferUser: "migration",
+      transferKey: "d".repeat(64),
+    };
+    const prepareRaw = JSON.stringify(prepareBody);
+    await createPrepareRsyncImportHandler(deps)(
+      mkRequest(prepareBody, {
+        signature: signForPod(prepareBody.migrationId, prepareRaw),
+        localAddress: `::ffff:${TARGET_POD_IP}`,
+      }),
+      mkResponse().res,
+      vi.fn(),
+    );
+
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: "mig-pending",
+      slug: "chris",
+      rpcPhase: "finish-rsync-import",
+      mode: "final",
+    };
+    const finishRaw = JSON.stringify(finishBody);
+    const { res, getStatus, getBody } = mkResponse();
+    await createFinishRsyncImportHandler(deps)(
+      mkRequest(finishBody, {
+        signature: signForPod(finishBody.migrationId, finishRaw),
+      }),
+      res,
+      vi.fn(),
+    );
+
+    expect(getStatus()).toBe(200);
+    expect(getBody()).toMatchObject({
+      imported: true,
+      verificationPending: "connect response timed out after 30000ms",
+    });
+    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+    expect(adapter.onMounted).toHaveBeenCalledWith("chris");
+  });
+
   it("attaches and proves a configured Builder overlay without generic activation before finishing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-finish-"));
     migrationTempRoots.push(stateDir);

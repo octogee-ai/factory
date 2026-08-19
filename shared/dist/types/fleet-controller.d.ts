@@ -35,6 +35,7 @@ export declare const GATEWAY_HEARTBEAT_INTERVAL_MS = 15000;
 export declare const GATEWAY_UNREACHABLE_AFTER_MS: number;
 export declare const VERIFY_ACCOUNT_TIMEOUT_MS = 120000;
 export declare const CONFIG_PATCH_DEADLINE_MS = 120000;
+export declare const CONFIG_RELOAD_DEADLINE_MS = 120000;
 export declare const ADD_CUSTOMER_DEADLINE_MS = 300000;
 export declare const MIGRATION_QUIESCE_TIMEOUT_MS = 60000;
 export declare const MIGRATION_TRANSFER_TIMEOUT_MS: number;
@@ -199,6 +200,8 @@ export interface ImportResponse {
     slug: string;
     imported: boolean;
     alreadyMounted?: boolean;
+    /** Set when the activation committed but a post-commit step could not be confirmed. */
+    verificationPending?: string;
 }
 export interface UnmountRequestBody extends MigrationRequestBody {
 }

@@ -31,7 +31,7 @@ export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';
 export type { NotificationCategory, DeliveryChannel, NotificationAction, InboxDocument, } from './notifications.js';
 export type { GatewayStatus, GatewayState, GatewayLastError, CustomerSnapshot, } from './fleet-controller.js';
 export { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from './openclaw-release.js';
-export { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';
+export { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, VERIFY_ACCOUNT_TIMEOUT_MS, CONFIG_PATCH_DEADLINE_MS, CONFIG_RELOAD_DEADLINE_MS, ADD_CUSTOMER_DEADLINE_MS, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATING_IN_PIN_TTL_MS, SIGNATURE_HEADER, GATEWAYS_COLLECTION, } from './fleet-controller.js';
 export type { OnboardingOrchestratorConfig, } from './orchestrator-placement.js';
 export { resolveContinuousBuilderPlacement, resolveLiveActivationTargetGatewayId, } from './orchestrator-placement.js';
 export type { SharedGatewayAutoscalingConfig, SharedGatewayAutoscalingDecision, SharedGatewayAutoscalingInput, SharedGatewayAutoscalingMember, SharedGatewayPoolCandidate, SharedGatewayPoolConfig, SharedGatewayRebalance, SharedGatewaySelection, } from './shared-gateway-pool.js';

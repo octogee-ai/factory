@@ -1444,4 +1444,144 @@ describe("surge customer handoff", () => {
       updatedByOperationId: h.operationId,
     });
   });
+  it("stands down instead of converging a pod a pending release replaces", async () => {
+    const h = harness();
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+    expect(h.assignments().every((item) => item.state === "serving")).toBe(true);
+  });
+
+  it("resumes a held Builder source while standing down for a pending release", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+      bootingUids: [oldPod.uid, targetPod.uid],
+      prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
+  });
+
+  it("unreserves a sourceless Builder target while standing down for a pending release", async () => {
+    const h = harness({
+      pods: [targetPod],
+      assignments: [assignment("u1", "alice")],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["unreserve-target:target-uid:alice"]);
+  });
+
+  it("still settles a released target while a rollout is queued", async () => {
+    const h = harness({
+      pods: [{ ...targetPod, ready: true }],
+      targetReleased: true,
+      targetMountedCustomers: ["alice"],
+      assignments: [assignment("u1", "alice")],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: true });
+  });
+
+  it("reopens a gated lease for the sourceless target it unreserves while standing down", async () => {
+    const h = harness({
+      pods: [targetPod],
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "unreserve-target:target-uid:alice",
+      "assignment:u1:serving",
+    ]);
+  });
+
+  it("reopens a lease its own dead handoff left gated while standing down", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["assignment:u1:serving"]);
+    expect(h.assignments()[0]).toMatchObject({ state: "serving" });
+  });
+
+  it("reopens an abandoned surge gate while standing down for a pending release", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: abandonedOperationId,
+      })],
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+      supersedingImageTag: "next-sha",
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(["assignment:u1:serving"]);
+    expect(h.assignments()[0]).toMatchObject({ state: "serving" });
+  });
 });

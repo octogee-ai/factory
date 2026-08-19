@@ -63,7 +63,7 @@ import {
   readAgentSessionsAtPath,
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
-import type { GatewayRpcClient } from "./gateway-rpc.js";
+import type { ConfigGetResult, GatewayRpcClient } from "./gateway-rpc.js";
 import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
@@ -640,29 +640,48 @@ export async function waitForAppliedConfigRevision(
   const timeoutMs = opts.timeoutMs ?? CONFIG_PATCH_DEADLINE_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? 250;
   const deadline = Date.now() + timeoutMs;
-  throwIfConfigApplicationWaitAborted(opts.signal);
-  let snapshot = await rpc.configGet();
-  const targetRevisionHash = snapshot.configRevisionHash;
+  let lastReadError: string | null = null;
+  let targetRevisionHash: string | null = null;
   let appliedConfigHash: string | null = null;
-  for (;;) {
+  const idle = (): Promise<void> => new Promise<void>((resolve) =>
+    setTimeout(resolve, Math.max(0, Math.min(pollIntervalMs, deadline - Date.now()))));
+  // The patch this waits on is what makes the runtime reload, and a reloading
+  // runtime refuses the socket every poll opens. A read that fails is therefore
+  // the expected shape of "not applied yet", not a failed import.
+  const readSnapshot = async (): Promise<ConfigGetResult | null> => {
     throwIfConfigApplicationWaitAborted(opts.signal);
-    if (snapshot.configRevisionHash !== targetRevisionHash) {
-      throw new Error(
-        `[import:${slug}] config revision changed while waiting ` +
-          `(expected=${targetRevisionHash}, observed=${snapshot.configRevisionHash})`,
-      );
+    try {
+      return await rpc.configGet();
+    } catch (error) {
+      throwIfConfigApplicationWaitAborted(opts.signal);
+      lastReadError = error instanceof Error ? error.message : String(error);
+      return null;
     }
-    appliedConfigHash = snapshot.appliedConfigHash;
-    if (targetRevisionHash === appliedConfigHash) return;
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
-    throwIfConfigApplicationWaitAborted(opts.signal);
-    snapshot = await rpc.configGet();
+  };
+  for (;;) {
+    const snapshot = await readSnapshot();
+    if (snapshot !== null) {
+      targetRevisionHash ??= snapshot.configRevisionHash;
+      if (snapshot.configRevisionHash !== targetRevisionHash) {
+        throw new Error(
+          `[import:${slug}] config revision changed while waiting ` +
+            `(expected=${targetRevisionHash}, observed=${snapshot.configRevisionHash})`,
+        );
+      }
+      appliedConfigHash = snapshot.appliedConfigHash;
+      if (targetRevisionHash === appliedConfigHash) return;
+    }
+    if (Date.now() >= deadline) break;
+    await idle();
+  }
+  if (targetRevisionHash === null) {
+    throw new Error(
+      `[import:${slug}] config revision was unreadable for ${timeoutMs}ms: ${lastReadError}`,
+    );
   }
   throw new Error(
     `[import:${slug}] active config did not reach revision ${targetRevisionHash} ` +
-      `within ${timeoutMs}ms (applied=${appliedConfigHash ?? "none"})`,
+      `within ${timeoutMs}ms (applied=${appliedConfigHash ?? lastReadError ?? "none"})`,
   );
 }
 
@@ -1160,7 +1179,7 @@ async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
-): Promise<string> {
+): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   const manifest = await readImportedActivationManifest(ctx, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
@@ -1219,34 +1238,75 @@ async function activateImportedCustomer(
     },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
-  await waitForAppliedConfigRevision(ctx.rpc, slug, { signal: opts?.signal });
-  await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
-  if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
-    await activatePendingMattermostRouting(
-      ctx.rpc,
-      OPENCLAW_DIR,
-      ctx.log,
-      {
-        restartAccountIds: patch.restartExistingAccountIds ?? [],
-        restartConfiguredPending: patch.routingActivationRequired === false,
-      },
+  const verificationPending = await settleActivatedImport(ctx, {
+    slug,
+    patch,
+    signal: opts?.signal,
+  });
+  return { appliedFingerprint: manifest.appliedFingerprint, verificationPending };
+}
+
+// The patch above is the commit: from here the customer is this gateway's, and
+// every step is verification of a runtime that is reloading around it. Reporting
+// a step it could not confirm keeps the import — rolling it back would unmount
+// work that succeeded and send the retry into the same reload.
+async function settleActivatedImport(
+  ctx: BrokerCtx,
+  input: {
+    slug: string;
+    patch: { routingActivationRequired: boolean; restartExistingAccountIds?: string[] };
+    signal?: AbortSignal;
+  },
+): Promise<string | undefined> {
+  const { slug, patch, signal } = input;
+  try {
+    await waitForAppliedConfigRevision(ctx.rpc, slug, { signal });
+    await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
+    if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
+      await activatePendingMattermostRouting(
+        ctx.rpc,
+        OPENCLAW_DIR,
+        ctx.log,
+        {
+          restartAccountIds: patch.restartExistingAccountIds ?? [],
+          restartConfiguredPending: patch.routingActivationRequired === false,
+        },
+      );
+    }
+    await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
+    ctx.log(
+      `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
+    );
+    const healthy = await waitForAccountHealthy(ctx, {
+      slug,
+      timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS,
+    });
+    if (!healthy) {
+      return reportPendingVerification(
+        ctx,
+        slug,
+        `channel did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`,
+      );
+    }
+    await logActivatedCoachModel(ctx, slug);
+    ctx.log(`[import:${slug}] activation complete`);
+    return undefined;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return reportPendingVerification(
+      ctx,
+      slug,
+      error instanceof Error ? error.message : String(error),
     );
   }
-  await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
+}
 
+function reportPendingVerification(ctx: BrokerCtx, slug: string, reason: string): string {
   ctx.log(
-    `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
+    `[import:${slug}] ⚠ activation committed; verification incomplete — the reconcile ` +
+    `converges the rest: ${reason}`,
   );
-  const healthy = await waitForAccountHealthy(ctx, {
-    slug,
-    timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS,
-  });
-  if (!healthy) {
-    throw new Error(`[import:${slug}] channel did not reach running+connected after activation`);
-  }
-  await logActivatedCoachModel(ctx, slug);
-  ctx.log(`[import:${slug}] activation complete`);
-  return manifest.appliedFingerprint;
+  return reason;
 }
 
 export async function pruneWorkspaceOnlyProjectCheckouts(
@@ -1476,9 +1536,8 @@ export function buildBrokeredLifecycleAdapter(
     listExportPaths,
     prepareImportDir,
     prepareKeyImportDir,
-    activateImportedCustomer: async (slug, callOpts) => ({
-      appliedFingerprint: await activateImportedCustomer(ctx, slug, callOpts),
-    }),
+    activateImportedCustomer: (slug, callOpts) =>
+      activateImportedCustomer(ctx, slug, callOpts),
     exportOpenClawActivationManifest: (slug) =>
       exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>

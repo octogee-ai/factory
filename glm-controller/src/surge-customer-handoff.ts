@@ -169,6 +169,8 @@ export interface ReconcileSurgeCustomerHandoffInput {
   disposableBuilderGateway?: boolean;
   ownerlessOperatorPrewarm?: boolean;
   stateMigration: RollStateMigrationDecision;
+  /** Image tag a queued rollout will put on this gateway, when it replaces the current one. */
+  supersedingImageTag?: string;
 }
 
 function configTransferModeFor(
@@ -1053,6 +1055,64 @@ async function settleOrGateTarget(
   return targetHealth.handoffReleased && !heldPrelaunchTarget ? { ready: false } : null;
 }
 
+function sourceHoldsItsOpenClaw(
+  input: ReconcileSurgeCustomerHandoffInput,
+  source: SurgeSourceSelection,
+  healthByUid: ReadonlyMap<string, SurgePodHealth>,
+): boolean {
+  return configuredBuilderProcessGateRequired(input) &&
+    source.kind !== "missing" &&
+    healthByUid.get(source.pod.uid)?.prelaunchState === "held";
+}
+
+// Handing customers onto pods a queued rollout is about to replace buys nothing.
+// Everything that keeps a customer served still runs, because none of it may wait
+// on the queue: a gated lease refuses the customer at the edge, and a held source
+// cannot restart its own OpenClaw.
+async function standDownForSupersedingRelease(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  context: {
+    source: SurgeSourceSelection;
+    target: SurgePod;
+    targetHealth: SurgePodHealth;
+    healthByUid: ReadonlyMap<string, SurgePodHealth>;
+    ownedBy: string;
+    observedPodUids: readonly string[];
+  },
+): Promise<{ ready: boolean }> {
+  const { source, target, targetHealth, healthByUid, ownedBy, observedPodUids } = context;
+  deps.log(
+    `[surge-handoff] standing down for a queued rollout gateway=${input.gatewayId} ` +
+    `serving=${input.desiredImageTag} queued=${input.supersedingImageTag}`,
+  );
+  const assignments = await deps.readAssignments(input.gatewayId);
+  await restoreAbandonedSurgeAssignments(
+    deps,
+    input.gatewayId,
+    assignments,
+    null,
+    { observedPodUids },
+  );
+  if (configuredBuilderProcessGateRequired(input)) {
+    await tendSourcelessTarget(deps, input, {
+      source,
+      target,
+      targetHealth,
+      healthByUid,
+      ownedBy,
+      assignments,
+    });
+  }
+  // Reopening admits the customer to whichever pod serves them next, so it waits
+  // only on a source still holding its OpenClaw down — the resume above owns that
+  // case and reopens the lease itself once the process is back.
+  if (!sourceHoldsItsOpenClaw(input, source, healthByUid)) {
+    await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
+  }
+  return { ready: false };
+}
+
 export async function reconcileSurgeCustomerHandoff(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
@@ -1089,6 +1149,20 @@ export async function reconcileSurgeCustomerHandoff(
     ownedBy,
     observedPodUids,
   });
+  // A settled target is a handoff that already finished — the release it proves
+  // still marks live, because withholding that would gate the Dashboard behind a
+  // queue this gateway is not waiting on.
+  if (settled?.ready) return settled;
+  if (input.supersedingImageTag) {
+    return standDownForSupersedingRelease(deps, input, {
+      source,
+      target,
+      targetHealth,
+      healthByUid,
+      ownedBy,
+      observedPodUids,
+    });
+  }
   if (settled) return settled;
 
   let assignments: SurgeAssignment[] | null = null;

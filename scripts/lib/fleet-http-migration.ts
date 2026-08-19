@@ -188,7 +188,7 @@ async function activateImportedCustomerForMigration(input: {
   mode: MigrationImportMode;
   loadStrategy?: MigrationLoadStrategy;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const { deps, slug, mode, signal, loadStrategy = "standard" } = input;
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
@@ -214,6 +214,7 @@ async function activateImportedCustomerForMigration(input: {
   if (mode === "default") {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }
+  return activation.verificationPending;
 }
 
 async function requireAttachableConfiguredBuilder(
@@ -844,6 +845,25 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
   };
 }
 
+async function mountImportedCustomer(input: {
+  deps: MigrationHandlerDeps;
+  slug: string;
+  mode: MigrationImportMode | "keys";
+  signal: AbortSignal;
+}): Promise<string | undefined> {
+  const { deps, slug, mode, signal } = input;
+  if (mode !== "final" && mode !== "default") return undefined;
+  const verificationPending = await activateImportedCustomerForMigration({
+    deps,
+    slug,
+    mode,
+    signal,
+  });
+  deps.adapter.writeMountMarker?.(slug);
+  deps.adapter.onMounted?.(slug);
+  return verificationPending;
+}
+
 export function createActivateImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -857,7 +877,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
 
     try {
       deps.adapter.markCustomerMigratingIn?.(body.slug);
-      await activateImportedCustomerForMigration({
+      const verificationPending = await activateImportedCustomerForMigration({
         deps,
         slug: body.slug,
         mode: "default",
@@ -868,9 +888,11 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
         migrationId: body.migrationId,
         slug: body.slug,
         imported: true,
+        ...(verificationPending ? { verificationPending } : {}),
       };
       log(
-        `[migration-http] ✅ activate-import migrationId=${body.migrationId} slug=${body.slug}`,
+        `[migration-http] ✅ activate-import migrationId=${body.migrationId} slug=${body.slug}` +
+        (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
       );
       res.status(200).json(response);
     } catch (err) {
@@ -1746,11 +1768,11 @@ async function activateFinishedRsyncImport(input: {
   configTransferMode: MigrationConfigTransferMode;
   loadStrategy: MigrationLoadStrategy;
   signal: AbortSignal;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
-    await activateImportedCustomerForMigration({
+    const verificationPending = await activateImportedCustomerForMigration({
       deps,
       slug: body.slug,
       mode: "final",
@@ -1759,10 +1781,11 @@ async function activateFinishedRsyncImport(input: {
     });
     deps.adapter.writeMountMarker?.(body.slug);
     deps.adapter.onMounted?.(body.slug);
-    return;
+    return verificationPending;
   }
   await attachConfiguredBuilderImportedCustomer({ deps, slug: body.slug, signal });
   await deps.markSurgePrelaunchHydrated?.({ migrationId: body.migrationId, slug: body.slug });
+  return undefined;
 }
 
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -1806,21 +1829,25 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         return;
       }
       await copyStageToOpenClaw(session.stageDir, session.importDir);
-      if (mode === "final") {
-        await activateFinishedRsyncImport({
+      const verificationPending = mode === "final"
+        ? await activateFinishedRsyncImport({
           deps,
           body,
           configTransferMode,
           loadStrategy,
           signal: controller.signal,
-        });
-      }
+        })
+        : undefined;
       const response: ImportResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
         imported: true,
+        ...(verificationPending ? { verificationPending } : {}),
       };
-      log(`[migration-rsync] ✅ finish-import migrationId=${body.migrationId} slug=${body.slug} done`);
+      log(
+        `[migration-rsync] ✅ finish-import migrationId=${body.migrationId} slug=${body.slug} done` +
+        (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
+      );
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2204,19 +2231,23 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
       // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
       // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
       deps.adapter.markCustomerMigratingIn?.(slug);
-      if (mode === "final" || mode === "default") {
-        await activateImportedCustomerForMigration({
-          deps,
-          slug,
-          mode,
-          signal: controller.signal,
-        });
-        deps.adapter.writeMountMarker?.(slug);
-        deps.adapter.onMounted?.(slug);
-      }
+      const verificationPending = await mountImportedCustomer({
+        deps,
+        slug,
+        mode,
+        signal: controller.signal,
+      });
 
-      const response: ImportResponse = { migrationId, slug, imported: true };
-      log(`[migration-http] ✅ import migrationId=${migrationId} slug=${slug} done`);
+      const response: ImportResponse = {
+        migrationId,
+        slug,
+        imported: true,
+        ...(verificationPending ? { verificationPending } : {}),
+      };
+      log(
+        `[migration-http] ✅ import migrationId=${migrationId} slug=${slug} done` +
+        (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
+      );
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

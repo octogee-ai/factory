@@ -221,6 +221,7 @@ export interface CustomerLifecycleAdapter {
         signal?: AbortSignal;
     }) => Promise<{
         appliedFingerprint: string;
+        verificationPending?: string;
     }>;
     recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
     exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;

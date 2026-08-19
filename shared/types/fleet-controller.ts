@@ -57,6 +57,12 @@ export const VERIFY_ACCOUNT_TIMEOUT_MS = 120_000;
 
 export const CONFIG_PATCH_DEADLINE_MS = 120_000;
 
+// A committed config patch makes OpenClaw reload: it re-registers the whole plugin
+// surface and restarts channels before it answers a socket again, and every RPC opens
+// a fresh one. A call that follows a patch is therefore budgeted in reload terms, not
+// in request terms.
+export const CONFIG_RELOAD_DEADLINE_MS = 120_000;
+
 export const ADD_CUSTOMER_DEADLINE_MS = 300_000;
 
 export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
@@ -277,6 +283,9 @@ export interface ImportResponse {
 imported: boolean;
 
 alreadyMounted?: boolean;
+
+/** Set when the activation committed but a post-commit step could not be confirmed. */
+verificationPending?: string;
 }
 
 export interface UnmountRequestBody extends MigrationRequestBody {}

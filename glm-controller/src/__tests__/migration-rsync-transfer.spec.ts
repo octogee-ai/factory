@@ -183,6 +183,44 @@ describe("createRsyncMigrationTransfer", () => {
     ]);
   });
 
+  it("keeps an import the target committed but could not finish verifying", async () => {
+    const store: Store = {};
+    const fetchCalls: string[] = [];
+    const logs: string[] = [];
+    const baseFetch = makeFetch(fetchCalls);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : String(input);
+      const response = await baseFetch(input, init);
+      if (!url.includes("/finish-rsync-import/")) return response;
+      const body = await response.json() as Record<string, unknown>;
+      return jsonResponse({
+        ...body,
+        verificationPending: "connect response timed out after 30000ms",
+      });
+    }) as typeof fetch;
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: fetchImpl,
+      runCommand: makeCommandRunner([]),
+      log: (message) => logs.push(message),
+    });
+
+    await expect(transfer({
+      migrationId: "mig-pending-verify",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "final",
+    })).resolves.toMatchObject({ imported: true });
+
+    expect(fetchCalls.some((url) => url.includes("/abort-rsync-import/"))).toBe(false);
+    expect(logs.some((line) => line.includes("verification pending"))).toBe(true);
+  });
+
   it("requires the source transport to be Ready before it serves the state push", async () => {
     const store: Store = {};
     const runCommand: CommandRunner = async (_command, args) => {

@@ -448,7 +448,7 @@ export function createRsyncMigrationTransfer(
         rpcPhase: "finish-rsync-import",
         mode,
       };
-      await control<ImportResponse>({
+      const finished = await control<ImportResponse>({
         transportId: toTransportId,
         gatewayId: input.toGatewayId,
         pathSuffix: "/finish-rsync-import",
@@ -457,6 +457,15 @@ export function createRsyncMigrationTransfer(
         baseUrl: targetBaseUrl,
       });
       await markTaskSucceeded(claimed.ref, now);
+      // The target committed the import and told us which post-commit step it could
+      // not confirm. Aborting here would unmount work that landed and send the retry
+      // back into the same reload, so the state stands and the reconcile converges it.
+      if (finished.verificationPending) {
+        log(
+          `[migration-rsync] ⚠ task=${claimed.taskId} migrationId=${input.migrationId} ` +
+          `slug=${input.slug} imported with verification pending: ${finished.verificationPending}`,
+        );
+      }
       log(
         `[migration-rsync] ✅ task=${claimed.taskId} mode=${mode} migrationId=${input.migrationId} slug=${input.slug}`,
       );

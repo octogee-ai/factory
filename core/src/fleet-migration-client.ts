@@ -342,6 +342,15 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       log(
         `[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
       );
+      // The target kept an import it could not finish verifying. Nothing retries
+      // it — the reconcile converges the rest — so this line is the only place
+      // the unconfirmed step is named.
+      if (parsed.verificationPending) {
+        log(
+          `[migration-client] ⚠ migrationId=${migrationId} slug=${slug} imported with ` +
+          `verification pending: ${parsed.verificationPending}`,
+        );
+      }
       return parsed;
     },
 

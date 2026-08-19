@@ -336,4 +336,41 @@ describe("gateway convergence surge wiring", () => {
     expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
   });
 
+  it("stands the handoff down when a queued rollout replaces the pod image", async () => {
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
+    const pendingRoll = { ...gateway(), latestRelease: 3 };
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, pendingRoll),
+      gateway: pendingRoll,
+      artifact,
+      pendingArtifact: { imageRepository: repository, imageTag: "ghi9012-oc2026.7.1" },
+      runtime: runtime("def5678-oc2026.7.1", "2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "steady" });
+
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      supersedingImageTag: "ghi9012-oc2026.7.1",
+    }));
+  });
+
+  it("keeps converging when the queued rollout keeps the same image", async () => {
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
+    const pendingRoll = { ...gateway(), latestRelease: 3 };
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, pendingRoll),
+      gateway: pendingRoll,
+      artifact,
+      pendingArtifact: artifact,
+      runtime: runtime("def5678-oc2026.7.1", "2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.not.objectContaining({
+      supersedingImageTag: expect.anything(),
+    }));
+  });
 });

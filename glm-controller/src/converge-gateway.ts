@@ -72,24 +72,49 @@ function classKnobs(gateway: DurableGateway): {
   };
 }
 
-export function gatewayImageFor(
+type GatewayImage = { imageRepository: string; imageTag: string };
+
+function gatewayImageIn(
   gateway: DurableGateway,
   artifact: ReleasePayload,
-): { imageRepository: string; imageTag: string } {
-  const imageProfile = resolveGatewayImageProfile(classKnobs(gateway));
-  if (imageProfile === "standard") {
+): GatewayImage | null {
+  if (resolveGatewayImageProfile(classKnobs(gateway)) === "standard") {
     return {
       imageRepository: artifact.imageRepository,
       imageTag: artifact.imageTag,
     };
   }
-  const image = artifact.profileImages?.builder;
+  return artifact.profileImages?.builder ?? null;
+}
+
+export function gatewayImageFor(
+  gateway: DurableGateway,
+  artifact: ReleasePayload,
+): GatewayImage {
+  const image = gatewayImageIn(gateway, artifact);
   if (!image) {
     throw new Error(
       `gateway ${gateway.gatewayId} release is missing its immutable Builder gateway image reference`,
     );
   }
   return image;
+}
+
+// A release recorded past desiredRelease is a rollout the queue has yet to apply;
+// a different image there means the pods standing today are already condemned.
+export function supersedingGatewayImageTag(input: {
+  gateway: DurableGateway;
+  desiredImage: GatewayImage;
+  pendingArtifact: ReleasePayload | null;
+}): string | undefined {
+  const { gateway, desiredImage, pendingArtifact } = input;
+  if (!pendingArtifact || gateway.latestRelease <= gateway.desiredRelease) return undefined;
+  const pendingImage = gatewayImageIn(gateway, pendingArtifact);
+  if (!pendingImage) return undefined;
+  return pendingImage.imageTag !== desiredImage.imageTag ||
+    pendingImage.imageRepository !== desiredImage.imageRepository
+    ? pendingImage.imageTag
+    : undefined;
 }
 
 export interface ObservedHelmInstance {

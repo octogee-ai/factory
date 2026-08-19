@@ -87,6 +87,7 @@ import {
   planGatewayConvergence,
   provisioningRuntimeDoc,
   requiresSurgeCustomerMigration,
+  supersedingGatewayImageTag,
   type DurableGateway,
   type GatewayConvergenceAction,
   type GatewayUpsertOpts,
@@ -927,10 +928,38 @@ function runtimeReportsDesiredBuild(
   );
 }
 
+function reconcileGatewaySurgeHandoff(input: {
+  passDeps: Pick<GatewayConvergencePassDeps, "reconcileSurgeHandoff">;
+  gateway: DurableGateway;
+  runtime: GatewayRuntimeDoc | undefined;
+  desiredImage: { imageRepository: string; imageTag: string };
+  pendingArtifact: ReleasePayload | null;
+}): Promise<{ ready: boolean }> {
+  const { passDeps, gateway, runtime, desiredImage, pendingArtifact } = input;
+  const supersedingImageTag = supersedingGatewayImageTag({
+    gateway,
+    desiredImage,
+    pendingArtifact,
+  });
+  return passDeps.reconcileSurgeHandoff({
+    gatewayId: gateway.gatewayId,
+    desiredImageTag: desiredImage.imageTag,
+    requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
+    disposableBuilderGateway: isDisposableBuilderGateway(gateway),
+    ownerlessOperatorPrewarm: false,
+    stateMigration: decideRollStateMigration({
+      sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),
+      targetOpenclawVersion: openclawVersionFromGatewayImageTag(desiredImage.imageTag),
+    }),
+    ...(supersedingImageTag ? { supersedingImageTag } : {}),
+  });
+}
+
 export async function refineGatewayConvergenceAction(input: {
   passDeps: Pick<GatewayConvergencePassDeps, "db" | "reconcileSurgeHandoff">;
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
+  pendingArtifact?: ReleasePayload | null;
   runtime: GatewayRuntimeDoc | undefined;
   helmObserved: ObservedHelmInstance | null;
   desiredChartFingerprint?: string;
@@ -941,6 +970,7 @@ export async function refineGatewayConvergenceAction(input: {
     passDeps,
     gateway,
     artifact,
+    pendingArtifact = null,
     runtime,
     helmObserved,
     desiredChartFingerprint,
@@ -958,16 +988,12 @@ export async function refineGatewayConvergenceAction(input: {
     return { kind: "steady" };
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
-  const handoff = await passDeps.reconcileSurgeHandoff({
-    gatewayId: gateway.gatewayId,
-    desiredImageTag: desiredImage.imageTag,
-    requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
-    disposableBuilderGateway: isDisposableBuilderGateway(gateway),
-    ownerlessOperatorPrewarm: false,
-    stateMigration: decideRollStateMigration({
-      sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),
-      targetOpenclawVersion: openclawVersionFromGatewayImageTag(desiredImage.imageTag),
-    }),
+  const handoff = await reconcileGatewaySurgeHandoff({
+    passDeps,
+    gateway,
+    runtime,
+    desiredImage,
+    pendingArtifact,
   });
   if (
     handoff.ready &&
@@ -1047,6 +1073,10 @@ async function convergeOneGateway(
     gateway.desiredStatus === "retired"
       ? null
       : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
+  const pendingArtifact =
+    artifact && gateway.latestRelease > gateway.desiredRelease
+      ? await readGatewayArtifact(db, gateway.gatewayId, gateway.latestRelease)
+      : null;
   const runtime = runtimeById.get(gateway.gatewayId);
   const desiredIntent = await prepareDesiredGatewayIntent({
     passDeps,
@@ -1069,6 +1099,7 @@ async function convergeOneGateway(
     passDeps,
     gateway,
     artifact,
+    pendingArtifact,
     runtime,
     helmObserved,
     desiredChartFingerprint,
