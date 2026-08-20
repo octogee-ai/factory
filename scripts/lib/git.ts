@@ -1838,6 +1838,15 @@ export function reconcileImportedWorkspace(
 ): WorkspaceRemoteState | null {
   const target = workspaceSyncTarget(slug);
   if (!repositoryMetadataExists(target.dir)) return null;
+  // The import stages the worktree — .git pointer included — before activation
+  // recreates the git dir that pointer names, and the mutation lease locks that
+  // dir. Reconciling here would fail the whole import over a directory the next
+  // sync will find; the divergence it would have repaired is repaired then.
+  const leaseGitDir = projectWorkspaceMutationLeaseGitDir(target.dir) ?? trustedGitDir(target.dir);
+  if (!leaseGitDir || !fs.existsSync(leaseGitDir)) {
+    dlog(`[git-sync] ${target.label}: git dir not on disk yet — import reconcile skipped`);
+    return null;
+  }
   const identity = customerGitIdentity(target.dir);
   if (identity && trustedCustomerGitSource(identity)?.kind === "github") {
     dlog(`[git-sync] ${target.label}: GitHub-backed workspace — import reconcile skipped`);

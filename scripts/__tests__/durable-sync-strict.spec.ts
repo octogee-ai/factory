@@ -331,6 +331,19 @@ describe("workspace divergence", () => {
     execFileSync("git", ["push", "-q", "origin", "main"], { cwd: sibling });
   }
 
+  it("skips the import reconcile while the workspace git dir is not on disk yet", () => {
+    const { workspace } = initWorkspaceWithRemote("alice");
+    const pointer = fs.readFileSync(path.join(workspace, ".git"), "utf8");
+    expect(pointer).toContain("gitdir:");
+    // The import stages the worktree — pointer file and all — before activation
+    // recreates the git dir it points at.
+    const metadataDir = pointer.replace("gitdir:", "").trim();
+    fs.rmSync(metadataDir, { recursive: true, force: true });
+
+    expect(() => reconcileImportedWorkspace("alice", { gitExec: testGitExec })).not.toThrow();
+    expect(reconcileImportedWorkspace("alice", { gitExec: testGitExec })).toBeNull();
+  });
+
   it("withholds the push from a diverged workspace instead of retrying a rejected one", async () => {
     const { workspace, remote } = initWorkspaceWithRemote("alice");
     commitLocally(workspace, "LOCAL.md", "written here\n");
