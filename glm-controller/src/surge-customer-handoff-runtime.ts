@@ -432,13 +432,17 @@ async function readSurgePodHealth(
   }
 }
 
+interface SurgeControlOptions {
+  operationId: string;
+  body: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
 type SurgeControlCall = (
   pod: SurgePod,
   gatewayId: string,
   path: string,
-  operationId: string,
-  body: Record<string, unknown>,
-  timeoutMs?: number,
+  options: SurgeControlOptions,
 ) => Promise<Record<string, unknown>>;
 
 async function controlSurgeOpenClawProcess(
@@ -459,13 +463,15 @@ async function controlSurgeOpenClawProcess(
       input.pod,
       input.gatewayId,
       input.path,
-      input.operationId,
       {
-        migrationId: input.operationId,
-        slug: input.slug,
-        targetPodUid: input.targetPodUid,
+        operationId: input.operationId,
+        body: {
+          migrationId: input.operationId,
+          slug: input.slug,
+          targetPodUid: input.targetPodUid,
+        },
+        timeoutMs: input.timeoutMs,
       },
-      input.timeoutMs,
     );
   } catch (error) {
     if (error instanceof SurgePodControlError && error.status === 404) {
@@ -575,12 +581,15 @@ async function abortTargetImport(
   mode: "keys" | "final",
 ): Promise<void> {
   const { gatewayId, slug, operationId, targetPod, configTransferMode } = input;
-  await runtime.control(targetPod, gatewayId, "abort-rsync-import", operationId, {
-    migrationId: operationId,
-    slug,
-    rpcPhase: "abort-rsync-import",
-    mode,
-    ...(mode === "final" ? { configTransferMode } : {}),
+  await runtime.control(targetPod, gatewayId, "abort-rsync-import", {
+    operationId,
+    body: {
+      migrationId: operationId,
+      slug,
+      rpcPhase: "abort-rsync-import",
+      mode,
+      ...(mode === "final" ? { configTransferMode } : {}),
+    },
   }).catch((abortError) => {
     runtime.log(
       `[surge-handoff] abort failed pod=${targetPod.name} slug=${slug}: ` +
@@ -598,42 +607,51 @@ async function transferMode(
   const transferKey = runtime.randomKey();
   let prepared = false;
   try {
-    const prepare = await runtime.control(targetPod, gatewayId, "prepare-rsync-import", operationId, {
-      migrationId: operationId,
-      slug,
-      rpcPhase: "prepare-rsync-import",
-      mode,
-      transferUser: "migration",
-      transferKey,
-      sourcePodIp: sourcePod.podIP,
-      ...(mode === "final" ? { configTransferMode } : {}),
+    const prepare = await runtime.control(targetPod, gatewayId, "prepare-rsync-import", {
+      operationId,
+      body: {
+        migrationId: operationId,
+        slug,
+        rpcPhase: "prepare-rsync-import",
+        mode,
+        transferUser: "migration",
+        transferKey,
+        sourcePodIp: sourcePod.podIP,
+        ...(mode === "final" ? { configTransferMode } : {}),
+      },
     }) as unknown as PrepareRsyncImportResponse;
     if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
       throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
     }
     prepared = true;
-    await runtime.control(sourcePod, gatewayId, "push-rsync-state", operationId, {
-      migrationId: operationId,
-      slug,
-      rpcPhase: "push-rsync-state",
-      mode,
-      targetHost: targetPod.podIP,
-      targetPort: prepare.port,
-      transferUser: "migration",
-      transferKey,
-      ...(mode === "final"
-        ? {
-          configTransferMode,
-          ...(configTransferMode === "activation-manifest" ? { includeActivationManifest: true } : {}),
-        }
-        : {}),
+    await runtime.control(sourcePod, gatewayId, "push-rsync-state", {
+      operationId,
+      body: {
+        migrationId: operationId,
+        slug,
+        rpcPhase: "push-rsync-state",
+        mode,
+        targetHost: targetPod.podIP,
+        targetPort: prepare.port,
+        transferUser: "migration",
+        transferKey,
+        ...(mode === "final"
+          ? {
+            configTransferMode,
+            ...(configTransferMode === "activation-manifest" ? { includeActivationManifest: true } : {}),
+          }
+          : {}),
+      },
     });
-    await runtime.control(targetPod, gatewayId, "finish-rsync-import", operationId, {
-      migrationId: operationId,
-      slug,
-      rpcPhase: "finish-rsync-import",
-      mode,
-      ...(mode === "final" ? { loadStrategy, configTransferMode } : {}),
+    await runtime.control(targetPod, gatewayId, "finish-rsync-import", {
+      operationId,
+      body: {
+        migrationId: operationId,
+        slug,
+        rpcPhase: "finish-rsync-import",
+        mode,
+        ...(mode === "final" ? { loadStrategy, configTransferMode } : {}),
+      },
     });
   } catch (error) {
     if (prepared) await abortTargetImport(runtime, input, mode);
@@ -652,11 +670,14 @@ async function transferCustomerState(
   await transferMode(runtime, input, "keys");
   if (configTransferMode === "configured-builder-system-config") {
     try {
-      await runtime.control(targetPod, gatewayId, "flush", operationId, {
-        migrationId: operationId,
-        slug,
-        reason: "migration-converge",
-        expectedSystemConfigCommit: expectedSystemConfigCommit!,
+      await runtime.control(targetPod, gatewayId, "flush", {
+        operationId,
+        body: {
+          migrationId: operationId,
+          slug,
+          reason: "migration-converge",
+          expectedSystemConfigCommit: expectedSystemConfigCommit!,
+        },
       });
     } catch (error) {
       if (
@@ -712,9 +733,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     pod: SurgePod,
     gatewayId: string,
     path: string,
-    operationId: string,
-    body: Record<string, unknown>,
-    timeoutMs?: number,
+    controlOptions: SurgeControlOptions,
   ): Promise<Record<string, unknown>> => {
     assertGatewayScopedSignatureCapability(pod);
     try {
@@ -724,9 +743,9 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         pod,
         gatewayId,
         path,
-        operationId,
-        body,
-        timeoutMs,
+        operationId: controlOptions.operationId,
+        body: controlOptions.body,
+        timeoutMs: controlOptions.timeoutMs,
       });
     } catch (error) {
       if (
@@ -752,10 +771,13 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     }, pod, gatewayId),
 
     async quiesce({ gatewayId, slug, operationId, sourcePod }) {
-      await control(sourcePod, gatewayId, "quiesce", operationId, {
-        migrationId: operationId,
-        slug,
-        timeoutMs: MIGRATION_QUIESCE_TIMEOUT_MS,
+      await control(sourcePod, gatewayId, "quiesce", {
+        operationId,
+        body: {
+          migrationId: operationId,
+          slug,
+          timeoutMs: MIGRATION_QUIESCE_TIMEOUT_MS,
+        },
       });
     },
 
@@ -816,11 +838,14 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       reason,
       expectedSystemConfigCommit,
     }) {
-      const response = await control(pod, gatewayId, "flush", operationId, {
-        migrationId: operationId,
-        slug,
-        reason,
-        ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+      const response = await control(pod, gatewayId, "flush", {
+        operationId,
+        body: {
+          migrationId: operationId,
+          slug,
+          reason,
+          ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
+        },
       }) as unknown as FlushGatewayResponse;
       return {
         ...(typeof response.systemConfigCommit === "string"
@@ -840,10 +865,12 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         targetPod,
         gatewayId,
         "unmount",
-        operationId,
         {
-          migrationId: operationId,
-          slug,
+          operationId,
+          body: {
+            migrationId: operationId,
+            slug,
+          },
         },
       );
       try {
@@ -860,9 +887,12 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async releaseTarget({ gatewayId, operationId, pod }) {
-      await control(pod, gatewayId, "complete-surge-handoff", operationId, {
-        migrationId: operationId,
-        targetPodUid: pod.uid,
+      await control(pod, gatewayId, "complete-surge-handoff", {
+        operationId,
+        body: {
+          migrationId: operationId,
+          targetPodUid: pod.uid,
+        },
       });
     },
   };
