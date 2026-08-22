@@ -38,7 +38,10 @@ const LOCAL_CORE_PORTABLE_PLAN = fileURLToPath(new URL(
   import.meta.url,
 ));
 
-function runBuilderDigest(stateDir: string): { fileCount: number; totalBytes: number; sha256: string } {
+function runBuilderDigest(
+  stateDir: string,
+  configPath?: string,
+): { fileCount: number; totalBytes: number; sha256: string } {
   const result = spawnSync(
     process.execPath,
     [
@@ -55,7 +58,7 @@ function runBuilderDigest(stateDir: string): { fileCount: number; totalBytes: nu
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        OPENCLAW_CONFIG_PATH: configPath ?? "",
       },
       encoding: "utf8",
     },
@@ -66,9 +69,13 @@ function runBuilderDigest(stateDir: string): { fileCount: number; totalBytes: nu
   return JSON.parse(result.stdout) as { fileCount: number; totalBytes: number; sha256: string };
 }
 
-function writeConfiguredBuilderState(stateDir: string): void {
+function writeConfiguredBuilderState(
+  stateDir: string,
+  configPath = path.join(stateDir, "openclaw.json"),
+): void {
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify({
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
     agents: {
       list: [{
         id: "discord-helper",
@@ -200,8 +207,8 @@ describe("surge handoff Kubernetes projection", () => {
       writeConfiguredBuilderState(sourceState);
       writeConfiguredBuilderState(targetState);
 
-      const sourceDigest = runBuilderDigest(sourceState);
-      const targetDigest = runBuilderDigest(targetState);
+      const sourceDigest = runBuilderDigest(sourceState, path.join(sourceState, "openclaw.json"));
+      const targetDigest = runBuilderDigest(targetState, path.join(targetState, "openclaw.json"));
 
       expect(sourceDigest).toEqual(targetDigest);
       expect(sourceDigest.fileCount).toBe(5);
@@ -210,10 +217,21 @@ describe("surge handoff Kubernetes projection", () => {
         path.join(targetState, "workspaces", "discord-helper", "notes.md"),
         "changed workspace state",
       );
-      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
+      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
     } finally {
       fs.rmSync(sourceState, { recursive: true, force: true });
       fs.rmSync(targetState, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the configured Builder system config when the gateway does not expose its config path", () => {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-system-config-"));
+    try {
+      writeConfiguredBuilderState(state, path.join(state, "system_config", "openclaw.json"));
+
+      expect(runBuilderDigest(state)).toMatchObject({ fileCount: 5, totalBytes: expect.any(Number) });
+    } finally {
+      fs.rmSync(state, { recursive: true, force: true });
     }
   });
 });

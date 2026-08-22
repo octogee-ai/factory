@@ -122,6 +122,42 @@ describe("strict durable sync", () => {
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
   });
 
+  it("rejects a strict durable flush when a project checkout is behind canonical origin", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remotes = path.join(paths.customers, "remotes");
+    const projectRemote = path.join(remotes, "project.git");
+    initPushableRepo(customer, path.join(remotes, "workspace.git"));
+    initPushableRepo(project, projectRemote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(customer, "README.md"), "workspace checkpoint\n");
+    fs.writeFileSync(path.join(project, "README.md"), "project checkpoint\n");
+
+    await syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    const sibling = path.join(paths.root, "project-sibling");
+    execFileSync("git", ["clone", "-q", projectRemote, sibling]);
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: sibling });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: sibling });
+    fs.writeFileSync(path.join(sibling, "REMOTE.md"), "canonical checkpoint\n");
+    execFileSync("git", ["add", "-A"], { cwd: sibling });
+    execFileSync("git", ["commit", "-q", "-m", "canonical checkpoint"], { cwd: sibling });
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: sibling });
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice\/projects\/launch.*push/u);
+
+    expect(testGitExec(project, ["rev-parse", "HEAD"]))
+      .not.toBe(testGitExec(projectRemote, ["rev-parse", "main"]));
+  });
+
   it("attempts every project checkpoint before reporting a workspace push failure", async () => {
     const customer = path.join(paths.customers, "alice");
     const project = path.join(customer, "projects", "launch");
@@ -383,6 +419,26 @@ describe("workspace divergence", () => {
 
     expect(attempted).toEqual([]);
     expect(report.diverged).toEqual([]);
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .not.toBe(testGitExec(remote, ["rev-parse", "main"]));
+  });
+
+  it("accepts a strict durable flush when the clean workspace is behind canonical origin", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+    const attempted: string[][] = [];
+    const recordingGitExec = (cwd: string, argv: string[]): string | null => {
+      if (argv[0] === "push") attempted.push(argv);
+      return testGitExec(cwd, argv);
+    };
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: recordingGitExec,
+      prepareRepository: prepareTestRepository,
+    })).resolves.toEqual({ diverged: [] });
+
+    expect(attempted).toEqual([]);
     expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
       .not.toBe(testGitExec(remote, ["rev-parse", "main"]));
   });
