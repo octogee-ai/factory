@@ -484,60 +484,76 @@ function hasNonNegativeDuration(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+const LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS = [
+  ["session-quiesce", "skipped"],
+  ["workspace-git", "failed"],
+  ["blob-sync", "skipped"],
+  ["system-config", "done"],
+  ["gitea-key-release", "skipped"],
+] as const;
+
+function legacyConfiguredBuilderConvergenceResponse(
+  error: unknown,
+  input: Pick<SurgeTransferInput, "operationId" | "slug" | "expectedSystemConfigCommit">,
+): Record<string, unknown> | null {
+  if (!(error instanceof SurgePodControlError) || !input.expectedSystemConfigCommit) return null;
+  const response = record(error.body);
+  if (!response) return null;
+  const expected = [
+    error.status === 500,
+    response.migrationId === input.operationId,
+    response.slug === input.slug,
+    response.ok === false,
+    hasNonNegativeDuration(response.durationMs),
+    response.systemConfigCommit === input.expectedSystemConfigCommit,
+  ];
+  return expected.every(Boolean) ? response : null;
+}
+
+function legacyConfiguredBuilderConvergenceSteps(
+  value: unknown,
+): Map<string, Record<string, unknown>> | null {
+  if (!Array.isArray(value) || value.length !== LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.length) {
+    return null;
+  }
+  const steps = new Map<string, Record<string, unknown>>();
+  for (const candidate of value) {
+    const step = record(candidate);
+    if (
+      !step ||
+      typeof step.name !== "string" ||
+      typeof step.status !== "string" ||
+      !hasNonNegativeDuration(step.durationMs) ||
+      steps.has(step.name)
+    ) {
+      return null;
+    }
+    steps.set(step.name, step);
+  }
+  return steps.size === LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.length ? steps : null;
+}
+
+function legacyConfiguredBuilderConvergenceStepsMatch(
+  steps: ReadonlyMap<string, Record<string, unknown>>,
+  slug: string,
+): boolean {
+  return LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.every(([name, status]) => {
+    const step = steps.get(name);
+    const expectedError = name === "workspace-git"
+      ? `[git-sync] durable flush failed: ${slug}: git metadata is missing`
+      : undefined;
+    return step?.status === status && step?.error === expectedError;
+  });
+}
+
 function isLegacyConfiguredBuilderConvergenceResponse(
   error: unknown,
   input: Pick<SurgeTransferInput, "operationId" | "slug" | "expectedSystemConfigCommit">,
 ): boolean {
-  if (
-    !(error instanceof SurgePodControlError) ||
-    error.status !== 500 ||
-    !input.expectedSystemConfigCommit
-  ) {
-    return false;
-  }
-  const response = record(error.body);
-  if (
-    response?.migrationId !== input.operationId ||
-    response.slug !== input.slug ||
-    response.ok !== false ||
-    !hasNonNegativeDuration(response.durationMs) ||
-    response.systemConfigCommit !== input.expectedSystemConfigCommit ||
-    !Array.isArray(response.steps) ||
-    response.steps.length !== 5
-  ) {
-    return false;
-  }
-  const steps = new Map<string, Record<string, unknown>>();
-  for (const value of response.steps) {
-    const step = record(value);
-    if (
-      !step ||
-      typeof step.name !== "string" ||
-      steps.has(step.name) ||
-      typeof step.status !== "string" ||
-      !hasNonNegativeDuration(step.durationMs)
-    ) {
-      return false;
-    }
-    steps.set(step.name, step);
-  }
-  const expected = [
-    ["session-quiesce", "skipped"],
-    ["workspace-git", "failed"],
-    ["blob-sync", "skipped"],
-    ["system-config", "done"],
-    ["gitea-key-release", "skipped"],
-  ] as const;
-  if (steps.size !== expected.length) return false;
-  for (const [name, status] of expected) {
-    if (steps.get(name)?.status !== status) return false;
-  }
-  return steps.get("workspace-git")?.error ===
-      `[git-sync] durable flush failed: ${input.slug}: git metadata is missing` &&
-    steps.get("session-quiesce")?.error === undefined &&
-    steps.get("blob-sync")?.error === undefined &&
-    steps.get("system-config")?.error === undefined &&
-    steps.get("gitea-key-release")?.error === undefined;
+  const response = legacyConfiguredBuilderConvergenceResponse(error, input);
+  if (!response) return false;
+  const steps = legacyConfiguredBuilderConvergenceSteps(response.steps);
+  return steps !== null && legacyConfiguredBuilderConvergenceStepsMatch(steps, input.slug);
 }
 
 async function abortTargetImport(
