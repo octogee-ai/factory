@@ -606,14 +606,32 @@ interface FleetRuntime {
   activeProvisioning: number;
   mountedCustomers: string[];
   status: "booting" | "ready";
+  beginProvisioning: () => void;
+  finishProvisioning: () => void;
+  waitForProvisioningDrain: () => Promise<void>;
 }
 
 function createFleetRuntime(): FleetRuntime {
-  return {
+  const drainWaiters = new Set<() => void>();
+  const runtime: FleetRuntime = {
     activeProvisioning: 0,
     mountedCustomers: [],
     status: "booting",
+    beginProvisioning: () => {
+      runtime.activeProvisioning += 1;
+    },
+    finishProvisioning: () => {
+      runtime.activeProvisioning -= 1;
+      if (runtime.activeProvisioning !== 0) return;
+      for (const resolve of drainWaiters) resolve();
+      drainWaiters.clear();
+    },
+    waitForProvisioningDrain: () => {
+      if (runtime.activeProvisioning === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => drainWaiters.add(resolve));
+    },
   };
+  return runtime;
 }
 
 // Only openclaw writes an agent's auth-profile store, and it can refuse the
@@ -1015,6 +1033,41 @@ function createCurrentEvictionBatchReader(input: {
   };
 }
 
+function createReconcileUnmountSlug(input: {
+  runtime: FleetRuntime;
+  canReconcile?: () => Promise<boolean>;
+  readDesired: () => Promise<string[]>;
+  cancelPendingEviction: (slug: string) => void;
+  wrappedAdapter: CustomerLifecycleAdapter;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  invalidateConfigRemovedSlug: (slug: string) => void;
+  onLocalStateRemoved: (slug: string) => void;
+}): (slug: string, evictionBatch: readonly string[]) => Promise<UnmountOutcome> {
+  return async (slug, evictionBatch) => {
+    input.runtime.beginProvisioning();
+    try {
+      if (input.canReconcile && !(await input.canReconcile())) return "noop";
+      return await evictLocalCustomerIfStillUndesired({
+        slug,
+        evictionBatch,
+        readDesired: input.readDesired,
+        cancelPendingEviction: input.cancelPendingEviction,
+        evict: (currentEvictionBatch, readCurrentEvictionBatch) => evictLocalCustomer({
+          adapter: input.wrappedAdapter,
+          slug,
+          evictionBatch: currentEvictionBatch,
+          currentEvictionBatch: readCurrentEvictionBatch,
+          onRetainedAfterConfigRemoval: input.invalidateConfigRemovedSlug,
+          stampMounted: input.stampMounted,
+          onLocalStateRemoved: input.onLocalStateRemoved,
+        }),
+      });
+    } finally {
+      input.runtime.finishProvisioning();
+    }
+  };
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -1022,8 +1075,17 @@ function startMaybeReconcileLoop(params: {
   runtime: FleetRuntime;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   surgeReadiness: SurgeReadinessGate;
+  canReconcile?: () => Promise<boolean>;
 }): () => void {
-  const { provision, opts, wrappedAdapter, runtime, stampMounted, surgeReadiness } = params;
+  const {
+    provision,
+    opts,
+    wrappedAdapter,
+    runtime,
+    stampMounted,
+    surgeReadiness,
+    canReconcile,
+  } = params;
 
   // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
   // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
@@ -1127,6 +1189,7 @@ function startMaybeReconcileLoop(params: {
     },
     getEvictObserved: () => getEvictObservedSlugs(wrappedAdapter),
     ...(getContentStale ? { getContentStale } : {}),
+    ...(canReconcile ? { canReconcile } : {}),
     readDesired,
     shouldEnsureSlug: (slug) => customerEnsureRetryReady({
       cloneRetry: cloneRetry.get(slug),
@@ -1142,8 +1205,9 @@ function startMaybeReconcileLoop(params: {
       evictionBatch: readonly string[],
       pendingEvictions: () => readonly string[],
     ) => {
-      runtime.activeProvisioning += 1;
+      runtime.beginProvisioning();
       try {
+        if (canReconcile && !(await canReconcile())) return "noop";
         wrappedAdapter.cancelPendingEviction?.(slug);
         const convergenceHooks: ConvergenceHooks = {
           recordApplied: (s, fp) => {
@@ -1198,7 +1262,7 @@ function startMaybeReconcileLoop(params: {
 
         return result.newCustomer ? "mounted" : "noop";
       } finally {
-        runtime.activeProvisioning -= 1;
+        runtime.finishProvisioning();
       }
     },
     onEnsureError: (slug, message, error) => {
@@ -1211,22 +1275,10 @@ function startMaybeReconcileLoop(params: {
       permanentConfigPatchRetry = undefined;
       clearReconcileError(opts, slug);
     },
-    unmountSlug: (slug: string, evictionBatch: readonly string[]) =>
-      evictLocalCustomerIfStillUndesired({
-        slug,
-        evictionBatch,
-        readDesired,
-        cancelPendingEviction,
-        evict: (currentEvictionBatch, readCurrentEvictionBatch) => evictLocalCustomer({
-          adapter: wrappedAdapter,
-          slug,
-          evictionBatch: currentEvictionBatch,
-          currentEvictionBatch: readCurrentEvictionBatch,
-          onRetainedAfterConfigRemoval: invalidateConfigRemovedSlug,
-          stampMounted,
-          onLocalStateRemoved,
-        }),
-      }),
+    unmountSlug: createReconcileUnmountSlug({
+      runtime, canReconcile, readDesired, cancelPendingEviction, wrappedAdapter, stampMounted,
+      invalidateConfigRemovedSlug, onLocalStateRemoved,
+    }),
   });
   return startAfterSurgeReadiness({
     released: surgeReadiness.released,
@@ -1306,6 +1358,36 @@ function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null
       adapter.configuredBuilderOverlayPresent?.(slug) === true
     ? slug
     : null;
+}
+
+export function createConfiguredBuilderReconcileAdmission(input: {
+  processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null;
+  log: (message: string) => void;
+}): () => Promise<boolean> {
+  let lastBlocked: string | null = null;
+  return async () => {
+    if (!input.processGate) return true;
+    try {
+      const state = await input.processGate.status();
+      if (state.mode === "permitted") {
+        lastBlocked = null;
+        return true;
+      }
+      const blocked = `${state.role}/${state.mode}`;
+      if (lastBlocked !== blocked) {
+        input.log(`[surge-handoff] reconcile paused while configured Builder process gate is ${blocked}`);
+        lastBlocked = blocked;
+      }
+      return false;
+    } catch (error) {
+      const blocked = `status error: ${error instanceof Error ? error.message : String(error)}`;
+      if (lastBlocked !== blocked) {
+        input.log(`[surge-handoff] reconcile paused while configured Builder process gate has ${blocked}`);
+        lastBlocked = blocked;
+      }
+      return false;
+    }
+  };
 }
 
 function configuredBuilderMountProven(adapter: CustomerLifecycleAdapter): boolean {
@@ -1502,6 +1584,7 @@ export function createBuilderSurgeGateWiring(input: {
   surgeReadiness: SurgeReadinessGate;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
+  waitForActiveProvisioningDrain?: () => Promise<void>;
   reconcileImportedWorkspace?: (slug: string) => void;
   attachConfiguredBuilderBeforeOpenClaw?: (input: {
     adapter: CustomerLifecycleAdapter;
@@ -1514,6 +1597,7 @@ export function createBuilderSurgeGateWiring(input: {
     surgeReadiness,
     waitForGatewayReady,
     log,
+    waitForActiveProvisioningDrain = async () => undefined,
     reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
   } = input;
@@ -1535,6 +1619,7 @@ export function createBuilderSurgeGateWiring(input: {
         slug,
         targetPodUid: requireOwnPodUid("reserve the configured Builder migration target"),
       });
+      await waitForActiveProvisioningDrain();
     },
     async releaseSurgeReadiness({ migrationId, targetPodUid }) {
       const ownPodUid = process.env.POD_UID?.trim();
@@ -1671,6 +1756,10 @@ export async function startFleetController(
   const builderProcessGate = adapter.isBuilderGateway?.() === true
     ? opts.surgeOpenClawProcessGate ?? createSurgeOpenClawProcessSupervisorClient(openclawDir)
     : null;
+  const canReconcile = createConfiguredBuilderReconcileAdmission({
+    processGate: builderProcessGate,
+    log: opts.log,
+  });
 
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
@@ -1773,6 +1862,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     surgeReadiness,
     waitForGatewayReady: () => waitForOpenClawUp(BUILDER_POST_START_HEALTH_TIMEOUT_MS),
     log: opts.log,
+    waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
   });
   const migrationDeps = {
     publicKey: opts.publicKey,
@@ -1789,6 +1879,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     gatewayId: opts.gatewayId,
     configuredBuilder: (slug) => configuredBuilderSlug(wrappedAdapter) === slug,
     processGate: builderProcessGate ?? undefined,
+    waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
     log: opts.log,
   });
 
@@ -1802,6 +1893,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     runtime,
     stampMounted,
     surgeReadiness,
+    canReconcile,
   });
 
   const server: Server = await new Promise((resolve) => {

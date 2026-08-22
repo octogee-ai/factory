@@ -57,6 +57,30 @@ function observed(slugs: string[]): Partial<ReconcileLoopDeps> {
 beforeEach(() => _resetReconcileInFlightForTests());
 
 describe("reconcileFleet — bidirectional desired−observed convergence", () => {
+  it("rechecks admission before mutating a roster sampled while permitted", async () => {
+    const getMountObserved = vi.fn(() => [] as string[]);
+    const getEvictObserved = vi.fn(() => ["stale"]);
+    const readDesired = vi.fn(async () => ["alice"]);
+    const d = mkDeps({
+      getMountObserved,
+      getEvictObserved,
+      readDesired,
+      canReconcile: vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false),
+    });
+
+    await reconcileFleet(d);
+
+    expect(getMountObserved).toHaveBeenCalledOnce();
+    expect(getEvictObserved).toHaveBeenCalledOnce();
+    expect(readDesired).toHaveBeenCalledOnce();
+    expect(d.ensured).toEqual([]);
+    expect(d.evicted).toEqual([]);
+  });
+
   it("mounts desired−observed and evicts observed−desired in one tick", async () => {
     const d = mkDeps({
       ...observed(["b", "c", "d"]),

@@ -225,6 +225,7 @@ function responseTextJson(
 }
 
 const SURGE_POD_CONTROL_TIMEOUT_MS = 330_000;
+export const SURGE_OPENCLAW_HOLD_TIMEOUT_MS = 480_000;
 export const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
 export const SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS = 1_500_000;
 
@@ -294,6 +295,9 @@ function postSignedViaHttp(opts: SignedPodRequestOptions): Promise<Record<string
 }
 
 function nativeSurgeControlTimeout(path: string, timeoutMs: number | undefined): number | undefined {
+  if (path === "hold-surge-openclaw") {
+    return timeoutMs ?? SURGE_OPENCLAW_HOLD_TIMEOUT_MS;
+  }
   if (path === "resume-surge-openclaw") {
     return timeoutMs ?? SURGE_OPENCLAW_RESUME_TIMEOUT_MS;
   }

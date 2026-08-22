@@ -19,6 +19,7 @@ export interface ReconcileLoopDeps {
   getEvictObserved: () => string[];
   /** Desired: slugs this gateway should host (eligible + assigned here). */
   readDesired: () => Promise<string[]>;
+  canReconcile?: () => Promise<boolean>;
   /** Content-stale: mount-observed slugs whose APPLIED config no longer matches their
    *  desired snapshot (e.g. a project-agent toggle changed the snapshot after the mount
    *  completed). Membership is unchanged, so the desired−observed set-difference would
@@ -77,49 +78,72 @@ function fireSafely(deps: ReconcileLoopDeps, fn: (() => void) | undefined): void
   }
 }
 
-export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
-  const mountObserved = new Set(deps.getMountObserved());
-  const evictObserved = new Set(deps.getEvictObserved());
-  const desired = new Set(await deps.readDesired());
-  const contentStale = new Set(deps.getContentStale?.() ?? []);
+interface ReconcileSnapshot {
+  mountObserved: Set<string>;
+  evictObserved: Set<string>;
+  desired: Set<string>;
+  contentStale: Set<string>;
+}
 
-  // A desired slug is (re-)ensured when it is not yet mount-observed OR its applied
-  // content has drifted. Staleness never resurrects an unassigned slug — the filter is
-  // over `desired`, so a stale slug that is no longer desired falls through to evict.
+interface ReconcilePlan {
+  toMount: string[];
+  toEvict: string[];
+  currentPendingEvictions: () => string[];
+}
+
+async function readReconcileSnapshot(deps: ReconcileLoopDeps): Promise<ReconcileSnapshot | null> {
+  if (!(await reconciliationAllowed(deps))) return null;
+  const snapshot = {
+    mountObserved: new Set(deps.getMountObserved()),
+    evictObserved: new Set(deps.getEvictObserved()),
+    desired: new Set(await deps.readDesired()),
+    contentStale: new Set(deps.getContentStale?.() ?? []),
+  };
+  return (await reconciliationAllowed(deps)) ? snapshot : null;
+}
+
+function planReconciliation(deps: ReconcileLoopDeps, snapshot: ReconcileSnapshot): ReconcilePlan | null {
+  const { mountObserved, evictObserved, desired, contentStale } = snapshot;
   for (const slug of [...pendingEvictions]) {
     if (desired.has(slug)) {
       pendingEvictions.delete(slug);
       deps.onPendingEvictionCancelled?.(slug);
     }
   }
-  const evictionCandidates = [...evictObserved].filter((s) => !desired.has(s));
+  const evictionCandidates = [...evictObserved].filter((slug) => !desired.has(slug));
   for (const slug of evictionCandidates) pendingEvictions.add(slug);
-
   const toMount = [...desired].filter(
-    (s) =>
-      (!mountObserved.has(s) || contentStale.has(s)) &&
-      !inFlight.has(s) &&
-      (deps.shouldEnsureSlug?.(s) ?? true),
+    (slug) =>
+      (!mountObserved.has(slug) || contentStale.has(slug)) &&
+      !inFlight.has(slug) &&
+      (deps.shouldEnsureSlug?.(slug) ?? true),
   );
-  const toEvict = evictionCandidates.filter((s) => !queuedEvictions.has(s));
-  const currentPendingEvictions = (): string[] => [...pendingEvictions];
+  const toEvict = evictionCandidates.filter((slug) => !queuedEvictions.has(slug));
+  if (toMount.length === 0 && toEvict.length === 0) return null;
+  return { toMount, toEvict, currentPendingEvictions: () => [...pendingEvictions] };
+}
 
-  if (toMount.length === 0 && toEvict.length === 0) return;
-
-  const mountList = toMount.length ? ` (${toMount.join(",")})` : "";
-  const evictList = toEvict.length ? ` (${toEvict.join(",")})` : "";
+function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
+  const mountList = plan.toMount.length ? ` (${plan.toMount.join(",")})` : "";
+  const evictList = plan.toEvict.length ? ` (${plan.toEvict.join(",")})` : "";
   deps.log(
-    `[reconcile] ${deps.gatewayId}: +${toMount.length} mount${mountList} / -${toEvict.length} evict${evictList}`,
+    `[reconcile] ${deps.gatewayId}: +${plan.toMount.length} mount${mountList} / -${plan.toEvict.length} evict${evictList}`,
   );
+}
 
+async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan): Promise<void> {
   const mounts: Array<() => Promise<void>> = [];
   let deferRemainingMounts = false;
-  for (const slug of toMount) {
+  for (const slug of plan.toMount) {
     mounts.push(async () => {
-      if (deferRemainingMounts) return;
+      if (deferRemainingMounts || !(await reconciliationAllowed(deps))) return;
       inFlight.add(slug);
       try {
-        const outcome = await deps.ensureSlug(slug, currentPendingEvictions(), currentPendingEvictions);
+        const outcome = await deps.ensureSlug(
+          slug,
+          plan.currentPendingEvictions(),
+          plan.currentPendingEvictions,
+        );
         deps.log(`[reconcile] ${deps.gatewayId}: mounted ${slug} (${outcome})`);
         fireSafely(deps, () => deps.onEnsureSuccess?.(slug));
       } catch (err) {
@@ -135,16 +159,29 @@ export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
       }
     });
   }
-
   await runBounded(
     mounts,
     deps.shouldDeferRemainingMounts ? 1 : (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT),
   );
+}
+
+async function enqueueReconcileEvictions(deps: ReconcileLoopDeps, toEvict: readonly string[]): Promise<void> {
+  if (!(await reconciliationAllowed(deps))) return;
   for (const slug of toEvict) {
     queuedEvictions.add(slug);
     evictionQueue.push({ slug, deps });
   }
   startEvictionWorker();
+}
+
+export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
+  const snapshot = await readReconcileSnapshot(deps);
+  if (!snapshot) return;
+  const plan = planReconciliation(deps, snapshot);
+  if (!plan) return;
+  logReconcilePlan(deps, plan);
+  await runReconcileMounts(deps, plan);
+  await enqueueReconcileEvictions(deps, plan.toEvict);
 }
 
 function startEvictionWorker(): void {
@@ -163,6 +200,10 @@ async function runEvictionQueue(): Promise<void> {
       queuedEvictions.delete(slug);
       continue;
     }
+    if (!(await reconciliationAllowed(deps))) {
+      queuedEvictions.delete(slug);
+      continue;
+    }
     inFlight.add(slug);
     try {
       const outcome = await deps.unmountSlug(slug, [...pendingEvictions]);
@@ -175,6 +216,10 @@ async function runEvictionQueue(): Promise<void> {
       queuedEvictions.delete(slug);
     }
   }
+}
+
+async function reconciliationAllowed(deps: ReconcileLoopDeps): Promise<boolean> {
+  return deps.canReconcile ? await deps.canReconcile() : true;
 }
 
 async function runBounded(actions: Array<() => Promise<void>>, max: number): Promise<void> {

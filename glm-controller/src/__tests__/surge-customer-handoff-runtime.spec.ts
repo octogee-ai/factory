@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   POD_SESSION_DIGEST_SCRIPT,
   SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
+  SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
   SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
   createSurgePodTransport,
   parseSurgePodSnapshot,
@@ -289,7 +290,7 @@ type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
 type FetchInput = string | URL | Request;
 
 describe("surge handoff direct pod transport", () => {
-  it("uses native full-operation deadlines for source resume and target completion", async () => {
+  it("uses native full-operation deadlines for Builder holds, source resume, and target completion", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];
     const request = vi.fn((options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
@@ -323,6 +324,19 @@ describe("surge handoff direct pod transport", () => {
       log: vi.fn(),
     });
 
+    await expect(transport.stopSourceOpenClaw?.({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+    })).resolves.toBeUndefined();
+    await expect(transport.holdTargetOpenClaw?.({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      targetPod: target,
+    })).resolves.toBeUndefined();
     await expect(transport.resumeSourceOpenClaw?.({
       gatewayId: "default",
       slug: "alice",
@@ -340,11 +354,25 @@ describe("surge handoff direct pod transport", () => {
     expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({
       hostname: source.podIP,
       port: 3003,
-      path: "/resume-surge-openclaw/default",
+      path: "/hold-surge-openclaw/default",
       method: "POST",
       agent: false,
     }), expect.any(Function));
     expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      hostname: target.podIP,
+      port: 3003,
+      path: "/hold-surge-openclaw/default",
+      method: "POST",
+      agent: false,
+    }), expect.any(Function));
+    expect(request).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      hostname: source.podIP,
+      port: 3003,
+      path: "/resume-surge-openclaw/default",
+      method: "POST",
+      agent: false,
+    }), expect.any(Function));
+    expect(request).toHaveBeenNthCalledWith(4, expect.objectContaining({
       hostname: target.podIP,
       port: 3003,
       path: "/complete-surge-handoff/default",
@@ -359,11 +387,31 @@ describe("surge handoff direct pod transport", () => {
       },
       {
         migrationId: "surge-default-new",
+        slug: "alice",
+        targetPodUid: target.uid,
+      },
+      {
+        migrationId: "surge-default-new",
+        slug: "alice",
+        targetPodUid: target.uid,
+      },
+      {
+        migrationId: "surge-default-new",
         targetPodUid: target.uid,
       },
     ]);
-    const resumeRequest = request.mock.results[0]?.value as { setTimeout: ReturnType<typeof vi.fn> };
-    const completeRequest = request.mock.results[1]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const sourceHoldRequest = request.mock.results[0]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const targetHoldRequest = request.mock.results[1]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const resumeRequest = request.mock.results[2]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const completeRequest = request.mock.results[3]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    expect(sourceHoldRequest.setTimeout).toHaveBeenCalledWith(
+      SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+      expect.any(Function),
+    );
+    expect(targetHoldRequest.setTimeout).toHaveBeenCalledWith(
+      SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+      expect.any(Function),
+    );
     expect(resumeRequest.setTimeout).toHaveBeenCalledWith(
       SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
       expect.any(Function),
@@ -911,7 +959,7 @@ describe("surge handoff direct pod transport", () => {
     });
   });
 
-  it("retains short fetch deadlines for the non-resume process controls", async () => {
+  it("retains the short fetch deadline for target unreserve", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -936,13 +984,9 @@ describe("surge handoff direct pod transport", () => {
     };
 
     try {
-      await transport.stopSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
-      await transport.holdTargetOpenClaw!({ ...base, targetPod: target });
       await transport.unreserveTargetOpenClaw!({ ...base, targetPod: target });
 
       expect(calls.map((call) => call.path)).toEqual([
-        `/hold-surge-openclaw/${GATEWAY_ID}`,
-        `/hold-surge-openclaw/${GATEWAY_ID}`,
         `/unreserve-surge-openclaw/${GATEWAY_ID}`,
       ]);
       for (const call of calls) {
@@ -954,8 +998,6 @@ describe("surge handoff direct pod transport", () => {
       }
       expect(timeout.mock.calls).toEqual([
         [330_000],
-        [330_000],
-        [330_000],
       ]);
     } finally {
       timeout.mockRestore();
@@ -963,12 +1005,32 @@ describe("surge handoff direct pod transport", () => {
   });
 
   it("names the missing process-control capability when a pod predates the endpoint", async () => {
-    const fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ error: "not found" }), { status: 404 }),
-    ) as unknown as typeof globalThis.fetch;
+    const request = vi.fn((_options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+      const req = new EventEmitter() as EventEmitter & {
+        setTimeout: ReturnType<typeof vi.fn>;
+        destroy: ReturnType<typeof vi.fn>;
+        end: () => void;
+      };
+      req.setTimeout = vi.fn();
+      req.destroy = vi.fn();
+      req.end = () => {
+        const response = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          setEncoding: (encoding: BufferEncoding) => void;
+        };
+        response.statusCode = 404;
+        response.setEncoding = vi.fn();
+        queueMicrotask(() => {
+          onResponse(response);
+          response.emit("data", JSON.stringify({ error: "not found" }));
+          response.emit("end");
+        });
+      };
+      return req;
+    }) as unknown as typeof import("node:http").request;
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
-      fetch,
+      request,
       log: vi.fn(),
     });
 

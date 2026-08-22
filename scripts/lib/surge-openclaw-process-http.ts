@@ -16,6 +16,7 @@ export interface SurgeOpenClawProcessHandlerDeps {
   gatewayId: string;
   configuredBuilder: (slug: string) => boolean;
   processGate?: Pick<SurgeOpenClawProcessSupervisorClient, SurgeOpenClawProcessOperation>;
+  waitForActiveProvisioningDrain?: () => Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -86,6 +87,7 @@ function createHandler(
     if (!gate) return;
     try {
       const state = await gate[operation](request);
+      if (operation === "hold") await deps.waitForActiveProvisioningDrain?.();
       res.status(200).json({
         migrationId: request.migrationId,
         slug: request.slug,

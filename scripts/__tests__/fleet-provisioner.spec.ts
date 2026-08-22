@@ -12,6 +12,7 @@ import {
   cloneRetryReady,
   customerEnsureRetryReady,
   cancelRemovedEviction,
+  createConfiguredBuilderReconcileAdmission,
   createBuilderSurgeGateWiring,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
@@ -36,6 +37,8 @@ import {
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
+import { startReconcileLoop } from "../lib/reconcile-loop.js";
+import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
 import {
   _resetMigratingInProcessPinsForTests,
   isMigratingInPinned,
@@ -577,6 +580,165 @@ describe("configured Builder surge release", () => {
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not reconcile a released-marker target until its Builder process gate is permitted", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    try {
+      let mode: "held" | "permitted" = "held";
+      const logs: string[] = [];
+      const processGate = {
+        status: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "target" as const,
+          mode,
+          phase: mode === "held" ? "held" as const : "running" as const,
+          migrationId: "mig-builder",
+          slug: "ceckert-test",
+          targetPodUid: "target-pod",
+        })),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const admission = createConfiguredBuilderReconcileAdmission({
+        processGate,
+        log: (message) => logs.push(message),
+      });
+      const getMountObserved = vi.fn(() => [] as string[]);
+      const getEvictObserved = vi.fn(() => ["stale"]);
+      const readDesired = vi.fn(async () => ["ceckert-test"]);
+      const add = vi.fn();
+      const mount = vi.fn();
+      const workspace = vi.fn();
+      const evict = vi.fn();
+      const start = vi.fn(() => startReconcileLoop({
+        gatewayId: "builder",
+        intervalMs: 10,
+        canReconcile: admission,
+        getMountObserved,
+        getEvictObserved,
+        readDesired,
+        ensureSlug: async () => {
+          add();
+          mount();
+          workspace();
+          return "mounted" as const;
+        },
+        unmountSlug: async () => {
+          evict();
+          return "drained" as const;
+        },
+        log: (message) => logs.push(message),
+      }));
+      const stop = startAfterSurgeReadiness({
+        released: async () => true,
+        start,
+        log: (message) => logs.push(message),
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(start).toHaveBeenCalledOnce();
+      expect(getMountObserved).not.toHaveBeenCalled();
+      expect(getEvictObserved).not.toHaveBeenCalled();
+      expect(readDesired).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+      expect(mount).not.toHaveBeenCalled();
+      expect(workspace).not.toHaveBeenCalled();
+      expect(evict).not.toHaveBeenCalled();
+      expect(logs).toContain(
+        "[surge-handoff] reconcile paused while configured Builder process gate is target/held",
+      );
+
+      mode = "permitted";
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(add).toHaveBeenCalledOnce();
+      expect(mount).toHaveBeenCalledOnce();
+      expect(workspace).toHaveBeenCalledOnce();
+      expect(evict).toHaveBeenCalledOnce();
+      stop();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed without repeating a Builder process-gate status error", async () => {
+    const logs: string[] = [];
+    const admission = createConfiguredBuilderReconcileAdmission({
+      processGate: {
+        status: vi.fn(async () => {
+          throw new Error("supervisor unavailable");
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient,
+      log: (message) => logs.push(message),
+    });
+
+    await expect(admission()).resolves.toBe(false);
+    await expect(admission()).resolves.toBe(false);
+
+    expect(logs).toEqual([
+      "[surge-handoff] reconcile paused while configured Builder process gate has status error: supervisor unavailable",
+    ]);
+  });
+
+  it("waits for an active Builder mount after holding the target reservation", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      let releaseDrain: (() => void) | undefined;
+      const events: string[] = [];
+      const processGate = {
+        hydrate: vi.fn(async () => {
+          events.push("hydrate");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "held" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter: {
+          isBuilderGateway: () => true,
+          isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+          configuredBuilderOverlayPresent: () => true,
+        } as CustomerLifecycleAdapter,
+        processGate,
+        surgeReadiness: {} as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        waitForActiveProvisioningDrain: () => new Promise<void>((resolve) => {
+          events.push("wait-for-mount");
+          releaseDrain = resolve;
+        }),
+      });
+
+      let settled = false;
+      const reserved = wiring.reserveSurgeTarget({
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+      }).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+
+      expect(events).toEqual(["hydrate", "wait-for-mount"]);
+      expect(settled).toBe(false);
+
+      releaseDrain?.();
+      await reserved;
+
+      expect(settled).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }
