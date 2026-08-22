@@ -37,7 +37,10 @@ import {
   startWorkspaceAutosaveLoop,
   startWorkspacePushRecoveryLoop,
 } from "../lib/workspace-autosave-runner.js";
-import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
+import {
+  runGatewayPreStopFlush,
+  runGatewaySystemConfigConvergenceCheckpoint,
+} from "../lib/gateway-prestop-flush.js";
 import {
   checkpointDurableSystemConfigForSlug,
   readDurableSystemConfigHeadForSlug,
@@ -150,6 +153,63 @@ export function createFleetFlushSystemConfigSync(input: {
       );
 }
 
+export interface FleetControllerRequestedFlushDeps {
+  gatewayId: string;
+  gatewayClass: string;
+  builderSlug: string;
+  builder: boolean;
+  syncWorkspaces: (slug: string) => Promise<unknown>;
+  syncBlobs?: (slug: string) => Promise<void>;
+  log: (message: string) => void;
+  syncSystemConfig?: typeof syncSystemConfigForSlug;
+  readAcceptedCommit?: typeof readDurableSystemConfigHeadForSlug;
+}
+
+export function createFleetControllerRequestedFlush(input: FleetControllerRequestedFlushDeps) {
+  return async ({
+    slug,
+    reason,
+    expectedSystemConfigCommit,
+  }: {
+    slug: string;
+    reason: string;
+    expectedSystemConfigCommit?: string;
+  }) => {
+    input.log(`[fleet] controller-requested flush slug=${slug} reason=${reason}`);
+    if (reason === "migration-converge" && !expectedSystemConfigCommit) {
+      throw new Error(`migration converge is missing expected system config commit for ${slug}`);
+    }
+    const syncSystemConfig = createFleetFlushSystemConfigSync({
+      slug,
+      builderSlug: input.builderSlug,
+      builder: input.builder,
+      expectedSystemConfigCommit,
+      log: input.log,
+      sync: input.syncSystemConfig,
+      readAcceptedCommit: input.readAcceptedCommit,
+    });
+    if (reason === "migration-converge") {
+      if (!syncSystemConfig) {
+        throw new Error(`migration converge has no durable system config for ${slug}`);
+      }
+      return runGatewaySystemConfigConvergenceCheckpoint({
+        gatewayId: input.gatewayId,
+        gatewayClass: input.gatewayClass,
+        syncSystemConfig,
+        log: input.log,
+      });
+    }
+    return runGatewayPreStopFlush({
+      gatewayId: input.gatewayId,
+      gatewayClass: input.gatewayClass,
+      syncWorkspaces: () => input.syncWorkspaces(slug),
+      syncBlobs: input.syncBlobs ? () => input.syncBlobs!(slug) : undefined,
+      syncSystemConfig,
+      log: input.log,
+    });
+  };
+}
+
 export function createAssignedFingerprintReader(
   brokerClient: Pick<FleetBrokerClient, "assignedUsers">,
   seedSnapshot: Parameters<typeof desiredFingerprints>[1],
@@ -259,34 +319,26 @@ async function main(): Promise<void> {
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
-    flushLocalState: async ({ slug, reason, expectedSystemConfigCommit }) => {
-      log(`[fleet] controller-requested flush slug=${slug} reason=${reason}`);
-      return runGatewayPreStopFlush({
-        gatewayId: entrypointConfig.gatewayId,
-        gatewayClass: GATEWAY_CLASS,
-        syncWorkspaces: () => syncCustomerRepositoriesForSlug(slug, {
+    flushLocalState: createFleetControllerRequestedFlush({
+      gatewayId: entrypointConfig.gatewayId,
+      gatewayClass: GATEWAY_CLASS,
+      builderSlug: entrypointConfig.builderSlug,
+      builder,
+      syncWorkspaces: (slug) => syncCustomerRepositoriesForSlug(slug, {
+        strict: true,
+        resolveGithubToken: (customerSlug) => resolveGithubTokenForSlug(
+          brokerClient,
+          customerSlug,
+        ),
+      }),
+      syncBlobs: builder
+        ? undefined
+        : (slug) => blobSyncForSlug(slug, {
           strict: true,
-          resolveGithubToken: (customerSlug) => resolveGithubTokenForSlug(
-            brokerClient,
-            customerSlug,
-          ),
+          store: createBrokeredBlobStore(brokerClient),
         }),
-        syncBlobs: builder
-          ? undefined
-          : () => blobSyncForSlug(slug, {
-              strict: true,
-              store: createBrokeredBlobStore(brokerClient),
-            }),
-        syncSystemConfig: createFleetFlushSystemConfigSync({
-          slug,
-          builderSlug: entrypointConfig.builderSlug,
-          builder,
-          expectedSystemConfigCommit,
-          log,
-        }),
-        log,
-      });
-    },
+      log,
+    }),
     // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
     // /health and writes gateways/{id} on the trusted side. Gateway pods run
     // only the local mount reconcile from brokered assigned snapshots; all

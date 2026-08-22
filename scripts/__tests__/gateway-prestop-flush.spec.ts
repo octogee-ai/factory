@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
+import {
+  runGatewayPreStopFlush,
+  runGatewaySystemConfigConvergenceCheckpoint,
+} from "../lib/gateway-prestop-flush.js";
 
 describe("runGatewayPreStopFlush", () => {
   it("lets the predecessor complete its final pushes before releasing its stale key", async () => {
@@ -127,5 +130,66 @@ describe("runGatewayPreStopFlush", () => {
     });
     expect(releaseGiteaKey).not.toHaveBeenCalled();
     expect(result.steps.at(-1)).toMatchObject({ name: "gitea-key-release", status: "skipped" });
+  });
+
+  it("checks only durable system config before a target workspace is materialized", async () => {
+    const syncSystemConfig = vi.fn(async () => ({ acceptedCommit: "a".repeat(40) }));
+    const result = await runGatewaySystemConfigConvergenceCheckpoint({
+      gatewayId: "builder-alice",
+      gatewayClass: "builder",
+      syncSystemConfig,
+      log: () => {},
+    });
+
+    expect(syncSystemConfig).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      ok: true,
+      systemConfigCommit: "a".repeat(40),
+      steps: [
+        { name: "session-quiesce", status: "skipped" },
+        { name: "workspace-git", status: "skipped" },
+        { name: "blob-sync", status: "skipped" },
+        { name: "system-config", status: "done" },
+        { name: "gitea-key-release", status: "skipped" },
+      ],
+    });
+  });
+
+  it("keeps convergence fenced when the system config checkpoint fails", async () => {
+    const result = await runGatewaySystemConfigConvergenceCheckpoint({
+      gatewayId: "builder-alice",
+      gatewayClass: "builder",
+      syncSystemConfig: vi.fn(async () => { throw new Error("checkpoint failed"); }),
+      log: () => {},
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "workspace-git", status: "skipped" }),
+      expect.objectContaining({
+        name: "system-config",
+        status: "failed",
+        error: "checkpoint failed",
+      }),
+    ]));
+  });
+
+  it("keeps convergence fenced without an accepted system config commit", async () => {
+    const result = await runGatewaySystemConfigConvergenceCheckpoint({
+      gatewayId: "builder-alice",
+      gatewayClass: "builder",
+      syncSystemConfig: vi.fn(async () => undefined) as never,
+      log: () => {},
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.systemConfigCommit).toBeUndefined();
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "system-config",
+        status: "failed",
+        error: "system config checkpoint returned no accepted commit",
+      }),
+    ]));
   });
 });

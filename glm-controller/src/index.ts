@@ -2247,6 +2247,7 @@ function startControllerBackgroundTasks({
       }),
       now: () => Date.now(),
       log,
+      allowLegacyBuilderReturnCompatibilityRecovery: ENVIRONMENT_SETTINGS.name === "test",
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
@@ -2347,7 +2348,11 @@ function buildSurgeHandoffDeps(input: {
 }): SurgeCustomerHandoffDeps {
   const { db, runKubectl, privateKey } = input;
   return {
-    ...createSurgePodTransport({ privateKey, log }),
+    ...createSurgePodTransport({
+      privateKey,
+      log,
+      allowLegacyConfiguredBuilderConvergence: ENVIRONMENT_SETTINGS.name === "test",
+    }),
     listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
     readAssignments: async (gatewayId) => {
       const [assignments, userSnapshot] = await Promise.all([
