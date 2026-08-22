@@ -44,9 +44,18 @@ async function runUidMountExclusive(uid, opts, work) {
     if (!controller.signal.aborted && Number.isFinite(deadlineMs) && deadlineMs > 0) {
         timer = setTimeout(() => controller.abort(new Error(`[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; releasing in-flight lock so the next retry can run`)), deadlineMs);
     }
-    opts.onSignalCreated?.(controller.signal);
     try {
-        return await raceWithSignal(work(controller.signal, markStep), controller.signal);
+        opts.onSignalCreated?.(controller.signal);
+        let workPromise;
+        try {
+            workPromise = work(controller.signal, markStep);
+        }
+        catch (error) {
+            workPromise = Promise.reject(error);
+        }
+        const workSettled = workPromise.then(() => undefined, () => undefined);
+        opts.onWorkSettled?.(workSettled);
+        return await raceWithSignal(workPromise, controller.signal);
     }
     finally {
         if (timer)
@@ -198,7 +207,7 @@ async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
     const ctx = buildCustomerContext(snapshot, opts.customersDir);
     const steps = [];
     opts.markStep("ssh-key");
-    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    steps.push(...(await ensureSshKeyAndGitea(adapter, slug, opts.reclaimExistingSshKey === true)));
     throwIfAborted(opts.signal, uid);
     opts.markStep("workspace-repo");
     steps.push(...(await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)));
@@ -247,6 +256,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
             customersDir,
             convergeContent: opts.convergeContent,
             deferRuntimeVerification: opts.deferRuntimeVerification,
+            reclaimExistingSshKey: opts.reclaimExistingSshKey,
             signal,
             markStep,
         });
@@ -326,12 +336,12 @@ async function loadAndPrepareForMount(adapter, uid, customersDir) {
     adapter.log(`🟢 [add:${snapshot.slug}] starting (status=${snapshot.status || "<empty>"}, repoUrl=${snapshot.repoUrl ? "set" : "empty"}, mmUserId=${snapshot.mattermostUserId ? "set" : "empty"})`);
     return { snapshot, ctx, newCustomer };
 }
-async function ensureSshKeyAndGitea(adapter, slug) {
+async function ensureSshKeyAndGitea(adapter, slug, reclaimExistingSshKey = false) {
     if (!adapter.hasCustomerSshKey(slug)) {
         await registerFirstTimeSshKey(adapter, slug);
         return ["ssh-key"];
     }
-    return resyncSshKeyIfDrifted(adapter, slug);
+    return resyncSshKeyIfDrifted(adapter, slug, reclaimExistingSshKey);
 }
 async function registerFirstTimeSshKey(adapter, slug) {
     const pubKey = adapter.generateCustomerSshKey(slug);
@@ -348,17 +358,20 @@ async function registerFirstTimeSshKey(adapter, slug) {
     }
     adapter.log(`[add:${slug}] SSH key + Gitea user registered`);
 }
-async function resyncSshKeyIfDrifted(adapter, slug) {
+async function resyncSshKeyIfDrifted(adapter, slug, reclaimExistingSshKey) {
     const localPub = adapter.readLocalCustomerPubKey(slug);
     if (localPub === null) {
         await adapter.deleteCustomerSshKey(slug).catch(() => { });
         throw new Error(`[add:${slug}] SSH key dir exists but pubkey is unreadable; cleared, retry will regenerate`);
     }
     const giteaPubKeys = await adapter.readGiteaCustomerPubKeys(slug);
-    if (giteaPubKeys.some((candidate) => pubKeysMatch(candidate, localPub)))
+    const registered = giteaPubKeys.some((candidate) => pubKeysMatch(candidate, localPub));
+    if (!reclaimExistingSshKey && registered)
         return [];
-    const driftDetail = giteaPubKeys.length === 0 ? "absent" : "mismatch";
-    adapter.log(`[add:${slug}] resync triggered: SSH key drift (giteaPub=${driftDetail})`);
+    const reason = reclaimExistingSshKey && registered
+        ? "ownership reclaim"
+        : `SSH key drift (giteaPub=${giteaPubKeys.length === 0 ? "absent" : "mismatch"})`;
+    adapter.log(`[add:${slug}] resync triggered: ${reason}`);
     await adapter.createGiteaUser(slug, localPub);
     const recheck = await adapter.readGiteaCustomerPubKeys(slug);
     if (!recheck.some((candidate) => pubKeysMatch(candidate, localPub))) {

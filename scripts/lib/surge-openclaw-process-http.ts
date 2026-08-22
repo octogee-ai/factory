@@ -5,17 +5,23 @@ import { SIGNATURE_HEADER } from "../../shared/types/fleet-controller.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
 import type {
+  SurgeOpenClawProcessGateState,
   SurgeOpenClawProcessRequest,
   SurgeOpenClawProcessSupervisorClient,
 } from "./surge-openclaw-process-gate.js";
 
 type SurgeOpenClawProcessOperation = "hold" | "resume" | "unreserve";
+type SurgeOpenClawProcessHandlerGate = Pick<
+  SurgeOpenClawProcessSupervisorClient,
+  SurgeOpenClawProcessOperation | "finalizeTargetCancellation"
+>;
 
 export interface SurgeOpenClawProcessHandlerDeps {
   publicKey: string;
   gatewayId: string;
   configuredBuilder: (slug: string) => boolean;
-  processGate?: Pick<SurgeOpenClawProcessSupervisorClient, SurgeOpenClawProcessOperation>;
+  processGate?: SurgeOpenClawProcessHandlerGate;
+  unreserveConfiguredBuilderTarget?: (request: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   waitForActiveProvisioningDrain?: () => Promise<void>;
   log?: (message: string) => void;
 }
@@ -68,7 +74,7 @@ function requireConfiguredBuilder(
   request: SurgeOpenClawProcessRequest,
   res: Response,
   deps: SurgeOpenClawProcessHandlerDeps,
-): Pick<SurgeOpenClawProcessSupervisorClient, SurgeOpenClawProcessOperation> | null {
+): SurgeOpenClawProcessHandlerGate | null {
   if (!deps.processGate || !deps.configuredBuilder(request.slug)) {
     res.status(409).json({ error: "configured Builder OpenClaw process control is unavailable" });
     return null;
@@ -86,8 +92,13 @@ function createHandler(
     const gate = requireConfiguredBuilder(request, res, deps);
     if (!gate) return;
     try {
-      const state = await gate[operation](request);
-      if (operation === "hold") await deps.waitForActiveProvisioningDrain?.();
+      let state = operation === "unreserve" && deps.unreserveConfiguredBuilderTarget
+        ? await deps.unreserveConfiguredBuilderTarget(request)
+        : await gate[operation](request);
+      if (operation === "hold") {
+        await deps.waitForActiveProvisioningDrain?.();
+        if (state.phase === "cancelling") state = await gate.finalizeTargetCancellation(request);
+      }
       res.status(200).json({
         migrationId: request.migrationId,
         slug: request.slug,

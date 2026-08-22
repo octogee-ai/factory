@@ -225,9 +225,23 @@ function responseTextJson(
 }
 
 const SURGE_POD_CONTROL_TIMEOUT_MS = 330_000;
-export const SURGE_OPENCLAW_HOLD_TIMEOUT_MS = 480_000;
-export const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
 export const SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS = 1_500_000;
+export const SURGE_OPENCLAW_HOLD_TIMEOUT_MS = SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS;
+export const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
+export const SURGE_RSYNC_PREPARE_TIMEOUT_MS = SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS;
+export const SURGE_RSYNC_PUSH_TIMEOUT_MS = 480_000;
+export const SURGE_RSYNC_FINISH_TIMEOUT_MS = 720_000;
+
+const NATIVE_SURGE_CONTROL_TIMEOUTS: Readonly<Record<string, number>> = {
+  "hold-surge-openclaw": SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+  "unreserve-surge-openclaw": SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+  "resume-surge-openclaw": SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
+  "complete-surge-handoff": SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
+  flush: SURGE_POD_CONTROL_TIMEOUT_MS,
+  "prepare-rsync-import": SURGE_RSYNC_PREPARE_TIMEOUT_MS,
+  "push-rsync-state": SURGE_RSYNC_PUSH_TIMEOUT_MS,
+  "finish-rsync-import": SURGE_RSYNC_FINISH_TIMEOUT_MS,
+};
 
 interface SignedPodRequestOptions {
   privateKey: string;
@@ -295,16 +309,8 @@ function postSignedViaHttp(opts: SignedPodRequestOptions): Promise<Record<string
 }
 
 function nativeSurgeControlTimeout(path: string, timeoutMs: number | undefined): number | undefined {
-  if (path === "hold-surge-openclaw") {
-    return timeoutMs ?? SURGE_OPENCLAW_HOLD_TIMEOUT_MS;
-  }
-  if (path === "resume-surge-openclaw") {
-    return timeoutMs ?? SURGE_OPENCLAW_RESUME_TIMEOUT_MS;
-  }
-  if (path === "complete-surge-handoff") {
-    return timeoutMs ?? SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS;
-  }
-  return undefined;
+  const nativeTimeoutMs = NATIVE_SURGE_CONTROL_TIMEOUTS[path];
+  return nativeTimeoutMs === undefined ? undefined : timeoutMs ?? nativeTimeoutMs;
 }
 
 async function postSigned(

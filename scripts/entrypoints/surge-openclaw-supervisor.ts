@@ -481,9 +481,49 @@ export async function startSurgeOpenClawSupervisor(
   };
 
   const hold = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
-    await gate.hold({ ...input, podUid: opts.podUid });
+    const state = await gate.hold({ ...input, podUid: opts.podUid });
     await stopChild();
+    if (state.phase === "cancelling") return state;
     return gate.markHeld({ podUid: opts.podUid, migrationId: input.migrationId });
+  };
+
+  const reholdTarget = async (
+    input: SurgeOpenClawProcessRequest,
+  ): Promise<SurgeOpenClawProcessGateState> => {
+    const state = await gate.reholdTarget({ ...input, podUid: opts.podUid });
+    await stopChild();
+    if (state.phase === "cancelling") return state;
+    return gate.markHeld({ podUid: opts.podUid, migrationId: input.migrationId });
+  };
+
+  const claimTargetCompletion = (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> =>
+    gate.claimTargetCompletion({ ...input, podUid: opts.podUid });
+
+  const finalizeTargetCancellation = (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> =>
+    gate.finalizeTargetCancellation({ ...input, podUid: opts.podUid });
+
+  const releaseTarget = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
+    const state = await current();
+    if (
+      state.role === "normal" &&
+      state.terminalTarget?.migrationId === input.migrationId &&
+      state.terminalTarget.slug === input.slug &&
+      state.terminalTarget.targetPodUid === input.targetPodUid
+    ) {
+      await readiness.release({ targetPodUid: input.targetPodUid });
+      return state;
+    }
+    if (
+      state.role !== "target" ||
+      state.mode !== "permitted" ||
+      state.migrationId !== input.migrationId ||
+      state.slug !== input.slug ||
+      state.targetPodUid !== input.targetPodUid
+    ) {
+      throw new Error("surge OpenClaw process gate does not permit this target migration");
+    }
+    await readiness.release({ targetPodUid: input.targetPodUid });
+    return gate.settleTargetCompletion({ ...input, podUid: opts.podUid });
   };
 
   const permit = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
@@ -538,6 +578,10 @@ export async function startSurgeOpenClawSupervisor(
     if (request.action === "settle") return settle();
     const input = requestIdentity(request);
     if (request.action === "hold") return hold(input);
+    if (request.action === "rehold") return reholdTarget(input);
+    if (request.action === "claim") return claimTargetCompletion(input);
+    if (request.action === "finalize-cancellation") return finalizeTargetCancellation(input);
+    if (request.action === "release-target") return releaseTarget(input);
     if (request.action === "hydrate") return hydrate(input);
     if (request.action === "permit") return permit(input);
     if (request.action === "unreserve") return unreserve(input);

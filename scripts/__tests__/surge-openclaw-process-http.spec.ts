@@ -55,7 +55,7 @@ describe("surge OpenClaw process control handlers", () => {
       publicKey: PUBLIC_KEY,
       gatewayId: GATEWAY_ID,
       configuredBuilder: (slug) => slug === "ceckert-test",
-      processGate: { hold, resume: vi.fn(), unreserve: vi.fn() },
+      processGate: { hold, resume: vi.fn(), unreserve: vi.fn(), finalizeTargetCancellation: vi.fn() },
     });
     const body = {
       migrationId: "surge-gateway-target",
@@ -88,7 +88,7 @@ describe("surge OpenClaw process control handlers", () => {
       publicKey: PUBLIC_KEY,
       gatewayId: GATEWAY_ID,
       configuredBuilder: (slug) => slug === "ceckert-test",
-      processGate: { hold, resume: vi.fn(), unreserve: vi.fn() },
+      processGate: { hold, resume: vi.fn(), unreserve: vi.fn(), finalizeTargetCancellation: vi.fn() },
       waitForActiveProvisioningDrain,
     });
     const body = {
@@ -122,13 +122,61 @@ describe("surge OpenClaw process control handlers", () => {
     });
   });
 
+  it("finalizes a signed target cancellation only after Builder provisioning drains", async () => {
+    let releaseDrain!: () => void;
+    const hold = vi.fn(async () => ({ ...GATE_STATE, phase: "cancelling" as const }));
+    const finalizeTargetCancellation = vi.fn(async () => ({
+      ...GATE_STATE,
+      role: "normal" as const,
+      phase: "held" as const,
+    }));
+    const waitForActiveProvisioningDrain = vi.fn(() => new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    }));
+    const handler = createHoldSurgeOpenClawHandler({
+      publicKey: PUBLIC_KEY,
+      gatewayId: GATEWAY_ID,
+      configuredBuilder: (slug) => slug === "ceckert-test",
+      processGate: { hold, resume: vi.fn(), unreserve: vi.fn(), finalizeTargetCancellation },
+      waitForActiveProvisioningDrain,
+    });
+    const body = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+    const raw = JSON.stringify(body);
+    const res = response();
+    let settled = false;
+    const held = handler(
+      request(body, signForPod(body.migrationId, raw)) as never,
+      res as never,
+      vi.fn(),
+    ).then(() => { settled = true; });
+
+    await Promise.resolve();
+
+    expect(waitForActiveProvisioningDrain).toHaveBeenCalledOnce();
+    expect(finalizeTargetCancellation).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    releaseDrain();
+    await held;
+
+    expect(finalizeTargetCancellation).toHaveBeenCalledWith(body);
+    expect(res.result()).toEqual({
+      status: 200,
+      body: { ...body, operation: "hold", role: "normal", mode: "held", phase: "held" },
+    });
+  });
+
   it("refuses unsigned and foreign Builder resume attempts", async () => {
     const resume = vi.fn();
     const handler = createResumeSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
       gatewayId: GATEWAY_ID,
       configuredBuilder: () => false,
-      processGate: { hold: vi.fn(), resume, unreserve: vi.fn() },
+      processGate: { hold: vi.fn(), resume, unreserve: vi.fn(), finalizeTargetCancellation: vi.fn() },
     });
     const body = {
       migrationId: "surge-gateway-target",
@@ -159,7 +207,7 @@ describe("surge OpenClaw process control handlers", () => {
       publicKey: PUBLIC_KEY,
       gatewayId: GATEWAY_ID,
       configuredBuilder: (slug) => slug === "ceckert-test",
-      processGate: { hold: vi.fn(), resume: vi.fn(), unreserve },
+      processGate: { hold: vi.fn(), resume: vi.fn(), unreserve, finalizeTargetCancellation: vi.fn() },
     });
     const body = {
       migrationId: "surge-gateway-target",

@@ -11,6 +11,7 @@ import {
   createSurgeOpenClawProcessSupervisorClient,
   SURGE_OPENCLAW_PROCESS_GATE_FILE,
 } from "../lib/surge-openclaw-process-gate.js";
+import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 import { startSurgeOpenClawSupervisor } from "../entrypoints/surge-openclaw-supervisor.js";
 
 const roots: string[] = [];
@@ -113,6 +114,7 @@ describe("surge OpenClaw process gate", () => {
     await expect(gate.settle({ podUid: "target-pod" })).rejects.toThrow(
       "cannot settle a held surge OpenClaw process gate",
     );
+    await gate.claimTargetCompletion(request);
     await gate.permitTarget(request);
     await gate.markRunning({ podUid: "target-pod", migrationId: request.migrationId });
     await expect(gate.settle({ podUid: "target-pod" })).resolves.toEqual({
@@ -136,6 +138,8 @@ describe("surge OpenClaw process gate", () => {
     };
     const next = { ...finished, migrationId: "surge-gateway-next", targetPodUid: "other-target" };
 
+    await gate.hydrateTarget(finished);
+    await gate.claimTargetCompletion(finished);
     await gate.permitTarget(finished);
     await expect(gate.hold(next)).rejects.toThrow("belongs to surge-gateway-finished");
     await gate.markRunning({ podUid: "target-pod", migrationId: finished.migrationId });
@@ -172,6 +176,35 @@ describe("surge OpenClaw process gate", () => {
     await expect(gate.unreserveTarget(request)).resolves.toMatchObject({ role: "normal" });
   });
 
+  it("refuses a stale target permit after its matching unreserve", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const gate = createSurgeOpenClawProcessGate(openclawDir);
+    await gate.ensure({ podUid: "target-pod", readinessReleased: false });
+    const request = {
+      podUid: "target-pod",
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    await gate.hydrateTarget(request);
+    await gate.unreserveTarget(request);
+
+    await expect(gate.permitTarget(request)).rejects.toThrow(
+      "does not reserve this target migration",
+    );
+    await expect(gate.reholdTarget(request)).rejects.toThrow(
+      "does not reserve this target migration",
+    );
+    await expect(gate.read()).resolves.toEqual({
+      version: 1,
+      podUid: "target-pod",
+      role: "normal",
+      mode: "held",
+      phase: "held",
+    });
+  });
+
   it("restarts a released pod serving and keeps held records held except healed normal residue", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const gate = createSurgeOpenClawProcessGate(openclawDir);
@@ -190,6 +223,7 @@ describe("surge OpenClaw process gate", () => {
       migrationId: request.migrationId,
     });
 
+    await gate.claimTargetCompletion(request);
     await gate.permitTarget(request);
     await expect(gate.ensure({ podUid: "pod-a", readinessReleased: false })).resolves.toMatchObject({
       role: "target",
@@ -197,6 +231,7 @@ describe("surge OpenClaw process gate", () => {
       phase: "held",
     });
 
+    await gate.claimTargetCompletion(request);
     await gate.permitTarget(request);
     await expect(gate.ensure({ podUid: "pod-a", readinessReleased: true })).resolves.toEqual({
       version: 1,
@@ -204,7 +239,13 @@ describe("surge OpenClaw process gate", () => {
       role: "normal",
       mode: "permitted",
       phase: "starting",
+      terminalTarget: {
+        migrationId: request.migrationId,
+        slug: request.slug,
+        targetPodUid: request.targetPodUid,
+      },
     });
+    await expect(gate.hold(request)).rejects.toThrow("target migration already released");
 
     await gate.holdNormal({ podUid: "pod-a" });
     await expect(gate.ensure({ podUid: "pod-a", readinessReleased: true })).resolves.toMatchObject({
@@ -214,7 +255,7 @@ describe("surge OpenClaw process gate", () => {
     });
   });
 
-  it("keeps a target permit committed when a matching hold returns it to the safe held state", async () => {
+  it("cancels a matching target permit before it can release readiness", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const gate = createSurgeOpenClawProcessGate(openclawDir);
     await gate.ensure({ podUid: "target-pod", readinessReleased: false });
@@ -225,12 +266,47 @@ describe("surge OpenClaw process gate", () => {
       targetPodUid: "target-pod",
     };
 
+    await gate.hydrateTarget(request);
+    await gate.claimTargetCompletion(request);
     await gate.permitTarget(request);
     await expect(gate.hold(request)).resolves.toMatchObject({
       role: "target",
       mode: "held",
-      phase: "stopping",
+      phase: "cancelling",
       migrationId: request.migrationId,
+    });
+  });
+
+  it("preserves a target cancellation across restart and clears it only through its finalizer", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const gate = createSurgeOpenClawProcessGate(openclawDir);
+    const request = {
+      podUid: "target-pod",
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+    await gate.ensure({ podUid: request.podUid, readinessReleased: false });
+    await gate.hydrateTarget(request);
+    await gate.claimTargetCompletion(request);
+    await expect(gate.hold(request)).resolves.toMatchObject({
+      role: "target",
+      mode: "held",
+      phase: "cancelling",
+    });
+    await expect(gate.claimTargetCompletion(request)).rejects.toThrow("target completion is not held");
+    await expect(gate.unreserveTarget(request)).rejects.toThrow("cannot unreserve a claimed");
+    await expect(gate.ensure({ podUid: request.podUid, readinessReleased: false })).resolves.toMatchObject({
+      role: "target",
+      mode: "held",
+      phase: "cancelling",
+    });
+    await expect(gate.finalizeTargetCancellation(request)).resolves.toEqual({
+      version: 1,
+      podUid: request.podUid,
+      role: "normal",
+      mode: "held",
+      phase: "held",
     });
   });
 
@@ -278,6 +354,8 @@ describe("surge OpenClaw process supervisor", () => {
     };
 
     await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
     await expect(client.permit(request)).resolves.toMatchObject({
       role: "target",
       mode: "permitted",
@@ -289,9 +367,57 @@ describe("surge OpenClaw process supervisor", () => {
     await expect(client.hold(request)).resolves.toMatchObject({
       role: "target",
       mode: "held",
-      phase: "held",
+      phase: "cancelling",
     });
     expect(children[0]!.kill).toHaveBeenCalledWith("SIGTERM");
+    await expect(client.releaseTarget(request)).rejects.toThrow("does not permit this target migration");
+    await expect(createSurgeReadinessGate(openclawDir, "target-pod").released()).resolves.toBe(false);
+    await supervisor.stop();
+  });
+
+  it("rejects a delayed matching target hold after target release commits", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget: async () => undefined,
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      probeHealthz: healthzOf(children),
+      healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
+    await client.permit(request);
+    await expect(client.releaseTarget(request)).resolves.toMatchObject({
+      role: "normal",
+      mode: "permitted",
+      terminalTarget: request,
+    });
+    await expect(createSurgeReadinessGate(openclawDir, "target-pod").released()).resolves.toBe(true);
+
+    await expect(client.hold(request)).rejects.toThrow("target migration already released");
+    expect(children[0]!.kill).not.toHaveBeenCalled();
+    await expect(client.status()).resolves.toMatchObject({
+      role: "normal",
+      mode: "permitted",
+      terminalTarget: request,
+    });
     await supervisor.stop();
   });
 
@@ -330,6 +456,8 @@ describe("surge OpenClaw process supervisor", () => {
       targetPodUid: "target-pod",
     };
 
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
     await expect(client.permit(request)).resolves.toMatchObject({
       role: "target",
       mode: "permitted",
@@ -381,6 +509,8 @@ describe("surge OpenClaw process supervisor", () => {
       targetPodUid: "target-pod",
     };
 
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
     await expect(client.permit(request)).rejects.toThrow("OpenClaw exited before becoming healthy");
     expect(prepareTarget).toHaveBeenCalledTimes(2);
     expect(onUnexpectedChildExit).toHaveBeenCalledOnce();
@@ -464,6 +594,8 @@ describe("surge OpenClaw process supervisor", () => {
       targetPodUid: "target-pod",
     };
 
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
     const permit = client.permit(request);
     await prepareEntered;
 

@@ -259,10 +259,12 @@ export interface AddCustomerOptions {
     mountDeadlineMs?: number;
     convergeContent?: boolean;
     deferRuntimeVerification?: boolean;
+    reclaimExistingSshKey?: boolean;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
+    onWorkSettled?: (settled: Promise<void>) => void;
 }
 export declare function addCustomerToGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: AddCustomerOptions): Promise<AddCustomerResult>;
 export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, opts?: AddCustomerOptions): Promise<RestoreCustomerRuntimeResult>;

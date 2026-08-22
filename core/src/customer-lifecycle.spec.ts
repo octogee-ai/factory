@@ -1452,6 +1452,35 @@ expect(state.calls).toContain("createGiteaUser");
     expect(state.calls).not.toContain("createGiteaUser");
   });
 
+  it("reclaims a matching existing Gitea key when a target mount requires ownership", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user",
+        greetingPosted: true,
+      }),
+      {
+        ...emptyDisk(),
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      reclaimExistingSshKey: true,
+    });
+
+    expect(result.steps).toContain("ssh-key-resync");
+    expect(state.calls).toContain("createGiteaUser");
+  });
+
   it("treats transient Gitea-read failure as ERROR, not as 'key absent' (no spurious resync)", async () => {
 
 const state = makeState(
@@ -1918,23 +1947,64 @@ releaseFirst();
     expect(result.steps).toContain("verify-channel-ready");
   });
 
-  it("throws a deadline error and releases the in-flight uid when a step hangs past mountDeadlineMs", async () => {
-    const state = makeState(snap({ status: "" }), emptyDisk());
+  it("reports a deadline-raced Builder workspace clone only after its post-deadline tree mutation settles", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        repoUrl: "http://gitea/octogee/test-workspace",
+      }),
+      emptyDisk(),
+    );
     const realAdapter = makeAdapter(state);
+    realAdapter.isBuilderGateway = () => true;
+    let cloneStarted!: () => void;
+    const cloneStartedPromise = new Promise<void>((resolve) => {
+      cloneStarted = resolve;
+    });
+    let releaseClone!: () => void;
+    const clone = new Promise<void>((resolve) => {
+      releaseClone = resolve;
+    });
     const hangingAdapter: CustomerLifecycleAdapter = {
       ...realAdapter,
-      loadUserSnapshot: () => new Promise(() => {}),
+      cloneWorkspaceRepo: async (slug, repoUrl) => {
+        cloneStarted();
+        await clone;
+        return realAdapter.cloneWorkspaceRepo(slug, repoUrl);
+      },
     };
+    let workSettled: Promise<void> | undefined;
 
-    await expect(
-      addCustomerToGateway(hangingAdapter, "uid-test", { mountDeadlineMs: 25 }),
-    ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+    const mounting = addCustomerToGateway(hangingAdapter, "uid-test", {
+        mountDeadlineMs: 25,
+        onWorkSettled: (settled) => {
+          workSettled = settled;
+        },
+      });
+    await cloneStartedPromise;
 
+    await expect(mounting).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+
+    let callbackSettled = false;
+    void workSettled?.then(() => {
+      callbackSettled = true;
+    });
+    await Promise.resolve();
+    expect(workSettled).toBeDefined();
+    expect(callbackSettled).toBe(false);
     expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
 
     const state2 = makeState(snap({ status: "" }), emptyDisk());
     const retry = await addCustomerToGateway(makeAdapter(state2), "uid-test");
     expect(retry.steps).toContain("verify-channel-ready");
+
+    releaseClone();
+    await workSettled;
+    expect(callbackSettled).toBe(true);
+    expect(state.calls).toContain("cloneWorkspaceRepo");
+    expect(state.calls).toContain("ensureCustomerDirectories");
+    expect(state.calls).toContain("writeCustomerTemplateFiles");
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
   });
 
   it("names the hung step in the deadline error", async () => {
@@ -2206,20 +2276,36 @@ describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () =
     _resetInFlightUidsForTests();
   });
 
-  it("throws a deadline error and releases the in-flight uid when a restore step hangs past mountDeadlineMs", async () => {
+  it("releases the restore uid after a deadline while reporting work settlement", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
     const realAdapter = makeAdapter(state);
+    let releaseRead!: () => void;
+    const read = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
     const hangingAdapter: CustomerLifecycleAdapter = {
       ...realAdapter,
       hasCustomerSshKey: () => true,
       readLocalCustomerPubKey: () => "ssh-pubkey",
-      readGiteaCustomerPubKeys: async () => new Promise(() => {}),
+      readGiteaCustomerPubKeys: async () => {
+        await read;
+        return ["ssh-pubkey"];
+      },
     };
+    let workSettled: Promise<void> | undefined;
 
     await expect(
-      restoreCustomerRuntimeFromSnapshot(hangingAdapter, state.user!, { mountDeadlineMs: 25 }),
+      restoreCustomerRuntimeFromSnapshot(hangingAdapter, state.user!, {
+        mountDeadlineMs: 25,
+        onWorkSettled: (settled) => {
+          workSettled = settled;
+        },
+      }),
     ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
 
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+    releaseRead();
+    await workSettled;
     expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
 
     const state2 = makeState(snap({ status: "complete" }), emptyDisk());

@@ -32,9 +32,13 @@ import {
   reconcileAddCustomerOptions,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
+  runProvisioningWork,
   waitForOpenClawHealthz,
 } from "../lib/fleet-provisioner.js";
-import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import {
+  addCustomerToGateway,
+  type CustomerLifecycleAdapter,
+} from "../lib/customer-lifecycle.js";
 import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
 import { startReconcileLoop } from "../lib/reconcile-loop.js";
@@ -481,6 +485,104 @@ function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLif
   } as CustomerLifecycleAdapter;
 }
 
+function createProvisioningCounter(): {
+  provisioning: {
+    beginProvisioning: () => void;
+    finishProvisioning: () => void;
+  };
+  active: () => number;
+  waitForDrain: () => Promise<void>;
+} {
+  let active = 0;
+  const waiters = new Set<() => void>();
+  return {
+    provisioning: {
+      beginProvisioning: () => {
+        active += 1;
+      },
+      finishProvisioning: () => {
+        active -= 1;
+        if (active !== 0) return;
+        for (const resolve of waiters) resolve();
+        waiters.clear();
+      },
+    },
+    active: () => active,
+    waitForDrain: () => active === 0
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => waiters.add(resolve)),
+  };
+}
+
+function configuredBuilderLifecycleAdapter(input: {
+  cloneWorkspaceRepo?: () => Promise<boolean>;
+  writeMountMarker?: () => void;
+  createGiteaUser?: () => Promise<void>;
+} = {}): { adapter: CustomerLifecycleAdapter; calls: string[] } {
+  const calls: string[] = [];
+  let customerDir = false;
+  let workspaceGitDir = false;
+  let gitRemote = false;
+  let mountMarked = false;
+  const cloneWorkspaceRepo = input.cloneWorkspaceRepo ?? (async () => true);
+  const adapter = {
+    log: () => undefined,
+    isBuilderGateway: () => true,
+    isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+    configuredBuilderOverlayPresent: () => true,
+    uidForSlug: async () => "uid-builder",
+    loadUserSnapshot: async () => ({
+      uid: "uid-builder",
+      slug: "ceckert-test",
+      tier: "trial",
+      gatewayId: "gw-builder",
+      status: "complete" as const,
+      agentIds: [],
+      repoUrl: "http://gitea/octogee/ceckert-test-workspace",
+      mattermostUserId: null,
+      greetingPosted: true,
+      channels: [],
+      ownerName: "Builder",
+    }),
+    hasCustomerSshKey: () => true,
+    readLocalCustomerPubKey: () => "ssh-pubkey",
+    readGiteaCustomerPubKeys: async () => ["ssh-pubkey"],
+    createGiteaUser: async () => {
+      calls.push("claim-gitea-key");
+      await input.createGiteaUser?.();
+    },
+    hasCustomerDir: () => customerDir,
+    hasWorkspaceGitDir: () => workspaceGitDir,
+    hasGitRemote: () => gitRemote,
+    cloneWorkspaceRepo: async () => {
+      calls.push("clone-workspace");
+      const cloned = await cloneWorkspaceRepo();
+      if (cloned) {
+        customerDir = true;
+        workspaceGitDir = true;
+        gitRemote = true;
+      }
+      return cloned;
+    },
+    ensureCustomerDirectories: () => {
+      calls.push("ensure-customer-directories");
+      customerDir = true;
+    },
+    writeCustomerTemplateFiles: async () => {
+      calls.push("write-customer-template-files");
+    },
+    customerCoachWiredInOpenclawConfig: () => false,
+    writeMountMarker: () => {
+      calls.push("mount-marker");
+      mountMarked = true;
+      input.writeMountMarker?.();
+    },
+    customerMountMarked: () => mountMarked,
+    listLocalCustomerSlugs: () => mountMarked ? ["ceckert-test"] : [],
+  } as unknown as CustomerLifecycleAdapter;
+  return { adapter, calls };
+}
+
 describe("configured Builder surge release", () => {
   it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
@@ -511,6 +613,19 @@ describe("configured Builder surge release", () => {
             targetPodUid: "target-pod",
           };
         }),
+        claimTargetCompletion: vi.fn(async () => {
+          events.push("claim");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "completing" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
         permit: vi.fn(async () => {
           events.push("permit");
           return {
@@ -524,9 +639,8 @@ describe("configured Builder surge release", () => {
             targetPodUid: "target-pod",
           };
         }),
-        hold: vi.fn(),
-        settle: vi.fn(async () => {
-          events.push("settle");
+        releaseTarget: vi.fn(async () => {
+          events.push("release-target");
           return {
             version: 1 as const,
             podUid: "target-pod",
@@ -535,6 +649,7 @@ describe("configured Builder surge release", () => {
             phase: "running" as const,
           };
         }),
+        hold: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
       const surgeReadiness = {
         release: vi.fn(async () => {
@@ -557,6 +672,7 @@ describe("configured Builder surge release", () => {
           events.push("ready");
         },
         log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         reconcileImportedWorkspace,
         attachConfiguredBuilderBeforeOpenClaw,
       });
@@ -568,18 +684,26 @@ describe("configured Builder surge release", () => {
 
       expect(events).toEqual([
         "status",
+        "claim",
+        "claim",
         "reconcile:ceckert-test",
+        "claim",
         "attach",
         "permit",
         "ready",
-        "release",
-        "settle",
+        "release-target",
       ]);
       expect(vi.mocked(processGate.permit)).toHaveBeenCalledWith({
         migrationId: "mig-builder",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
+      expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledWith({
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+        targetPodUid: "target-pod",
+      });
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();
     }
@@ -686,15 +810,577 @@ describe("configured Builder surge release", () => {
     ]);
   });
 
-  it("waits for an active Builder mount after holding the target reservation", async () => {
+  it("defers target release until an actual deadline-raced Builder clone settles", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
-      let releaseDrain: (() => void) | undefined;
       const events: string[] = [];
+      let releaseClone!: () => void;
+      const clone = new Promise<void>((resolve) => {
+        releaseClone = resolve;
+      });
+      let cloneStarted!: () => void;
+      const cloneStartedPromise = new Promise<void>((resolve) => {
+        cloneStarted = resolve;
+      });
+      const { adapter, calls } = configuredBuilderLifecycleAdapter({
+        cloneWorkspaceRepo: async () => {
+          cloneStarted();
+          await clone;
+          return true;
+        },
+      });
+      const counter = createProvisioningCounter();
+      const staleEnsure = runProvisioningWork({
+        provisioning: counter.provisioning,
+        work: (onWorkSettled) => addCustomerToGateway(adapter, "uid-builder", {
+          mountDeadlineMs: 25,
+          onWorkSettled,
+        }),
+      });
+      await cloneStartedPromise;
+      await expect(staleEnsure).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
+      expect(counter.active()).toBe(1);
+
+      let releaseWaitStarted!: () => void;
+      const releaseWaitStartedPromise = new Promise<void>((resolve) => {
+        releaseWaitStarted = resolve;
+      });
       const processGate = {
+        status: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "target" as const,
+          mode: "held" as const,
+          phase: "held" as const,
+          migrationId: "mig-builder",
+          slug: "ceckert-test",
+          targetPodUid: "target-pod",
+        })),
+        claimTargetCompletion: vi.fn(async () => {
+          events.push("claim");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "completing" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        permit: vi.fn(async () => {
+          events.push("permit");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        hold: vi.fn(),
+        rehold: vi.fn(),
+        releaseTarget: vi.fn(async () => {
+          events.push("release-target");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+          };
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async (input: {
+        adapter: CustomerLifecycleAdapter;
+        onWorkSettled?: (settled: Promise<void>) => void;
+      }) => {
+        events.push("attach");
+        await addCustomerToGateway(input.adapter, "uid-builder", {
+          onWorkSettled: input.onWorkSettled,
+        });
+        input.adapter.writeMountMarker?.("ceckert-test");
+        return "ceckert-test";
+      });
+      const reconcileImportedWorkspace = vi.fn(() => {
+        events.push("reconcile");
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        provisioning: counter.provisioning,
+        waitForActiveProvisioningDrain: () => {
+          releaseWaitStarted();
+          return counter.waitForDrain();
+        },
+        reconcileImportedWorkspace,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+      const released = wiring.releaseSurgeReadiness({
+        migrationId: "mig-builder",
+        targetPodUid: "target-pod",
+      });
+      await releaseWaitStartedPromise;
+
+      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
+      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
+
+      releaseClone();
+      await released;
+
+      expect(calls).toEqual([
+        "clone-workspace",
+        "ensure-customer-directories",
+        "write-customer-template-files",
+        "mount-marker",
+      ]);
+      expect(events).toEqual([
+        "claim",
+        "claim",
+        "reconcile",
+        "claim",
+        "attach",
+        "permit",
+        "release-target",
+      ]);
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+      expect(counter.active()).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("holds reservation and release through the actual ensure stamp and marker tail", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const events: string[] = [];
+      let releaseStamp!: () => void;
+      const stamp = new Promise<void>((resolve) => {
+        releaseStamp = resolve;
+      });
+      let stampStarted!: () => void;
+      const stampStartedPromise = new Promise<void>((resolve) => {
+        stampStarted = resolve;
+      });
+      const { adapter, calls } = configuredBuilderLifecycleAdapter({
+        writeMountMarker: () => events.push("mount-marker"),
+      });
+      const counter = createProvisioningCounter();
+      const ensuring = runProvisioningWork({
+        provisioning: counter.provisioning,
+        work: async (onWorkSettled) => {
+          const result = await addCustomerToGateway(adapter, "uid-builder", { onWorkSettled });
+          await finalizeConvergedMount({
+            now: 1_000,
+            slug: "ceckert-test",
+            uid: "uid-builder",
+            desiredFingerprint: "fp-builder",
+            prior: undefined,
+            result,
+            hooks: {
+              recordApplied: vi.fn(),
+              rememberRetry: vi.fn(),
+              forgetRetry: vi.fn(),
+            },
+            stampMounted: async () => {
+              stampStarted();
+              await stamp;
+            },
+            writeMountMarker: adapter.writeMountMarker,
+          });
+          return result;
+        },
+      });
+      await stampStartedPromise;
+
+      const processGate = {
+        status: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "target" as const,
+          mode: "held" as const,
+          phase: "held" as const,
+          migrationId: "mig-builder",
+          slug: "ceckert-test",
+          targetPodUid: "target-pod",
+        })),
+        hydrate: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "target" as const,
+          mode: "held" as const,
+          phase: "held" as const,
+          migrationId: "mig-builder",
+          slug: "ceckert-test",
+          targetPodUid: "target-pod",
+        })),
+        claimTargetCompletion: vi.fn(async () => {
+          events.push("claim");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "completing" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        permit: vi.fn(async () => {
+          events.push("permit");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        hold: vi.fn(),
+        rehold: vi.fn(),
+        releaseTarget: vi.fn(async () => {
+          events.push("release-target");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+          };
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const reconcileImportedWorkspace = vi.fn(() => {
+        events.push("reconcile");
+      });
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+        events.push("attach");
+        return "ceckert-test";
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
+      let drainCalls = 0;
+      let bothInitialDrainsStarted!: () => void;
+      const bothInitialDrainsStartedPromise = new Promise<void>((resolve) => {
+        bothInitialDrainsStarted = resolve;
+      });
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        provisioning: counter.provisioning,
+        waitForActiveProvisioningDrain: () => {
+          drainCalls += 1;
+          if (drainCalls === 2) bothInitialDrainsStarted();
+          return counter.waitForDrain();
+        },
+        reconcileImportedWorkspace,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+      let reserved = false;
+      const reservation = wiring.reserveSurgeTarget({
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+      }).then(() => {
+        reserved = true;
+      });
+      const released = wiring.releaseSurgeReadiness({
+        migrationId: "mig-builder",
+        targetPodUid: "target-pod",
+      });
+      await bothInitialDrainsStartedPromise;
+
+      expect(counter.active()).toBe(1);
+      expect(calls).not.toContain("mount-marker");
+      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
+      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
+      expect(reserved).toBe(false);
+
+      releaseStamp();
+      await Promise.all([ensuring, reservation, released]);
+
+      expect(calls).toContain("mount-marker");
+      expect(events).toEqual([
+        "mount-marker",
+        "claim",
+        "claim",
+        "reconcile",
+        "claim",
+        "attach",
+        "permit",
+        "release-target",
+      ]);
+      expect(counter.active()).toBe(0);
+      expect(vi.mocked(processGate.permit)).toHaveBeenCalledOnce();
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+      expect(reserved).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not mutate a target cancelled after its completion claim", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const counter = createProvisioningCounter();
+      const request = {
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+        targetPodUid: "target-pod",
+      };
+      let state: Record<string, unknown> = {
+        version: 1,
+        podUid: "target-pod",
+        role: "target",
+        mode: "held",
+        phase: "held",
+        ...request,
+      };
+      let releaseFirstClaim!: () => void;
+      const firstClaimBlocked = new Promise<void>((resolve) => {
+        releaseFirstClaim = resolve;
+      });
+      let firstClaimEntered!: () => void;
+      const firstClaimEnteredPromise = new Promise<void>((resolve) => {
+        firstClaimEntered = resolve;
+      });
+      const processGate = {
+        status: vi.fn(async () => state),
+        claimTargetCompletion: vi.fn(async () => {
+          if (state.phase === "held") {
+            const claimed = { ...state, phase: "completing" };
+            state = claimed;
+            firstClaimEntered();
+            await firstClaimBlocked;
+            return claimed;
+          }
+          if (state.phase !== "completing") {
+            throw new Error("surge OpenClaw process gate target completion is not held");
+          }
+          return state;
+        }),
+        rehold: vi.fn(async () => state),
+        finalizeTargetCancellation: vi.fn(async () => {
+          state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
+          return state;
+        }),
         hydrate: vi.fn(async () => {
-          events.push("hydrate");
+          state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request };
+          return state;
+        }),
+        permit: vi.fn(),
+        hold: vi.fn(),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const reconcileImportedWorkspace = vi.fn();
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => "ceckert-test");
+      const wiring = createBuilderSurgeGateWiring({
+        adapter: {
+          isBuilderGateway: () => true,
+          isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+          configuredBuilderOverlayPresent: () => true,
+          listLocalCustomerSlugs: () => [],
+          customerMountMarked: () => false,
+          hasWorkspaceGitDir: () => true,
+          hasGitRemote: () => true,
+        } as unknown as CustomerLifecycleAdapter,
+        processGate,
+        surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        provisioning: counter.provisioning,
+        waitForActiveProvisioningDrain: counter.waitForDrain,
+        reconcileImportedWorkspace,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+
+      const release = wiring.releaseSurgeReadiness({
+        migrationId: request.migrationId,
+        targetPodUid: request.targetPodUid,
+      });
+      await firstClaimEnteredPromise;
+      expect(counter.active()).toBe(1);
+      state = { ...state, phase: "cancelling" };
+      releaseFirstClaim();
+
+      await expect(release).rejects.toThrow("target completion is not held");
+      await vi.waitFor(() => expect(state).toMatchObject({ role: "normal", mode: "held", phase: "held" }));
+
+      expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(2);
+      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
+      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
+
+      await expect(wiring.reserveSurgeTarget({ migrationId: "mig-next", slug: request.slug })).resolves.toBeUndefined();
+      expect(vi.mocked(processGate.hydrate)).toHaveBeenCalledWith({
+        migrationId: "mig-next",
+        slug: request.slug,
+        targetPodUid: "target-pod",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not publish readiness when a matching hold finishes during post-permit verification", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const counter = createProvisioningCounter();
+      const request = {
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+        targetPodUid: "target-pod",
+      };
+      let state: Record<string, unknown> = {
+        version: 1,
+        podUid: "target-pod",
+        role: "target",
+        mode: "held",
+        phase: "held",
+        ...request,
+      };
+      let mounted = false;
+      let releaseVerification!: () => void;
+      const verificationBlocked = new Promise<void>((resolve) => {
+        releaseVerification = resolve;
+      });
+      let verificationStarted!: () => void;
+      const verificationStartedPromise = new Promise<void>((resolve) => {
+        verificationStarted = resolve;
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => undefined),
+      } as unknown as SurgeReadinessGate;
+      const processGate = {
+        status: vi.fn(async () => state),
+        claimTargetCompletion: vi.fn(async () => {
+          if (state.phase !== "held" && state.phase !== "completing") {
+            throw new Error("surge OpenClaw process gate target completion is not held");
+          }
+          state = { ...state, phase: "completing" };
+          return state;
+        }),
+        permit: vi.fn(async () => {
+          state = { ...state, mode: "permitted", phase: "running" };
+          return state;
+        }),
+        releaseTarget: vi.fn(async () => {
+          if (state.role !== "target" || state.mode !== "permitted") {
+            throw new Error("surge OpenClaw process gate does not permit this target migration");
+          }
+          await surgeReadiness.release({ targetPodUid: request.targetPodUid });
+          state = { version: 1, podUid: "target-pod", role: "normal", mode: "permitted", phase: "running" };
+          return state;
+        }),
+        rehold: vi.fn(async () => state),
+        hold: vi.fn(),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter: {
+          isBuilderGateway: () => true,
+          isConfiguredBuilderCustomer: (slug: string) => slug === request.slug,
+          configuredBuilderOverlayPresent: () => true,
+          listLocalCustomerSlugs: () => mounted ? [request.slug] : [],
+          customerMountMarked: () => mounted,
+          hasWorkspaceGitDir: () => true,
+          hasGitRemote: () => true,
+        } as unknown as CustomerLifecycleAdapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => {
+          verificationStarted();
+          await verificationBlocked;
+        },
+        log: () => undefined,
+        provisioning: counter.provisioning,
+        waitForActiveProvisioningDrain: counter.waitForDrain,
+        reconcileImportedWorkspace: () => undefined,
+        attachConfiguredBuilderBeforeOpenClaw: async () => {
+          mounted = true;
+          return request.slug;
+        },
+      });
+
+      const release = wiring.releaseSurgeReadiness({
+        migrationId: request.migrationId,
+        targetPodUid: request.targetPodUid,
+      });
+      await verificationStartedPromise;
+      expect(counter.active()).toBe(0);
+
+      state = { ...state, mode: "held", phase: "cancelling" };
+      let holdFinished = false;
+      await counter.waitForDrain().then(() => {
+        state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
+        holdFinished = true;
+      });
+      expect(holdFinished).toBe(true);
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+
+      releaseVerification();
+      await expect(release).rejects.toThrow("does not permit this target migration");
+
+      expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledOnce();
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+      expect(state).toEqual({
+        version: 1,
+        podUid: "target-pod",
+        role: "normal",
+        mode: "held",
+        phase: "held",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("shares an in-progress target release only with the same migration and target", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const events: string[] = [];
+      let releaseAttach!: () => void;
+      const attach = new Promise<void>((resolve) => {
+        releaseAttach = resolve;
+      });
+      let mounted = false;
+      const adapter = {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+        configuredBuilderOverlayPresent: () => true,
+        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
+        customerMountMarked: () => mounted,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+      } as unknown as CustomerLifecycleAdapter;
+      const processGate = {
+        status: vi.fn(async () => {
+          events.push("status");
           return {
             version: 1 as const,
             podUid: "target-pod",
@@ -706,39 +1392,105 @@ describe("configured Builder surge release", () => {
             targetPodUid: "target-pod",
           };
         }),
+        claimTargetCompletion: vi.fn(async () => {
+          events.push("claim");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "completing" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        permit: vi.fn(async () => {
+          events.push("permit");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        hold: vi.fn(),
+        releaseTarget: vi.fn(async () => {
+          events.push("release-target");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+          };
+        }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+        events.push("attach");
+        await attach;
+        mounted = true;
+        return "ceckert-test";
+      });
+      const reconcileImportedWorkspace = vi.fn(() => {
+        events.push("reconcile");
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
       const wiring = createBuilderSurgeGateWiring({
-        adapter: {
-          isBuilderGateway: () => true,
-          isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-          configuredBuilderOverlayPresent: () => true,
-        } as CustomerLifecycleAdapter,
+        adapter,
         processGate,
-        surgeReadiness: {} as SurgeReadinessGate,
+        surgeReadiness,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
-        waitForActiveProvisioningDrain: () => new Promise<void>((resolve) => {
-          events.push("wait-for-mount");
-          releaseDrain = resolve;
-        }),
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        reconcileImportedWorkspace,
+        attachConfiguredBuilderBeforeOpenClaw,
       });
 
-      let settled = false;
-      const reserved = wiring.reserveSurgeTarget({
+      const first = wiring.releaseSurgeReadiness({
         migrationId: "mig-builder",
-        slug: "ceckert-test",
-      }).then(() => {
-        settled = true;
+        targetPodUid: "target-pod",
       });
       await Promise.resolve();
+      const duplicate = wiring.releaseSurgeReadiness({
+        migrationId: "mig-builder",
+        targetPodUid: "target-pod",
+      });
 
-      expect(events).toEqual(["hydrate", "wait-for-mount"]);
-      expect(settled).toBe(false);
+      expect(duplicate).toBe(first);
+      await expect(wiring.releaseSurgeReadiness({
+        migrationId: "other-migration",
+        targetPodUid: "target-pod",
+      })).rejects.toThrow(/release in progress/);
 
-      releaseDrain?.();
-      await reserved;
+      releaseAttach();
+      await Promise.all([first, duplicate]);
 
-      expect(settled).toBe(true);
+      expect(events).toEqual([
+        "status",
+        "claim",
+        "claim",
+        "reconcile",
+        "claim",
+        "attach",
+        "permit",
+        "release-target",
+      ]);
+      expect(vi.mocked(processGate.status)).toHaveBeenCalledOnce();
+      expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(3);
+      expect(reconcileImportedWorkspace).toHaveBeenCalledOnce();
+      expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledOnce();
+      expect(vi.mocked(processGate.permit)).toHaveBeenCalledOnce();
+      expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledOnce();
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();
     }

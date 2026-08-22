@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const OLD_ENV = { ...process.env };
@@ -14,6 +16,10 @@ function callsTo(fetchMock: ReturnType<typeof vi.fn>): Array<{ url: string; meth
     method: (init?.method ?? "GET") as string,
     body: init?.body ? JSON.parse(init.body as string) : undefined,
   }));
+}
+
+function keyTitle(owner: string): string {
+  return `octogee-gateway-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
 }
 
 describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", () => {
@@ -132,6 +138,84 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
             key: "ssh-ed25519 WANT successor-pod",
           },
         }),
+      ]);
+    });
+
+    it("restores the predecessor key when inherited-key ownership transfer fails", async () => {
+      const predecessorOwner = "bender/pod-old";
+      const predecessorTitle = keyTitle(predecessorOwner);
+      const inheritedKey = "ssh-ed25519 WANT inherited-from-source";
+      fetchMock
+        .mockResolvedValueOnce(res(422, {}))
+        .mockResolvedValueOnce(res(200, [{
+          id: 9,
+          title: predecessorTitle,
+          key: inheritedKey,
+        }]))
+        .mockResolvedValueOnce(res(204))
+        .mockResolvedValueOnce(res(500, { message: "target registration failed" }))
+        .mockResolvedValueOnce(res(200, []))
+        .mockResolvedValueOnce(res(201, {}));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+
+      await expect(
+        ensureGiteaUser("acme", inheritedKey, "bender/pod-new"),
+      ).rejects.toThrow(/register-key.*500.*target registration failed/);
+
+      const calls = callsTo(fetchMock);
+      expect(calls).toEqual([
+        expect.objectContaining({ method: "POST", url: `${BASE}/admin/users` }),
+        expect.objectContaining({ method: "GET", url: `${BASE}/users/ws-acme/keys?limit=50&page=1` }),
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/admin/users/ws-acme/keys/9` }),
+        expect.objectContaining({
+          method: "POST",
+          url: `${BASE}/admin/users/ws-acme/keys`,
+          body: { title: keyTitle("bender/pod-new"), key: inheritedKey },
+        }),
+        expect.objectContaining({ method: "GET", url: `${BASE}/users/ws-acme/keys?limit=50&page=1` }),
+        expect.objectContaining({
+          method: "POST",
+          url: `${BASE}/admin/users/ws-acme/keys`,
+          body: { title: predecessorTitle, key: inheritedKey },
+        }),
+      ]);
+    });
+
+    it("transfers an inherited key to the target so source release cannot remove it", async () => {
+      const predecessorOwner = "bender/pod-old";
+      const successorOwner = "bender/pod-new";
+      const inheritedKey = "ssh-ed25519 WANT inherited-from-source";
+      let keys = [{ id: 9, title: keyTitle(predecessorOwner), key: inheritedKey }];
+      let nextKeyId = 10;
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const path = new URL(url).pathname;
+        if (method === "POST" && path === "/api/v1/admin/users") return res(422, {});
+        if (method === "GET" && path === "/api/v1/users/ws-acme/keys") return res(200, keys);
+        if (method === "DELETE" && path.startsWith("/api/v1/admin/users/ws-acme/keys/")) {
+          const id = Number(path.split("/").at(-1));
+          keys = keys.filter((key) => key.id !== id);
+          return res(204);
+        }
+        if (method === "POST" && path === "/api/v1/admin/users/ws-acme/keys") {
+          const body = JSON.parse(String(init?.body)) as { title: string; key: string };
+          keys.push({ id: nextKeyId++, ...body });
+          return res(201, {});
+        }
+        throw new Error(`unexpected request: ${method} ${path}`);
+      });
+      const { ensureGiteaUser, deleteGiteaUserPubKey } = await import("../gitea-admin.js");
+
+      await ensureGiteaUser("acme", inheritedKey, successorOwner);
+      await deleteGiteaUserPubKey("acme", inheritedKey, predecessorOwner);
+
+      expect(keys).toEqual([{
+        id: 10,
+        title: keyTitle(successorOwner),
+        key: inheritedKey,
+      }]);
+      expect(callsTo(fetchMock).filter((call) => call.method === "DELETE")).toEqual([
+        expect.objectContaining({ url: `${BASE}/admin/users/ws-acme/keys/9` }),
       ]);
     });
 
