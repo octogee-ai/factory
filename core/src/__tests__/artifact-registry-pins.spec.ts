@@ -74,13 +74,14 @@ describe("artifact-registry keep-tag pins", () => {
     expect(calls[0]).toBe(`DELETE ${BASE}/octogee-gateway/tags/keep-test-4011015-oc2026.6.11`);
   });
 
-  it("listKeepTags returns the underlying referenced tags for this env only (strips keep-<env>- prefix)", async () => {
+  it("listKeepTags returns only controller-owned live pins for this env", async () => {
     const fetchMock = mockFetch(() => ({
       status: 200,
       body: {
         tags: [
           { name: `${BASE}/octogee-gateway/tags/keep-prod-930d163-oc2026.6.11` },
           { name: `${BASE}/octogee-gateway/tags/keep-test-4011015-oc2026.6.11` },
+          { name: `${BASE}/octogee-gateway/tags/keep-release-prod-b975108-oc2026.8.1` },
           { name: `${BASE}/octogee-gateway/tags/930d163-oc2026.6.11` },
           { name: `${BASE}/octogee-gateway/tags/latest` },
         ],

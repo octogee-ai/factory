@@ -183,35 +183,35 @@ describe("release digest manifest", () => {
     expect(releaseDigestKeepTagPlan(manifest(), releaseSha, "prod")).toEqual([
       {
         source: `${repository}/gateway-edge@${digest("2")}`,
-        target: `${repository}/gateway-edge:keep-prod-aaaaaaa-oc2026.7.1`,
+        target: `${repository}/gateway-edge:keep-release-prod-aaaaaaa-oc2026.7.1`,
       },
       {
         source: `${repository}/octogee-gateway@${digest("5")}`,
-        target: `${repository}/octogee-gateway:keep-prod-aaaaaaa-oc2026.7.1`,
+        target: `${repository}/octogee-gateway:keep-release-prod-aaaaaaa-oc2026.7.1`,
       },
       {
         source: `${repository}/octogee-gateway-builder@${digest("6")}`,
-        target: `${repository}/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1`,
+        target: `${repository}/octogee-gateway-builder:keep-release-prod-aaaaaaa-oc2026.7.1`,
       },
       {
         source: `${repository}/artifact-worker@${digest("1")}`,
-        target: `${repository}/artifact-worker:keep-prod-aaaaaaa`,
+        target: `${repository}/artifact-worker:keep-release-prod-aaaaaaa`,
       },
       {
         source: `${repository}/glm-controller@${digest("3")}`,
-        target: `${repository}/glm-controller:keep-prod-aaaaaaa`,
+        target: `${repository}/glm-controller:keep-release-prod-aaaaaaa`,
       },
       {
         source: `${repository}/octogee-api@${digest("4")}`,
-        target: `${repository}/octogee-api:keep-prod-aaaaaaa`,
+        target: `${repository}/octogee-api:keep-release-prod-aaaaaaa`,
       },
       {
         source: `${repository}/octogee-ops-agent@${digest("7")}`,
-        target: `${repository}/octogee-ops-agent:keep-prod-aaaaaaa`,
+        target: `${repository}/octogee-ops-agent:keep-release-prod-aaaaaaa`,
       },
       {
         source: `${repository}/octogee-project-runner@${digest("8")}`,
-        target: `${repository}/octogee-project-runner:keep-prod-aaaaaaa`,
+        target: `${repository}/octogee-project-runner:keep-release-prod-aaaaaaa`,
       },
     ]);
     expect(() => releaseDigestKeepTagPlan(manifest(), releaseSha, "build-week"))
@@ -221,7 +221,7 @@ describe("release digest manifest", () => {
   it("scopes retention tags to TEST when a TEST release is selected", () => {
     expect(releaseDigestKeepTagPlan(manifest(), releaseSha, "test")).toContainEqual({
       source: `${repository}/glm-controller@${digest("3")}`,
-      target: `${repository}/glm-controller:keep-test-aaaaaaa`,
+      target: `${repository}/glm-controller:keep-release-test-aaaaaaa`,
     });
   });
 

@@ -634,7 +634,7 @@ export function createCentralReleaseAuthority(
       for (const surface of ["gateway", "platform"] as const) {
         for (const [image, digest] of Object.entries(validated.surfaces[surface])) {
           aliases.push({
-            alias: `${repository}/${image}:keep-${environment}-${tagFor(surface)}`,
+            alias: `${repository}/${image}:keep-release-${environment}-${tagFor(surface)}`,
             intendedTarget: `${repository}/${image}@${digest}`,
           });
         }

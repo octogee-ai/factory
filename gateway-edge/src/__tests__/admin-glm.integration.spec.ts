@@ -475,6 +475,23 @@ function seedDurableGateway(
   if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);
 }
 
+function seedNonSharedDurableGateway(
+  gatewayId: string,
+  options: Parameters<typeof seedDurableGateway>[1] = {},
+) {
+  seedDurableGateway(gatewayId, {
+    ...options,
+    root: {
+      profile: "builder",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      ownerUid: `owner-${gatewayId}`,
+      builderSlug: gatewayId,
+      ...options.root,
+    },
+  });
+}
+
 function markGatewayServing(
   gatewayId: string,
   heartbeat: Record<string, unknown>,
@@ -1439,7 +1456,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
 
 describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   it("creates a rollout op with the new imageTag (and inherited repo)", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
+    seedNonSharedDurableGateway("default", { imageTag: "abcdef0" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
@@ -1505,7 +1522,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
+    seedNonSharedDurableGateway("default", { imageTag: "abcdef0" });
     glmOperationsDocs.push({
       id: "op-running-1",
       data: {
@@ -1551,7 +1568,7 @@ describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
   });
 
   it("returns 409 when the gateway is already on the requested image (no-op)", async () => {
-    seedDurableGateway("default", { imageTag: "1234567" });
+    seedNonSharedDurableGateway("default", { imageTag: "1234567" });
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/gateways/default/rollout")
