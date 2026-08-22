@@ -1739,21 +1739,21 @@ function projectWorkspaceMutationLeaseGitDir(workspaceDir: string): string | nul
 interface RepositorySyncTarget {
   dir: string;
   label: string;
+  kind: "workspace" | "project";
 }
 
 function requirePushedInStrictSync(target: RepositorySyncTarget, strict: boolean, pushed: boolean): void {
   if (!pushed && strict) throw new Error(`${target.label}: git push failed`);
 }
 
-// Behind or in sync means the remote already holds everything local has, so a
-// push carries nothing; a strict flush pushes regardless, because that is what
-// proves the checkpoint durable.
-function pushCarriesSomething(
+function pushRequired(
+  target: RepositorySyncTarget,
   committed: boolean,
   strict: boolean,
   state: WorkspaceRemoteState,
 ): boolean {
-  return committed || strict ||
+  return committed ||
+    (strict && target.kind === "project") ||
     state === "ahead" || state === "no-remote-branch" || state === "unknown";
 }
 
@@ -1811,7 +1811,7 @@ function syncOneRepository(
     }
     clearDivergenceReport(target.dir);
 
-    if (pushCarriesSomething(committed, strict, remoteState)) {
+    if (pushRequired(target, committed, strict, remoteState)) {
       const pushed = pushAndLog(target.dir, target.label, keyArg, runGit, githubToken);
       requirePushedInStrictSync(target, strict, pushed);
     }
@@ -1895,6 +1895,7 @@ function workspaceSyncTarget(slug: string): RepositorySyncTarget {
   return {
     dir: path.join(CUSTOMERS_DIR, slug),
     label: slug,
+    kind: "workspace",
   };
 }
 
@@ -1907,6 +1908,7 @@ function projectSyncTargets(slug: string): RepositorySyncTarget[] {
     .map((entry) => ({
       dir: path.join(projectsDir, entry.name),
       label: `${slug}/projects/${entry.name}`,
+      kind: "project" as const,
     }));
 }
 
