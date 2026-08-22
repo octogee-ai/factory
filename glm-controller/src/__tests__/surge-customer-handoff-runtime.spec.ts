@@ -8,10 +8,8 @@ import { fileURLToPath } from "node:url";
 import {
   POD_SESSION_DIGEST_SCRIPT,
   SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
-  SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
   SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
   SURGE_RSYNC_FINISH_TIMEOUT_MS,
-  SURGE_RSYNC_PREPARE_TIMEOUT_MS,
   SURGE_RSYNC_PUSH_TIMEOUT_MS,
   createSurgePodTransport,
   parseSurgePodSnapshot,
@@ -448,11 +446,11 @@ describe("surge handoff direct pod transport", () => {
     const resumeRequest = request.mock.results[2]?.value as { setTimeout: ReturnType<typeof vi.fn> };
     const completeRequest = request.mock.results[3]?.value as { setTimeout: ReturnType<typeof vi.fn> };
     expect(sourceHoldRequest.setTimeout).toHaveBeenCalledWith(
-      SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       expect.any(Function),
     );
     expect(targetHoldRequest.setTimeout).toHaveBeenCalledWith(
-      SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       expect.any(Function),
     );
     expect(resumeRequest.setTimeout).toHaveBeenCalledWith(
@@ -541,10 +539,10 @@ describe("surge handoff direct pod transport", () => {
       reason: "migration-final",
     });
     const timeouts = [
-      SURGE_RSYNC_PREPARE_TIMEOUT_MS,
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       SURGE_RSYNC_PUSH_TIMEOUT_MS,
       SURGE_RSYNC_FINISH_TIMEOUT_MS,
-      SURGE_RSYNC_PREPARE_TIMEOUT_MS,
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       SURGE_RSYNC_PUSH_TIMEOUT_MS,
       SURGE_RSYNC_FINISH_TIMEOUT_MS,
       330_000,
@@ -1149,7 +1147,7 @@ describe("surge handoff direct pod transport", () => {
     });
     const native = request.mock.results[0]?.value as NativeRequest;
     expect(native.setTimeout).toHaveBeenCalledWith(
-      SURGE_OPENCLAW_HOLD_TIMEOUT_MS,
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       expect.any(Function),
     );
   });
