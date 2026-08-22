@@ -99,6 +99,28 @@ function writeConfiguredBuilderState(
   }
 }
 
+function writeConfiguredBuilderCustomerState(stateDir: string): void {
+  const agentId = "octogee-alice-coach";
+  const agentDir = path.join(stateDir, "agents", agentId, "agent");
+  const workspace = path.join(stateDir, "customers", "alice");
+  const sessionStore = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  const configPath = path.join(stateDir, "system_config", "openclaw.json");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".system"), { recursive: true });
+  fs.mkdirSync(path.dirname(sessionStore), { recursive: true });
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    agents: {
+      list: [{ id: agentId, agentDir, workspace }],
+    },
+    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+  }));
+  fs.writeFileSync(path.join(agentDir, "state.json"), "agent-state");
+  fs.writeFileSync(path.join(workspace, ".system", ".mounted"), "");
+  fs.writeFileSync(path.join(workspace, "notes.md"), "workspace");
+  fs.writeFileSync(sessionStore, "session");
+}
+
 describe("surge handoff Kubernetes projection", () => {
   it("keeps every observed UID while projecting usable pods independently", () => {
     expect(parseSurgePodSnapshot(JSON.stringify({
@@ -218,6 +240,30 @@ describe("surge handoff Kubernetes projection", () => {
         "changed workspace state",
       );
       expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
+    } finally {
+      fs.rmSync(sourceState, { recursive: true, force: true });
+      fs.rmSync(targetState, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores the target-local configured Builder migration pin while hashing transferred state", () => {
+    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
+    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
+    try {
+      writeConfiguredBuilderCustomerState(sourceState);
+      writeConfiguredBuilderCustomerState(targetState);
+      fs.writeFileSync(
+        path.join(targetState, "customers", "alice", ".system", ".migrating-in"),
+        "",
+      );
+
+      const sourceDigest = runBuilderDigest(sourceState);
+      const targetDigest = runBuilderDigest(targetState);
+
+      expect(targetDigest).toEqual(sourceDigest);
+
+      fs.writeFileSync(path.join(targetState, "customers", "alice", "notes.md"), "changed");
+      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
     } finally {
       fs.rmSync(sourceState, { recursive: true, force: true });
       fs.rmSync(targetState, { recursive: true, force: true });
@@ -787,7 +833,7 @@ describe("surge handoff direct pod transport", () => {
     });
   });
 
-  it("stops, resumes, reserves, and unreserves Builder OpenClaw through the process endpoints", async () => {
+  it("gives Builder resume its end-to-end operation budget while retaining short control deadlines", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -802,29 +848,42 @@ describe("surge handoff direct pod transport", () => {
       fetch,
       log: vi.fn(),
     });
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(
+      () => new AbortController().signal,
+    );
     const base = {
       gatewayId: GATEWAY_ID,
       slug: "alice",
       operationId: "surge-gw-a-target",
     };
 
-    await transport.stopSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
-    await transport.resumeSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
-    await transport.holdTargetOpenClaw!({ ...base, targetPod: target });
-    await transport.unreserveTargetOpenClaw!({ ...base, targetPod: target });
+    try {
+      await transport.stopSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
+      await transport.resumeSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
+      await transport.holdTargetOpenClaw!({ ...base, targetPod: target });
+      await transport.unreserveTargetOpenClaw!({ ...base, targetPod: target });
 
-    expect(calls.map((call) => call.path)).toEqual([
-      `/hold-surge-openclaw/${GATEWAY_ID}`,
-      `/resume-surge-openclaw/${GATEWAY_ID}`,
-      `/hold-surge-openclaw/${GATEWAY_ID}`,
-      `/unreserve-surge-openclaw/${GATEWAY_ID}`,
-    ]);
-    for (const call of calls) {
-      expect(call.body).toEqual({
-        migrationId: "surge-gw-a-target",
-        slug: "alice",
-        targetPodUid: target.uid,
-      });
+      expect(calls.map((call) => call.path)).toEqual([
+        `/hold-surge-openclaw/${GATEWAY_ID}`,
+        `/resume-surge-openclaw/${GATEWAY_ID}`,
+        `/hold-surge-openclaw/${GATEWAY_ID}`,
+        `/unreserve-surge-openclaw/${GATEWAY_ID}`,
+      ]);
+      for (const call of calls) {
+        expect(call.body).toEqual({
+          migrationId: "surge-gw-a-target",
+          slug: "alice",
+          targetPodUid: target.uid,
+        });
+      }
+      expect(timeout.mock.calls).toEqual([
+        [330_000],
+        [720_000],
+        [330_000],
+        [330_000],
+      ]);
+    } finally {
+      timeout.mockRestore();
     }
   });
 
