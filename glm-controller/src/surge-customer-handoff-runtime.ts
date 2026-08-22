@@ -110,7 +110,7 @@ export const POD_SESSION_DIGEST_SCRIPT = [
   'import { assertConfiguredBuilderPortableStatePlanOnDisk, configuredBuilderPortableStatePlanFromConfig } from "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js";',
   'const state=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),slug=process.argv[1],mode=process.argv[2];',
   'const walk=(dir,prefix="")=>{if(!fs.existsSync(dir))return [];const root=fs.lstatSync(dir);if(root.isSymbolicLink()||!root.isDirectory())throw new Error(`non-regular durable state path: ${prefix||"."}`);const out=[];for(const item of fs.readdirSync(dir,{withFileTypes:true})){const relative=prefix?path.join(prefix,item.name):item.name,abs=path.join(dir,item.name),stat=fs.lstatSync(abs);if(stat.isSymbolicLink())out.push([relative,abs,"link"]);else if(stat.isDirectory())out.push(...walk(abs,relative));else if(stat.isFile())out.push([relative,abs,"file"]);else throw new Error(`non-regular durable state path: ${relative}`);}return out;};',
-  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"system_config","openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state);assertConfiguredBuilderPortableStatePlanOnDisk(state,plan);files=plan.paths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];});}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
+  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"system_config","openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state);assertConfiguredBuilderPortableStatePlanOnDisk(state,plan);files=plan.paths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];}).filter(([relative])=>relative!==path.join("customers",slug,".system",".migrating-in"));}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
   'files.sort(([left],[right])=>left.localeCompare(right));const hash=crypto.createHash("sha256");let totalBytes=0;',
   'for(const [relative,absolute,kind] of files){const contents=kind==="link"?Buffer.from(`symlink:${fs.readlinkSync(absolute)}`):fs.readFileSync(absolute);totalBytes+=contents.byteLength;hash.update(relative.split(path.sep).join("/"));hash.update("\\0");hash.update(contents);hash.update("\\0");}',
   'process.stdout.write(JSON.stringify({fileCount:files.length,totalBytes,sha256:hash.digest("hex")}));',
@@ -216,6 +216,9 @@ async function responseJson(response: Response, context: string): Promise<Record
   }
 }
 
+const SURGE_POD_CONTROL_TIMEOUT_MS = 330_000;
+const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 630_000;
+
 async function postSigned(
   opts: {
     fetch: typeof globalThis.fetch;
@@ -225,6 +228,7 @@ async function postSigned(
     path: string;
     operationId: string;
     body: Record<string, unknown>;
+    timeoutMs?: number;
   },
 ): Promise<Record<string, unknown>> {
   const rawBody = JSON.stringify(opts.body);
@@ -241,7 +245,7 @@ async function postSigned(
         ),
       },
       body: rawBody,
-      signal: AbortSignal.timeout(330_000),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? SURGE_POD_CONTROL_TIMEOUT_MS),
     },
   );
   return responseJson(response, `${opts.path} pod=${opts.pod.name}`);
@@ -434,6 +438,7 @@ type SurgeControlCall = (
   path: string,
   operationId: string,
   body: Record<string, unknown>,
+  timeoutMs?: number,
 ) => Promise<Record<string, unknown>>;
 
 async function controlSurgeOpenClawProcess(
@@ -446,14 +451,22 @@ async function controlSurgeOpenClawProcess(
     slug: string;
     targetPodUid: string;
     capability: string;
+    timeoutMs?: number;
   },
 ): Promise<void> {
   try {
-    await control(input.pod, input.gatewayId, input.path, input.operationId, {
-      migrationId: input.operationId,
-      slug: input.slug,
-      targetPodUid: input.targetPodUid,
-    });
+    await control(
+      input.pod,
+      input.gatewayId,
+      input.path,
+      input.operationId,
+      {
+        migrationId: input.operationId,
+        slug: input.slug,
+        targetPodUid: input.targetPodUid,
+      },
+      input.timeoutMs,
+    );
   } catch (error) {
     if (error instanceof SurgePodControlError && error.status === 404) {
       throw new SurgeOpenClawProcessEndpointMissingError(
@@ -701,6 +714,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     path: string,
     operationId: string,
     body: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<Record<string, unknown>> => {
     assertGatewayScopedSignatureCapability(pod);
     try {
@@ -712,6 +726,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         path,
         operationId,
         body,
+        timeoutMs,
       });
     } catch (error) {
       if (
@@ -765,6 +780,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         slug,
         targetPodUid: targetPod.uid,
         capability: "resume",
+        timeoutMs: SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
       });
     },
 
