@@ -330,6 +330,7 @@ export interface AssignInitialPlacementInput {
 export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
+  allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
   maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
@@ -1755,6 +1756,7 @@ async function reconcileReturnMigrationOnTarget(
     returnOperation?.status === ROLLED_BACK_STATUS
   ) {
     if (
+      context.deps.allowLegacyBuilderReturnCompatibilityRecovery === true &&
       returnOperation.status === "failed" &&
       activationMigrationMatches(returnOperation, {
         id: operationId,
@@ -2602,6 +2604,7 @@ interface FirestorePlacementPolicyInput {
   sendRuntimeSleepWarning(input: RuntimeSleepWarningInput): Promise<void>;
   now(): number;
   log(message: string): void;
+  allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
   maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
   readGatewayPodDiagnostics(input: {
@@ -3605,7 +3608,9 @@ export async function enqueuePlacementMigration(
       ) {
         const operatorFence = operatorFenceRearm(data, request);
         const rolledBackTransient = rolledBackTransientPlacementCanRearm(data, request);
-        const builderReturnRecovery = builderReturnCompatibilityRecovery(data, request);
+        const builderReturnRecovery = input.allowLegacyBuilderReturnCompatibilityRecovery === true
+          ? builderReturnCompatibilityRecovery(data, request)
+          : null;
         if (operatorFence || rolledBackTransient || builderReturnRecovery) {
           await assertAutomaticPlacementMutationAllowed({
             db: input.db,
@@ -4280,6 +4285,8 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   return {
     now: input.now,
     log: input.log,
+    allowLegacyBuilderReturnCompatibilityRecovery:
+      input.allowLegacyBuilderReturnCompatibilityRecovery === true,
     maintenanceGate: input.maintenanceGate,
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),

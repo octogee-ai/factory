@@ -49,6 +49,7 @@ class SurgePodControlError extends Error {
     message: string,
     readonly status: number,
     readonly code: string | null,
+    readonly body: unknown | null,
   ) {
     super(message);
   }
@@ -189,12 +190,24 @@ function podBaseUrl(pod: SurgePod): string {
 async function responseJson(response: Response, context: string): Promise<Record<string, unknown>> {
   const text = await response.text();
   if (!response.ok) {
+    let body: unknown | null = null;
     let code: string | null = null;
     try {
-      const body = JSON.parse(text) as { code?: unknown };
-      if (typeof body.code === "string") code = body.code;
+      body = JSON.parse(text);
+      if (
+        body !== null &&
+        typeof body === "object" &&
+        typeof (body as { code?: unknown }).code === "string"
+      ) {
+        code = (body as { code: string }).code;
+      }
     } catch {}
-    throw new SurgePodControlError(`${context}: ${response.status} ${text}`, response.status, code);
+    throw new SurgePodControlError(
+      `${context}: ${response.status} ${text}`,
+      response.status,
+      code,
+      body,
+    );
   }
   try {
     return JSON.parse(text) as Record<string, unknown>;
@@ -267,6 +280,7 @@ export interface SurgePodTransportOptions {
   privateKey: string;
   fetch?: typeof globalThis.fetch;
   randomKey?: () => string;
+  allowLegacyConfiguredBuilderConvergence?: boolean;
   log: (message: string) => void;
 }
 
@@ -455,9 +469,76 @@ interface SurgeTransferRuntime {
   control: SurgeControlCall;
   randomKey: () => string;
   log: (message: string) => void;
+  allowLegacyConfiguredBuilderConvergence: boolean;
 }
 
 type SurgeTransferInput = Parameters<SurgeCustomerHandoffDeps["transfer"]>[0];
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function hasNonNegativeDuration(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isLegacyConfiguredBuilderConvergenceResponse(
+  error: unknown,
+  input: Pick<SurgeTransferInput, "operationId" | "slug" | "expectedSystemConfigCommit">,
+): boolean {
+  if (
+    !(error instanceof SurgePodControlError) ||
+    error.status !== 500 ||
+    !input.expectedSystemConfigCommit
+  ) {
+    return false;
+  }
+  const response = record(error.body);
+  if (
+    response?.migrationId !== input.operationId ||
+    response.slug !== input.slug ||
+    response.ok !== false ||
+    !hasNonNegativeDuration(response.durationMs) ||
+    response.systemConfigCommit !== input.expectedSystemConfigCommit ||
+    !Array.isArray(response.steps) ||
+    response.steps.length !== 5
+  ) {
+    return false;
+  }
+  const steps = new Map<string, Record<string, unknown>>();
+  for (const value of response.steps) {
+    const step = record(value);
+    if (
+      !step ||
+      typeof step.name !== "string" ||
+      steps.has(step.name) ||
+      typeof step.status !== "string" ||
+      !hasNonNegativeDuration(step.durationMs)
+    ) {
+      return false;
+    }
+    steps.set(step.name, step);
+  }
+  const expected = [
+    ["session-quiesce", "skipped"],
+    ["workspace-git", "failed"],
+    ["blob-sync", "skipped"],
+    ["system-config", "done"],
+    ["gitea-key-release", "skipped"],
+  ] as const;
+  if (steps.size !== expected.length) return false;
+  for (const [name, status] of expected) {
+    if (steps.get(name)?.status !== status) return false;
+  }
+  return steps.get("workspace-git")?.error ===
+      `[git-sync] durable flush failed: ${input.slug}: git metadata is missing` &&
+    steps.get("session-quiesce")?.error === undefined &&
+    steps.get("blob-sync")?.error === undefined &&
+    steps.get("system-config")?.error === undefined &&
+    steps.get("gitea-key-release")?.error === undefined;
+}
 
 async function abortTargetImport(
   runtime: SurgeTransferRuntime,
@@ -549,8 +630,17 @@ async function transferCustomerState(
         expectedSystemConfigCommit: expectedSystemConfigCommit!,
       });
     } catch (error) {
-      await abortTargetImport(runtime, input, "final");
-      throw error;
+      if (
+        !runtime.allowLegacyConfiguredBuilderConvergence ||
+        !isLegacyConfiguredBuilderConvergenceResponse(error, input)
+      ) {
+        await abortTargetImport(runtime, input, "final");
+        throw error;
+      }
+      runtime.log(
+        `[surge-handoff] target config converged before import; continuing to materialize missing workspace ` +
+        `pod=${targetPod.name} slug=${slug} gateway=${gatewayId} commit=${expectedSystemConfigCommit}`,
+      );
     }
   }
   await transferMode(runtime, input, "final");
@@ -707,7 +797,12 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       };
     },
 
-    transfer: (input) => transferCustomerState({ control, randomKey, log: opts.log }, input),
+    transfer: (input) => transferCustomerState({
+      control,
+      randomKey,
+      log: opts.log,
+      allowLegacyConfiguredBuilderConvergence: opts.allowLegacyConfiguredBuilderConvergence === true,
+    }, input),
     async discardTargetCustomer({ gatewayId, slug, operationId, targetPod }) {
       const unmount = () => control(
         targetPod,

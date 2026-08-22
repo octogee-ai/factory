@@ -10,6 +10,14 @@ export interface GatewayPreStopFlushDeps {
   now?: () => number;
 }
 
+export interface GatewaySystemConfigConvergenceCheckpointDeps {
+  gatewayId: string;
+  gatewayClass: string;
+  syncSystemConfig: () => Promise<{ acceptedCommit: string }>;
+  log: (msg: string) => void;
+  now?: () => number;
+}
+
 export interface GatewayPreStopFlushStep {
   name: "session-quiesce" | "workspace-git" | "blob-sync" | "system-config" | "gitea-key-release";
   status: "done" | "failed" | "skipped";
@@ -26,6 +34,14 @@ export interface GatewayPreStopFlushResult {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function systemConfigCommit(value: unknown): string | undefined {
+  return value && typeof value === "object" &&
+      "acceptedCommit" in value &&
+      typeof value.acceptedCommit === "string"
+    ? value.acceptedCommit
+    : undefined;
 }
 
 async function runStep<T>(
@@ -76,16 +92,45 @@ export async function runGatewayPreStopFlush(
   const durationMs = now() - started;
   const ok = steps.every((step) => step.status !== "failed");
   deps.log(`[prestop-flush] complete ok=${ok} durationMs=${durationMs}`);
-  const systemConfigCommit = systemConfig.value &&
-    typeof systemConfig.value === "object" &&
-    "acceptedCommit" in systemConfig.value &&
-    typeof systemConfig.value.acceptedCommit === "string"
-    ? systemConfig.value.acceptedCommit
-    : undefined;
+  const acceptedCommit = systemConfigCommit(systemConfig.value);
   return {
     ok,
     durationMs,
     steps,
-    ...(systemConfigCommit ? { systemConfigCommit } : {}),
+    ...(acceptedCommit ? { systemConfigCommit: acceptedCommit } : {}),
+  };
+}
+
+export async function runGatewaySystemConfigConvergenceCheckpoint(
+  deps: GatewaySystemConfigConvergenceCheckpointDeps,
+): Promise<GatewayPreStopFlushResult> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  deps.log(
+    `[prestop-flush] starting config convergence gateway=${deps.gatewayId} class=${deps.gatewayClass || "unknown"}`,
+  );
+  const systemConfig = await runStep(deps, "system-config", async () => {
+    const result = await deps.syncSystemConfig();
+    if (!systemConfigCommit(result)) {
+      throw new Error("system config checkpoint returned no accepted commit");
+    }
+    return result;
+  });
+  const steps: GatewayPreStopFlushStep[] = [
+    { name: "session-quiesce", status: "skipped", durationMs: 0 },
+    { name: "workspace-git", status: "skipped", durationMs: 0 },
+    { name: "blob-sync", status: "skipped", durationMs: 0 },
+    systemConfig.step,
+    { name: "gitea-key-release", status: "skipped", durationMs: 0 },
+  ];
+  const durationMs = now() - started;
+  const ok = systemConfig.step.status !== "failed";
+  deps.log(`[prestop-flush] config convergence complete ok=${ok} durationMs=${durationMs}`);
+  const acceptedCommit = systemConfigCommit(systemConfig.value);
+  return {
+    ok,
+    durationMs,
+    steps,
+    ...(acceptedCommit ? { systemConfigCommit: acceptedCommit } : {}),
   };
 }

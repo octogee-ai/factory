@@ -403,6 +403,205 @@ describe("surge handoff direct pod transport", () => {
     expect(calls.some((call) => call.url.includes("/unmount/"))).toBe(false);
   });
 
+  it("continues a legacy target convergence only after its exact config checkpoint succeeded", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const log = vi.fn();
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, body });
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+      }
+      if (url.includes("/flush/")) {
+        return new Response(JSON.stringify({
+          migrationId: "surge-default-new",
+          slug: "alice",
+          ok: false,
+          durationMs: 12,
+          systemConfigCommit: expectedSystemConfigCommit,
+          steps: [
+            { name: "session-quiesce", status: "skipped", durationMs: 0 },
+            {
+              name: "workspace-git",
+              status: "failed",
+              error: "[git-sync] durable flush failed: alice: git metadata is missing",
+              durationMs: 1,
+            },
+            { name: "blob-sync", status: "skipped", durationMs: 0 },
+            { name: "system-config", status: "done", durationMs: 11 },
+            { name: "gitea-key-release", status: "skipped", durationMs: 0 },
+          ],
+        }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      randomKey: vi.fn()
+        .mockReturnValueOnce("keys-transfer-key")
+        .mockReturnValueOnce("final-transfer-key"),
+      allowLegacyConfiguredBuilderConvergence: true,
+      log,
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+      loadStrategy: "standard",
+      configTransferMode: "configured-builder-system-config",
+      expectedSystemConfigCommit,
+    })).resolves.toBeUndefined();
+
+    expect(calls.map((call) => [call.url, call.body?.mode, call.body?.rpcPhase])).toEqual([
+      ["http://10.0.0.2:3003/prepare-rsync-import/default", "keys", "prepare-rsync-import"],
+      ["http://10.0.0.1:3003/push-rsync-state/default", "keys", "push-rsync-state"],
+      ["http://10.0.0.2:3003/finish-rsync-import/default", "keys", "finish-rsync-import"],
+      ["http://10.0.0.2:3003/flush/default", undefined, undefined],
+      ["http://10.0.0.2:3003/prepare-rsync-import/default", "final", "prepare-rsync-import"],
+      ["http://10.0.0.1:3003/push-rsync-state/default", "final", "push-rsync-state"],
+      ["http://10.0.0.2:3003/finish-rsync-import/default", "final", "finish-rsync-import"],
+    ]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(
+      "target config converged before import; continuing to materialize missing workspace pod=new-pod slug=alice",
+    ));
+  });
+
+  it("keeps even the exact legacy convergence response fenced unless the TEST bridge is enabled", async () => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+      }
+      if (url.includes("/flush/")) {
+        return new Response(JSON.stringify({
+          migrationId: "surge-default-new",
+          slug: "alice",
+          ok: false,
+          durationMs: 12,
+          systemConfigCommit: expectedSystemConfigCommit,
+          steps: [
+            { name: "session-quiesce", status: "skipped", durationMs: 0 },
+            {
+              name: "workspace-git",
+              status: "failed",
+              error: "[git-sync] durable flush failed: alice: git metadata is missing",
+              durationMs: 1,
+            },
+            { name: "blob-sync", status: "skipped", durationMs: 0 },
+            { name: "system-config", status: "done", durationMs: 11 },
+            { name: "gitea-key-release", status: "skipped", durationMs: 0 },
+          ],
+        }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      randomKey: vi.fn()
+        .mockReturnValueOnce("keys-transfer-key")
+        .mockReturnValueOnce("final-transfer-key"),
+      log: vi.fn(),
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+      loadStrategy: "standard",
+      configTransferMode: "configured-builder-system-config",
+      expectedSystemConfigCommit,
+    })).rejects.toThrow("flush pod=new-pod: 500");
+
+    const paths = fetch.mock.calls.map(([input]) => String(input));
+    expect(paths.filter((path) => path.includes("/prepare-rsync-import/")).length).toBe(1);
+    expect(paths).toContain("http://10.0.0.2:3003/abort-rsync-import/default");
+  });
+
+  it.each([
+    ["a different accepted config commit", {
+      systemConfigCommit: "b".repeat(40),
+    }],
+    ["another failed durability step", {
+      steps: [
+        { name: "session-quiesce", status: "skipped", durationMs: 0 },
+        {
+          name: "workspace-git",
+          status: "failed",
+          error: "[git-sync] durable flush failed: alice: git metadata is missing",
+          durationMs: 1,
+        },
+        { name: "blob-sync", status: "failed", error: "blob failure", durationMs: 1 },
+        { name: "system-config", status: "done", durationMs: 11 },
+        { name: "gitea-key-release", status: "skipped", durationMs: 0 },
+      ],
+    }],
+  ])("keeps legacy convergence fenced when it reports %s", async (_label, overrides) => {
+    const expectedSystemConfigCommit = "a".repeat(40);
+    const fetch = vi.fn(async (input: FetchInput) => {
+      const url = String(input);
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+      }
+      if (url.includes("/flush/")) {
+        return new Response(JSON.stringify({
+          migrationId: "surge-default-new",
+          slug: "alice",
+          ok: false,
+          durationMs: 12,
+          systemConfigCommit: expectedSystemConfigCommit,
+          steps: [
+            { name: "session-quiesce", status: "skipped", durationMs: 0 },
+            {
+              name: "workspace-git",
+              status: "failed",
+              error: "[git-sync] durable flush failed: alice: git metadata is missing",
+              durationMs: 1,
+            },
+            { name: "blob-sync", status: "skipped", durationMs: 0 },
+            { name: "system-config", status: "done", durationMs: 11 },
+            { name: "gitea-key-release", status: "skipped", durationMs: 0 },
+          ],
+          ...overrides,
+        }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      randomKey: vi.fn()
+        .mockReturnValueOnce("keys-transfer-key")
+        .mockReturnValueOnce("final-transfer-key"),
+      allowLegacyConfiguredBuilderConvergence: true,
+      log: vi.fn(),
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+      loadStrategy: "standard",
+      configTransferMode: "configured-builder-system-config",
+      expectedSystemConfigCommit,
+    })).rejects.toThrow("flush pod=new-pod: 500");
+
+    const paths = fetch.mock.calls.map(([input]) => String(input));
+    expect(paths.filter((path) => path.includes("/prepare-rsync-import/")).length).toBe(1);
+    expect(paths).toContain("http://10.0.0.2:3003/abort-rsync-import/default");
+  });
+
   it("does not transfer final state when the key transfer fails", async () => {
     const calls: SurgeTransportCall[] = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
