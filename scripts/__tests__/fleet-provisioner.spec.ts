@@ -12,6 +12,7 @@ import {
   cloneRetryReady,
   customerEnsureRetryReady,
   cancelRemovedEviction,
+  createBuilderSurgeGateWiring,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   ensureCustomerCheckoutsOnly,
@@ -33,6 +34,8 @@ import {
   waitForOpenClawHealthz,
 } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
+import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
 import {
   _resetMigratingInProcessPinsForTests,
   isMigratingInPinned,
@@ -474,6 +477,111 @@ function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLif
     ...over,
   } as CustomerLifecycleAdapter;
 }
+
+describe("configured Builder surge release", () => {
+  it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const events: string[] = [];
+      let mounted = false;
+      const adapter = {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+        configuredBuilderOverlayPresent: () => true,
+        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
+        customerMountMarked: () => mounted,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+      } as unknown as CustomerLifecycleAdapter;
+      const processGate = {
+        status: vi.fn(async () => {
+          events.push("status");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "held" as const,
+            phase: "held" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        permit: vi.fn(async () => {
+          events.push("permit");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "target" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+            migrationId: "mig-builder",
+            slug: "ceckert-test",
+            targetPodUid: "target-pod",
+          };
+        }),
+        hold: vi.fn(),
+        settle: vi.fn(async () => {
+          events.push("settle");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+          };
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
+      const reconcileImportedWorkspace = vi.fn((slug: string) => {
+        events.push(`reconcile:${slug}`);
+      });
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+        events.push("attach");
+        mounted = true;
+        return "ceckert-test";
+      });
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => {
+          events.push("ready");
+        },
+        log: () => undefined,
+        reconcileImportedWorkspace,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+
+      await wiring.releaseSurgeReadiness({
+        migrationId: "mig-builder",
+        targetPodUid: "target-pod",
+      });
+
+      expect(events).toEqual([
+        "status",
+        "reconcile:ceckert-test",
+        "attach",
+        "permit",
+        "ready",
+        "release",
+        "settle",
+      ]);
+      expect(vi.mocked(processGate.permit)).toHaveBeenCalledWith({
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+        targetPodUid: "target-pod",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe("observed split — evict keys off raw presence, mount off completion", () => {
   it("evict-observed = RAW on-disk dirs (not coach-wired), so a partial/junk dir is drainable", () => {

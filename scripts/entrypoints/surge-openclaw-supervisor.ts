@@ -258,6 +258,89 @@ async function waitForExitOrTimeout(
   ]);
 }
 
+interface StartPermittedOpenClawChildOptions {
+  before: SurgeOpenClawProcessGateState;
+  child: { get: () => SpawnedOpenClaw | null; set: (next: SpawnedOpenClaw | null) => void };
+  current: () => Promise<SurgeOpenClawProcessGateState>;
+  forgetChildPid: () => Promise<void>;
+  isStopping: () => boolean;
+  log: (message: string) => void;
+  onUnexpectedChildExit?: () => void;
+  podUid: string;
+  prepare: boolean;
+  prepareTarget: () => Promise<void>;
+  probeHealthz: () => Promise<boolean>;
+  reapOrphanedOpenClaw: () => Promise<void>;
+  recordChildPid: (pid: number | undefined) => Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  spawnOpenClaw: () => SpawnedOpenClaw;
+  timeoutMs: number;
+  gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>, "markRunning">;
+}
+
+async function startPermittedOpenClawChild(
+  opts: StartPermittedOpenClawChildOptions,
+): Promise<SurgeOpenClawProcessGateState> {
+  let retriedPreHealthExit = false;
+  for (;;) {
+    if (opts.prepare || opts.before.role === "target") await opts.prepareTarget();
+    const afterPreparation = await opts.current();
+    if (afterPreparation.mode !== "permitted") {
+      throw new Error("surge OpenClaw process was held during target preparation");
+    }
+    await opts.reapOrphanedOpenClaw();
+    const spawned = opts.spawnOpenClaw();
+    opts.child.set(spawned);
+    let healthy = false;
+    let exitedBeforeHealth = false;
+    let resolveExitCleanup: () => void = () => {};
+    const exitCleanup = new Promise<void>((resolve) => { resolveExitCleanup = resolve; });
+    spawned.once("exit", () => {
+      if (opts.child.get() !== spawned) return;
+      opts.child.set(null);
+      void opts.forgetChildPid().then(resolveExitCleanup, resolveExitCleanup);
+      if (!opts.isStopping()) {
+        if (!healthy && !retriedPreHealthExit) {
+          exitedBeforeHealth = true;
+          return;
+        }
+        opts.log("[surge-openclaw] OpenClaw exited outside a supervised stop");
+        opts.onUnexpectedChildExit?.();
+      }
+    });
+    spawned.once("error", () => {
+      if (opts.child.get() === spawned) opts.child.set(null);
+    });
+    await opts.recordChildPid(spawned.pid);
+    if (opts.child.get() !== spawned) await opts.forgetChildPid();
+    try {
+      await waitForHealth({
+        child: () => opts.child.get() === spawned ? spawned : null,
+        probe: opts.probeHealthz,
+        sleep: opts.sleep,
+        timeoutMs: opts.timeoutMs,
+      });
+    } catch (error) {
+      if (exitedBeforeHealth && !retriedPreHealthExit) {
+        await exitCleanup;
+        retriedPreHealthExit = true;
+        continue;
+      }
+      throw error;
+    }
+    if (opts.child.get() !== spawned) {
+      if (exitedBeforeHealth && !retriedPreHealthExit) {
+        await exitCleanup;
+        retriedPreHealthExit = true;
+        continue;
+      }
+      throw new Error("OpenClaw exited before becoming healthy");
+    }
+    healthy = true;
+    return opts.gate.markRunning({ podUid: opts.podUid, migrationId: afterPreparation.migrationId });
+  }
+}
+
 function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -352,34 +435,28 @@ export async function startSurgeOpenClawSupervisor(
       }
       if (child) return before;
       await gate.markStarting({ podUid: opts.podUid, migrationId: before.migrationId });
-      if (prepare || before.role === "target") await prepareTarget();
-      const afterPreparation = await current();
-      if (afterPreparation.mode !== "permitted") {
-        throw new Error("surge OpenClaw process was held during target preparation");
-      }
-      await reapOrphanedOpenClaw();
-      const spawned = spawnOpenClaw();
-      child = spawned;
-      await recordChildPid(spawned.pid);
-      spawned.once("exit", () => {
-        if (child !== spawned) return;
-        child = null;
-        void forgetChildPid();
-        if (!stopping) {
-          opts.log("[surge-openclaw] OpenClaw exited outside a supervised stop");
-          opts.onUnexpectedChildExit?.();
-        }
-      });
-      spawned.once("error", () => {
-        if (child === spawned) child = null;
-      });
-      await waitForHealth({
-        child: () => child,
-        probe: probeHealthz,
+      return startPermittedOpenClawChild({
+        before,
+        child: {
+          get: () => child,
+          set: (next) => { child = next; },
+        },
+        current,
+        forgetChildPid,
+        isStopping: () => stopping,
+        log: opts.log,
+        onUnexpectedChildExit: opts.onUnexpectedChildExit,
+        podUid: opts.podUid,
+        prepare,
+        prepareTarget,
+        probeHealthz,
+        reapOrphanedOpenClaw,
+        recordChildPid,
         sleep,
+        spawnOpenClaw,
         timeoutMs,
+        gate,
       });
-      return gate.markRunning({ podUid: opts.podUid, migrationId: afterPreparation.migrationId });
     })();
     starting = work;
     try {

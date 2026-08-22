@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   POD_SESSION_DIGEST_SCRIPT,
+  SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
+  SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
   createSurgePodTransport,
   parseSurgePodSnapshot,
   readPodDurableSessionDigest,
@@ -286,6 +289,91 @@ type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
 type FetchInput = string | URL | Request;
 
 describe("surge handoff direct pod transport", () => {
+  it("uses native full-operation deadlines for source resume and target completion", async () => {
+    const fetch = vi.fn() as unknown as typeof globalThis.fetch;
+    const bodies: Record<string, unknown>[] = [];
+    const request = vi.fn((options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+      const req = new EventEmitter() as EventEmitter & {
+        setTimeout: ReturnType<typeof vi.fn>;
+        destroy: ReturnType<typeof vi.fn>;
+        end: (body: string) => void;
+      };
+      req.setTimeout = vi.fn();
+      req.destroy = vi.fn();
+      req.end = (body: string) => {
+        bodies.push(JSON.parse(body) as Record<string, unknown>);
+        const response = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          setEncoding: (encoding: BufferEncoding) => void;
+        };
+        response.statusCode = 200;
+        response.setEncoding = vi.fn();
+        queueMicrotask(() => {
+          onResponse(response);
+          response.emit("data", JSON.stringify({ resumed: true }));
+          response.emit("end");
+        });
+      };
+      return req;
+    }) as unknown as typeof import("node:http").request;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      request,
+      log: vi.fn(),
+    });
+
+    await expect(transport.resumeSourceOpenClaw?.({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+    })).resolves.toBeUndefined();
+    await expect(transport.releaseTarget({
+      gatewayId: "default",
+      operationId: "surge-default-new",
+      pod: target,
+    })).resolves.toBeUndefined();
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      hostname: source.podIP,
+      port: 3003,
+      path: "/resume-surge-openclaw/default",
+      method: "POST",
+      agent: false,
+    }), expect.any(Function));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      hostname: target.podIP,
+      port: 3003,
+      path: "/complete-surge-handoff/default",
+      method: "POST",
+      agent: false,
+    }), expect.any(Function));
+    expect(bodies).toEqual([
+      {
+        migrationId: "surge-default-new",
+        slug: "alice",
+        targetPodUid: target.uid,
+      },
+      {
+        migrationId: "surge-default-new",
+        targetPodUid: target.uid,
+      },
+    ]);
+    const resumeRequest = request.mock.results[0]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const completeRequest = request.mock.results[1]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    expect(resumeRequest.setTimeout).toHaveBeenCalledWith(
+      SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
+      expect.any(Function),
+    );
+    expect(completeRequest.setTimeout).toHaveBeenCalledWith(
+      SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
+      expect.any(Function),
+    );
+  });
+
   it("transfers customer keys before final state and verifies each direct pod", async () => {
     const calls: SurgeTransportCall[] = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
@@ -346,11 +434,6 @@ describe("surge handoff direct pod transport", () => {
       operationId: "surge-default-new",
       targetPod: target,
     });
-    await transport.releaseTarget({
-      gatewayId: "default",
-      operationId: "surge-default-new",
-      pod: target,
-    });
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://10.0.0.2:3003/health",
@@ -363,7 +446,6 @@ describe("surge handoff direct pod transport", () => {
       "http://10.0.0.1:3003/push-rsync-state/default",
       "http://10.0.0.2:3003/finish-rsync-import/default",
       "http://10.0.0.2:3003/unmount/default",
-      "http://10.0.0.2:3003/complete-surge-handoff/default",
     ]);
     expect(calls.slice(3, 9).map((call) => call.body?.rpcPhase)).toEqual([
       "prepare-rsync-import",
@@ -402,10 +484,6 @@ describe("surge handoff direct pod transport", () => {
       mode: "final",
       loadStrategy: "expedited",
       configTransferMode: "activation-manifest",
-    });
-    expect(calls[10]?.body).toEqual({
-      migrationId: "surge-default-new",
-      targetPodUid: "new",
     });
     expect(randomKey).toHaveBeenCalledTimes(2);
   });
@@ -833,7 +911,7 @@ describe("surge handoff direct pod transport", () => {
     });
   });
 
-  it("gives Builder resume its end-to-end operation budget while retaining short control deadlines", async () => {
+  it("retains short fetch deadlines for the non-resume process controls", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -859,13 +937,11 @@ describe("surge handoff direct pod transport", () => {
 
     try {
       await transport.stopSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
-      await transport.resumeSourceOpenClaw!({ ...base, sourcePod: source, targetPod: target });
       await transport.holdTargetOpenClaw!({ ...base, targetPod: target });
       await transport.unreserveTargetOpenClaw!({ ...base, targetPod: target });
 
       expect(calls.map((call) => call.path)).toEqual([
         `/hold-surge-openclaw/${GATEWAY_ID}`,
-        `/resume-surge-openclaw/${GATEWAY_ID}`,
         `/hold-surge-openclaw/${GATEWAY_ID}`,
         `/unreserve-surge-openclaw/${GATEWAY_ID}`,
       ]);
@@ -878,7 +954,6 @@ describe("surge handoff direct pod transport", () => {
       }
       expect(timeout.mock.calls).toEqual([
         [330_000],
-        [720_000],
         [330_000],
         [330_000],
       ]);

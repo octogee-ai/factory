@@ -76,6 +76,7 @@ export class SurgeOpenClawProcessEndpointMissingError extends Error {}
 export class SurgeGatewayScopedSignatureCapabilityMissingError extends Error {}
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
+const CONFIGURED_BUILDER_TARGET_RELEASE_RETRY_DELAY_MS = 7_000;
 
 export interface SurgeCustomerHandoffDeps {
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
@@ -161,6 +162,7 @@ export interface SurgeCustomerHandoffDeps {
     operationId: string;
     pod: SurgePod;
   }) => Promise<void>;
+  wait?: (ms: number) => Promise<void>;
   readOwnerOperation: (operationId: string) => Promise<{ status: OperationStatus } | null>;
   log: (message: string) => void;
 }
@@ -408,6 +410,14 @@ function sameDigest(left: SessionDigest, right: SessionDigest): boolean {
     left.sha256 === right.sha256;
 }
 
+function describeDigest(digest: SessionDigest): string {
+  return `files=${digest.fileCount} bytes=${digest.totalBytes} sha256=${digest.sha256}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function discardTargetCustomers(
   deps: SurgeCustomerHandoffDeps,
   context: {
@@ -532,7 +542,11 @@ async function copyAndVerifyAssignment(
   });
   const [sourceDigest, targetDigest] = await Promise.all([digestOf(sourcePod), digestOf(targetPod)]);
   if (!sameDigest(sourceDigest, targetDigest)) {
-    throw new Error(`durable session digest mismatch for ${assignment.slug}`);
+    throw new Error(
+      `durable session digest mismatch for ${assignment.slug} ` +
+      `sourcePod=${sourcePod.name} targetPod=${targetPod.name}: ` +
+      `source(${describeDigest(sourceDigest)}) target(${describeDigest(targetDigest)})`,
+    );
   }
 }
 
@@ -567,7 +581,7 @@ async function transferAssignments(
     } else if (touchedSlugs.length > 0) {
       deps.log(
         `[surge-handoff] preserving configured Builder target state after failed handoff ` +
-        `gateway=${input.gatewayId} slugs=${touchedSlugs.join(",")}`,
+        `gateway=${input.gatewayId} slugs=${touchedSlugs.join(",")}: ${errorMessage(error)}`,
       );
     }
     throw error;
@@ -600,20 +614,48 @@ function selectSource(pods: readonly SurgePod[], target: SurgePod): SurgeSourceS
 
 async function releaseTargetWithConfirmation(
   deps: SurgeCustomerHandoffDeps,
-  input: { gatewayId: string; operationId: string; pod: SurgePod },
+  input: {
+    gatewayId: string;
+    operationId: string;
+    pod: SurgePod;
+    retryHeldConfiguredBuilderTarget?: boolean;
+  },
 ): Promise<void> {
+  const releaseOnce = async (): Promise<void> => {
+    try {
+      await deps.releaseTarget(input);
+    } catch (error) {
+      const health = await deps.readPodHealth(input.pod, input.gatewayId);
+      if (health?.handoffReleased) {
+        deps.log(
+          `[surge-handoff] confirmed target release after response failure ` +
+          `pod=${input.pod.name}`,
+        );
+        return;
+      }
+      throw error;
+    }
+  };
   try {
-    await deps.releaseTarget(input);
+    await releaseOnce();
   } catch (error) {
+    if (!input.retryHeldConfiguredBuilderTarget) throw error;
+    const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    await wait(CONFIGURED_BUILDER_TARGET_RELEASE_RETRY_DELAY_MS);
     const health = await deps.readPodHealth(input.pod, input.gatewayId);
     if (health?.handoffReleased) {
       deps.log(
-        `[surge-handoff] confirmed target release after response failure ` +
+        `[surge-handoff] confirmed target release after delayed response failure ` +
         `pod=${input.pod.name}`,
       );
       return;
     }
-    throw error;
+    if (!health || !prelaunchTransferEligible(health)) throw error;
+    deps.log(
+      `[surge-handoff] retrying configured Builder target release after it returned to hold ` +
+      `pod=${input.pod.name}: ${errorMessage(error)}`,
+    );
+    await releaseOnce();
   }
 }
 
@@ -906,7 +948,8 @@ async function rollBackConfiguredBuilderHandoff(
     } catch (resumeError) {
       throw new AggregateError(
         [cause, resumeError],
-        "configured Builder handoff failed and its source could not be resumed",
+        "configured Builder handoff failed and its source could not be resumed: " +
+          `handoff=${errorMessage(cause)}; resume=${errorMessage(resumeError)}`,
       );
     }
   } else if (heldSourceSlugs.length > 0) {
@@ -965,6 +1008,7 @@ async function migrateAssignmentsAndReleaseTarget(
       gatewayId: input.gatewayId,
       operationId: ownedBy,
       pod: targetPod,
+      retryHeldConfiguredBuilderTarget: configuredBuilderProcessGateRequired(input),
     });
   } catch (error) {
     if (error instanceof SurgeTargetCleanupError) {

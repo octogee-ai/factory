@@ -63,6 +63,7 @@ function harness(input: {
   discardError?: Error;
   markErrorUid?: string;
   releaseErrorBeforeCommit?: Error;
+  releaseErrorBeforeCommitOnce?: boolean;
   releaseErrorAfterCommit?: Error;
   targetVersion?: string;
   sourceMountedCustomers?: string[];
@@ -76,11 +77,14 @@ function harness(input: {
   stopSourceLegacy?: boolean;
   holdTargetError?: Error;
   holdTargetErrorFromCall?: number;
+  digestByPodUid?: Record<string, { fileCount: number; totalBytes: number; sha256: string }>;
+  wait?: (ms: number) => Promise<void>;
 } = {}) {
   const events: string[] = [];
   let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
   let targetReleased = input.targetReleased === true;
   let sourceHeld = false;
+  let targetReleaseCalls = 0;
   const operationId = "surge-default-target-uid";
   const deps: SurgeCustomerHandoffDeps = {
     listPods: vi.fn(async () => {
@@ -164,17 +168,27 @@ function harness(input: {
     }),
     readDurableSessionDigest: vi.fn(async ({ pod, slug }) => {
       events.push(`digest:${pod.uid}:${slug}`);
-      return { fileCount: 2, totalBytes: 20, sha256: "a".repeat(64) };
+      return input.digestByPodUid?.[pod.uid] ?? {
+        fileCount: 2,
+        totalBytes: 20,
+        sha256: "a".repeat(64),
+      };
     }),
     releaseTarget: vi.fn(async ({ pod }) => {
       events.push(`release:${pod.uid}`);
-      if (input.releaseErrorBeforeCommit) throw input.releaseErrorBeforeCommit;
+      targetReleaseCalls += 1;
+      if (input.releaseErrorBeforeCommit && (
+        input.releaseErrorBeforeCommitOnce !== true || targetReleaseCalls === 1
+      )) {
+        throw input.releaseErrorBeforeCommit;
+      }
       if (input.releaseErrorAfterCommit) {
         targetReleased = true;
         throw input.releaseErrorAfterCommit;
       }
       targetReleased = true;
     }),
+    wait: input.wait,
     readOwnerOperation: vi.fn(async (id: string) => (
       input.ownerOperations && id in input.ownerOperations
         ? input.ownerOperations[id]
@@ -314,6 +328,40 @@ describe("surge customer handoff", () => {
     ]);
   });
 
+  it("reports the divergent configured Builder digest pair before rolling back", async () => {
+    const sourceDigestHash = "a".repeat(64);
+    const targetDigestHash = "b".repeat(64);
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      resumeSourceError: new Error("source resume refused"),
+      digestByPodUid: {
+        [oldPod.uid]: { fileCount: 110, totalBytes: 1_172_920, sha256: sourceDigestHash },
+        [targetPod.uid]: { fileCount: 109, totalBytes: 1_172_920, sha256: targetDigestHash },
+      },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow(
+      "configured Builder handoff failed and its source could not be resumed: " +
+        "handoff=durable session digest mismatch for alice sourcePod=gateway-old targetPod=gateway-new: " +
+        `source(files=110 bytes=1172920 sha256=${sourceDigestHash}) ` +
+        `target(files=109 bytes=1172920 sha256=${targetDigestHash}); resume=source resume refused`,
+    );
+
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
+      "preserving configured Builder target state after failed handoff gateway=default slugs=alice: " +
+        "durable session digest mismatch for alice sourcePod=gateway-old targetPod=gateway-new: " +
+        "source(files=110 bytes=1172920",
+    ));
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceOpenClaw).toHaveBeenCalledOnce();
+  });
+
   it("keeps the roster gated when a Builder rollback cannot resume its source", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],
@@ -327,7 +375,10 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: false,
       disposableBuilderGateway: true,
       stateMigration: MIGRATE_STATE,
-    })).rejects.toThrow("configured Builder handoff failed and its source could not be resumed");
+    })).rejects.toThrow(
+      "configured Builder handoff failed and its source could not be resumed: " +
+        "handoff=rsync failed; resume=source resume refused",
+    );
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -1465,6 +1516,75 @@ describe("surge customer handoff", () => {
       "digest:target-uid:alice",
       "release:target-uid",
     ]);
+  });
+
+  it("retries a digest-verified Builder target release after it returns to hold", async () => {
+    const wait = vi.fn(async () => undefined);
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      prelaunchByUid: { [targetPod.uid]: "hydrated" },
+      releaseErrorBeforeCommit: new Error("target supervisor restarted"),
+      releaseErrorBeforeCommitOnce: true,
+      wait,
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(wait).toHaveBeenCalledWith(7_000);
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+      "release:target-uid",
+    ]);
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("confirms a Builder target release that commits during the retry delay", async () => {
+    const target = { release: () => undefined };
+    const wait = vi.fn(async () => {
+      target.release();
+    });
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      releaseErrorBeforeCommit: new Error("connection reset"),
+      wait,
+    });
+    target.release = () => h.setTargetReleased(true);
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(wait).toHaveBeenCalledWith(7_000);
+    expect(h.events).toEqual([
+      "assignment:u1:quiescing",
+      "quiesce:alice",
+      "flush:old-uid:alice:migration-final",
+      "hold-target:target-uid:alice",
+      "stop-source:old-uid:alice",
+      "transfer:alice",
+      "digest:old-uid:alice",
+      "digest:target-uid:alice",
+      "release:target-uid",
+    ]);
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
   });
 
   it("keeps admission closed when target release cannot be confirmed", async () => {

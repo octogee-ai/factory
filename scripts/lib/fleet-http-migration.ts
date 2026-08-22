@@ -59,7 +59,6 @@ import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
 import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import {
-  addCustomerToGateway,
   cloneMissingProjects,
   removeCustomerFromGateway,
   restoreCustomerRuntimeFromSnapshot,
@@ -117,7 +116,6 @@ flushLocalState?: (input: {
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
-markSurgePrelaunchHydrated?: (input: { migrationId: string; slug: string }) => Promise<void>;
 pauseSystemConfigWatch?: (slug: string) => Promise<string | void>;
 readSystemConfigWatchFence?: (slug: string) => Promise<string | null>;
 resumeSystemConfigWatch?: (
@@ -217,52 +215,6 @@ async function activateImportedCustomerForMigration(input: {
     await resumeSystemConfigWatchForBuilder(deps, slug, fenceGeneration);
   }
   return activation.verificationPending;
-}
-
-async function requireAttachableConfiguredBuilder(
-  adapter: MigrationHandlerDeps["adapter"],
-  slug: string,
-): Promise<string> {
-  if (
-    !adapter.isBuilderGateway?.() ||
-    !adapter.isConfiguredBuilderCustomer?.(slug) ||
-    !adapter.configuredBuilderOverlayPresent?.(slug)
-  ) {
-    throw new Error(`[migration-http] configured Builder overlay is not attachable for ${slug}`);
-  }
-  const uid = await adapter.uidForSlug(slug);
-  if (!uid) {
-    throw new Error(`[migration-http] no user doc for configured Builder ${slug}`);
-  }
-  return uid;
-}
-
-async function attachConfiguredBuilderImportedCustomer(input: {
-  deps: MigrationHandlerDeps;
-  slug: string;
-  signal: AbortSignal;
-}): Promise<void> {
-  const { deps, slug, signal } = input;
-  const uid = await requireAttachableConfiguredBuilder(deps.adapter, slug);
-  const result = await addCustomerToGateway(deps.adapter, uid, {
-    convergeContent: true,
-    deferRuntimeVerification: true,
-    signal,
-  });
-  if (result.pendingProjectClones.length > 0) {
-    deps.log?.(
-      `[migration-http] configured Builder project checkouts still pending for ${slug}; ` +
-      `the reconcile loop converges them: ${result.pendingProjectClones.join(", ")}`,
-    );
-  }
-  deps.adapter.writeMountMarker?.(slug);
-  if (!deps.adapter.customerMountMarked?.(slug)) {
-    throw new Error(`[migration-http] configured Builder mount marker was not written for ${slug}`);
-  }
-  deps.adapter.onMounted?.(slug);
-  if (!deps.getMountedCustomers?.().includes(slug)) {
-    throw new Error(`[migration-http] configured Builder was not mounted for ${slug}`);
-  }
 }
 
 async function ensureMigrationGiteaKey(
@@ -1773,10 +1725,8 @@ async function activateFinishedRsyncImport(input: {
 }): Promise<string | undefined> {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
-  // Before anything can serve from the imported tree: the snapshot predates the
-  // source's own last push, and only here is no Agent holding the worktree.
-  (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
+    (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
     const verificationPending = await activateImportedCustomerForMigration({
       deps,
       slug: body.slug,
@@ -1788,8 +1738,6 @@ async function activateFinishedRsyncImport(input: {
     deps.adapter.onMounted?.(body.slug);
     return verificationPending;
   }
-  await attachConfiguredBuilderImportedCustomer({ deps, slug: body.slug, signal });
-  await deps.markSurgePrelaunchHydrated?.({ migrationId: body.migrationId, slug: body.slug });
   return undefined;
 }
 

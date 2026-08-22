@@ -2106,7 +2106,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
   });
 
-  it("attaches and proves a configured Builder overlay without generic activation before finishing", async () => {
+  it("leaves a configured Builder final import untouched until signed surge release", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-finish-"));
     migrationTempRoots.push(stateDir);
     const configPath = path.join(stateDir, "openclaw.json");
@@ -2121,6 +2121,8 @@ describe("queued-rsync migration control handlers", () => {
     const onMounted = vi.fn((slug: string) => {
       if (!mounted.includes(slug)) mounted.push(slug);
     });
+    const reconcileImportedWorkspace = vi.fn();
+    const markCustomerMigratingIn = vi.fn();
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
       configuredBuilderOverlayPresent: vi.fn(() => true),
@@ -2131,7 +2133,7 @@ describe("queued-rsync migration control handlers", () => {
       prepareImportDir: vi.fn(async () => stateDir),
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "unexpected" })),
       applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
-      markCustomerMigratingIn: vi.fn(),
+      markCustomerMigratingIn,
       writeMountMarker: vi.fn(),
       customerMountMarked: vi.fn(() => true),
       onMounted,
@@ -2144,6 +2146,7 @@ describe("queued-rsync migration control handlers", () => {
       migrationRsyncPort: 30873,
       waitForRsyncReady: vi.fn(async () => undefined),
       getMountedCustomers: () => mounted,
+      reconcileImportedWorkspace,
     });
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-builder-finish",
@@ -2183,9 +2186,12 @@ describe("queued-rsync migration control handlers", () => {
     expect(finishResponse.getStatus()).toBe(200);
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
     expect(adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-    expect(onMounted).toHaveBeenCalledWith("chris");
-    expect(mounted).toEqual(["chris"]);
+    expect(adapter.loadUserSnapshot).not.toHaveBeenCalled();
+    expect(adapter.writeMountMarker).not.toHaveBeenCalled();
+    expect(onMounted).not.toHaveBeenCalled();
+    expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
+    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(mounted).toEqual([]);
   });
 
   it("rejects a final import whose config transfer mode does not match the prepared Builder session", async () => {

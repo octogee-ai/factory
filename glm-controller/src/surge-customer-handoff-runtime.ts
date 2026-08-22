@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import * as http from "node:http";
 import {
   type FlushGatewayResponse,
   type MigrationConfigTransferMode,
@@ -188,8 +189,15 @@ function podBaseUrl(pod: SurgePod): string {
 }
 
 async function responseJson(response: Response, context: string): Promise<Record<string, unknown>> {
-  const text = await response.text();
-  if (!response.ok) {
+  return responseTextJson(response.status, await response.text(), context);
+}
+
+function responseTextJson(
+  status: number,
+  text: string,
+  context: string,
+): Record<string, unknown> {
+  if (status < 200 || status >= 300) {
     let body: unknown | null = null;
     let code: string | null = null;
     try {
@@ -203,8 +211,8 @@ async function responseJson(response: Response, context: string): Promise<Record
       }
     } catch {}
     throw new SurgePodControlError(
-      `${context}: ${response.status} ${text}`,
-      response.status,
+      `${context}: ${status} ${text}`,
+      status,
       code,
       body,
     );
@@ -217,7 +225,83 @@ async function responseJson(response: Response, context: string): Promise<Record
 }
 
 const SURGE_POD_CONTROL_TIMEOUT_MS = 330_000;
-const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
+export const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
+export const SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS = 1_500_000;
+
+interface SignedPodRequestOptions {
+  privateKey: string;
+  pod: SurgePod;
+  gatewayId: string;
+  path: string;
+  operationId: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+  request: typeof http.request;
+}
+
+function postSignedViaHttp(opts: SignedPodRequestOptions): Promise<Record<string, unknown>> {
+  const rawBody = JSON.stringify(opts.body);
+  const context = `${opts.path} pod=${opts.pod.name}`;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const deadline = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
+    const finish = (error: unknown | null, value?: Record<string, unknown>): void => {
+      if (settled) return;
+      settled = true;
+      if (deadline.timer !== undefined) clearTimeout(deadline.timer);
+      if (error) reject(error);
+      else resolve(value!);
+    };
+    const req = opts.request({
+      hostname: opts.pod.podIP,
+      port: 3003,
+      path: `/${opts.path}/${encodeURIComponent(opts.gatewayId)}`,
+      method: "POST",
+      agent: false,
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(rawBody),
+        [SIGNATURE_HEADER]: signFleetRequest(
+          opts.privateKey,
+          gatewayScopedJobId(opts.operationId, opts.gatewayId),
+          rawBody,
+        ),
+      },
+    }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { text += chunk; });
+      res.once("error", (error) => finish(error));
+      res.once("aborted", () => finish(new Error(`${context}: response aborted`)));
+      res.once("end", () => {
+        try {
+          finish(null, responseTextJson(res.statusCode ?? 0, text, context));
+        } catch (error) {
+          finish(error);
+        }
+      });
+    });
+    const timedOut = (): void => {
+      const error = new Error(`${context} timed out after ${opts.timeoutMs}ms`);
+      req.destroy(error);
+      finish(error);
+    };
+    deadline.timer = setTimeout(timedOut, opts.timeoutMs);
+    req.setTimeout(opts.timeoutMs, timedOut);
+    req.once("error", (error) => finish(error));
+    req.end(rawBody);
+  });
+}
+
+function nativeSurgeControlTimeout(path: string, timeoutMs: number | undefined): number | undefined {
+  if (path === "resume-surge-openclaw") {
+    return timeoutMs ?? SURGE_OPENCLAW_RESUME_TIMEOUT_MS;
+  }
+  if (path === "complete-surge-handoff") {
+    return timeoutMs ?? SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS;
+  }
+  return undefined;
+}
 
 async function postSigned(
   opts: {
@@ -229,8 +313,22 @@ async function postSigned(
     operationId: string;
     body: Record<string, unknown>;
     timeoutMs?: number;
+    request?: typeof http.request;
   },
 ): Promise<Record<string, unknown>> {
+  const nativeTimeoutMs = nativeSurgeControlTimeout(opts.path, opts.timeoutMs);
+  if (nativeTimeoutMs !== undefined) {
+    return postSignedViaHttp({
+      privateKey: opts.privateKey,
+      pod: opts.pod,
+      gatewayId: opts.gatewayId,
+      path: opts.path,
+      operationId: opts.operationId,
+      body: opts.body,
+      timeoutMs: nativeTimeoutMs,
+      request: opts.request ?? http.request,
+    });
+  }
   const rawBody = JSON.stringify(opts.body);
   const response = await opts.fetch(
     `${podBaseUrl(opts.pod)}/${opts.path}/${encodeURIComponent(opts.gatewayId)}`,
@@ -283,6 +381,7 @@ async function readPodFleetState(
 export interface SurgePodTransportOptions {
   privateKey: string;
   fetch?: typeof globalThis.fetch;
+  request?: typeof http.request;
   randomKey?: () => string;
   allowLegacyConfiguredBuilderConvergence?: boolean;
   log: (message: string) => void;
@@ -746,6 +845,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         operationId: controlOptions.operationId,
         body: controlOptions.body,
         timeoutMs: controlOptions.timeoutMs,
+        request: opts.request,
       });
     } catch (error) {
       if (
@@ -893,6 +993,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           migrationId: operationId,
           targetPodUid: pod.uid,
         },
+        timeoutMs: SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       });
     },
   };

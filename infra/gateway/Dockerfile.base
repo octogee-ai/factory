@@ -166,7 +166,7 @@ RUN set -e; \
       openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-codex.tgz" --force > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: vendored @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     else \
-      openclaw plugins install @openclaw/codex > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \

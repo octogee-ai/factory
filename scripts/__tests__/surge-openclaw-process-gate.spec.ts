@@ -295,6 +295,99 @@ describe("surge OpenClaw process supervisor", () => {
     await supervisor.stop();
   });
 
+  it("retries one target child exit before health and reports an exit only after the retry is healthy", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const prepareTarget = vi.fn(async () => undefined);
+    const onUnexpectedChildExit = vi.fn();
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget,
+      onUnexpectedChildExit,
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        if (children.length === 1) {
+          queueMicrotask(() => {
+            child.alive = false;
+            child.emit("exit", 1, null);
+          });
+        }
+        return child;
+      },
+      probeHealthz: async () => children.at(-1)?.alive === true,
+      healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    await expect(client.permit(request)).resolves.toMatchObject({
+      role: "target",
+      mode: "permitted",
+      phase: "running",
+    });
+    expect(prepareTarget).toHaveBeenCalledTimes(2);
+    expect(children).toHaveLength(2);
+    expect(onUnexpectedChildExit).not.toHaveBeenCalled();
+
+    children[1]!.alive = false;
+    children[1]!.emit("exit", 1, null);
+    expect(onUnexpectedChildExit).toHaveBeenCalledOnce();
+    await supervisor.stop();
+  });
+
+  it("holds the target and reports the second pre-health child exit", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const prepareTarget = vi.fn(async () => undefined);
+    const onUnexpectedChildExit = vi.fn();
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget,
+      onUnexpectedChildExit,
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      probeHealthz: async () => {
+        const newest = children.at(-1);
+        if (newest?.alive) {
+          newest.alive = false;
+          newest.emit("exit", 1, null);
+        }
+        return false;
+      },
+      healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    await expect(client.permit(request)).rejects.toThrow("OpenClaw exited before becoming healthy");
+    expect(prepareTarget).toHaveBeenCalledTimes(2);
+    expect(onUnexpectedChildExit).toHaveBeenCalledOnce();
+    await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+    await supervisor.stop();
+  });
+
   it("stops and restarts a source only through its matching durable hold", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const children: FakeChild[] = [];

@@ -106,4 +106,12 @@ describe("gateway base image", () => {
     expect(pluginInstall).toBeGreaterThan(-1);
     expect(npmUpgrade).toBeGreaterThan(pluginInstall);
   });
+
+  it("pins published Codex to the OpenClaw version while retaining its vendored fallback", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+
+    expect(dockerfile).toContain('if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then');
+    expect(dockerfile).toContain('openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-codex.tgz" --force');
+    expect(dockerfile).toContain('openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}"');
+  });
 });

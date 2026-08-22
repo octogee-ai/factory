@@ -68,6 +68,7 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
+import { reconcileImportedWorkspace } from "./git.js";
 import {
   addCustomerToGateway,
   cloneMissingProjects,
@@ -1470,7 +1471,6 @@ function registerMigrationRoutes(
 
 interface BuilderSurgeGateWiring {
   reserveSurgeTarget: (input: { migrationId: string; slug: string }) => Promise<void>;
-  markSurgePrelaunchHydrated: (input: { migrationId: string; slug: string }) => Promise<void>;
   selfReleaseReserved: () => Promise<boolean>;
   releaseSurgeReadiness: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
   selfRelease: (targetPodUid: string) => Promise<void>;
@@ -1496,14 +1496,27 @@ async function returnToHoldAfterFailure(
   throw error;
 }
 
-function createBuilderSurgeGateWiring(input: {
+export function createBuilderSurgeGateWiring(input: {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
+  reconcileImportedWorkspace?: (slug: string) => void;
+  attachConfiguredBuilderBeforeOpenClaw?: (input: {
+    adapter: CustomerLifecycleAdapter;
+    log?: (message: string) => void;
+  }) => Promise<string>;
 }): BuilderSurgeGateWiring {
-  const { adapter, processGate, surgeReadiness, waitForGatewayReady, log } = input;
+  const {
+    adapter,
+    processGate,
+    surgeReadiness,
+    waitForGatewayReady,
+    log,
+    reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
+    attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
+  } = input;
   const settleReleasedGate = async (): Promise<void> => {
     try {
       await processGate!.settle();
@@ -1523,14 +1536,6 @@ function createBuilderSurgeGateWiring(input: {
         targetPodUid: requireOwnPodUid("reserve the configured Builder migration target"),
       });
     },
-    async markSurgePrelaunchHydrated({ migrationId, slug }) {
-      if (!processGate) return;
-      const targetPodUid = requireOwnPodUid("mark configured Builder prelaunch hydration");
-      if (configuredBuilderSlug(adapter) !== slug || !configuredBuilderMountProven(adapter)) {
-        throw new Error(`configured Builder prelaunch mount proof is unavailable for ${slug}`);
-      }
-      await processGate.hydrate({ migrationId, slug, targetPodUid });
-    },
     async releaseSurgeReadiness({ migrationId, targetPodUid }) {
       const ownPodUid = process.env.POD_UID?.trim();
       if (ownPodUid && ownPodUid !== targetPodUid) {
@@ -1541,9 +1546,25 @@ function createBuilderSurgeGateWiring(input: {
         return;
       }
       if (!ownPodUid) throw new Error("POD_UID is required to permit configured Builder OpenClaw");
-      const slug = configuredBuilderMountProven(adapter)
-        ? configuredBuilderSlug(adapter)!
-        : await attachConfiguredBuilderBeforeOpenClaw({ adapter, log });
+      const reservation = await processGate.status();
+      if (
+        reservation.role !== "target" ||
+        reservation.migrationId !== migrationId ||
+        reservation.targetPodUid !== targetPodUid
+      ) {
+        throw new Error("configured Builder target is not reserved by this migration");
+      }
+      const slug = configuredBuilderSlug(adapter);
+      if (!slug) throw new Error("configured Builder overlay is unavailable for surge release");
+      if (reservation.mode === "held") {
+        reconcileImported(slug);
+        const attachedSlug = await attachConfigured({ adapter, log });
+        if (attachedSlug !== slug) {
+          throw new Error(`configured Builder prelaunch attach returned ${attachedSlug}, expected ${slug}`);
+        }
+      } else if (reservation.mode !== "permitted") {
+        throw new Error("configured Builder target has an invalid surge reservation mode");
+      }
       const request = { migrationId, slug, targetPodUid };
       try {
         await processGate.permit(request);
@@ -1761,7 +1782,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     getMountedCustomers: () => runtime.mountedCustomers,
     flushLocalState: opts.flushLocalState,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
-    markSurgePrelaunchHydrated: surgeGate.markSurgePrelaunchHydrated,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
   };
   registerMigrationRoutes(app, migrationDeps, {
