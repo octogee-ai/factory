@@ -365,6 +365,89 @@ function respondJson(res: http.ServerResponse, status: number, body: unknown): v
   res.end(JSON.stringify(body));
 }
 
+interface TargetSupervisorOperationDependencies {
+  current: () => Promise<SurgeOpenClawProcessGateState>;
+  gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>,
+    "claimTargetCompletion" | "finalizeTargetCancellation" | "hold" |
+    "markHeld" | "reholdTarget" | "settleTargetCompletion"
+  >;
+  podUid: string;
+  readiness: Pick<ReturnType<typeof createSurgeReadinessGate>, "release">;
+  stopChild: () => Promise<void>;
+}
+
+interface TargetSupervisorOperations {
+  claimTargetCompletion: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  finalizeTargetCancellation: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  hold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  reholdTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  releaseTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+}
+
+function withPodUid(
+  input: SurgeOpenClawProcessRequest,
+  podUid: string,
+): SurgeOpenClawProcessRequest & { podUid: string } {
+  return { ...input, podUid };
+}
+
+function terminalTargetMatches(
+  state: SurgeOpenClawProcessGateState,
+  input: SurgeOpenClawProcessRequest,
+): boolean {
+  const terminal = state.terminalTarget;
+  return state.role === "normal" && terminal?.migrationId === input.migrationId &&
+    terminal.slug === input.slug && terminal.targetPodUid === input.targetPodUid;
+}
+
+function permittedTargetMatches(
+  state: SurgeOpenClawProcessGateState,
+  input: SurgeOpenClawProcessRequest,
+): boolean {
+  return state.role === "target" && state.mode === "permitted" &&
+    state.migrationId === input.migrationId && state.slug === input.slug &&
+    state.targetPodUid === input.targetPodUid;
+}
+
+function createTargetSupervisorOperations(
+  deps: TargetSupervisorOperationDependencies,
+): TargetSupervisorOperations {
+  const { current, gate, podUid, readiness, stopChild } = deps;
+  const stopAndMarkHeld = async (
+    state: SurgeOpenClawProcessGateState,
+    input: SurgeOpenClawProcessRequest,
+  ): Promise<SurgeOpenClawProcessGateState> => {
+    await stopChild();
+    if (state.phase === "cancelling") return state;
+    return gate.markHeld({ podUid, migrationId: input.migrationId });
+  };
+
+  return {
+    async hold(input) {
+      const state = await gate.hold(withPodUid(input, podUid));
+      return stopAndMarkHeld(state, input);
+    },
+    async reholdTarget(input) {
+      const state = await gate.reholdTarget(withPodUid(input, podUid));
+      return stopAndMarkHeld(state, input);
+    },
+    claimTargetCompletion: (input) => gate.claimTargetCompletion(withPodUid(input, podUid)),
+    finalizeTargetCancellation: (input) => gate.finalizeTargetCancellation(withPodUid(input, podUid)),
+    async releaseTarget(input) {
+      const state = await current();
+      if (terminalTargetMatches(state, input)) {
+        await readiness.release({ targetPodUid: input.targetPodUid });
+        return state;
+      }
+      if (!permittedTargetMatches(state, input)) {
+        throw new Error("surge OpenClaw process gate does not permit this target migration");
+      }
+      await readiness.release({ targetPodUid: input.targetPodUid });
+      return gate.settleTargetCompletion(withPodUid(input, podUid));
+    },
+  };
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -480,51 +563,13 @@ export async function startSurgeOpenClawSupervisor(
     }
   };
 
-  const hold = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
-    const state = await gate.hold({ ...input, podUid: opts.podUid });
-    await stopChild();
-    if (state.phase === "cancelling") return state;
-    return gate.markHeld({ podUid: opts.podUid, migrationId: input.migrationId });
-  };
-
-  const reholdTarget = async (
-    input: SurgeOpenClawProcessRequest,
-  ): Promise<SurgeOpenClawProcessGateState> => {
-    const state = await gate.reholdTarget({ ...input, podUid: opts.podUid });
-    await stopChild();
-    if (state.phase === "cancelling") return state;
-    return gate.markHeld({ podUid: opts.podUid, migrationId: input.migrationId });
-  };
-
-  const claimTargetCompletion = (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> =>
-    gate.claimTargetCompletion({ ...input, podUid: opts.podUid });
-
-  const finalizeTargetCancellation = (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> =>
-    gate.finalizeTargetCancellation({ ...input, podUid: opts.podUid });
-
-  const releaseTarget = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
-    const state = await current();
-    if (
-      state.role === "normal" &&
-      state.terminalTarget?.migrationId === input.migrationId &&
-      state.terminalTarget.slug === input.slug &&
-      state.terminalTarget.targetPodUid === input.targetPodUid
-    ) {
-      await readiness.release({ targetPodUid: input.targetPodUid });
-      return state;
-    }
-    if (
-      state.role !== "target" ||
-      state.mode !== "permitted" ||
-      state.migrationId !== input.migrationId ||
-      state.slug !== input.slug ||
-      state.targetPodUid !== input.targetPodUid
-    ) {
-      throw new Error("surge OpenClaw process gate does not permit this target migration");
-    }
-    await readiness.release({ targetPodUid: input.targetPodUid });
-    return gate.settleTargetCompletion({ ...input, podUid: opts.podUid });
-  };
+  const targetOperations = createTargetSupervisorOperations({
+    current,
+    gate,
+    podUid: opts.podUid,
+    readiness,
+    stopChild,
+  });
 
   const permit = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
     await gate.permitTarget({ ...input, podUid: opts.podUid });
@@ -577,11 +622,11 @@ export async function startSurgeOpenClawSupervisor(
     if (request.action === "permit-normal") return permitNormal();
     if (request.action === "settle") return settle();
     const input = requestIdentity(request);
-    if (request.action === "hold") return hold(input);
-    if (request.action === "rehold") return reholdTarget(input);
-    if (request.action === "claim") return claimTargetCompletion(input);
-    if (request.action === "finalize-cancellation") return finalizeTargetCancellation(input);
-    if (request.action === "release-target") return releaseTarget(input);
+    if (request.action === "hold") return targetOperations.hold(input);
+    if (request.action === "rehold") return targetOperations.reholdTarget(input);
+    if (request.action === "claim") return targetOperations.claimTargetCompletion(input);
+    if (request.action === "finalize-cancellation") return targetOperations.finalizeTargetCancellation(input);
+    if (request.action === "release-target") return targetOperations.releaseTarget(input);
     if (request.action === "hydrate") return hydrate(input);
     if (request.action === "permit") return permit(input);
     if (request.action === "unreserve") return unreserve(input);

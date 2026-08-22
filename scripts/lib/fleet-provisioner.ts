@@ -1123,6 +1123,26 @@ function createReconcileUnmountSlug(input: {
   };
 }
 
+function createReconcileConvergenceHooks(input: {
+  fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
+  appliedFp: Map<string, string>;
+  cloneRetry: Map<string, CloneRetryState>;
+  persistAppliedFp: () => void;
+}): ConvergenceHooks {
+  const recordApplied = (slug: string, fingerprint: string | undefined): void => {
+    if (!input.fingerprintSource || fingerprint === undefined) return;
+    input.appliedFp.set(slug, fingerprint);
+    input.persistAppliedFp();
+  };
+  const rememberRetry = (slug: string, state: CloneRetryState): void => {
+    input.cloneRetry.set(slug, state);
+  };
+  const forgetRetry = (slug: string): void => {
+    input.cloneRetry.delete(slug);
+  };
+  return { recordApplied, rememberRetry, forgetRetry };
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -1227,6 +1247,9 @@ function startMaybeReconcileLoop(params: {
           pendingContentFp,
         )
     : undefined;
+  const convergenceHooks = createReconcileConvergenceHooks(
+    { fingerprintSource, appliedFp, cloneRetry, persistAppliedFp },
+  );
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: RECONCILE_LOOP_INTERVAL_MS,
@@ -1270,17 +1293,6 @@ function startMaybeReconcileLoop(params: {
       work: async (onWorkSettled) => {
         if (canReconcile && !(await canReconcile())) return "noop";
         wrappedAdapter.cancelPendingEviction?.(slug);
-        const convergenceHooks: ConvergenceHooks = {
-          recordApplied: (s, fp) => {
-            if (!fingerprintSource) return;
-            if (fp !== undefined) {
-              appliedFp.set(s, fp);
-              persistAppliedFp();
-            }
-          },
-          rememberRetry: (s, state) => cloneRetry.set(s, state),
-          forgetRetry: (s) => cloneRetry.delete(s),
-        };
         if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
           return ensureCustomerCheckoutsOnly(
             wrappedAdapter,
@@ -1628,6 +1640,25 @@ interface BuilderSurgeGateWiring {
   selfReleaseLoopSettled: () => Promise<boolean>;
 }
 
+interface ActiveBuilderSurgeRelease {
+  migrationId: string;
+  targetPodUid: string;
+  cancelled: boolean;
+  promise: Promise<void> | null;
+}
+
+interface BuilderSurgeTargetRequest {
+  migrationId: string;
+  slug: string;
+  targetPodUid: string;
+}
+
+type ConfiguredBuilderAttach = (input: {
+  adapter: CustomerLifecycleAdapter;
+  log?: (message: string) => void;
+  onWorkSettled?: (settled: Promise<void>) => void;
+}) => Promise<string>;
+
 function requireOwnPodUid(purpose: string): string {
   const currentPodUid = process.env.POD_UID?.trim();
   if (!currentPodUid) throw new Error(`POD_UID is required to ${purpose}`);
@@ -1647,6 +1678,131 @@ async function returnToHoldAfterFailure(
   throw error;
 }
 
+function attachConfiguredBuilderWithProvisioning(input: {
+  adapter: CustomerLifecycleAdapter;
+  attachConfigured: ConfiguredBuilderAttach;
+  log: (message: string) => void;
+  provisioning: ProvisioningCounter;
+}): Promise<string> {
+  return runProvisioningWork({
+    provisioning: input.provisioning,
+    onDeferredReleaseError: (error) => {
+      input.log(
+        `[surge-handoff] configured Builder provisioning lease release failed: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+    work: (onWorkSettled) => input.attachConfigured({
+      adapter: input.adapter,
+      log: input.log,
+      onWorkSettled,
+    }),
+  });
+}
+
+function throwIfBuilderSurgeReleaseCancelled(release: ActiveBuilderSurgeRelease): void {
+  if (release.cancelled) throw new Error("configured Builder target release was cancelled");
+}
+
+function scheduleBuilderTargetHoldFinalization(input: {
+  log: (message: string) => void;
+  processGate: SurgeOpenClawProcessSupervisorClient;
+  release: ActiveBuilderSurgeRelease;
+  request: BuilderSurgeTargetRequest;
+  waitForActiveProvisioningDrain: () => Promise<void>;
+}): void {
+  void (async () => {
+    await input.waitForActiveProvisioningDrain();
+    if (input.release.cancelled) return;
+    await input.processGate.finalizeTargetCancellation(input.request);
+  })().catch((error) => {
+    input.log(
+      `[surge-handoff] configured Builder target cancellation could not be finalized: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+}
+
+async function unreserveConfiguredBuilderTarget(input: {
+  activeRelease: ActiveBuilderSurgeRelease | null;
+  processGate: SurgeOpenClawProcessSupervisorClient;
+  request: BuilderSurgeTargetRequest;
+  waitForActiveProvisioningDrain: () => Promise<void>;
+}): Promise<SurgeOpenClawProcessGateState> {
+  const { activeRelease, processGate, request, waitForActiveProvisioningDrain } = input;
+  const release = activeRelease?.migrationId === request.migrationId &&
+    activeRelease.targetPodUid === request.targetPodUid
+    ? activeRelease
+    : null;
+  if (release) release.cancelled = true;
+  const state = await processGate.status();
+  if (state.role === "normal") return processGate.unreserve(request);
+  if (
+    state.role !== "target" ||
+    state.migrationId !== request.migrationId ||
+    state.slug !== request.slug ||
+    state.targetPodUid !== request.targetPodUid
+  ) {
+    return processGate.unreserve(request);
+  }
+  const reheld = await processGate.rehold(request);
+  await waitForActiveProvisioningDrain();
+  if (reheld.phase !== "cancelling") return processGate.unreserve(request);
+  return processGate.finalizeTargetCancellation(request);
+}
+
+async function selfReleaseConfiguredBuilder(input: {
+  adapter: CustomerLifecycleAdapter;
+  attachConfigured: ConfiguredBuilderAttach;
+  log: (message: string) => void;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+  provisioning: ProvisioningCounter;
+  surgeReadiness: SurgeReadinessGate;
+  targetPodUid: string;
+  waitForActiveProvisioningDrain: () => Promise<void>;
+  waitForGatewayReady: () => Promise<void>;
+}): Promise<void> {
+  const {
+    adapter,
+    attachConfigured,
+    log,
+    processGate,
+    provisioning,
+    surgeReadiness,
+    targetPodUid,
+    waitForActiveProvisioningDrain,
+    waitForGatewayReady,
+  } = input;
+  if (!processGate) {
+    await surgeReadiness.release({ targetPodUid });
+    return;
+  }
+  if (requireOwnPodUid("self-release the configured Builder") !== targetPodUid) {
+    throw new Error("configured Builder self-release target pod UID mismatch");
+  }
+  const reservation = await processGate.status();
+  if (reservation.role !== "normal") {
+    throw new Error(
+      `configured Builder pod is reserved by migration ${reservation.migrationId}; ` +
+      "refusing self-release until its controller completes or rolls back",
+    );
+  }
+  await waitForActiveProvisioningDrain();
+  try {
+    await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
+    await waitForActiveProvisioningDrain();
+    await processGate.permitNormal();
+    await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
+    await surgeReadiness.release({ targetPodUid });
+  } catch (error) {
+    await returnToHoldAfterFailure(
+      error,
+      () => processGate.holdNormal(),
+      "configured Builder self-release failed and could not be returned to hold",
+    );
+  }
+}
+
 export function createBuilderSurgeGateWiring(input: {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
@@ -1656,11 +1812,7 @@ export function createBuilderSurgeGateWiring(input: {
   provisioning: ProvisioningCounter;
   waitForActiveProvisioningDrain?: () => Promise<void>;
   reconcileImportedWorkspace?: (slug: string) => void;
-  attachConfiguredBuilderBeforeOpenClaw?: (input: {
-    adapter: CustomerLifecycleAdapter;
-    log?: (message: string) => void;
-    onWorkSettled?: (settled: Promise<void>) => void;
-  }) => Promise<string>;
+  attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
 }): BuilderSurgeGateWiring {
   const {
     adapter,
@@ -1673,53 +1825,20 @@ export function createBuilderSurgeGateWiring(input: {
     reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
   } = input;
-  const attachWithProvisioning = (): Promise<string> =>
-    runProvisioningWork({
-      provisioning,
-      onDeferredReleaseError: (error) => {
-        log(
-          `[surge-handoff] configured Builder provisioning lease release failed: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-      work: (onWorkSettled) => attachConfigured({
-        adapter,
-        log,
-        onWorkSettled,
-      }),
-    });
-  interface ActiveBuilderSurgeRelease {
-    migrationId: string;
-    targetPodUid: string;
-    cancelled: boolean;
-    promise: Promise<void> | null;
-  }
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
-  const releaseWasCancelled = (release: ActiveBuilderSurgeRelease): void => {
-    if (release.cancelled) throw new Error("configured Builder target release was cancelled");
-  };
-  const scheduleTargetHoldFinalization = (
-    request: { migrationId: string; slug: string; targetPodUid: string },
-    release: ActiveBuilderSurgeRelease,
-  ): void => {
-    void (async () => {
-      await waitForActiveProvisioningDrain();
-      if (release.cancelled) return;
-      await processGate!.finalizeTargetCancellation(request);
-    })().catch((error) => {
-      log(
-        `[surge-handoff] configured Builder target cancellation could not be finalized: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  };
   const reholdAfterReleaseFailure = async (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
   ): Promise<void> => {
     const state = await processGate!.rehold(request);
     if (state.phase === "cancelling" && !release.cancelled) {
-      scheduleTargetHoldFinalization(request, release);
+      scheduleBuilderTargetHoldFinalization({
+        log,
+        processGate: processGate!,
+        release,
+        request,
+        waitForActiveProvisioningDrain,
+      });
     }
   };
   const attachClaimedTargetWithProvisioning = (
@@ -1734,12 +1853,12 @@ export function createBuilderSurgeGateWiring(input: {
       );
     },
     work: async (onWorkSettled) => {
-      releaseWasCancelled(release);
+      throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
-      releaseWasCancelled(release);
+      throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
       reconcileImported(request.slug);
-      releaseWasCancelled(release);
+      throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
       const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
       if (attachedSlug !== request.slug) {
@@ -1753,9 +1872,9 @@ export function createBuilderSurgeGateWiring(input: {
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
   ): Promise<void> => {
-    releaseWasCancelled(release);
+    throwIfBuilderSurgeReleaseCancelled(release);
     await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
-    releaseWasCancelled(release);
+    throwIfBuilderSurgeReleaseCancelled(release);
     await processGate!.releaseTarget(request);
   };
   const releaseSurgeReadinessOnce = async ({
@@ -1827,25 +1946,12 @@ export function createBuilderSurgeGateWiring(input: {
     },
     async unreserveSurgeTarget(request) {
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
-      const release = activeRelease?.migrationId === request.migrationId &&
-        activeRelease.targetPodUid === request.targetPodUid
-        ? activeRelease
-        : null;
-      if (release) release.cancelled = true;
-      const state = await processGate.status();
-      if (state.role === "normal") return processGate.unreserve(request);
-      if (
-        state.role !== "target" ||
-        state.migrationId !== request.migrationId ||
-        state.slug !== request.slug ||
-        state.targetPodUid !== request.targetPodUid
-      ) {
-        return processGate.unreserve(request);
-      }
-      const reheld = await processGate.rehold(request);
-      await waitForActiveProvisioningDrain();
-      if (reheld.phase !== "cancelling") return processGate.unreserve(request);
-      return processGate.finalizeTargetCancellation(request);
+      return unreserveConfiguredBuilderTarget({
+        activeRelease,
+        processGate,
+        request,
+        waitForActiveProvisioningDrain,
+      });
     },
     releaseSurgeReadiness(input) {
       if (activeRelease) {
@@ -1872,34 +1978,17 @@ export function createBuilderSurgeGateWiring(input: {
       return promise;
     },
     async selfRelease(targetPodUid) {
-      if (!processGate) {
-        await surgeReadiness.release({ targetPodUid });
-        return;
-      }
-      if (requireOwnPodUid("self-release the configured Builder") !== targetPodUid) {
-        throw new Error("configured Builder self-release target pod UID mismatch");
-      }
-      const reservation = await processGate.status();
-      if (reservation.role !== "normal") {
-        throw new Error(
-          `configured Builder pod is reserved by migration ${reservation.migrationId}; ` +
-          "refusing self-release until its controller completes or rolls back",
-        );
-      }
-      await waitForActiveProvisioningDrain();
-      try {
-        await attachWithProvisioning();
-        await waitForActiveProvisioningDrain();
-        await processGate.permitNormal();
-        await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
-        await surgeReadiness.release({ targetPodUid });
-      } catch (error) {
-        await returnToHoldAfterFailure(
-          error,
-          () => processGate.holdNormal(),
-          "configured Builder self-release failed and could not be returned to hold",
-        );
-      }
+      return selfReleaseConfiguredBuilder({
+        adapter,
+        attachConfigured,
+        log,
+        processGate,
+        provisioning,
+        surgeReadiness,
+        targetPodUid,
+        waitForActiveProvisioningDrain,
+        waitForGatewayReady,
+      });
     },
     async selfReleaseLoopSettled() {
       if (!(await surgeReadiness.released())) return false;

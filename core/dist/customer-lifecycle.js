@@ -368,9 +368,10 @@ async function resyncSshKeyIfDrifted(adapter, slug, reclaimExistingSshKey) {
     const registered = giteaPubKeys.some((candidate) => pubKeysMatch(candidate, localPub));
     if (!reclaimExistingSshKey && registered)
         return [];
-    const reason = reclaimExistingSshKey && registered
-        ? "ownership reclaim"
-        : `SSH key drift (giteaPub=${giteaPubKeys.length === 0 ? "absent" : "mismatch"})`;
+    const giteaState = giteaPubKeys.length === 0 ? "absent" : "mismatch";
+    let reason = `SSH key drift (giteaPub=${giteaState})`;
+    if (reclaimExistingSshKey && registered)
+        reason = "ownership reclaim";
     adapter.log(`[add:${slug}] resync triggered: ${reason}`);
     await adapter.createGiteaUser(slug, localPub);
     const recheck = await adapter.readGiteaCustomerPubKeys(slug);

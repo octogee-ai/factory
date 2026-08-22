@@ -1359,6 +1359,77 @@ describe("configured Builder surge release", () => {
     }
   });
 
+  it("reholds, drains, and finalizes a permitted target unreserve without raw fallback", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const counter = createProvisioningCounter();
+      const request = {
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+        targetPodUid: "target-pod",
+      };
+      const permitted = {
+        version: 1 as const,
+        podUid: "target-pod",
+        role: "target" as const,
+        mode: "permitted" as const,
+        phase: "running" as const,
+        ...request,
+      };
+      const cancelling = {
+        ...permitted,
+        mode: "held" as const,
+        phase: "cancelling" as const,
+      };
+      const finalized = {
+        version: 1 as const,
+        podUid: "target-pod",
+        role: "normal" as const,
+        mode: "held" as const,
+        phase: "held" as const,
+      };
+      const processGate = {
+        status: vi.fn(async () => permitted),
+        rehold: vi.fn(async () => cancelling),
+        finalizeTargetCancellation: vi.fn(async () => finalized),
+        unreserve: vi.fn(async () => {
+          throw new Error("raw unreserve must not handle a matching permitted target");
+        }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter: {} as CustomerLifecycleAdapter,
+        processGate,
+        surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        provisioning: counter.provisioning,
+        waitForActiveProvisioningDrain: counter.waitForDrain,
+      });
+
+      counter.provisioning.beginProvisioning();
+      let settled = false;
+      const unreserve = wiring.unreserveSurgeTarget(request).then((state) => {
+        settled = true;
+        return state;
+      });
+      await vi.waitFor(() => expect(vi.mocked(processGate.rehold)).toHaveBeenCalledWith(request));
+
+      expect(counter.active()).toBe(1);
+      expect(settled).toBe(false);
+      expect(vi.mocked(processGate.finalizeTargetCancellation)).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.unreserve)).not.toHaveBeenCalled();
+
+      counter.provisioning.finishProvisioning();
+      await expect(unreserve).resolves.toEqual(finalized);
+
+      expect(vi.mocked(processGate.finalizeTargetCancellation)).toHaveBeenCalledWith(request);
+      expect(vi.mocked(processGate.unreserve)).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("shares an in-progress target release only with the same migration and target", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");

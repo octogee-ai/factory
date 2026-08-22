@@ -115,6 +115,7 @@ const PHASES: readonly SurgeOpenClawProcessPhase[] = [
   "starting",
   "running",
 ];
+const TARGET_MIGRATION_NOT_RESERVED = "surge OpenClaw process gate does not reserve this target migration";
 
 function parseEnum<T extends string>(value: unknown, allowed: readonly T[], name: string): T {
   if (!(allowed as readonly unknown[]).includes(value)) {
@@ -248,6 +249,172 @@ function terminalTargetMatches(
     terminal.slug === input.slug && terminal.targetPodUid === input.targetPodUid;
 }
 
+function targetCancellationRequested(
+  state: SurgeOpenClawProcessGateState,
+  input: SurgeOpenClawProcessRequest,
+): boolean {
+  return state.role === "target" && sameMigration(state, input) && (
+    state.mode === "permitted" ||
+    (state.mode === "held" && (state.phase === "held" || state.phase === "completing"))
+  );
+}
+
+function completedMigrationCanBeReplaced(
+  state: SurgeOpenClawProcessGateState,
+  isCancellation: boolean,
+): boolean {
+  return !isCancellation && state.role !== "normal" &&
+    state.mode === "permitted" && state.phase === "running";
+}
+
+function heldStateForRequest(input: {
+  state: SurgeOpenClawProcessGateState;
+  request: SurgeOpenClawProcessRequest & { podUid: string };
+  requireMigrationOwner: (state: SurgeOpenClawProcessGateState, request: SurgeOpenClawProcessRequest) => void;
+}): SurgeOpenClawProcessGateState {
+  const { state, request, requireMigrationOwner } = input;
+  if (state.role === "normal" && terminalTargetMatches(state, request)) {
+    throw new Error("surge OpenClaw process gate target migration already released");
+  }
+  const isCancellation = targetCancellationRequested(state, request);
+  if (state.mode === "held" && !isCancellation && sameMigration(state, request)) return state;
+  const completedMigration = completedMigrationCanBeReplaced(state, isCancellation);
+  if (!completedMigration) requireMigrationOwner(state, request);
+  const heldRole: SurgeOpenClawProcessRole = request.targetPodUid === request.podUid ? "target" : "source";
+  return {
+    version: 1,
+    podUid: request.podUid,
+    role: completedMigration || state.role === "normal" ? heldRole : state.role,
+    mode: "held",
+    phase: isCancellation ? "cancelling" : "stopping",
+    ...migrationIdentity(request),
+  };
+}
+
+interface TargetGateOperationDependencies {
+  current: (podUid: string) => Promise<SurgeOpenClawProcessGateState>;
+  requireMigrationOwner: (state: SurgeOpenClawProcessGateState, input: SurgeOpenClawProcessRequest) => void;
+  write: (next: SurgeOpenClawProcessGateState) => Promise<SurgeOpenClawProcessGateState>;
+}
+
+function createTargetGateOperations(
+  deps: TargetGateOperationDependencies,
+): Pick<SurgeOpenClawProcessGate,
+  "reholdTarget" | "claimTargetCompletion" | "finalizeTargetCancellation" |
+  "permitTarget" | "hydrateTarget" | "unreserveTarget" | "settleTargetCompletion"
+> {
+  const { current, requireMigrationOwner, write } = deps;
+  const requireReservedTarget = (
+    state: SurgeOpenClawProcessGateState,
+    input: SurgeOpenClawProcessRequest,
+  ): void => {
+    if (state.role !== "target" || !sameMigration(state, input)) {
+      throw new Error(TARGET_MIGRATION_NOT_RESERVED);
+    }
+  };
+
+  return {
+    async reholdTarget(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      requireReservedTarget(state, input);
+      if (state.mode === "held" && state.phase === "cancelling") return state;
+      const phase = targetCancellationRequested(state, input) ? "cancelling" : "stopping";
+      return write({ ...state, mode: "held", phase });
+    },
+    async claimTargetCompletion(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      requireReservedTarget(state, input);
+      if (state.mode !== "held" || (state.phase !== "held" && state.phase !== "completing")) {
+        throw new Error("surge OpenClaw process gate target completion is not held");
+      }
+      if (state.phase === "completing") return state;
+      return write({ ...state, phase: "completing" });
+    },
+    async finalizeTargetCancellation(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role === "normal") return state;
+      requireReservedTarget(state, input);
+      if (state.mode !== "held") {
+        throw new Error("surge OpenClaw process gate target cancellation is not held");
+      }
+      if (state.phase !== "cancelling") {
+        throw new Error("surge OpenClaw process gate target cancellation is not pending");
+      }
+      return write({ ...normalState(state), mode: "held", phase: "held" });
+    },
+    async permitTarget(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role === "target" && state.mode === "permitted" && sameMigration(state, input)) {
+        return state;
+      }
+      requireReservedTarget(state, input);
+      if (state.mode !== "held" || state.phase !== "completing") {
+        throw new Error("surge OpenClaw process gate target completion is not claimed");
+      }
+      return write({
+        version: 1,
+        podUid: input.podUid,
+        role: "target",
+        mode: "permitted",
+        phase: "starting",
+        ...migrationIdentity(input),
+      });
+    },
+    async hydrateTarget(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role === "target" && state.mode === "held" && sameMigration(state, input)) {
+        return state;
+      }
+      requireMigrationOwner(state, input);
+      if (state.mode === "permitted") {
+        throw new Error("cannot hydrate a permitted surge OpenClaw process gate");
+      }
+      return write({
+        version: 1,
+        podUid: input.podUid,
+        role: "target",
+        mode: "held",
+        phase: "held",
+        ...migrationIdentity(input),
+      });
+    },
+    async unreserveTarget(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role === "normal") return state;
+      requireReservedTarget(state, input);
+      if (state.mode !== "held") {
+        throw new Error("cannot unreserve a permitted surge OpenClaw process gate");
+      }
+      if (state.phase !== "held") {
+        throw new Error("cannot unreserve a claimed surge OpenClaw process gate");
+      }
+      return write({ ...normalState(state), mode: "held", phase: "held" });
+    },
+    async settleTargetCompletion(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role === "normal" && terminalTargetMatches(state, input)) return state;
+      if (state.role !== "target" || state.mode !== "permitted" || !sameMigration(state, input)) {
+        throw new Error("surge OpenClaw process gate does not permit this target migration");
+      }
+      return write({
+        ...normalState(state),
+        terminalTarget: {
+          migrationId: input.migrationId,
+          slug: input.slug,
+          targetPodUid: input.targetPodUid,
+        },
+      });
+    },
+  };
+}
+
 async function readState(filePath: string): Promise<SurgeOpenClawProcessGateState | null> {
   try {
     return parseState(JSON.parse(await fs.readFile(filePath, "utf8")));
@@ -370,6 +537,7 @@ export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenCl
     await writeState(gatePath, next);
     return next;
   };
+  const targetOperations = createTargetGateOperations({ current, requireMigrationOwner, write });
 
   return {
     async ensure({ podUid, readinessReleased }) {
@@ -385,118 +553,9 @@ export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenCl
     async hold(input) {
       assertRequest(input);
       const state = await current(input.podUid);
-      if (state.role === "normal" && terminalTargetMatches(state, input)) {
-        throw new Error("surge OpenClaw process gate target migration already released");
-      }
-      const cancellingTarget = state.role === "target" && sameMigration(state, input) && (
-        state.mode === "permitted" ||
-        (state.mode === "held" && (state.phase === "held" || state.phase === "completing"))
-      );
-      if (state.mode === "held" && !cancellingTarget && sameMigration(state, input)) return state;
-      // A running permitted gate that still names a finished migration is an
-      // unsettled completion — a correct controller never holds an unreleased
-      // target for a new migration, so a cross-migration hold settles it here.
-      const finishedMigration = !cancellingTarget && state.role !== "normal" &&
-        state.mode === "permitted" && state.phase === "running";
-      if (!finishedMigration) requireMigrationOwner(state, input);
-      const effectiveRole = finishedMigration ? "normal" : state.role;
-      const heldRole: SurgeOpenClawProcessRole = input.targetPodUid === input.podUid ? "target" : "source";
-      return write({
-        version: 1,
-        podUid: input.podUid,
-        role: effectiveRole === "normal" ? heldRole : effectiveRole,
-        mode: "held",
-        phase: cancellingTarget ? "cancelling" : "stopping",
-        ...migrationIdentity(input),
-      });
+      return write(heldStateForRequest({ state, request: input, requireMigrationOwner }));
     },
-    async reholdTarget(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role !== "target" || !sameMigration(state, input)) {
-        throw new Error("surge OpenClaw process gate does not reserve this target migration");
-      }
-      if (state.mode === "held" && state.phase === "cancelling") return state;
-      const phase = state.mode === "permitted" ||
-        (state.mode === "held" && (state.phase === "held" || state.phase === "completing"))
-        ? "cancelling"
-        : "stopping";
-      return write({
-        ...state,
-        mode: "held",
-        phase,
-      });
-    },
-    async claimTargetCompletion(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role !== "target" || !sameMigration(state, input)) {
-        throw new Error("surge OpenClaw process gate does not reserve this target migration");
-      }
-      if (state.mode !== "held") {
-        throw new Error("surge OpenClaw process gate target completion is not held");
-      }
-      if (state.phase === "completing") return state;
-      if (state.phase !== "held") {
-        throw new Error("surge OpenClaw process gate target completion is not held");
-      }
-      return write({ ...state, phase: "completing" });
-    },
-    async finalizeTargetCancellation(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role === "normal") return state;
-      if (state.role !== "target" || !sameMigration(state, input)) {
-        throw new Error("surge OpenClaw process gate does not reserve this target migration");
-      }
-      if (state.mode !== "held") {
-        throw new Error("surge OpenClaw process gate target cancellation is not held");
-      }
-      if (state.phase !== "cancelling") {
-        throw new Error("surge OpenClaw process gate target cancellation is not pending");
-      }
-      return write({ ...normalState(state), mode: "held", phase: "held" });
-    },
-    async permitTarget(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role === "target" && state.mode === "permitted" && sameMigration(state, input)) {
-        return state;
-      }
-      if (state.role !== "target" || !sameMigration(state, input)) {
-        throw new Error("surge OpenClaw process gate does not reserve this target migration");
-      }
-      if (state.mode !== "held" || state.phase !== "completing") {
-        throw new Error("surge OpenClaw process gate target completion is not claimed");
-      }
-      return write({
-        version: 1,
-        podUid: input.podUid,
-        role: "target",
-        mode: "permitted",
-        phase: "starting",
-        ...migrationIdentity(input),
-      });
-    },
-    async hydrateTarget(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role === "target" && state.mode === "held" && sameMigration(state, input)) {
-        return state;
-      }
-      requireMigrationOwner(state, input);
-      if (state.mode === "permitted") {
-        throw new Error("cannot hydrate a permitted surge OpenClaw process gate");
-      }
-      return write({
-        version: 1,
-        podUid: input.podUid,
-        role: "target",
-        mode: "held",
-        phase: "held",
-        ...migrationIdentity(input),
-      });
-    },
+    ...targetOperations,
     async holdNormal(input) {
       requireNonemptyString(input.podUid, "podUid");
       const state = await current(input.podUid);
@@ -523,41 +582,6 @@ export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenCl
       }
       if (state.mode === "permitted") return state;
       return write({ ...state, mode: "permitted", phase: "starting" });
-    },
-    async unreserveTarget(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role === "normal") return state;
-      if (state.role !== "target" || !sameMigration(state, input)) {
-        throw new Error("surge OpenClaw process gate does not reserve this target migration");
-      }
-      if (state.mode !== "held") {
-        throw new Error("cannot unreserve a permitted surge OpenClaw process gate");
-      }
-      if (state.phase !== "held") {
-        throw new Error("cannot unreserve a claimed surge OpenClaw process gate");
-      }
-      return write({ ...normalState(state), mode: "held", phase: "held" });
-    },
-    async settleTargetCompletion(input) {
-      assertRequest(input);
-      const state = await current(input.podUid);
-      if (state.role === "normal" && terminalTargetMatches(state, input)) return state;
-      if (
-        state.role !== "target" ||
-        state.mode !== "permitted" ||
-        !sameMigration(state, input)
-      ) {
-        throw new Error("surge OpenClaw process gate does not permit this target migration");
-      }
-      return write({
-        ...normalState(state),
-        terminalTarget: {
-          migrationId: input.migrationId,
-          slug: input.slug,
-          targetPodUid: input.targetPodUid,
-        },
-      });
     },
     async settle(input) {
       requireNonemptyString(input.podUid, "podUid");
