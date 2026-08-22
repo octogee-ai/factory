@@ -341,6 +341,21 @@ function seedNewSchemaGateway(
   };
 }
 
+function seedNonSharedGateway(
+  id: string,
+  payload: ReleasePayload,
+  gatewayOverrides: Record<string, unknown> = {},
+): Record<string, Record<string, unknown>> {
+  return seedNewSchemaGateway(id, payload, {
+    profile: "builder",
+    gatewayClass: "builder",
+    imageProfile: "builder",
+    ownerUid: `owner-${id}`,
+    builderSlug: id,
+    ...gatewayOverrides,
+  });
+}
+
 describe("normal fleet mutation admission", () => {
   it("rejects a frozen gateway restart before it creates an audit or operation", async () => {
     const seed = {
@@ -417,35 +432,35 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       }]),
       keepTagsFor: vi.fn((environment: "test" | "prod") => [
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-release-${environment}-aaaaaaa-oc2026.7.1`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@${edgeDigest}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-release-${environment}-aaaaaaa-oc2026.7.1`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-release-${environment}-aaaaaaa-oc2026.7.1`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@${builderDigest}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/artifact-worker:keep-${environment}-aaaaaaa`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/artifact-worker:keep-release-${environment}-aaaaaaa`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/artifact-worker@sha256:${"1".repeat(64)}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-${environment}-aaaaaaa`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-release-${environment}-aaaaaaa`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/glm-controller@sha256:${"2".repeat(64)}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-api:keep-${environment}-aaaaaaa`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-api:keep-release-${environment}-aaaaaaa`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-api@sha256:${"3".repeat(64)}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent:keep-${environment}-aaaaaaa`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent:keep-release-${environment}-aaaaaaa`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent@sha256:${"4".repeat(64)}`,
         },
         {
-          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner:keep-${environment}-aaaaaaa`,
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner:keep-release-${environment}-aaaaaaa`,
           intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner@sha256:${"5".repeat(64)}`,
         },
       ]),
@@ -498,16 +513,16 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     }));
     expect(authority.ensureAliases).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-test-aaaaaaa",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-release-test-aaaaaaa",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-test-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-release-test-aaaaaaa-oc2026.7.1",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-test-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-release-test-aaaaaaa-oc2026.7.1",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-test-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-release-test-aaaaaaa-oc2026.7.1",
       }),
     ]));
     expect(authority.ensureAliases.mock.calls[0]?.[0]).toHaveLength(8);
@@ -796,10 +811,10 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(opsIn(store, "rollout")).toHaveLength(0);
     expect(authority.ensureAliases).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-test-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-release-test-aaaaaaa-oc2026.7.1",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-test-aaaaaaa",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-release-test-aaaaaaa",
       }),
     ]));
   });
@@ -885,10 +900,10 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     }));
     expect(authority.ensureAliases.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-prod-aaaaaaa",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-release-prod-aaaaaaa",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-release-prod-aaaaaaa-oc2026.7.1",
       }),
     ]));
     expect(authority.ensureAliases.mock.calls[0]?.[0]).toHaveLength(9);
@@ -1041,10 +1056,10 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
     expect(authority.ensureAliases.mock.calls[1]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-prod-aaaaaaa",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-release-prod-aaaaaaa",
       }),
       expect.objectContaining({
-        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1",
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-release-prod-aaaaaaa-oc2026.7.1",
       }),
     ]));
   });
@@ -2238,12 +2253,88 @@ describe("GET /gateways/:id/releases — lists retained release docs", () => {
 });
 
 describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer image rollout)", () => {
+  it("directs a shared gateway SHA rollout through the atomic platform release", async () => {
+    const payload = sharedPayload({
+      imageTag: `48ffdb7-oc2026.8.1-beta.2@sha256:${"a".repeat(64)}`,
+      profileImages: {
+        builder: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+          imageTag: `48ffdb7-oc2026.8.1-beta.2@sha256:${"b".repeat(64)}`,
+        },
+      },
+      gatewayEdgeImage: {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+        imageTag: `48ffdb7-oc2026.8.1-beta.2@sha256:${"c".repeat(64)}`,
+      },
+    });
+    const seed = {
+      ...seedNewSchemaGateway("shared-a", payload),
+      "config/orchestrator": {
+        defaultGatewayId: "shared-a",
+        sharedGatewayIds: ["shared-a", "shared-b"],
+      },
+    };
+    const { app, store } = mkApp(seed);
+
+    const response = await request(app)
+      .post("/gateways/shared-a/rollout")
+      .send({ imageTag: "48ffdb7" })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: "shared gateways roll together through Release platform",
+      code: "shared-gateway-rollout-requires-platform-release",
+      gatewayId: "shared-a",
+    });
+    expect(store.has(`gateways/shared-a/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBe(false);
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
+  it("keeps one-gateway rollouts available to a standalone shared canary", async () => {
+    const seed = {
+      ...seedNewSchemaGateway("canary", sharedPayload()),
+      "config/orchestrator": {
+        defaultGatewayId: "shared-a",
+        sharedGatewayIds: ["shared-a", "shared-b"],
+      },
+    };
+    const { app, store } = mkApp(seed);
+
+    await request(app)
+      .post("/gateways/canary/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(202);
+
+    expect(
+      (store.get(`gateways/canary/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)?.payload as ReleasePayload)
+        .imageTag,
+    ).toBe("deadbee");
+    expect(opsIn(store, "rollout")).toHaveLength(1);
+  });
+
+  it("fails closed when shared-pool membership cannot be established", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("canary", sharedPayload()));
+
+    const response = await request(app)
+      .post("/gateways/canary/rollout")
+      .send({ imageTag: "deadbee" })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: "shared gateway pool configuration is unavailable",
+      code: "shared-gateway-pool-config-unavailable",
+      gatewayId: "canary",
+    });
+    expect(store.has(`gateways/canary/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toBe(false);
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("upgrades the retired Mac artifact field before cutting the rollout release", async () => {
     const legacyPayload = {
       ...sharedPayload(),
       macOpsTokenProtocol: { version: 1 },
     };
-    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    const seed = seedNonSharedGateway("epsilon", sharedPayload());
     seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payload = legacyPayload;
     seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payloadHash =
       releasePayloadHash(legacyPayload as never);
@@ -2262,7 +2353,7 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
 
   it("returns a typed conflict when the current artifact schema cannot be upgraded", async () => {
     const unsupportedPayload = { ...sharedPayload(), futureField: true };
-    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    const seed = seedNonSharedGateway("epsilon", sharedPayload());
     seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payload = unsupportedPayload;
     seed[`gateways/epsilon/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]!.payloadHash =
       releasePayloadHash(unsupportedPayload as never);
@@ -2284,7 +2375,7 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
 
   it("queues a rollout op AND cuts a release for a new-schema gateway with mounted customers", async () => {
     const { app, store } = mkApp(
-      seedNewSchemaGateway("epsilon", sharedPayload(), {
+      seedNonSharedGateway("epsilon", sharedPayload(), {
         status: "ready",
         mountedCustomers: ["chris"],
       }),
@@ -2323,7 +2414,7 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
         imageTag: `abc1234@sha256:${"c".repeat(64)}`,
       },
     });
-    const { app, store } = mkApp(seedNewSchemaGateway("epsilon", payload));
+    const { app, store } = mkApp(seedNonSharedGateway("epsilon", payload));
 
     await request(app)
       .post("/gateways/epsilon/rollout")
@@ -2350,7 +2441,7 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
         imageTag: `abc1234@sha256:${"c".repeat(64)}`,
       },
     });
-    const { app, store } = mkApp(seedNewSchemaGateway("epsilon", payload));
+    const { app, store } = mkApp(seedNonSharedGateway("epsilon", payload));
 
     const response = await request(app)
       .post("/gateways/epsilon/rollout")
@@ -2367,7 +2458,7 @@ describe("POST /gateways/:id/rollout — compatibility wrapper (mounted-customer
   });
 
   it("cuts a release when the durable gateway has no legacy glm desired doc", async () => {
-    const seed = seedNewSchemaGateway("epsilon", sharedPayload());
+    const seed = seedNonSharedGateway("epsilon", sharedPayload());
     delete seed[`${GLM_GATEWAYS_COLLECTION}/epsilon`];
     const { app, store } = mkApp(seed);
 

@@ -1407,6 +1407,16 @@ export function validateRolloutBody(body) {
         },
     };
 }
+function requestedRolloutConfigFields({ profile, gatewayClass, imageProfile, }) {
+    const fields = [];
+    if (profile)
+        fields.push("profile");
+    if (gatewayClass)
+        fields.push("gatewayClass");
+    if (imageProfile)
+        fields.push("imageProfile");
+    return fields;
+}
 function validateAddGatewayRequiredFields(body) {
     if (!isNonEmptyString(body.gatewayId) ||
         !isNonEmptyString(body.imageRepository) ||
@@ -4890,14 +4900,15 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const { imageTag, imageRepository, profile, gatewayClass, imageProfile } = validation.ok;
-            if (profile || gatewayClass || imageProfile) {
+            const requestedConfigFields = requestedRolloutConfigFields({
+                profile,
+                gatewayClass,
+                imageProfile,
+            });
+            if (requestedConfigFields.length > 0) {
                 res.status(400).json({
                     error: "gateway configuration is mutable; update it with PATCH /api/admin/gateways/:id",
-                    fields: [
-                        ...(profile ? ["profile"] : []),
-                        ...(gatewayClass ? ["gatewayClass"] : []),
-                        ...(imageProfile ? ["imageProfile"] : []),
-                    ],
+                    fields: requestedConfigFields,
                 });
                 return;
             }
@@ -4908,6 +4919,24 @@ export function addAdminFleetRoutes(router, deps) {
             if (rolloutGateway?.desiredStatus === "retired") {
                 res.status(409).json({
                     error: "cannot roll out a retired gateway",
+                    gatewayId: id,
+                });
+                return;
+            }
+            const sharedPoolSnapshot = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+            const sharedPool = parseSharedGatewayPoolConfig(sharedPoolSnapshot.exists ? sharedPoolSnapshot.data() : undefined);
+            if (rolloutGateway.gatewayClass === "shared" && sharedPool === null) {
+                res.status(409).json({
+                    error: "shared gateway pool configuration is unavailable",
+                    code: "shared-gateway-pool-config-unavailable",
+                    gatewayId: id,
+                });
+                return;
+            }
+            if (sharedPool?.sharedGatewayIds.includes(id)) {
+                res.status(409).json({
+                    error: "shared gateways roll together through Release platform",
+                    code: "shared-gateway-rollout-requires-platform-release",
                     gatewayId: id,
                 });
                 return;

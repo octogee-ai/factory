@@ -385,35 +385,35 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
 
     expect(authority.keepTagsFor("prod", { ...manifest, manifestDigest })).toEqual([
       {
-        alias: `${repository}/gateway-edge:keep-prod-aaaaaaa-oc2026.7.1`,
+        alias: `${repository}/gateway-edge:keep-release-prod-aaaaaaa-oc2026.7.1`,
         intendedTarget: `${repository}/gateway-edge@${edgeDigest}`,
       },
       {
-        alias: `${repository}/octogee-gateway:keep-prod-aaaaaaa-oc2026.7.1`,
+        alias: `${repository}/octogee-gateway:keep-release-prod-aaaaaaa-oc2026.7.1`,
         intendedTarget: `${repository}/octogee-gateway@${gatewayDigest}`,
       },
       {
-        alias: `${repository}/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1`,
+        alias: `${repository}/octogee-gateway-builder:keep-release-prod-aaaaaaa-oc2026.7.1`,
         intendedTarget: `${repository}/octogee-gateway-builder@${builderDigest}`,
       },
       {
-        alias: `${repository}/artifact-worker:keep-prod-aaaaaaa`,
+        alias: `${repository}/artifact-worker:keep-release-prod-aaaaaaa`,
         intendedTarget: `${repository}/artifact-worker@sha256:${"1".repeat(64)}`,
       },
       {
-        alias: `${repository}/glm-controller:keep-prod-aaaaaaa`,
+        alias: `${repository}/glm-controller:keep-release-prod-aaaaaaa`,
         intendedTarget: `${repository}/glm-controller@sha256:${"2".repeat(64)}`,
       },
       {
-        alias: `${repository}/octogee-api:keep-prod-aaaaaaa`,
+        alias: `${repository}/octogee-api:keep-release-prod-aaaaaaa`,
         intendedTarget: `${repository}/octogee-api@sha256:${"3".repeat(64)}`,
       },
       {
-        alias: `${repository}/octogee-ops-agent:keep-prod-aaaaaaa`,
+        alias: `${repository}/octogee-ops-agent:keep-release-prod-aaaaaaa`,
         intendedTarget: `${repository}/octogee-ops-agent@sha256:${"4".repeat(64)}`,
       },
       {
-        alias: `${repository}/octogee-project-runner:keep-prod-aaaaaaa`,
+        alias: `${repository}/octogee-project-runner:keep-release-prod-aaaaaaa`,
         intendedTarget: `${repository}/octogee-project-runner@sha256:${"5".repeat(64)}`,
       },
     ]);
