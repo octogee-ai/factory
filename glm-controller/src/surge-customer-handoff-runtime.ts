@@ -217,7 +217,7 @@ async function responseJson(response: Response, context: string): Promise<Record
 }
 
 const SURGE_POD_CONTROL_TIMEOUT_MS = 330_000;
-const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 630_000;
+const SURGE_OPENCLAW_RESUME_TIMEOUT_MS = 720_000;
 
 async function postSigned(
   opts: {

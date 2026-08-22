@@ -833,7 +833,7 @@ describe("surge handoff direct pod transport", () => {
     });
   });
 
-  it("stops, resumes, reserves, and unreserves Builder OpenClaw through the process endpoints", async () => {
+  it("gives Builder resume its end-to-end operation budget while retaining short control deadlines", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -878,7 +878,7 @@ describe("surge handoff direct pod transport", () => {
       }
       expect(timeout.mock.calls).toEqual([
         [330_000],
-        [630_000],
+        [720_000],
         [330_000],
         [330_000],
       ]);
