@@ -10,6 +10,7 @@ import {
   openRouterCatalogInputForBaseUrl,
   type BrokerProfileSweepOptions,
 } from "./agent-model-token-materializer.js";
+import { createBrokerTokenRefreshScheduler } from "./broker-token-refresh.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
@@ -699,6 +700,19 @@ function startBrokerProfileRetry(
   };
   sweep();
   return setInterval(sweep, BROKER_PROFILE_RETRY_INTERVAL_MS);
+}
+
+function startBrokerTokenRefreshAfterGatewayReady(
+  rpc: Pick<GatewayRpcClient, "secretsReload">,
+  openclawDir: string,
+  whenReady: Promise<void>,
+  log: (message: string) => void,
+): () => void {
+  const scheduler = createBrokerTokenRefreshScheduler({ rpc, openclawDir, log });
+  void whenReady
+    .then(() => scheduler.start())
+    .catch((error) => log(`[agent-model-token] ⚠ refresh scheduler did not start: ${String(error)}`));
+  return () => scheduler.stop();
 }
 
 export async function waitForOpenClawHealthz(input: {
@@ -1784,6 +1798,13 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     reserved: surgeGate.selfReleaseReserved,
     log: opts.log,
   });
+  const whenReady = waitForGatewayReady();
+  const stopBrokerTokenRefresh = startBrokerTokenRefreshAfterGatewayReady(
+    opts.rpc,
+    openclawDir,
+    whenReady,
+    opts.log,
+  );
   const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
   opts.log(
     `[fleet] listening on 0.0.0.0:${boundPort}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
@@ -1791,10 +1812,11 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
 
 return {
     port: boundPort,
-    whenReady: waitForGatewayReady(),
+    whenReady,
     stop: async () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (brokerProfileTimer) clearInterval(brokerProfileTimer);
+      stopBrokerTokenRefresh();
       stopSurgeSelfRelease();
       stopReconcileLoop();
       await new Promise<void>((resolve, reject) => {

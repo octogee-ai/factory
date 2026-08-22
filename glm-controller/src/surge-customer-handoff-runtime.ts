@@ -11,8 +11,10 @@ import { isValidUsername } from "@octogee/shared/types/identity";
 import { describeFleetStateRejection, requestFleetState } from "./fleet-state-client.js";
 import { parseFleetStateResponse, type GatewayFleetState } from "./gateway-heartbeat-poller.js";
 import {
+  SurgeGatewayScopedSignatureCapabilityMissingError,
   SurgeOpenClawProcessEndpointMissingError,
   type SurgeCustomerHandoffDeps,
+  type SurgeFleetSignatureCapability,
   type SurgePod,
   type SurgePodHealth,
   type SurgePodSnapshot,
@@ -48,6 +50,12 @@ class SurgePodControlError extends Error {
     readonly status: number,
     readonly code: string | null,
   ) {
+    super(message);
+  }
+}
+
+class SurgePodFleetStateError extends Error {
+  constructor(message: string, readonly status: number) {
     super(message);
   }
 }
@@ -226,12 +234,6 @@ async function postSigned(
   return responseJson(response, `${opts.path} pod=${opts.pod.name}`);
 }
 
-// The roster and the image tag left the unauthenticated /health probe, so the
-// handoff reads them the same signed way the heartbeat poller does — addressed at
-// one pod, because a surge has two pods answering for one gatewayId. A 404 is the
-// one answer that is not a fault: it names a pod predating the split, which still
-// carries the roster on /health and is what readPodHealth falls back to. Any other
-// rejection is a real fault and must not read as absence.
 async function readPodFleetState(
   opts: {
     fetch: typeof globalThis.fetch;
@@ -250,9 +252,10 @@ async function readPodFleetState(
   });
   if (response.status === 404) return null;
   if (!response.ok) {
-    throw new Error(
+    throw new SurgePodFleetStateError(
       `fleet state pod=${opts.pod.name}: ${response.status} — ` +
       describeFleetStateRejection(response.status),
+      response.status,
     );
   }
   const state = parseFleetStateResponse(await response.json());
@@ -298,6 +301,119 @@ function parsePrelaunchState(value: unknown): SurgePrelaunchState | null {
     : null;
 }
 
+interface SurgePodHealthReaderOptions {
+  fetch: typeof globalThis.fetch;
+  privateKey: string;
+  rejectedSignaturePods: ReadonlyMap<string, string>;
+  reportLegacySignaturePod: (pod: SurgePod, version: string) => string;
+  reportRejectedSignaturePod: (pod: SurgePod, status: number) => string;
+  log: (message: string) => void;
+}
+
+async function readSurgeHealthResponses(
+  fetchImpl: typeof globalThis.fetch,
+  pod: SurgePod,
+): Promise<{ health: Record<string, unknown>; ready: Record<string, unknown> }> {
+  const [healthResponse, readyResponse] = await Promise.all([
+    fetchImpl(`${podBaseUrl(pod)}/health`, { signal: AbortSignal.timeout(5_000) }),
+    fetchImpl(`${podBaseUrl(pod)}/surge-ready`, { signal: AbortSignal.timeout(5_000) }),
+  ]);
+  return {
+    health: await responseJson(healthResponse, `health pod=${pod.name}`),
+    ready: await readyResponse.json() as Record<string, unknown>,
+  };
+}
+
+async function resolveSurgeFleetState(input: {
+  fetch: typeof globalThis.fetch;
+  privateKey: string;
+  pod: SurgePod;
+  gatewayId: string;
+  health: Record<string, unknown>;
+}): Promise<{
+  state: GatewayFleetState | null;
+  fleetSignatureCapability: SurgeFleetSignatureCapability;
+}> {
+  const legacyState = parseFleetStateResponse(input.health);
+  if (legacyState) {
+    return { state: legacyState, fleetSignatureCapability: "legacy" };
+  }
+  return {
+    state: await readPodFleetState(input),
+    fleetSignatureCapability: "gateway-scoped",
+  };
+}
+
+function parseSurgePodHealth(input: {
+  pod: SurgePod;
+  health: Record<string, unknown>;
+  ready: Record<string, unknown>;
+  state: GatewayFleetState | null;
+  fleetSignatureCapability: SurgeFleetSignatureCapability;
+  reportLegacySignaturePod: (pod: SurgePod, version: string) => string;
+}): SurgePodHealth {
+  const prelaunchState = parsePrelaunchState(input.ready.prelaunchState);
+  if (
+    (input.health.status !== "booting" && input.health.status !== "ready") ||
+    typeof input.state?.version !== "string" ||
+    typeof input.ready.handoffReleased !== "boolean" ||
+    typeof input.ready.openclawUp !== "boolean" ||
+    prelaunchState === null
+  ) {
+    throw new Error(`invalid surge health response from pod=${input.pod.name}`);
+  }
+  if (input.fleetSignatureCapability === "legacy") {
+    input.reportLegacySignaturePod(input.pod, input.state.version);
+  }
+  return {
+    status: input.ready.openclawUp ? "ready" : "booting",
+    version: input.state.version,
+    fleetSignatureCapability: input.fleetSignatureCapability,
+    handoffReleased: input.ready.handoffReleased,
+    prelaunchState,
+    mountedCustomers: [...new Set(input.state.customers)],
+  };
+}
+
+async function readSurgePodHealth(
+  opts: SurgePodHealthReaderOptions,
+  pod: SurgePod,
+  gatewayId: string,
+): Promise<SurgePodHealth | null> {
+  if (opts.rejectedSignaturePods.has(pod.uid)) return null;
+  try {
+    const { health, ready } = await readSurgeHealthResponses(opts.fetch, pod);
+    const { state, fleetSignatureCapability } = await resolveSurgeFleetState({
+      fetch: opts.fetch,
+      privateKey: opts.privateKey,
+      pod,
+      gatewayId,
+      health,
+    });
+    return parseSurgePodHealth({
+      pod,
+      health,
+      ready,
+      state,
+      fleetSignatureCapability,
+      reportLegacySignaturePod: opts.reportLegacySignaturePod,
+    });
+  } catch (error) {
+    if (
+      error instanceof SurgePodFleetStateError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      opts.reportRejectedSignaturePod(pod, error.status);
+      return null;
+    }
+    opts.log(
+      `[surge-handoff] pod=${pod.name} health unavailable: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
 type SurgeControlCall = (
   pod: SurgePod,
   gatewayId: string,
@@ -305,6 +421,35 @@ type SurgeControlCall = (
   operationId: string,
   body: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
+
+async function controlSurgeOpenClawProcess(
+  control: SurgeControlCall,
+  input: {
+    pod: SurgePod;
+    gatewayId: string;
+    path: "hold-surge-openclaw" | "resume-surge-openclaw" | "unreserve-surge-openclaw";
+    operationId: string;
+    slug: string;
+    targetPodUid: string;
+    capability: string;
+  },
+): Promise<void> {
+  try {
+    await control(input.pod, input.gatewayId, input.path, input.operationId, {
+      migrationId: input.operationId,
+      slug: input.slug,
+      targetPodUid: input.targetPodUid,
+    });
+  } catch (error) {
+    if (error instanceof SurgePodControlError && error.status === 404) {
+      throw new SurgeOpenClawProcessEndpointMissingError(
+        `pod ${input.pod.name} lacks the required surge OpenClaw ${input.capability} endpoint`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
 
 interface SurgeTransferRuntime {
   control: SurgeControlCall;
@@ -414,43 +559,61 @@ async function transferCustomerState(
 export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePodTransport {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
   const randomKey = opts.randomKey ?? (() => randomBytes(32).toString("hex"));
+  const legacySignaturePods = new Map<string, { version: string; message: string }>();
+  const rejectedSignaturePods = new Map<string, string>();
 
-  const control = (
+  const legacySignatureMessage = (pod: SurgePod, version: string): string =>
+    `pod=${pod.name} version=${version} predates the gateway-scoped fleet signature protocol; ` +
+    "roll the pod before starting a surge handoff";
+  const rejectedSignatureMessage = (pod: SurgePod, status: number): string =>
+    `pod=${pod.name} rejected the gateway-scoped fleet signature with HTTP ${status}; ` +
+    "the pod's fleet key does not match Cowboy's signing key; repair the key or roll the pod " +
+    "before starting a surge handoff";
+  const reportLegacySignaturePod = (pod: SurgePod, version: string): string => {
+    const message = legacySignatureMessage(pod, version);
+    const previous = legacySignaturePods.get(pod.uid);
+    legacySignaturePods.set(pod.uid, { version, message });
+    if (!previous || previous.version !== version) opts.log(`[surge-handoff] ${message}`);
+    return message;
+  };
+  const reportRejectedSignaturePod = (pod: SurgePod, status: number): string => {
+    const message = rejectedSignatureMessage(pod, status);
+    if (!rejectedSignaturePods.has(pod.uid)) opts.log(`[surge-handoff] ${message}`);
+    rejectedSignaturePods.set(pod.uid, message);
+    return message;
+  };
+  const assertGatewayScopedSignatureCapability = (pod: SurgePod): void => {
+    const legacy = legacySignaturePods.get(pod.uid);
+    const rejected = rejectedSignaturePods.get(pod.uid);
+    if (legacy) throw new SurgeGatewayScopedSignatureCapabilityMissingError(legacy.message);
+    if (rejected) throw new SurgeGatewayScopedSignatureCapabilityMissingError(rejected);
+  };
+
+  const control = async (
     pod: SurgePod,
     gatewayId: string,
     path: string,
     operationId: string,
     body: Record<string, unknown>,
-  ) => postSigned({
-    fetch: fetchImpl,
-    privateKey: opts.privateKey,
-    pod,
-    gatewayId,
-    path,
-    operationId,
-    body,
-  });
-
-  const openClawProcessControl = async (input: {
-    pod: SurgePod;
-    gatewayId: string;
-    path: "hold-surge-openclaw" | "resume-surge-openclaw" | "unreserve-surge-openclaw";
-    operationId: string;
-    slug: string;
-    targetPodUid: string;
-    capability: string;
-  }): Promise<void> => {
+  ): Promise<Record<string, unknown>> => {
+    assertGatewayScopedSignatureCapability(pod);
     try {
-      await control(input.pod, input.gatewayId, input.path, input.operationId, {
-        migrationId: input.operationId,
-        slug: input.slug,
-        targetPodUid: input.targetPodUid,
+      return await postSigned({
+        fetch: fetchImpl,
+        privateKey: opts.privateKey,
+        pod,
+        gatewayId,
+        path,
+        operationId,
+        body,
       });
     } catch (error) {
-      if (error instanceof SurgePodControlError && error.status === 404) {
-        throw new SurgeOpenClawProcessEndpointMissingError(
-          `pod ${input.pod.name} lacks the required surge OpenClaw ${input.capability} endpoint`,
-          { cause: error },
+      if (
+        error instanceof SurgePodControlError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw new SurgeGatewayScopedSignatureCapabilityMissingError(
+          reportRejectedSignaturePod(pod, error.status),
         );
       }
       throw error;
@@ -458,44 +621,14 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
   };
 
   return {
-    async readPodHealth(pod, gatewayId): Promise<SurgePodHealth | null> {
-      try {
-        const [healthResponse, readyResponse, signedState] = await Promise.all([
-          fetchImpl(`${podBaseUrl(pod)}/health`, { signal: AbortSignal.timeout(5_000) }),
-          fetchImpl(`${podBaseUrl(pod)}/surge-ready`, { signal: AbortSignal.timeout(5_000) }),
-          readPodFleetState({ fetch: fetchImpl, privateKey: opts.privateKey, pod, gatewayId }),
-        ]);
-        const health = await responseJson(healthResponse, `health pod=${pod.name}`);
-        const ready = await readyResponse.json() as Record<string, unknown>;
-        const prelaunchState = parsePrelaunchState(ready.prelaunchState);
-        // The pods this roll retires predate the signed route, and a Builder's
-        // state only survives the handoff — so their /health roster is still read.
-        // Delete this fallback once no pod answers 404 above.
-        const state = signedState ?? parseFleetStateResponse(health);
-        if (
-          (health.status !== "booting" && health.status !== "ready") ||
-          typeof state?.version !== "string" ||
-          typeof ready.handoffReleased !== "boolean" ||
-          typeof ready.openclawUp !== "boolean" ||
-          prelaunchState === null
-        ) {
-          throw new Error(`invalid surge health response from pod=${pod.name}`);
-        }
-        return {
-          status: ready.openclawUp ? "ready" : "booting",
-          version: state.version,
-          handoffReleased: ready.handoffReleased,
-          prelaunchState,
-          mountedCustomers: [...new Set(state.customers)],
-        };
-      } catch (error) {
-        opts.log(
-          `[surge-handoff] pod=${pod.name} health unavailable: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-        );
-        return null;
-      }
-    },
+    readPodHealth: (pod, gatewayId) => readSurgePodHealth({
+      fetch: fetchImpl,
+      privateKey: opts.privateKey,
+      rejectedSignaturePods,
+      reportLegacySignaturePod,
+      reportRejectedSignaturePod,
+      log: opts.log,
+    }, pod, gatewayId),
 
     async quiesce({ gatewayId, slug, operationId, sourcePod }) {
       await control(sourcePod, gatewayId, "quiesce", operationId, {
@@ -506,7 +639,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async stopSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
-      await openClawProcessControl({
+      await controlSurgeOpenClawProcess(control, {
         pod: sourcePod,
         gatewayId,
         path: "hold-surge-openclaw",
@@ -518,7 +651,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async resumeSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
-      await openClawProcessControl({
+      await controlSurgeOpenClawProcess(control, {
         pod: sourcePod,
         gatewayId,
         path: "resume-surge-openclaw",
@@ -530,7 +663,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async holdTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
-      await openClawProcessControl({
+      await controlSurgeOpenClawProcess(control, {
         pod: targetPod,
         gatewayId,
         path: "hold-surge-openclaw",
@@ -542,7 +675,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async unreserveTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
-      await openClawProcessControl({
+      await controlSurgeOpenClawProcess(control, {
         pod: targetPod,
         gatewayId,
         path: "unreserve-surge-openclaw",

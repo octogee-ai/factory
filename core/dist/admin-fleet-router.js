@@ -5107,6 +5107,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             const payload = centralGatewayReleasePayload(manifest);
+            const aliasPlan = authority.keepTagsFor("test", manifest);
             const testProvenance = {
                 environment: "test",
                 sourceCommit: sourceSha,
@@ -5133,6 +5134,7 @@ export function addAdminFleetRoutes(router, deps) {
                         manifestDigest: manifest.manifestDigest,
                     },
                     testProvenance,
+                    aliasPlan,
                     ...(existingFanout
                         ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
                         : {}),
@@ -5141,7 +5143,7 @@ export function addAdminFleetRoutes(router, deps) {
                         imageTag: payload.imageTag,
                     }),
                     action: async () => {
-                        const aliasOutcomes = [];
+                        let aliasOutcomes = [];
                         try {
                             await assertNormalFleetMutationOpen(db);
                         }
@@ -5149,6 +5151,15 @@ export function addAdminFleetRoutes(router, deps) {
                             return {
                                 aliasOutcomes,
                                 failure: { error, failedStep: "maintenance" },
+                            };
+                        }
+                        try {
+                            aliasOutcomes = await authority.ensureAliases(aliasPlan);
+                        }
+                        catch (error) {
+                            return {
+                                aliasOutcomes: aliasOutcomesFromError(error),
+                                failure: { error, failedStep: "aliases" },
                             };
                         }
                         try {
@@ -5249,7 +5260,10 @@ export function addAdminFleetRoutes(router, deps) {
             }
             await ensureCentralReleaseFanout(db, fanoutInput, createdBy, Date.now());
             const payload = centralGatewayReleasePayload(manifest);
-            const aliasPlan = authority.aliasesFor(manifest);
+            const aliasPlan = [
+                ...authority.aliasesFor(manifest),
+                ...authority.keepTagsFor("prod", manifest),
+            ];
             let result;
             try {
                 result = await runAdminFleetMutation({
@@ -5279,21 +5293,21 @@ export function addAdminFleetRoutes(router, deps) {
                     action: async () => {
                         let aliasOutcomes = [];
                         try {
-                            aliasOutcomes = await authority.ensureAliases(authority.aliasesFor(manifest));
-                        }
-                        catch (error) {
-                            return {
-                                aliasOutcomes: aliasOutcomesFromError(error),
-                                failure: { error, failedStep: "aliases" },
-                            };
-                        }
-                        try {
                             await assertNormalFleetMutationOpen(db);
                         }
                         catch (error) {
                             return {
                                 aliasOutcomes,
                                 failure: { error, failedStep: "maintenance" },
+                            };
+                        }
+                        try {
+                            aliasOutcomes = await authority.ensureAliases(aliasPlan);
+                        }
+                        catch (error) {
+                            return {
+                                aliasOutcomes: aliasOutcomesFromError(error),
+                                failure: { error, failedStep: "aliases" },
                             };
                         }
                         try {

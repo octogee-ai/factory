@@ -743,8 +743,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     ]);
   });
 
-  it("pins the effective Builder gateway image instead of the standard release repository", async () => {
+  it("pins both gateway profiles for a Builder release", async () => {
     const gatewayId = "builder-alice";
+    const gatewayTag = `abc1234@sha256:${"a".repeat(64)}`;
+    const builderTag = `abc1234@sha256:${"b".repeat(64)}`;
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
     const log = vi.fn();
@@ -780,7 +782,15 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
         },
         releases: {
           [gatewayId]: {
-            2: releaseArtifact(gatewayId, 2, "abc1234"),
+            2: releaseArtifact(gatewayId, 2, gatewayTag, {
+              profileImages: {
+                builder: {
+                  imageRepository:
+                    "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+                  imageTag: builderTag,
+                },
+              },
+            }),
           },
         },
         callbacks,
@@ -802,13 +812,61 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       {
         imageRepository:
           "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-        imageTag: "abc1234",
+        imageTag: builderTag,
       },
-    ]));
-    expect(artifacts).not.toEqual(expect.arrayContaining([
       {
         imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: "abc1234",
+        imageTag: gatewayTag,
+      },
+    ]));
+  });
+
+  it("pins the Builder profile referenced by an otherwise all-standard release", async () => {
+    const gatewayTag = `abc1234@sha256:${"a".repeat(64)}`;
+    const builderTag = `abc1234@sha256:${"b".repeat(64)}`;
+    const callbacks: SnapshotCallbacks = {};
+    const reconcileImagePins = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: { default: servingRuntime() },
+        releases: {
+          default: {
+            2: releaseArtifact("default", 2, gatewayTag, {
+              profileImages: {
+                builder: {
+                  imageRepository:
+                    "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+                  imageTag: builderTag,
+                },
+              },
+            }),
+          },
+        },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      log: vi.fn(),
+    });
+
+    await runTick(callbacks);
+    stop();
+
+    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
+      string,
+      Array<{ imageRepository: string; imageTag: string }>,
+    ];
+    expect(artifacts).toEqual(expect.arrayContaining([
+      {
+        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+        imageTag: gatewayTag,
+      },
+      {
+        imageRepository:
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+        imageTag: builderTag,
       },
     ]));
   });

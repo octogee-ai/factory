@@ -47,6 +47,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { isValidUsername, parseAgentId } from "../shared/dist/types/identity.js";
 
@@ -121,6 +122,7 @@ const AGENT_MODEL_TOKEN_ID_RE =
   /^agent-model-token-(?:(?<provider>openrouter|openai)-)?(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 const AGENT_EMBEDDING_TOKEN_ID_RE =
   /^agent-embedding-token-openai-(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
+const BROKER_TOKEN_EXPIRY_DIRECTORY = "agent-model-token-expiry";
 
 function parseAgentScopedId(id, pattern) {
   const match = id.match(pattern);
@@ -232,6 +234,44 @@ function brokerRouteFor(id) {
   return { route: "/internal/byok/api-key", payload: { id } };
 }
 
+function isAgentBrokerTokenRef(id) {
+  return AGENT_MODEL_TOKEN_ID_RE.test(id) || AGENT_EMBEDDING_TOKEN_ID_RE.test(id);
+}
+
+function brokerTokenExpiryDirectory(expiryDir) {
+  return expiryDir || path.join(process.env.HOME || "/home/node", ".openclaw", "secrets", BROKER_TOKEN_EXPIRY_DIRECTORY);
+}
+
+function recordBrokerTokenExpiry(id, expiresAt, expiryDir) {
+  const directory = brokerTokenExpiryDirectory(expiryDir);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const filename = path.join(directory, `${Buffer.from(id, "utf8").toString("base64url")}.json`);
+  const temporary = path.join(directory, `.${process.pid}-${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(
+      temporary,
+      `${JSON.stringify({ refId: id, expiresAt })}\n`,
+      { encoding: "utf8", mode: 0o600, flag: "wx" },
+    );
+    fs.renameSync(temporary, filename);
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
+}
+
+function recordResolvedBrokerTokenExpiry(id, expiresAt, expiryDir) {
+  if (!isAgentBrokerTokenRef(id)) return;
+  if (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= 0) {
+    audit(`expiry metadata unavailable id=${JSON.stringify(id)}`);
+    return;
+  }
+  try {
+    recordBrokerTokenExpiry(id, expiresAt, expiryDir);
+  } catch (error) {
+    audit(`expiry metadata write failed id=${JSON.stringify(id)} reason=${JSON.stringify(error?.message || String(error))}`);
+  }
+}
+
 function retryable(error) {
   const err = error instanceof Error ? error : new Error(String(error));
   err.retryable = true;
@@ -261,7 +301,7 @@ async function brokerAttempt(fetchImpl, url, headers, payload, timeoutMs) {
   if (typeof body?.value !== "string") {
     throw new Error("byok broker: malformed response (no value)");
   }
-  return body.value;
+  return { value: body.value, expiresAt: body.expiresAt };
 }
 
 /**
@@ -285,12 +325,13 @@ function resolverDeps(deps) {
     budgetMs: deps.budgetMs ?? BROKER_TOTAL_BUDGET_MS,
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     now: deps.now ?? Date.now,
+    expiryDir: deps.expiryDir,
     headers,
   };
 }
 
 export async function resolveOne(id, deps = {}) {
-  const { fetchImpl, attemptTimeoutMs, backoffMs, budgetMs, sleep, now, headers } =
+  const { fetchImpl, attemptTimeoutMs, backoffMs, budgetMs, sleep, now, expiryDir, headers } =
     resolverDeps(deps);
   const { route, payload } = brokerRouteFor(id);
   const url = `${BROKER_BASE_URL}${route}`;
@@ -299,13 +340,15 @@ export async function resolveOne(id, deps = {}) {
 
   for (let attempt = 1; ; attempt++) {
     try {
-      return await brokerAttempt(
+      const resolved = await brokerAttempt(
         fetchImpl,
         url,
         headers,
         payload,
         Math.min(attemptTimeoutMs, Math.max(1, remainingMs())),
       );
+      recordResolvedBrokerTokenExpiry(id, resolved.expiresAt, expiryDir);
+      return resolved.value;
     } catch (err) {
       const budgetLeft = remainingMs() - backoffMs;
       if (attempt >= BROKER_ATTEMPTS || err?.retryable !== true || budgetLeft <= 0) throw err;

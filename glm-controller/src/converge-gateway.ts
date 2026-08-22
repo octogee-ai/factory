@@ -106,15 +106,19 @@ export function supersedingGatewayImageTag(input: {
   gateway: DurableGateway;
   desiredImage: GatewayImage;
   pendingArtifact: ReleasePayload | null;
+  observedImage?: GatewayImage | null;
 }): string | undefined {
-  const { gateway, desiredImage, pendingArtifact } = input;
+  const { gateway, desiredImage, pendingArtifact, observedImage = null } = input;
   if (!pendingArtifact || gateway.latestRelease <= gateway.desiredRelease) return undefined;
   const pendingImage = gatewayImageIn(gateway, pendingArtifact);
   if (!pendingImage) return undefined;
-  return pendingImage.imageTag !== desiredImage.imageTag ||
-    pendingImage.imageRepository !== desiredImage.imageRepository
-    ? pendingImage.imageTag
-    : undefined;
+  const pendingDiffersFromDesired = pendingImage.imageTag !== desiredImage.imageTag ||
+    pendingImage.imageRepository !== desiredImage.imageRepository;
+  if (!pendingDiffersFromDesired) return undefined;
+  const pendingAlreadyObserved = observedImage !== null &&
+    pendingImage.imageTag === observedImage.imageTag &&
+    pendingImage.imageRepository === observedImage.imageRepository;
+  return pendingAlreadyObserved ? undefined : pendingImage.imageTag;
 }
 
 export interface ObservedHelmInstance {

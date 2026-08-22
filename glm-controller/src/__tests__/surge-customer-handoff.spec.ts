@@ -70,6 +70,7 @@ function harness(input: {
   ownerOperations?: Record<string, { status: OperationStatus } | null>;
   bootingUids?: string[];
   prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
+  fleetSignatureCapabilityByUid?: Record<string, SurgePodHealth["fleetSignatureCapability"]>;
   resumeSourceError?: Error;
   stopSourceError?: Error;
   stopSourceLegacy?: boolean;
@@ -92,6 +93,7 @@ function harness(input: {
     readPodHealth: vi.fn(async (pod) => ({
       status: input.bootingUids?.includes(pod.uid) ? "booting" as const : "ready" as const,
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
+      fleetSignatureCapability: input.fleetSignatureCapabilityByUid?.[pod.uid] ?? "gateway-scoped",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
       prelaunchState: input.prelaunchByUid?.[pod.uid] ??
         (pod.uid !== targetPod.uid && sourceHeld ? "held" : "none"),
@@ -671,7 +673,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("waits for pod-side source-loss release, then heals its owned roster gates", async () => {
+  it("releases a sourceless shared target, then heals its owned roster gates", async () => {
     const pods: SurgePod[] = [targetPod];
     const h = harness({
       pods,
@@ -688,7 +690,7 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: true,
       stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: false });
-    expect(h.events).toEqual([]);
+    expect(h.events).toEqual(["release:target-uid"]);
 
     h.setTargetReleased(true);
     pods[0] = { ...targetPod, ready: true };
@@ -699,6 +701,7 @@ describe("surge customer handoff", () => {
       stateMigration: MIGRATE_STATE,
     })).resolves.toEqual({ ready: true });
     expect(h.events).toEqual([
+      "release:target-uid",
       "assignment:u1:serving",
     ]);
   });
@@ -1305,6 +1308,51 @@ describe("surge customer handoff", () => {
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual(["unreserve-target:target-uid:alice"]);
+  });
+
+  it("leaves assignments open when a legacy source cannot begin a scoped handoff", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      fleetSignatureCapabilityByUid: { [oldPod.uid]: "legacy" },
+    });
+    const input = {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    };
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+    expect(h.deps.readAssignments).not.toHaveBeenCalled();
+    expect(h.deps.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not settle a ready legacy target through assignment or release control", async () => {
+    const h = harness({
+      pods: [{ ...targetPod, ready: true }],
+      assignments: [assignment("u1", "alice", {
+        state: "quiescing",
+        updatedByOperationId: "surge-default-target-uid",
+      })],
+      targetReleased: true,
+      targetMountedCustomers: ["alice"],
+      fleetSignatureCapabilityByUid: { [targetPod.uid]: "legacy" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([]);
+    expect(h.deps.readAssignments).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
   });
 
   it("gates only the stale target customer when retry cleanup fails", async () => {

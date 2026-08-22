@@ -55,7 +55,6 @@ import {
   MIGRATE_CUSTOMER_KIND,
 } from "./automatic-operation-fence.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
-import { resolveGatewayImageRepository } from "./gateway-profiles.js";
 import {
   revisionHeartbeatMerge,
   readHeartbeatLiveness,
@@ -836,14 +835,12 @@ async function readDurableReleaseArtifacts(
         );
       }
       artifacts.push({
-        imageRepository: resolveGatewayImageRepository({
-          gatewayClass: gateway.gatewayClass,
-          imageProfile: gateway.imageProfile,
-          profile: gateway.profile ?? undefined,
-          imageRepository: artifact.imageRepository,
-        }),
+        imageRepository: artifact.imageRepository,
         imageTag: artifact.imageTag,
       });
+      if (artifact.profileImages?.builder) {
+        artifacts.push(artifact.profileImages.builder);
+      }
       if (!artifact.gatewayEdgeImage) {
         throw new Error(
           `gateway ${gateway.gatewayId} release ${release} is missing its immutable gateway-edge image reference`,
@@ -934,12 +931,16 @@ function reconcileGatewaySurgeHandoff(input: {
   runtime: GatewayRuntimeDoc | undefined;
   desiredImage: { imageRepository: string; imageTag: string };
   pendingArtifact: ReleasePayload | null;
+  helmObserved: ObservedHelmInstance | null;
 }): Promise<{ ready: boolean }> {
-  const { passDeps, gateway, runtime, desiredImage, pendingArtifact } = input;
+  const { passDeps, gateway, runtime, desiredImage, pendingArtifact, helmObserved } = input;
   const supersedingImageTag = supersedingGatewayImageTag({
     gateway,
     desiredImage,
     pendingArtifact,
+    observedImage: helmObserved?.imageRepository && helmObserved.imageTag
+      ? { imageRepository: helmObserved.imageRepository, imageTag: helmObserved.imageTag }
+      : null,
   });
   return passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
@@ -994,6 +995,7 @@ export async function refineGatewayConvergenceAction(input: {
     runtime,
     desiredImage,
     pendingArtifact,
+    helmObserved,
   });
   if (
     handoff.ready &&

@@ -415,6 +415,40 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
         alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:aaaaaaa-oc2026.7.1",
         intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
       }]),
+      keepTagsFor: vi.fn((environment: "test" | "prod") => [
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@${edgeDigest}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway@${gatewayDigest}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-${environment}-aaaaaaa-oc2026.7.1`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@${builderDigest}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/artifact-worker:keep-${environment}-aaaaaaa`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/artifact-worker@sha256:${"1".repeat(64)}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-${environment}-aaaaaaa`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/glm-controller@sha256:${"2".repeat(64)}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-api:keep-${environment}-aaaaaaa`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-api@sha256:${"3".repeat(64)}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent:keep-${environment}-aaaaaaa`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-ops-agent@sha256:${"4".repeat(64)}`,
+        },
+        {
+          alias: `us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner:keep-${environment}-aaaaaaa`,
+          intendedTarget: `us-central1-docker.pkg.dev/octogee/octogee/octogee-project-runner@sha256:${"5".repeat(64)}`,
+        },
+      ]),
       ensureAliases: vi.fn(async (aliases: Array<{ alias: string; intendedTarget: string }>) =>
         aliases.map((alias) => ({
           alias: alias.alias,
@@ -458,7 +492,25 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     });
     expect(opsIn(store, "rollout")).toHaveLength(1);
     expect(authority.aliasesFor).not.toHaveBeenCalled();
-    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(authority.keepTagsFor).toHaveBeenCalledWith("test", expect.objectContaining({
+      sourceSha,
+      manifestDigest,
+    }));
+    expect(authority.ensureAliases).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-test-aaaaaaa",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:keep-test-aaaaaaa-oc2026.7.1",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-test-aaaaaaa-oc2026.7.1",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-test-aaaaaaa-oc2026.7.1",
+      }),
+    ]));
+    expect(authority.ensureAliases.mock.calls[0]?.[0]).toHaveLength(8);
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
       status: "completed",
       what: "cut CENTRAL TEST release",
@@ -539,6 +591,29 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
         input: expect.objectContaining({ gatewayId: "default-b", targetRelease: 2 }),
       }),
     ]));
+  });
+
+  it("does not append desired state when TEST retention tag creation fails", async () => {
+    const authority = releaseAuthority();
+    authority.ensureAliases.mockRejectedValueOnce(new Error("retention tag creation denied"));
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+
+    await request(app)
+      .post("/releases/cut")
+      .send({ version: "v0.4.0", sourceSha })
+      .expect(500);
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      outcome: "partial",
+      partialOutcome: expect.objectContaining({
+        details: expect.objectContaining({ failedStep: "aliases" }),
+      }),
+    }));
   });
 
   it("queues a newer CENTRAL release behind an active rollout reservation", async () => {
@@ -693,7 +768,7 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(opsIn(store, "rollout")).toHaveLength(0);
   });
 
-  it("reuses a matching durable TEST version without changing desired state", async () => {
+  it("reuses a matching durable TEST version while revalidating retention tags", async () => {
     const authority = releaseAuthority();
     const { app, store } = mkApp({
       ...seedNewSchemaGateway("default", sharedPayload()),
@@ -719,7 +794,14 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     expect(response.body).toMatchObject({ release: 2, operationId: "rollout-existing" });
     expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
     expect(opsIn(store, "rollout")).toHaveLength(0);
-    expect(authority.ensureAliases).not.toHaveBeenCalled();
+    expect(authority.ensureAliases).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:keep-test-aaaaaaa-oc2026.7.1",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-test-aaaaaaa",
+      }),
+    ]));
   });
 
   it("serializes concurrent matching TEST cuts through one durable reservation", async () => {
@@ -797,6 +879,19 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       .expect(202);
 
     expect(authority.resolveManifest).toHaveBeenCalledWith(sourceSha);
+    expect(authority.keepTagsFor).toHaveBeenCalledWith("prod", expect.objectContaining({
+      sourceSha,
+      manifestDigest,
+    }));
+    expect(authority.ensureAliases.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-prod-aaaaaaa",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1",
+      }),
+    ]));
+    expect(authority.ensureAliases.mock.calls[0]?.[0]).toHaveLength(9);
     expect((store.get("gateways/default/releases/2")?.payload as ReleasePayload).imageTag)
       .toBe(`aaaaaaa-oc2026.7.1@${gatewayDigest}`);
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
@@ -805,6 +900,30 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
     }));
     expect(auditsIn(store).find((audit) => audit.what === "promote CENTRAL release"))
       .not.toHaveProperty("testProvenance");
+  });
+
+  it("does not append desired state when PROD retention tag creation fails", async () => {
+    const authority = releaseAuthority();
+    authority.ensureAliases.mockRejectedValueOnce(new Error("retention tag creation denied"));
+    const { app, store } = mkApp(seedNewSchemaGateway("default", sharedPayload()), {
+      releaseEnvironment: "prod",
+      releaseAuthority: authority,
+    });
+
+    await request(app)
+      .post("/releases/v0.4.0/promote")
+      .send({ sourceSha })
+      .expect(500);
+
+    expect(store.get("gateways/default")).toMatchObject({ latestRelease: 1, desiredRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      outcome: "partial",
+      partialOutcome: expect.objectContaining({
+        details: expect.objectContaining({ failedStep: "aliases" }),
+      }),
+    }));
   });
 
   it("rejects PROD promotion without an exact full lowercase source SHA", async () => {
@@ -919,6 +1038,15 @@ describe("POST /releases/cut and POST /releases/:version/promote", () => {
       },
     });
     expect(opsIn(store, "rollout")).toHaveLength(2);
+    expect(authority.ensureAliases).toHaveBeenCalledTimes(2);
+    expect(authority.ensureAliases.mock.calls[1]?.[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/glm-controller:keep-prod-aaaaaaa",
+      }),
+      expect.objectContaining({
+        alias: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1",
+      }),
+    ]));
   });
 });
 

@@ -6967,6 +6967,7 @@ router.post(
           Date.now(),
         );
         const payload = centralGatewayReleasePayload(manifest);
+        const aliasPlan = authority.keepTagsFor("test", manifest);
         const testProvenance: OperationAuditTestProvenance = {
           environment: "test",
           sourceCommit: sourceSha,
@@ -6993,6 +6994,7 @@ router.post(
               manifestDigest: manifest.manifestDigest,
             },
             testProvenance,
+            aliasPlan,
             ...(existingFanout
               ? { idempotencyScope: `cut-central-test-release:${version}:resume` }
               : {}),
@@ -7001,13 +7003,21 @@ router.post(
               imageTag: payload.imageTag,
             }),
             action: async () => {
-              const aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
+              let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
               try {
                 await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
               } catch (error) {
                 return {
                   aliasOutcomes,
                   failure: { error, failedStep: "maintenance" },
+                };
+              }
+              try {
+                aliasOutcomes = await authority.ensureAliases(aliasPlan);
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
                 };
               }
               try {
@@ -7110,7 +7120,10 @@ router.post(
           Date.now(),
         );
         const payload = centralGatewayReleasePayload(manifest);
-        const aliasPlan = authority.aliasesFor(manifest);
+        const aliasPlan = [
+          ...authority.aliasesFor(manifest),
+          ...authority.keepTagsFor("prod", manifest),
+        ];
         let result: CentralReleaseMutationResult;
         try {
           result = await runAdminFleetMutation({
@@ -7140,21 +7153,19 @@ router.post(
             action: async () => {
               let aliasOutcomes: ReleaseDigestAliasOutcome[] = [];
               try {
-                aliasOutcomes = await authority.ensureAliases(
-                  authority.aliasesFor(manifest),
-                );
-              } catch (error) {
-                return {
-                  aliasOutcomes: aliasOutcomesFromError(error),
-                  failure: { error, failedStep: "aliases" },
-                };
-              }
-              try {
                 await assertNormalFleetMutationOpen(db as unknown as NormalFleetMutationDb);
               } catch (error) {
                 return {
                   aliasOutcomes,
                   failure: { error, failedStep: "maintenance" },
+                };
+              }
+              try {
+                aliasOutcomes = await authority.ensureAliases(aliasPlan);
+              } catch (error) {
+                return {
+                  aliasOutcomes: aliasOutcomesFromError(error),
+                  failure: { error, failedStep: "aliases" },
                 };
               }
               try {

@@ -188,6 +188,10 @@ function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): bool
     op.id === `builder-return-${fromGatewayId}`;
 }
 
+function isGatewayMigrationReadinessFailure(error: string): boolean {
+  return /gateway .* is not migration-ready/i.test(error);
+}
+
 function isLevelTriggeredContinuousPlacement(
   op: OperationCompletionInput["op"],
 ): boolean {
@@ -289,7 +293,7 @@ export function buildOperationCompletionUpdate(
   const failure = failureCompletionContext(input, persistedSteps, attempts);
   const retryBeyondCap =
     failure.levelTriggeredFence ||
-    isLevelTriggeredBuilderReturn(op) ||
+    (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
     isLevelTriggeredContinuousPlacement(op);
   const retry = shouldRetry(
     op,

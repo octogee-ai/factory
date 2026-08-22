@@ -515,6 +515,35 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
+  it("fails a Builder return after the migration-ready precondition exhausts its retry budget", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: "builder-return-run-alice",
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: {
+          source: "builder-activation-lease",
+          fromGatewayId: "run-alice",
+        },
+        attempts: MAX_OPERATION_ATTEMPTS - 1,
+        attemptHistory: [],
+      },
+      result: {
+        steps: [],
+        success: false,
+        error:
+          "source gateway run-alice is not migration-ready " +
+          "(desiredStatus=running, desiredRelease=4, liveRelease=3); " +
+          "requires running or draining with a converged release",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("failed");
+    expect(update.attempts).toBe(MAX_OPERATION_ATTEMPTS);
+  });
+
   it("keeps deterministic continuous placement demand retryable without creating new operations", () => {
     const update = buildOperationCompletionUpdate({
       op: {

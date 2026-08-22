@@ -21,10 +21,12 @@ export interface SurgePodSnapshot {
 }
 
 export type SurgePrelaunchState = "none" | "held" | "hydrated" | "starting" | "serving";
+export type SurgeFleetSignatureCapability = "gateway-scoped" | "legacy";
 
 export interface SurgePodHealth {
   status: "booting" | "ready";
   version: string;
+  fleetSignatureCapability: SurgeFleetSignatureCapability;
   handoffReleased: boolean;
   prelaunchState: SurgePrelaunchState;
   mountedCustomers: readonly string[];
@@ -71,6 +73,7 @@ class SurgeTargetCleanupError extends Error {}
 // degrades to the pre-gate contract for that one roll instead of wedging the
 // gateway on its own image forever.
 export class SurgeOpenClawProcessEndpointMissingError extends Error {}
+export class SurgeGatewayScopedSignatureCapabilityMissingError extends Error {}
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
@@ -706,6 +709,30 @@ async function unreserveSourcelessTarget(
   }
 }
 
+async function releaseSourcelessSharedTarget(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  context: { targetPod: SurgePod; ownedBy: string },
+): Promise<void> {
+  try {
+    await releaseTargetWithConfirmation(deps, {
+      gatewayId: input.gatewayId,
+      operationId: context.ownedBy,
+      pod: context.targetPod,
+    });
+    deps.log(
+      `[surge-handoff] released a sourceless shared target ` +
+      `gateway=${input.gatewayId} target=${context.targetPod.name}`,
+    );
+  } catch (error) {
+    deps.log(
+      `[surge-handoff] sourceless shared target release failed ` +
+      `gateway=${input.gatewayId} target=${context.targetPod.name}: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 function sourceForTransfer(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
@@ -1006,24 +1033,30 @@ async function tendSourcelessTarget(
     targetHealth: SurgePodHealth;
     healthByUid: ReadonlyMap<string, SurgePodHealth>;
     ownedBy: string;
-    assignments: SurgeAssignment[];
+    assignments?: SurgeAssignment[];
   },
 ): Promise<void> {
   const { source, target, targetHealth, healthByUid, ownedBy, assignments } = context;
   if (source.kind === "missing") {
-    await unreserveSourcelessTarget(deps, input, {
-      targetPod: target,
-      targetHealth,
-      ownedBy,
-      slugs: assignments.map((assignment) => assignment.slug),
-    });
-  } else if (source.kind === "waiting") {
+    if (configuredBuilderProcessGateRequired(input)) {
+      const sourceAssignments = assignments ?? await deps.readAssignments(input.gatewayId);
+      await unreserveSourcelessTarget(deps, input, {
+        targetPod: target,
+        targetHealth,
+        ownedBy,
+        slugs: sourceAssignments.map((assignment) => assignment.slug),
+      });
+    } else if (input.requiresCustomerMigration) {
+      await releaseSourcelessSharedTarget(deps, input, { targetPod: target, ownedBy });
+    }
+  } else if (source.kind === "waiting" && configuredBuilderProcessGateRequired(input)) {
+    const sourceAssignments = assignments ?? await deps.readAssignments(input.gatewayId);
     await recoverHeldWaitingSource(deps, input, {
       sourcePod: source.pod,
       sourceHealth: healthByUid.get(source.pod.uid),
       targetPod: target,
       ownedBy,
-      assignments,
+      assignments: sourceAssignments,
     });
   }
 }
@@ -1066,6 +1099,14 @@ function sourceHoldsItsOpenClaw(
     healthByUid.get(source.pod.uid)?.prelaunchState === "held";
 }
 
+function hasLegacyFleetSignatureCapability(
+  targetHealth: SurgePodHealth,
+  sourceHealth: SurgePodHealth | undefined,
+): boolean {
+  return targetHealth.fleetSignatureCapability === "legacy" ||
+    sourceHealth?.fleetSignatureCapability === "legacy";
+}
+
 // Handing customers onto pods a queued rollout is about to replace buys nothing.
 // Everything that keeps a customer served still runs, because none of it may wait
 // on the queue: a gated lease refuses the customer at the edge, and a held source
@@ -1095,16 +1136,14 @@ async function standDownForSupersedingRelease(
     null,
     { observedPodUids },
   );
-  if (configuredBuilderProcessGateRequired(input)) {
-    await tendSourcelessTarget(deps, input, {
-      source,
-      target,
-      targetHealth,
-      healthByUid,
-      ownedBy,
-      assignments,
-    });
-  }
+  await tendSourcelessTarget(deps, input, {
+    source,
+    target,
+    targetHealth,
+    healthByUid,
+    ownedBy,
+    assignments,
+  });
   // Reopening admits the customer to whichever pod serves them next, so it waits
   // only on a source still holding its OpenClaw down — the resume above owns that
   // case and reopens the lease itself once the process is back.
@@ -1143,6 +1182,10 @@ export async function reconcileSurgeCustomerHandoff(
 
   const ownedBy = operationId(input.gatewayId, target.uid);
   const source = selectSource(pods, target);
+  const sourceHealth = source.kind === "missing" ? undefined : healthByUid.get(source.pod.uid);
+  if (hasLegacyFleetSignatureCapability(targetHealth, sourceHealth)) {
+    return { ready: false };
+  }
   const settled = await settleOrGateTarget(deps, input, {
     target,
     targetHealth,
@@ -1181,16 +1224,14 @@ export async function reconcileSurgeCustomerHandoff(
 
   const sourcePod = sourceForTransfer(deps, input, source);
   if (!sourcePod) {
-    if (configuredBuilderProcessGateRequired(input)) {
-      await tendSourcelessTarget(deps, input, {
-        source,
-        target,
-        targetHealth,
-        healthByUid,
-        ownedBy,
-        assignments: assignments ?? await deps.readAssignments(input.gatewayId),
-      });
-    }
+    await tendSourcelessTarget(deps, input, {
+      source,
+      target,
+      targetHealth,
+      healthByUid,
+      ownedBy,
+      ...(assignments ? { assignments } : {}),
+    });
     return { ready: false };
   }
 

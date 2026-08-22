@@ -10,7 +10,10 @@ import {
   parseSurgePodSnapshot,
   readPodDurableSessionDigest,
 } from "../surge-customer-handoff-runtime.js";
-import type { SurgePod } from "../surge-customer-handoff.js";
+import {
+  SurgeGatewayScopedSignatureCapabilityMissingError,
+  type SurgePod,
+} from "../surge-customer-handoff.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const GATEWAY_ID = "gw-a";
@@ -259,6 +262,7 @@ describe("surge handoff direct pod transport", () => {
     await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
       status: "ready",
       version: "new",
+      fleetSignatureCapability: "gateway-scoped",
       handoffReleased: false,
       prelaunchState: "none",
       mountedCustomers: ["alice"],
@@ -532,6 +536,7 @@ describe("surge handoff direct pod transport", () => {
     await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
       status: "booting",
       version: "new",
+      fleetSignatureCapability: "gateway-scoped",
       handoffReleased: true,
       prelaunchState: "none",
       mountedCustomers: [],
@@ -676,6 +681,7 @@ describe("surge handoff direct pod transport", () => {
     await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toEqual({
       status: "ready",
       version: "new",
+      fleetSignatureCapability: "gateway-scoped",
       handoffReleased: false,
       prelaunchState: "none",
       mountedCustomers: ["alice", "bob"],
@@ -685,12 +691,12 @@ describe("surge handoff direct pod transport", () => {
     expect(fleetStateCall?.body).toMatchObject({ gatewayId: GATEWAY_ID });
   });
 
-  it("falls back to the roster a pod predating the signed route still serves on /health", async () => {
+  it("refuses a legacy health payload before any gateway-scoped signed exchange", async () => {
+    const calls: string[] = [];
+    const log = vi.fn();
     const fetch = vi.fn(async (input: FetchInput) => {
       const url = String(input);
-      if (url.includes("/fleet-state/")) {
-        return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-      }
+      calls.push(url);
       if (url.endsWith("/health")) {
         return new Response(JSON.stringify({
           status: "ready",
@@ -704,16 +710,30 @@ describe("surge handoff direct pod transport", () => {
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       fetch,
-      log: vi.fn(),
+      log,
     });
 
     await expect(transport.readPodHealth(source, GATEWAY_ID)).resolves.toEqual({
       status: "ready",
       version: "old",
+      fleetSignatureCapability: "legacy",
       handoffReleased: false,
       prelaunchState: "none",
       mountedCustomers: ["alice"],
     });
+    await expect(transport.quiesce({
+      gatewayId: GATEWAY_ID,
+      slug: "alice",
+      operationId: "surge-gw-a-new",
+      sourcePod: source,
+    })).rejects.toBeInstanceOf(SurgeGatewayScopedSignatureCapabilityMissingError);
+    await expect(transport.readPodHealth(source, GATEWAY_ID)).resolves.toMatchObject({
+      fleetSignatureCapability: "legacy",
+    });
+
+    expect(calls.every((url) => !url.includes("/fleet-state/") && !url.includes("/quiesce/"))).toBe(true);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("predates the gateway-scoped fleet signature protocol"));
   });
 
   it("names an unsigned-read rejection so a fleet key skew is not read as an absent pod", async () => {
@@ -735,8 +755,10 @@ describe("surge handoff direct pod transport", () => {
     });
 
     await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toBeNull();
+    await expect(transport.readPodHealth(target, GATEWAY_ID)).resolves.toBeNull();
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("does not match Cowboy's signing key"),
     );
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });

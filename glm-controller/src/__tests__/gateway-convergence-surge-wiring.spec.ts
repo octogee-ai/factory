@@ -355,6 +355,25 @@ describe("gateway convergence surge wiring", () => {
     }));
   });
 
+  it("keeps an already-updated target handoff active while its release record catches up", async () => {
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
+    const pendingRoll = { ...gateway(), latestRelease: 3 };
+
+    await refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, pendingRoll),
+      gateway: pendingRoll,
+      artifact,
+      pendingArtifact: { imageRepository: repository, imageTag: "ghi9012-oc2026.7.1" },
+      runtime: runtime("def5678-oc2026.7.1", "2026.7.1"),
+      helmObserved: { imageRepository: repository, imageTag: "ghi9012-oc2026.7.1", replicas: 1 },
+      action: { kind: "steady" },
+    });
+
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.not.objectContaining({
+      supersedingImageTag: expect.anything(),
+    }));
+  });
+
   it("keeps converging when the queued rollout keeps the same image", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
     const pendingRoll = { ...gateway(), latestRelease: 3 };

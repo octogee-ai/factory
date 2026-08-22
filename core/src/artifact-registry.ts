@@ -314,6 +314,10 @@ export class ReleaseDigestAliasError extends Error {
 export interface CentralReleaseAuthority {
   resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
   aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
+  keepTagsFor: (
+    environment: "test" | "prod",
+    manifest: ReleaseDigestManifest,
+  ) => ReleaseDigestAlias[];
   ensureAliases: (
     aliases: readonly ReleaseDigestAlias[],
   ) => Promise<ReleaseDigestAliasOutcome[]>;
@@ -614,6 +618,25 @@ export function createCentralReleaseAuthority(
               intendedTarget: target,
             });
           }
+        }
+      }
+      return aliases;
+    },
+    keepTagsFor(environment, manifest) {
+      const sourceSha = assertSourceSha(manifest.sourceSha);
+      const validated = validateResolvedReleaseDigestManifest(manifest, repository);
+      const shortSha = sourceSha.slice(0, 7);
+      const tagFor = (surface: "gateway" | "platform") =>
+        surface === "gateway"
+          ? `${shortSha}-oc${validated.openclawVersion}`
+          : shortSha;
+      const aliases: ReleaseDigestAlias[] = [];
+      for (const surface of ["gateway", "platform"] as const) {
+        for (const [image, digest] of Object.entries(validated.surfaces[surface])) {
+          aliases.push({
+            alias: `${repository}/${image}:keep-${environment}-${tagFor(surface)}`,
+            intendedTarget: `${repository}/${image}@${digest}`,
+          });
         }
       }
       return aliases;

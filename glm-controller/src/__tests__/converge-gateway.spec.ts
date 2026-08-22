@@ -719,6 +719,15 @@ describe("supersedingGatewayImageTag", () => {
     })).toBeUndefined();
   });
 
+  it("stays silent when the pending image is already observed on the gateway", () => {
+    expect(supersedingGatewayImageTag({
+      gateway: gateway({ desiredRelease: 2, latestRelease: 3 }),
+      desiredImage,
+      pendingArtifact: artifact({ imageTag: "aaa1111" }),
+      observedImage: { imageRepository: REPO, imageTag: "aaa1111" },
+    })).toBeUndefined();
+  });
+
   it("stays silent when the pending release names no image for this gateway", () => {
     expect(supersedingGatewayImageTag({
       gateway: gateway({

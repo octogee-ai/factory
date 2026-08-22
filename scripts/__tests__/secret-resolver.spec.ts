@@ -42,6 +42,7 @@ const resolveOne = resolveOneRaw as (
     budgetMs?: number;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
+    expiryDir?: string;
   },
 ) => Promise<string>;
 
@@ -413,6 +414,38 @@ describe("resolveOne — brokered byok materialization (unit, injected deps)", (
     expect(v).toBe("ogk_shared-1_abc");
     expect(seen?.url).toBe(`${BROKER_BASE_URL}/internal/byok/agent-model-token`);
     expect(JSON.parse(seen!.init.body)).toEqual({ agentId: "octogee-tester5-coach" });
+  });
+
+  it("atomically records only an agent broker ref and its exact expiry metadata", async () => {
+    const expiryDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    const token = "ogk_shared-1_dont-persist-me";
+    try {
+      await expect(
+        resolveOne("agent-model-token-octogee-tester5-coach", {
+          token: "ksa-tok",
+          expiryDir,
+          fetchImpl: async () => ({
+            ok: true,
+            status: 200,
+            json: async () => ({ value: token, expiresAt }),
+          }),
+        }),
+      ).resolves.toBe(token);
+
+      const files = fs.readdirSync(expiryDir);
+      expect(files).toHaveLength(1);
+      const filename = path.join(expiryDir, files[0]!);
+      expect(JSON.parse(fs.readFileSync(filename, "utf8"))).toEqual({
+        refId: "agent-model-token-octogee-tester5-coach",
+        expiresAt,
+      });
+      expect(fs.readFileSync(filename, "utf8")).not.toContain(token);
+      expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+      expect(files.some((file) => file.includes("tmp"))).toBe(false);
+    } finally {
+      fs.rmSync(expiryDir, { recursive: true, force: true });
+    }
   });
 
   it("routes a canonical project-agent model token with the exact embedded agentId", async () => {

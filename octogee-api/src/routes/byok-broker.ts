@@ -630,7 +630,10 @@ function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
         agentId,
       },
     });
-    res.json({ value: issued.token, provider, purpose });
+    if (typeof issued.record.expiresAt !== "number") {
+      throw new Error("agent model token was issued without an expiry");
+    }
+    res.json({ value: issued.token, expiresAt: issued.record.expiresAt, provider, purpose });
   });
 }
 

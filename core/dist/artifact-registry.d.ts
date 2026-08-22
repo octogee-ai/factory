@@ -54,6 +54,7 @@ export declare class ReleaseDigestAliasError extends Error {
 export interface CentralReleaseAuthority {
     resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
     aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
+    keepTagsFor: (environment: "test" | "prod", manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
     ensureAliases: (aliases: readonly ReleaseDigestAlias[]) => Promise<ReleaseDigestAliasOutcome[]>;
 }
 export interface CentralReleaseAuthorityCoordinates {

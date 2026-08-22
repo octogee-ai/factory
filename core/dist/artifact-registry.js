@@ -422,6 +422,24 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
             }
             return aliases;
         },
+        keepTagsFor(environment, manifest) {
+            const sourceSha = assertSourceSha(manifest.sourceSha);
+            const validated = validateResolvedReleaseDigestManifest(manifest, repository);
+            const shortSha = sourceSha.slice(0, 7);
+            const tagFor = (surface) => surface === "gateway"
+                ? `${shortSha}-oc${validated.openclawVersion}`
+                : shortSha;
+            const aliases = [];
+            for (const surface of ["gateway", "platform"]) {
+                for (const [image, digest] of Object.entries(validated.surfaces[surface])) {
+                    aliases.push({
+                        alias: `${repository}/${image}:keep-${environment}-${tagFor(surface)}`,
+                        intendedTarget: `${repository}/${image}@${digest}`,
+                    });
+                }
+            }
+            return aliases;
+        },
         async ensureAliases(aliases) {
             const token = await getWriteToken();
             const outcomes = [];

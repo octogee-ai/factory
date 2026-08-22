@@ -376,6 +376,49 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     });
   });
 
+  it("plans environment-scoped keep tags for every exact manifest digest", () => {
+    const authority = createCentralReleaseAuthority({
+      project: "octogee",
+      location: "us-central1",
+      repository: "octogee",
+    });
+
+    expect(authority.keepTagsFor("prod", { ...manifest, manifestDigest })).toEqual([
+      {
+        alias: `${repository}/gateway-edge:keep-prod-aaaaaaa-oc2026.7.1`,
+        intendedTarget: `${repository}/gateway-edge@${edgeDigest}`,
+      },
+      {
+        alias: `${repository}/octogee-gateway:keep-prod-aaaaaaa-oc2026.7.1`,
+        intendedTarget: `${repository}/octogee-gateway@${gatewayDigest}`,
+      },
+      {
+        alias: `${repository}/octogee-gateway-builder:keep-prod-aaaaaaa-oc2026.7.1`,
+        intendedTarget: `${repository}/octogee-gateway-builder@${builderDigest}`,
+      },
+      {
+        alias: `${repository}/artifact-worker:keep-prod-aaaaaaa`,
+        intendedTarget: `${repository}/artifact-worker@sha256:${"1".repeat(64)}`,
+      },
+      {
+        alias: `${repository}/glm-controller:keep-prod-aaaaaaa`,
+        intendedTarget: `${repository}/glm-controller@sha256:${"2".repeat(64)}`,
+      },
+      {
+        alias: `${repository}/octogee-api:keep-prod-aaaaaaa`,
+        intendedTarget: `${repository}/octogee-api@sha256:${"3".repeat(64)}`,
+      },
+      {
+        alias: `${repository}/octogee-ops-agent:keep-prod-aaaaaaa`,
+        intendedTarget: `${repository}/octogee-ops-agent@sha256:${"4".repeat(64)}`,
+      },
+      {
+        alias: `${repository}/octogee-project-runner:keep-prod-aaaaaaa`,
+        intendedTarget: `${repository}/octogee-project-runner@sha256:${"5".repeat(64)}`,
+      },
+    ]);
+  });
+
   it("resolves a manifest an older generator wrote, aliasing only the images it carries", async () => {
     const authority = createCentralReleaseAuthority({
       project: "octogee",
