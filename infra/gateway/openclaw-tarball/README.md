@@ -541,6 +541,11 @@ content-hash specific); it is **not staged, not restored, and not
 required** for the harness to load. Only the `npm` tree needs to survive
 the runtime emptyDir, which the existing whole-`npm` symlink already does.
 
+On upstream-main builds Codex is version-bound to the host. The base image
+re-packs a vendored Codex companion with `OPENCLAW_VERSION` before installation;
+otherwise startup repair treats the package as stale and tries its unpublished
+version from npm.
+
 **Verify a staging change cheaply (no full gateway build needed):**
 `kubectl run` a throwaway pod on the freshly-built base image in
 `octogee-test`, run the entrypoint's `find` guard + the symlink into a
