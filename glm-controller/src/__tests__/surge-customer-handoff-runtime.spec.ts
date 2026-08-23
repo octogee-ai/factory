@@ -251,12 +251,21 @@ describe("surge handoff Kubernetes projection", () => {
     }
   });
 
-  it("ignores the target-local configured Builder migration pin while hashing transferred state", () => {
+  it("ignores configured Builder transient markers while hashing transferred state", () => {
     const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
     const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
     try {
       writeConfiguredBuilderCustomerState(sourceState);
       writeConfiguredBuilderCustomerState(targetState);
+      fs.writeFileSync(
+        path.join(sourceState, "agents", "octogee-alice-coach", "agent", "openclaw-agent.sqlite-wal"),
+        "transient wal",
+      );
+      fs.writeFileSync(
+        path.join(sourceState, "agents", "octogee-alice-coach", "agent", "openclaw-agent.sqlite-shm"),
+        "transient shm",
+      );
+      fs.rmSync(path.join(targetState, "customers", "alice", ".system", ".mounted"));
       fs.writeFileSync(
         path.join(targetState, "customers", "alice", ".system", ".migrating-in"),
         "",
