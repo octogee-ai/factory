@@ -71,6 +71,7 @@ function harness(input: {
   ownerOperations?: Record<string, { status: OperationStatus } | null>;
   bootingUids?: string[];
   prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
+  targetPrelaunchStateAfterRelease?: SurgePodHealth["prelaunchState"];
   fleetSignatureCapabilityByUid?: Record<string, SurgePodHealth["fleetSignatureCapability"]>;
   resumeSourceError?: Error;
   stopSourceError?: Error;
@@ -99,7 +100,13 @@ function harness(input: {
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       fleetSignatureCapability: input.fleetSignatureCapabilityByUid?.[pod.uid] ?? "gateway-scoped",
       handoffReleased: pod.uid === targetPod.uid && targetReleased,
-      prelaunchState: input.prelaunchByUid?.[pod.uid] ??
+      prelaunchState: (
+        pod.uid === targetPod.uid &&
+        targetReleaseCalls > 0 &&
+        input.targetPrelaunchStateAfterRelease !== undefined
+          ? input.targetPrelaunchStateAfterRelease
+          : input.prelaunchByUid?.[pod.uid]
+      ) ??
         (pod.uid !== targetPod.uid && sourceHeld ? "held" : "none"),
       mountedCustomers: pod.uid === targetPod.uid
         ? input.targetMountedCustomers ?? []
@@ -566,6 +573,121 @@ describe("surge customer handoff", () => {
     expect(h.deps.transfer).not.toHaveBeenCalled();
     expect(h.deps.readDurableSessionDigest).not.toHaveBeenCalled();
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(PROVISION_FRESH.reason));
+  });
+
+  it("reserves a fresh configured Builder target before releasing it", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: PROVISION_FRESH,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual([
+      "hold-target:target-uid:alice",
+      "assignment:u1:quiescing",
+      "release:target-uid",
+    ]);
+    expect(h.deps.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.flush).not.toHaveBeenCalled();
+    expect(h.deps.stopSourceOpenClaw).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.readDurableSessionDigest).not.toHaveBeenCalled();
+  });
+
+  it("leaves the source serving when fresh configured Builder target reservation fails", async () => {
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      holdTargetError: new Error("target reservation refused"),
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: PROVISION_FRESH,
+    })).rejects.toThrow("target reservation refused");
+
+    expect(h.events).toEqual(["hold-target:target-uid:alice"]);
+    expect(h.assignments()).toEqual([assignment("u1", "alice")]);
+  });
+
+  it("returns a fresh configured Builder target to hold before reopening the source", async () => {
+    const wait = vi.fn(async () => undefined);
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+      targetPrelaunchStateAfterRelease: "starting",
+      releaseErrorBeforeCommit: new Error("target release interrupted"),
+      wait,
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: PROVISION_FRESH,
+    })).rejects.toThrow("target release interrupted");
+
+    expect(wait).toHaveBeenCalledWith(7_000);
+    expect(h.events).toEqual([
+      "hold-target:target-uid:alice",
+      "assignment:u1:quiescing",
+      "release:target-uid",
+      "hold-target:target-uid:alice",
+      "assignment:u1:serving",
+    ]);
+  });
+
+  it("keeps admission closed when a fresh configured Builder target cannot be re-held", async () => {
+    const wait = vi.fn(async () => undefined);
+    const h = harness({
+      assignments: [assignment("u1", "alice")],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+      targetPrelaunchStateAfterRelease: "starting",
+      releaseErrorBeforeCommit: new Error("target release interrupted"),
+      holdTargetError: new Error("target re-hold refused"),
+      holdTargetErrorFromCall: 2,
+      wait,
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: PROVISION_FRESH,
+    })).rejects.toThrow("configured Builder target could not be re-held");
+
+    expect(wait).toHaveBeenCalledWith(7_000);
+    expect(h.events).toEqual([
+      "hold-target:target-uid:alice",
+      "assignment:u1:quiescing",
+      "release:target-uid",
+      "hold-target:target-uid:alice",
+    ]);
+    expect(h.assignments()).toEqual([
+      expect.objectContaining({ state: "quiescing", updatedByOperationId: h.operationId }),
+    ]);
+  });
+
+  it("fails closed when a fresh configured Builder has anything but one assignment", async () => {
+    const h = harness();
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: true,
+      disposableBuilderGateway: true,
+      stateMigration: PROVISION_FRESH,
+    })).rejects.toThrow("configured Builder fresh replacement requires exactly one assignment");
+
+    expect(h.events).toEqual([]);
   });
 
   it("restores the roster to serving once the blank replacement is the only pod", async () => {

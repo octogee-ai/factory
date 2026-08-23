@@ -915,12 +915,25 @@ async function rollBackConfiguredBuilderHandoff(
     sourcePod: SurgePod;
     targetPod: SurgePod;
     ownedBy: string;
+    reservedTargetSlugs: readonly string[];
     heldSourceSlugs: readonly string[];
+    targetReleaseAttempted: boolean;
     cause: unknown;
   },
 ): Promise<void> {
-  const { input, assignments, sourcePod, targetPod, ownedBy, heldSourceSlugs, cause } = context;
-  for (const slug of [...new Set(heldSourceSlugs)]) {
+  const {
+    input,
+    assignments,
+    sourcePod,
+    targetPod,
+    ownedBy,
+    reservedTargetSlugs,
+    heldSourceSlugs,
+    targetReleaseAttempted,
+    cause,
+  } = context;
+  const targetReholdErrors: unknown[] = [];
+  for (const slug of [...new Set([...reservedTargetSlugs, ...heldSourceSlugs])]) {
     try {
       await holdTargetOpenClaw(deps, {
         gatewayId: input.gatewayId,
@@ -934,7 +947,15 @@ async function rollBackConfiguredBuilderHandoff(
         `gateway=${input.gatewayId} target=${targetPod.name} slug=${slug}: ` +
         `${error instanceof Error ? error.message : String(error)}`,
       );
+      if (targetReleaseAttempted) targetReholdErrors.push(error);
     }
+  }
+  if (targetReholdErrors.length > 0) {
+    throw new AggregateError(
+      [cause, ...targetReholdErrors],
+      "configured Builder target could not be re-held after release attempt: " +
+        `handoff=${errorMessage(cause)}; rehold=${targetReholdErrors.map(errorMessage).join("; ")}`,
+    );
   }
   if (heldSourceSlugs.length > 0 && await sourceStillHeld(deps, sourcePod, input.gatewayId)) {
     try {
@@ -984,14 +1005,24 @@ async function migrateAssignmentsAndReleaseTarget(
     },
   );
   assertAssignmentsAvailable(assignments, ownedBy);
+  const reservedTargetSlugs: string[] = [];
   const heldSourceSlugs: string[] = [];
   let targetReleaseAttempted = false;
   try {
+    let freshConfiguredBuilderAssignment: SurgeAssignment | undefined;
     if (input.stateMigration.strategy === "provision-fresh") {
       deps.log(
         `[surge-handoff] skipping state migration; the replacement provisions fresh ` +
         `gateway=${input.gatewayId} — ${input.stateMigration.reason}`,
       );
+      if (configuredBuilderProcessGateRequired(input)) {
+        if (assignments.length !== 1) {
+          throw new Error(
+            `configured Builder fresh replacement requires exactly one assignment on ${input.gatewayId}`,
+          );
+        }
+        freshConfiguredBuilderAssignment = assignments[0]!;
+      }
     } else {
       await migrateAssignedState(deps, {
         input,
@@ -1001,6 +1032,15 @@ async function migrateAssignmentsAndReleaseTarget(
         ownedBy,
         heldSourceSlugs,
       });
+    }
+    if (freshConfiguredBuilderAssignment) {
+      await holdTargetOpenClaw(deps, {
+        gatewayId: input.gatewayId,
+        slug: freshConfiguredBuilderAssignment.slug,
+        operationId: ownedBy,
+        targetPod,
+      });
+      reservedTargetSlugs.push(freshConfiguredBuilderAssignment.slug);
     }
     await gateServingAssignments(deps, input.gatewayId, assignments, ownedBy);
     targetReleaseAttempted = true;
@@ -1021,7 +1061,9 @@ async function migrateAssignmentsAndReleaseTarget(
         sourcePod,
         targetPod,
         ownedBy,
+        reservedTargetSlugs,
         heldSourceSlugs,
+        targetReleaseAttempted,
         cause: error,
       });
       throw error;
