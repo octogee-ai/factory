@@ -3,6 +3,7 @@ import {
   GATEWAY_HEARTBEAT_INTERVAL_MS,
   GATEWAY_UNREACHABLE_AFTER_MS,
 } from "@octogee/shared/types/fleet-controller";
+import { OPENCLAW_CONTROL_RUNTIME_FRESH_MS } from "@octogee/core/openclaw-control-runtime-ready";
 import {
   HEARTBEAT_REFRESH_MS,
   heartbeatMergeIsRedundant,
@@ -189,6 +190,11 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
   it("keeps a full poll interval of headroom under the fleet staleness bound", () => {
     expect(HEARTBEAT_REFRESH_MS + GATEWAY_HEARTBEAT_INTERVAL_MS)
       .toBeLessThan(GATEWAY_UNREACHABLE_AFTER_MS);
+  });
+
+  it("refreshes before the OpenClaw dashboard readiness proof can expire", () => {
+    expect(HEARTBEAT_REFRESH_MS + GATEWAY_HEARTBEAT_INTERVAL_MS)
+      .toBeLessThanOrEqual(OPENCLAW_CONTROL_RUNTIME_FRESH_MS);
   });
 });
 
