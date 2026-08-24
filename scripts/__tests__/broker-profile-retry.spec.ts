@@ -80,18 +80,22 @@ describe("broker profile retry (level-triggered)", () => {
   let logs: string[];
   let applyOutcome: "refuse" | "accept";
   let apply: ReturnType<typeof vi.fn>;
+  let reloadFails: boolean;
+  let reload: ReturnType<typeof vi.fn>;
   const readConfig = () => ({ agents: { entries: { [AGENT]: { model: "house" } } } });
   const sweep = () =>
     materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
       readConfig,
       secretsApply: { rpc: { secretsApply: apply } },
+      secretsReload: { secretsReload: reload },
     });
 
   beforeEach(() => {
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-bpr-"));
     logs = [];
     applyOutcome = "refuse";
+    reloadFails = false;
     apply = vi.fn(async ({ plan }: Parameters<typeof writeAppliedProfiles>[1] extends infer P
       ? { plan: P }
       : never) => {
@@ -100,6 +104,10 @@ describe("broker profile retry (level-triggered)", () => {
       }
       writeAppliedProfiles(agentsDir, plan);
       return { mode: "write", changed: true };
+    });
+    reload = vi.fn(async () => {
+      if (reloadFails) throw new Error("snapshot reload unavailable");
+      return { ok: true, warningCount: 0 };
     });
     _resetBrokerProfileLogStateForTests();
   });
@@ -116,6 +124,28 @@ describe("broker profile retry (level-triggered)", () => {
     expect(apply).toHaveBeenCalledWith({
       plan: expect.objectContaining({ generatedBy: "manual", targets: expect.any(Array) }),
     });
+  });
+
+  it("reloads the active secret snapshot after profiles are accepted", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+
+    await sweep();
+
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed snapshot reload after the profile store has settled", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    reloadFails = true;
+
+    await sweep();
+    reloadFails = false;
+    await sweep();
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 
   it("reports a deferral while openclaw refuses the apply", async () => {

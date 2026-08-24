@@ -700,11 +700,15 @@ const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
 /** Last deferral set reported, so a steady state stays quiet — this runs on a
  *  timer and must not reprint the same warning forever. */
 let lastDeferredSignature: string | null = null;
+let brokerProfileSnapshotReloadPending = false;
+let lastBrokerProfileSnapshotReloadError: string | null = null;
 
 /** Test seam only — the memo above is module state, so a spec exercising the
  *  quiet-once-settled behaviour must be able to start from a known point. */
 export function _resetBrokerProfileLogStateForTests(): void {
   lastDeferredSignature = null;
+  brokerProfileSnapshotReloadPending = false;
+  lastBrokerProfileSnapshotReloadError = null;
 }
 
 /** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
@@ -715,6 +719,7 @@ export async function materializeDeferredBrokerProfiles(
     agentsDir?: string;
     readConfig?: () => unknown;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+    secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
   } = {},
 ): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
@@ -737,6 +742,29 @@ export async function materializeDeferredBrokerProfiles(
   });
   if (sweep.materialized > 0) {
     log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
+    if (deps.secretsReload) brokerProfileSnapshotReloadPending = true;
+  }
+  if (brokerProfileSnapshotReloadPending && deps.secretsReload) {
+    try {
+      const result = await deps.secretsReload.secretsReload();
+      const warningCount = result.warningCount ?? 0;
+      if (result.ok !== true || warningCount > 0) {
+        throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
+      }
+      brokerProfileSnapshotReloadPending = false;
+      lastBrokerProfileSnapshotReloadError = null;
+      log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
+    } catch (error) {
+      const message = String(error);
+      if (message !== lastBrokerProfileSnapshotReloadError) {
+        log(
+          `[agent-model-token] ⚠ active secret snapshot reload deferred — ${message}; retrying every ${
+            BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
+          }s`,
+        );
+        lastBrokerProfileSnapshotReloadError = message;
+      }
+    }
   }
   const signature = sweep.deferred.join(",");
   if (signature !== lastDeferredSignature) {
@@ -760,13 +788,14 @@ export async function materializeDeferredBrokerProfiles(
 function startBrokerProfileRetry(
   provisions: boolean,
   log: (msg: string) => void,
+  secretsReload: Pick<GatewayRpcClient, "secretsReload">,
 ): NodeJS.Timeout | null {
   if (!provisions) return null;
   let sweepInFlight = false;
   const sweep = () => {
     if (sweepInFlight) return;
     sweepInFlight = true;
-    void materializeDeferredBrokerProfiles(log)
+    void materializeDeferredBrokerProfiles(log, { secretsReload })
       .catch((error) => log(`⚠ [agent-model-token] sweep failed: ${String(error)}`))
       .finally(() => {
         sweepInFlight = false;
@@ -2152,7 +2181,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
-  const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log);
+  const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log, opts.rpc);
 
   const surgeGate = createBuilderSurgeGateWiring({
     adapter: wrappedAdapter,
