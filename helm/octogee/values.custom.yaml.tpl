@@ -56,7 +56,7 @@ gateway-edge:
   env:
     FIREBASE_PROJECT_ID: "__FIREBASE_PROJECT__"
     GCLOUD_PROJECT: "__FIREBASE_PROJECT__"
-    APP_URL: "https://app-octogee-test.web.app"
+    APP_URL: "https://app-test.octogee.com"
     SITE_URL: "https://octogee-test.web.app"
     K8S_NAMESPACE: "__NAMESPACE__"
   ingress:
@@ -124,4 +124,4 @@ opsAgent:
   gcpServiceAccount: octogee-ops-agent@__FIREBASE_PROJECT__.iam.gserviceaccount.com
   loggingProjectId: __CLUSTER_PROJECT__
   loggingResourceName: projects/__CLUSTER_PROJECT__/locations/global/buckets/ops-agent-test/views/ops-agent
-  appUrl: https://app-octogee-test.web.app
+  appUrl: https://app-test.octogee.com

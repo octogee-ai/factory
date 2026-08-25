@@ -112,6 +112,7 @@ describe("deployment environment registry", () => {
       giteaStaticIpName: "gitea-ip-test",
       previewStaticIpName: "preview-ip-test",
       projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
+      appOrigin: "https://app-test.octogee.com",
     });
 
     expect(deploymentTargetsForEnvironment("prod")).toEqual([
@@ -302,5 +303,6 @@ describe("deployment environment registry", () => {
       "https://octogee-build-week.firebaseapp.com",
       "https://app-octogee-build-week.firebaseapp.com",
     ]));
+    expect(publicAppOrigins()).toContain("https://app-octogee-test.web.app");
   });
 });

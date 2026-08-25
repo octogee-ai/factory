@@ -107,7 +107,7 @@
         "previewStaticIpName": "preview-ip-test"
       },
       "siteOrigin": "https://octogee-test.web.app",
-      "appOrigin": "https://app-octogee-test.web.app",
+      "appOrigin": "https://app-test.octogee.com",
       "apiOrigin": "https://api-test.octogee.com",
       "gitOrigin": "https://git-test.octogee.com",
       "mattermostOrigin": "https://mattermost-test.octogee.com",

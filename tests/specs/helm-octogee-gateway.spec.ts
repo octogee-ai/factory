@@ -887,11 +887,11 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
 describe("helm/octogee-gateway/ — gateway container required env", () => {
   it("threads APP_URL into the gateway container for environment-correct app links", () => {
     const out = helmTemplate("octogee-gw-default", {
-      "gatewayEdge.env.APP_URL": "https://app-octogee-test.web.app",
+      "gatewayEdge.env.APP_URL": "https://app-test.octogee.com",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
-    expect(gw).toMatch(/- name:\s*APP_URL[\s\S]*?value:\s*"https:\/\/app-octogee-test\.web\.app"/);
+    expect(gw).toMatch(/- name:\s*APP_URL[\s\S]*?value:\s*"https:\/\/app-test\.octogee\.com"/);
   });
 
   it("emits MM_INTERACTIONS_CALLBACK_BASE_URL pointing at the stable private router", () => {
