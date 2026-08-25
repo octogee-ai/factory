@@ -54,6 +54,8 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.opsAgent.port | quote }}
+            - name: XDG_CACHE_HOME
+              value: /tmp/openclaw-cache
             - name: APP_URL
               value: {{ .Values.opsAgent.appUrl | quote }}
             - name: K8S_NAMESPACE
