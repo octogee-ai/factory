@@ -49,7 +49,7 @@ import { OpenClawControlSessionManager, type OpenClawControlSession } from "./se
 import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./metrics.js";
 
 const MAX_WS_FRAME_BYTES = 1_048_576;
-const DEFAULT_HTTP_TIMEOUT_MS = 5_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 const DEFAULT_AUTHORIZATION_INTERVAL_MS = 10_000;
 const CSP_BEFORE_FRAME_ANCESTORS = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors";
@@ -80,32 +80,65 @@ const DASHBOARD_ROUTES = new Set([
   "/activity",
   "/agents",
   "/ai-agents",
+  "/apps",
   "/appearance",
   "/automation",
+  "/automations",
   "/channels",
   "/chat",
   "/communications",
   "/config",
   "/cron",
+  "/custodian",
+  "/dashboard",
+  "/dashboards",
   "/debug",
   "/dreaming",
   "/dreams",
   "/infrastructure",
   "/instances",
   "/logs",
+  "/lobsterdex",
   "/mcp",
+  "/memory-import",
+  "/model-providers",
+  "/model-setup",
+  "/new",
   "/nodes",
   "/overview",
   "/plugin",
+  "/portals",
+  "/profile",
   "/sessions",
+  "/settings/about",
+  "/settings/advanced",
+  "/settings/agents",
   "/settings/ai-agents",
   "/settings/appearance",
+  "/settings/approvals",
   "/settings/automation",
   "/settings/channels",
+  "/settings/cloud-workers",
   "/settings/communications",
+  "/settings/connection",
+  "/settings/devices",
   "/settings/general",
   "/settings/infrastructure",
+  "/settings/labs",
+  "/settings/lobsterdex",
   "/settings/mcp",
+  "/settings/memory",
+  "/settings/memory-import",
+  "/settings/model-providers",
+  "/settings/model-setup",
+  "/settings/notifications",
+  "/settings/plugins",
+  "/settings/profile",
+  "/settings/secrets",
+  "/settings/security",
+  "/settings/sessions",
+  "/settings/talk",
+  "/settings/updates",
   "/settings/worktrees",
   "/skills",
   "/skills/workshop",
@@ -275,6 +308,15 @@ function isDashboardProviderIcon(pathname: string): boolean {
   return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
 }
 
+function isDashboardDynamicRoute(pathname: string): boolean {
+  const segment = "[A-Za-z0-9][A-Za-z0-9._~:%-]{0,511}";
+  return new RegExp(`^/(?:chat|dashboard)/${segment}$`, "iu").test(pathname) ||
+    new RegExp(`^/settings/agents/${segment}(?:/${segment})?$`, "iu").test(pathname) ||
+    new RegExp(`^/workboard/${segment}$`, "iu").test(pathname) ||
+    /^\/settings\/memory\/(?:memories|dreams|settings)$/iu.test(pathname) ||
+    pathname.toLowerCase() === "/settings/plugins/discover";
+}
+
 export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: string): boolean {
   openClawControlUpstreamPath(originalUrl, gatewayId);
   const parsed = openClawControlHttpSuffix(originalUrl, gatewayId);
@@ -283,7 +325,8 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     : parsed.pathname;
   return route === "/" ||
     route === "/control-ui-config.json" ||
-    DASHBOARD_ROUTES.has(route) ||
+    DASHBOARD_ROUTES.has(route.toLowerCase()) ||
+    isDashboardDynamicRoute(route) ||
     DASHBOARD_ROOT_ASSETS.has(route) ||
     isDashboardStaticAsset(route) ||
     isDashboardAvatar(parsed) ||

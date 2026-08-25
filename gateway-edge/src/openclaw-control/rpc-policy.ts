@@ -514,18 +514,12 @@ function nativeOwnerConfigMutationDecision(
   return { allowed: true, category, proposedConfig: proposed, outbound: structuredClone(request) };
 }
 
-// A native owner gets their whole OpenClaw: every method its runtime
-// advertises forwards verbatim. What remains is transport safety — session
-// tenancy, origin, revocation, and protocol validity live in the surface — plus
-// the migration config freeze and the platform wiring invariants on config
-// writes, which hold for every principal.
 export function evaluateNativeOwnerOpenClawControlRpc(
   frame: unknown,
   context: OpenClawControlRpcPolicyContext,
 ): OpenClawControlRpcDecision {
   const parsed = parsedOpenClawControlRequest(frame);
   if ("allowed" in parsed) return parsed;
-  if (!context.installedMethods.has(parsed.method)) return unavailableMethodDecision();
   const category = nativeOwnerCategory(parsed.method);
   if (category === "config_mutation") {
     return nativeOwnerConfigMutationDecision(parsed.request, context);
