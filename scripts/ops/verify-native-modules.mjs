@@ -1,10 +1,17 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const NATIVE_MODULES = ["node-pty"];
+export function readNativeModules({ packageRoot, read = readFileSync }) {
+  const manifest = JSON.parse(read(path.join(packageRoot, "package.json"), "utf8"));
+  const names = manifest.nativeModules;
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string" && name.length > 0)) {
+    throw new Error('package.json "nativeModules" must be an array of non-empty package names');
+  }
+  return names;
+}
 
 export function verifyNativeModules({ names, load }) {
   const failures = [];
@@ -53,13 +60,14 @@ export function describeBindingLayout({
 
 function main({ packageRoot }) {
   const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
+  const names = readNativeModules({ packageRoot });
   const failures = verifyNativeModules({
-    names: NATIVE_MODULES,
+    names,
     load: (name) => requireFromPackage(name),
   });
   const failed = new Set(failures.map((failure) => failure.name));
 
-  for (const name of NATIVE_MODULES) {
+  for (const name of names) {
     if (!failed.has(name)) {
       console.error(`[native-modules] ok: ${name}`);
     }
@@ -67,7 +75,7 @@ function main({ packageRoot }) {
 
   if (failures.length === 0) {
     console.error(
-      `[native-modules] ${NATIVE_MODULES.length} native module(s) load on ${process.platform}-${process.arch}`,
+      `[native-modules] ${names.length} native module(s) load on ${process.platform}-${process.arch}`,
     );
     return;
   }

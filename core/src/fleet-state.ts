@@ -7,7 +7,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   type CustomerMigrationV2GatewayRootFence,
   isOperatorManaged,
-  resolveUserGatewayShellState,
+  resolveUserGatewayControlState,
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
@@ -402,12 +402,12 @@ function updateUserMirror(
   targetRoot: Record<string, unknown> | undefined,
 ): void {
   if (!params.flipMirror) return;
-  const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+  const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
   txn.update(deps.db.collection("users").doc(params.uid), {
     "provisioning.openclaw.gatewayId": params.toGatewayId,
     "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
-    "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-    "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+    "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
+    "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
   });
 }
 
@@ -519,7 +519,7 @@ function recoveryAlreadyCommitted(input: {
     input.targetRootData,
     input.params.toGatewayId,
   );
-  const shellState = resolveUserGatewayShellState(
+  const controlState = resolveUserGatewayControlState(
     targetRoot
       ? { ...targetRoot, builderAccess: targetRoot.builderAccess ?? undefined }
       : undefined,
@@ -547,8 +547,8 @@ function recoveryAlreadyCommitted(input: {
     !input.sourceAssignmentExists,
     openclaw.gatewayId === input.params.toGatewayId,
     millisFromUnknown(openclaw.gatewayAssignedAt) === operationAt,
-    openclaw.gatewayProfile === shellState.gatewayProfile,
-    openclaw.shellsEnabled === shellState.shellsEnabled,
+    openclaw.gatewayProfile === controlState.gatewayProfile,
+    openclaw.controlUiEnabled === controlState.controlUiEnabled,
     targetAssignmentExact,
     operationTimingExact,
     disposableLeaseExact,
@@ -815,7 +815,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(
         : undefined,
     });
     const targetRoot = targetRootSnapshot.data();
-    const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+    const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
     clearRecoveredSourceMount({
       txn,
       sourceRuntimeRef,
@@ -825,8 +825,8 @@ export async function commitUnavailableGatewayRecoveryAtomic(
     txn.update(userRef, {
       "provisioning.openclaw.gatewayId": params.toGatewayId,
       "provisioning.openclaw.gatewayAssignedAt": nowMs,
-      "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-      "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+      "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
+      "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
       ...(lease
         ? {
             "provisioning.openclaw.activationLease": {

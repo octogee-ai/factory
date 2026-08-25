@@ -40,7 +40,7 @@ import {
   ProjectRepoProvisioningError,
 } from "../projects/provisioning.js";
 
-// Gitea ADMIN broker for the in-pod provisioner. The provisioner runs in the shell-bearing
+// Gitea ADMIN broker for the in-pod provisioner. The provisioner runs in the OpenClaw
 // openclaw container and no longer holds the admin token; it calls octogee-api with its
 // projected gateway KSA token so the API singleton performs the admin operation. Local git
 // (SSH clone/init/push) stays in the provisioner. The legacy gateway-edge mount stays

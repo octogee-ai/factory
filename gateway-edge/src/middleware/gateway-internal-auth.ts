@@ -1,14 +1,14 @@
 import { Request, Response, NextFunction } from "express";
 import {
-  isValidBuilderShellInternalAuth,
-  resolveBuilderShellInternalAuthSecret,
-} from "../lib/builder-shell-internal-auth.js";
+  isValidGatewayInternalAuth,
+  resolveGatewayInternalAuthSecret,
+} from "../lib/gateway-internal-auth.js";
 import type { Reviewer } from "../lib/kubernetes-token-review.js";
 import { logger } from "./logging.js";
 
 let tokenReviewerForTests: Reviewer | null = null;
 
-export function _setBuilderShellTokenReviewerForTests(reviewer: Reviewer | null): void {
+export function _setGatewayTokenReviewerForTests(reviewer: Reviewer | null): void {
   tokenReviewerForTests = reviewer;
 }
 
@@ -18,14 +18,14 @@ function readHeader(req: Request, name: string): string | undefined {
   return raw;
 }
 
-async function handleBuilderShellInternalAuth(
+async function handleGatewayInternalAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const secret = resolveBuilderShellInternalAuthSecret(process.env);
+  const secret = resolveGatewayInternalAuthSecret(process.env);
   if (!secret) {
-    logger.error("builder-shell internal auth is not configured — refusing request");
+    logger.error("gateway internal auth is not configured — refusing request");
     res.status(503).json({ error: "Internal auth unavailable" });
     return;
   }
@@ -38,11 +38,11 @@ async function handleBuilderShellInternalAuth(
 
   let valid = false;
   try {
-    valid = await isValidBuilderShellInternalAuth(provided, process.env, {
+    valid = await isValidGatewayInternalAuth(provided, process.env, {
       reviewer: tokenReviewerForTests ?? undefined,
     });
   } catch (err) {
-    logger.error("builder-shell service-account TokenReview failed — refusing request", {
+    logger.error("gateway service-account TokenReview failed — refusing request", {
       err: err instanceof Error ? err.message : String(err),
     });
     res.status(503).json({ error: "Internal auth unavailable" });
@@ -51,7 +51,7 @@ async function handleBuilderShellInternalAuth(
 
   if (!valid) {
     logger.warn(
-      `Builder-shell internal auth rejected from ${req.socket.remoteAddress} — invalid ${secret.mode} credential`,
+      `Gateway internal auth rejected from ${req.socket.remoteAddress} — invalid ${secret.mode} credential`,
     );
     res.status(401).json({ error: "Invalid internal service key" });
     return;
@@ -60,10 +60,10 @@ async function handleBuilderShellInternalAuth(
   next();
 }
 
-export function requireBuilderShellInternalAuth(
+export function requireGatewayInternalAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): void {
-  handleBuilderShellInternalAuth(req, res, next).catch(next);
+  handleGatewayInternalAuth(req, res, next).catch(next);
 }

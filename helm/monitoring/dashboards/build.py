@@ -588,7 +588,6 @@ def d_bridge():
         ts("WS handshakes / rotations recovered", [
             (f'sum(rate(chat_proxy_openclaw_ws_handshakes_total{{namespace="{NS}"}}[5m])) or vector(0)', "handshakes/s"),
             (f'sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{{namespace="{NS}"}}[5m])) or vector(0)', "rotations/s")], unit="ops", legend=True),
-        ts("Builder-shell session closes", [(f'sum(rate(chat_proxy_builder_shell_session_close_total{{namespace="{NS}"}}[5m])) by (reason) or vector(0)', "{{reason}}")], unit="ops", legend=True),
     ]
     return dashboard("octogee-bridge", "Gateways — Activity Bridge & WS", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
@@ -671,13 +670,11 @@ def d_tracing():
         "**Status: not yet landing.** This is the third SPOG pillar (metrics ✓ · logs ✓ · traces ⏳), "
         "stubbed and ready to light up.\n\n"
         "### Current pipeline\n"
-        "- The PWA emits client OTel spans (`app/src/lib/builder-shell-telemetry.ts`) but `VITE_OTLP_ENDPOINT` "
-        "is unset → spans are **dropped**.\n"
-        "- No OTel collector is deployed; no server-side instrumentation yet.\n\n"
+        "- No OTel collector or application instrumentation is deployed yet.\n\n"
         "### Intended (deferred prod-runtime work)\n"
         "1. Deploy an **OTel Collector** with the `googlecloud` exporter → **Cloud Trace**.\n"
         "2. Point `VITE_OTLP_ENDPOINT` at it → client traces land.\n"
-        "3. Instrument octogee-api / gateway-edge / agent-run / shell-attach (OTLP → collector).\n\n"
+        "3. Instrument octogee-api / gateway-edge / agent-run (OTLP → collector).\n\n"
         "### Where traces will be viewed\n"
         "Cloud Trace is explored in the **GCP Cloud Console** (no reliable Grafana trace datasource plugin). "
         "Once span-metrics exist, RED panels + exemplars can be added below.\n\n"

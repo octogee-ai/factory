@@ -32,7 +32,7 @@ describe("resolveScope — ownership", () => {
 
   it("gateway-edge owns its emulator suite too", () => {
     expectJobs(
-      ["gateway-edge/src/routes/shells.ts"],
+      ["gateway-edge/src/routes/gateway-access.ts"],
       // + the gateway-edge/src edge pulls octogee-api + its emulator suite
       // (octogee-api compiles AND mounts gateway-edge route Routers; the
       // octogee-api emulator specs drive createApp() which mounts them) + tests

@@ -1,4 +1,3 @@
-{{- $builderShellsEnabled := and (eq (include "octogee-gateway.gatewayClass" .) "builder") (.Values.builderAccess.shellsEnabled | default false) -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,11 +18,6 @@ spec:
     - name: fleet-http
       port: {{ .Values.env.fleetControllerPort | default "3003" }}
       targetPort: {{ .Values.env.fleetControllerPort | default "3003" }}
-    {{- if $builderShellsEnabled }}
-    - name: builder-shell
-      port: {{ .Values.env.builderShellPort | default "3005" }}
-      targetPort: {{ .Values.env.builderShellPort | default "3005" }}
-    {{- end }}
   type: ClusterIP
 ---
 # Per-instance gateway-edge Service — internal target for the shared public

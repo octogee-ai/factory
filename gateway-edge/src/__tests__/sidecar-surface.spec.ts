@@ -42,11 +42,11 @@ vi.mock("../lib/stripe", () => ({
 }));
 
 import { createApp } from "../index.js";
-import { _setBuilderShellTokenReviewerForTests } from "../middleware/builder-shell-auth.js";
+import { _setGatewayTokenReviewerForTests } from "../middleware/gateway-internal-auth.js";
 
 let projectedTokenDir: string | null = null;
 
-function configureBuilderServiceAccountAuth() {
+function configureGatewayServiceAccountAuth() {
   projectedTokenDir = mkdtempSync(join(tmpdir(), "octogee-sidecar-auth-"));
   const tokenPath = join(projectedTokenDir, "token");
   writeFileSync(tokenPath, "projected-reviewer-token\n");
@@ -69,7 +69,7 @@ function configureBuilderServiceAccountAuth() {
         }
       : { authenticated: false as const },
   );
-  _setBuilderShellTokenReviewerForTests(reviewer);
+  _setGatewayTokenReviewerForTests(reviewer);
   return reviewer;
 }
 
@@ -80,7 +80,7 @@ describe("gateway-edge sidecar surface", () => {
   });
 
   afterEach(() => {
-    _setBuilderShellTokenReviewerForTests(null);
+    _setGatewayTokenReviewerForTests(null);
     delete process.env.INTERNAL_SERVICE_KEY;
     delete process.env.GATEWAY_PROFILE;
     delete process.env.GATEWAY_CLASS;
@@ -135,19 +135,6 @@ describe("gateway-edge sidecar surface", () => {
     ).toBe(404);
   });
 
-  it("keeps builder-shell locality mounted on the sidecar", async () => {
-    process.env.INTERNAL_SERVICE_KEY = "redeem-mount-test-key";
-    const app = createApp({ surface: "sidecar" });
-
-    const res = await request(app)
-      .post("/internal/builder-shell/redeem")
-      .set("X-Internal-Service-Key", "redeem-mount-test-key")
-      .send({});
-
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: "Missing ticket" });
-  });
-
   it("keeps workspace commits mounted but retires the in-pod project publisher", async () => {
     const app = createApp({ surface: "sidecar" });
 
@@ -163,8 +150,8 @@ describe("gateway-edge sidecar surface", () => {
     expect(publish.status).toBe(404);
   });
 
-  it("requires valid Builder KSA auth on sidecar connector materialization", async () => {
-    const reviewer = configureBuilderServiceAccountAuth();
+  it("requires valid gateway KSA auth on sidecar connector materialization", async () => {
+    const reviewer = configureGatewayServiceAccountAuth();
     const app = createApp({ surface: "sidecar" });
 
     const missing = await request(app).get("/internal/connectors/cloudflare/materialize");
@@ -181,7 +168,7 @@ describe("gateway-edge sidecar surface", () => {
   });
 
   it("does not mount connector materialization on the cluster surface", async () => {
-    const reviewer = configureBuilderServiceAccountAuth();
+    const reviewer = configureGatewayServiceAccountAuth();
     const app = createApp({ surface: "cluster" });
 
     const res = await request(app)

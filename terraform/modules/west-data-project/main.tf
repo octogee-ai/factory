@@ -48,7 +48,6 @@ locals {
     "gatewayTickets.expireAt"                 = { collection = "gatewayTickets", field = "expireAt" }
     "gatewayTicketMintLog.expireAt"           = { collection = "gatewayTicketMintLog", field = "expireAt" }
     "connectFlows.expireAt"                   = { collection = "connectFlows", field = "expireAt" }
-    "builderShellMintLog.expireAt"            = { collection = "builderShellMintLog", field = "expireAt" }
     "openclawControlTickets.expireAt"         = { collection = "openclawControlTickets", field = "expireAt" }
     "openclawControlSessions.expireAt"        = { collection = "openclawControlSessions", field = "expireAt" }
     "agentControls.gcAt"                      = { collection = "agentControls", field = "gcAt", disable_indexes = true }

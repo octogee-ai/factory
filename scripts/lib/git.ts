@@ -10,8 +10,8 @@
 //
 // Gitea ADMIN operations (create user, register the SSH key, create
 // orgs/repos, repo-exists, archive) are NOT performed here. The provisioner
-// runs in the shell-bearing openclaw container, which holds no Gitea admin
-// token; those calls go through the no-shell gateway-edge sidecar via
+// runs in the OpenClaw gateway container, which holds no Gitea admin
+// token; those calls go through the gateway-edge sidecar via
 // gitea-admin-broker-client (PLATFORM-CREDENTIAL-BROKERING). What stays here
 // is local git on the per-customer SSH key — clone/init/commit/push.
 import { execFileSync, execSync } from "child_process";

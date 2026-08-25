@@ -120,7 +120,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     });
   });
 
-  it("persists startedAt from /health so the shell reaper can detect a roll", async () => {
+  it("persists startedAt from /health across a roll", async () => {
     const deps = makeDeps({
       fetchFleetState: vi.fn(async () => ({
         status: "ready",

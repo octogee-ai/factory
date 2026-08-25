@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
-import {
-  acquireSystemConfigMutationLease,
-  acquireSystemConfigShellCapabilitySync,
-} from "@octogee/core/system-config-mutation-lease";
+import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
   createAssignedFingerprintReader,
   createFleetFlushSystemConfigSync,
@@ -358,11 +355,6 @@ describe("fleet-controller entrypoint config", () => {
       channelsStatus: vi.fn(async () => ({ channels: [] })),
     }));
     const rpc = createFleetControllerMutationGatedRpc(openclawDir, createRpc as never);
-    expect(acquireSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "native-config",
-    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
-
     try {
       expect(FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS).toBe(120_000);
       expect(createRpc).toHaveBeenCalledWith({
@@ -371,29 +363,8 @@ describe("fleet-controller entrypoint config", () => {
         connectTimeoutMs: CONFIG_RELOAD_DEADLINE_MS,
       });
       await expect(rpc.configPatch({ agents: {} }, "current"))
-        .rejects.toThrow(/shell-active/i);
-      expect(configPatch).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(openclawDir, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks native config mutation while an accepted BuilderShell can edit the config", async () => {
-    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-entrypoint-shell-"));
-    const configApply = vi.fn(async () => ({ ok: true as const, hash: "next" }));
-    const rpc = createSystemConfigMutationGatedRpc({
-      configGet: vi.fn(async () => ({ config: {}, hash: "current" })),
-      configApply,
-      channelsStatus: vi.fn(async () => ({ channels: [] })),
-    } as never, openclawDir);
-    expect(acquireSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "native-config",
-    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
-
-    try {
-      await expect(rpc.configApply({}, "current")).rejects.toThrow(/shell-active/i);
-      expect(configApply).not.toHaveBeenCalled();
+        .resolves.toEqual({ ok: true, hash: "next" });
+      expect(configPatch).toHaveBeenCalledOnce();
     } finally {
       fs.rmSync(openclawDir, { recursive: true, force: true });
     }

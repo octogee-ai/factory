@@ -1303,13 +1303,13 @@ function scrubCustomerOauthDisk(
   {
     resetAgentIds,
     directRuntimeModelRefs,
-    preserveBuilderShellCredentials = false,
+    preserveNativeCredentials = false,
   },
 ) {
   const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
   const homeDir = env.HOME ?? "/home/node";
   const nativeCredential = path.join(homeDir, ".claude", ".credentials.json");
-  const nativeRemoved = preserveBuilderShellCredentials
+  const nativeRemoved = preserveNativeCredentials
     ? false
     : [nativeCredential, `${nativeCredential}.tmp`].map(removeFile).some(Boolean);
   const agentIds = configuredCustomerAgentIds(config);
@@ -1318,13 +1318,13 @@ function scrubCustomerOauthDisk(
   for (const agentId of agentIds) {
     const agentDir = path.join(openclawDir, "agents", agentId, "agent");
     const authJson = path.join(agentDir, "codex-home", "auth.json");
-    const authRemoved = preserveBuilderShellCredentials
+    const authRemoved = preserveNativeCredentials
       ? false
       : [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]
         .map(removeFile)
         .some(Boolean);
     const staging = path.join(agentDir, "codex-home.staging");
-    const stagingRemoved = !preserveBuilderShellCredentials && fs.existsSync(staging);
+    const stagingRemoved = !preserveNativeCredentials && fs.existsSync(staging);
     if (stagingRemoved) fs.rmSync(staging, { recursive: true, force: true });
     const profilesScrubbed = scrubAgentOauthProfiles(agentDir, agentId);
     const modelsScrubbed = projectAgentModelsJson(agentDir, modelProviders);
@@ -1524,7 +1524,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
       {
         resetAgentIds: scrub.resetAgentIds,
         directRuntimeModelRefs: scrub.directRuntimeModelRefs,
-        preserveBuilderShellCredentials: gatewayClass === "builder",
+        preserveNativeCredentials: gatewayClass === "builder",
       },
     );
     applyCustomerPolicy(config);

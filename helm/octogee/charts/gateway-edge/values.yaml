@@ -20,7 +20,7 @@ router:
   replicas: 2
   port: 3001
 
-# No-shell platform CronJobs run under their own least-privilege KSA. Its
+# Platform CronJobs run under their own least-privilege KSA. Its
 # projected octogee-api-audience token tenant-binds the call (kind=platform),
 # so the crons no longer depend on the shared internal-service-key.
 cronServiceAccountName: octogee-cron

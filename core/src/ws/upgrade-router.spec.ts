@@ -95,15 +95,15 @@ describe("WsUpgradeRouter", () => {
     if (!r.ok) expect(r.status).toBe(403);
   });
 
-  it("supports prefix matching with extractTicket for paths like /builder-shell/<id>", async () => {
+  it("supports prefix matching with extractTicket for ticketed routes", async () => {
     const server = createServer();
     servers.push(server);
     const handlerTickets: string[] = [];
     const router = new WsUpgradeRouter();
     router.add({
-      match: (p) => p.startsWith("/builder-shell/"),
+      match: (p) => p.startsWith("/ticketed/"),
       extractTicket: (p) => {
-        const m = p.match(/^\/builder-shell\/([A-Za-z0-9_-]{8,32})\/?$/);
+        const m = p.match(/^\/ticketed\/([A-Za-z0-9_-]{8,32})\/?$/);
         return m ? m[1] : null;
       },
       allowedOrigins: new Set(["https://app.example"]),
@@ -114,7 +114,7 @@ describe("WsUpgradeRouter", () => {
     router.attach(server);
     const port = await listen(server);
     const ticket = "abcdef0123456789xyzWVUTSR";
-    const r = await attempt(port, `/builder-shell/${ticket}`, { origin: "https://app.example" });
+    const r = await attempt(port, `/ticketed/${ticket}`, { origin: "https://app.example" });
     expect(r.ok).toBe(true);
     if (r.ok) r.ws.close();
     expect(handlerTickets).toEqual([ticket]);
@@ -125,14 +125,14 @@ describe("WsUpgradeRouter", () => {
     servers.push(server);
     const router = new WsUpgradeRouter();
     router.add({
-      match: (p) => p.startsWith("/builder-shell/"),
+      match: (p) => p.startsWith("/ticketed/"),
       extractTicket: () => null,
       allowedOrigins: new Set(["https://app.example"]),
       onUpgrade: () => undefined,
     });
     router.attach(server);
     const port = await listen(server);
-    const r = await attempt(port, "/builder-shell/x", { origin: "https://app.example" });
+    const r = await attempt(port, "/ticketed/x", { origin: "https://app.example" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(400);
   });
@@ -348,21 +348,21 @@ const r = await attempt(port, "/k", {
     const calls: string[] = [];
     const router = new WsUpgradeRouter();
     router.add({
-      match: "/builder-shell/short-prefix",
+      match: "/ticketed/short-prefix",
       allowedOrigins: new Set(["https://app.example"]),
       onUpgrade: () => calls.push("short"),
     });
     router.add({
-      match: (p) => p.startsWith("/builder-shell/"),
+      match: (p) => p.startsWith("/ticketed/"),
       extractTicket: (p) => p.split("/")[2] ?? null,
       allowedOrigins: new Set(["https://app.example"]),
       onUpgrade: () => calls.push("prefix"),
     });
     router.attach(server);
     const port = await listen(server);
-    const r1 = await attempt(port, "/builder-shell/short-prefix", { origin: "https://app.example" });
+    const r1 = await attempt(port, "/ticketed/short-prefix", { origin: "https://app.example" });
     if (r1.ok) r1.ws.close();
-    const r2 = await attempt(port, "/builder-shell/other-ticket", { origin: "https://app.example" });
+    const r2 = await attempt(port, "/ticketed/other-ticket", { origin: "https://app.example" });
     if (r2.ok) r2.ws.close();
     expect(calls).toEqual(["short", "prefix"]);
   });

@@ -193,13 +193,3 @@ export function requireSocialNotificationAuth(req: Request, res: Response, next:
   }
   res.status(401).json({ error: "invalid social notification bearer" });
 }
-
-export function requireSystemNotificationAuth(req: Request, res: Response, next: NextFunction): void {
-  const configured = process.env.SYSTEM_NOTIFICATION_BEARER_TOKEN;
-  const provided = bearerFromRequest(req);
-  if (configured && provided && timingSafeStringEqual(provided, configured)) {
-    next();
-    return;
-  }
-  res.status(401).json({ error: "invalid system notification bearer" });
-}

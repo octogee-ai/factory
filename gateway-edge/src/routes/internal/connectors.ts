@@ -8,7 +8,7 @@ import {
 } from "../../lib/connector-tokens.js";
 import { cloneGithubProjectCheckout } from "../../lib/github-project-clone.js";
 import { logger } from "../../middleware/logging.js";
-import { requireBuilderShellInternalAuth } from "../../middleware/builder-shell-auth.js";
+import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 
 const router = Router();
 
@@ -40,7 +40,7 @@ function tokenReadUnavailable(err: unknown): err is ConnectorTokenReadError {
 
 router.get(
   "/:connector/materialize",
-  requireBuilderShellInternalAuth,
+  requireGatewayInternalAuth,
   async (req: Request, res: Response) => {
     const connectorId = paramString(req.params.connector);
     if (
@@ -95,7 +95,7 @@ router.get(
 
 router.post(
   "/github/clone",
-  requireBuilderShellInternalAuth,
+  requireGatewayInternalAuth,
   async (req: Request, res: Response) => {
     const projectSlug = paramString(req.body?.projectSlug);
     const builderSlug = paramString(req.body?.builderSlug);

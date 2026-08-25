@@ -12,8 +12,8 @@ import { setupEmulatorTest } from "@octogee/test-helpers/firestore-emulator";
 setupEmulatorTest();
 
 const COLLECTION = _testInternal.COLLECTION;
-const SHELL_CAP = _testInternal.POLICIES["builder-shell"].perUidCap as number;
-const SHELL_QUOTA = _testInternal.POLICIES["builder-shell"].hourlyQuota as number;
+const VOICE_CAP = _testInternal.POLICIES["voice-ws"].perUidCap as number;
+const VOICE_QUOTA = _testInternal.POLICIES["voice-ws"].hourlyQuota as number;
 
 async function getTicketDoc(id: string) {
   const snap = await db.collection(COLLECTION).doc(id).get();
@@ -34,16 +34,16 @@ describe("mintTicket — unified gateway ticket (emulator)", () => {
     expect((doc?.expireAt as { toMillis(): number }).toMillis()).toBe(doc?.expiresAt);
   });
 
-  it("round-trips feature payload (builder-shell shellId/cwd/containerSlug)", async () => {
+  it("round-trips an opaque feature payload", async () => {
     const t = await mintTicket({
       uid: "u1",
       gatewayId: "gw",
-      purpose: "builder-shell",
-      payload: { shellId: "s1", cwd: "/x", containerSlug: "c1" },
+      purpose: "openclaw-ws",
+      payload: { session: "dashboard" },
     });
     const doc = await getTicketDoc(t.ticket);
-    expect(doc?.payload).toMatchObject({ shellId: "s1", cwd: "/x", containerSlug: "c1" });
-    expect(t.payload).toMatchObject({ shellId: "s1", cwd: "/x", containerSlug: "c1" });
+    expect(doc?.payload).toMatchObject({ session: "dashboard" });
+    expect(t.payload).toMatchObject({ session: "dashboard" });
   });
 
   it("two mints return distinct UUID ticket ids", async () => {
@@ -52,85 +52,85 @@ describe("mintTicket — unified gateway ticket (emulator)", () => {
     expect(a.ticket).not.toBe(b.ticket);
   });
 
-  it("uncapped purpose (mattermost-ws) mints freely past the shell cap", async () => {
-    for (let i = 0; i < SHELL_CAP + 10; i++) {
+  it("uncapped purpose (mattermost-ws) mints freely past the voice cap", async () => {
+    for (let i = 0; i < VOICE_CAP + 10; i++) {
       await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "mattermost-ws" });
     }
     const ok = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "mattermost-ws" });
     expect(ok.ticket).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("per-uid cap (builder-shell) throws TicketCapExceededError at the cap", async () => {
-    for (let i = 0; i < SHELL_CAP; i++) {
-      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: { shellId: "s" } });
+  it("per-uid cap (voice-ws) throws TicketCapExceededError at the cap", async () => {
+    for (let i = 0; i < VOICE_CAP; i++) {
+      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} });
     }
     await expect(
-      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: { shellId: "s" } }),
+      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} }),
     ).rejects.toThrow(TicketCapExceededError);
   });
 
-  it("cap is per-(uid,purpose) — exhausting builder-shell does NOT block preview", async () => {
-    for (let i = 0; i < SHELL_CAP; i++) {
-      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} });
+  it("cap is per-(uid,purpose) — exhausting voice-ws does NOT block preview", async () => {
+    for (let i = 0; i < VOICE_CAP; i++) {
+      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} });
     }
     const ok = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "preview" });
     expect(ok.ticket).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("cap is per-uid, not global — u2 unaffected by u1's exhausted cap", async () => {
-    for (let i = 0; i < SHELL_CAP; i++) {
-      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} });
+    for (let i = 0; i < VOICE_CAP; i++) {
+      await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} });
     }
-    const ok = await mintTicket({ uid: "u2", gatewayId: "gw", purpose: "builder-shell", payload: {} });
+    const ok = await mintTicket({ uid: "u2", gatewayId: "gw", purpose: "voice-ws", payload: {} });
     expect(ok.ticket).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("hourly quota (builder-shell) caps sustained mints per (uid,purpose)", async () => {
+  it("hourly quota (voice-ws) caps sustained mints per (uid,purpose)", async () => {
     const now = Date.now();
-    for (let i = 0; i < SHELL_QUOTA - 1; i++) {
+    for (let i = 0; i < VOICE_QUOTA - 1; i++) {
       await db.collection(_testInternal.MINT_LOG_COLLECTION).add({
         uid: "u1",
-        purpose: "builder-shell",
+        purpose: "voice-ws",
         mintedAt: now - i * 1000,
       });
     }
-    const ok = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} });
+    const ok = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} });
     expect(ok.ticket).toMatch(/^[0-9a-f-]{36}$/);
     await expect(
-      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} }),
+      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} }),
     ).rejects.toThrow(HourlyMintQuotaExceededError);
   });
 
-  it("hourly quota is per-(uid,purpose) — an exhausted shell window does NOT block openclaw-ws", async () => {
+  it("hourly quota is per-(uid,purpose) — an exhausted voice window does NOT block openclaw-ws", async () => {
     const now = Date.now();
-    for (let i = 0; i < SHELL_QUOTA; i++) {
+    for (let i = 0; i < VOICE_QUOTA; i++) {
       await db.collection(_testInternal.MINT_LOG_COLLECTION).add({
         uid: "u1",
-        purpose: "builder-shell",
+        purpose: "voice-ws",
         mintedAt: now - i * 1000,
       });
     }
     await expect(
-      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} }),
+      mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} }),
     ).rejects.toThrow(HourlyMintQuotaExceededError);
     const ok = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "openclaw-ws" });
     expect(ok.ticket).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("per-uid cap holds under concurrent mints — transactional regression", async () => {
-    const attempts = SHELL_CAP + 2;
+    const attempts = VOICE_CAP + 2;
     const results = await Promise.allSettled(
       Array.from({ length: attempts }, () =>
-        mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} }),
+        mintTicket({ uid: "u1", gatewayId: "gw", purpose: "voice-ws", payload: {} }),
       ),
     );
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(SHELL_CAP);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(VOICE_CAP);
     const live = await db
       .collection(COLLECTION)
       .where("uid", "==", "u1")
       .where("expiresAt", ">", Date.now())
       .get();
-    expect(live.size).toBe(SHELL_CAP);
+    expect(live.size).toBe(VOICE_CAP);
   });
 
   it("invalid purpose throws", async () => {
@@ -163,9 +163,9 @@ describe("redeemTicket — unified gateway ticket (emulator)", () => {
     expect(await redeemTicket({ ticketId: t.ticket, purpose: "openclaw-ws" })).toBeNull();
   });
 
-  it("WRONG PURPOSE returns null and does NOT consume — a preview ticket cannot open a shell (D2 cross-purpose isolation)", async () => {
+  it("WRONG PURPOSE returns null and does NOT consume", async () => {
     const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "preview" });
-    expect(await redeemTicket({ ticketId: t.ticket, purpose: "builder-shell" })).toBeNull();
+    expect(await redeemTicket({ ticketId: t.ticket, purpose: "openclaw-ws" })).toBeNull();
     expect(await getTicketDoc(t.ticket)).not.toBeNull();
     const r = await redeemTicket({ ticketId: t.ticket, purpose: "preview" });
     expect(r?.purpose).toBe("preview");
@@ -227,13 +227,13 @@ describe("redeemTicket — unified gateway ticket (emulator)", () => {
   });
 
   it("onValidated side-writes commit atomically with the ticket delete on success", async () => {
-    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: { shellId: "s1" } });
-    let ranWith: { uid: string; shellId: unknown } | null = null;
+    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "openclaw-ws", payload: { session: "dashboard" } });
+    let ranWith: { uid: string; session: unknown } | null = null;
     const r = await redeemTicket({
       ticketId: t.ticket,
-      purpose: "builder-shell",
+      purpose: "openclaw-ws",
       onValidated: (tx, ticket) => {
-        ranWith = { uid: ticket.uid, shellId: ticket.payload.shellId };
+        ranWith = { uid: ticket.uid, session: ticket.payload.session };
         tx.set(db.collection("gatewayTicketSessions").doc(ticket.ticket), {
           uid: ticket.uid,
           gatewayId: ticket.gatewayId,
@@ -242,17 +242,17 @@ describe("redeemTicket — unified gateway ticket (emulator)", () => {
       },
     });
     expect(r).not.toBeNull();
-    expect(ranWith).toEqual({ uid: "u1", shellId: "s1" });
+    expect(ranWith).toEqual({ uid: "u1", session: "dashboard" });
     expect((await db.collection("gatewayTicketSessions").doc(t.ticket).get()).exists).toBe(true);
     expect(await getTicketDoc(t.ticket)).toBeNull();
   });
 
   it("onValidated throw ABORTS the transaction — ticket NOT deleted, side-write rolled back", async () => {
-    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: {} });
+    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "openclaw-ws", payload: {} });
     await expect(
       redeemTicket({
         ticketId: t.ticket,
-        purpose: "builder-shell",
+        purpose: "openclaw-ws",
         onValidated: (tx, ticket) => {
           tx.set(db.collection("gatewayTicketSessions").doc(ticket.ticket), { status: "active" });
           throw new Error("simulated downstream failure");
@@ -264,16 +264,16 @@ describe("redeemTicket — unified gateway ticket (emulator)", () => {
   });
 
   it("validate predicate vetoes redemption with NO consume (feature payload rejected inside the tx); a passing validate consumes normally", async () => {
-    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "builder-shell", payload: { shellId: "s1" } });
-    const vetoed = await redeemTicket({ ticketId: t.ticket, purpose: "builder-shell", validate: () => false });
+    const t = await mintTicket({ uid: "u1", gatewayId: "gw", purpose: "openclaw-ws", payload: { session: "dashboard" } });
+    const vetoed = await redeemTicket({ ticketId: t.ticket, purpose: "openclaw-ws", validate: () => false });
     expect(vetoed).toBeNull();
     expect(await getTicketDoc(t.ticket)).not.toBeNull();
     const ok = await redeemTicket({
       ticketId: t.ticket,
-      purpose: "builder-shell",
-      validate: (tk) => tk.payload.shellId === "s1",
+      purpose: "openclaw-ws",
+      validate: (tk) => tk.payload.session === "dashboard",
     });
-    expect(ok?.payload.shellId).toBe("s1");
+    expect(ok?.payload.session).toBe("dashboard");
     expect(await getTicketDoc(t.ticket)).toBeNull();
   });
 

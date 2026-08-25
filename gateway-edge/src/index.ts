@@ -11,9 +11,6 @@ import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
 import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
-import { getKiller } from "./lib/shell-kill-fetcher.js";
-import { reconcileDeletingWorkspaceShells } from "./lib/shell-deletion-reconciler.js";
-import { createOpenClawRuntimeBrokerFromEnv } from "./chat-proxy/openclaw/runtime-broker.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
@@ -24,7 +21,6 @@ import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 import internalAgentMessageRoutes from "./routes/internal/agent-message.js";
 
-import internalBuilderShellRoutes from "./routes/internal/builder-shell.js";
 import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
@@ -170,12 +166,6 @@ app.use((req, res, next) =>
   activeRollRosterGate ? activeRollRosterGate(req, res, next) : next(),
 );
 
-// builder-shell has two caller shapes: redeem is pod-local (the in-pod bridge,
-// bare path), kill is cross-pod (octogee-api → the owner pod via the
-// /api/g/<id>/* fleet seam). The HTTP server hands Express the raw url without
-// stripping the fleet prefix, so the scoped form needs its own mount.
-app.use("/internal/builder-shell", internalBuilderShellRoutes);
-app.use("/api/g/:gatewayId/internal/builder-shell", internalBuilderShellRoutes);
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
 if (surface === "sidecar") {
   app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
@@ -321,7 +311,7 @@ if (process.env.NODE_ENV !== "test") {
         "Supplied per-gateway via the chart's gatewayEdge.env/.secrets ranges " +
         "(threaded by Cowboy); a missing one means a skewed render or a " +
         "dropped-on-apply duplicate. Refusing to boot rather than limp — the " +
-        "openclaw/activity bridges, git locality routes, and builder-shell all " +
+        "openclaw/activity bridges and git locality routes all " +
         "depend on these.",
     );
     process.exit(1);
@@ -350,8 +340,8 @@ if (process.env.NODE_ENV !== "test") {
         log: (msg) => logger.warn(msg),
       }),
     );
-    // WS upgrades bypass Express — the SAME roster/boot checks run at the
-    // upgrade path (chat-proxy shared handler + builder-shell redeem).
+    // WS upgrades bypass Express — the same roster/boot checks run at the
+    // chat-proxy upgrade path.
     rollRosterUpgradeGate = createRollRosterUpgradeGate({
       store: storeFacade,
       gatewayId: rosterGatewayId,
@@ -390,12 +380,6 @@ if (process.env.NODE_ENV !== "test") {
       });
       process.once("exit", () => dashboardHeartbeat?.stop());
     }
-    chatProxy.attachBuilderShellRoute(server, { upgradeGate: rollRosterUpgradeGate }).catch((err) => {
-      logger.error("[builder-shell] route attach failed — WS route disabled", {
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-
     server.listen(PORT, () => {
       logger.info(`gateway-edge boot — listening on port ${PORT}`, {
         port: PORT,
@@ -405,7 +389,6 @@ if (process.env.NODE_ENV !== "test") {
         fork: process.env.OPENCLAW_FORK_SHA || "n/a",
         node: process.version,
       });
-      startDeletingShellReconciliation(rosterGatewayId);
     });
 
     chatProxy.startChatProxyBackground().catch((err) => {
@@ -420,36 +403,6 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   });
   }
-}
-
-function startDeletingShellReconciliation(gatewayId: string): void {
-  if (!gatewayId) return;
-  const broker = createOpenClawRuntimeBrokerFromEnv();
-  let stopped = false;
-  let timer: NodeJS.Timeout | null = null;
-  const run = (): void => {
-    if (stopped) return;
-    void reconcileDeletingWorkspaceShells({ gatewayId, broker, kill: getKiller() })
-      .then((result) => {
-        if (result.completed || result.pending) {
-          logger.info("[shells] deletion reconciliation", { gatewayId, ...result });
-        }
-      })
-      .catch((error) => {
-        logger.error("[shells] deletion reconciliation failed", {
-          gatewayId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        if (!stopped) timer = setTimeout(run, 30_000);
-      });
-  };
-  run();
-  process.once("exit", () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-  });
 }
 
 export default app;

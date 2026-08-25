@@ -1,5 +1,5 @@
 import { GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperatorManaged, resolveUserGatewayShellState, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperatorManaged, resolveUserGatewayControlState, } from "@octogee/shared/types/glm";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
@@ -233,12 +233,12 @@ function assertCustomerMigrationSourceAssignmentExact(prior, fence) {
 function updateUserMirror(txn, deps, params, targetRoot) {
     if (!params.flipMirror)
         return;
-    const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+    const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
     txn.update(deps.db.collection("users").doc(params.uid), {
         "provisioning.openclaw.gatewayId": params.toGatewayId,
         "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
-        "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-        "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+        "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
+        "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
     });
 }
 function updateAssignment(txn, db, params, priorEpoch, nowMs) {
@@ -300,7 +300,7 @@ function recoveryOperationMatches(operation, params) {
 function recoveryAlreadyCommitted(input) {
     const openclaw = recordOrEmpty(recordOrEmpty(input.user?.provisioning).openclaw);
     const targetRoot = projectGatewayDesiredRootForGateway(input.targetRootData, input.params.toGatewayId);
-    const shellState = resolveUserGatewayShellState(targetRoot
+    const controlState = resolveUserGatewayControlState(targetRoot
         ? { ...targetRoot, builderAccess: targetRoot.builderAccess ?? undefined }
         : undefined, input.params.uid);
     const targetAssignmentExact = [
@@ -325,8 +325,8 @@ function recoveryAlreadyCommitted(input) {
         !input.sourceAssignmentExists,
         openclaw.gatewayId === input.params.toGatewayId,
         millisFromUnknown(openclaw.gatewayAssignedAt) === operationAt,
-        openclaw.gatewayProfile === shellState.gatewayProfile,
-        openclaw.shellsEnabled === shellState.shellsEnabled,
+        openclaw.gatewayProfile === controlState.gatewayProfile,
+        openclaw.controlUiEnabled === controlState.controlUiEnabled,
         targetAssignmentExact,
         operationTimingExact,
         disposableLeaseExact,
@@ -527,7 +527,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
                 : undefined,
         });
         const targetRoot = targetRootSnapshot.data();
-        const shellState = resolveUserGatewayShellState(targetRoot, params.uid);
+        const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
         clearRecoveredSourceMount({
             txn,
             sourceRuntimeRef,
@@ -537,8 +537,8 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         txn.update(userRef, {
             "provisioning.openclaw.gatewayId": params.toGatewayId,
             "provisioning.openclaw.gatewayAssignedAt": nowMs,
-            "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-            "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+            "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
+            "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
             ...(lease
                 ? {
                     "provisioning.openclaw.activationLease": {

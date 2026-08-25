@@ -45,7 +45,7 @@ Pre-broad-customer, breaking changes are cheap and correctness is the priority.
   that moves/renames/removes a field on `users/*`, `workspaces/*`,
   `projects/*` (or other user-facing docs) needs a real migration: idempotent,
   dry-run-first, tested against the emulator, `--dry-run` then `--apply` on
-  test then prod. Cattle/fleet state (`glmGateways`, gateways, shells) stays
+  test then prod. Cattle/fleet state (`glmGateways`, gateways) stays
   teardown-recoverable — no migration needed there. Breaking the code is
   free; silently orphaning a quiet user's data is a real regression.
 - **Teardown over surgery:** when state is tangled and no real data is at risk,

@@ -86,7 +86,6 @@ export interface GatewayServiceAccountSpec {
 }
 
 export interface BuilderGatewayAccessSpec {
-  shellsEnabled?: boolean;
   controlUiEnabled?: boolean;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
@@ -95,18 +94,15 @@ export interface BuilderGatewayAccessSpec {
 }
 
 export const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec = {
-  shellsEnabled: false,
   controlUiEnabled: false,
   reason: "runtime-trust-boundary-not-provisioned",
 };
 
 export function defaultBuilderGatewayAccess(
   ownerUid: string | null | undefined,
-  shellsEnabled = true,
 ): BuilderGatewayAccessSpec {
   return ownerUid
     ? {
-      shellsEnabled,
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     }
@@ -185,21 +181,14 @@ export function builderGatewayServiceAccountName(gatewayId: string): string {
   return `${BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
 
-export function isGatewayClassShellAccessEnabled(
-  gatewayClass: GatewayClass | undefined,
-  builderAccess: BuilderGatewayAccessSpec | undefined,
-): boolean {
-  return gatewayClass === "builder" && builderAccess?.shellsEnabled === true;
-}
-
 export function isGatewayClassControlUiAccessEnabled(
   gatewayClass: GatewayClass | undefined,
   builderAccess: BuilderGatewayAccessSpec | undefined,
 ): boolean {
-  return gatewayClass === "builder" && builderAccess?.controlUiEnabled !== false;
+  return gatewayClass === "builder" && builderAccess?.controlUiEnabled === true;
 }
 
-export function resolveUserGatewayShellState(
+export function resolveUserGatewayControlState(
   data:
     | {
         gatewayClass?: unknown;
@@ -210,7 +199,7 @@ export function resolveUserGatewayShellState(
       }
     | undefined,
   uid: string,
-): { gatewayProfile: GatewayProfile; shellsEnabled: boolean } {
+): { gatewayProfile: GatewayProfile; controlUiEnabled: boolean } {
   const gatewayClass = resolveGatewayClass({
     gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
     profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
@@ -219,7 +208,7 @@ export function resolveUserGatewayShellState(
   const userOwns = data?.ownerUid === uid;
   return {
     gatewayProfile: gatewayClass === "builder" ? "builder" : "standard",
-    shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.builderAccess),
+    controlUiEnabled: userOwns && isGatewayClassControlUiAccessEnabled(gatewayClass, data?.builderAccess),
   };
 }
 

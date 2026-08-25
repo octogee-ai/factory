@@ -16,9 +16,9 @@
 # See docs/architecture/GATEWAY-PLATFORM-SPEC.md
 # §Operator-class customization surface for the design rationale.
 #
-# Create or edit this file through BuilderShell, then restart the gateway
-# process to pick it up. Credentials that must survive a roll belong in the
-# customer credential store and enter config through SecretRefs.
+# Edit this file from the gateway only when necessary, then restart the
+# gateway process to pick it up. Credentials that must survive a roll belong
+# in the customer credential store and enter config through SecretRefs.
 #
 # ── Examples ──────────────────────────────────────────────────────────
 #

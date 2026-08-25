@@ -63,12 +63,7 @@ describe("directory dependency repository contract", () => {
     },
   );
 
-  // scripts/ is the only consumer with a native dependency (node-pty), so it is
-  // the only one whose install has to run a dependency's install script. npm 12
-  // skips unreviewed install scripts with nothing but a warning; strict mode
-  // makes that a failed install instead of a gateway image with an unloadable
-  // binding (#2834).
-  it("scripts adds strict install-script review on top of the shared npm config", () => {
+  it("scripts preserves strict install-script review on top of the shared npm config", () => {
     expect(fs.readFileSync(path.join(root, "scripts", ".npmrc"), "utf8")).toBe(
       "install-links=true\nmin-release-age=7\nstrict-allow-scripts=true\n",
     );

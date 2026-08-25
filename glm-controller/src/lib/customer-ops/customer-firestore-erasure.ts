@@ -57,7 +57,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   openclawControlTickets: { uidFields: ["uid"] },
   openclawControlAudit: { uidFields: ["uid"] },
   channelSessionModelAudit: { uidFields: ["actorUid"] },
-  builder_shell_sessions: { uidFields: ["attacherUid", "takenOverFromUid"] },
   chatArtifactJobs: {
     uidFields: ["ownerUid", "workspaceOwnerUid"],
     slugFields: ["workspaceSlug"],

@@ -1,4 +1,4 @@
-import type { BuilderGatewayConfigStatus } from "@octogee/shared/types/builder-shell";
+import type { GatewayConfigStatus } from "@octogee/shared/types/gateway-control";
 
 const STATES = new Set(["clean", "dirty", "syncing", "error", "unavailable"]);
 
@@ -16,14 +16,14 @@ function boundedString(value: unknown, maxLength: number): string | undefined {
 
 export function projectOpenClawConfigStatus(
   heartbeat: Record<string, unknown> | null,
-): BuilderGatewayConfigStatus | undefined {
+): GatewayConfigStatus | undefined {
   const source = record(heartbeat?.configStatus);
   if (!source || typeof source.state !== "string" || !STATES.has(source.state)) return undefined;
   const acceptedCommit = boundedString(source.acceptedCommit, 128);
   const lastSyncedAt = boundedString(source.lastSyncedAt, 64);
   const lastErrorCode = boundedString(source.lastErrorCode, 80);
   return {
-    state: source.state as BuilderGatewayConfigStatus["state"],
+    state: source.state as GatewayConfigStatus["state"],
     ...(acceptedCommit ? { acceptedCommit } : {}),
     ...(lastSyncedAt ? { lastSyncedAt } : {}),
     ...(lastErrorCode ? { lastErrorCode } : {}),

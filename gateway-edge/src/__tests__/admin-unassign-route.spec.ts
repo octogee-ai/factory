@@ -136,7 +136,7 @@ function buildApp() {
 
 function seedMountedUser(uid: string, gatewayId: string) {
   state.store[`users/${uid}`] = {
-    provisioning: { openclaw: { gatewayId, gatewayProfile: "shared", shellsEnabled: true } },
+    provisioning: { openclaw: { gatewayId, gatewayProfile: "shared", controlUiEnabled: true } },
   };
 }
 
@@ -178,7 +178,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
     const mirror = state.store["users/u-serving"] as Record<string, unknown>;
     expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayId"])).toBe(true);
     expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayProfile"])).toBe(true);
-    expect(isDeleteTransform(mirror["provisioning.openclaw.shellsEnabled"])).toBe(true);
+    expect(isDeleteTransform(mirror["provisioning.openclaw.controlUiEnabled"])).toBe(true);
     expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayAssignedAt"])).toBe(true);
   });
 

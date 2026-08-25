@@ -759,7 +759,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       serviceAccountName: "octogee-gw-builder-alice",
       serviceAccount: { create: false },
       builderAccess: {
-        shellsEnabled: false,
+        controlUiEnabled: false,
         controlUiEnabled: false,
       },
       ownerUid: "uid-alice",

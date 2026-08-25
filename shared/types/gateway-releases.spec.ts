@@ -437,7 +437,7 @@ describe("commitPlacementAtomic", () => {
     lifecycle,
   });
 
-  const mirror = { "provisioning.openclaw.gatewayId": "default", "provisioning.openclaw.shellsEnabled": false };
+  const mirror = { "provisioning.openclaw.gatewayId": "default", "provisioning.openclaw.controlUiEnabled": false };
 
   it("projects only an empty retired co-owner mirror from a desired root", () => {
     const projected = projectGatewayDesiredRootForGateway(

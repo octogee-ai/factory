@@ -9,7 +9,7 @@ import {
   builderGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
-  resolveUserGatewayShellState,
+  resolveUserGatewayControlState,
   isGatewayClassControlUiAccessEnabled,
   isOperatorManaged,
   resolveManagedBy,
@@ -168,9 +168,8 @@ describe("gateway class/profile resolution", () => {
 });
 
 describe("defaultBuilderGatewayAccess", () => {
-  it("grants shells and Control UI to an owned runtime gateway and locks an un-owned one", () => {
+  it("grants Control UI to an owned runtime gateway and locks an un-owned one", () => {
     expect(defaultBuilderGatewayAccess("uid-chris")).toEqual({
-      shellsEnabled: true,
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     });
@@ -180,88 +179,82 @@ describe("defaultBuilderGatewayAccess", () => {
 });
 
 describe("isGatewayClassControlUiAccessEnabled", () => {
-  it("enables Control UI for isolated classes by default and honors an explicit disable", () => {
+  it("requires explicitly enabled Control UI on isolated classes", () => {
     expect(isGatewayClassControlUiAccessEnabled("builder", {
-      shellsEnabled: true,
       controlUiEnabled: true,
     })).toBe(true);
     expect(isGatewayClassControlUiAccessEnabled("shared", {
-      shellsEnabled: true,
       controlUiEnabled: true,
     })).toBe(false);
     expect(isGatewayClassControlUiAccessEnabled("builder", {
-      shellsEnabled: false,
       controlUiEnabled: true,
     })).toBe(true);
+    expect(isGatewayClassControlUiAccessEnabled("builder", {})).toBe(false);
     expect(isGatewayClassControlUiAccessEnabled("builder", {
-      shellsEnabled: false,
-    })).toBe(true);
-    expect(isGatewayClassControlUiAccessEnabled("builder", {
-      shellsEnabled: true,
       controlUiEnabled: false,
     })).toBe(false);
   });
 });
 
-describe("resolveUserGatewayShellState", () => {
-  it("does not infer BuilderShell from the retired operator image profile", () => {
+describe("resolveUserGatewayControlState", () => {
+  it("does not infer Control UI from the retired operator image profile", () => {
     expect(
-      resolveUserGatewayShellState(
+      resolveUserGatewayControlState(
         {
           gatewayClass: "shared",
           imageProfile: "operator",
           ownerUid: "uid-chris",
-          builderAccess: { shellsEnabled: true },
+          builderAccess: { controlUiEnabled: true },
         },
         "uid-chris",
       ),
-    ).toEqual({ gatewayProfile: "standard", shellsEnabled: false });
+    ).toEqual({ gatewayProfile: "standard", controlUiEnabled: false });
   });
 
-  it("enables BuilderShell for the owner of a builder-class gateway with shells on", () => {
+  it("enables Control UI for the owner of an explicitly enabled builder gateway", () => {
     expect(
-      resolveUserGatewayShellState(
+      resolveUserGatewayControlState(
         {
           gatewayClass: "builder",
           imageProfile: "standard",
           ownerUid: "uid-chris",
-          builderAccess: { shellsEnabled: true },
+          builderAccess: { controlUiEnabled: true },
         },
         "uid-chris",
       ),
-    ).toEqual({ gatewayProfile: "builder", shellsEnabled: true });
+    ).toEqual({ gatewayProfile: "builder", controlUiEnabled: true });
   });
 
-  it("does not infer shell access for a non-owner", () => {
+  it("does not grant Control UI to a non-owner", () => {
     expect(
-      resolveUserGatewayShellState(
-        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { shellsEnabled: true } },
+      resolveUserGatewayControlState(
+        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { controlUiEnabled: true } },
         "uid-jack",
-      ).shellsEnabled,
+      ).controlUiEnabled,
     ).toBe(false);
   });
 
-  it("denies a guest migrated onto someone else's Builder gateway", () => {
+  it("denies Control UI to a guest migrated onto someone else's Builder gateway", () => {
     expect(
-      resolveUserGatewayShellState(
-        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { shellsEnabled: true } },
+      resolveUserGatewayControlState(
+        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { controlUiEnabled: true } },
         "uid-jack",
       ),
-    ).toEqual({ gatewayProfile: "builder", shellsEnabled: false });
+    ).toEqual({ gatewayProfile: "builder", controlUiEnabled: false });
   });
 
-  it("never enables shells on a shared gateway", () => {
+  it("never enables Control UI on a shared gateway", () => {
     expect(
-      resolveUserGatewayShellState({ gatewayClass: "shared", ownerUid: "uid-chris" }, "uid-chris"),
-    ).toEqual({ gatewayProfile: "standard", shellsEnabled: false });
+      resolveUserGatewayControlState({ gatewayClass: "shared", ownerUid: "uid-chris" }, "uid-chris"),
+    ).toEqual({ gatewayProfile: "standard", controlUiEnabled: false });
   });
 
   it("respects explicitly locked Builder access even for the owner", () => {
     expect(
-      resolveUserGatewayShellState(
-        { gatewayClass: "builder", ownerUid: "uid-chris", builderAccess: { shellsEnabled: false } },
+      resolveUserGatewayControlState(
+        { gatewayClass: "builder", ownerUid: "uid-chris", builderAccess: { controlUiEnabled: false } },
         "uid-chris",
-      ).shellsEnabled,
+      ).controlUiEnabled,
     ).toBe(false);
   });
 });

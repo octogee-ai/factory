@@ -26,8 +26,7 @@ export interface GatewayFleetState {
   status: string;
   version?: string;
   openclawVersion?: string;
-  /** The pod's current process start (epoch ms). Persisted trusted-side so the
-   *  shell reaper can detect a roll. Optional — omitted by a malformed /health. */
+  /** The pod's current process start (epoch ms). Optional — omitted by a malformed /health. */
   startedAt?: number;
   /** Slugs the pod actually has on disk + coach-wired — reported Firestore-free. */
   customers: string[];
@@ -41,7 +40,7 @@ export interface GatewayHeartbeatRecord {
   mountedCustomers: string[];
   version?: string;
   openclawVersion?: string;
-  /** Live pod-boot time (epoch ms) — lets reapGoneGatewayShells reap pre-roll shells. */
+  /** Live pod-boot time (epoch ms). */
   startedAt?: number;
 }
 

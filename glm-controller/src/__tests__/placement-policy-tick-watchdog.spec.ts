@@ -77,53 +77,6 @@ describe("placement policy tick watchdog", () => {
     stop();
   });
 
-  it("an abandoned pass can no longer publish idle sleep or send sleep warnings", async () => {
-    const log = vi.fn();
-    const publishIdleSleep = vi.fn().mockResolvedValue(undefined);
-    const sendRuntimeSleepWarning = vi.fn().mockResolvedValue(undefined);
-    const deps = {
-      now: () => Date.now(),
-      log,
-      publishIdleSleep,
-      sendRuntimeSleepWarning,
-    } as unknown as PlacementPolicyReconcilerDeps;
-    let resume: () => void = () => undefined;
-    let fenced: PlacementPolicyReconcilerDeps | null = null;
-    const runPass = vi.fn()
-      .mockImplementationOnce((passDeps: PlacementPolicyReconcilerDeps) => {
-        fenced = passDeps;
-        return new Promise<void>((resolve) => { resume = resolve; });
-      })
-      .mockResolvedValue(undefined);
-    const stop = startPlacementPolicyReconciler(deps, PLACEMENT_POLICY_RECONCILE_MS_DEFAULT, { runPass });
-    await vi.advanceTimersByTimeAsync(PLACEMENT_POLICY_PASS_DEADLINE_MS + PLACEMENT_POLICY_RECONCILE_MS_DEFAULT);
-    await fenced!.publishIdleSleep({ uid: "uid-x", projection: null });
-    await fenced!.sendRuntimeSleepWarning({ uid: "uid-x" } as never);
-    expect(publishIdleSleep).not.toHaveBeenCalled();
-    expect(sendRuntimeSleepWarning).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("dropped idle-sleep publish"));
-    resume();
-    stop();
-  });
-
-  it("a live pass publishes idle sleep through the fence untouched", async () => {
-    const log = vi.fn();
-    const publishIdleSleep = vi.fn().mockResolvedValue(undefined);
-    const deps = {
-      now: () => Date.now(),
-      log,
-      publishIdleSleep,
-      sendRuntimeSleepWarning: vi.fn().mockResolvedValue(undefined),
-    } as unknown as PlacementPolicyReconcilerDeps;
-    const runPass = vi.fn().mockImplementation(async (passDeps: PlacementPolicyReconcilerDeps) => {
-      await passDeps.publishIdleSleep({ uid: "uid-live", projection: null });
-    });
-    const stop = startPlacementPolicyReconciler(deps, PLACEMENT_POLICY_RECONCILE_MS_DEFAULT, { runPass });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(publishIdleSleep).toHaveBeenCalledWith({ uid: "uid-live", projection: null });
-    stop();
-  });
-
   it("logs when an abandoned pass eventually settles", async () => {
     const log = vi.fn();
     let release: () => void = () => undefined;

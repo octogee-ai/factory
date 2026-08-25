@@ -7,15 +7,13 @@ export async function prepareGatewayRuntimeConfig<T extends GatewayMutableConfig
   gatewayId: string,
   resolveApiServerEgressCidrs: ApiServerEgressResolver,
 ): Promise<T> {
-  if (
-    config.gatewayClass !== "builder" ||
-    config.builderAccess?.shellsEnabled !== true
-  ) {
+  if (config.gatewayClass !== "builder") {
     return config;
   }
+  const builderAccess = config.builderAccess ?? {};
   const kubeApiServerEgressCidrs = await resolveApiServerEgressCidrs();
   if (kubeApiServerEgressCidrs.length === 0) {
-    if ((config.builderAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
+    if ((builderAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
       return config;
     }
     throw new Error(`builder gateway ${gatewayId} has no API-server egress CIDRs`);
@@ -23,7 +21,7 @@ export async function prepareGatewayRuntimeConfig<T extends GatewayMutableConfig
   return {
     ...config,
     builderAccess: {
-      ...config.builderAccess,
+      ...builderAccess,
       kubeApiServerEgressCidrs,
     },
   } as T;

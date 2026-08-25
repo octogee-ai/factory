@@ -43,7 +43,7 @@ export async function resolveApiServerEgressCidrs(
     log(`[apiserver-egress] resolve threw: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (cidrs.size === 0) {
-    log("[apiserver-egress] ⚠ resolved no apiserver CIDRs — Builder shell egress unchanged until this succeeds");
+    log("[apiserver-egress] ⚠ resolved no apiserver CIDRs — gateway API-server egress unchanged until this succeeds");
   }
   return [...cidrs].sort();
 }

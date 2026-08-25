@@ -58,20 +58,17 @@ describe("gateway principal access", () => {
       kind: "owner",
       brokerProfile: "native-owner",
       dashboard: true,
-      shell: true,
     }));
   });
 
   it.each([
-    ["agent-viewer.v1", "delegated-read", false, false],
-    ["trusted-helper.v1", "delegated-config", true, false],
-    ["co-owner.v1", "native-co-owner", true, false],
-    ["builder-shell.v1", null, false, true],
+    ["agent-viewer.v1", "delegated-read", false],
+    ["trusted-helper.v1", "delegated-config", true],
+    ["co-owner.v1", "native-co-owner", true],
   ] as const)("resolves %s to its exact broker and capability profile", (
     permissionSetId,
     brokerProfile,
     config,
-    shell,
   ) => {
     expect(resolveGatewayPrincipalAccess({
       gateway,
@@ -85,21 +82,8 @@ describe("gateway principal access", () => {
       brokerProfile,
       dashboard: brokerProfile !== null,
       config,
-      shell,
       grantRevision: 3,
     }));
-  });
-
-  it("does not bundle Builder Shell with Trusted Helper or Co-owner", () => {
-    for (const permissionSetId of ["trusted-helper.v1", "co-owner.v1"] as const) {
-      expect(resolveGatewayPrincipalAccess({
-        gateway,
-        uid: "helper",
-        grant: grant({ permissionSetIds: [permissionSetId] }),
-        isWorkspaceMember: true,
-        now: 1_000,
-      })).toEqual(expect.objectContaining({ shell: false }));
-    }
   });
 
   it.each([
@@ -144,7 +128,6 @@ describe("gateway principal access", () => {
       "agent-viewer.v1",
       "trusted-helper.v1",
       "co-owner.v1",
-      "builder-shell.v1",
     ]);
     expect(JSON.stringify(GATEWAY_PERMISSION_SETS)).not.toMatch(/tools\.invoke|config\.patch|RPC/u);
   });

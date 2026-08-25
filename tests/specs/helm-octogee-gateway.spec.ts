@@ -249,6 +249,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       builderSlug: "ceckert",
       gatewayClass: "builder",
       imageProfile: "builder",
+      "builderAccess.controlUiEnabled": "true",
     }), "Deployment", "octogee-gateway-bender") ?? "";
     expect(containerBlock(owned, "gateway")).not.toMatch(/GATEWAY_UNOWNED_OPERATOR_PREWARM/);
     expect(containerBlock(owned, "gateway-edge")).toMatch(
@@ -388,7 +389,6 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).toMatch(/name:\s*gateway-credential-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-gateway-credentials\s*\n\s*readOnly:\s*true/);
     expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
-    expect(edge).toMatch(/name:\s*BUILDER_SHELL_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*FLEET_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-api\/token"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
@@ -439,7 +439,6 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).toMatch(/name:\s*gateway-credential-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-gateway-credentials\s*\n\s*readOnly:\s*true/);
     expect(edge).toMatch(/name:\s*OPENCLAW_RUNTIME_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*CONNECTOR_TOKEN_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
-    expect(edge).toMatch(/name:\s*BUILDER_SHELL_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*FLEET_BROKER_URL\s*\n\s*value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/);
     expect(edge).toMatch(/name:\s*OCTOGEE_API_SA_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/secrets\/octogee-api\/token"/);
     expect(edge).toMatch(/name:\s*octogee-api-sa-token\s*\n\s*mountPath:\s*\/var\/run\/secrets\/octogee-api\s*\n\s*readOnly:\s*true/);
@@ -496,7 +495,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const gw = containerBlock(dep, "gateway");
     const edge = containerBlock(dep, "gateway-edge");
 
-    // The shell-bearing gateway container may know the localhost sidecar URL,
+    // The OpenClaw gateway container may know the localhost sidecar URL,
     // but it does not get the platform internal-service key needed for
     // privileged sidecar paths. Gitea admin lifecycle goes through octogee-api
     // with the projected gateway KSA token instead.
@@ -567,7 +566,7 @@ const out = helmTemplate();
     expect(selectorBlock(svc)).toMatch(/gateway-instance:\s*default/);
   });
 
-  it("locks the no-shell gateway-edge sidecar to a read-only root filesystem with an explicit writable /tmp", () => {
+  it("locks the gateway-edge sidecar to a read-only root filesystem with an explicit writable /tmp", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const edge = containerBlock(dep, "gateway-edge");
 
@@ -576,7 +575,7 @@ const out = helmTemplate();
     expect(dep).toMatch(/name:\s*tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit:\s*1Gi/);
   });
 
-  it("keeps the shell-bearing gateway runtime writable", () => {
+  it("keeps the OpenClaw gateway runtime writable", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gateway = containerBlock(dep, "gateway");
 
@@ -624,58 +623,6 @@ const out = helmTemplate();
 
     const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     expect(svc).not.toMatch(/migration-rsync/);
-  });
-
-  it("does not expose builder-shell on locked runtime gateways", () => {
-    const out = helmTemplate("octogee-gw-default", { profile: "builder" });
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const gw = containerBlock(dep, "gateway");
-    expect(gw).not.toMatch(/name:\s*builder-shell/);
-    expect(gw).toMatch(
-      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"false"/,
-    );
-
-    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
-    expect(svc).not.toMatch(/name:\s*builder-shell/);
-  });
-
-  it("exposes builder-shell after explicit runtime shell access is enabled", () => {
-    const out = helmTemplate("octogee-gw-default", {
-      profile: "builder",
-      "builderAccess.shellsEnabled": "true",
-    });
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const gw = containerBlock(dep, "gateway");
-    expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
-    expect(gw).toMatch(
-      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
-    );
-    expect(gw).toMatch(
-      /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
-    );
-    expect(gw).not.toMatch(/name:\s*INTERNAL_SERVICE_KEY\b/);
-
-    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
-    expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
-  });
-
-  it("exposes builder-shell on builder gateways when shell access is enabled", () => {
-    const out = helmTemplate("octogee-gw-default", {
-      gatewayClass: "builder",
-      "builderAccess.shellsEnabled": "true",
-    });
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    const gw = containerBlock(dep, "gateway");
-    expect(gw).toMatch(/containerPort:\s*3005\s*\n\s*name:\s*builder-shell/);
-    expect(gw).toMatch(
-      /- name:\s*BUILDER_SHELLS_ENABLED[\s\S]*?value:\s*"true"/,
-    );
-    expect(gw).toMatch(
-      /- name:\s*BUILDER_SHELL_REQUIRE_KEY[\s\S]*?value:\s*"false"/,
-    );
-
-    const svc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
-    expect(svc).toMatch(/name:\s*builder-shell\s*\n\s*port:\s*3005\s*\n\s*targetPort:\s*3005/);
   });
 
   it("runs exec-capable builder gateways in the registered gVisor RuntimeClass", () => {
@@ -919,7 +866,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     );
   });
 
-  it("keeps MM_ADMIN_PAT out of the runtime gateway container (Builder shells must not inherit platform MM admin)", () => {
+  it("keeps MM_ADMIN_PAT out of the runtime gateway container", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
     expect(gw).not.toMatch(/- name:\s*MM_ADMIN_PAT\b/);
@@ -977,43 +924,53 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     );
   });
 
-  it("requires and publishes the native Dashboard bridge for every isolated gateway", () => {
-    for (const gatewayClass of ["builder", "builder"]) {
-      const enabled = findDoc(
-        helmTemplate(`octogee-gw-${gatewayClass}`, {
-          gatewayId: gatewayClass,
-          gatewayClass,
-          ownerUid: "uid-ceckert",
-          builderSlug: "ceckert",
-          "builderAccess.shellsEnabled": "false",
-          "builderAccess.controlUiEnabled": "false",
-        }),
-        "Deployment",
-        `octogee-gateway-${gatewayClass}`,
-      ) ?? "";
-      const enabledGateway = containerBlock(enabled, "gateway");
-      const enabledEdge = containerBlock(enabled, "gateway-edge");
-      expect(enabledGateway).toMatch(
-        /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED[\s\S]*?value:\s*"true"/,
-      );
-      expect(enabledEdge).toMatch(
-        /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED[\s\S]*?value:\s*"true"/,
-      );
-      expect(enabledEdge).toMatch(
-        /name:\s*OPENCLAW_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw"/,
-      );
-      expect(enabledEdge).toMatch(
-        /name:\s*OPENCLAW_CONFIG_PATH[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
-      );
-      expect(enabledEdge).toMatch(
-        /name:\s*OPENCLAW_CONTROL_BROKER_URL[\s\S]*?value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/,
-      );
-      expect(enabledEdge).not.toContain("OPENCLAW_CONTROL_RPC_POLICY_MODE");
-      expect(enabledEdge).toMatch(/name:\s*API_PUBLIC_URL\b/);
-    }
+  it("requires and publishes the native Dashboard bridge for every control-enabled isolated gateway", () => {
+    const enabled = findDoc(
+      helmTemplate("octogee-gw-builder", {
+        gatewayId: "builder",
+        gatewayClass: "builder",
+        ownerUid: "uid-ceckert",
+        builderSlug: "ceckert",
+        "builderAccess.controlUiEnabled": "true",
+      }),
+      "Deployment",
+      "octogee-gateway-builder",
+    ) ?? "";
+    const enabledGateway = containerBlock(enabled, "gateway");
+    const enabledEdge = containerBlock(enabled, "gateway-edge");
+    expect(enabledGateway).toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_REQUIRED[\s\S]*?value:\s*"true"/,
+    );
+    expect(enabledEdge).toMatch(
+      /name:\s*OPENCLAW_DASHBOARD_BRIDGE_ENABLED[\s\S]*?value:\s*"true"/,
+    );
+    expect(enabledEdge).toMatch(
+      /name:\s*OPENCLAW_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw"/,
+    );
+    expect(enabledEdge).toMatch(
+      /name:\s*OPENCLAW_CONFIG_PATH[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/system_config\/openclaw\.json"/,
+    );
+    expect(enabledEdge).toMatch(
+      /name:\s*OPENCLAW_CONTROL_BROKER_URL[\s\S]*?value:\s*"http:\/\/octogee-api\.octogee-test\.svc\.cluster\.local:3001"/,
+    );
+    expect(enabledEdge).not.toContain("OPENCLAW_CONTROL_RPC_POLICY_MODE");
+    expect(enabledEdge).toMatch(/name:\s*API_PUBLIC_URL\b/);
 
     const disabledValueSets: Array<Record<string, string>> = [
-      { gatewayId: "shared", gatewayClass: "shared", "builderAccess.shellsEnabled": "true", "builderAccess.controlUiEnabled": "true" },
+      { gatewayId: "shared", gatewayClass: "shared", "builderAccess.controlUiEnabled": "true" },
+      {
+        gatewayId: "builder-disabled",
+        gatewayClass: "builder",
+        ownerUid: "uid-ceckert",
+        builderSlug: "ceckert",
+        "builderAccess.controlUiEnabled": "false",
+      },
+      {
+        gatewayId: "builder-default",
+        gatewayClass: "builder",
+        ownerUid: "uid-ceckert",
+        builderSlug: "ceckert",
+      },
     ];
     for (const values of disabledValueSets) {
       const disabled = findDoc(
@@ -1471,129 +1428,51 @@ function networkPolicyIngressRules(np: string): Array<Record<string, any>> {
   return parsed.spec?.ingress ?? [];
 }
 
-describe("helm/octogee-gateway/ — builder-shell NetworkPolicy port allowlist", () => {
-  it("restricts :3005 (builder-shell) to same-instance pods — the backstop intent", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-default", {
-        profile: "builder",
-        "builderAccess.shellsEnabled": "true",
-      }),
+describe("helm/octogee-gateway/ — gateway ingress policy", () => {
+  function ingressPolicy(values: Record<string, string> = {}): string {
+    return findDoc(
+      helmTemplate("octogee-gw-default", values),
       "NetworkPolicy",
-      "octogee-gateway-builder-shell-default",
-    );
-    expect(np).not.toBeNull();
-    const rule = networkPolicyIngressRules(np!).find((candidate) =>
-      candidate.ports?.some((port: any) => port.port === 3005));
-    expect(rule).toEqual({
-      from: [{
-        podSelector: {
-          matchLabels: { app: "octogee-gateway", "gateway-instance": "default" },
-        },
-      }],
-      ports: [{ protocol: "TCP", port: 3005 }],
-    });
-  });
+      "octogee-gateway-ingress-default",
+    ) ?? "";
+  }
 
-  it("renders the same builder-shell backstop for builder gateways when shells are enabled", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-default", {
-        gatewayClass: "builder",
-        "builderAccess.shellsEnabled": "true",
-      }),
-      "NetworkPolicy",
-      "octogee-gateway-builder-shell-default",
-    );
-    expect(np).not.toBeNull();
-    expect(networkPolicyIngressRules(np!).some((candidate) =>
-      candidate.from?.[0]?.podSelector?.matchLabels?.["gateway-instance"] === "default"
-      && candidate.ports?.some((port: any) => port.port === 3005))).toBe(true);
-  });
-
-  it("never widens gateway-edge, fleet-control, or OpenClaw ingress beyond the generic source policy", () => {
-    const out = helmTemplate("octogee-gw-default", {
-        profile: "builder",
-        "builderAccess.shellsEnabled": "true",
-    });
-    const shellPolicy = findDoc(
-      out,
-      "NetworkPolicy",
-      "octogee-gateway-builder-shell-default",
-    );
-    expect(shellPolicy).not.toBeNull();
-    const shellRules = networkPolicyIngressRules(shellPolicy!);
-    expect(shellRules.every((rule) => Array.isArray(rule.from) && rule.from.length > 0)).toBe(true);
-    expect(shellRules.flatMap((rule) => rule.ports.map((port: any) => port.port)).sort((a, b) => a - b))
-      .toEqual([3005, 9092, 30873]);
-
-    const genericPolicy = findDoc(out, "NetworkPolicy", "octogee-gateway-ingress-default");
-    expect(genericPolicy).not.toBeNull();
-    const genericRules = networkPolicyIngressRules(genericPolicy!);
-    const sourcesForPort = (port: number) => genericRules
+  it("limits gateway-edge and fleet-control ingress to their explicit sources", () => {
+    const rules = networkPolicyIngressRules(ingressPolicy());
+    const sourcesForPort = (port: number) => rules
       .filter((rule) => rule.ports.some((candidate: any) => candidate.port === port))
       .flatMap((rule) => rule.from.map((source: any) => source.podSelector?.matchLabels?.app))
       .filter(Boolean)
       .sort();
+
     expect(sourcesForPort(3001)).toEqual([
       "gateway-router",
       "mattermost-callback-router",
       "octogee-api",
     ]);
     expect(sourcesForPort(3003)).toEqual(["glm-controller", "octogee-gateway"]);
-    expect(genericRules.some((rule) =>
+    expect(rules.some((rule) =>
       rule.ports.some((candidate: any) => candidate.port === 18789))).toBe(false);
   });
 
-  it("scopes runner-metrics (:9092) to the gke-gmp-system namespace (GMP collectors) — never the open any-source rule", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-default", {
-        profile: "builder",
-        "builderAccess.shellsEnabled": "true",
-      }),
-      "NetworkPolicy",
-      "octogee-gateway-builder-shell-default",
-    );
-    expect(np).not.toBeNull();
-    const rule = networkPolicyIngressRules(np!).find((candidate) =>
+  it("scopes runner metrics to GMP collectors", () => {
+    const rule = networkPolicyIngressRules(ingressPolicy()).find((candidate) =>
       candidate.ports?.some((port: any) => port.port === 9092));
     expect(rule?.from).toEqual([{
       namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "gke-gmp-system" } },
     }]);
   });
 
-  it("allows migration rsync ingress only from peer gateway pods — never the open any-source rule", () => {
-    const np = findDoc(
-      helmTemplate("octogee-gw-default", {
-        profile: "builder",
-        "builderAccess.shellsEnabled": "true",
-      }),
-      "NetworkPolicy",
-      "octogee-gateway-builder-shell-default",
-    );
-    expect(np).not.toBeNull();
-    const rule = networkPolicyIngressRules(np!).find((candidate) =>
+  it("allows migration rsync ingress only from peer gateway pods", () => {
+    const rule = networkPolicyIngressRules(ingressPolicy()).find((candidate) =>
       candidate.ports?.some((port: any) => port.port === 30873));
     expect(rule?.from).toEqual([{
       podSelector: { matchLabels: { app: "octogee-gateway" } },
     }]);
   });
 
-  it("is NOT rendered for shared gateways (cattle don't expose :3005 so no backstop needed)", () => {
-    const out = helmTemplate();
-    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
-  });
-
-  it("is NOT rendered for locked runtime gateways before shell access is provisioned", () => {
-    const out = helmTemplate("octogee-gw-default", { profile: "builder" });
-    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
-  });
-
-  it("is NOT rendered when NetworkPolicy is explicitly disabled", () => {
-    const out = helmTemplate("octogee-gw-default", {
-      profile: "builder",
-      "builderAccess.shellsEnabled": "true",
-      "networkPolicy.enabled": "false",
-    });
-    expect(findDoc(out, "NetworkPolicy", "octogee-gateway-builder-shell-default")).toBeNull();
+  it("does not render when network policy is explicitly disabled", () => {
+    expect(ingressPolicy({ "networkPolicy.enabled": "false" })).toBe("");
   });
 });
 

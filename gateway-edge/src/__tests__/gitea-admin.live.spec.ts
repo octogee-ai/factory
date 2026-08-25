@@ -14,7 +14,7 @@ import {
 } from "../lib/gitea-admin.js";
 
 // Live gate for PLATFORM-CREDENTIAL-BROKERING PR2: the provisioner's Gitea ADMIN ops
-// moved off the shell-bearing gateway container into this gateway-edge lib (the sidecar
+// moved off the OpenClaw gateway container into this gateway-edge lib (the sidecar
 // the in-pod provisioner now brokers through). No Gitea emulator exists, so exercise the
 // real admin API — create user + register SSH key + create org/team/member + create repo —
 // against live TEST Gitea, and self-clean. Catches real-Gitea contract drift the mocked

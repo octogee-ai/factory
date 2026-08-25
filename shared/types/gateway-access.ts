@@ -2,7 +2,6 @@ export const GATEWAY_ACCESS_PERMISSION_SET_IDS = [
   "agent-viewer.v1",
   "trusted-helper.v1",
   "co-owner.v1",
-  "builder-shell.v1",
 ] as const;
 
 export type GatewayAccessPermissionSetId =
@@ -12,13 +11,11 @@ export type GatewayAccessRole =
   | "owner"
   | "co-owner"
   | "trusted-helper"
-  | "agent-viewer"
-  | "shell-only";
+  | "agent-viewer";
 
 export interface GatewayAccessCapabilities {
   dashboard: boolean;
   config: boolean;
-  shell: boolean;
   workspaceManagement: boolean;
 }
 

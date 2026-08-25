@@ -10,14 +10,12 @@ export const GATEWAY_PROFILES = ["standard", "builder"];
 export const GATEWAY_CLASSES = ["shared", "builder"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];
 export const BUILDER_GATEWAY_LOCKED_ACCESS = {
-    shellsEnabled: false,
     controlUiEnabled: false,
     reason: "runtime-trust-boundary-not-provisioned",
 };
-export function defaultBuilderGatewayAccess(ownerUid, shellsEnabled = true) {
+export function defaultBuilderGatewayAccess(ownerUid) {
     return ownerUid
         ? {
-            shellsEnabled,
             controlUiEnabled: true,
             reason: "owned-runtime-gateway",
         }
@@ -82,13 +80,10 @@ export function deriveGatewayIdentity(gatewayId, explicitGateway) {
 export function builderGatewayServiceAccountName(gatewayId) {
     return `${BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
-export function isGatewayClassShellAccessEnabled(gatewayClass, builderAccess) {
-    return gatewayClass === "builder" && builderAccess?.shellsEnabled === true;
-}
 export function isGatewayClassControlUiAccessEnabled(gatewayClass, builderAccess) {
-    return gatewayClass === "builder" && builderAccess?.controlUiEnabled !== false;
+    return gatewayClass === "builder" && builderAccess?.controlUiEnabled === true;
 }
-export function resolveUserGatewayShellState(data, uid) {
+export function resolveUserGatewayControlState(data, uid) {
     const gatewayClass = resolveGatewayClass({
         gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
         profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
@@ -97,7 +92,7 @@ export function resolveUserGatewayShellState(data, uid) {
     const userOwns = data?.ownerUid === uid;
     return {
         gatewayProfile: gatewayClass === "builder" ? "builder" : "standard",
-        shellsEnabled: userOwns && isGatewayClassShellAccessEnabled(gatewayClass, data?.builderAccess),
+        controlUiEnabled: userOwns && isGatewayClassControlUiAccessEnabled(gatewayClass, data?.builderAccess),
     };
 }
 export const OPERATION_ORIGINS = ["automatic", "operator"];

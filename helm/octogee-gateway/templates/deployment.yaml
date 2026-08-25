@@ -13,8 +13,7 @@
 {{- if and (ne $gatewayClass "shared") (empty .Values.ownerUid) -}}
 {{- fail "octogee-gateway: ownerUid and builderSlug are required for owner-bound disposable gateways" -}}
 {{- end -}}
-{{- $builderShellsEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.shellsEnabled | default false) -}}
-{{- $builderControlUiEnabled := eq $gatewayClass "builder" -}}
+{{- $builderControlUiEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.controlUiEnabled | default false) -}}
 {{- if and (ne $conversationMode "broad") (ne $conversationMode "publisher-live") -}}
 {{- fail (printf "octogee-gateway: conversationExperiment.mode must be broad or publisher-live, got %q" $conversationMode) -}}
 {{- end -}}
@@ -175,10 +174,6 @@ spec:
               name: fleet-http
             - containerPort: {{ .Values.env.migrationRsyncPort | default "30873" }}
               name: migration-rsync
-            {{- if $builderShellsEnabled }}
-            - containerPort: {{ .Values.env.builderShellPort | default "3005" }}
-              name: builder-shell
-            {{- end }}
           securityContext:
             {{- toYaml .Values.gatewayContainerSecurityContext | nindent 12 }}
           {{- if .Values.preStopFlush.enabled }}
@@ -243,8 +238,6 @@ spec:
             - name: WORKSPACE_AUTOSAVE_ENABLED
               value: {{ $autosave | quote }}
             {{- end }}
-            - name: BUILDER_SHELLS_ENABLED
-              value: {{ ternary "true" "false" $builderShellsEnabled | quote }}
             {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
             # Every class routes anthropic through the LLM broker — no provider key
             # is served from a pod to api.anthropic.com directly. The base URL is
@@ -269,10 +262,6 @@ spec:
             # store by pre-boot-config.ts / byot-sync and fetched at runtime via the
             # secret-resolver → POST /internal/byok/agent-model-token. The broker
             # resolves platform-or-BYOK per owner and meters per ownerUid.
-            {{- end }}
-            {{- if $builderShellsEnabled }}
-            - name: BUILDER_SHELL_REQUIRE_KEY
-              value: "false"
             {{- end }}
             - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
               value: "1"
@@ -321,12 +310,12 @@ spec:
                   key: public-key
             # Where legacy in-pod callers reach gateway-edge. The platform
             # INTERNAL_SERVICE_KEY is intentionally not present in this
-            # shell-bearing container; callers that still require it fail closed
+            # OpenClaw gateway container; callers that still require it fail closed
             # until they move behind octogee-api/Cowboy.
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
             # Gitea admin lifecycle operations are brokered by octogee-api,
-            # which holds the Gitea admin token. The shell-bearing gateway
+            # which holds the Gitea admin token. The OpenClaw gateway
             # presents only its projected gateway KSA token; octogee-api
             # TokenReview + tenant enforcement bind it back to this gateway.
             - name: GITEA_ADMIN_BROKER_URL
@@ -483,8 +472,6 @@ spec:
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: WORKSPACE_COMMIT_PROOF_BROKER_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
-            - name: BUILDER_SHELL_BROKER_URL
-              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: FLEET_BROKER_URL
               value: {{ .Values.fleetBrokerUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001" .Release.Namespace) | quote }}
             - name: OCTOGEE_API_SA_TOKEN_PATH
@@ -537,8 +524,8 @@ spec:
                   key: token
             {{- /* Platform secrets are intentionally absent. Locality routes
                 that still need platform authority fail closed or are served by
-                octogee-api/Cowboy, while builder-shell uses the per-gateway
-                token and TokenReview paths. */}}
+                octogee-api/Cowboy, while gateway-local callers use the
+                per-gateway token and TokenReview paths. */}}
             {{- if eq $gatewayClass "builder" }}
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://localhost:{{ .Values.gatewayEdge.port }}"

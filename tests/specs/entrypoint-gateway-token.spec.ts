@@ -142,25 +142,22 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
-  const earlyStart = src.indexOf("# BuilderShell comes up before the durable restore");
-  const earlyEnd = src.indexOf("# ── Owner-bound runtime system_config restore", earlyStart);
   const start = src.indexOf("# ── In-pod runners:");
   const end = src.indexOf("# ── Runner metrics exporter", start);
-  if (earlyStart < 0 || earlyEnd < 0 || start < 0 || end < 0) {
+  if (start < 0 || end < 0) {
     throw new Error("could not locate runner startup block in entrypoint.sh");
   }
   return [
     "supervise_runner() {",
     "  echo \"$1\" >> \"$RUNNER_MARKER\"",
     "}",
-    src.slice(earlyStart, earlyEnd),
     src.slice(start, end),
   ].join("\n");
 }
 
 function runRunnerBlock(
   profile: string,
-  opts: { builderShellsEnabled?: string; gatewayClass?: string } = {},
+  opts: { gatewayClass?: string } = {},
 ): {
   status: number | null;
   stderr: string;
@@ -175,7 +172,6 @@ function runRunnerBlock(
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
       export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
-      export BUILDER_SHELLS_ENABLED="${opts.builderShellsEnabled ?? ""}"
       export RUNNER_MARKER="${marker}"
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
@@ -193,7 +189,7 @@ function runRunnerBlock(
   }
 }
 
-describe("infra/gateway/entrypoint.sh — locked Builder platform provisioner boundary", () => {
+describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
   it("starts only the db-less controller and neutral side runners on Builder gateways", () => {
     const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
@@ -203,33 +199,17 @@ describe("infra/gateway/entrypoint.sh — locked Builder platform provisioner bo
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).toContain("byosub-syncback");
     expect(result.runners).toContain("system-config-watch");
-    expect(result.runners).not.toContain("builder-shell");
     expect(result.stderr).toMatch(/site-build-api disabled/);
-    expect(result.stderr).toMatch(/Builder-shell disabled/);
   });
 
-  it("starts the db-less fleet controller and cattle side runners on standard gateways, never builder-shell", () => {
-    const result = runRunnerBlock("standard", { builderShellsEnabled: "true" });
+  it("starts the db-less fleet controller and cattle side runners on standard gateways", () => {
+    const result = runRunnerBlock("standard");
     expect(result.status).toBe(0);
     expect(result.runners).toEqual([
       "fleet-controller",
       "byosub-syncback",
     ]);
     expect(result.stderr).toMatch(/In-gateway project code runners disabled/);
-  });
-
-  it("starts builder-shell on explicitly unlocked builder gateways", () => {
-    const result = runRunnerBlock("builder", {
-      gatewayClass: "builder",
-      builderShellsEnabled: "true",
-    });
-    expect(result.status).toBe(0);
-    expect(result.runners).toEqual([
-      "builder-shell",
-      "fleet-controller",
-      "byosub-syncback",
-      "system-config-watch",
-    ]);
   });
 
 });
@@ -266,7 +246,7 @@ describe("infra/gateway/entrypoint.sh — gateway token stays outside durable co
   });
 });
 
-describe("infra/gateway/entrypoint.sh — no per-customer shell-sourced secret seam", () => {
+describe("infra/gateway/entrypoint.sh — no per-customer sourced secret seam", () => {
   it("does not source the retired operator.env file", () => {
     const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
     expect(entrypoint).not.toMatch(/operator\.env/);

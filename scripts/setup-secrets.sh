@@ -806,24 +806,6 @@ if [[ -z "$SOCIAL_NOTIFICATION_BEARER" ]]; then
 fi
 ksecret social-notification-bearer --from-literal=bearer-token="$SOCIAL_NOTIFICATION_BEARER"
 
-# ── 9a3. System notification bearer (glm-controller → octogee-api /system) ─
-# Dedicated bearer for platform system-notification producers — the only auth
-# on /api/notifications/system (category-allowlisted to system.runtime;
-# Cowboy's runtime-sleep warning is the producer). octogee-api and
-# glm-controller both read the SAME K8s secret
-# (system-notification-bearer/bearer-token); Secret Manager is the durable
-# store. Precedence: env file > Secret Manager > existing K8s > generated.
-info "system-notification-bearer"
-SYSTEM_NOTIFICATION_BEARER_TOKEN="$(configured_secret_value "${SYSTEM_NOTIFICATION_BEARER_TOKEN:-}")"
-[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(sm_get "SYSTEM_NOTIFICATION_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(ksecret_key system-notification-bearer bearer-token)
-[[ -n "$SYSTEM_NOTIFICATION_BEARER_TOKEN" ]] || SYSTEM_NOTIFICATION_BEARER_TOKEN=$(openssl rand -hex 32)
-if [[ "$ENV" != "custom" ]]; then
-  sync_secret_manager_value SYSTEM_NOTIFICATION_BEARER_TOKEN "$SYSTEM_NOTIFICATION_BEARER_TOKEN" "$FIREBASE_PROJECT"
-fi
-save_env_file_value "$ENV_FILE" SYSTEM_NOTIFICATION_BEARER_TOKEN "$SYSTEM_NOTIFICATION_BEARER_TOKEN"
-ksecret system-notification-bearer --from-literal=bearer-token="$SYSTEM_NOTIFICATION_BEARER_TOKEN"
-
 # ── 9b. Fleet controller signing keypair (glm-controller ↔ gateway) ──────
 # glm-controller signs the in-cluster migration RPCs with an Ed25519 private
 # key; gateway pods verify with only the public key. Secret Manager is the
@@ -1114,7 +1096,6 @@ completeness_row "gitea-token"                                  "${GIT_API_TOKEN
 completeness_row "gateway-model-key-issuer"                     "${GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN:-}" launch
 completeness_row "ops-agent-bearer"                             "${OPS_AGENT_BEARER_TOKEN:-}"               launch
 completeness_row "social-notification-bearer"                   "${SOCIAL_NOTIFICATION_BEARER:-}"           launch
-completeness_row "system-notification-bearer"                   "${SYSTEM_NOTIFICATION_BEARER_TOKEN:-}"     launch
 completeness_row "octogee-anthropic"                            "${ANTHROPIC_API_KEY:-}"                    launch
 completeness_row "octogee-openrouter"                           "${OPENROUTER_API_KEY:-}"                   launch
 completeness_row "openai-embeddings"                            "${OPENAI_API_KEY:-}"                       optional

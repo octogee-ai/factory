@@ -9,7 +9,6 @@ export type BuilderRuntimeDemandCause =
   | "run-start"
   | "ticket"
   | "scheduled"
-  | "shell"
   | "manual";
 
 export type BuilderActivationLeaseResult = {

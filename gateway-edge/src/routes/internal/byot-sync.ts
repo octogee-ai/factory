@@ -29,9 +29,6 @@ export function createLeasedModelConfigWriter(
       acquired = await acquireLease({ openclawDir: openclawDir() });
     }
     if (!acquired.ok) {
-      if (acquired.code === "shell-active") {
-        throw new Error(`system config mutation blocked by active builder shells: ${acquired.shellIds.join(", ")}`);
-      }
       throw new Error("system config writer lock is busy");
     }
     try {

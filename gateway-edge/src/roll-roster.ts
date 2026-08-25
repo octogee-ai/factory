@@ -228,8 +228,8 @@ export function createRollRosterGate(opts: CreateRollRosterGateOptions): Request
 // path itself. A quiescing customer is REFUSED attach (503 + Retry-After) and
 // the client reconnects after the migration cutover settles. checkRequest runs
 // pre-dispatch (roster boot gate + bearer uid when resolvable); checkUid runs
-// post-auth wherever a flow resolves the customer (OpenClaw ticket redemption,
-// builder-shell ticket redemption) — so a stale attach is impossible even for
+// post-auth wherever a flow resolves the customer (OpenClaw ticket redemption)
+// — so a stale attach is impossible even for
 // flows whose identity only appears after the handshake starts.
 
 // The single retryable "customer not admitted" WS-upgrade response: 503 + a
@@ -349,7 +349,7 @@ export async function mmRosterVerdictFor(
 }
 
 // Wrap a ticket-redemption fn so the redeemed customer's roster verdict gates
-// the attach (the builder-shell site): a refused customer's redeem throws, and
+// the attach: a refused customer's redeem throws, and
 // the bridge closes the WS with its standard retry semantics.
 export function wrapRedeemWithRosterGate<T extends { uid: string }>(
   redeem: (ticket: string) => Promise<T>,

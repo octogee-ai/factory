@@ -2,19 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   acceptanceDocId,
   currentVersion,
-  decodeFrame,
-  encodeStdin,
   GATEWAY_CLASSES,
   isLegalDocId,
   modelCredentialEntryById,
   OPENCLAW_PROTOCOL_VERSION,
   OpenclawWireError,
-  PTY_FRAME,
   resolveGatewayClass,
   resolveSizingTier,
   type Agent,
   type Project,
-  type PtyFrame,
 } from "./index.js";
 
 describe("shared type barrel", () => {
@@ -27,16 +23,6 @@ describe("shared type barrel", () => {
     expect(modelCredentialEntryById("openai").displayName).toBe("OpenAI API key");
     expect(OPENCLAW_PROTOCOL_VERSION).toBe(4);
     expect(new OpenclawWireError("timeout", "late").code).toBe("timeout");
-  });
-
-  it("re-exports PTY helpers through the root shared entrypoint", () => {
-    const frame: PtyFrame = decodeFrame(encodeStdin(new TextEncoder().encode("hello")));
-
-    expect(frame.type).toBe(PTY_FRAME.STDIN);
-    if (frame.type !== PTY_FRAME.STDIN) {
-      throw new Error("expected stdin frame");
-    }
-    expect(new TextDecoder().decode(frame.data)).toBe("hello");
   });
 
   it("keeps consumer-facing document types reachable from the root barrel", () => {

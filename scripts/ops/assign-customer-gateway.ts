@@ -245,7 +245,7 @@ export async function assignOne(
         assignmentWrite: "create-if-missing",
         mirrorPatch: {
           "provisioning.openclaw.gatewayProfile": targetProfile,
-          "provisioning.openclaw.shellsEnabled": false,
+          "provisioning.openclaw.controlUiEnabled": false,
           ...modelMetadataPatch(openclaw),
         },
       });
@@ -274,7 +274,7 @@ export async function assignOne(
       mirrorPatch: {
         "provisioning.openclaw.gatewayId": target,
         "provisioning.openclaw.gatewayProfile": targetProfile,
-        "provisioning.openclaw.shellsEnabled": false,
+        "provisioning.openclaw.controlUiEnabled": false,
         ...modelMetadataPatch(openclaw),
       },
     });

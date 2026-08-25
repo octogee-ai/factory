@@ -237,14 +237,6 @@ spec:
           annotations:
             summary: "In-pod runner {{ $labels.runner }} is crash-looping"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
-        - alert: ShellReconcilerStalled
-          expr: (time() - octogee_shell_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Shell reconciler has not completed a sweep in {{ $value | humanizeDuration }}"
-            description: "octogee_shell_reconcile on {{ $labels.pod }} last succeeded >10m ago — stale shell docs won't flip to dead. Check octogee_shell_reconcile_errors_total + the reconciler logs."
     - name: octogee.activity-pairs
       rules:
         - alert: ActivityPairReconciliationFailures

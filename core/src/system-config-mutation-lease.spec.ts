@@ -8,11 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   acquireSystemConfigMutationLease,
-  acquireSystemConfigShellCapabilitySync,
   acquireSystemConfigSyncLeaseSync,
-  activeSystemConfigShellIds,
-  readSystemConfigShellCapability,
-  releaseSystemConfigShellCapabilitySync,
   systemConfigSyncLockPath,
 } from "./system-config-mutation-lease.js";
 
@@ -97,94 +93,6 @@ describe("system config cross-container mutation lease", () => {
     expect(mutation.ok).toBe(true);
     if (mutation.ok) await mutation.lease.release();
     expect(fs.existsSync(systemConfigSyncLockPath(openclawDir))).toBe(false);
-  });
-
-  it("refuses Dashboard mutation and config control while an accepted shell capability exists", async () => {
-    const openclawDir = tempDir();
-    const capability = acquireSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "accepted-shell",
-    });
-    expect(capability).toMatchObject({ ok: true, created: true });
-    if (!capability.ok) throw new Error("expected shell capability");
-    expect(activeSystemConfigShellIds(openclawDir)).toEqual(["accepted-shell"]);
-
-    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
-      ok: false,
-      code: "shell-active",
-      shellIds: ["accepted-shell"],
-    });
-
-    expect(releaseSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "accepted-shell",
-      ownerToken: capability.ownerToken,
-    })).toBe(true);
-    expect(activeSystemConfigShellIds(openclawDir)).toEqual([]);
-    const mutation = await acquireSystemConfigMutationLease({ openclawDir });
-    expect(mutation.ok).toBe(true);
-    if (mutation.ok) await mutation.lease.release();
-  });
-
-  it("makes shell admission and Dashboard mutation atomic in either acquisition order", async () => {
-    const shellFirstDir = tempDir();
-    let dashboardDuringShell: ReturnType<typeof acquireSystemConfigMutationLease> | undefined;
-    expect(acquireSystemConfigShellCapabilitySync({
-      openclawDir: shellFirstDir,
-      shellId: "accepted1",
-      afterGateAcquired: () => {
-        dashboardDuringShell = acquireSystemConfigMutationLease({ openclawDir: shellFirstDir });
-      },
-    })).toMatchObject({ ok: true, created: true, ownerToken: expect.any(String) });
-    await expect(dashboardDuringShell).resolves.toEqual({
-      ok: false,
-      code: "writer-lock-busy",
-    });
-
-    const dashboardFirstDir = tempDir();
-    let shellDuringDashboard: ReturnType<typeof acquireSystemConfigShellCapabilitySync> | undefined;
-    const dashboard = await acquireSystemConfigMutationLease({
-      openclawDir: dashboardFirstDir,
-      afterGateAcquired: () => {
-        shellDuringDashboard = acquireSystemConfigShellCapabilitySync({
-          openclawDir: dashboardFirstDir,
-          shellId: "dashboard-first",
-        });
-      },
-    });
-    expect(dashboard.ok).toBe(true);
-    expect(shellDuringDashboard).toEqual({ ok: false, code: "writer-lock-busy" });
-    if (dashboard.ok) await dashboard.lease.release();
-  });
-
-  it("conditionally releases only the observed shell capability generation", async () => {
-    const openclawDir = tempDir();
-    const observed = acquireSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "same-shell",
-    });
-    if (!observed.ok) throw new Error("expected observed capability");
-    const reacquired = acquireSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "same-shell",
-    });
-    if (!reacquired.ok) throw new Error("expected reacquired capability");
-    expect(reacquired.ownerToken).not.toBe(observed.ownerToken);
-
-    expect(releaseSystemConfigShellCapabilitySync({
-      openclawDir,
-      shellId: "same-shell",
-      ownerToken: observed.ownerToken,
-    })).toBe(true);
-    expect(readSystemConfigShellCapability(openclawDir, "same-shell")).toEqual({
-      shellId: "same-shell",
-      ownerToken: reacquired.ownerToken,
-    });
-    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
-      ok: false,
-      code: "shell-active",
-      shellIds: ["same-shell"],
-    });
   });
 
   it("reclaims only an expired heartbeat through atomic lease-directory quarantine", () => {

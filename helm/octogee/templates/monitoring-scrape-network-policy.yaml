@@ -10,7 +10,7 @@ spec:
   # gitea already carries the gitea-ingress policy, so adding a rule here is
   # purely additive and flips nothing. Mattermost metrics are Enterprise-licensed
   # (404 unlicensed) so there's nothing to scrape; restricted gateways get their
-  # monitoring allowance from the builder-shell policy instead.
+  # monitoring allowance from the gateway ingress policy instead.
   podSelector:
     matchLabels:
       app.kubernetes.io/name: gitea

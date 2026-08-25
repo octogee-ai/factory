@@ -211,62 +211,6 @@ describe("OpenClaw runtime broker env", () => {
     );
   });
 
-  it("brokers shell-deletion discovery and completion without gateway ADC", async () => {
-    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
-    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
-      const url = String(input);
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      calls.push({ url, body });
-      if (url.endsWith("/internal/openclaw/shells/deleting/list")) {
-        return new Response(JSON.stringify({
-          deletions: [{
-            shellId: "shell123",
-            workspaceSlug: "west-canary",
-            deletionId: "00000000-0000-4000-8000-000000000051",
-          }],
-        }), {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        });
-      }
-      return new Response(JSON.stringify({ completed: true }), {
-        headers: { "content-type": "application/json" },
-        status: 200,
-      });
-    });
-    const broker = createOpenClawRuntimeBroker({
-      baseUrl: "http://octogee-api:3001/",
-      gatewayId: "builder-west-canary",
-      fetchImpl,
-    });
-
-    await expect(broker.listDeletingShells(25)).resolves.toEqual([{
-      shellId: "shell123",
-      workspaceSlug: "west-canary",
-      deletionId: "00000000-0000-4000-8000-000000000051",
-    }]);
-    await expect(broker.completeDeletingShell({
-      shellId: "shell123",
-      workspaceSlug: "west-canary",
-      deletionId: "00000000-0000-4000-8000-000000000051",
-    })).resolves.toBe(true);
-    expect(calls).toEqual([
-      {
-        url: "http://octogee-api:3001/internal/openclaw/shells/deleting/list",
-        body: { gatewayId: "builder-west-canary", limit: 25 },
-      },
-      {
-        url: "http://octogee-api:3001/internal/openclaw/shells/deleting/complete",
-        body: {
-          gatewayId: "builder-west-canary",
-          shellId: "shell123",
-          workspaceSlug: "west-canary",
-          deletionId: "00000000-0000-4000-8000-000000000051",
-        },
-      },
-    ]);
-  });
-
   it("brokers Mattermost owner and user-id resolution through octogee-api", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl: typeof fetch = vi.fn(async (input, init) => {

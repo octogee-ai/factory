@@ -628,7 +628,7 @@ export interface CommitPlacementParams {
   source: AssignmentSource;
   now: number;
   // The exact users/{uid} mirror patch the caller already writes today
-  // (gatewayId + gatewayProfile + shellsEnabled + any model-metadata deletes).
+  // (gatewayId + gatewayProfile + controlUiEnabled + any model-metadata deletes).
   // Passed in so this helper stays agnostic to per-caller mirror shaping and
   // preserves each entry point's field set byte-for-byte.
   mirrorPatch: Record<string, unknown>;

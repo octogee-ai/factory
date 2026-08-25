@@ -126,7 +126,6 @@
     "builderAccess": {
       "type": "object",
       "properties": {
-        "shellsEnabled": { "type": "boolean" },
         "controlUiEnabled": { "type": "boolean" },
         "kubeApiServerEgressCidrs": {
           "type": "array",

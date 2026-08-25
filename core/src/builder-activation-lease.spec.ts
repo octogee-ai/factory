@@ -187,10 +187,10 @@ describe("requestBuilderActivationLease", () => {
     await expect(request(db, {
       reportingGatewayId: "shared-green",
       assignmentEpoch: 8,
-      eventKey: "shell:new",
-      cause: "shell",
+      eventKey: "ticket:new",
+      cause: "ticket",
       observedAt: 9_000,
-      createdBy: "builder-shell:uid-alice:alice",
+      createdBy: "openclaw-control:uid-alice:alice",
     })).resolves.toMatchObject({
       statusCode: 202,
       body: { leaseId: "lease-existing", generation: 7, status: "requested", adopted: true },
@@ -205,11 +205,11 @@ describe("requestBuilderActivationLease", () => {
             status: "requested",
             sourceGatewayId: "shared-green",
             sourceAssignmentEpoch: 8,
-            cause: "shell",
-            eventKey: "shell:new",
+            cause: "ticket",
+            eventKey: "ticket:new",
             requestedAt: 9_000,
             lastActiveAt: 9_000,
-            requestedBy: "builder-shell:uid-alice:alice",
+            requestedBy: "openclaw-control:uid-alice:alice",
           },
         },
       },
@@ -253,8 +253,8 @@ describe("requestBuilderActivationLease", () => {
       await expect(request(db, {
         reportingGatewayId: "shared-green",
         assignmentEpoch: 8,
-        eventKey: "shell:new",
-        cause: "shell",
+        eventKey: "ticket:new",
+        cause: "ticket",
         observedAt: 9_000,
       })).resolves.toMatchObject({ statusCode: 202, body: { adopted: true } });
 
@@ -409,12 +409,12 @@ describe("requestBuilderActivationLease", () => {
     ).not.toHaveProperty("activationLease");
   });
 
-  it("activates every Builder tier for a shell request, Hobby included", async () => {
+  it("activates every Builder tier for an interactive ticket demand, Hobby included", async () => {
     const { db, docs } = state();
 
     await expect(request(db, {
-      cause: "shell",
-      eventKey: "shell:req-1",
+      cause: "ticket",
+      eventKey: "ticket:req-1",
     })).resolves.toMatchObject({
       statusCode: 202,
       body: {
@@ -430,7 +430,7 @@ describe("requestBuilderActivationLease", () => {
         openclaw: {
           activationLease: {
             status: "requested",
-            cause: "shell",
+            cause: "ticket",
             entitlementTier: "hobby",
             sizingTier: "xs",
           },

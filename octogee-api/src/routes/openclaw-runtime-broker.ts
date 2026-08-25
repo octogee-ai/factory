@@ -11,10 +11,6 @@ import {
   type ParsedAgentId,
 } from "@octogee/shared/types/identity";
 import {
-  isValidShellId,
-  workspaceShellsCollectionPath,
-} from "@octogee/shared/types/shells";
-import {
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -69,7 +65,6 @@ const FORBIDDEN = { error: "forbidden" } as const;
 const RECEIPT_MAX_LEASE_MS = 60_000;
 const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
-const SHELL_DELETION_BATCH_MAX = 25;
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
 function isDurableGatewayRoot(
@@ -1444,65 +1439,6 @@ function mountActivityRoutes(
   });
 }
 
-function mountShellDeletionRoutes(router: Router, db: Firestore): void {
-  router.post("/shells/deleting/list", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const limit = (req.body as { limit?: unknown } | undefined)?.limit;
-    if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > SHELL_DELETION_BATCH_MAX) {
-      res.status(400).json({ error: "invalid_limit" });
-      return;
-    }
-    const snapshot = await db
-      .collectionGroup("shells")
-      .where("gatewayId", "==", bound.gatewayId)
-      .where("status", "==", "deleting")
-      .limit(Number(limit))
-      .get();
-    const deletions = snapshot.docs.map((document) => {
-      const workspaceSlug = document.ref.parent.parent?.id ?? null;
-      const deletionId = document.data().deletionId;
-      return {
-        shellId: document.id,
-        workspaceSlug: isValidUsername(workspaceSlug) ? workspaceSlug : null,
-        deletionId: typeof deletionId === "string" && deletionId ? deletionId : null,
-      };
-    });
-    res.json({ deletions });
-  });
-
-  router.post("/shells/deleting/complete", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const workspaceSlug = stringBody(req, "workspaceSlug");
-    const shellId = stringBody(req, "shellId");
-    const deletionId = stringBody(req, "deletionId");
-    if (!isValidUsername(workspaceSlug) || !isValidShellId(shellId) || !deletionId) {
-      res.status(400).json({ error: "invalid_shell_deletion" });
-      return;
-    }
-    const reference = db.doc(`${workspaceShellsCollectionPath(workspaceSlug)}/${shellId}`);
-    const outcome = await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(reference);
-      if (!snapshot.exists) return "missing";
-      const data = snapshot.data() ?? {};
-      if (data.gatewayId !== bound.gatewayId) return "forbidden";
-      if (data.status !== "deleting" || data.deletionId !== deletionId) return "conflict";
-      transaction.delete(reference);
-      return "completed";
-    });
-    if (outcome === "forbidden") {
-      forbidden(res);
-      return;
-    }
-    if (outcome === "conflict") {
-      res.status(409).json({ error: "deletion_ownership_changed" });
-      return;
-    }
-    res.json({ completed: outcome === "completed" });
-  });
-}
-
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
   opsMattermostUserId?: string;
@@ -1541,7 +1477,6 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
   };
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db, opsMattermostUserId);
-  mountShellDeletionRoutes(router, db);
   router.use("/agent-control", createAgentControlRoutes({
     registry: agentControlRegistry,
     belongsToGateway: (record, gatewayId) => controlBelongsToGateway(db, record, gatewayId),

@@ -20,7 +20,7 @@ function validConfig(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: { shellsEnabled: true },
+    builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-owner",
     builderSlug: "owner",
     openclawOverrides: null,
@@ -34,7 +34,7 @@ function validConfig(
 describe("gateway mutable config", () => {
   it("accepts the complete durable root authority shape", () => {
     expect(isGatewayMutableConfig(validConfig({
-      builderAccess: { shellsEnabled: true, controlUiEnabled: true },
+      builderAccess: { controlUiEnabled: true },
     }))).toBe(true);
   });
 
@@ -91,7 +91,7 @@ describe("gateway mutable config", () => {
   it("rejects a non-boolean Control UI capability", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),
-      builderAccess: { shellsEnabled: true, controlUiEnabled: "yes" },
+      builderAccess: { controlUiEnabled: "yes" },
     })).toBe(false);
   });
 
@@ -99,7 +99,6 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),
       builderAccess: {
-        shellsEnabled: true,
         platformMetadataEgress: true,
       },
     })).toBe(false);

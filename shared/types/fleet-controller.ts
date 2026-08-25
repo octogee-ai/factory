@@ -90,7 +90,7 @@ export interface FleetHealthResponse {
 }
 
 // Tenant-bearing fleet state. Signed with the fleet controller key, which only
-// Cowboy holds — gateway pods carry the public half, so a Builder with a shell in
+// Cowboy holds — gateway pods carry the public half, so a Builder with terminal access in
 // their own pod cannot mint one. gatewayId is signed into the body so a captured
 // signature cannot be replayed against a different pod.
 export interface FleetStateRequestBody {

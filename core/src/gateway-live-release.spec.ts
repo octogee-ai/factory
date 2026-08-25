@@ -182,7 +182,7 @@ function mutableConfig(
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: { shellsEnabled: true },
+    builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-ceckert",
     builderSlug: "ceckert",
     openclawOverrides: null,
@@ -315,7 +315,7 @@ describe("gateway durable configuration authorization", () => {
         payload: {
           gatewayClass: "shared",
           ownerUid: "uid-someone-else",
-          builderAccess: { shellsEnabled: false },
+          builderAccess: { controlUiEnabled: false },
         },
       },
       "glmGateways/bender": servingRuntime(),
@@ -326,7 +326,7 @@ describe("gateway durable configuration authorization", () => {
       config: {
         gatewayClass: "builder",
         ownerUid: "uid-ceckert",
-        builderAccess: { shellsEnabled: true },
+        builderAccess: { controlUiEnabled: true },
       },
     });
     await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toMatchObject({
@@ -367,7 +367,7 @@ describe("gateway durable configuration authorization", () => {
         gatewayId: "bender",
         ownerUid: "uid-ceckert",
         gatewayClass: "builder",
-        builderAccess: { shellsEnabled: true },
+        builderAccess: { controlUiEnabled: true },
       },
     };
 
@@ -392,7 +392,7 @@ describe("gateway durable configuration authorization", () => {
         gatewayId: "bender",
         ownerUid: "uid-ceckert",
         gatewayClass: "builder",
-        builderAccess: { shellsEnabled: true },
+        builderAccess: { controlUiEnabled: true },
       },
     };
 

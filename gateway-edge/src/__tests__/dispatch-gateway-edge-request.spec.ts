@@ -20,7 +20,7 @@ function mockRes(): ServerResponse {
 describe("dispatchGatewayEdgeRequest — fleet-prefix raw-passthrough seam", () => {
   it("hands a non-chat-proxy scoped path to the app with req.url UNCHANGED — fleet prefix intact, no blanket strip", () => {
     const app = vi.fn();
-    const url = "/api/g/gw-bender/internal/builder-shell/kill";
+    const url = "/api/g/gw-bender/internal/connectors/materialize";
     const req = mockReq(url, "POST");
     const res = mockRes();
 

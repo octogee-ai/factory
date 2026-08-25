@@ -101,7 +101,7 @@ describe("customerMigrationV2GatewayRootFence", () => {
     gatewayContainerSecurityContext: null,
     serviceAccountName: null,
     serviceAccount: null,
-    builderAccess: { shellsEnabled: true },
+    builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-1",
     builderSlug: "alice",
     openclawOverrides: null,

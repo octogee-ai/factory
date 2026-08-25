@@ -31,16 +31,8 @@ WORKDIR /octogee/scripts
 # `tsc@2.0.4` registry package and exits 1. The runtime image stays slim
 # via `npm prune --omit=dev` after the typecheck.
 #
-# Install scripts MUST stay enabled here. node-pty publishes prebuilds for
-# darwin + win32 only, so on linux `build/Release/pty.node` exists solely as
-# output of its `install` script (`node scripts/prebuild.js || node-gyp
-# rebuild`) — the base image's python3 + make + build-essential are what let
-# that fallback compile. npm 12 additionally refuses to run a dependency's
-# install scripts unless `scripts/package.json`'s `allowScripts` names it,
-# and only WARNS when it skips one; that is how #2834 shipped a gateway with
-# an unloadable node-pty while the build stayed green. `.npmrc`'s
-# `strict-allow-scripts=true` turns any future unreviewed install script into
-# a failed install instead of a warning.
+# Install scripts stay enabled and strict so an unreviewed dependency install
+# cannot be silently skipped in the gateway image.
 RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
@@ -76,11 +68,6 @@ COPY --chown=node:node shared/ /octogee/shared/
 
 # Install shared/ deps (FULL — including devDeps like @types/ws) so the
 # typecheck below can resolve imports that walk into shared/.
-# `scripts/lib/builder-shell-server.ts` imports `shared/ws/upgrade-router`
-# which imports the `ws` npm package; tsc needs both the runtime package
-# (in shared's prod deps) AND the type declarations (in shared's
-# devDependencies — @types/ws). Without this, tsc two steps down fails
-# with TS2307 "Cannot find module 'ws'".
 # The devDeps are pruned together with scripts/'s devDeps at the
 # combined prune step below.
 RUN cd /octogee/shared && npm ci --no-audit --no-fund
@@ -97,13 +84,9 @@ RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
     npm prune --omit=dev --no-audit --no-fund && \
     cd /octogee/shared && npm prune --omit=dev --no-audit --no-fund
 
-# ── Native-module gate (#2834) ──────────────────────────────────────────────
-# Load every native module in scripts/ for real. A missing binding is
-# invisible to pod readiness — the pod reports 2/2 Ready and the first Builder
-# Shell session is what discovers it — so the require has to happen where a
-# failure can still stop the image from being pushed. Placed AFTER the prune
-# so it covers both halves: the install must produce the binding, and nothing
-# later may remove it.
+# ── Native-module gate ──────────────────────────────────────────────────────
+# Validate every native module declared by scripts/package.json after pruning,
+# before an image can be pushed.
 RUN node ops/verify-native-modules.mjs
 
 # ── Workspace templates ─────────────────────────────────────────────────────

@@ -382,7 +382,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     expect(gatewayDeploymentIntentFingerprint({
       ...base,
       deploymentIntentFingerprint: undefined,
-      builderAccess: { shellsEnabled: true },
+      builderAccess: { controlUiEnabled: true },
     })).not.toBe(base.deploymentIntentFingerprint);
     expect(gatewayDeploymentIntentFingerprint({
       ...base,

@@ -142,15 +142,6 @@ else
   export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_DIR/openclaw.json}"
 fi
 
-# BuilderShell comes up before the durable restore so the Builder can shell
-# in and repair while boot is still waiting on the data plane.
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ "${BUILDER_SHELLS_ENABLED:-}" = "true" ]; then
-  export BUILDER_SHELL_REQUIRE_KEY="${BUILDER_SHELL_REQUIRE_KEY:-true}"
-  supervise_runner builder-shell 5000 "$TSX" /octogee/scripts/entrypoints/builder-shell-server.ts
-elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Builder-shell disabled: runtime shell access is not enabled"
-fi
-
 # ── Owner-bound runtime system_config restore ───────────────────────────────
 # Builder gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
@@ -216,7 +207,7 @@ fi
 # gateway-edge gets the same per-gateway OPENCLAW_GATEWAY_TOKEN env exception,
 # uses it once to pair with OpenClaw, then persists a sidecar-only device token.
 #
-# The shell-bearing gateway container must not need platform Secret Manager
+# The OpenClaw gateway container must not need platform Secret Manager
 # reach under the platform-credential floor. Leaving this publisher as opt-in
 # preserves a rollback hook for legacy deployments without making normal boots
 # block on ADC/metadata or requiring a secretmanager role on the cattle GSA.

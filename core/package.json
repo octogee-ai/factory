@@ -57,10 +57,6 @@
       "types": "./dist/builder-activation-lease.d.ts",
       "default": "./dist/builder-activation-lease.js"
     },
-    "./builder-shell-deletion-fence": {
-      "types": "./dist/builder-shell-deletion-fence.d.ts",
-      "default": "./dist/builder-shell-deletion-fence.js"
-    },
     "./byosub-onboarding": {
       "types": "./dist/byosub-onboarding.d.ts",
       "default": "./dist/byosub-onboarding.js"
@@ -407,9 +403,6 @@
       ],
       "builder-activation-lease": [
         "dist/builder-activation-lease.d.ts"
-      ],
-      "builder-shell-deletion-fence": [
-        "dist/builder-shell-deletion-fence.d.ts"
       ],
       "byosub-onboarding": [
         "dist/byosub-onboarding.d.ts"

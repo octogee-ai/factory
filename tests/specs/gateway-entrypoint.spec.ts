@@ -80,7 +80,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
   it("requires a builder slug for every owner-bound runtime", () => {
     const identityBlock = entrypoint.slice(
       entrypoint.indexOf("GATEWAY_ID is set by the deployment's env block"),
-      entrypoint.indexOf("BuilderShell comes up before the durable restore"),
+      entrypoint.indexOf("# ── Owner-bound runtime system_config restore"),
     );
     expect(identityBlock).toMatch(
       /FATAL: GATEWAY_BUILDER_SLUG is required for \$\{GATEWAY_CLASS_EFFECTIVE\} durable config/,
@@ -95,17 +95,6 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     const retryBlock = entrypoint.slice(retryIdx, entrypoint.indexOf("else", retryIdx));
     expect(retryBlock).toMatch(/sleep 5/);
     expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
-  });
-
-  it("starts the entitled repair shell before restore so the Builder can intervene while boot waits", () => {
-    const configPathIdx = entrypoint.indexOf(
-      'export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"',
-    );
-    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    expect(configPathIdx).toBeGreaterThan(-1);
-    expect(configPathIdx).toBeLessThan(shellIdx);
-    expect(shellIdx).toBeLessThan(restoreIdx);
   });
 
   it("starts the probed runner plane only after the actual OpenClaw process", () => {
@@ -157,8 +146,6 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
     const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
-    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    expect(openclawIdx).toBeGreaterThan(shellIdx);
     expect(watcherIdx).toBeGreaterThan(openclawIdx);
     expect(fleetIdx).toBeGreaterThan(openclawIdx);
     expect(entrypoint).toContain("OpenClaw gateway healthy; starting auxiliary runners");
@@ -261,37 +248,14 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).not.toMatch(/supervise_runner\s+preview-proxy\b/);
   });
 
-  it("gates builder-shell behind runtime class and explicit shell unlock", () => {
-    expect(entrypoint).toMatch(/supervise_runner\s+builder-shell\s+5000\b/);
-    expect(entrypoint.match(/supervise_runner\s+builder-shell\s+5000\b/g)).toHaveLength(1);
-    const builderIdx = entrypoint.indexOf("supervise_runner builder-shell");
-    const guardBlock = entrypoint.slice(
-      entrypoint.lastIndexOf("if [", builderIdx),
-      builderIdx,
-    );
-    expect(guardBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
-    expect(guardBlock).toMatch(/= "builder"/);
-    expect(guardBlock).toMatch(/BUILDER_SHELLS_ENABLED/);
-    expect(guardBlock).toMatch(/true/);
-    expect(entrypoint).toMatch(/export BUILDER_SHELL_REQUIRE_KEY/);
-    expect(entrypoint).toMatch(
-      /Builder-shell disabled: runtime shell access is not enabled/,
-    );
-  });
-
-  it("does not run the Firestore-backed shell reconciler inside Builder pods", () => {
-    expect(entrypoint).not.toMatch(/supervise_runner\s+shell-reconciler\b/);
-    expect(entrypoint).not.toMatch(/reconcile-shells-runner\.ts/);
-  });
-
   it("starts the always-on runner-metrics-exporter", () => {
     expect(entrypoint).toMatch(/runner-metrics-exporter\.ts/);
   });
 
-  it("supervise_runner keeps a thin shell guard so a dead supervisor restarts", () => {
+  it("supervise_runner keeps a thin guard so a dead supervisor restarts", () => {
     const fnRegion = entrypoint.slice(
       entrypoint.indexOf("supervise_runner() {"),
-      entrypoint.indexOf("supervise_runner builder-shell"),
+      entrypoint.indexOf("supervise_runner fleet-controller"),
     );
     expect(fnRegion).toMatch(/while true/);
     expect(fnRegion).toMatch(/\$SUPERVISE/);
@@ -302,11 +266,11 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
   it("forwards SIGTERM to the whole process group so a pod restart is clean", () => {
     const shutdownIdx = entrypoint.indexOf("shutdown() {");
     const trapIdx = entrypoint.indexOf("trap shutdown TERM INT");
-    const shellIdx = entrypoint.indexOf("supervise_runner builder-shell");
+    const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const shutdown = entrypoint.slice(shutdownIdx, trapIdx);
     expect(shutdown).toMatch(/kill -TERM 0/);
     expect(shutdown).toMatch(/exit 0/);
-    expect(trapIdx).toBeLessThan(shellIdx);
+    expect(trapIdx).toBeLessThan(fleetIdx);
     expect(entrypoint.match(/trap shutdown TERM INT/g)).toHaveLength(1);
     expect(gatewayDeployment).toMatch(/kind:\s*Deployment/);
     expect(gatewayDeployment).not.toMatch(/restartPolicy:\s*(?:Never|OnFailure)/);

@@ -20,7 +20,6 @@ import {
   createAgentControlRegistryClient,
   type AgentControlRegistryClient,
 } from "./agent-control-registry-client.js";
-import type { BrokeredShellDeletion } from "../../lib/shell-deletion-reconciler.js";
 
 export interface RedeemedOpenClawWs {
   uid: string;
@@ -54,12 +53,6 @@ export interface OpenClawRuntimeBroker {
   }): Promise<Record<string, unknown>>;
   writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
   deleteRunLiveDoc(path: string): Promise<void>;
-  listDeletingShells(limit: number): Promise<BrokeredShellDeletion[]>;
-  completeDeletingShell(input: {
-    shellId: string;
-    workspaceSlug: string;
-    deletionId: string;
-  }): Promise<boolean>;
   activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
@@ -123,31 +116,6 @@ function objectField(body: Record<string, unknown> | null, name: string): Record
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function shellDeletions(body: Record<string, unknown> | null): BrokeredShellDeletion[] {
-  const records = body?.deletions;
-  if (!Array.isArray(records)) {
-    throw new OpenClawRuntimeBrokerError(502, "malformed shell deletion list");
-  }
-  return records.map((record) => {
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new OpenClawRuntimeBrokerError(502, "malformed shell deletion");
-    }
-    const value = record as Record<string, unknown>;
-    if (
-      typeof value.shellId !== "string" ||
-      !(typeof value.workspaceSlug === "string" || value.workspaceSlug === null) ||
-      !(typeof value.deletionId === "string" || value.deletionId === null)
-    ) {
-      throw new OpenClawRuntimeBrokerError(502, "malformed shell deletion");
-    }
-    return {
-      shellId: value.shellId,
-      workspaceSlug: value.workspaceSlug,
-      deletionId: value.deletionId,
-    };
-  });
 }
 
 function readReceipt(body: Record<string, unknown> | null): ActivityWriteReceiptV1 {
@@ -416,25 +384,6 @@ export function createOpenClawRuntimeBroker(opts: {
         { path },
         new Set([204]),
       );
-    },
-    async listDeletingShells(limit: number): Promise<BrokeredShellDeletion[]> {
-      const body = await postJson(
-        "/internal/openclaw/shells/deleting/list",
-        { limit },
-        new Set([200]),
-      );
-      return shellDeletions(body);
-    },
-    async completeDeletingShell(input): Promise<boolean> {
-      const body = await postJson(
-        "/internal/openclaw/shells/deleting/complete",
-        input,
-        new Set([200]),
-      );
-      if (typeof body?.completed !== "boolean") {
-        throw new OpenClawRuntimeBrokerError(502, "malformed shell deletion completion");
-      }
-      return body.completed;
     },
     activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore {
       return new BrokeredActivityWriteReceiptStore(receiptPort, channelDocPath);

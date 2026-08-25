@@ -110,17 +110,6 @@ spec:
               value: {{ (.Values.disposableGateway).idleMs | default "1800000" | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_WARNING_MS
               value: {{ (.Values.disposableGateway).idleWarningMs | default "300000" | quote }}
-            # Runtime-sleep warning producer: Cowboy posts system.runtime
-            # events to octogee-api's dedicated-bearer notifications route.
-            # Secret optional — an unconfigured notifier logs and skips.
-            - name: SYSTEM_NOTIFICATION_URL
-              value: {{ .Values.env.systemNotificationUrl | default (printf "http://octogee-api.%s.svc.cluster.local:3001/api/notifications/system" .Release.Namespace) | quote }}
-            - name: SYSTEM_NOTIFICATION_BEARER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: system-notification-bearer
-                  key: bearer-token
-                  optional: true
             # Single source of truth: parent `.Values.global.fleetControllerPort`.
             # The umbrella's gateway-fleet.yaml renders Service +
             # BackendConfig + Ingress paths off the same value, so a

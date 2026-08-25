@@ -49,9 +49,8 @@ builderAccess:
   # Locked by default. Cowboy may enable this only after a customer has a
   # tenant-owned disposable Builder runtime and the app/user mirror has been
   # updated.
-  shellsEnabled: false
   controlUiEnabled: false
-  # Builder gateway TokenReview path. BuilderShell and broker identity checks
+  # Builder gateway TokenReview path. Internal gateway identity checks
   # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
   # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)
   # from the default/kubernetes EndpointSlice, not the Service ClusterIP.
@@ -298,10 +297,10 @@ gatewayEdge:
     OCTOGEE_KMS_KEY_NAME: ""
   # Platform secrets (GITEA_TOKEN, MM_ADMIN_TOKEN, INTERNAL_SERVICE_KEY,
   # OAuth/Discord/Resend/Stripe/INVITE_SECRET, …) are intentionally NOT mounted on
-  # the gateway-edge sidecar or the shell-bearing gateway pod — the agent runs
+  # the gateway-edge sidecar or the OpenClaw gateway pod — the agent runs
   # arbitrary code there, so platform credentials must stay off it. Nothing rendered
   # this list anyway (the deployment injects only gatewayEdge.env); the cluster
-  # gateway-edge and the no-shell broker sidecar hold what's needed. See
+  # gateway-edge and the platform broker sidecar hold what's needed. See
   # credential-brokering #1480 / #1478 / #1493 / #1494. Do NOT add a
   # `range .Values.gatewayEdge.secrets` env loop here — it re-introduces the exact
   # exposure those PRs removed. (Dead block + unused requireGatewayEdgeSecret helper
@@ -314,9 +313,6 @@ gatewayEdge:
       cpu: 500m
       memory: 512Mi
 
-# NetworkPolicy locking down Builder gateway :3005 (builder
-# shell) to same-pod / same-instance ingress only. See
-# templates/builder-shell-network-policy.yaml. Disable per gateway if
-# a cluster doesn't support NetworkPolicy enforcement.
+# Disable per gateway if a cluster doesn't support NetworkPolicy enforcement.
 networkPolicy:
   enabled: true

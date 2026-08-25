@@ -853,7 +853,7 @@ fi
 # POST-BENDER-CLEANUP-SPEC §2.7: chat-proxy is gone as a separate container.
 # - MM REST (/api/v4/*) + credential mint (/api/auth/mattermost) → octogee-api
 #   (the mint route was preflighted in 5d.b above).
-# - MM WS bridge + OpenClaw WS + builder-shell → gateway-router /g/<gw>/*
+# - MM WS bridge + OpenClaw WS → gateway-router /g/<gw>/*
 #   publicly, then the gateway-edge sidecar's internal /api/g/<gw>/* mount.
 set_section infra
 header "8. chat (gateway-edge sidecar + octogee-api)"

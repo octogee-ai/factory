@@ -1752,7 +1752,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
     expect(update?.data?.["provisioning.openclaw.gatewayId"]).toEqual(FieldValue.delete());
     expect(update?.data?.["provisioning.openclaw.gatewayAssignedAt"]).toEqual(FieldValue.delete());
     expect(update?.data?.["provisioning.openclaw.gatewayProfile"]).toEqual(FieldValue.delete());
-    expect(update?.data?.["provisioning.openclaw.shellsEnabled"]).toEqual(FieldValue.delete());
+    expect(update?.data?.["provisioning.openclaw.controlUiEnabled"]).toEqual(FieldValue.delete());
   });
 
   it("returns 404 for an unknown customer", async () => {
@@ -2037,7 +2037,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
         ownerUid: "uid-owner",
         builderSlug: "owner",
         builderAccess: {
-          shellsEnabled: true,
+          controlUiEnabled: true,
           reason: "owned-runtime-gateway",
         },
       },

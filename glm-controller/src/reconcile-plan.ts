@@ -103,7 +103,7 @@ function injectApiServerEgress(
   builderAccess: HelmInstanceValue["builderAccess"],
   apiServerEgressCidrs: readonly string[],
 ): HelmInstanceValue["builderAccess"] {
-  if (!builderAccess?.shellsEnabled || apiServerEgressCidrs.length === 0) {
+  if (!builderAccess?.controlUiEnabled || apiServerEgressCidrs.length === 0) {
     return builderAccess;
   }
   return { ...builderAccess, kubeApiServerEgressCidrs: [...apiServerEgressCidrs] };

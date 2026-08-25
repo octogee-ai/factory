@@ -293,7 +293,7 @@ projectRunner:
   apiServerEgressCidrs: []
 
 # ── llm-broker ───────────────────────────────────────────────────────────────
-# Dedicated, shell-less cluster service that holds the real platform model key
+# Dedicated cluster service that holds the real platform model key
 # and accepts only per-gateway broker tokens from exec-capable builder pods.
 # It runs from the octogee-api image for now so the platform release carries one
 # singleton image tag; split to a separate image only when traffic/load demands.

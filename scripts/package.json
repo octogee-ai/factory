@@ -25,20 +25,19 @@
     "audit-duplication": "node ops/audit-duplication.mjs"
   },
   "allowScripts": {
-    "node-pty": true,
     "esbuild": true,
     "protobufjs": true,
     "@firebase/util": true,
     "fsevents": true,
     "re2": false
   },
+  "nativeModules": [],
   "dependencies": {
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
     "express": "^5.2.1",
     "firebase-admin": "^14.1.0",
     "google-auth-library": "^10.9.0",
-    "node-pty": "^1.1.0",
     "stripe": "^22.5.0",
     "tsx": "^4.23.12",
     "ws": "^8.21.1"

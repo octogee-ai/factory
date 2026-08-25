@@ -58,7 +58,6 @@ export interface GatewayServiceAccountSpec {
     annotations?: Record<string, string>;
 }
 export interface BuilderGatewayAccessSpec {
-    shellsEnabled?: boolean;
     controlUiEnabled?: boolean;
     kubeApiServerEgressCidrs?: string[];
     reason?: string;
@@ -66,7 +65,7 @@ export interface BuilderGatewayAccessSpec {
     verifiedBy?: string;
 }
 export declare const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec;
-export declare function defaultBuilderGatewayAccess(ownerUid: string | null | undefined, shellsEnabled?: boolean): BuilderGatewayAccessSpec;
+export declare function defaultBuilderGatewayAccess(ownerUid: string | null | undefined): BuilderGatewayAccessSpec;
 export declare function resolveBuilderGatewayAccess(ownerUid: string | null | undefined, builderAccess: BuilderGatewayAccessSpec | null | undefined): BuilderGatewayAccessSpec;
 export declare const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export declare const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
@@ -78,9 +77,8 @@ export declare const NEW_GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase
 export declare function isValidNewGatewayId(id: unknown): id is string;
 export declare function deriveGatewayIdentity(gatewayId: string, explicitGateway?: unknown): string;
 export declare function builderGatewayServiceAccountName(gatewayId: string): string;
-export declare function isGatewayClassShellAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: BuilderGatewayAccessSpec | undefined): boolean;
 export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: BuilderGatewayAccessSpec | undefined): boolean;
-export declare function resolveUserGatewayShellState(data: {
+export declare function resolveUserGatewayControlState(data: {
     gatewayClass?: unknown;
     profile?: unknown;
     imageProfile?: unknown;
@@ -88,7 +86,7 @@ export declare function resolveUserGatewayShellState(data: {
     builderAccess?: BuilderGatewayAccessSpec;
 } | undefined, uid: string): {
     gatewayProfile: GatewayProfile;
-    shellsEnabled: boolean;
+    controlUiEnabled: boolean;
 };
 export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "scale-shared-member" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";

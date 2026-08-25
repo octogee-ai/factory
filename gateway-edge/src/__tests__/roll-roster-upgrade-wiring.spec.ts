@@ -19,7 +19,7 @@ const indexSource = readFileSync(
 );
 
 describe("roll-roster upgrade gate wiring (Codex P0)", () => {
-  it("the shared upgrade handler gates BEFORE any dispatch (openclaw + MM + wsRouter/builder-shell)", () => {
+  it("the shared upgrade handler gates BEFORE any dispatch", () => {
     const handlerStart = proxySource.indexOf('server.on("upgrade"');
     const gateCall = proxySource.indexOf("guardUpgradeRequest(", handlerStart);
     const firstDispatch = proxySource.indexOf("handleOpenClawWsUpgrade(", handlerStart);
@@ -30,10 +30,6 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
 
   it("the OpenClaw WS attach re-checks the redeemed uid (post-auth per-customer verdict)", () => {
     expect(proxySource).toContain("checkUid(uid)");
-  });
-
-  it("the builder-shell redeem is wrapped with the roster gate", () => {
-    expect(proxySource).toContain("wrapRedeemWithRosterGate(");
   });
 
   it("the MM WS bridge gates at the auth-late seam: rosterVerdict threaded from the SAME shared gate (checkUid), resolving mmUser→uid through the BROKER not direct Firestore", () => {
@@ -81,10 +77,9 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
     );
   });
 
-  it("index boot installs ONE shared upgrade gate over the same roster store and threads it to both attach calls", () => {
+  it("index boot installs one shared upgrade gate over the roster store", () => {
     expect(indexSource).toContain("createRollRosterUpgradeGate(");
     expect(indexSource).toMatch(/attachChatProxyWsUpgrade\(server, \{ upgradeGate/);
-    expect(indexSource).toMatch(/attachBuilderShellRoute\(server, \{ upgradeGate/);
   });
 
   it("loads the revision roster through the tenant-bound broker, never directly from Firestore", () => {

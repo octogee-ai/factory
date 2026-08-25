@@ -31,13 +31,11 @@ import {
 import { isAllowedWsOrigin, warnIfWsOriginsMisconfigured } from "./openclaw/ws-origin.js";
 import { applyGatewayPrefixStripInPlace, stripGatewayPrefix } from "./gateway-prefix.js";
 import { createBridgeLog } from "./bridge-log.js";
-import { resolveBuilderShellInternalAuthSecret } from "../lib/builder-shell-internal-auth.js";
 import { isAllowedLocalhostOrigin } from "../lib/dev-origins.js";
 import {
   guardUpgradeRequest,
   mmRosterVerdictFor,
   revisionUnavailableUpgradeResponse,
-  wrapRedeemWithRosterGate,
   type RollRosterUpgradeGate,
   type UpgradeGateVerdict,
 } from "../roll-roster.js";
@@ -191,20 +189,6 @@ const metricsRegistry = chatProxyMetricsRegistry;
 const ocWsConnectionsActive = new Gauge({
   name: 'chat_proxy_openclaw_ws_connections_active',
   help: 'Active OpenClaw gateway proxy connections',
-  registers: [metricsRegistry],
-});
-
-const builderShellSessionCloseTotal = new Counter({
-  name: 'chat_proxy_builder_shell_session_close_total',
-  help: 'Builder-shell session close events, by reason (client-disconnect / upstream-disconnect / upstream-error / upstream-unreachable / backpressure-*). Does NOT include invalid-ticket rejections — those are counted separately on chat_proxy_builder_shell_rejected_total.',
-  labelNames: ['reason'] as const,
-  registers: [metricsRegistry],
-});
-
-const builderShellRejectedTotal = new Counter({
-  name: 'chat_proxy_builder_shell_rejected_total',
-  help: 'Builder-shell ticket rejections (invalid/expired/replayed). Separate from session_close_total so session-close alerting is not muddled by ticket-mint/redeem mismatch.',
-  labelNames: ['reason'] as const,
   registers: [metricsRegistry],
 });
 
@@ -1041,135 +1025,6 @@ export function attachChatProxyWsUpgrade(
   });
 
   (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
-}
-
-export interface AttachBuilderShellRouteOptions {
-  upgradeGate?: RollRosterUpgradeGate | null;
-}
-
-export async function attachBuilderShellRoute(
-  server: http.Server,
-  routeOpts: AttachBuilderShellRouteOptions = {},
-): Promise<void> {
-  const gatewayEdgeUrl = process.env.GATEWAY_EDGE_INTERNAL_URL;
-  const internalAuth = resolveBuilderShellInternalAuthSecret(process.env);
-  const namespace = process.env.K8S_NAMESPACE || "octogee";
-  if (!gatewayEdgeUrl || !internalAuth) {
-    console.warn(
-      "[builder-shell] GATEWAY_EDGE_INTERNAL_URL or builder-shell internal auth unset — builder-shell WS disabled",
-    );
-    return;
-  }
-  const { buildRedeemFetcher, buildSessionAuthorizer } = await import("./builder-shell/redeem.js");
-  const { buildConnectUpstream } = await import("./builder-shell/upstream.js");
-  const { attachBuilderShellUpgrade } = await import("./builder-shell/upgrade.js");
-  const router = (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter;
-  const redeemAuth =
-    internalAuth.headerName === "x-k8s-sa-token"
-      ? {
-          getK8sServiceAccountToken: () =>
-            resolveBuilderShellInternalAuthSecret(process.env)?.value,
-        }
-      : {
-          getInternalServiceKey: () =>
-            resolveBuilderShellInternalAuthSecret(process.env)?.value,
-        };
-  const upstreamInternalServiceKey =
-    internalAuth.headerName === "x-internal-service-key" ? internalAuth.value : undefined;
-  attachBuilderShellUpgrade(server, {
-    router,
-    // The roster gate rides the redeem (the point where the customer resolves):
-    // a quiescing / elsewhere-serving customer's redeem throws and the bridge
-    // closes the WS with its standard retry semantics.
-    redeem: wrapRedeemWithRosterGate(
-      buildRedeemFetcher({
-        baseUrl: gatewayEdgeUrl,
-        ...redeemAuth,
-      }),
-      routeOpts.upgradeGate ?? null,
-    ),
-    authorize: buildSessionAuthorizer({
-      baseUrl: gatewayEdgeUrl,
-      ...redeemAuth,
-    }),
-    connectUpstream: buildConnectUpstream({
-      namespace,
-      internalServiceKey: upstreamInternalServiceKey,
-    }),
-
-    allowedOrigins: isAllowedWsOrigin,
-    onEvent: (e) => {
-      if (e.kind === "session-attached") {
-        // Presence flip happens HERE, not at redeem-time — the upstream
-        // WS is confirmed live (ATTACHED received), so flipping
-        // currentAttacherUid can't kick the prior user only to strand
-        // them when the new dial later fails.
-        import("../lib/builder-shell-broker.js")
-          .then(({ recordBuilderShellAttach }) =>
-            recordBuilderShellAttach({
-              gatewayId: e.gatewayId,
-              containerSlug: e.containerSlug,
-              shellId: e.shellId,
-              attacherUid: e.uid,
-              sessionId: e.sessionId,
-            }),
-          )
-          .catch((err) => {
-            console.error("[builder-shell] presence attach failed", {
-              sessionId: e.sessionId,
-              shellId: e.shellId,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          });
-        return;
-      }
-      if (e.kind === "session-closed") {
-        builderShellSessionCloseTotal.inc({ reason: e.reason });
-        console.warn(
-          `[builder-shell] session closed sessionId=${e.sessionId} uid=${e.uid} gatewayId=${e.gatewayId} reason=${e.reason}`,
-        );
-        // Clear shell-doc presence + close the audit row in parallel.
-        // recordShellDetach is guarded against stale closes after a
-        // takeover (it only clears if currentAttacherUid still matches
-        // the detacher). closeAuditRow is idempotent — won't overwrite
-        // a 'taken-over' status that recordShellAttach set already.
-        import("../lib/builder-shell-broker.js")
-          .then(async ({ recordBuilderShellDetach, closeBuilderShellAuditRow }) => {
-            const isError =
-              e.reason === "upstream-unreachable" || e.reason === "upstream-error";
-            await Promise.allSettled([
-              recordBuilderShellDetach({
-                gatewayId: e.gatewayId,
-                containerSlug: e.containerSlug,
-                shellId: e.shellId,
-                detacherUid: e.uid,
-              }),
-              closeBuilderShellAuditRow({
-                gatewayId: e.gatewayId,
-                sessionId: e.sessionId,
-                status: isError ? "errored" : "closed",
-                error: isError ? e.reason : undefined,
-              }),
-            ]);
-          })
-          .catch((err) => {
-            console.error("[builder-shell] presence/audit close failed", {
-              sessionId: e.sessionId,
-              shellId: e.shellId,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          });
-        return;
-      }
-      // 'rejected' — counted separately so session-close baselines
-      // aren't polluted by invalid-ticket events.
-      builderShellRejectedTotal.inc({ reason: e.reason });
-      console.warn(`[builder-shell] ticket rejected reason=${e.reason}`);
-    },
-  });
-  console.log(
-    `[builder-shell] WS route attached (gateway-edge=${gatewayEdgeUrl}, ns=${namespace}, auth=${internalAuth.mode})`,
-  );
 }
 
 async function buildEditDiffFetcher() {

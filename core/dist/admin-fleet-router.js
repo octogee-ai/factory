@@ -1,5 +1,5 @@
 import { FieldValue, } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayShellState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -3060,7 +3060,7 @@ async function claimCustomerDeletion(opts) {
                     "provisioning.openclaw.gatewayId": FieldValue.delete(),
                     "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
                     "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                    "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+                    "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
                 }
                 : {}),
         });
@@ -4181,14 +4181,14 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const currentGid = userData.provisioning?.openclaw?.gatewayId;
-            const shellState = resolveUserGatewayShellState({
+            const controlState = resolveUserGatewayControlState({
                 gatewayClass: target.root.gatewayClass,
                 profile: target.root.profile ?? undefined,
                 imageProfile: target.root.imageProfile,
                 ownerUid: target.root.ownerUid ?? undefined,
                 builderAccess: target.root.builderAccess ?? undefined,
             }, uid);
-            const gatewayProfile = shellState.gatewayProfile;
+            const gatewayProfile = controlState.gatewayProfile;
             // Mirror AND the revision assignment doc commit together
             // (commitPlacementAtomic): on a backfilled gateway the customer gets a
             // serving assignment on the resolved revision instead of being left a
@@ -4226,7 +4226,7 @@ export function addAdminFleetRoutes(router, deps) {
                     mirrorPatch: {
                         "provisioning.openclaw.gatewayId": targetGatewayId,
                         "provisioning.openclaw.gatewayProfile": gatewayProfile,
-                        "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+                        "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
                     },
                 }),
             });
@@ -5779,7 +5779,7 @@ export function addAdminFleetRoutes(router, deps) {
                             "provisioning.openclaw.gatewayId": FieldValue.delete(),
                             "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
                             "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                            "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+                            "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
                         });
                         return { status: 200, body: { uid, parked: true } };
                     }),
@@ -5936,7 +5936,7 @@ export function addAdminFleetRoutes(router, deps) {
                             };
                         }
                         if (!current) {
-                            const shellState = resolveUserGatewayShellState({
+                            const controlState = resolveUserGatewayControlState({
                                 gatewayClass: targetRoot.gatewayClass,
                                 profile: targetRoot.profile ?? undefined,
                                 imageProfile: targetRoot.imageProfile,
@@ -5945,8 +5945,8 @@ export function addAdminFleetRoutes(router, deps) {
                             }, uid);
                             txn.update(userRef, {
                                 "provisioning.openclaw.gatewayId": targetGatewayId,
-                                "provisioning.openclaw.gatewayProfile": shellState.gatewayProfile,
-                                "provisioning.openclaw.shellsEnabled": shellState.shellsEnabled,
+                                "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
+                                "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
                                 "provisioning.openclaw.managedBy": "operator",
                                 "provisioning.openclaw.activationLease": FieldValue.delete(),
                             });
@@ -6156,13 +6156,13 @@ export function addAdminFleetRoutes(router, deps) {
                     }
                     // Drop the durable assignment AND the mirror together, so no stale
                     // roster entry outlives the placement and no stale
-                    // gatewayProfile/shellsEnabled survives the gateway they described.
+                    // gateway profile or control authorization survives the gateway it described.
                     txn.delete(assignmentRef);
                     txn.update(userRef, {
                         "provisioning.openclaw.gatewayId": FieldValue.delete(),
                         "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
                         "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                        "provisioning.openclaw.shellsEnabled": FieldValue.delete(),
+                        "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
                     });
                     return {
                         status: 200,

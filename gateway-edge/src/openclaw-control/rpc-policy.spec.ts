@@ -60,7 +60,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
       "native-owner",
     )).toEqual({ allowed: true, category: "tools_invoke", outbound: ownerTool });
     expect(evaluateOpenClawControlRpcForProfile(
-      request("terminal.open", { sessionId: "shell" }),
+      request("terminal.open", { sessionId: "terminal" }),
       context,
       "native-owner",
     )).toMatchObject({ allowed: true, category: "unknown" });

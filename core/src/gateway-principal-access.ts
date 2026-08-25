@@ -7,7 +7,6 @@ export const GATEWAY_PERMISSION_SET_IDS = [
   "agent-viewer.v1",
   "trusted-helper.v1",
   "co-owner.v1",
-  "builder-shell.v1",
 ] as const;
 
 export type GatewayPermissionSetId = (typeof GATEWAY_PERMISSION_SET_IDS)[number];
@@ -38,7 +37,6 @@ export const GATEWAY_PERMISSION_SETS: Readonly<
     cannot: Object.freeze([
       "Change settings",
       "Read private conversations or secrets",
-      "Use Builder Shell",
     ]),
   }),
   "trusted-helper.v1": Object.freeze({
@@ -52,7 +50,7 @@ export const GATEWAY_PERMISSION_SETS: Readonly<
     cannot: Object.freeze([
       "See passwords or tokens",
       "Approve personal account access",
-      "Use Builder Shell, manage billing, or give access",
+      "Manage billing or give access",
     ]),
   }),
   "co-owner.v1": Object.freeze({
@@ -61,19 +59,6 @@ export const GATEWAY_PERMISSION_SETS: Readonly<
     can: Object.freeze([
       "Use the full OpenClaw Dashboard",
       "Manage ordinary workspace settings",
-    ]),
-    cannot: Object.freeze([
-      "Manage billing or ownership",
-      "Give or remove Agent access",
-      "Use Builder Shell without a separate grant",
-    ]),
-  }),
-  "builder-shell.v1": Object.freeze({
-    label: "Builder Shell",
-    purpose: "Debug directly in the agent runtime.",
-    can: Object.freeze([
-      "Read and edit runtime files",
-      "Run commands as the non-root runtime user",
     ]),
     cannot: Object.freeze([
       "Manage billing or ownership",
@@ -94,7 +79,6 @@ export interface ResolvedGatewayAccess {
   brokerProfile: OpenClawBrokerProfile | null;
   dashboard: boolean;
   config: boolean;
-  shell: boolean;
   workspaceManagement: boolean;
   grantRevision: number | null;
   expiresAt: number | null;
@@ -232,7 +216,6 @@ export function resolveGatewayPrincipalAccess(input: {
       brokerProfile: "native-owner",
       dashboard: true,
       config: true,
-      shell: true,
       workspaceManagement: true,
       grantRevision: null,
       expiresAt: null,
@@ -257,7 +240,6 @@ export function resolveGatewayPrincipalAccess(input: {
     brokerProfile,
     dashboard: brokerProfile !== null,
     config: brokerProfile === "delegated-config" || brokerProfile === "native-co-owner",
-    shell: grant.permissionSetIds.includes("builder-shell.v1"),
     workspaceManagement: grant.permissionSetIds.includes("co-owner.v1"),
     grantRevision: grant.revision,
     expiresAt: grant.expiresAt,

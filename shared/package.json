@@ -46,13 +46,9 @@
       "types": "./dist/types/billing-tiers.d.ts",
       "default": "./dist/types/billing-tiers.js"
     },
-    "./types/builder-shell": {
-      "types": "./dist/types/builder-shell.d.ts",
-      "default": "./dist/types/builder-shell.js"
-    },
-    "./types/builder-shell-pty": {
-      "types": "./dist/types/builder-shell-pty.d.ts",
-      "default": "./dist/types/builder-shell-pty.js"
+    "./types/gateway-control": {
+      "types": "./dist/types/gateway-control.d.ts",
+      "default": "./dist/types/gateway-control.js"
     },
     "./types/builder-gateway-id": {
       "types": "./dist/types/builder-gateway-id.d.ts",
@@ -218,10 +214,6 @@
       "types": "./dist/types/run-live.d.ts",
       "default": "./dist/types/run-live.js"
     },
-    "./types/shells": {
-      "types": "./dist/types/shells.d.ts",
-      "default": "./dist/types/shells.js"
-    },
     "./types/sizing": {
       "types": "./dist/types/sizing.d.ts",
       "default": "./dist/types/sizing.js"
@@ -262,11 +254,8 @@
       "types/billing-tiers": [
         "dist/types/billing-tiers.d.ts"
       ],
-      "types/builder-shell": [
-        "dist/types/builder-shell.d.ts"
-      ],
-      "types/builder-shell-pty": [
-        "dist/types/builder-shell-pty.d.ts"
+      "types/gateway-control": [
+        "dist/types/gateway-control.d.ts"
       ],
       "types/builder-gateway-id": [
         "dist/types/builder-gateway-id.d.ts"
@@ -381,9 +370,6 @@
       ],
       "types/signup-offer": [
         "dist/types/signup-offer.d.ts"
-      ],
-      "types/shells": [
-        "dist/types/shells.d.ts"
       ],
       "types/sizing": [
         "dist/types/sizing.d.ts"

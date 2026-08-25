@@ -305,10 +305,6 @@ import {
   createFirestorePlacementPolicyReconcilerDeps,
   startPlacementPolicyReconciler,
 } from "./placement-policy-reconciler.js";
-import {
-  createRuntimeSleepWarningSender,
-  runtimeSleepNotifierConfigFromEnv,
-} from "./runtime-sleep-notifier.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectCheckoutScope,
@@ -372,10 +368,6 @@ const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
 const DISPOSABLE_GATEWAY_IDLE_MS = parseNonNegativeInt(
   process.env.DISPOSABLE_GATEWAY_IDLE_MS,
   30 * 60 * 1000,
-);
-const DISPOSABLE_GATEWAY_IDLE_WARNING_MS = parseNonNegativeInt(
-  process.env.DISPOSABLE_GATEWAY_IDLE_WARNING_MS,
-  5 * 60 * 1000,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
@@ -2240,11 +2232,6 @@ function startControllerBackgroundTasks({
       informer,
       namespace: NAMESPACE,
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
-      idleWarningMs: DISPOSABLE_GATEWAY_IDLE_WARNING_MS,
-      sendRuntimeSleepWarning: createRuntimeSleepWarningSender({
-        config: runtimeSleepNotifierConfigFromEnv(),
-        log,
-      }),
       now: () => Date.now(),
       log,
       allowLegacyBuilderReturnCompatibilityRecovery: ENVIRONMENT_SETTINGS.name === "test",

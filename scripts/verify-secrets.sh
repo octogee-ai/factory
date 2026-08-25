@@ -90,7 +90,6 @@ REQUIRED_SECRETS=(
   "gateway-model-key-issuer" # glm-controller ↔ octogee-api model broker token issuer
   "ops-agent-bearer"        # octogee-api → octogee-ops-agent
   "social-notification-bearer"  # octogee-api /social + Cloud Functions social producer
-  "system-notification-bearer"  # octogee-api /system + glm-controller runtime-sleep warnings
   "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
   "stripe-secrets"          # octogee-api: Stripe API, webhook, and per-environment price map
   "google-oauth"             # octogee-api: Google OAuth + Drive picker
@@ -120,7 +119,6 @@ REQUIRED_KEYS=(
   "gateway-model-key-issuer:bearer_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "ops-agent-bearer:bearer_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "system-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-openrouter:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"

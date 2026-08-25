@@ -152,7 +152,7 @@ describe("buildInstancesMap", () => {
     expect(map.bender.profile).toBe("builder");
   });
 
-  it("defaults Builder gateways to a locked dedicated ServiceAccount and shell access", () => {
+  it("defaults Builder gateways to a locked dedicated ServiceAccount and Control UI", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "bender",
@@ -164,34 +164,32 @@ describe("buildInstancesMap", () => {
       serviceAccountName: "octogee-gw-bender",
       serviceAccount: { create: true },
       builderAccess: {
-        shellsEnabled: false,
+        controlUiEnabled: false,
         reason: "runtime-trust-boundary-not-provisioned",
       },
     });
   });
 
-  it("enables shell access for a Builder gateway with a Builder owner", () => {
+  it("enables Control UI for a Builder gateway with a Builder owner", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" }),
     ]);
     expect(map.bender.builderAccess).toMatchObject({
-      shellsEnabled: true,
       controlUiEnabled: true,
     });
   });
 
-  it("defaults a missing legacy Control UI flag on without changing the persisted shell entitlement", () => {
+  it("defaults Control UI on for an owned Builder gateway", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "hobby",
         gatewayClass: "builder",
         imageProfile: "builder",
         ownerUid: "uid-hobby",
-        builderAccess: { shellsEnabled: false },
+        builderAccess: {},
       }),
     ]);
     expect(map.hobby.builderAccess).toMatchObject({
-      shellsEnabled: false,
       controlUiEnabled: true,
     });
   });
@@ -201,21 +199,19 @@ describe("buildInstancesMap", () => {
       mkDesired({ gatewayId: "jack", gatewayClass: "builder", ownerUid: "uid-jack" }),
     ]);
     expect(map.jack.builderAccess).toMatchObject({
-      shellsEnabled: true,
       reason: "owned-runtime-gateway",
     });
     expect(map.jack.serviceAccountName).toBe("octogee-gw-jack");
     expect(map.jack.serviceAccount).toEqual({ create: true });
   });
 
-  it("injects resolved apiserver egress CIDRs into an owned Builder gateway with shells", () => {
+  it("injects resolved API-server egress CIDRs into an owned Builder gateway with Control UI", () => {
     const map = buildInstancesMap(
       [mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" })],
       undefined,
       ["10.128.0.2/32", "34.118.224.1/32"],
     );
     expect(map.bender.builderAccess).toMatchObject({
-      shellsEnabled: true,
       kubeApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
   });
@@ -233,7 +229,7 @@ describe("buildInstancesMap", () => {
           gatewayClass: "builder",
           imageProfile: "builder",
           ownerUid: "uid-chris",
-          builderAccess: { shellsEnabled: true, kubeApiServerEgressCidrs: ["10.128.0.2/32"] },
+          builderAccess: { controlUiEnabled: true, kubeApiServerEgressCidrs: ["10.128.0.2/32"] },
         }),
       ],
       undefined,
@@ -268,7 +264,7 @@ describe("buildInstancesMap", () => {
     ]);
     expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
     expect(map["bender-canary-2026"].builderAccess).toMatchObject({
-      shellsEnabled: true,
+      controlUiEnabled: true,
     });
   });
 
@@ -858,8 +854,8 @@ describe("isImageRoll — the in-place-roll detector behind the mounted-gateway 
       isImageRoll({
         kind: "update",
         gatewayId: "bender",
-        from: { ...base(), builderAccess: { shellsEnabled: false } },
-        to: { ...base(), builderAccess: { shellsEnabled: true } },
+        from: { ...base(), builderAccess: { controlUiEnabled: false } },
+        to: { ...base(), builderAccess: { controlUiEnabled: true } },
       }),
     ).toBe(false);
   });

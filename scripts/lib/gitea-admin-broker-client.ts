@@ -1,7 +1,7 @@
 import { internalFetch } from "./internal-fetch.js";
 
 // In-pod provisioner → octogee-api broker for Gitea ADMIN operations.
-// The provisioner runs in the shell-bearing openclaw container and holds NO Gitea admin
+// The provisioner runs in the OpenClaw gateway container and holds NO Gitea admin
 // token (GIT_API_TOKEN dropped, PLATFORM-CREDENTIAL-BROKERING). It calls octogee-api,
 // which holds GITEA_TOKEN, through internalFetch. internalFetch attaches the projected
 // gateway KSA token from disk; no shared INTERNAL_SERVICE_KEY is required in the gateway.

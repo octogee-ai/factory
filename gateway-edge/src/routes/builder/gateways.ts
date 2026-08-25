@@ -3,11 +3,10 @@ import rateLimit from "express-rate-limit";
 import { requireAuth } from "../../middleware/auth.js";
 import { db, FieldValue, Timestamp } from "../../lib/db.js";
 import {
-  BuilderGatewayListEntry,
-  BuilderGatewaysMeResponse,
-} from "@octogee/shared/types/builder-shell";
+  GatewayControlListEntry,
+  GatewayControlListResponse,
+} from "@octogee/shared/types/gateway-control";
 import {
-  isGatewayClassShellAccessEnabled,
   isGatewayClassControlUiAccessEnabled,
   isValidGatewayId,
   resolveGatewayClass,
@@ -47,12 +46,12 @@ const NOT_FOUND = "not-found";
 const CAPABILITY_DISABLED = "capability-disabled";
 const NOT_READY = "not-ready";
 
-function accessRole(access: ResolvedGatewayAccess): BuilderGatewayListEntry["via"] {
+function accessRole(access: ResolvedGatewayAccess): GatewayControlListEntry["via"] {
   if (access.kind === "owner") return "owner";
   if (access.permissionSetIds.includes("co-owner.v1")) return "co-owner";
   if (access.permissionSetIds.includes("trusted-helper.v1")) return "trusted-helper";
   if (access.permissionSetIds.includes("agent-viewer.v1")) return "agent-viewer";
-  return "shell-only";
+  throw new Error("resolved gateway access has no recognized role");
 }
 
 const openClawTicketRateLimit = rateLimit({
@@ -80,7 +79,7 @@ function builderViewOf({
   heartbeat: Record<string, unknown> | null;
   runtime: unknown;
   isCurrentAssignment: boolean;
-}): BuilderGatewayListEntry {
+}): GatewayControlListEntry {
   const { gateway, config } = authorization;
   const explicitProfile = config.profile ?? undefined;
   const profile = explicitProfile ?? "standard";
@@ -107,10 +106,6 @@ function builderViewOf({
     imageProfile,
     desiredStatus: gateway.desiredStatus,
     imageTag,
-    shellsEnabled: access.shell && isGatewayClassShellAccessEnabled(
-      gatewayClass,
-      config.builderAccess ?? undefined,
-    ),
     controlUiEnabled,
     controlUiReady: openClawControlReachable({
       authorization,
@@ -125,7 +120,6 @@ function builderViewOf({
     capabilities: {
       dashboard: access.dashboard,
       config: access.config,
-      shell: access.shell,
       workspaceManagement: access.workspaceManagement,
     },
     grantRevision: access.grantRevision,
@@ -283,7 +277,7 @@ type BuilderGatewayCandidate = Awaited<ReturnType<typeof builderGatewayCandidate
 async function builderGatewayEntry(
   uid: string,
   candidate: BuilderGatewayCandidate,
-): Promise<{ scopeKey: string; entry: BuilderGatewayListEntry } | null> {
+): Promise<{ scopeKey: string; entry: GatewayControlListEntry } | null> {
   const authorization = gatewayAuthorizationFromRootDocument(candidate.root.data(), candidate.root.id);
   if (!authorization) return null;
   const scope = await workspaceScopeFor(
@@ -319,9 +313,9 @@ async function builderGatewayEntry(
   };
 }
 
-async function builderGatewaysFor(uid: string): Promise<BuilderGatewayListEntry[]> {
+async function builderGatewaysFor(uid: string): Promise<GatewayControlListEntry[]> {
   const seen = new Set<string>();
-  const entries: BuilderGatewayListEntry[] = [];
+  const entries: GatewayControlListEntry[] = [];
   for (const candidate of await builderGatewayCandidates(uid)) {
     const result = await builderGatewayEntry(uid, candidate);
     if (!result || seen.has(result.scopeKey)) continue;
@@ -335,7 +329,7 @@ async function builderGatewaysFor(uid: string): Promise<BuilderGatewayListEntry[
 function registerGatewayListRoute(router: Router): void {
   router.get("/gateways/me", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const body: BuilderGatewaysMeResponse = { gateways: await builderGatewaysFor(req.uid!) };
+      const body: GatewayControlListResponse = { gateways: await builderGatewaysFor(req.uid!) };
       res.json(body);
     } catch (err) {
       next(err);

@@ -14,7 +14,6 @@ export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
   "cleanupFeedRetention",
   "reapExpiredRunLiveDocs",
   "reapExpiredAgentImports",
-  "reapGoneGatewayShells",
   "processGatewayAccessLifecycle",
 ] as const;
 export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [

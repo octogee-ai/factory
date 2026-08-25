@@ -2,11 +2,9 @@ import * as crypto from "crypto";
 import { db, FieldValue, Timestamp } from "./db.js";
 
 // Unified "mint centrally, manage at the gateway" ticket primitive. One
-// collection, purpose-scoped, replacing the ad-hoc ocTickets + builderShellTickets
-// systems (wsTickets was vestigial — deleted). See docs/specs/GATEWAY-ROUTING-PATTERN-SPEC.md.
+// collection, purpose-scoped. See docs/specs/GATEWAY-ROUTING-PATTERN-SPEC.md.
 
 export const GATEWAY_TICKET_PURPOSES = [
-  "builder-shell",
   "mattermost-ws",
   "openclaw-ws",
   "preview",
@@ -24,8 +22,7 @@ export interface GatewayTicket {
   gatewayId: string;
   purpose: GatewayTicketPurpose;
   expiresAt: number;
-  // Feature-specific fields (builder-shell: shellId/cwd/containerSlug; {} for
-  // the others). The primitive owns ticket semantics; the feature owns payload.
+  // Feature-specific fields. The primitive owns ticket semantics; the feature owns payload.
   payload: Record<string, unknown>;
 }
 
@@ -54,8 +51,8 @@ export class HourlyMintQuotaExceededError extends Error {
 
 interface PurposePolicy {
   ttlMs: number;
-  // Optional abuse bounds — only `builder-shell` enforces them today (matching
-  // its existing behavior); the lighter WS purposes mint freely as they do now.
+  // Optional abuse bounds for interactive session tickets; lighter WS purposes
+  // mint freely.
   perUidCap?: number;
   hourlyQuota?: number;
 }
@@ -63,7 +60,6 @@ interface PurposePolicy {
 const HOURLY_WINDOW_MS = 60 * 60 * 1000;
 
 const POLICIES: Record<GatewayTicketPurpose, PurposePolicy> = {
-  "builder-shell": { ttlMs: 30_000, perUidCap: 5, hourlyQuota: 60 },
   "mattermost-ws": { ttlMs: 30_000 },
   "openclaw-ws": { ttlMs: 30_000 },
   "preview": { ttlMs: 30_000 },

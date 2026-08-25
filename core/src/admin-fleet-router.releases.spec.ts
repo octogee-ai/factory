@@ -1135,7 +1135,7 @@ function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<str
           gatewayId,
           gatewayAssignedAt: 1,
           gatewayProfile: "standard",
-          shellsEnabled: true,
+          controlUiEnabled: true,
         } : {}),
         managedBy,
       },
@@ -1344,7 +1344,7 @@ describe("PATCH /customers/:uid/placement", () => {
         openclaw: {
           gatewayId: "target",
           gatewayProfile: "standard",
-          shellsEnabled: false,
+          controlUiEnabled: false,
           managedBy: "operator",
         },
       },
@@ -1461,7 +1461,7 @@ describe("PATCH /customers/:uid/placement", () => {
     expect(openclaw).not.toHaveProperty("gatewayId");
     expect(openclaw).not.toHaveProperty("gatewayAssignedAt");
     expect(openclaw).not.toHaveProperty("gatewayProfile");
-    expect(openclaw).not.toHaveProperty("shellsEnabled");
+    expect(openclaw).not.toHaveProperty("controlUiEnabled");
     expect(openclaw).not.toHaveProperty("activationLease");
     expect(store.get("gateways/source/assignments/uid-alice")).toBeUndefined();
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
@@ -1816,7 +1816,7 @@ describe("admin target resolution", () => {
           imageProfile: "builder",
           ownerUid: "uid-alice",
           builderSlug: "alice",
-          builderAccess: { shellsEnabled: true, reason: "owned-runtime-gateway" },
+          builderAccess: { controlUiEnabled: true, reason: "owned-runtime-gateway" },
         },
       ),
       "users/uid-alice": { username: "alice" },
@@ -2810,7 +2810,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
       imageProfile: "builder",
       ownerUid: "uid-alice",
       builderSlug: "alice",
-      builderAccess: { shellsEnabled: true },
+      builderAccess: { controlUiEnabled: true },
       allocation: {
         kind: "disposable-builder",
         schemaVersion: 1,
@@ -2883,12 +2883,12 @@ describe("durable config PATCHes", () => {
     const res = await request(app)
       .patch("/gateways/bench")
       .send({
-        builderAccess: { shellsEnabled: true, reason: "debug" },
+        builderAccess: { controlUiEnabled: true, reason: "debug" },
         gatewayContainerSecurityContext: { runAsNonRoot: true },
       });
     expect(res.status).toBe(202);
     const root = store.get("gateways/bench") as Record<string, unknown>;
-    expect(root.builderAccess).toEqual({ shellsEnabled: true, reason: "debug" });
+    expect(root.builderAccess).toEqual({ controlUiEnabled: true, reason: "debug" });
     expect(root.gatewayContainerSecurityContext).toEqual({ runAsNonRoot: true });
     expect(root.ownerUid).toBe("uid-1");
     expect(root.builderSlug).toBe("chris");

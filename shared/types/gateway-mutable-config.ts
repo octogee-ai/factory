@@ -100,7 +100,6 @@ function isNullableBuilderAccess(value: unknown): value is BuilderGatewayAccessS
   if (value === null) return true;
   if (!isRecord(value)) return false;
   const fields = new Set([
-    "shellsEnabled",
     "controlUiEnabled",
     "kubeApiServerEgressCidrs",
     "reason",
@@ -108,8 +107,7 @@ function isNullableBuilderAccess(value: unknown): value is BuilderGatewayAccessS
     "verifiedBy",
   ]);
   if (!Object.keys(value).every((field) => fields.has(field))) return false;
-  const validPowerAccess = isOptionalBoolean(value.shellsEnabled) &&
-    isOptionalBoolean(value.controlUiEnabled);
+  const validPowerAccess = isOptionalBoolean(value.controlUiEnabled);
   const validNetworkAccess = value.kubeApiServerEgressCidrs === undefined ||
     isStringArray(value.kubeApiServerEgressCidrs);
   const validVerification = isOptionalString(value.reason) &&

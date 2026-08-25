@@ -77,7 +77,7 @@ describe("buildCustomerAgent", () => {
     );
   });
 
-  it("gives project agents workspace-scoped discovery without a shell", () => {
+  it("gives project agents workspace-scoped discovery without direct terminal access", () => {
     expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(
       expect.arrayContaining(["read", "grep", "find", "ls"]),
     );

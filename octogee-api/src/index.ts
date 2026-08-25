@@ -44,7 +44,6 @@ import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
-import { createBuilderShellBrokerRoutes } from "./routes/builder-shell-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
@@ -680,7 +679,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     });
   };
   // octogee-api-only: broker standard gateway fleet-mount Firestore/MM
-  // operations. The shell-bearing gateway sees only assigned roster snapshots
+  // operations. The OpenClaw gateway sees only assigned roster snapshots
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
   app.use("/internal/fleet", createFleetBrokerRoutes({
     db,
@@ -774,7 +773,6 @@ export function createApp(opts: CreateAppOptions = {}) {
     }),
   );
   app.use("/internal/agent-access", createAgentAccessRoutes({ db, actionBaseUrl: appOrigin }));
-  app.use("/internal/builder-shell", createBuilderShellBrokerRoutes());
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
   app.use(
     "/internal/automations",

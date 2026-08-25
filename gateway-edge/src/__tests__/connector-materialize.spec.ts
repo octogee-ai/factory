@@ -44,8 +44,8 @@ vi.mock("../lib/github-project-clone.js", () => ({
   cloneGithubProjectCheckout: mocks.cloneGithubProjectCheckout,
 }));
 
-vi.mock("../middleware/builder-shell-auth.js", () => ({
-  requireBuilderShellInternalAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
+vi.mock("../middleware/gateway-internal-auth.js", () => ({
+  requireGatewayInternalAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 vi.mock("../middleware/logging.js", () => ({

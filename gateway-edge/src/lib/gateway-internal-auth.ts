@@ -7,20 +7,19 @@ import {
   type Reviewer,
 } from "./kubernetes-token-review.js";
 
-export type BuilderShellInternalAuthMode = "platform" | "builder-service-account";
+export type GatewayInternalAuthMode = "platform" | "gateway-service-account";
 
-export const BUILDER_SHELL_K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
-export const BUILDER_SHELL_INTERNAL_KEY_HEADER = "x-internal-service-key";
-export const DEFAULT_PROJECTED_API_TOKEN_PATH =
-  "/var/run/secrets/octogee-api/token";
+export const GATEWAY_K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
+export const GATEWAY_INTERNAL_KEY_HEADER = "x-internal-service-key";
+export const DEFAULT_PROJECTED_API_TOKEN_PATH = "/var/run/secrets/octogee-api/token";
 
-export interface BuilderShellInternalAuthSecret {
+export interface GatewayInternalAuthSecret {
   value: string;
-  mode: BuilderShellInternalAuthMode;
-  headerName: typeof BUILDER_SHELL_INTERNAL_KEY_HEADER | typeof BUILDER_SHELL_K8S_SA_TOKEN_HEADER;
+  mode: GatewayInternalAuthMode;
+  headerName: typeof GATEWAY_INTERNAL_KEY_HEADER | typeof GATEWAY_K8S_SA_TOKEN_HEADER;
 }
 
-export interface BuilderShellInternalAuthValidationOptions {
+export interface GatewayInternalAuthValidationOptions {
   reviewer?: Reviewer;
 }
 
@@ -49,13 +48,13 @@ function expectedNamespace(env: Record<string, string | undefined>): string {
   return nonBlank(env.K8S_NAMESPACE) ?? nonBlank(env.POD_NAMESPACE) ?? "octogee";
 }
 
-function allowedBuilderServiceAccounts(env: Record<string, string | undefined>): Set<string> {
+function allowedGatewayServiceAccounts(env: Record<string, string | undefined>): Set<string> {
   const allowed = new Set<string>(["octogee-api"]);
-  const configured = nonBlank(env.BUILDER_SHELL_ALLOWED_K8S_SERVICE_ACCOUNTS);
+  const configured = nonBlank(env.GATEWAY_ALLOWED_K8S_SERVICE_ACCOUNTS);
   if (configured) {
     for (const item of configured.split(",")) {
-      const sa = nonBlank(item);
-      if (sa) allowed.add(sa);
+      const serviceAccount = nonBlank(item);
+      if (serviceAccount) allowed.add(serviceAccount);
     }
   }
 
@@ -72,37 +71,32 @@ function timingSafeStringEqual(provided: string | undefined, expected: string): 
   try {
     return (
       provided.length === expected.length &&
-      crypto.timingSafeEqual(
-        Buffer.from(provided, "utf8"),
-        Buffer.from(expected, "utf8"),
-      )
+      crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expected, "utf8"))
     );
   } catch {
     return false;
   }
 }
 
-export function resolveBuilderShellInternalAuthSecret(
+export function resolveGatewayInternalAuthSecret(
   env: Record<string, string | undefined> = process.env,
-): BuilderShellInternalAuthSecret | null {
+): GatewayInternalAuthSecret | null {
   const platformKey = nonBlank(env.INTERNAL_SERVICE_KEY);
   if (platformKey) {
     return {
       value: platformKey,
       mode: "platform",
-      headerName: BUILDER_SHELL_INTERNAL_KEY_HEADER,
+      headerName: GATEWAY_INTERNAL_KEY_HEADER,
     };
   }
 
-  if (
-    env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder"
-  ) {
+  if (env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder") {
     const serviceAccountToken = readProjectedServiceAccountToken(env);
     if (serviceAccountToken) {
       return {
         value: serviceAccountToken,
-        mode: "builder-service-account",
-        headerName: BUILDER_SHELL_K8S_SA_TOKEN_HEADER,
+        mode: "gateway-service-account",
+        headerName: GATEWAY_K8S_SA_TOKEN_HEADER,
       };
     }
   }
@@ -110,22 +104,20 @@ export function resolveBuilderShellInternalAuthSecret(
   return null;
 }
 
-export async function isValidBuilderShellInternalAuth(
+export async function isValidGatewayInternalAuth(
   provided: string | undefined,
   env: Record<string, string | undefined> = process.env,
-  opts: BuilderShellInternalAuthValidationOptions = {},
+  opts: GatewayInternalAuthValidationOptions = {},
 ): Promise<boolean> {
   if (!provided) return false;
-  const secret = resolveBuilderShellInternalAuthSecret(env);
+  const secret = resolveGatewayInternalAuthSecret(env);
   if (!secret) return false;
 
-  if (secret.mode === "platform") {
-    return timingSafeStringEqual(provided, secret.value);
-  }
+  if (secret.mode === "platform") return timingSafeStringEqual(provided, secret.value);
 
   const review = await (opts.reviewer ?? getReviewer())(provided);
   if (!review.authenticated) return false;
   if (!review.audiences.includes(TOKEN_REVIEW_AUDIENCE)) return false;
   if (review.namespace !== expectedNamespace(env)) return false;
-  return allowedBuilderServiceAccounts(env).has(review.saName);
+  return allowedGatewayServiceAccounts(env).has(review.saName);
 }
