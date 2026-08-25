@@ -711,6 +711,82 @@ export function _resetBrokerProfileLogStateForTests(): void {
   lastBrokerProfileSnapshotReloadError = null;
 }
 
+type BrokerProfileSweep = Awaited<ReturnType<typeof materializeBrokerProfilesForAgents>>;
+
+function readBrokerProfileAgentIds(
+  log: (msg: string) => void,
+  readConfig: () => unknown,
+): string[] | null {
+  try {
+    return agentIdsFromConfig(readConfig());
+  } catch (error) {
+    log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
+    return null;
+  }
+}
+
+function brokerProfileSweepOptions(
+  deps: {
+    agentsDir?: string;
+    secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+  },
+  log: (msg: string) => void,
+): BrokerProfileSweepOptions {
+  const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
+  const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  return {
+    logFn: log,
+    ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
+    ...(deps.secretsApply ? { secretsApply: deps.secretsApply } : {}),
+    ...(openRouterBaseUrl
+      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
+      : {}),
+    ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
+  };
+}
+
+async function reloadBrokerProfileSnapshot(
+  log: (msg: string) => void,
+  secretsReload: Pick<GatewayRpcClient, "secretsReload"> | undefined,
+): Promise<void> {
+  if (!brokerProfileSnapshotReloadPending || !secretsReload) return;
+  try {
+    const result = await secretsReload.secretsReload();
+    const warningCount = result.warningCount ?? 0;
+    if (result.ok !== true || warningCount > 0) {
+      throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
+    }
+    brokerProfileSnapshotReloadPending = false;
+    lastBrokerProfileSnapshotReloadError = null;
+    log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
+  } catch (error) {
+    const message = String(error);
+    if (message === lastBrokerProfileSnapshotReloadError) return;
+    log(
+      `[agent-model-token] ⚠ active secret snapshot reload deferred — ${message}; retrying every ${
+        BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
+      }s`,
+    );
+    lastBrokerProfileSnapshotReloadError = message;
+  }
+}
+
+function reportBrokerProfileSweep(log: (msg: string) => void, sweep: BrokerProfileSweep): void {
+  const signature = sweep.deferred.join(",");
+  if (signature === lastDeferredSignature) return;
+  if (sweep.deferred.length > 0) {
+    log(
+      `[agent-model-token] broker profile still deferred for ${sweep.deferred.join(", ")}` +
+        ` — ${sweep.deferralReason ?? "openclaw refused the secrets apply"}; retrying every ${
+          BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
+        }s`,
+    );
+  } else if (lastDeferredSignature !== null) {
+    log("[agent-model-token] broker profiles settled — every rostered coach has its profile");
+  }
+  lastDeferredSignature = signature;
+}
+
 /** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
  *  — a profile already applied spawns nothing, so this is safe on every tick. */
 export async function materializeDeferredBrokerProfiles(
@@ -722,64 +798,18 @@ export async function materializeDeferredBrokerProfiles(
     secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
   } = {},
 ): Promise<void> {
-  const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
-  const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
-  let agentIds: string[];
-  try {
-    agentIds = agentIdsFromConfig((deps.readConfig ?? readOpenClawConfig)());
-  } catch (error) {
-    log(`⚠ [agent-model-token] post-boot sweep skipped — config unreadable: ${String(error)}`);
-    return;
-  }
-  const sweep = await materializeBrokerProfilesForAgents(agentIds, {
-    logFn: log,
-    ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
-    ...(deps.secretsApply ? { secretsApply: deps.secretsApply } : {}),
-    ...(openRouterBaseUrl
-      ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
-      : {}),
-    ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
-  });
+  const agentIds = readBrokerProfileAgentIds(log, deps.readConfig ?? readOpenClawConfig);
+  if (!agentIds) return;
+  const sweep = await materializeBrokerProfilesForAgents(
+    agentIds,
+    brokerProfileSweepOptions(deps, log),
+  );
   if (sweep.materialized > 0) {
     log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
     if (deps.secretsReload) brokerProfileSnapshotReloadPending = true;
   }
-  if (brokerProfileSnapshotReloadPending && deps.secretsReload) {
-    try {
-      const result = await deps.secretsReload.secretsReload();
-      const warningCount = result.warningCount ?? 0;
-      if (result.ok !== true || warningCount > 0) {
-        throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
-      }
-      brokerProfileSnapshotReloadPending = false;
-      lastBrokerProfileSnapshotReloadError = null;
-      log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
-    } catch (error) {
-      const message = String(error);
-      if (message !== lastBrokerProfileSnapshotReloadError) {
-        log(
-          `[agent-model-token] ⚠ active secret snapshot reload deferred — ${message}; retrying every ${
-            BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
-          }s`,
-        );
-        lastBrokerProfileSnapshotReloadError = message;
-      }
-    }
-  }
-  const signature = sweep.deferred.join(",");
-  if (signature !== lastDeferredSignature) {
-    if (sweep.deferred.length > 0) {
-      log(
-        `[agent-model-token] broker profile still deferred for ${sweep.deferred.join(", ")}` +
-          ` — ${sweep.deferralReason ?? "openclaw refused the secrets apply"}; retrying every ${
-            BROKER_PROFILE_RETRY_INTERVAL_MS / 1000
-          }s`,
-      );
-    } else if (lastDeferredSignature !== null) {
-      log("[agent-model-token] broker profiles settled — every rostered coach has its profile");
-    }
-    lastDeferredSignature = signature;
-  }
+  await reloadBrokerProfileSnapshot(log, deps.secretsReload);
+  reportBrokerProfileSweep(log, sweep);
 }
 
 /** The level-triggered half of broker-profile materialization: retried until
