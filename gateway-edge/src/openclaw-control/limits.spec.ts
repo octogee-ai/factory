@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { OpenClawControlResourceLimiter } from "./limits.js";
+import {
+  OPENCLAW_CONTROL_MAX_IN_FLIGHT,
+  OpenClawControlResourceLimiter,
+} from "./limits.js";
 
 describe("OpenClaw Dashboard shared resource limits", () => {
+  it("admits the current Dashboard startup burst", () => {
+    expect(OPENCLAW_CONTROL_MAX_IN_FLIGHT).toBe(64);
+    const limiter = new OpenClawControlResourceLimiter();
+    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const leases = Array.from({ length: OPENCLAW_CONTROL_MAX_IN_FLIGHT }, () =>
+      limiter.acquireRequest(identity));
+
+    expect(leases.every(Boolean)).toBe(true);
+    expect(limiter.acquireRequest(identity)).toBeNull();
+    leases.forEach((lease) => lease?.release());
+  });
+
   it("shares socket, in-flight RPC, and mutation limits by uid, gateway, and session", () => {
     let now = 100;
     const limiter = new OpenClawControlResourceLimiter({

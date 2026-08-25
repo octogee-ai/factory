@@ -38,7 +38,7 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
-  it("retains delegated restrictions while a native owner gets their whole advertised runtime", () => {
+  it("retains delegated restrictions while OpenClaw owns the native owner's method contract", () => {
     const unsafeDelegatedRead = request("config.patch", {
       raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 30 } } }),
       baseHash: "hash-1",
@@ -68,7 +68,17 @@ describe("OpenClaw Dashboard RPC policy", () => {
       request("sessions.list"),
       context,
       "native-owner",
-    )).toMatchObject({ allowed: false, reason: "method-unavailable" });
+    )).toMatchObject({ allowed: true, category: "unknown" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("sessions.usage"),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: true, category: "unknown" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("device.pair.setupCode"),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: true, category: "unknown" });
   });
 
   it("fences native owner config writes behind the migration freeze and the platform wiring invariants only", () => {

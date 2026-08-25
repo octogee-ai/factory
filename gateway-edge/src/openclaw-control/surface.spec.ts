@@ -293,6 +293,14 @@ describe("OpenClaw Dashboard HTTP surface", () => {
   it.each([
     "/",
     "/chat?session=agent%3Aoctogee-eggman-coach%3Amain",
+    "/new",
+    "/automations",
+    "/settings/plugins",
+    "/settings/devices",
+    "/chat/octogee-eggman-coach",
+    "/dashboard/octogee-eggman-coach",
+    "/settings/agents/octogee-eggman-coach/files",
+    "/workboard/city-scout",
     "/control-ui-config.json",
     "/avatar/octogee-eggman-coach?meta=1",
     "/favicon.svg",
@@ -519,6 +527,21 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.status).toBe(504);
     expect(response.body).toEqual({ error: "openclaw-timeout", retryable: true });
     expect(JSON.stringify(response.body)).not.toContain("gateway-secret");
+  });
+
+  it("gives the current Dashboard asset graph a thirty-second default upstream budget", async () => {
+    const timeout = vi.spyOn(http.ClientRequest.prototype, "setTimeout");
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({ env: env(port), sessions: manager }))
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("cookie", issue(manager));
+
+    expect(response.status).toBe(200);
+    expect(timeout).toHaveBeenCalledWith(30_000, expect.any(Function));
+    timeout.mockRestore();
   });
 
   it("reports an upstream navigation failure to the embedding Octogee panel", async () => {
@@ -912,7 +935,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     expect(JSON.stringify(audit.mock.calls)).not.toContain("command");
   });
 
-  it("keeps a session open for extra methods and denies only an unavailable allowed method", async () => {
+  it("forwards hidden native-owner methods and returns the runtime's response", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ noServer: true });
@@ -939,6 +962,13 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               },
             },
           }));
+        } else if (frame.id === "hidden-session-usage") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: { sessions: [] },
+          }));
         }
       });
     });
@@ -959,31 +989,36 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
     });
-    const denied = await new Promise<Record<string, unknown>>((resolve, reject) => {
-      const deadline = setTimeout(() => reject(new Error("missing method was not denied")), 1_000);
+    const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("hidden method was not forwarded")), 1_000);
       browser.on("error", reject);
       browser.on("message", (data) => {
         const frame = JSON.parse(data.toString()) as Record<string, unknown>;
         if (frame.event === "connect.challenge") {
           browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
         } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
-          browser.send(JSON.stringify({ type: "req", id: "missing-status", method: "status", params: {} }));
-        } else if (frame.id === "missing-status") {
+          browser.send(JSON.stringify({
+            type: "req",
+            id: "hidden-session-usage",
+            method: "sessions.usage",
+            params: {},
+          }));
+        } else if (frame.id === "hidden-session-usage") {
           clearTimeout(deadline);
           resolve(frame);
         }
       });
     });
 
-    expect(denied).toMatchObject({
-      id: "missing-status",
-      ok: false,
-      error: {
-        code: "POLICY_DENIED",
-        message: expect.stringContaining("method-unavailable"),
-      },
+    expect(response).toMatchObject({
+      id: "hidden-session-usage",
+      ok: true,
+      payload: { sessions: [] },
     });
-    expect(upstreamFrames.some((frame) => frame.id === "missing-status")).toBe(false);
+    expect(upstreamFrames).toContainEqual(expect.objectContaining({
+      id: "hidden-session-usage",
+      method: "sessions.usage",
+    }));
     expect(browser.readyState).toBe(WebSocket.OPEN);
     browser.close();
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
