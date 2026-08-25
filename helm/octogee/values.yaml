@@ -74,8 +74,8 @@ mattermost:
   enabled: true
   image:
     repository: mattermost/mattermost-team-edition
-    tag: "11.9.0"
-    digest: "sha256:f8e032dd9d53c43713c2277c677b463f85b11a52056329fcc49b03732d61f5a5"
+    tag: "11.10.1"
+    digest: "sha256:12f18e9f6ad2a9c29a95393f337aa2ab0700517a55470cd943a759f5392a017f"
   db:
     user: mattermost
     name: mattermost_prod

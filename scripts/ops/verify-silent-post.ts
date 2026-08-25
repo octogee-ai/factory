@@ -13,7 +13,7 @@ export async function runVerifySilentPost(
   const config = parseSilentPostProbeArgs(argv, env);
   if (!config) {
     console.error(
-      "Usage: verify-silent-post --base-url=<url> --channel-id=<id> --observer-user-id=<id> --observer-username=<name>; MM_BOT_TOKEN, MM_HUMAN_TOKEN, MM_OBSERVER_TOKEN, and MATTERMOST_SILENT_CAPABILITY_SENTINEL are required",
+      "Usage: verify-silent-post --base-url=<url> --channel-id=<id> --observer-user-id=<id> --observer-username=<name>; MM_BOT_TOKEN, MM_HUMAN_TOKEN, and MM_OBSERVER_TOKEN are required",
     );
     return 2;
   }

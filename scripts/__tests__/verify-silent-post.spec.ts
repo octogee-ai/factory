@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  SILENT_POST_CAPABILITY_SENTINEL,
   parseSilentPostProbeArgs,
   verifySilentPostCapability,
 } from "../lib/mattermost/verify-silent-post.js";
@@ -21,7 +20,6 @@ describe("Mattermost silent-post capability verifier", () => {
     const waitForWebsocketPost = vi.fn(async () => undefined);
 
     const report = await verifySilentPostCapability({
-      sourceCapabilitySentinel: SILENT_POST_CAPABILITY_SENTINEL,
       readUnread,
       createPost,
       waitForWebsocketPost,
@@ -45,15 +43,6 @@ describe("Mattermost silent-post capability verifier", () => {
     ]);
   });
 
-  it("fails closed when the exact source capability sentinel is absent", async () => {
-    await expect(verifySilentPostCapability({
-      sourceCapabilitySentinel: "unverified",
-      readUnread: vi.fn(),
-      createPost: vi.fn(),
-      waitForWebsocketPost: vi.fn(),
-    })).rejects.toThrow("Mattermost silent capability artifact is not approved");
-  });
-
   it("accepts a server rejection when persistent notifications are unavailable in the edition", async () => {
     const unread = [
       { msgCount: 0, mentionCount: 0 },
@@ -61,7 +50,6 @@ describe("Mattermost silent-post capability verifier", () => {
       { msgCount: 1, mentionCount: 1 },
     ];
     const report = await verifySilentPostCapability({
-      sourceCapabilitySentinel: SILENT_POST_CAPABILITY_SENTINEL,
       readUnread: vi.fn(async () => unread.shift()!),
       createPost: vi.fn()
         .mockResolvedValueOnce({ status: 201, id: "silent-1", props: { silent_notification: true } })
@@ -84,7 +72,6 @@ describe("Mattermost silent-post capability verifier", () => {
       MM_BOT_TOKEN: "bot-token",
       MM_HUMAN_TOKEN: "human-token",
       MM_OBSERVER_TOKEN: "observer-token",
-      MATTERMOST_SILENT_CAPABILITY_SENTINEL: SILENT_POST_CAPABILITY_SENTINEL,
     })).toEqual({
       baseUrl: "https://mattermost.example",
       channelId: "channel-1",
@@ -93,7 +80,6 @@ describe("Mattermost silent-post capability verifier", () => {
       botToken: "bot-token",
       humanToken: "human-token",
       observerToken: "observer-token",
-      sourceCapabilitySentinel: SILENT_POST_CAPABILITY_SENTINEL,
     });
     expect(parseSilentPostProbeArgs([], {})).toBeNull();
   });

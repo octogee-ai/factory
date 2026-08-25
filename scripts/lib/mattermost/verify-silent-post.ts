@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
-export const SILENT_POST_CAPABILITY_SENTINEL = "octogee:mattermost-silent-post:v1";
-
 export interface MattermostSilentPostProbeConfig {
   baseUrl: string;
   channelId: string;
@@ -11,7 +9,6 @@ export interface MattermostSilentPostProbeConfig {
   botToken: string;
   humanToken: string;
   observerToken: string;
-  sourceCapabilitySentinel: string;
 }
 
 export interface MattermostUnread {
@@ -33,7 +30,6 @@ export interface SilentPostCreateResult {
 }
 
 export interface SilentPostProbeDeps {
-  sourceCapabilitySentinel: string;
   readUnread(): Promise<MattermostUnread>;
   createPost(request: SilentPostCreateRequest): Promise<SilentPostCreateResult>;
   waitForWebsocketPost(postId: string): Promise<void>;
@@ -60,9 +56,6 @@ function sameMentions(left: MattermostUnread, right: MattermostUnread): boolean 
 export async function verifySilentPostCapability(
   deps: SilentPostProbeDeps,
 ): Promise<SilentPostCapabilityReport> {
-  if (deps.sourceCapabilitySentinel !== SILENT_POST_CAPABILITY_SENTINEL) {
-    throw new Error("Mattermost silent capability artifact is not approved");
-  }
   const nonce = randomUUID();
   const before = await deps.readUnread();
   const silent = await deps.createPost({
@@ -138,7 +131,6 @@ export function parseSilentPostProbeArgs(
     botToken: nonBlank(env.MM_BOT_TOKEN),
     humanToken: nonBlank(env.MM_HUMAN_TOKEN),
     observerToken: nonBlank(env.MM_OBSERVER_TOKEN),
-    sourceCapabilitySentinel: nonBlank(env.MATTERMOST_SILENT_CAPABILITY_SENTINEL),
   };
   if (Object.values(config).some((value) => value === undefined)) return null;
   return config as MattermostSilentPostProbeConfig;
@@ -243,7 +235,6 @@ export async function runMattermostSilentPostProbe(
     actor === "bot" ? config.botToken : config.humanToken;
   try {
     return await verifySilentPostCapability({
-      sourceCapabilitySentinel: config.sourceCapabilitySentinel,
       async readUnread() {
         const response = await fetchImpl(
           `${baseUrl}/api/v4/users/${encodeURIComponent(config.observerUserId)}/channels/${encodeURIComponent(config.channelId)}/unread`,

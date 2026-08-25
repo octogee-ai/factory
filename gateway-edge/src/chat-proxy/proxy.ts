@@ -233,7 +233,6 @@ const activityAttachmentUnknownTotal = new Counter({
 });
 
 export const activityRuntimeRegistry = new CandidateActivityRuntimeRegistry();
-export const MATTERMOST_SILENT_CAPABILITY_SENTINEL = "octogee:mattermost-silent-post:v1";
 
 export function recordActivityMissingFinal(): void {
   activityMissingFinalTotal.inc();
@@ -1240,15 +1239,6 @@ function installProductionActivityIntake(
   controls: ActivitySinkControlLifecycle,
   runtimeBroker: OpenClawRuntimeBroker,
 ): void {
-  if (
-    process.env.MATTERMOST_SILENT_CAPABILITY_SENTINEL !==
-    MATTERMOST_SILENT_CAPABILITY_SENTINEL
-  ) {
-    console.warn(
-      "[chat-proxy] Activity intake disabled — Mattermost silent capability sentinel is absent",
-    );
-    return;
-  }
   const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
   installActivityIntakeHandler(createProductionActivityIntakeHandler({
     registry: activityRuntimeRegistry,

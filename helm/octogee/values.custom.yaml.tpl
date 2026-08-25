@@ -17,7 +17,7 @@ cloud-sql-proxy:
 mattermost:
   image:
     repository: mattermost/mattermost-team-edition
-    tag: "11.9.0"
+    tag: "11.10.1"
   db:
     name: mattermost___DB_SLUG__
   siteUrl: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
