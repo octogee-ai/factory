@@ -213,6 +213,10 @@ describe("OpenClaw Dashboard HTTP surface", () => {
         return;
       }
       res.setHeader("content-type", "text/javascript");
+      res.setHeader(
+        "content-security-policy",
+        "default-src 'self'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data:",
+      );
       res.setHeader("etag", "gateway-secret");
       res.setHeader("set-cookie", "openclaw=gateway-secret");
       res.setHeader("authorization", "Bearer gateway-secret");
@@ -235,7 +239,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(captured.origin).toBe("https://api.octogee.com");
     expect(captured["accept-encoding"]).toBe("identity");
     expect(response.headers["content-security-policy"]).toBe(
-      "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://app.octogee.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:",
+      "default-src 'self'; frame-ancestors https://app.octogee.com; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data:",
     );
     expect(response.headers["x-frame-options"]).toBeUndefined();
     expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
@@ -303,6 +307,13 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/workboard/city-scout",
     "/control-ui-config.json",
     "/avatar/octogee-eggman-coach?meta=1",
+    "/avatar/ops%2Fmain",
+    "/__openclaw__/catalog-icon/https%3A%2F%2Fcdn.example.test%2Ficon.svg",
+    "/__openclaw__/channel-avatar/agent%3Amain%3Adiscord%3Adirect%3Auser-1",
+    "/__openclaw__/link-favicon/docs.example.test",
+    "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord",
+    "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+    "/api/users/profile%2Fa%20b/avatar?v=hash%2Fimage",
     "/favicon.svg",
     "/provider-icons/ProviderIcon-openai.svg",
     "/assets/app-4c3f.js?build=1",
@@ -342,6 +353,8 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/hooks",
     "/plugins/arbitrary",
     "/__openclaw__/assistant-media",
+    "/__openclaw__/plugin-icon/one/two",
+    "/api/users/one/two/avatar",
     "/avatar/octogee-eggman-coach/extra",
     "/assets/app.js/extra",
   ])("rejects non-UI HTTP resource %s before loading or forwarding the gateway token", async (suffix) => {
@@ -1185,7 +1198,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
-  it("quarantines repeated timed-out tools.invoke work and releases the socket after cleanup", async () => {
+  it("continues native-owner RPCs after one request times out", async () => {
     let toolRequests = 0;
     let connections = 0;
     const upstream = http.createServer();
@@ -1262,7 +1275,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    expect(toolRequests).toBe(1);
+    expect(toolRequests).toBe(2);
 
     const second = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie: issue(manager), origin: "https://api.octogee.com" },

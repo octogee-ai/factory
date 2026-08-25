@@ -50,7 +50,7 @@ import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./me
 
 const MAX_WS_FRAME_BYTES = 1_048_576;
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-const DEFAULT_RPC_TIMEOUT_MS = 10_000;
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 const DEFAULT_AUTHORIZATION_INTERVAL_MS = 10_000;
 const CSP_BEFORE_FRAME_ANCESTORS = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors";
 const CSP_AFTER_FRAME_ANCESTORS = "; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:";
@@ -68,6 +68,7 @@ const ALLOWED_REQUEST_HEADERS = new Set([
 ]);
 const ALLOWED_RESPONSE_HEADERS = new Set([
   "cache-control",
+  "content-security-policy",
   "content-disposition",
   "content-language",
   "content-length",
@@ -251,10 +252,44 @@ function isNativeChatSessionSelector(parsed: URL, key: string): boolean {
     /^[A-Za-z0-9:_-]{1,256}$/u.test(chatSessions[0] ?? "");
 }
 
+function controlResourceSuffix(pathname: string, gatewayId: string): string | null {
+  for (const base of [`/api/g/${gatewayId}/openclaw`, "/openclaw"]) {
+    if (pathname === base) return "/";
+    if (pathname.startsWith(`${base}/`)) return pathname.slice(base.length);
+  }
+  return null;
+}
+
+function isEncodedResourceSegment(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    return decodeURIComponent(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function isDashboardControlResourcePath(pathname: string): boolean {
+  const resource = /^\/(?:avatar|__openclaw__\/(?:catalog-icon|channel-avatar|link-favicon|plugin-icon|workspace-icon))\/([^/]+)$/u
+    .exec(pathname);
+  if (resource) return isEncodedResourceSegment(resource[1]);
+  const userAvatar = /^\/api\/users\/([^/]+)\/avatar$/u.exec(pathname);
+  return isEncodedResourceSegment(userAvatar?.[1]);
+}
+
+function isSafeDashboardPath(rawPath: string, gatewayId: string): boolean {
+  if (!rawPath.startsWith("/") || rawPath.includes("\\") || rawPath.includes("..") ||
+    /%(?:2e|5c)/iu.test(rawPath)) {
+    return false;
+  }
+  if (!/%2f/iu.test(rawPath)) return true;
+  const resourceSuffix = controlResourceSuffix(rawPath, gatewayId);
+  return resourceSuffix !== null && isDashboardControlResourcePath(resourceSuffix);
+}
+
 export function openClawControlUpstreamPath(originalUrl: string, gatewayId: string): string {
   const rawPath = originalUrl.split("?", 1)[0] ?? "";
-  if (!rawPath.startsWith("/") || rawPath.includes("\\") || rawPath.includes("..") ||
-    /%(?:2e|2f|5c)/iu.test(rawPath)) {
+  if (!isSafeDashboardPath(rawPath, gatewayId)) {
     throw new Error("OpenClaw Dashboard request path is outside its base path");
   }
   const parsed = new URL(originalUrl, "https://octogee.invalid");
@@ -298,12 +333,6 @@ function isDashboardStaticAsset(pathname: string): boolean {
   return DASHBOARD_STATIC_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
 }
 
-function isDashboardAvatar(parsed: URL): boolean {
-  if (!/^\/avatar\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(parsed.pathname)) return false;
-  if (!parsed.search) return true;
-  return parsed.searchParams.size === 1 && parsed.searchParams.get("meta") === "1";
-}
-
 function isDashboardProviderIcon(pathname: string): boolean {
   return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
 }
@@ -329,16 +358,32 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     isDashboardDynamicRoute(route) ||
     DASHBOARD_ROOT_ASSETS.has(route) ||
     isDashboardStaticAsset(route) ||
-    isDashboardAvatar(parsed) ||
+    isDashboardControlResourcePath(route) ||
     isDashboardProviderIcon(route);
 }
 
-function securityHeaders(res: Response | http.ServerResponse, frameAncestor: string): void {
+function frameableContentSecurityPolicy(value: string, frameAncestor: string): string {
+  const directives = value.split(";").map((directive) => directive.trim()).filter(Boolean);
+  const frameAncestors = directives.findIndex((directive) => /^frame-ancestors(?:\s|$)/iu.test(directive));
+  if (frameAncestors >= 0) directives[frameAncestors] = `frame-ancestors ${frameAncestor}`;
+  else directives.push(`frame-ancestors ${frameAncestor}`);
+  return directives.join("; ");
+}
+
+function securityHeaders(
+  res: Response | http.ServerResponse,
+  frameAncestor: string,
+  upstreamContentSecurityPolicy?: number | string | string[],
+): void {
   res.setHeader("cache-control", "no-store");
-  res.setHeader(
-    "content-security-policy",
-    `${CSP_BEFORE_FRAME_ANCESTORS} ${frameAncestor}${CSP_AFTER_FRAME_ANCESTORS}`,
-  );
+  const fallback = `${CSP_BEFORE_FRAME_ANCESTORS} ${frameAncestor}${CSP_AFTER_FRAME_ANCESTORS}`;
+  let policies: string | string[] = fallback;
+  if (Array.isArray(upstreamContentSecurityPolicy)) {
+    policies = upstreamContentSecurityPolicy.map((value) => frameableContentSecurityPolicy(value, frameAncestor));
+  } else if (typeof upstreamContentSecurityPolicy === "string") {
+    policies = frameableContentSecurityPolicy(upstreamContentSecurityPolicy, frameAncestor);
+  }
+  res.setHeader("content-security-policy", policies);
   res.setHeader("cross-origin-opener-policy", "same-origin");
   res.setHeader("cross-origin-resource-policy", "cross-origin");
   res.setHeader("referrer-policy", "no-referrer");
@@ -612,7 +657,7 @@ export function createOpenClawControlHttpRouter(
             res.setHeader(name, scrubbed);
           }
         }
-        securityHeaders(res, frameAncestor);
+        securityHeaders(res, frameAncestor, res.getHeader("content-security-policy"));
         res.setHeader("set-cookie", touched.cookie);
         upstream.pipe(credentialScrubber([gatewayToken])).pipe(res);
       });
@@ -1114,10 +1159,8 @@ class OpenClawControlSocketBridge {
   }
 
   private rejectQuarantined(frame: BrowserRpcFrame): boolean {
-    let reason: "request-id-quarantined" | "upstream-quarantined" | undefined;
-    if (this.timedOut.has(frame.id)) reason = "request-id-quarantined";
-    else if (this.timedOut.size > 0) reason = "upstream-quarantined";
-    if (!reason) return false;
+    if (!this.timedOut.has(frame.id)) return false;
+    const reason = "request-id-quarantined";
     this.args.browser.send(openClawControlPolicyError(frame, reason));
     this.audit("rpc_deny", "unknown", "denied", reason);
     this.args.metrics?.rpc(this.metricsIdentity, "unknown", "denied");
