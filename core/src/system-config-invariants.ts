@@ -447,6 +447,9 @@ export function platformInvariantTable(
       value,
     })),
   ];
+  if (!isolated) {
+    base.push({ kind: "exact", path: "commands.ownerAllowFrom", value: ABSENT });
+  }
   const platformProjection = context.gatewayClass === "builder"
     ? base.filter((invariant) => invariant.kind !== "mattermost-account-projection")
     : base;
@@ -648,22 +651,26 @@ function trustedOwnerAllowFrom(value: unknown): string[] | null {
     : null;
 }
 
-function managedMattermostAccountIds(config: JsonObject): Set<string> {
-  const result = new Set<string>();
+function managedMattermostAccounts(config: JsonObject): Map<string, "coach" | "project"> {
+  const result = new Map<string, "coach" | "project">();
   const agents = asObject(config.agents);
   if (!agents) return result;
+  const addAgent = (agentId: string): void => {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind !== "coach" && parsed.kind !== "project") return;
+    const accountId = accountIdForAgentId(agentId);
+    if (accountId) result.set(accountId, parsed.kind);
+  };
   if (Array.isArray(agents.list)) {
     for (const entry of agents.list) {
       const agent = asObject(entry);
-      const accountId = typeof agent?.id === "string" ? accountIdForAgentId(agent.id) : null;
-      if (accountId) result.add(accountId);
+      if (typeof agent?.id === "string") addAgent(agent.id);
     }
   }
   const entries = asObject(agents.entries);
   if (entries) {
     for (const agentId of Object.keys(entries)) {
-      const accountId = accountIdForAgentId(agentId);
-      if (accountId) result.add(accountId);
+      addAgent(agentId);
     }
   }
   return result;
@@ -686,13 +693,16 @@ function accountProjectionSatisfied(config: JsonObject): boolean {
   const accounts = mattermostAccounts(config);
   if (accounts === ABSENT) return true;
   if (!accounts) return false;
-  const managed = managedMattermostAccountIds(config);
+  const managed = managedMattermostAccounts(config);
   return Object.entries(accounts).every(([accountId, rawAccount]) => {
     const account = asObject(rawAccount);
-    return managed.has(accountId)
+    const accountKind = managed.get(accountId);
+    return accountKind !== undefined
       && account !== null
       && equal(account.botToken, mattermostAccountSecretRef(accountId))
-      && trustedOwnerAllowFrom(account.allowFrom) !== null
+      && (accountKind === "project"
+        ? account.dmPolicy === "disabled" && !Object.prototype.hasOwnProperty.call(account, "allowFrom")
+        : account.dmPolicy === "allowlist" && trustedOwnerAllowFrom(account.allowFrom) !== null)
       && !Object.prototype.hasOwnProperty.call(account, "baseUrl")
       && !Object.prototype.hasOwnProperty.call(account, "network")
       && !Object.prototype.hasOwnProperty.call(account, "interactions")
@@ -708,15 +718,22 @@ function reconcileMattermostAccounts(config: JsonObject): void {
     mattermost[leaf] = {};
     return;
   }
-  const managed = managedMattermostAccountIds(config);
+  const managed = managedMattermostAccounts(config);
   for (const [accountId, rawAccount] of Object.entries(current)) {
     const account = asObject(rawAccount);
-    if (!managed.has(accountId) || !account) {
+    const accountKind = managed.get(accountId);
+    if (accountKind === undefined || !account) {
       delete current[accountId];
       continue;
     }
     account.botToken = mattermostAccountSecretRef(accountId);
-    account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
+    if (accountKind === "project") {
+      account.dmPolicy = "disabled";
+      delete account.allowFrom;
+    } else {
+      account.dmPolicy = "allowlist";
+      account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
+    }
     delete account.baseUrl;
     delete account.network;
     delete account.interactions;

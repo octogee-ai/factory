@@ -13,7 +13,6 @@ import * as path from "path";
 import {
   isValidUsername,
   usernameValidationError,
-  workspaceAdminChannelName,
   workspaceCoachChannelName,
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
@@ -322,7 +321,6 @@ export function wireCoachMattermostBindings(
   const bindChannels: Array<[unknown, string]> = [
     [mmUpdate["mattermost.channelId"], "coach DM"],
     [mmUpdate["mattermost.generalChannelId"], "general"],
-    [mmUpdate["mattermost.adminChannelId"], "admin"],
   ];
 
   for (const [channelIdRaw, label] of bindChannels) {
@@ -522,19 +520,6 @@ async function seedWorkspaceChannels(
     );
   }
 
-  const adminChannelId = mmUpdate["mattermost.adminChannelId"] as string | undefined;
-  if (adminChannelId) {
-    await db.doc(`workspaces/${ctx.slug}/channels/admin`).set(
-      {
-        id: "admin",
-        kind: "admin",
-        name: "admin",
-        mattermost: { channelId: adminChannelId },
-        createdAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
-  }
 }
 
 async function provisionActivityPairsForWorkspace(
@@ -543,7 +528,6 @@ async function provisionActivityPairsForWorkspace(
 ): Promise<void> {
   const generalChannelId = mmUpdate["mattermost.generalChannelId"] as string | undefined;
   const coachDmChannelId = mmUpdate["mattermost.channelId"] as string | undefined;
-  const adminChannelId = mmUpdate["mattermost.adminChannelId"] as string | undefined;
   const apTeamId = (mmUpdate["mattermost.teamId"] as string | undefined) ?? "";
   const mmApiCall = mmApiCallDefault;
   if (!apTeamId) throw new Error(`activity-pair provisioning failed for ${ctx.slug}: Mattermost team is missing`);
@@ -562,9 +546,6 @@ async function provisionActivityPairsForWorkspace(
               (mmUpdate["mattermost.channelName"] as string | undefined) ||
               workspaceCoachChannelName(ctx.slug),
           }
-        : null,
-      adminChannel: adminChannelId
-        ? { id: adminChannelId, name: workspaceAdminChannelName(ctx.slug) }
         : null,
     },
     {

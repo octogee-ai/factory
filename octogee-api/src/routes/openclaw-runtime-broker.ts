@@ -474,14 +474,46 @@ function authorizedChannelContext(
   return purpose.length > 0 ? { authorized: true, purpose } : { authorized: true };
 }
 
+interface ResolveSessionContextInput {
+  gatewayId: string;
+  agentId: string;
+  accountId: string;
+  channelId: string;
+  senderId: string;
+  sessionKey: string;
+  opsMattermostUserId: string | null;
+}
+
+async function resolveRawDirectSessionContext(
+  db: Firestore,
+  input: ResolveSessionContextInput,
+): Promise<SessionContextLookup | undefined> {
+  if (!input.senderId && !input.sessionKey) return undefined;
+  if (!input.senderId || !input.sessionKey) return "forbidden";
+  const route = dispatchSessionRoute(input.sessionKey, input.agentId);
+  if (!route || route.kind !== "direct" || route.peerId !== input.senderId) {
+    return "forbidden";
+  }
+  return resolveDispatchContext({
+    db,
+    gatewayId: input.gatewayId,
+    agentId: input.agentId,
+    accountId: input.accountId,
+    conversationId: input.senderId,
+    senderId: input.senderId,
+    sessionKey: input.sessionKey,
+    opsMattermostUserId: input.opsMattermostUserId,
+  });
+}
+
 async function resolveSessionContext(
   db: Firestore,
-  gatewayId: string,
-  agentId: string,
-  accountId: string,
-  channelId: string,
+  input: ResolveSessionContextInput,
 ): Promise<SessionContextLookup> {
+  const { gatewayId, agentId, accountId, channelId } = input;
   if (!agentId || !channelId) return null;
+  const directContext = await resolveRawDirectSessionContext(db, input);
+  if (directContext !== undefined) return directContext;
   const parsed = parseAgentId(agentId);
   const expectedAccountId = mattermostAccountId(parsed);
   if (!expectedAccountId || accountId !== expectedAccountId) return "forbidden";
@@ -513,6 +545,11 @@ interface DispatchContextInput {
   conversationId: string;
   senderId: string;
   sessionKey: string;
+  opsMattermostUserId: string | null;
+}
+
+function validMattermostUserId(value: unknown): value is string {
+  return typeof value === "string" && MATTERMOST_ID_RE.test(value);
 }
 
 function mattermostAccountId(parsed: ParsedAgentId): string | null {
@@ -550,7 +587,7 @@ function dispatchEnvelope(
   return route;
 }
 
-async function resolveDirectDispatchContext(
+async function resolveCoachOwnerDispatchContext(
   input: DispatchContextInput,
   identity: AgentScope,
   parsed: KnownAgentId,
@@ -568,6 +605,26 @@ async function resolveDirectDispatchContext(
     && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
   ) return { authorized: true };
   return "forbidden";
+}
+
+async function resolveDirectDispatchContext(
+  input: DispatchContextInput,
+  identity: AgentScope,
+  parsed: KnownAgentId,
+): Promise<DispatchContextLookup> {
+  if (parsed.kind !== "coach") return "forbidden";
+  if (identity.channelDocPath !== `workspaces/${parsed.username}/channels/coach-dm`) {
+    return "forbidden";
+  }
+
+  const gateway = await input.db.doc(`gateways/${input.gatewayId}`).get();
+  const isBuilderGateway = gateway.exists && gateway.data()?.gatewayClass === "builder";
+  if (
+    input.opsMattermostUserId !== null &&
+    input.senderId === input.opsMattermostUserId
+  ) return { authorized: true };
+  if (!isBuilderGateway) return "forbidden";
+  return resolveCoachOwnerDispatchContext(input, identity, parsed);
 }
 
 function isExactDispatchLane(
@@ -598,7 +655,7 @@ async function resolveGroupDispatchContext(
       channel.binding.lane !== "workspace"
       || channel.binding.workspaceSlug !== parsed.username
     ) return "forbidden";
-    return resolveDirectDispatchContext(input, identity, parsed);
+    return resolveCoachOwnerDispatchContext(input, identity, parsed);
   }
   if (!isExactDispatchLane(channel.binding, parsed)) return "forbidden";
   if (!(await sessionOwnerIsActive(input.db, channel.binding))) return null;
@@ -1131,7 +1188,11 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
   });
 }
 
-function mountSessionContextRoute(router: Router, db: Firestore): void {
+function mountSessionContextRoute(
+  router: Router,
+  db: Firestore,
+  opsMattermostUserId: string | null,
+): void {
   router.post("/activity/dispatch-context", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1143,6 +1204,7 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
       conversationId: stringBody(req, "conversationId"),
       senderId: stringBody(req, "senderId"),
       sessionKey: stringBody(req, "sessionKey"),
+      opsMattermostUserId,
     });
     if (context === "forbidden") {
       forbidden(res);
@@ -1158,13 +1220,15 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
   router.post("/activity/session-context", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
-    const context = await resolveSessionContext(
-      db,
-      bound.gatewayId,
-      stringBody(req, "agentId"),
-      stringBody(req, "accountId"),
-      stringBody(req, "channelId"),
-    );
+    const context = await resolveSessionContext(db, {
+      gatewayId: bound.gatewayId,
+      agentId: stringBody(req, "agentId"),
+      accountId: stringBody(req, "accountId"),
+      channelId: stringBody(req, "channelId"),
+      senderId: stringBody(req, "senderId"),
+      sessionKey: stringBody(req, "sessionKey"),
+      opsMattermostUserId,
+    });
     if (context === "forbidden") {
       forbidden(res);
       return;
@@ -1177,7 +1241,11 @@ function mountSessionContextRoute(router: Router, db: Firestore): void {
   });
 }
 
-function mountActivityRoutes(router: Router, db: Firestore): void {
+function mountActivityRoutes(
+  router: Router,
+  db: Firestore,
+  opsMattermostUserId: string | null,
+): void {
   router.post("/activity/agent-identity", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1208,7 +1276,7 @@ function mountActivityRoutes(router: Router, db: Firestore): void {
     res.json({ pair });
   });
 
-  mountSessionContextRoute(router, db);
+  mountSessionContextRoute(router, db, opsMattermostUserId);
 
   router.post("/activity/run-live", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1437,6 +1505,7 @@ function mountShellDeletionRoutes(router: Router, db: Firestore): void {
 
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
+  opsMattermostUserId?: string;
   resolveMattermostActorFacts?: (
     record: AgentControlRecordV1,
     actorMmUserId: string,
@@ -1445,6 +1514,9 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
 }): Router {
   const router = Router();
   const { db } = opts;
+  const opsMattermostUserId = validMattermostUserId(opts.opsMattermostUserId)
+    ? opts.opsMattermostUserId
+    : null;
   const agentControlRegistry = createAgentControlRegistry({
     store: createFirestoreAgentControlStore(db as never),
   });
@@ -1468,7 +1540,7 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
     return deleteMattermostInputPost(postId);
   };
   mountUserAndWsRoutes(router, db);
-  mountActivityRoutes(router, db);
+  mountActivityRoutes(router, db, opsMattermostUserId);
   mountShellDeletionRoutes(router, db);
   router.use("/agent-control", createAgentControlRoutes({
     registry: agentControlRegistry,

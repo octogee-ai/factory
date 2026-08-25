@@ -84,6 +84,12 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(before)).not.toBe(snapshotConfigFingerprint(after));
   });
 
+  it("changes when the shared-gateway Ops Mattermost identity changes", () => {
+    const before = snap({ platformAdminMmUserId: "pppppppppppppppppppppppppp" });
+    const after = snap({ platformAdminMmUserId: "qqqqqqqqqqqqqqqqqqqqqqqqqq" });
+    expect(snapshotConfigFingerprint(before)).not.toBe(snapshotConfigFingerprint(after));
+  });
+
   it("changes when a channel is added or removed", () => {
     const base = snapshotConfigFingerprint(snap());
     const extra = snap({

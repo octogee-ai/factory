@@ -99,6 +99,10 @@ secrets:
     secretName: mattermost-gateway
     secretKey: admin_token
     optional: false
+  - envName: MM_ADMIN_USER_ID
+    secretName: mattermost-gateway
+    secretKey: admin_user_id
+    optional: false
   - envName: GOOGLE_CLIENT_ID
     secretName: google-oauth
     secretKey: client_id

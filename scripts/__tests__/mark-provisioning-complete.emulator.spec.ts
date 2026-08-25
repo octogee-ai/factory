@@ -2,7 +2,6 @@
 
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
-  workspaceAdminChannelName,
   workspaceCoachChannelName,
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
@@ -49,10 +48,6 @@ function mockMattermostActivityPairs(slug: string, mmUpdate: Record<string, unkn
       name: typeof mmUpdate["mattermost.channelName"] === "string"
         ? mmUpdate["mattermost.channelName"]
         : workspaceCoachChannelName(slug),
-    },
-    {
-      id: mmUpdate["mattermost.adminChannelId"],
-      name: workspaceAdminChannelName(slug),
     },
   ];
   const channels = new Map<string, MattermostChannelFixture>();
@@ -187,7 +182,6 @@ const fullMmUpdate = (slug: string) => ({
   "mattermost.channelId": `mm-coach-dm-${slug}`,
   "mattermost.channelName": `octogee-${slug}-coach`,
   "mattermost.generalChannelId": `mm-general-${slug}`,
-  "mattermost.adminChannelId": `mm-admin-${slug}`,
   "mattermost.coachUserId": `mm-coach-${slug}`,
 });
 
@@ -372,7 +366,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
     expect(typeof ws?.gitea?.repoName).toBe("string");
   });
 
-  it("seeds workspaces/{slug}/channels/{general,coach-dm,admin} when their MM ids are present", async () => {
+  it("seeds workspaces/{slug}/channels/{general,coach-dm} without an Admin channel", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
@@ -380,11 +374,10 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
 
     const general = await readDoc(`workspaces/${slug}/channels/general`);
     const coachDm = await readDoc(`workspaces/${slug}/channels/coach-dm`);
-    const adminCh = await readDoc(`workspaces/${slug}/channels/admin`);
 
     expect(general).toMatchObject({ id: "general", kind: "general", name: "general", mattermost: { channelId: `mm-general-${slug}` } });
     expect(coachDm).toMatchObject({ id: "coach-dm", kind: "coach-dm", mattermost: { channelId: `mm-coach-dm-${slug}` } });
-    expect(adminCh).toMatchObject({ id: "admin", kind: "admin", name: "admin", mattermost: { channelId: `mm-admin-${slug}` } });
+    expect(await readDoc(`workspaces/${slug}/channels/admin`)).toBeNull();
   });
 
   it("persists only supplied channels but rejects completion when required pair primaries are absent", async () => {
@@ -400,7 +393,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
         "mattermost.coachUserId": `mm-coach-${slug}`,
       },
       [],
-    )).rejects.toThrow(/coach-dm=primary channel is missing.*admin=primary channel is missing/);
+    )).rejects.toThrow(/coach-dm=primary channel is missing/);
 
     expect(await readDoc(`workspaces/${slug}/channels/general`)).toMatchObject({
       mattermost: {
@@ -409,7 +402,6 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
       },
     });
     expect(await readDoc(`workspaces/${slug}/channels/coach-dm`)).toBeNull();
-    expect(await readDoc(`workspaces/${slug}/channels/admin`)).toBeNull();
   });
 
   it("seeds workspaces/{slug}/members/{uid} as role=owner", async () => {
@@ -452,7 +444,7 @@ describe("markProvisioningComplete — agents/{uid} doc", () => {
         "mattermost.userId": `mm-user-${slug}`,
       },
       [],
-    )).rejects.toThrow(/general=primary channel is missing.*coach-dm=primary channel is missing.*admin=primary channel is missing/);
+    )).rejects.toThrow(/general=primary channel is missing.*coach-dm=primary channel is missing/);
 
     expect(await readDoc(`agents/${uid}`)).toBeNull();
   });

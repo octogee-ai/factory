@@ -21,6 +21,9 @@ import {
 } from "../lib/openclaw-config-builders.js";
 
 const CHRIS_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ADMIN_MM_ID = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+const SAM_MM_ID = "cccccccccccccccccccccccccc";
+const PAT_MM_ID = "dddddddddddddddddddddddddd";
 
 describe("buildCustomerAgent", () => {
   it("marks the isolated gateway Builder coach as OpenClaw's explicit default", () => {
@@ -421,37 +424,54 @@ describe("buildMattermostAccounts", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" }],
       new Map([["uid-a", "tok-chris"]]),
-      "mm-admin",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
     expect(accounts.admin).toBeUndefined();
   });
 
-  it("restricts each workspace coach to its Builder and platform admin", () => {
+  it("allows shared coach DMs only from platform admin and keeps Coach groups Builder-only", () => {
     const accounts = buildMattermostAccounts(
       [
-        { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
-        { uid: "uid-b", slug: "sam", customerMmUserId: "mm-sam" },
+        { uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID },
+        { uid: "uid-b", slug: "sam", customerMmUserId: SAM_MM_ID },
       ],
       new Map([
         ["uid-a", "tok-chris"],
         ["uid-b", "tok-sam"],
       ]),
-      "mm-admin",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
     expect(accounts["chris-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
-      allowFrom: [],
+      dmPolicy: "allowlist",
+      allowFrom: [ADMIN_MM_ID],
       groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-chris", "mm-admin"],
+      groupAllowFrom: [CHRIS_MM_ID],
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
-      allowFrom: [],
+      dmPolicy: "allowlist",
+      allowFrom: [ADMIN_MM_ID],
       groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-sam", "mm-admin"],
+      groupAllowFrom: [SAM_MM_ID],
       commands: { native: false },
     });
+  });
+
+  it("does not set a Builder gateway's direct-message policy", () => {
+    const accounts = buildMattermostAccounts(
+      [{ uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID }],
+      new Map([["uid-a", "tok-chris"]]),
+      { gatewayClass: "builder", platformAdminMmUserId: ADMIN_MM_ID },
+    );
+
+    expect(accounts["chris-coach"]).toMatchObject({
+      groupPolicy: "allowlist",
+      groupAllowFrom: [CHRIS_MM_ID],
+    });
+    expect(accounts["chris-coach"]).not.toHaveProperty("dmPolicy");
+    expect(accounts["chris-coach"]).not.toHaveProperty("allowFrom");
   });
 
   it("OMITS customers without a PAT — never emits a null/empty botToken", () => {
@@ -461,7 +481,7 @@ describe("buildMattermostAccounts", () => {
         { uid: "uid-b", slug: "sam" },
       ],
       new Map([["uid-a", "tok-chris"]]),
-      "mm-admin",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
     expect(accounts["chris-coach"]).toMatchObject({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
@@ -474,40 +494,44 @@ describe("buildMattermostAccounts", () => {
   it("routes tokens + allowlists per-uid — no cross-workspace bleed", () => {
     const accounts = buildMattermostAccounts(
       [
-        { uid: "uid-a", slug: "chris", customerMmUserId: "mm-chris" },
-        { uid: "uid-b", slug: "sam", customerMmUserId: "mm-sam" },
-        { uid: "uid-c", slug: "pat", customerMmUserId: "mm-pat" },
+        { uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID },
+        { uid: "uid-b", slug: "sam", customerMmUserId: SAM_MM_ID },
+        { uid: "uid-c", slug: "pat", customerMmUserId: PAT_MM_ID },
       ],
       new Map([
         ["uid-a", "tok-A"],
         ["uid-b", "tok-B"],
         ["uid-c", "tok-C"],
       ]),
-      "mm-admin",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
-    expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-chris", "mm-admin"]);
-    expect(accounts["sam-coach"].groupAllowFrom).toEqual(["mm-sam", "mm-admin"]);
-    expect(accounts["pat-coach"].groupAllowFrom).toEqual(["mm-pat", "mm-admin"]);
+    expect(accounts["chris-coach"].groupAllowFrom).toEqual([CHRIS_MM_ID]);
+    expect(accounts["sam-coach"].groupAllowFrom).toEqual([SAM_MM_ID]);
+    expect(accounts["pat-coach"].groupAllowFrom).toEqual([PAT_MM_ID]);
+    expect(Object.values(accounts).every((account) =>
+      account.allowFrom?.[0] === ADMIN_MM_ID)).toBe(true);
   });
 
-  it("authorizes native actions only for the exact Builder id and never the admin", () => {
+  it("sets an immutable platform-admin DM allowlist rather than the Builder id", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID }],
       new Map([["uid-a", "tok-chris"]]),
-      "cccccccccccccccccccccccccc",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
 
-    expect(accounts["chris-coach"].allowFrom).toEqual([CHRIS_MM_ID]);
+    expect(accounts["chris-coach"].allowFrom).toEqual([ADMIN_MM_ID]);
   });
 
   it("keeps the platform admin as the only sender when the Builder id is unavailable", () => {
     const accounts = buildMattermostAccounts(
       [{ uid: "uid-a", slug: "chris" }],
       new Map([["uid-a", "tok-chris"]]),
-      "mm-admin",
+      { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID },
     );
+    expect(accounts["chris-coach"].dmPolicy).toBe("allowlist");
+    expect(accounts["chris-coach"].allowFrom).toEqual([ADMIN_MM_ID]);
     expect(accounts["chris-coach"].groupPolicy).toBe("allowlist");
-    expect(accounts["chris-coach"].groupAllowFrom).toEqual(["mm-admin"]);
+    expect(accounts["chris-coach"].groupAllowFrom).toEqual([]);
   });
 
   it("fails closed when no authorized coach sender is available", () => {
@@ -519,7 +543,7 @@ describe("buildMattermostAccounts", () => {
       warn,
     );
     expect(accounts).toEqual({});
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("sender allowlist is empty"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("authorized sender lists are empty"));
   });
 
   // OpenClaw 2026.7.2's mattermost plugin builds its group entry as
@@ -644,6 +668,29 @@ describe("buildCustomerBindings", () => {
       },
     ]);
   });
+
+  it("leaves the retired Admin channel unbound while retaining the Builder Coach channel", () => {
+    const bindings = buildCustomerBindings([
+      {
+        slug: "chris",
+        channels: [
+          { channelId: "ch-admin", scope: "workspace", kind: "admin" },
+          { channelId: "ch-coach", scope: "workspace", kind: "coach-dm" },
+        ],
+      },
+    ]);
+
+    expect(bindings.map((binding) =>
+      "peer" in binding.match ? binding.match.peer.id : null)).not.toContain("ch-admin");
+    expect(bindings).toContainEqual({
+      agentId: "octogee-chris-coach",
+      match: {
+        channel: "mattermost",
+        accountId: "chris-coach",
+        peer: { kind: "group", id: "ch-coach" },
+      },
+    });
+  });
 });
 
 describe("activeAgentProjectIds", () => {
@@ -719,21 +766,30 @@ describe("buildProjectAgents", () => {
 });
 
 describe("buildProjectAgentAccounts", () => {
-  it("emits accounts only for active agents, keyed {slug}-proj-{pid}", () => {
+  it("emits shared accounts only for active agents, keyed {slug}-proj-{pid}", () => {
     const accounts = buildProjectAgentAccounts("chris", [
       { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
       { projectId: "unminted", enabled: true, token: null, mmUserId: null },
       { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
-    ], CHRIS_MM_ID);
+    ], CHRIS_MM_ID, { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID });
 
     expect(accounts).toEqual({
       "chris-proj-orbit": {
         botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-proj-orbit" },
-        allowFrom: [CHRIS_MM_ID],
+        dmPolicy: "disabled",
         groupPolicy: "open",
         commands: { native: false },
       },
     });
+  });
+
+  it("leaves Builder gateway project-agent DM configuration unset", () => {
+    const accounts = buildProjectAgentAccounts("chris", [
+      { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
+    ], CHRIS_MM_ID, { gatewayClass: "builder" });
+
+    expect(accounts["chris-proj-orbit"]).not.toHaveProperty("dmPolicy");
+    expect(accounts["chris-proj-orbit"]).not.toHaveProperty("allowFrom");
   });
 });
 

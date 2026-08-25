@@ -34,10 +34,10 @@ afterEach(() => {
 });
 
 describe("wireCoachMattermostBindings", () => {
-  it("writes one binding per channel with accountId pinned to {slug}-coach", () => {
+  it("writes bindings only for the Builder-facing Coach and General channels", () => {
     const config: any = { bindings: [] };
     wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
-    expect(config.bindings).toHaveLength(3);
+    expect(config.bindings).toHaveLength(2);
     for (const b of config.bindings) {
       expect(b.agentId).toBe(AGENT_ID);
       expect(b.match.channel).toBe("mattermost");
@@ -45,7 +45,7 @@ describe("wireCoachMattermostBindings", () => {
       expect(b.match.peer.kind).toBe("group");
     }
     const channelIds = config.bindings.map((b: any) => b.match.peer.id).sort();
-    expect(channelIds).toEqual(["ch-admin", "ch-coach-dm", "ch-general"]);
+    expect(channelIds).toEqual(["ch-coach-dm", "ch-general"]);
   });
 
   it("REPLACES a legacy accountId-less binding in place (does not leave stale entries)", () => {
@@ -61,7 +61,7 @@ describe("wireCoachMattermostBindings", () => {
       ],
     };
     wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
-    expect(config.bindings).toHaveLength(3);
+    expect(config.bindings).toHaveLength(2);
     for (const b of config.bindings) {
       expect(b.match.accountId).toBe(ACCOUNT_ID);
     }
@@ -71,7 +71,7 @@ describe("wireCoachMattermostBindings", () => {
     const config: any = { bindings: [] };
     wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
     wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
-    expect(config.bindings).toHaveLength(3);
+    expect(config.bindings).toHaveLength(2);
   });
 
   it("skips channels whose id is missing from mmUpdate", () => {

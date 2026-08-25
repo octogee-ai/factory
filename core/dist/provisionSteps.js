@@ -9,7 +9,7 @@ import { filterOutCustomerBindings } from "./apply-config-patch.js";
 import { FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
-import { isValidUsername, usernameValidationError, workspaceAdminChannelName, workspaceCoachChannelName, workspaceGeneralChannelName, } from "@octogee/shared/types/identity";
+import { isValidUsername, usernameValidationError, workspaceCoachChannelName, workspaceGeneralChannelName, } from "@octogee/shared/types/identity";
 import { persistWorkspaceChannelsWithActivityPairs, provisionWorkspaceActivityPair, } from "./mattermost/provisionWorkspaceActivityPairs.js";
 import { mmApiCallStrict as mmApiCallDefault } from "./mattermost/client.js";
 import { log, OPENCLAW_DIR, CUSTOMERS_DIR, agentExists, } from "./config.js";
@@ -175,7 +175,6 @@ export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate
     const bindChannels = [
         [mmUpdate["mattermost.channelId"], "coach DM"],
         [mmUpdate["mattermost.generalChannelId"], "general"],
-        [mmUpdate["mattermost.adminChannelId"], "admin"],
     ];
     for (const [channelIdRaw, label] of bindChannels) {
         if (typeof channelIdRaw !== "string" || !channelIdRaw)
@@ -321,21 +320,10 @@ async function seedWorkspaceChannels(ctx, mmUpdate) {
             createdAt: FieldValue.serverTimestamp(),
         }, { merge: true });
     }
-    const adminChannelId = mmUpdate["mattermost.adminChannelId"];
-    if (adminChannelId) {
-        await db.doc(`workspaces/${ctx.slug}/channels/admin`).set({
-            id: "admin",
-            kind: "admin",
-            name: "admin",
-            mattermost: { channelId: adminChannelId },
-            createdAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
-    }
 }
 async function provisionActivityPairsForWorkspace(ctx, mmUpdate) {
     const generalChannelId = mmUpdate["mattermost.generalChannelId"];
     const coachDmChannelId = mmUpdate["mattermost.channelId"];
-    const adminChannelId = mmUpdate["mattermost.adminChannelId"];
     const apTeamId = mmUpdate["mattermost.teamId"] ?? "";
     const mmApiCall = mmApiCallDefault;
     if (!apTeamId)
@@ -352,9 +340,6 @@ async function provisionActivityPairsForWorkspace(ctx, mmUpdate) {
                 name: mmUpdate["mattermost.channelName"] ||
                     workspaceCoachChannelName(ctx.slug),
             }
-            : null,
-        adminChannel: adminChannelId
-            ? { id: adminChannelId, name: workspaceAdminChannelName(ctx.slug) }
             : null,
     }, {
         provisionPair: (apInput) => provisionWorkspaceActivityPair(apInput, { db, mmApiCall, log }),

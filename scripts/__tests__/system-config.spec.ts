@@ -1126,6 +1126,7 @@ describe("system_config restore", () => {
     expect(JSON.parse(tracked).channels.mattermost.accounts).toEqual({
       "acme-coach": {
         botToken: { source: "file", provider: "octogee-mattermost", id: "/acme-coach" },
+        dmPolicy: "allowlist",
         allowFrom: [],
       },
     });

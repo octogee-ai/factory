@@ -275,7 +275,9 @@ describe("system config platform invariants", () => {
       ]),
     );
     expect((config.channels as any).mattermost.accounts["alice-coach"].allowFrom).toEqual(["f".repeat(26)]);
-    expect((config.channels as any).mattermost.accounts["alice-proj-garden"].allowFrom).toEqual(["f".repeat(26)]);
+    expect((config.channels as any).mattermost.accounts["alice-proj-garden"].dmPolicy).toBe("disabled");
+    expect((config.channels as any).mattermost.accounts["alice-proj-garden"])
+      .not.toHaveProperty("allowFrom");
     expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "automations"]));
     expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining([
       "preview_start",
@@ -593,6 +595,89 @@ describe("system config platform invariants", () => {
       },
     });
     expect((config.gateway as Record<string, unknown>)).not.toHaveProperty("controlUi.basePath");
+  });
+
+  it("forces shared Mattermost DMs to an allowlist without rewriting Builder-owned DM settings", () => {
+    const accountId = "alice-coach";
+    const shared: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-coach" }] },
+      channels: {
+        mattermost: {
+          accounts: {
+            [accountId]: {
+              dmPolicy: "open",
+              allowFrom: ["a".repeat(26), "b".repeat(26)],
+            },
+          },
+        },
+      },
+    };
+    reconcilePlatformInvariants(shared, barn);
+
+    const sharedAccount = ((((shared.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>)[accountId]);
+    expect(sharedAccount.dmPolicy).toBe("allowlist");
+    expect(sharedAccount.allowFrom).toEqual([]);
+
+    const builderConfig: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-coach" }] },
+      channels: {
+        mattermost: {
+          accounts: {
+            [accountId]: {
+              dmPolicy: "open",
+              allowFrom: ["*", "a".repeat(26)],
+            },
+          },
+        },
+      },
+    };
+    reconcilePlatformInvariants(builderConfig, builder);
+
+    const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>)[accountId]);
+    expect(builderAccount.dmPolicy).toBe("open");
+    expect(builderAccount.allowFrom).toEqual(["*", "a".repeat(26)]);
+    expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
+  });
+
+  it("removes paired command ownership on shared gateways but leaves Builder ownership settings alone", () => {
+    const ownerAllowFrom = ["a".repeat(26)];
+    const shared: Record<string, unknown> = { commands: { ownerAllowFrom } };
+    reconcilePlatformInvariants(shared, barn);
+    expect(shared.commands as Record<string, unknown>).not.toHaveProperty("ownerAllowFrom");
+
+    const builderConfig: Record<string, unknown> = { commands: { ownerAllowFrom } };
+    reconcilePlatformInvariants(builderConfig, builder);
+    expect((builderConfig.commands as Record<string, unknown>).ownerAllowFrom).toEqual(ownerAllowFrom);
+    expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
+  });
+
+  it("disables project-agent DMs on shared gateways without rewriting Builder project-agent settings", () => {
+    const accountId = "alice-proj-orbit";
+    const shared: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-proj-orbit-coach" }] },
+      channels: { mattermost: { accounts: { [accountId]: { allowFrom: ["a".repeat(26)] } } } },
+    };
+    reconcilePlatformInvariants(shared, barn);
+    const sharedAccount = ((((shared.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>)[accountId]);
+    expect(sharedAccount.dmPolicy).toBe("disabled");
+    expect(sharedAccount).not.toHaveProperty("allowFrom");
+
+    const builderConfig: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-proj-orbit-coach" }] },
+      channels: {
+        mattermost: {
+          accounts: { [accountId]: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+      },
+    };
+    reconcilePlatformInvariants(builderConfig, builder);
+    const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>)[accountId]);
+    expect(builderAccount.dmPolicy).toBe("open");
+    expect(builderAccount.allowFrom).toEqual(["*"]);
   });
 
   it("exposes the same exact paths to RPC and filesystem consumers", () => {

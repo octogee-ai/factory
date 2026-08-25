@@ -404,6 +404,68 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
+  it("forces shared account DMs to an allowlist while preserving Builder-owned DM settings", () => {
+    const accountId = "alice-coach";
+    const projectAccountId = "alice-proj-orbit";
+    const shared = runPolicy("shared", {
+      agents: {
+        list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }],
+      },
+      commands: { ownerAllowFrom: ["a".repeat(26)] },
+      channels: {
+        mattermost: {
+          accounts: {
+            [accountId]: {
+              dmPolicy: "open",
+              allowFrom: ["a".repeat(26)],
+            },
+            [projectAccountId]: {
+              dmPolicy: "open",
+              allowFrom: ["a".repeat(26)],
+            },
+          },
+        },
+      },
+    });
+    expect(shared.channels.mattermost.accounts[accountId]).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["a".repeat(26)],
+    });
+    expect(shared.commands.ownerAllowFrom).toBeUndefined();
+    expect(shared.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
+    expect(shared.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
+
+    const builder = runPolicy("builder", {
+      agents: {
+        list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }],
+      },
+      commands: { ownerAllowFrom: ["a".repeat(26)] },
+      channels: {
+        mattermost: {
+          accounts: {
+            [accountId]: {
+              dmPolicy: "open",
+              allowFrom: ["*", "a".repeat(26)],
+            },
+            [projectAccountId]: {
+              dmPolicy: "open",
+              allowFrom: ["*", "a".repeat(26)],
+            },
+          },
+        },
+      },
+    });
+    expect(builder.channels.mattermost.accounts[accountId]).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["*", "a".repeat(26)],
+    });
+    expect(builder.commands.ownerAllowFrom).toEqual(["a".repeat(26)]);
+    expect(builder.channels.mattermost.accounts[projectAccountId]).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["*", "a".repeat(26)],
+    });
+  });
+
   it("shared class retains the durable disabled Codex invariant", () => {
     const out = runPolicy("shared", {
       plugins: {

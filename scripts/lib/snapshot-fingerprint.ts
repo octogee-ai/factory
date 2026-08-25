@@ -112,6 +112,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     coachToken: snapshot.coachToken,
     coachMmUserId: snapshot.coachMmUserId,
     customerMmUserId: snapshot.customerMmUserId,
+    platformAdminMmUserId: snapshot.platformAdminMmUserId ?? null,
     systemConfig: snapshot.systemConfig ?? null,
     byotActive: snapshot.byotActive ?? false,
     // Plan fields shape the effective model config through the ensure's byot reassert —

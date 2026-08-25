@@ -1371,15 +1371,21 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       const patch = args.buildPatch({
         agents: { list: [] },
         bindings: [],
-        channels: { mattermost: { accounts: {} } },
+        channels: {
+          mattermost: {
+            accounts: { "alice-coach": { dmPolicy: "open", allowFrom: ["*"] } },
+          },
+        },
       }) as {
         channels: { mattermost: { accounts: Record<string, unknown> } };
       };
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
         groupPolicy: "allowlist",
-        groupAllowFrom: ["mm-alice", "mm-admin"],
+        groupAllowFrom: ["mm-alice"],
         groups: null,
       });
+      expect(patch.channels.mattermost.accounts["alice-coach"]).not.toHaveProperty("dmPolicy");
+      expect(patch.channels.mattermost.accounts["alice-coach"]).not.toHaveProperty("allowFrom");
       expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).not.toBeNull();
       return { mode: "rpc", attempts: 1, noop: true };
     });
@@ -1389,7 +1395,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       client,
       rpc,
       log: vi.fn(),
-      adminMmUserId: "mm-admin",
+      isBuilderGateway: () => true,
     });
 
     await adapter.applyAddCustomerConfigPatch(
@@ -1437,6 +1443,46 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
+  it("takes shared coach DM authorization only from the broker snapshot's platform admin id", async () => {
+    const builderMmUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const platformAdminMmUserId = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const brokerSnapshot = {
+      ...aliceSnapshot({
+        mattermostUserId: builderMmUserId,
+        customerMmUserId: builderMmUserId,
+      }),
+      platformAdminMmUserId,
+    } as FleetBrokerUserSnapshot & { platformAdminMmUserId: string };
+    const client = mkClient({ userSnapshot: vi.fn(async () => brokerSnapshot) });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch({
+        agents: { list: [] },
+        bindings: [],
+        channels: { mattermost: { accounts: {} } },
+      }) as {
+        channels: { mattermost: { accounts: Record<string, unknown> } };
+      };
+
+      expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+        dmPolicy: "allowlist",
+        allowFrom: [platformAdminMmUserId],
+        groupPolicy: "allowlist",
+        groupAllowFrom: [builderMmUserId],
+      });
+      return { mode: "rpc", attempts: 1, noop: true };
+    });
+
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(
+      aliceSnapshot({
+        mattermostUserId: builderMmUserId,
+        channels: [{ scope: "workspace", kind: "general", channelId: "workspace-general" }],
+      }),
+      { _coachPersonalToken: "pat-1" },
+    );
+  });
+
   it("holds a project agent out of the patch while its checkout is absent — its workspace dir does not exist yet", async () => {
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const patch = args.buildPatch({
@@ -1458,7 +1504,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       client,
       rpc: mkGatewayRpc(),
       log: vi.fn(),
-      adminMmUserId: "mm-admin",
     });
 
     await adapter.applyAddCustomerConfigPatch(
@@ -2621,7 +2666,6 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       client: mkClient(),
       rpc: mkGatewayRpc(),
       log: vi.fn(),
-      adminMmUserId: "mm-admin",
     });
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
@@ -2696,12 +2740,18 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       provider: "octogee-mattermost",
       id: "/alice-proj-orbit",
     });
+    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).toMatchObject({
+      dmPolicy: "disabled",
+    });
+    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).not.toHaveProperty("allowFrom");
     // The plugin schema has no per-channel mute, so the coach account clears
     // `groups` rather than listing the project channel; the project channel
     // still reaches its own agent through the partitioned bindings above.
     expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: [],
       groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-alice", "mm-admin"],
+      groupAllowFrom: ["mm-alice"],
       groups: null,
     });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();

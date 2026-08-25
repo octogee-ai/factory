@@ -296,7 +296,6 @@ async function main(): Promise<void> {
     client: brokerClient,
     rpc,
     log,
-    adminMmUserId: process.env.MM_ADMIN_USER_ID,
     isBuilderGateway,
     projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
   });

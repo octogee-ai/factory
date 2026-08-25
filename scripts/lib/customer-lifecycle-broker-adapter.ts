@@ -112,6 +112,7 @@ import {
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
+  type MattermostAccountPolicy,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import {
@@ -205,11 +206,17 @@ function brokerCustomerMattermostUserId(
   return brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId;
 }
 
+function brokerPlatformAdminMattermostUserId(
+  brokerSnapshot: FleetBrokerUserSnapshot | null,
+): string | null {
+  const value = brokerSnapshot?.platformAdminMmUserId;
+  return typeof value === "string" ? value : null;
+}
+
 interface BuildBrokeredLifecycleAdapterOptions {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
-  adminMmUserId?: string;
   isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
 }
@@ -218,12 +225,23 @@ interface BrokerCtx {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
-  adminMmUserId?: string;
+  isBuilderGateway: () => boolean;
   configCache: ConfigCache;
   snapshotsByUid: Map<string, FleetBrokerUserSnapshot>;
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   configRemovedForEviction: Set<string>;
+}
+
+function mattermostAccountPolicyForGateway(
+  ctx: BrokerCtx,
+  brokerSnapshot: FleetBrokerUserSnapshot | null,
+): MattermostAccountPolicy {
+  if (ctx.isBuilderGateway()) return { gatewayClass: "builder" };
+  return {
+    gatewayClass: "shared",
+    platformAdminMmUserId: brokerPlatformAdminMattermostUserId(brokerSnapshot),
+  };
 }
 
 // The roster and the departing agents' bindings are `agents.delete`'s job —
@@ -710,6 +728,7 @@ async function applyAddCustomerConfigPatch(
   }
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
   const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot, callOpts?.withoutProjectIds);
+  const accountPolicy = mattermostAccountPolicyForGateway(ctx, brokerSnapshot);
   const accountsMap = buildMattermostAccounts(
     [
       {
@@ -721,7 +740,7 @@ async function applyAddCustomerConfigPatch(
       },
     ],
     new Map([[snapshot.uid, coachPat]]),
-    ctx.adminMmUserId,
+    accountPolicy,
     (m) => ctx.log(m),
   );
   const accountId = `${snapshot.slug}-coach`;
@@ -735,11 +754,7 @@ async function applyAddCustomerConfigPatch(
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
     agentDir,
-    coach: {
-      name: identity.name,
-      emoji: identity.emoji,
-      model: DEFAULT_COACH.model,
-    },
+    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
     default: builderGateway,
     hostCode: builderGateway ? "builder-full" : "customer-restricted",
@@ -782,6 +797,7 @@ async function applyAddCustomerConfigPatch(
     snapshot.slug,
     projectAgents,
     brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
+    accountPolicy,
   );
   const bindings = buildCustomerBindings([
     {
@@ -1415,7 +1431,7 @@ export function buildBrokeredLifecycleAdapter(
     client: opts.client,
     rpc: opts.rpc,
     log: opts.log,
-    adminMmUserId: opts.adminMmUserId,
+    isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     configCache: { current: undefined, hash: "" },
     snapshotsByUid: new Map(),
     snapshotsBySlug: new Map(),
@@ -1424,7 +1440,7 @@ export function buildBrokeredLifecycleAdapter(
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
-    isBuilderGateway: opts.isBuilderGateway ?? (() => false),
+    isBuilderGateway: ctx.isBuilderGateway,
     isConfiguredBuilderCustomer: (slug) =>
       Boolean(opts.isBuilderGateway?.()) && isConfiguredGatewayBuilder(slug),
     configuredBuilderOverlayPresent: (slug) =>

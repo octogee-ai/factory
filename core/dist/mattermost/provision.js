@@ -2,7 +2,7 @@ import * as crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { log } from "../config.js";
 import { db } from "../firebase.js";
-import { workspaceGeneralChannelName, workspaceCoachChannelName, workspaceAdminChannelName, } from "@octogee/shared/types/identity";
+import { workspaceGeneralChannelName, workspaceCoachChannelName, } from "@octogee/shared/types/identity";
 import { computeWorkspaceDisplayName, WORKSPACE_CHANNEL_DISPLAY_NAMES, } from "@octogee/shared/types/display-names";
 import { mmApiCall, assertMattermostConfigured } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
@@ -63,7 +63,7 @@ async function loadExistingMattermostTopology(slug, existingMattermost) {
     const coachChannelId = nonEmptyString(coachDmSnap.data()?.mattermost?.channelId);
     const generalChannelId = nonEmptyString(generalSnap.data()?.mattermost?.channelId);
     const adminChannelId = nonEmptyString(adminSnap.data()?.mattermost?.channelId);
-    if (!teamId || !coachChannelId || !generalChannelId || !adminChannelId)
+    if (!teamId || !coachChannelId || !generalChannelId)
         return null;
     return {
         teamId,
@@ -84,7 +84,7 @@ function existingProvisioningUpdate(input) {
         "mattermost.dmChannelId": topology.coachChannelId,
         "mattermost.generalChannelId": topology.generalChannelId,
         "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
-        "mattermost.adminChannelId": topology.adminChannelId,
+        ...(topology.adminChannelId ? { "mattermost.adminChannelId": topology.adminChannelId } : {}),
     };
     if (coachUserId)
         update["mattermost.coachUserId"] = coachUserId;
@@ -230,7 +230,7 @@ async function persistBuilderToken(uid, tokenResult) {
     }
 }
 async function createCoachBot(input) {
-    const { uid, slug, firstName, teamId, coachChannelId, generalChannelId, adminChannelId } = input;
+    const { uid, slug, firstName, teamId, coachChannelId, generalChannelId } = input;
     const coachUsername = `${slug}-coach`;
     const createdBot = await mmApiCall("POST", "/bots", {
         username: coachUsername,
@@ -251,9 +251,6 @@ async function createCoachBot(input) {
     await mmApiCall("POST", `/channels/${coachChannelId}/members`, { user_id: coachMmUser.id });
     if (generalChannelId) {
         await mmApiCall("POST", `/channels/${generalChannelId}/members`, { user_id: coachMmUser.id });
-    }
-    if (adminChannelId) {
-        await mmApiCall("POST", `/channels/${adminChannelId}/members`, { user_id: coachMmUser.id });
     }
     log(`[mattermost] coach bot created: ${coachUsername} (${coachMmUser.id})`);
     const coachToken = await mintAndPersistCoachToken({ mmApiCall, db, now: () => FieldValue.serverTimestamp() }, uid, coachMmUser.id);
@@ -284,20 +281,10 @@ async function createWorkspaceChannels(teamId, slug, firstName, builderUserId, a
         log(`[mattermost] general channel created: #${generalChannelName} (${generalChannelId})`);
     else
         log(`[mattermost] ⚠ failed to create general channel for ${slug} — non-fatal`);
-    const adminChannelName = workspaceAdminChannelName(slug);
-    const adminChannelId = await createChannelWithMembers(teamId, adminChannelName, WORKSPACE_CHANNEL_DISPLAY_NAMES.admin, `Founder-to-agent guidance for ${ownerLabel}. Customer not a member.`, customerChannelMembers("admin", {
-        customerMmUserId: null, // #170: customer not invited to admin
-        coachMmUserId: null,
-        adminMmUserId,
-    }));
-    if (adminChannelId)
-        log(`[mattermost] admin channel created: #${adminChannelName} (${adminChannelId})`);
-    else
-        log(`[mattermost] ⚠ failed to create admin channel for ${slug} — non-fatal`);
-    return { coachChannelId, coachChannelName, generalChannelId, adminChannelId };
+    return { coachChannelId, coachChannelName, generalChannelId };
 }
 function buildResultMap(args) {
-    const { builderUserId, slug, teamId, coachChannelId, coachChannelName, generalChannelId, adminChannelId, coach } = args;
+    const { builderUserId, slug, teamId, coachChannelId, coachChannelName, generalChannelId, coach } = args;
     return {
         "mattermost.userId": builderUserId,
         "mattermost.username": slug,
@@ -309,7 +296,6 @@ function buildResultMap(args) {
         "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
         ...(coach.coachUserId ? { "mattermost.coachUserId": coach.coachUserId } : {}),
         ...(coach.personalToken ? { _coachPersonalToken: coach.personalToken } : {}),
-        ...(adminChannelId ? { "mattermost.adminChannelId": adminChannelId } : {}),
         // The boot-greeting outcome key is owned by the customer-lifecycle
         // orchestrator — it schedules the cron AFTER verify-channel-ready passes
         // and persists the cron jobId. Letting the schedule live here would
@@ -343,7 +329,7 @@ export async function provisionMattermostUser(input) {
         const channels = await createWorkspaceChannels(teamId, slug, firstName, mmUser.id, MM_ADMIN_USER_ID ?? null);
         if (!channels)
             return {};
-        const { coachChannelId, coachChannelName, generalChannelId, adminChannelId } = channels;
+        const { coachChannelId, coachChannelName, generalChannelId } = channels;
         const tokenResult = await mmApiCall("POST", `/users/${mmUser.id}/tokens`, {
             description: "Octogee workspace chat",
         });
@@ -356,7 +342,6 @@ export async function provisionMattermostUser(input) {
             teamId,
             coachChannelId,
             generalChannelId,
-            adminChannelId,
         });
         return buildResultMap({
             builderUserId: mmUser.id,
@@ -365,7 +350,6 @@ export async function provisionMattermostUser(input) {
             coachChannelId,
             coachChannelName,
             generalChannelId,
-            adminChannelId,
             coach,
         });
     }

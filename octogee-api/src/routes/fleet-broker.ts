@@ -93,6 +93,7 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 const FORBIDDEN = { error: "forbidden" } as const;
 const OPENCLAW_GATEWAY_ID_FIELD = "provisioning.openclaw.gatewayId";
 const RECONCILE_ERROR_REPORT_WINDOW_MS = 60_000;
+const MATTERMOST_USER_ID_RE = /^[a-z0-9]{26}$/u;
 
 type RecordUsageEvent = (input: {
   db: Firestore;
@@ -168,6 +169,7 @@ type ResolveChatIdentity = (
 }>;
 
 interface FleetBrokerRouteDeps {
+  platformAdminMmUserId?: string;
   reconcileCoachProjectMembership?: (input: ProjectCoachMembershipInput) => Promise<void>;
   provisionMattermost?: (input: {
     uid: string;
@@ -1196,16 +1198,28 @@ function snapshotCoachIdentity(
   return name || emoji ? { coachIdentity: { name, emoji } } : {};
 }
 
+function trustedPlatformAdminMattermostUserId(value: unknown): string | null {
+  return typeof value === "string" && MATTERMOST_USER_ID_RE.test(value) ? value : null;
+}
+
+interface SnapshotModelDials {
+  freeTierModelRef: string;
+  builderAgentDefault: FleetBrokerUserSnapshot["builderAgentDefault"];
+}
+
+interface LoadSnapshotOptions {
+  modelDials: SnapshotModelDials;
+  projectCheckoutScope: FleetBrokerProjectCheckoutScope;
+  platformAdminMmUserId: string | null;
+}
+
 async function loadSnapshot(
   db: Firestore,
   uid: string,
   data: Record<string, unknown>,
-  modelDials: {
-    freeTierModelRef: string;
-    builderAgentDefault: FleetBrokerUserSnapshot["builderAgentDefault"];
-  },
-  projectCheckoutScope: FleetBrokerProjectCheckoutScope,
+  options: LoadSnapshotOptions,
 ): Promise<FleetBrokerUserSnapshot | null> {
+  const { modelDials, projectCheckoutScope, platformAdminMmUserId } = options;
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
   const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
@@ -1238,6 +1252,7 @@ async function loadSnapshot(
     ...(projectAgents.length > 0 ? { projectAgents } : {}),
     ...snapshotCoachFields(coachData),
     ...snapshotCoachIdentity(agentData),
+    ...(platformAdminMmUserId ? { platformAdminMmUserId } : {}),
     ...(credentialProjection.systemConfig ? { systemConfig: credentialProjection.systemConfig } : {}),
   };
 }
@@ -1355,6 +1370,7 @@ function resolveFleetBrokerRouteDeps(
 function installSnapshotRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
+  platformAdminMmUserId: string | null,
 ): void {
   const { db } = deps;
 
@@ -1429,8 +1445,16 @@ function installSnapshotRoutes(
         db,
         doc.id,
         data,
-        modelDials,
-        projectCheckoutScopeForGatewayRoot(gatewayData, bound.gatewayId, doc.id, slug),
+        {
+          modelDials,
+          projectCheckoutScope: projectCheckoutScopeForGatewayRoot(
+            gatewayData,
+            bound.gatewayId,
+            doc.id,
+            slug,
+          ),
+          platformAdminMmUserId,
+        },
       );
       if (snapshot) users.push(snapshot);
     }
@@ -1483,10 +1507,18 @@ function installSnapshotRoutes(
       uid,
       data,
       {
-        freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
-        builderAgentDefault: await deps.resolveBuilderAgentDefault(),
+        modelDials: {
+          freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+          builderAgentDefault: await deps.resolveBuilderAgentDefault(),
+        },
+        projectCheckoutScope: projectCheckoutScopeForGatewayRoot(
+          gatewayData,
+          bound.gatewayId,
+          uid,
+          slug,
+        ),
+        platformAdminMmUserId,
       },
-      projectCheckoutScopeForGatewayRoot(gatewayData, bound.gatewayId, uid, slug),
     );
     if (!snapshot) {
       res.status(404).json({ error: "not_found" });
@@ -2516,7 +2548,10 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
 export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRouteDeps): Router {
   const router = Router();
   const deps = resolveFleetBrokerRouteDeps(opts);
-  installSnapshotRoutes(router, deps);
+  const platformAdminMmUserId = trustedPlatformAdminMattermostUserId(
+    opts.platformAdminMmUserId ?? process.env.MM_ADMIN_USER_ID,
+  );
+  installSnapshotRoutes(router, deps, platformAdminMmUserId);
   installProvisioningRoutes(router, deps);
   installGatewayOpsRoutes(router, deps);
   installAgentRoutes(router, deps);

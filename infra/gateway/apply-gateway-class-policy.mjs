@@ -482,6 +482,7 @@ function disableCustomerConfigMutation(config) {
   for (const command of ["bash", "config", "mcp", "plugins", "debug"]) {
     config.commands[command] = false;
   }
+  delete config.commands.ownerAllowFrom;
   if (config.mcp && typeof config.mcp === "object" && !Array.isArray(config.mcp)) {
     delete config.mcp.servers;
   }
@@ -561,27 +562,25 @@ function trustedOwnerAllowFrom(value) {
   return [];
 }
 
-function managedMattermostAccountIds(config) {
-  const accountIds = new Set();
-  const accountIdForAgentId = (agentId) => {
-    if (!CUSTOMER_AGENT_ID.test(agentId)) return null;
-    const body = agentId.slice("octogee-".length, -"-coach".length);
-    return body.includes("-proj-") ? body : `${body}-coach`;
+function managedMattermostAccounts(config) {
+  const accounts = new Map();
+  const addAgent = (agentId) => {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind === "coach") accounts.set(`${parsed.username}-coach`, "coach");
+    if (parsed.kind === "project") accounts.set(`${parsed.username}-proj-${parsed.project}`, "project");
   };
   if (Array.isArray(config.agents?.list)) {
     for (const entry of config.agents.list) {
-      const accountId = objectValue(entry) ? accountIdForAgentId(entry.id) : null;
-      if (accountId) accountIds.add(accountId);
+      if (objectValue(entry) && typeof entry.id === "string") addAgent(entry.id);
     }
   }
   const entries = objectValue(config.agents?.entries);
   if (entries) {
     for (const agentId of Object.keys(entries)) {
-      const accountId = accountIdForAgentId(agentId);
-      if (accountId) accountIds.add(accountId);
+      addAgent(agentId);
     }
   }
-  return accountIds;
+  return accounts;
 }
 
 function disableCustomerAutomationsAndSkillWrites(config) {
@@ -616,17 +615,24 @@ function forceCustomerMattermostProjection(config) {
     callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
     allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
   };
-  const managed = managedMattermostAccountIds(config);
+  const managed = managedMattermostAccounts(config);
   const accounts = objectValue(mattermost.accounts) ?? {};
   mattermost.accounts = accounts;
   for (const [accountId, rawAccount] of Object.entries(accounts)) {
     const account = objectValue(rawAccount);
-    if (!managed.has(accountId) || !account) {
+    const accountKind = managed.get(accountId);
+    if (!accountKind || !account) {
       delete accounts[accountId];
       continue;
     }
     account.botToken = mattermostAccountSecretRef(accountId);
-    account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
+    if (accountKind === "project") {
+      account.dmPolicy = "disabled";
+      delete account.allowFrom;
+    } else {
+      account.dmPolicy = "allowlist";
+      account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
+    }
     delete account.baseUrl;
     delete account.network;
     delete account.interactions;

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   workspaceCoachChannelName,
   workspaceGeneralChannelName,
-  workspaceAdminChannelName,
 } from "@octogee/shared/types/identity";
 
 const h = vi.hoisted(() => {
@@ -94,7 +93,11 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
     expect(result["mattermost.channelId"]).toBe(`ch:${workspaceCoachChannelName("acme")}`);
     expect(result["mattermost.dmChannelId"]).toBe(`ch:${workspaceCoachChannelName("acme")}`);
     expect(result["mattermost.generalChannelId"]).toBe(`ch:${workspaceGeneralChannelName("acme")}`);
-    expect(result["mattermost.adminChannelId"]).toBe(`ch:${workspaceAdminChannelName("acme")}`);
+    expect(result).not.toHaveProperty("mattermost.adminChannelId");
+    expect(h.createOrRestoreChannel.mock.calls.map(([, name]) => name)).toEqual([
+      workspaceCoachChannelName("acme"),
+      workspaceGeneralChannelName("acme"),
+    ]);
   });
 
   it("creates the builder MM user with the least-privilege system_user role", async () => {
@@ -162,6 +165,34 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
     expect(result["mattermost.generalChannelId"]).toBe("existing-general-ch");
     expect(result["mattermost.adminChannelId"]).toBe("existing-admin-ch");
     expect(result["_coachPersonalToken"]).toBe("existing-coach-pat");
+    expect(seq()).not.toContain("POST /users");
+    expect(seq()).not.toContain("POST /teams");
+  });
+
+  it("keeps a new-style topology without an Admin channel idempotent", async () => {
+    h.setDocs({
+      "users/u1": {
+        mattermost: {
+          userId: "existing-builder",
+          username: "acme",
+          teamId: "existing-team",
+          coachUserId: "existing-coach",
+        },
+      },
+      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme/channels/coach-dm": {
+        name: "acme-coach",
+        mattermost: { channelId: "existing-coach-ch" },
+      },
+      "workspaces/acme/channels/general": { mattermost: { channelId: "existing-general-ch" } },
+      "users/u1/secrets/coachMattermost": { personalToken: "existing-coach-pat" },
+    });
+
+    const result = await call(HAPPY);
+
+    expect(result["mattermost.channelId"]).toBe("existing-coach-ch");
+    expect(result["mattermost.generalChannelId"]).toBe("existing-general-ch");
+    expect(result).not.toHaveProperty("mattermost.adminChannelId");
     expect(seq()).not.toContain("POST /users");
     expect(seq()).not.toContain("POST /teams");
   });

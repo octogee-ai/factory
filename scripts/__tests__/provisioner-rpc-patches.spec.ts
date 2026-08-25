@@ -66,9 +66,9 @@ describe("buildCoachAgentEntry", () => {
 });
 
 describe("buildCoachBindings", () => {
-  it("emits one binding per channel with accountId pinned to {slug}-coach", () => {
+  it("emits bindings only for Builder-facing Coach and General channels", () => {
     const bindings = buildCoachBindings({ bindings: [] }, AGENT_ID, SLUG, mkMmUpdate());
-    expect(bindings).toHaveLength(3);
+    expect(bindings).toHaveLength(2);
     for (const b of bindings) {
       expect(b.agentId).toBe(AGENT_ID);
       expect(b.match.channel).toBe("mattermost");

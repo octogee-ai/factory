@@ -270,6 +270,7 @@ export interface MattermostAccountInput {
 
 export interface MattermostAccountEntry {
   botToken: MattermostAccountSecretRef;
+  dmPolicy?: "allowlist" | "disabled";
   allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
@@ -278,26 +279,40 @@ export interface MattermostAccountEntry {
    *  key exists solely to clear entries written before 2026.7.2. */
   groups?: null;
 
-commands?: {
+  commands?: {
     native: false;
   };
+}
+
+export interface MattermostAccountPolicy {
+  gatewayClass: "shared" | "builder";
+  platformAdminMmUserId?: string | null;
+}
+
+function sharedDirectAllowFrom(policy: MattermostAccountPolicy): string[] | undefined {
+  if (policy.gatewayClass === "builder") return undefined;
+  return typeof policy.platformAdminMmUserId === "string" &&
+      MATTERMOST_ID_RE.test(policy.platformAdminMmUserId)
+    ? [policy.platformAdminMmUserId]
+    : [];
 }
 
 export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
-  adminMmUserId?: string | null,
+  policy: MattermostAccountPolicy = { gatewayClass: "shared" },
   warn: (msg: string) => void = () => {},
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
-    const groupAllowFrom = [c.customerMmUserId, adminMmUserId].filter(
+    const groupAllowFrom = [c.customerMmUserId].filter(
       (id): id is string => typeof id === "string" && id.length > 0,
     );
-    if (groupAllowFrom.length === 0) {
-      warn(`Skipping ${c.slug}-coach Mattermost account: sender allowlist is empty`);
+    const directAllowFrom = sharedDirectAllowFrom(policy);
+    if (groupAllowFrom.length === 0 && directAllowFrom?.length === 0) {
+      warn(`Skipping ${c.slug}-coach Mattermost account: authorized sender lists are empty`);
       continue;
     }
     // Per-channel mutes are not expressible: the mattermost plugin builds its
@@ -313,13 +328,11 @@ export function buildMattermostAccounts(
       ? { groups: null }
       : {};
     const accountId = `${c.slug}-coach`;
-    const ownerAllowFrom = typeof c.customerMmUserId === "string" &&
-        MATTERMOST_ID_RE.test(c.customerMmUserId)
-      ? [c.customerMmUserId]
-      : [];
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
-      allowFrom: ownerAllowFrom,
+      ...(directAllowFrom === undefined
+        ? {}
+        : { dmPolicy: "allowlist" as const, allowFrom: directAllowFrom }),
       groupPolicy: "allowlist",
       groupAllowFrom,
       ...groupsPatch,
@@ -534,7 +547,8 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
 export function buildProjectAgentAccounts(
   slug: string,
   projectAgents: ReadonlyArray<ProjectAgentState>,
-  ownerMmUserId?: string | null,
+  _ownerMmUserId?: string | null,
+  policy: MattermostAccountPolicy = { gatewayClass: "shared" },
 ): Record<string, MattermostAccountEntry> {
   const active = activeAgentProjectIds(projectAgents);
   const accounts: Record<string, MattermostAccountEntry> = {};
@@ -543,9 +557,7 @@ export function buildProjectAgentAccounts(
     const accountId = `${slug}-proj-${p.projectId}`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
-      allowFrom: typeof ownerMmUserId === "string" && MATTERMOST_ID_RE.test(ownerMmUserId)
-        ? [ownerMmUserId]
-        : [],
+      ...(policy.gatewayClass === "shared" ? { dmPolicy: "disabled" as const } : {}),
       groupPolicy: "open",
       commands: { native: false },
     };
@@ -556,6 +568,7 @@ export function buildProjectAgentAccounts(
 export interface BindingChannelInput {
   channelId: string;
   scope?: "workspace" | "project";
+  kind?: string;
   projectId?: string;
 }
 
@@ -586,7 +599,7 @@ export function buildCustomerBindings(
         },
       })),
     ];
-    const peerBindings = c.channels.map((binding) => {
+    const peerBindings = c.channels.filter((binding) => binding.kind !== "admin").map((binding) => {
       const projectAgent =
         binding.scope === "project" &&
         binding.projectId !== undefined &&
