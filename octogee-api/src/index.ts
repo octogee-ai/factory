@@ -467,7 +467,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   const previewOrigin = opts.previewOrigin ?? process.env.PREVIEW_PUBLIC_URL
     ?? (process.env.NODE_ENV === "test" ? "https://preview-test.octogee.com" : "");
   const appOrigin = opts.appOrigin ?? process.env.APP_URL
-    ?? (process.env.NODE_ENV === "test" ? "https://app-octogee-test.web.app" : "");
+    ?? (process.env.NODE_ENV === "test" ? "https://app-test.octogee.com" : "");
   if (process.env.NODE_ENV !== "test") {
     startProjectRunRetention({
       runs: projectRunStore,

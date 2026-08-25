@@ -565,6 +565,7 @@ function hostingOrigins(settings: DeploymentEnvironmentSettings): string[] {
   return [
     settings.siteOrigin,
     settings.appOrigin,
+    `https://app-${settings.hostingProjectId}.web.app`,
     `https://${project}.firebaseapp.com`,
     `https://app-${project}.firebaseapp.com`,
   ];

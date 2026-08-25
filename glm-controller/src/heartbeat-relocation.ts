@@ -10,6 +10,7 @@
 // to the legacy flat doc.
 
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "@octogee/shared/types/fleet-controller";
 
 export const HEARTBEAT_FIELD = "heartbeat";
 
@@ -60,8 +61,8 @@ export function revisionHeartbeatMerge(
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 
-// Must stay a poll interval inside GATEWAY_UNREACHABLE_AFTER_MS.
-export const HEARTBEAT_REFRESH_MS = 120_000;
+// Must stay a poll interval inside the OpenClaw control readiness window.
+export const HEARTBEAT_REFRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 3;
 
 function plainRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
