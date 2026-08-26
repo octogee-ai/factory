@@ -57,7 +57,16 @@ if [ -z "$RUNTIME_BUILD_ID" ]; then
   echo "FATAL: dist/build-info.json has no buildId — run pnpm build before packing" >&2
   exit 1
 fi
-if ! rg -l -F -- "$RUNTIME_BUILD_ID" dist/control-ui/assets >/dev/null; then
+if ! node -e '
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const buildId = process.argv[1];
+  const assets = "dist/control-ui/assets";
+  const matches = fs.readdirSync(assets)
+    .filter((name) => name.endsWith(".js"))
+    .some((name) => fs.readFileSync(path.join(assets, name), "utf8").includes(buildId));
+  process.exit(matches ? 0 : 1);
+' "$RUNTIME_BUILD_ID"; then
   echo "FATAL: bundled Control UI build identity does not match runtime — run pnpm build from a stable HEAD before packing" >&2
   exit 1
 fi
