@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import type { AddressInfo } from "node:net";
 import { PassThrough } from "node:stream";
 
-import { WsUpgradeRouter } from "./upgrade-router";
+import { WsUpgradeAuthorizationError, WsUpgradeRouter } from "./upgrade-router";
 
 const servers: Server[] = [];
 
@@ -29,7 +29,7 @@ function attempt(
   port: number,
   path: string,
   opts: { origin?: string; headers?: Record<string, string> } = {},
-): Promise<{ ok: true; ws: WebSocket } | { ok: false; status: number }> {
+): Promise<{ ok: true; ws: WebSocket } | { ok: false; status: number; errorCode?: string }> {
   return new Promise((resolve) => {
     const headers: Record<string, string> = { ...(opts.headers ?? {}) };
     if (opts.origin) headers.origin = opts.origin;
@@ -37,12 +37,43 @@ function attempt(
     ws.once("open", () => resolve({ ok: true, ws }));
     ws.once("error", () => undefined); 
     ws.once("unexpected-response", (_req, res) => {
-      resolve({ ok: false, status: res.statusCode ?? 0 });
+      resolve({
+        ok: false,
+        status: res.statusCode ?? 0,
+        errorCode: typeof res.headers["x-octogee-ws-error"] === "string"
+          ? res.headers["x-octogee-ws-error"]
+          : undefined,
+      });
     });
   });
 }
 
 describe("WsUpgradeRouter", () => {
+  it("returns a bounded typed authorization failure without exposing implementation details", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const server = createServer();
+    servers.push(server);
+    const router = new WsUpgradeRouter();
+    router.add({
+      match: "/dashboard",
+      allowedOrigins: new Set(["https://api.example"]),
+      authorize: async () => {
+        throw new WsUpgradeAuthorizationError(504, "OPENCLAW_BROKER_TIMEOUT");
+      },
+      onUpgrade: () => undefined,
+    });
+    router.attach(server);
+    const port = await listen(server);
+    const result = await attempt(port, "/dashboard", { origin: "https://api.example" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(504);
+      expect(result.errorCode).toBe("OPENCLAW_BROKER_TIMEOUT");
+    }
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("routes a matching path to its handler when Origin is allowed", async () => {
     const server = createServer();
     servers.push(server);

@@ -55,7 +55,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   gatewayTickets: { uidFields: ["uid"] },
   gatewayTicketMintLog: { uidFields: ["uid"] },
   openclawControlTickets: { uidFields: ["uid"] },
-  openclawControlAudit: { uidFields: ["uid"] },
   channelSessionModelAudit: { uidFields: ["actorUid"] },
   chatArtifactJobs: {
     uidFields: ["ownerUid", "workspaceOwnerUid"],

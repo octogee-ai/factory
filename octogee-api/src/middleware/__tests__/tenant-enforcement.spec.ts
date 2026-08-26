@@ -113,7 +113,6 @@ function app(opts: {
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
-  a.post("/internal/openclaw-control/audit", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
   a.post("/internal/openclaw/activity/dispatch-context", enforcement, handler);
   a.post("/internal/agent-support/ask", enforcement, handler);
@@ -138,6 +137,9 @@ function app(opts: {
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
+  a.post("/internal/fleet/builder-runtime-state/download-url", enforcement, handler);
+  a.post("/internal/fleet/builder-runtime-state/snapshot-urls", enforcement, handler);
+  a.post("/internal/fleet/builder-runtime-state/prune", enforcement, handler);
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
@@ -536,7 +538,7 @@ describe("tenant enforcement middleware", () => {
   });
 
   it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {
-    for (const route of ["redeem", "authorize", "audit"]) {
+    for (const route of ["redeem", "authorize"]) {
       const ownedGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "bender", uid: "victim" });
@@ -714,6 +716,37 @@ describe("tenant enforcement middleware", () => {
       .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
 
     expect(res.status).toBe(200);
+  });
+
+  it("passes builder runtime state snapshot and prune routes to their allocation-bound authorization", async () => {
+    const target = app({
+      boundTenant: BENDER_R2,
+      gateways: { bender: configuredBender() },
+    });
+
+    const download = await request(target)
+      .post("/internal/fleet/builder-runtime-state/download-url")
+      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+    const snapshot = await request(target)
+      .post("/internal/fleet/builder-runtime-state/snapshot-urls")
+      .send({
+        gatewayId: "bender",
+        revisionId: "bender-r2",
+        slug: "victim",
+        size: 1024,
+        recoveryTiers: ["minute"],
+      });
+    const prune = await request(target)
+      .post("/internal/fleet/builder-runtime-state/prune")
+      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+    const foreign = await request(target)
+      .post("/internal/fleet/builder-runtime-state/download-url")
+      .send({ gatewayId: "other", revisionId: "other", slug: "victim" });
+
+    expect(download.status).toBe(200);
+    expect(snapshot.status).toBe(200);
+    expect(prune.status).toBe(200);
+    expect(foreign.status).toBe(403);
   });
 
   it("allows any pod of the gateway's own Deployment — identity, never lifecycle (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {

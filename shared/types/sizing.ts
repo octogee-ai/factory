@@ -40,7 +40,7 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
     description: 'One-builder floor — Spot/emptyDir active session',
     resources: {
       requests: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
-      limits: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
+      limits: { cpu: '1000m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
     },
     nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '1536' },
     capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },

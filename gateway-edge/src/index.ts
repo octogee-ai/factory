@@ -54,6 +54,10 @@ import {
   createOpenClawControlMetrics,
   type OpenClawControlMetrics,
 } from "./openclaw-control/metrics.js";
+import {
+  createOpenClawControlAuthorizationCache,
+  type OpenClawControlAuthorizationCache,
+} from "./openclaw-control/broker.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -61,6 +65,7 @@ type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
 let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
+const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -180,6 +185,7 @@ if (surface === "cluster") {
 mountSidecarLocalitySurface(app, {
   dashboardEnabled: surface === "sidecar" && process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED === "true",
   openClawControlMetrics,
+  openClawControlAuthorizationCache,
 });
 
 app.use(errorHandler);
@@ -207,11 +213,13 @@ function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void 
 function mountSidecarLocalitySurface(app: Express, options: {
   dashboardEnabled: boolean;
   openClawControlMetrics: OpenClawControlMetrics;
+  openClawControlAuthorizationCache: OpenClawControlAuthorizationCache;
 }): void {
   if (options.dashboardEnabled) {
     app.use("/api/g/:gatewayId/openclaw", createOpenClawControlHttpRouter({
       env: process.env,
       metrics: options.openClawControlMetrics,
+      authorizationCache: options.openClawControlAuthorizationCache,
     }));
   }
   const workspaceLocality = Router();
@@ -371,6 +379,7 @@ if (process.env.NODE_ENV !== "test") {
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         env: process.env,
         metrics: activeOpenClawControlMetrics,
+        authorizationCache: openClawControlAuthorizationCache,
       });
       const dashboardHeartbeat = startOpenClawDashboardCapabilityHeartbeat({
         env: process.env,

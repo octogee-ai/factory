@@ -17,7 +17,10 @@ import {
   type FreeTierModelResolver,
 } from "../lib/platform-model-config.js";
 import type {
+  BuilderRuntimeStateRecoveryTier,
   FleetBrokerBlobSignedUrl,
+  FleetBrokerBuilderRuntimeStatePruneResult,
+  FleetBrokerBuilderRuntimeStateSnapshotUrls,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
   FleetBrokerConfiguredBuilderBootstrap,
@@ -33,6 +36,7 @@ import type {
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
+import { BUILDER_RUNTIME_STATE_RECOVERY_TIERS } from "@octogee/shared/types/fleet-broker";
 import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
@@ -107,7 +111,14 @@ type CreateBlobSignedUrl = (input: {
   gcsPath: string;
   action: "read" | "write";
   contentType?: string;
+  ifGenerationMatch?: 0;
 }) => Promise<FleetBrokerBlobSignedUrl>;
+
+type PruneBuilderRuntimeState = (input: {
+  canonicalPath: string;
+  runtimeStatePrefix: string;
+  now: number;
+}) => Promise<number>;
 
 type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
 
@@ -189,6 +200,7 @@ interface FleetBrokerRouteDeps {
   renderAvatar?: RenderAvatar;
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
+  pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
@@ -206,6 +218,11 @@ interface FleetBrokerRouteDeps {
 
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
 const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
+const BUILDER_RUNTIME_STATE_MAX_SIZE = 64 * 1024 * 1024;
+const BUILDER_RUNTIME_STATE_CONTENT_TYPE = "application/vnd.sqlite3";
+const BUILDER_RUNTIME_STATE_MINUTE_RETENTION_MS = 10 * 60_000;
+const BUILDER_RUNTIME_STATE_HOUR_RETENTION_MS = 24 * 60 * 60_000;
+const BUILDER_RUNTIME_STATE_DAY_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 async function defaultProvisionMattermost(input: {
   uid: string;
@@ -353,6 +370,9 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
       action: input.action,
       expires,
       ...(input.action === "write" ? { contentType: input.contentType } : {}),
+      ...(input.ifGenerationMatch === undefined
+        ? {}
+        : { queryParams: { ifGenerationMatch: String(input.ifGenerationMatch) } }),
     });
   return {
     url,
@@ -664,6 +684,7 @@ function validBlobRelativePath(value: unknown): string {
   if (parts.some((part) => part.length === 0 || part === "." || part === ".." || part.startsWith("."))) {
     return "";
   }
+  if (parts[0] === "runtime-state") return "";
   return p;
 }
 
@@ -676,9 +697,224 @@ function validContentType(value: unknown): string {
   return p;
 }
 
+function validBuilderRuntimeStateRecoveryTiers(
+  value: unknown,
+): BuilderRuntimeStateRecoveryTier[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > BUILDER_RUNTIME_STATE_RECOVERY_TIERS.length) {
+    return null;
+  }
+  if (!value.every((tier) => typeof tier === "string" && BUILDER_RUNTIME_STATE_RECOVERY_TIERS.includes(
+    tier as BuilderRuntimeStateRecoveryTier,
+  ))) return null;
+  const tiers = value as BuilderRuntimeStateRecoveryTier[];
+  if (!tiers.includes("minute") || new Set(tiers).size !== tiers.length) return null;
+  return tiers;
+}
+
 function gcsPathForBlob(slug: string, relativePath: string): string {
   return `customers/${slug}/${relativePath}`;
 }
+
+function gcsPathForBuilderRuntimeStateRoot(slug: string): string {
+  return `customers/${slug}/runtime-state`;
+}
+
+function gcsPathForBuilderRuntimeState(slug: string): string {
+  return `${gcsPathForBuilderRuntimeStateRoot(slug)}/openclaw.sqlite`;
+}
+
+function padUtcPart(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function runtimeStateSnapshotDate(now: number): Date {
+  const date = new Date(now);
+  if (!Number.isFinite(date.getTime())) throw new Error("runtime-state snapshot time is invalid");
+  return date;
+}
+
+function runtimeStateRecoveryTimestampValue(
+  tier: BuilderRuntimeStateRecoveryTier,
+  day: string,
+  hour: string,
+  minute: string,
+): string {
+  if (tier === "minute") return `${day}T${hour}${minute}Z`;
+  if (tier === "hour") return `${day}T${hour}Z`;
+  return day;
+}
+
+function runtimeStateRecoveryObjectPath(
+  slug: string,
+  tier: BuilderRuntimeStateRecoveryTier,
+  now: number,
+): string {
+  const date = runtimeStateSnapshotDate(now);
+  const day = `${date.getUTCFullYear()}${padUtcPart(date.getUTCMonth() + 1)}${padUtcPart(date.getUTCDate())}`;
+  const timestamp = runtimeStateRecoveryTimestampValue(
+    tier,
+    day,
+    padUtcPart(date.getUTCHours()),
+    padUtcPart(date.getUTCMinutes()),
+  );
+  return `${gcsPathForBuilderRuntimeStateRoot(slug)}/recovery/${tier}/${timestamp}.sqlite`;
+}
+
+function runtimeStateRecoveryTimestampMatch(
+  tier: BuilderRuntimeStateRecoveryTier,
+  value: string,
+): RegExpExecArray | null {
+  if (tier === "minute") return /^(\d{8})T(\d{2})(\d{2})Z$/u.exec(value);
+  if (tier === "hour") return /^(\d{8})T(\d{2})Z$/u.exec(value);
+  return /^(\d{8})$/u.exec(value);
+}
+
+function runtimeStateRecoveryTimestamp(
+  runtimeStatePrefix: string,
+  gcsPath: string,
+): { tier: BuilderRuntimeStateRecoveryTier; timestamp: number } | null {
+  const relative = gcsPath.startsWith(`${runtimeStatePrefix}/`)
+    ? gcsPath.slice(runtimeStatePrefix.length + 1)
+    : "";
+  const match = /^recovery\/(minute|hour|day)\/(.+)\.sqlite$/u.exec(relative);
+  if (!match) return null;
+  const tier = match[1] as BuilderRuntimeStateRecoveryTier;
+  const timestampValue = match[2] ?? "";
+  const timestampMatch = runtimeStateRecoveryTimestampMatch(tier, timestampValue);
+  if (!timestampMatch) return null;
+  const day = timestampMatch[1] ?? "";
+  const hour = timestampMatch[2];
+  const minute = timestampMatch[3];
+  const year = Number(day.slice(0, 4));
+  const month = Number(day.slice(4, 6));
+  const date = Number(day.slice(6, 8));
+  const parsedHour = hour === undefined ? 0 : Number(hour);
+  const parsedMinute = minute === undefined ? 0 : Number(minute);
+  const timestamp = Date.UTC(year, month - 1, date, parsedHour, parsedMinute);
+  const parsed = new Date(timestamp);
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate() !== date ||
+    parsed.getUTCHours() !== parsedHour ||
+    parsed.getUTCMinutes() !== parsedMinute
+  ) return null;
+  return { tier, timestamp };
+}
+
+function runtimeStateRetentionMs(tier: BuilderRuntimeStateRecoveryTier): number {
+  if (tier === "minute") return BUILDER_RUNTIME_STATE_MINUTE_RETENTION_MS;
+  if (tier === "hour") return BUILDER_RUNTIME_STATE_HOUR_RETENTION_MS;
+  return BUILDER_RUNTIME_STATE_DAY_RETENTION_MS;
+}
+
+export interface BuilderRuntimeStateStoredGeneration {
+  gcsPath: string;
+  generation: string;
+  timeCreated: string | null;
+}
+
+function expiredCanonicalRuntimeStateGeneration(input: {
+  generation: BuilderRuntimeStateStoredGeneration;
+  liveCanonicalGeneration: string | null;
+  cutoff: number;
+}): boolean {
+  if (
+    input.liveCanonicalGeneration === null ||
+    input.generation.generation === input.liveCanonicalGeneration
+  ) return false;
+  const created = input.generation.timeCreated === null
+    ? Number.NaN
+    : Date.parse(input.generation.timeCreated);
+  if (!Number.isFinite(created)) {
+    throw new Error("runtime-state noncurrent canonical generation lacks a valid creation time");
+  }
+  if (created > input.cutoff) return false;
+  if (!input.generation.generation) {
+    throw new Error("runtime-state canonical generation is missing its generation identifier");
+  }
+  return true;
+}
+
+function expiredRecoveryRuntimeStateGeneration(input: {
+  generation: BuilderRuntimeStateStoredGeneration;
+  runtimeStatePrefix: string;
+  now: number;
+}): boolean {
+  const recovery = runtimeStateRecoveryTimestamp(
+    input.runtimeStatePrefix,
+    input.generation.gcsPath,
+  );
+  if (!recovery || recovery.timestamp > input.now - runtimeStateRetentionMs(recovery.tier)) {
+    return false;
+  }
+  if (!input.generation.generation) {
+    throw new Error("runtime-state recovery generation is missing its generation identifier");
+  }
+  return true;
+}
+
+export function builderRuntimeStatePruneCandidates(input: {
+  canonicalPath: string;
+  runtimeStatePrefix: string;
+  liveCanonicalGeneration: string | null;
+  now: number;
+  generations: readonly BuilderRuntimeStateStoredGeneration[];
+}): BuilderRuntimeStateStoredGeneration[] {
+  if (!Number.isFinite(input.now)) throw new Error("runtime-state prune time is invalid");
+  const candidates: BuilderRuntimeStateStoredGeneration[] = [];
+  for (const generation of input.generations) {
+    if (generation.gcsPath === input.canonicalPath) {
+      if (expiredCanonicalRuntimeStateGeneration({
+        generation,
+        liveCanonicalGeneration: input.liveCanonicalGeneration,
+        cutoff: input.now - BUILDER_RUNTIME_STATE_MINUTE_RETENTION_MS,
+      })) candidates.push(generation);
+      continue;
+    }
+    if (expiredRecoveryRuntimeStateGeneration({
+      generation,
+      runtimeStatePrefix: input.runtimeStatePrefix,
+      now: input.now,
+    })) candidates.push(generation);
+  }
+  return candidates;
+}
+
+const defaultPruneBuilderRuntimeState: PruneBuilderRuntimeState = async (input) => {
+  const { getStorage } = await import("firebase-admin/storage");
+  const bucket = getStorage().bucket();
+  const [liveMetadata] = await bucket.file(input.canonicalPath).getMetadata();
+  const liveGenerationValue = liveMetadata.generation;
+  if (typeof liveGenerationValue !== "string" && typeof liveGenerationValue !== "number") {
+    throw new Error("runtime-state live canonical object lacks a generation identifier");
+  }
+  const liveCanonicalGeneration = String(liveGenerationValue);
+  const [files] = await bucket.getFiles({
+    prefix: `${input.runtimeStatePrefix}/`,
+    versions: true,
+  });
+  const candidates = builderRuntimeStatePruneCandidates({
+    ...input,
+    liveCanonicalGeneration,
+    generations: files.map((file) => {
+      const generationValue = file.generation ?? file.metadata.generation;
+      return {
+        gcsPath: file.name,
+        generation: typeof generationValue === "string" || typeof generationValue === "number"
+          ? String(generationValue)
+          : "",
+        timeCreated: typeof file.metadata.timeCreated === "string" ? file.metadata.timeCreated : null,
+      };
+    }),
+  });
+  await Promise.all(candidates.map(async (candidate) => {
+    await bucket.file(candidate.gcsPath, { generation: candidate.generation }).delete({
+      ifGenerationMatch: candidate.generation,
+    });
+  }));
+  return candidates.length;
+};
 
 function agentBelongsToAssignedWorkspace(
   data: Record<string, unknown>,
@@ -1315,6 +1551,7 @@ type ResolvedFleetBrokerRouteDeps = {
   renderAvatar: RenderAvatar;
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
+  pruneBuilderRuntimeState: PruneBuilderRuntimeState;
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
@@ -1357,6 +1594,7 @@ async function verifyOwnerWorkspaceTurnFailClosed(
   }
 }
 
+// eslint-disable-next-line complexity -- dependency defaults remain centralized so tests and production resolve the same broker contract.
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): ResolvedFleetBrokerRouteDeps {
@@ -1381,6 +1619,7 @@ function resolveFleetBrokerRouteDeps(
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
     applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
+    pruneBuilderRuntimeState: opts.pruneBuilderRuntimeState ?? defaultPruneBuilderRuntimeState,
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
@@ -1611,6 +1850,42 @@ function configuredBuilderBootstrapRequest(
   if (!podBelongsToGateway(gatewayId, podName)) return null;
   if (requestedRevisionId && requestedRevisionId !== gatewayId) return null;
   return { slug };
+}
+
+async function requireConfiguredBuilderRuntimeState(
+  db: Firestore,
+  req: Request,
+  res: Response,
+): Promise<{ bound: GatewayBinding; slug: string } | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const request = configuredBuilderBootstrapRequest(
+    bound.gatewayId,
+    bound.podName,
+    req.body,
+  );
+  if (!request) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+  const gateway = gatewaySnap.data();
+  const config = projectGatewayMutableConfigForGateway(gateway, bound.gatewayId);
+  const uid = config?.ownerUid;
+  if (
+    typeof uid !== "string" ||
+    !configuredBuilderCredentialBootstrapAllowed(gateway, {
+      gatewayId: bound.gatewayId,
+      podName: bound.podName,
+      slug: request.slug,
+      uid,
+    })
+  ) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return { bound, slug: request.slug };
 }
 
 function configuredBuilderBootstrapPayload(input: {
@@ -1979,6 +2254,8 @@ function installGatewayOpsRoutes(
     db,
     recordUsageEvent,
     createBlobSignedUrl,
+    pruneBuilderRuntimeState,
+    now,
   } = deps;
 
   installRunActivationRoute(router, deps);
@@ -2115,6 +2392,64 @@ function installGatewayOpsRoutes(
         contentType: validContentType(body.mimeType),
       });
       res.json(signed);
+    });
+  });
+
+  router.post("/builder-runtime-state/download-url", async (req, res) => {
+    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!configured) return;
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForBuilderRuntimeState(configured.slug),
+        action: "read",
+      });
+      res.json(signed);
+    });
+  });
+
+  router.post("/builder-runtime-state/snapshot-urls", async (req, res) => {
+    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!configured) return;
+    const body = objectBody(req);
+    const size = finiteNonNegative(body.size);
+    if (size === null || size > BUILDER_RUNTIME_STATE_MAX_SIZE) {
+      res.status(400).json({ error: "invalid_size" });
+      return;
+    }
+    const recoveryTiers = validBuilderRuntimeStateRecoveryTiers(body.recoveryTiers);
+    if (!recoveryTiers) {
+      res.status(400).json({ error: "invalid_recovery_tiers" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const snapshotAt = now();
+      const live = await createBlobSignedUrl({
+        gcsPath: gcsPathForBuilderRuntimeState(configured.slug),
+        action: "write",
+        contentType: BUILDER_RUNTIME_STATE_CONTENT_TYPE,
+      });
+      const recovery = await Promise.all(recoveryTiers.map((tier) => createBlobSignedUrl({
+        gcsPath: runtimeStateRecoveryObjectPath(configured.slug, tier, snapshotAt),
+        action: "write",
+        contentType: BUILDER_RUNTIME_STATE_CONTENT_TYPE,
+        ifGenerationMatch: 0,
+      })));
+      const response: FleetBrokerBuilderRuntimeStateSnapshotUrls = { live, recovery };
+      res.json(response);
+    });
+  });
+
+  router.post("/builder-runtime-state/prune", async (req, res) => {
+    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!configured) return;
+    await runBrokered(res, async () => {
+      const deleted = await pruneBuilderRuntimeState({
+        canonicalPath: gcsPathForBuilderRuntimeState(configured.slug),
+        runtimeStatePrefix: gcsPathForBuilderRuntimeStateRoot(configured.slug),
+        now: now(),
+      });
+      const response: FleetBrokerBuilderRuntimeStatePruneResult = { deleted };
+      res.json(response);
     });
   });
 }

@@ -184,7 +184,7 @@ spec:
                   - sh
                   - -c
                   - >
-                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 25 }}s
+                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 10 }}s
                     /octogee/scripts/node_modules/.bin/tsx
                     /octogee/scripts/entrypoints/prestop-flush.ts
           {{- end }}
@@ -370,7 +370,7 @@ spec:
               port: 18789
             {{- else }}
             httpGet:
-              path: /health
+              path: /startup-ready
               port: {{ .Values.env.fleetControllerPort | default "3003" }}
             {{- end }}
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}

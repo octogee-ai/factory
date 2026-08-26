@@ -70,6 +70,7 @@ describe("runGatewayPreStopFlush", () => {
       "done",
       "done",
       "skipped",
+      "skipped",
     ]);
     expect(logs.join("\n")).toMatch(/starting gateway=builder-a class=builder/);
     expect(logs.join("\n")).toMatch(/complete ok=true/);
@@ -98,6 +99,7 @@ describe("runGatewayPreStopFlush", () => {
       { name: "workspace-git", status: "failed", error: "git unavailable" },
       { name: "blob-sync", status: "done" },
       { name: "system-config", status: "skipped" },
+      { name: "runtime-state", status: "skipped" },
       { name: "gitea-key-release", status: "skipped" },
     ]);
     expect(logs.join("\n")).toMatch(/workspace-git failed/);
@@ -150,6 +152,7 @@ describe("runGatewayPreStopFlush", () => {
         { name: "workspace-git", status: "skipped" },
         { name: "blob-sync", status: "skipped" },
         { name: "system-config", status: "done" },
+        { name: "runtime-state", status: "skipped" },
         { name: "gitea-key-release", status: "skipped" },
       ],
     });
@@ -191,5 +194,30 @@ describe("runGatewayPreStopFlush", () => {
         error: "system config checkpoint returned no accepted commit",
       }),
     ]));
+  });
+
+  it("starts the final runtime snapshot after quiescence without serializing it behind repository flushes", async () => {
+    const calls: string[] = [];
+    let releaseRuntime: (() => void) | undefined;
+    const runtimeDone = new Promise<void>((resolve) => {
+      releaseRuntime = resolve;
+    });
+    const resultPromise = runGatewayPreStopFlush({
+      gatewayId: "builder-a",
+      gatewayClass: "builder",
+      quiesceSessions: async () => { calls.push("quiesce"); },
+      syncRuntimeState: async () => {
+        calls.push("runtime");
+        await runtimeDone;
+      },
+      syncWorkspaces: async () => { calls.push("workspace"); },
+      log: () => {},
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(["quiesce", "runtime", "workspace"]);
+    releaseRuntime?.();
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
 });

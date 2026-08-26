@@ -1,4 +1,21 @@
 import * as WsPkg from "ws";
+export class WsUpgradeAuthorizationError extends Error {
+    statusCode;
+    errorCode;
+    constructor(statusCode, errorCode) {
+        super(`WebSocket authorization failed (${errorCode})`);
+        this.statusCode = statusCode;
+        this.errorCode = errorCode;
+        this.name = "WsUpgradeAuthorizationError";
+    }
+}
+function upgradeFailureStatusText(statusCode) {
+    if (statusCode === 401)
+        return "Unauthorized";
+    if (statusCode === 504)
+        return "Gateway Timeout";
+    return "Service Unavailable";
+}
 const DEFAULT_MAX_PAYLOAD_BYTES = 1 << 20;
 const WebSocketServerCtor = (WsPkg.WebSocketServer
     ?? WsPkg.Server);
@@ -33,6 +50,10 @@ export class WsUpgradeRouter {
         if (!route)
             return false;
         void this.handleRoute(route, req, socket, head).catch((err) => {
+            if (err instanceof WsUpgradeAuthorizationError) {
+                writeStatusAndDestroy(socket, err.statusCode, upgradeFailureStatusText(err.statusCode), { "x-octogee-ws-error": safeWsErrorCode(err.errorCode) });
+                return;
+            }
             console.error("WsUpgradeRouter route failed", err);
             writeStatusAndDestroy(socket, 503, "Service Unavailable");
         });
@@ -85,9 +106,13 @@ function routeHeaderMatches(route, req) {
     const got = req.headers[route.requireHeaderKey.header.toLowerCase()];
     return typeof got === "string" && constantTimeEqual(got, route.requireHeaderKey.expected);
 }
-function writeStatusAndDestroy(socket, code, text) {
-    socket.write(`HTTP/1.1 ${code} ${text}\r\n\r\n`);
+function writeStatusAndDestroy(socket, code, text, headers = {}) {
+    const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+    socket.write(`HTTP/1.1 ${code} ${text}\r\n${lines}\r\n`);
     socket.destroy();
+}
+function safeWsErrorCode(value) {
+    return /^[A-Z0-9_]{1,128}$/u.test(value) ? value : "UPGRADE_AUTHORIZATION_FAILED";
 }
 function constantTimeEqual(a, b) {
     if (a.length !== b.length)

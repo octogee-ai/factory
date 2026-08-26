@@ -1,5 +1,8 @@
 import type {
   FleetBrokerBlobSignedUrl,
+  FleetBrokerBuilderRuntimeStatePruneResult,
+  FleetBrokerBuilderRuntimeStateSnapshotUrls,
+  BuilderRuntimeStateRecoveryTier,
   FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
@@ -84,6 +87,17 @@ export interface FleetBrokerClient {
     mimeType: string;
     size: number;
   }): Promise<FleetBrokerBlobSignedUrl>;
+  builderRuntimeStateDownloadUrl(input: {
+    slug: string;
+  }): Promise<FleetBrokerBlobSignedUrl>;
+  builderRuntimeStateSnapshotUrls(input: {
+    slug: string;
+    size: number;
+    recoveryTiers: BuilderRuntimeStateRecoveryTier[];
+  }): Promise<FleetBrokerBuilderRuntimeStateSnapshotUrls>;
+  builderRuntimeStatePrune(input: {
+    slug: string;
+  }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
 }
 
 export async function resolveGithubTokenForSlug(
@@ -253,6 +267,27 @@ export function createFleetBrokerClient(
       return postJson<FleetBrokerBlobSignedUrl>(
         "/internal/fleet/blob/upload-url",
         { gatewayId, ...input },
+      );
+    },
+    async builderRuntimeStateDownloadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/builder-runtime-state/download-url",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStateSnapshotUrls(input) {
+      return postJson<FleetBrokerBuilderRuntimeStateSnapshotUrls>(
+        "/internal/fleet/builder-runtime-state/snapshot-urls",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStatePrune(input) {
+      return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
+        "/internal/fleet/builder-runtime-state/prune",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
       );
     },
   };

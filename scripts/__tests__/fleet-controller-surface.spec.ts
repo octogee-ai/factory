@@ -91,7 +91,6 @@ describe("fleet controller port surface", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       gatewayId: GATEWAY_ID,
-      status: "booting",
       podUid: "pod-uid-1",
       version: "sha-1",
       openclawVersion: "2026.8.1-beta.2",

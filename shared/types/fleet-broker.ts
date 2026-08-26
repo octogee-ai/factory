@@ -112,6 +112,20 @@ export interface FleetBrokerBlobSignedUrl {
   expiresAt: string;
 }
 
+export const BUILDER_RUNTIME_STATE_RECOVERY_TIERS = ["minute", "hour", "day"] as const;
+
+export type BuilderRuntimeStateRecoveryTier =
+  (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];
+
+export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
+  live: FleetBrokerBlobSignedUrl;
+  recovery: FleetBrokerBlobSignedUrl[];
+}
+
+export interface FleetBrokerBuilderRuntimeStatePruneResult {
+  deleted: number;
+}
+
 export interface FleetBrokerPreStopFlushStep {
   name: string;
   status: "done" | "failed" | "skipped";

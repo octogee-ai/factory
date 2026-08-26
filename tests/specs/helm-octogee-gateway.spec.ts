@@ -1130,9 +1130,10 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     ) ?? "";
     const gw = containerBlock(dep, "gateway");
 
-    expect(gw).toMatch(/startupProbe:[\s\S]*?httpGet:\s+path:\s*\/health\s+port:\s*3003/);
+    expect(gw).toMatch(/startupProbe:[\s\S]*?httpGet:\s+path:\s*\/startup-ready\s+port:\s*3003/);
     expect(gw).toMatch(/livenessProbe:\s+httpGet:\s+path:\s*\/health\s+port:\s*3003/);
     expect(gw).toMatch(/readinessProbe:\s+httpGet:\s+path:\s*\/surge-ready\s+port:\s*3003/);
+    expect(gw).toMatch(/timeout\s+10s/);
     expect(gw).not.toContain("config-status-v2");
     expect(gw).not.toContain("18790");
     expect(dep).not.toMatch(/__openclaw__/);

@@ -97,6 +97,19 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
   });
 
+  it("restores builder-global SQLite before OpenClaw and supervises its periodic snapshotter", () => {
+    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
+    const runtimeRestoreIdx = entrypoint.indexOf("builder-runtime-state-restore.ts");
+    const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
+    const snapshotterIdx = entrypoint.indexOf("builder-runtime-state-snapshotter.ts");
+
+    expect(runtimeRestoreIdx).toBeGreaterThan(hydrateIdx);
+    expect(runtimeRestoreIdx).toBeLessThan(supervisorIdx);
+    expect(snapshotterIdx).toBeGreaterThan(supervisorIdx);
+    expect(entrypoint.slice(entrypoint.lastIndexOf("if [", snapshotterIdx), snapshotterIdx))
+      .toMatch(/GATEWAY_CLASS_EFFECTIVE.*builder/);
+  });
+
   it("starts the probed runner plane only after the actual OpenClaw process", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
@@ -104,7 +117,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 
     expect(fleetControllerIdx).toBeGreaterThan(restoreIdx);
     expect(fleetControllerIdx).toBeGreaterThan(openclawIdx);
-    expect(gatewayDeployment).toMatch(/startupProbe:[\s\S]*?path:\s*\/health[\s\S]*?port:\s*\{\{ \.Values\.env\.fleetControllerPort/);
+    expect(gatewayDeployment).toMatch(/startupProbe:[\s\S]*?path:\s*\/startup-ready[\s\S]*?port:\s*\{\{ \.Values\.env\.fleetControllerPort/);
     expect(gatewayValues).toMatch(
       /startup:\s+initialDelaySeconds:\s*15\s+periodSeconds:\s*10\s+failureThreshold:\s*60/,
     );

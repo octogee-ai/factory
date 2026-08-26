@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { permissionSetIds, } from "./gateway-principal-access.js";
 export const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
-export const OPENCLAW_CONTROL_AUDIT_COLLECTION = "openclawControlAudit";
 export const OPENCLAW_CONTROL_TICKET_TTL_MS = 120_000;
 export function openClawControlTicketHash(ticket) {
     return createHash("sha256").update(ticket, "utf8").digest("hex");

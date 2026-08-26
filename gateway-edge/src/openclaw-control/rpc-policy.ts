@@ -9,6 +9,8 @@ import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventor
 export type OpenClawControlRpcCategory =
   | "read"
   | "config_mutation"
+  | "approval_read"
+  | "approval_mutation"
   | "tools_invoke"
   | "forbidden_mutation"
   | "unknown";
@@ -31,7 +33,8 @@ export interface OpenClawControlRpcDecision {
     | "redacted-array-structural-edit"
     | "platform-invariant"
     | "tool-denied"
-    | "tool-schema-invalid";
+    | "tool-schema-invalid"
+    | "approval-schema-invalid";
   outbound?: Record<string, unknown>;
   proposedConfig?: Record<string, unknown>;
 }
@@ -60,9 +63,23 @@ const READ_METHODS = new Set([
 ]);
 
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
+const APPROVAL_READ_METHODS = new Set([
+  "approval.history",
+  "approval.get",
+  "exec.approval.list",
+  "plugin.approval.list",
+  "openclaw.approval.list",
+]);
+const APPROVAL_MUTATION_METHODS = new Set([
+  "approval.resolve",
+  "exec.approval.resolve",
+  "plugin.approval.resolve",
+]);
 export const OPENCLAW_CONTROL_ALLOWED_METHODS = Object.freeze([
   ...READ_METHODS,
   ...CONFIG_MUTATION_METHODS,
+  ...APPROVAL_READ_METHODS,
+  ...APPROVAL_MUTATION_METHODS,
   "tools.invoke",
 ]);
 const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
@@ -70,6 +87,8 @@ const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
 const METHOD_UNAVAILABLE = "method-unavailable" as const;
+const APPROVAL_KINDS = new Set(["exec", "plugin", "system-agent"]);
+const APPROVAL_DECISIONS = new Set(["allow-once", "allow-always", "deny"]);
 const DELEGATED_MUTABLE_PATHS = new Set([
   "agents.defaults.maxConcurrent",
   "agents.defaults.model",
@@ -121,6 +140,85 @@ function optionalInteger(value: unknown, min: number, max: number): boolean {
 
 function optionalNumber(value: unknown, min: number, max: number): boolean {
   return value === undefined || typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+}
+
+function wellFormedApprovalId(value: unknown): value is string {
+  if (!boundedString(value, 4_096) || value === "." || value === "..") return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validApprovalHistoryParams(params: Record<string, unknown>): boolean {
+  return exactKeys(params, new Set(["cursor", "limit", "kind"])) &&
+    (params.cursor === undefined || boundedString(params.cursor, 512)) &&
+    optionalInteger(params.limit, 1, 100) &&
+    (params.kind === undefined || typeof params.kind === "string" && APPROVAL_KINDS.has(params.kind));
+}
+
+function validApprovalGetParams(params: Record<string, unknown>): boolean {
+  return exactKeys(params, new Set(["id"])) && wellFormedApprovalId(params.id);
+}
+
+function validApprovalResolveParams(params: Record<string, unknown>): boolean {
+  return exactKeys(params, new Set(["id", "kind", "decision"])) &&
+    wellFormedApprovalId(params.id) &&
+    typeof params.kind === "string" && APPROVAL_KINDS.has(params.kind) &&
+    typeof params.decision === "string" && APPROVAL_DECISIONS.has(params.decision);
+}
+
+function validLegacyApprovalResolveParams(params: Record<string, unknown>): boolean {
+  return exactKeys(params, new Set(["id", "decision"])) &&
+    wellFormedApprovalId(params.id) &&
+    typeof params.decision === "string" && APPROVAL_DECISIONS.has(params.decision);
+}
+
+function nativeApprovalDecision(request: Record<string, unknown>): OpenClawControlRpcDecision {
+  const params = record(request.params);
+  const method = typeof request.method === "string" ? request.method : "";
+  let valid = false;
+  if (params !== null) {
+    switch (method) {
+      case "approval.history":
+        valid = validApprovalHistoryParams(params);
+        break;
+      case "approval.get":
+        valid = validApprovalGetParams(params);
+        break;
+      case "exec.approval.list":
+      case "plugin.approval.list":
+      case "openclaw.approval.list":
+        valid = exactKeys(params, new Set());
+        break;
+      case "approval.resolve":
+        valid = validApprovalResolveParams(params);
+        break;
+      default:
+        valid = validLegacyApprovalResolveParams(params);
+    }
+  }
+  if (!valid) {
+    return {
+      allowed: false,
+      category: APPROVAL_MUTATION_METHODS.has(method)
+        ? "approval_mutation"
+        : "approval_read",
+      reason: "approval-schema-invalid",
+    };
+  }
+  return {
+    allowed: true,
+    category: APPROVAL_MUTATION_METHODS.has(method) ? "approval_mutation" : "approval_read",
+    outbound: structuredClone(request),
+  };
 }
 
 function validateMemorySearch(args: Record<string, unknown>): boolean {
@@ -487,6 +585,8 @@ function unavailableMethodDecision(): OpenClawControlRpcDecision {
 function nativeOwnerCategory(method: string): OpenClawControlRpcCategory {
   if (READ_METHODS.has(method)) return "read";
   if (CONFIG_MUTATION_METHODS.has(method)) return "config_mutation";
+  if (APPROVAL_READ_METHODS.has(method)) return "approval_read";
+  if (APPROVAL_MUTATION_METHODS.has(method)) return "approval_mutation";
   if (method === "tools.invoke") return "tools_invoke";
   return "unknown";
 }
@@ -520,6 +620,9 @@ export function evaluateNativeOwnerOpenClawControlRpc(
 ): OpenClawControlRpcDecision {
   const parsed = parsedOpenClawControlRequest(frame);
   if ("allowed" in parsed) return parsed;
+  if (APPROVAL_READ_METHODS.has(parsed.method) || APPROVAL_MUTATION_METHODS.has(parsed.method)) {
+    return nativeApprovalDecision(parsed.request);
+  }
   const category = nativeOwnerCategory(parsed.method);
   if (category === "config_mutation") {
     return nativeOwnerConfigMutationDecision(parsed.request, context);
@@ -543,6 +646,9 @@ export function evaluateOpenClawControlRpc(
     return { allowed: true, category: "read", outbound: structuredClone(request) };
   }
   if (CONFIG_MUTATION_METHODS.has(method)) return configMutationDecision(request, context);
+  if (APPROVAL_READ_METHODS.has(method) || APPROVAL_MUTATION_METHODS.has(method)) {
+    return nativeApprovalDecision(request);
+  }
   if (method === "tools.invoke") return safeToolDecision(request);
   return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
 }
@@ -593,7 +699,15 @@ export function projectOpenClawHelloForProfile(
   const projected = structuredClone(frame);
   const payload = record(projected.payload);
   const features = record(payload?.features);
-  if (payload?.type !== "hello-ok" || !Array.isArray(features?.methods)) return projected;
+  if (payload?.type !== "hello-ok") return projected;
+  const auth = record(payload.auth);
+  if (auth) {
+    auth.scopes = Array.isArray(auth.scopes)
+      ? auth.scopes.filter((scope): scope is string =>
+        typeof scope === "string" && scope !== "operator.approvals")
+      : [];
+  }
+  if (!Array.isArray(features?.methods)) return projected;
   const allowed = profile === "delegated-config"
     ? new Set([...DELEGATED_READ_METHODS, ...CONFIG_MUTATION_METHODS])
     : DELEGATED_READ_METHODS;
@@ -960,5 +1074,5 @@ export function openClawControlTimeoutError(frame: unknown): string {
 }
 
 export function isOpenClawControlMutation(category: OpenClawControlRpcCategory): boolean {
-  return category === "config_mutation";
+  return category === "config_mutation" || category === "approval_mutation";
 }

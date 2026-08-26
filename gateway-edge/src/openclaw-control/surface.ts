@@ -4,7 +4,10 @@ import http from "node:http";
 import { isIP } from "node:net";
 import path from "node:path";
 import { Transform } from "node:stream";
-import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import {
+  WsUpgradeAuthorizationError,
+  WsUpgradeRouter,
+} from "@octogee/core/ws/upgrade-router";
 import {
   acquireSystemConfigMutationLease,
   type SystemConfigMutationLease,
@@ -17,11 +20,11 @@ import { WebSocket, type RawData } from "ws";
 import { fetchGatewayToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { logger } from "../middleware/logging.js";
 import {
-  auditOpenClawControlRpc,
   authorizeOpenClawControlSession,
+  createOpenClawControlAuthorizationCache,
+  openClawControlBrokerFailureKind,
   redeemOpenClawControlTicket,
-  type OpenClawControlAuditCategory,
-  type OpenClawControlAuditReason,
+  type OpenClawControlAuthorizationCache,
 } from "./broker.js";
 import {
   challengeNonce,
@@ -49,8 +52,10 @@ import { OpenClawControlSessionManager, type OpenClawControlSession } from "./se
 import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./metrics.js";
 
 const MAX_WS_FRAME_BYTES = 1_048_576;
-const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-const DEFAULT_RPC_TIMEOUT_MS = 60_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
+const DEFAULT_RPC_TIMEOUT_MS = 15_000;
+const DEFAULT_MUTATION_RPC_TIMEOUT_MS = 30_000;
+const DEFAULT_LONG_RUNNING_RPC_TIMEOUT_MS = 60_000;
 const DEFAULT_AUTHORIZATION_INTERVAL_MS = 10_000;
 const CSP_BEFORE_FRAME_ANCESTORS = "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors";
 const CSP_AFTER_FRAME_ANCESTORS = "; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:";
@@ -114,9 +119,9 @@ const DASHBOARD_ROUTES = new Set([
   "/settings/about",
   "/settings/advanced",
   "/settings/agents",
+  "/settings/approvals",
   "/settings/ai-agents",
   "/settings/appearance",
-  "/settings/approvals",
   "/settings/automation",
   "/settings/channels",
   "/settings/cloud-workers",
@@ -172,6 +177,7 @@ const DASHBOARD_STATIC_EXTENSIONS = new Set([
   ".webmanifest",
   ".webp",
 ]);
+const LONG_RUNNING_RPC_METHODS = new Set(["config.apply"]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
 const retainedMutationLeases = new Set<SystemConfigMutationLease>();
@@ -277,6 +283,26 @@ function isDashboardControlResourcePath(pathname: string): boolean {
   return isEncodedResourceSegment(userAvatar?.[1]);
 }
 
+function approvalIdFromEncodedDeepLink(pathname: string): string | null {
+  const encodedId = pathname.slice("/approve/".length);
+  if (!pathname.startsWith("/approve/") || !encodedId || encodedId.includes("/") || encodedId.length > 4_096) {
+    return null;
+  }
+  try {
+    const approvalId = decodeURIComponent(encodedId);
+    return approvalId.length > 0 && approvalId !== "." && approvalId !== ".." &&
+      encodeURIComponent(approvalId) === encodedId
+      ? approvalId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDashboardApprovalDeepLink(pathname: string): boolean {
+  return approvalIdFromEncodedDeepLink(pathname) !== null;
+}
+
 function isSafeDashboardPath(rawPath: string, gatewayId: string): boolean {
   if (!rawPath.startsWith("/") || rawPath.includes("\\") || rawPath.includes("..") ||
     /%(?:2e|5c)/iu.test(rawPath)) {
@@ -284,7 +310,10 @@ function isSafeDashboardPath(rawPath: string, gatewayId: string): boolean {
   }
   if (!/%2f/iu.test(rawPath)) return true;
   const resourceSuffix = controlResourceSuffix(rawPath, gatewayId);
-  return resourceSuffix !== null && isDashboardControlResourcePath(resourceSuffix);
+  return resourceSuffix !== null && (
+    isDashboardControlResourcePath(resourceSuffix) ||
+    isDashboardApprovalDeepLink(resourceSuffix)
+  );
 }
 
 export function openClawControlUpstreamPath(originalUrl: string, gatewayId: string): string {
@@ -359,7 +388,8 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     DASHBOARD_ROOT_ASSETS.has(route) ||
     isDashboardStaticAsset(route) ||
     isDashboardControlResourcePath(route) ||
-    isDashboardProviderIcon(route);
+    isDashboardProviderIcon(route) ||
+    isDashboardApprovalDeepLink(route);
 }
 
 function frameableContentSecurityPolicy(value: string, frameAncestor: string): string {
@@ -442,6 +472,65 @@ function unauthorized(req: Request, res: Response, frameAncestor: string): void 
   });
 }
 
+type OpenClawDashboardBrokerOutcome = "broker_timeout" | "broker_unavailable";
+type OpenClawDashboardHttpOutcome =
+  | "ok"
+  | "policy_denied"
+  | OpenClawDashboardBrokerOutcome
+  | "upstream_timeout"
+  | "upstream_unavailable"
+  | "error";
+
+function brokerOutcome(error: unknown): OpenClawDashboardBrokerOutcome {
+  return openClawControlBrokerFailureKind(error) === "timeout"
+    ? "broker_timeout"
+    : "broker_unavailable";
+}
+
+function brokerFailureResponse(
+  req: Request,
+  res: Response,
+  frameAncestor: string,
+  error: unknown,
+): OpenClawDashboardBrokerOutcome {
+  const outcome = brokerOutcome(error);
+  dashboardFailure(req, res, frameAncestor, outcome === "broker_timeout" ? 504 : 503, {
+    error: outcome === "broker_timeout" ? "openclaw-broker-timeout" : "openclaw-broker-unavailable",
+    retryable: true,
+  });
+  return outcome;
+}
+
+function brokerWsFailure(error: unknown): WsUpgradeAuthorizationError {
+  return brokerOutcome(error) === "broker_timeout"
+    ? new WsUpgradeAuthorizationError(504, "OPENCLAW_BROKER_TIMEOUT")
+    : new WsUpgradeAuthorizationError(503, "OPENCLAW_BROKER_UNAVAILABLE");
+}
+
+function logBrokerFailure(args: {
+  operation: "redeem" | "authorize";
+  gatewayId: string | string[];
+  revisionId: string;
+  error: unknown;
+}): OpenClawDashboardBrokerOutcome {
+  const outcome = brokerOutcome(args.error);
+  logger.warn("OpenClaw Dashboard broker request failed", {
+    gatewayId: args.gatewayId,
+    revisionId: args.revisionId,
+    operation: args.operation,
+    failure: outcome,
+  });
+  return outcome;
+}
+
+function logPolicyDenial(args: {
+  operation: "redeem" | "authorize";
+  gatewayId: string | string[];
+  revisionId: string;
+}): void {
+  logger.info("OpenClaw Dashboard session denied by policy", args);
+}
+
 function rejectDashboardHttpRequest(
   req: Request,
   res: Response,
@@ -460,11 +549,6 @@ function rejectDashboardHttpRequest(
     return true;
   }
   return false;
-}
-
-function httpAssetOutcome(statusCode: number): "ok" | "timeout" | "error" {
-  if (statusCode < 400) return "ok";
-  return statusCode === 504 ? "timeout" : "error";
 }
 
 function requestHeaders(
@@ -524,18 +608,23 @@ export interface CreateOpenClawControlHttpRouterOptions {
   sessions?: OpenClawControlSessionManager;
   redeem?: typeof redeemOpenClawControlTicket;
   authorize?: typeof authorizeOpenClawControlSession;
+  authorizationCache?: OpenClawControlAuthorizationCache;
   loadGatewayToken?: typeof fetchGatewayToken;
   httpTimeoutMs?: number;
   metrics?: OpenClawControlMetrics;
 }
 
+// eslint-disable-next-line max-lines-per-function -- launch and asset proxy routes share one session, policy, and metrics closure.
 export function createOpenClawControlHttpRouter(
   options: CreateOpenClawControlHttpRouterOptions,
 ): Router {
   const env = options.env ?? process.env;
   const sessions = options.sessions ?? defaultSessions;
   const redeem = options.redeem ?? redeemOpenClawControlTicket;
-  const authorize = options.authorize ?? authorizeOpenClawControlSession;
+  const authorizeBroker = options.authorize ?? authorizeOpenClawControlSession;
+  const authorizationCache = options.authorizationCache ?? createOpenClawControlAuthorizationCache({
+    authorize: authorizeBroker,
+  });
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
@@ -547,10 +636,11 @@ export function createOpenClawControlHttpRouter(
   const router = Router({ mergeParams: true });
   router.get("/launch/:ticket", async (req: Request, res: Response) => {
     const startedAt = performance.now();
+    let outcome: OpenClawDashboardHttpOutcome = "error";
     res.once("finish", () => metrics?.http(
       identity,
       "launch",
-      res.statusCode < 400 ? "ok" : "denied",
+      outcome,
       (performance.now() - startedAt) / 1_000,
     ));
     try {
@@ -559,13 +649,17 @@ export function createOpenClawControlHttpRouter(
       const ticket = req.params.ticket;
       if (gatewayId !== envValue(env, "GATEWAY_ID") || typeof ticket !== "string" ||
         !/^[A-Za-z0-9_-]{43}$/u.test(ticket)) {
+        outcome = "policy_denied";
+        logPolicyDenial({ operation: "redeem", gatewayId, revisionId });
         unauthorized(req, res, frameAncestor);
         return;
       }
       const sessionId = randomUUID();
       const redeemed = await redeem({ ticket, sessionId, gatewayId, revisionId, env });
       if (!redeemed || redeemed.gatewayId !== gatewayId || redeemed.revisionId !== revisionId) {
+        outcome = "policy_denied";
         metrics?.session(identity, "redeem", "denied");
+        logPolicyDenial({ operation: "redeem", gatewayId, revisionId });
         unauthorized(req, res, frameAncestor);
         return;
       }
@@ -583,37 +677,65 @@ export function createOpenClawControlHttpRouter(
       securityHeaders(res, frameAncestor);
       res.setHeader("set-cookie", issued.cookie);
       res.setHeader("location", `/g/${gatewayId}/openclaw/`);
+      outcome = "ok";
       res.status(303).end();
     } catch (error) {
-      logger.error("OpenClaw Dashboard ticket redemption failed", {
-        error: error instanceof Error ? error.name : "UnknownError",
+      outcome = logBrokerFailure({
+        operation: "redeem",
         gatewayId: req.params.gatewayId,
+        revisionId: env.GATEWAY_REVISION_ID?.trim() ?? "unknown",
+        error,
       });
-      dashboardFailure(req, res, frameAncestor, 502, {
-        error: "openclaw-unavailable",
-        retryable: true,
-      });
+      metrics?.session(identity, "redeem", outcome);
+      brokerFailureResponse(req, res, frameAncestor, error);
     }
   });
+  // eslint-disable-next-line complexity -- the proxy handler keeps each fail-closed HTTP outcome local to its response.
   router.use(async (req: Request, res: Response) => {
     const startedAt = performance.now();
+    let outcome: OpenClawDashboardHttpOutcome = "error";
     res.once("finish", () => metrics?.http(
       identity,
       "asset",
-      httpAssetOutcome(res.statusCode),
+      outcome,
       (performance.now() - startedAt) / 1_000,
     ));
     try {
       const gatewayId = req.params.gatewayId;
       const revisionId = env.GATEWAY_REVISION_ID?.trim();
       if (gatewayId !== env.GATEWAY_ID || !revisionId) {
+        outcome = "policy_denied";
+        logPolicyDenial({ operation: "authorize", gatewayId, revisionId: revisionId ?? "unknown" });
         unauthorized(req, res, frameAncestor);
         return;
       }
       const session = sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId });
-      if (!session || !await authorize({ sessionId: session.sessionId, gatewayId, revisionId, env })) {
+      if (!session) {
+        outcome = "policy_denied";
         metrics?.session(identity, "authorize", "denied");
-        if (session) sessions.revoke(session.sessionId);
+        logPolicyDenial({ operation: "authorize", gatewayId, revisionId });
+        unauthorized(req, res, frameAncestor);
+        return;
+      }
+      let allowed: boolean;
+      try {
+        allowed = await authorizationCache.authorize({
+          sessionId: session.sessionId,
+          gatewayId,
+          revisionId,
+          env,
+        });
+      } catch (error) {
+        outcome = logBrokerFailure({ operation: "authorize", gatewayId, revisionId, error });
+        metrics?.session(identity, "authorize", outcome);
+        brokerFailureResponse(req, res, frameAncestor, error);
+        return;
+      }
+      if (!allowed) {
+        outcome = "policy_denied";
+        metrics?.session(identity, "authorize", "denied");
+        sessions.revoke(session.sessionId);
+        logPolicyDenial({ operation: "authorize", gatewayId, revisionId });
         unauthorized(req, res, frameAncestor);
         return;
       }
@@ -621,6 +743,7 @@ export function createOpenClawControlHttpRouter(
       if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId)) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
+        outcome = "policy_denied";
         unauthorized(req, res, frameAncestor);
         return;
       }
@@ -638,6 +761,7 @@ export function createOpenClawControlHttpRouter(
       }, (upstream) => {
         settled = true;
         if (upstream.statusCode === 206) {
+          outcome = "upstream_unavailable";
           logger.warn("OpenClaw Dashboard upstream returned a partial response", {
             gatewayId,
           });
@@ -649,6 +773,7 @@ export function createOpenClawControlHttpRouter(
           return;
         }
         res.status(upstream.statusCode ?? 502);
+        outcome = (upstream.statusCode ?? 502) < 500 ? "ok" : "upstream_unavailable";
         for (const [name, value] of Object.entries(upstream.headers)) {
           if (value !== undefined && ALLOWED_RESPONSE_HEADERS.has(name.toLowerCase())) {
             const scrubbed = Array.isArray(value)
@@ -671,13 +796,15 @@ export function createOpenClawControlHttpRouter(
           return;
         }
         if (timedOut) {
+          outcome = "upstream_timeout";
           dashboardFailure(req, res, frameAncestor, 504, {
-            error: "openclaw-timeout",
+            error: "openclaw-upstream-timeout",
             retryable: true,
           });
         } else {
+          outcome = "upstream_unavailable";
           dashboardFailure(req, res, frameAncestor, 502, {
-            error: "openclaw-unavailable",
+            error: "openclaw-upstream-unavailable",
             retryable: true,
           });
         }
@@ -685,13 +812,15 @@ export function createOpenClawControlHttpRouter(
       req.once("aborted", () => proxy.destroy());
       proxy.end();
     } catch (error) {
-      logger.error("OpenClaw Dashboard HTTP proxy failed", {
-        error: error instanceof Error ? error.name : "UnknownError",
+      outcome = "upstream_unavailable";
+      logger.warn("OpenClaw Dashboard HTTP proxy failed", {
         gatewayId: req.params.gatewayId,
+        failure: outcome,
+        errorType: error instanceof Error ? error.name : typeof error,
       });
       if (!res.headersSent) {
         dashboardFailure(req, res, frameAncestor, 502, {
-          error: "openclaw-unavailable",
+          error: "openclaw-upstream-unavailable",
           retryable: true,
         });
       } else {
@@ -728,51 +857,25 @@ interface PendingRpc {
   category: OpenClawControlRpcCategory;
   method: string;
   internal: boolean;
+  timeoutMs: number;
   proposed?: Record<string, unknown>;
   lease: OpenClawControlLease;
   mutationLease?: SystemConfigMutationLease;
   timer: NodeJS.Timeout;
 }
 
-function canonicalReason(reason: string | undefined): OpenClawControlAuditReason {
-  if (reason === "rate-limited" || reason === "inflight-limited" || reason === "socket-limited") {
-    return "rate_limited";
+export function openClawControlRpcDeadlineMs(args: {
+  category: OpenClawControlRpcCategory;
+  method: string;
+  overrideMs?: number;
+}): number {
+  if (args.overrideMs !== undefined) return args.overrideMs;
+  if (LONG_RUNNING_RPC_METHODS.has(args.method)) return DEFAULT_LONG_RUNNING_RPC_TIMEOUT_MS;
+  if (args.category === "config_mutation" || args.category === "approval_mutation" ||
+    args.category === "tools_invoke") {
+    return DEFAULT_MUTATION_RPC_TIMEOUT_MS;
   }
-  if (reason === "request-timeout" || reason === "capability-unavailable") {
-    return "upstream_unavailable";
-  }
-  if (reason === "invalid-frame") return "protocol_invalid";
-  return reason ? "method_denied" : "none";
-}
-
-interface AuditEventInput {
-  audit: typeof auditOpenClawControlRpc;
-  env: NodeJS.ProcessEnv;
-  session: OpenClawControlSession;
-  event: "rpc_allow" | "rpc_deny" | "rpc_result";
-  category: OpenClawControlAuditCategory;
-  outcome: "ok" | "denied" | "error";
-  reason?: string;
-}
-
-function auditEvent(input: AuditEventInput): void {
-  void input.audit({
-    gatewayId: input.session.gatewayId,
-    revisionId: input.session.revisionId,
-    sessionId: input.session.sessionId,
-    event: input.event,
-    category: input.category,
-    outcome: input.outcome,
-    reason: canonicalReason(input.reason),
-    env: input.env,
-  }).catch(() => {
-    logger.warn("OpenClaw Dashboard RPC audit failed", {
-      gatewayId: input.session.gatewayId,
-      revisionId: input.session.revisionId,
-      event: input.event,
-      category: input.category,
-    });
-  });
+  return DEFAULT_RPC_TIMEOUT_MS;
 }
 
 interface BridgeControlSocketArgs {
@@ -782,12 +885,11 @@ interface BridgeControlSocketArgs {
   session: OpenClawControlSession;
   sessions: OpenClawControlSessionManager;
   env: NodeJS.ProcessEnv;
-  authorize: typeof authorizeOpenClawControlSession;
+  authorizationCache: OpenClawControlAuthorizationCache;
   loadGatewayToken: typeof fetchGatewayToken;
-  audit: typeof auditOpenClawControlRpc;
   limiter: OpenClawControlResourceLimiter;
   socketLease: OpenClawControlLease;
-  rpcTimeoutMs: number;
+  rpcTimeoutOverrideMs?: number;
   authorizationIntervalMs: number;
   metrics?: OpenClawControlMetrics;
   retainMutationLeaseUntilProcessReplacement: (
@@ -883,18 +985,34 @@ class OpenClawControlSocketBridge {
       this.closeBoth("session-expired");
       return;
     }
-    void this.args.authorize({
+    void this.args.authorizationCache.authorize({
       sessionId: this.activeSession.sessionId,
       gatewayId: this.activeSession.gatewayId,
       revisionId: this.activeSession.revisionId,
       env: this.args.env,
-    }).then((allowed) => {
-      this.args.metrics?.session(this.metricsIdentity, "authorize", allowed ? "ok" : "denied");
-      if (!allowed) {
-        this.args.sessions.revoke(this.activeSession.sessionId);
-        this.closeBoth("capability-revoked");
+    }, { forceRefresh: true }).then((allowed) => {
+      if (allowed) {
+        this.args.metrics?.session(this.metricsIdentity, "authorize", "ok");
+        return;
       }
-    }).catch(() => this.closeBoth("capability-unavailable"));
+      this.args.metrics?.session(this.metricsIdentity, "authorize", "policy_denied");
+      logPolicyDenial({
+        operation: "authorize",
+        gatewayId: this.activeSession.gatewayId,
+        revisionId: this.activeSession.revisionId,
+      });
+      this.args.sessions.revoke(this.activeSession.sessionId);
+      this.closeBoth("capability-revoked");
+    }).catch((error) => {
+      const outcome = logBrokerFailure({
+        operation: "authorize",
+        gatewayId: this.activeSession.gatewayId,
+        revisionId: this.activeSession.revisionId,
+        error,
+      });
+      this.args.metrics?.session(this.metricsIdentity, "authorize", outcome);
+      this.closeBoth(outcome === "broker_timeout" ? "broker-timeout" : "broker-unavailable");
+    });
   }
 
   private touch(): boolean {
@@ -987,10 +1105,14 @@ class OpenClawControlSocketBridge {
     }
   }
 
-  private quarantine(id: string, mutationLease?: SystemConfigMutationLease): void {
+  private quarantine(
+    id: string,
+    timeoutMs: number,
+    mutationLease?: SystemConfigMutationLease,
+  ): void {
     this.timedOut.set(id, mutationLease);
     if (this.quarantineTimer) return;
-    this.quarantineTimer = setTimeout(() => this.closeBoth("request-timeout"), this.args.rpcTimeoutMs);
+    this.quarantineTimer = setTimeout(() => this.closeBoth("request-timeout"), timeoutMs);
     this.quarantineTimer.unref?.();
   }
 
@@ -1018,12 +1140,18 @@ class OpenClawControlSocketBridge {
     } = {},
   ): void {
     const pendingRpc = {} as PendingRpc;
-    const timer = setTimeout(() => this.expirePending(id, method, category, pendingRpc), this.args.rpcTimeoutMs);
+    const timeoutMs = openClawControlRpcDeadlineMs({
+      category,
+      method,
+      overrideMs: this.args.rpcTimeoutOverrideMs,
+    });
+    const timer = setTimeout(() => this.expirePending(id, method, category, pendingRpc), timeoutMs);
     timer.unref?.();
     Object.assign(pendingRpc, {
       category,
       method,
       internal: options.internal ?? false,
+      timeoutMs,
       proposed: options.proposed,
       lease,
       mutationLease: options.mutationLease,
@@ -1044,29 +1172,11 @@ class OpenClawControlSocketBridge {
       this.closeBoth("request-timeout");
       return;
     }
-    this.quarantine(id, expired?.mutationLease);
+    this.quarantine(id, pendingRpc.timeoutMs, expired?.mutationLease);
     if (this.args.browser.readyState === WebSocket.OPEN) {
       this.args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
-      this.audit("rpc_result", category, "error", "request-timeout");
       this.args.metrics?.rpc(this.metricsIdentity, category, "timeout");
     }
-  }
-
-  private audit(
-    event: AuditEventInput["event"],
-    category: OpenClawControlAuditCategory,
-    outcome: AuditEventInput["outcome"],
-    reason?: string,
-  ): void {
-    auditEvent({
-      audit: this.args.audit,
-      env: this.args.env,
-      session: this.activeSession,
-      event,
-      category,
-      outcome,
-      reason,
-    });
   }
 
   private handleUpstreamMessage(data: RawData): void {
@@ -1087,7 +1197,6 @@ class OpenClawControlSocketBridge {
     const request = response ? this.settlePending(response.id) : undefined;
     this.acceptInstalledMethods(frame);
     this.updateCurrentConfig(frame, request);
-    this.recordUpstreamResult(frame, request);
     this.refreshConfigAfterMutation(frame, request);
     this.forwardProjectedFrame(frame, request);
   }
@@ -1117,12 +1226,6 @@ class OpenClawControlSocketBridge {
     if (snapshot) this.currentConfig = snapshot;
     if (request?.proposed && frame.ok === true) {
       this.currentConfig = { raw: request.proposed, hash: this.currentConfig?.hash ?? "" };
-    }
-  }
-
-  private recordUpstreamResult(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
-    if (request && !request.internal) {
-      this.audit("rpc_result", request.category, frame.ok === true ? "ok" : "error");
     }
   }
 
@@ -1167,12 +1270,12 @@ class OpenClawControlSocketBridge {
   }
 
   private rejectQuarantined(frame: BrowserRpcFrame): boolean {
-    if (!this.timedOut.has(frame.id)) return false;
-    const reason = "request-id-quarantined";
+    let reason: "request-id-quarantined" | "upstream-quarantined" | undefined;
+    if (this.timedOut.has(frame.id)) reason = "request-id-quarantined";
+    else if (this.timedOut.size > 0) reason = "upstream-quarantined";
+    if (!reason) return false;
     this.args.browser.send(openClawControlPolicyError(frame, reason));
-    this.audit("rpc_deny", "unknown", "denied", reason);
-    this.args.metrics?.rpc(this.metricsIdentity, "unknown", "denied");
-    this.args.metrics?.policy(this.metricsIdentity, reason.replaceAll("-", "_"));
+    this.recordPolicyDenial("unknown", reason);
     return true;
   }
 
@@ -1265,9 +1368,23 @@ class OpenClawControlSocketBridge {
     sendResponse = true,
   ): void {
     if (sendResponse) this.args.browser.send(openClawControlPolicyError(frame, reason));
-    this.audit("rpc_deny", decision.category, "denied", reason);
     const outcome = reason === "rate-limited" || reason === "inflight-limited" ? "rate_limited" : "denied";
-    this.args.metrics?.rpc(this.metricsIdentity, decision.category, outcome);
+    this.recordPolicyDenial(decision.category, reason, outcome);
+  }
+
+  private recordPolicyDenial(
+    category: OpenClawControlRpcCategory,
+    reason: string,
+    outcome: "denied" | "rate_limited" = "denied",
+  ): void {
+    logger.warn("OpenClaw Dashboard RPC denied by policy", {
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
+      brokerProfile: this.activeSession.brokerProfile,
+      category,
+      reason,
+    });
+    this.args.metrics?.rpc(this.metricsIdentity, category, outcome);
     this.args.metrics?.policy(this.metricsIdentity, reason.replaceAll("-", "_"));
   }
 
@@ -1288,7 +1405,6 @@ class OpenClawControlSocketBridge {
       this.settlePending(frame.id);
       throw error;
     }
-    this.audit("rpc_allow", decision.category, "ok");
     this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
   }
 
@@ -1333,8 +1449,8 @@ export interface AttachOpenClawControlWsRouteOptions {
   env?: NodeJS.ProcessEnv;
   sessions?: OpenClawControlSessionManager;
   authorize?: typeof authorizeOpenClawControlSession;
+  authorizationCache?: OpenClawControlAuthorizationCache;
   loadGatewayToken?: typeof fetchGatewayToken;
-  audit?: typeof auditOpenClawControlRpc;
   resourceLimiter?: OpenClawControlResourceLimiter;
   rpcTimeoutMs?: number;
   authorizationIntervalMs?: number;
@@ -1348,9 +1464,11 @@ export interface AttachOpenClawControlWsRouteOptions {
 export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRouteOptions): void {
   const env = options.env ?? process.env;
   const sessions = options.sessions ?? defaultSessions;
-  const authorize = options.authorize ?? authorizeOpenClawControlSession;
+  const authorizeBroker = options.authorize ?? authorizeOpenClawControlSession;
+  const authorizationCache = options.authorizationCache ?? createOpenClawControlAuthorizationCache({
+    authorize: authorizeBroker,
+  });
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
-  const audit = options.audit ?? auditOpenClawControlRpc;
   const limiter = options.resourceLimiter ?? defaultLimiter;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const authorizationIntervalMs = options.authorizationIntervalMs ?? DEFAULT_AUTHORIZATION_INTERVAL_MS;
@@ -1373,14 +1491,31 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
     maxPayloadBytes: MAX_WS_FRAME_BYTES,
     authorize: async (req) => {
       const session = sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId });
-      const allowed = session !== null && await authorize({
-        sessionId: session.sessionId,
-        gatewayId,
-        revisionId,
-        env,
-      });
-      options.metrics?.session(metricIdentity(env), "authorize", allowed ? "ok" : "denied");
-      return allowed;
+      if (!session) {
+        options.metrics?.session(metricIdentity(env), "authorize", "policy_denied");
+        logPolicyDenial({ operation: "authorize", gatewayId, revisionId });
+        throw new WsUpgradeAuthorizationError(401, "POLICY_DENIED");
+      }
+      let allowed: boolean;
+      try {
+        allowed = await authorizationCache.authorize({
+          sessionId: session.sessionId,
+          gatewayId,
+          revisionId,
+          env,
+        });
+      } catch (error) {
+        const outcome = logBrokerFailure({ operation: "authorize", gatewayId, revisionId, error });
+        options.metrics?.session(metricIdentity(env), "authorize", outcome);
+        throw brokerWsFailure(error);
+      }
+      if (!allowed) {
+        options.metrics?.session(metricIdentity(env), "authorize", "policy_denied");
+        logPolicyDenial({ operation: "authorize", gatewayId, revisionId });
+        throw new WsUpgradeAuthorizationError(401, "POLICY_DENIED");
+      }
+      options.metrics?.session(metricIdentity(env), "authorize", "ok");
+      return true;
     },
     onUpgrade: ({ ws, req, ticket }) => {
       const session = sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId });
@@ -1404,12 +1539,11 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         session,
         sessions,
         env,
-        authorize,
+        authorizationCache,
         loadGatewayToken,
-        audit,
         limiter,
         socketLease,
-        rpcTimeoutMs,
+        rpcTimeoutOverrideMs: options.rpcTimeoutMs,
         authorizationIntervalMs,
         metrics: options.metrics,
         retainMutationLeaseUntilProcessReplacement:

@@ -74,7 +74,7 @@ computeClass: octogee-gateway
 preStopFlush:
   enabled: true
   terminationGracePeriodSeconds: 30
-  timeoutSeconds: 25
+  timeoutSeconds: 10
 
 # Product/security class. Empty means the shared Barn. Builder is the
 # owner-bound disposable gateway class.
@@ -182,7 +182,7 @@ tiers:
         memory: "2Gi"
         ephemeral-storage: "4Gi"
       limits:
-        cpu: "500m"
+        cpu: "1000m"
         memory: "2Gi"
         ephemeral-storage: "4Gi"
     nodejs:
@@ -246,13 +246,14 @@ probes:
     periodSeconds: 60
     failureThreshold: 5
     timeoutSeconds: 10
-  # Readiness is the fleet-controller surge gate, which already proves both
-  # handoff release and a live OpenClaw RPC on every request.
+  # Readiness is the fleet-controller surge gate. On XS, a short steady-state
+  # budget catches loss of OpenClaw, broker-profile convergence, or the
+  # Dashboard bridge without turning ordinary cold-start work into restarts.
   readiness:
     initialDelaySeconds: 0
-    periodSeconds: 10
-    failureThreshold: 12
-    timeoutSeconds: 10
+    periodSeconds: 5
+    failureThreshold: 3
+    timeoutSeconds: 3
     successThreshold: 1
 
 pdb:

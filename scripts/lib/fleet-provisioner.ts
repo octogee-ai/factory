@@ -91,7 +91,10 @@ import {
   runAgentImportDoctor,
   type AgentImportDoctorResult,
 } from "./agent-import-doctor.js";
-import { probeOpenClawHealth } from "./system-config-runtime-health.js";
+import {
+  observeDashboardControl,
+  probeOpenClawHealth,
+} from "./system-config-runtime-health.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
@@ -713,6 +716,12 @@ export function _resetBrokerProfileLogStateForTests(): void {
 
 type BrokerProfileSweep = Awaited<ReturnType<typeof materializeBrokerProfilesForAgents>>;
 
+export interface BrokerProfileReadiness {
+  settled: boolean;
+  deferred: string[];
+  reason?: string;
+}
+
 function readBrokerProfileAgentIds(
   log: (msg: string) => void,
   readConfig: () => unknown,
@@ -797,9 +806,11 @@ export async function materializeDeferredBrokerProfiles(
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
     secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
   } = {},
-): Promise<void> {
+): Promise<BrokerProfileReadiness> {
   const agentIds = readBrokerProfileAgentIds(log, deps.readConfig ?? readOpenClawConfig);
-  if (!agentIds) return;
+  if (!agentIds) {
+    return { settled: false, deferred: [], reason: "config unreadable" };
+  }
   const sweep = await materializeBrokerProfilesForAgents(
     agentIds,
     brokerProfileSweepOptions(deps, log),
@@ -810,6 +821,27 @@ export async function materializeDeferredBrokerProfiles(
   }
   await reloadBrokerProfileSnapshot(log, deps.secretsReload);
   reportBrokerProfileSweep(log, sweep);
+  const reloadSettled = !brokerProfileSnapshotReloadPending;
+  let reason: string | undefined;
+  if (sweep.deferralReason) reason = sweep.deferralReason;
+  else if (!reloadSettled) reason = "active secret snapshot reload deferred";
+  return {
+    settled: sweep.deferred.length === 0 && reloadSettled,
+    deferred: sweep.deferred,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+export async function waitForBrokerProfilesSettled(input: {
+  sweep: () => Promise<BrokerProfileReadiness>;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const sleep = input.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  while (true) {
+    if ((await input.sweep()).settled) return;
+    await sleep(1_000);
+  }
 }
 
 /** The level-triggered half of broker-profile materialization: retried until
@@ -819,6 +851,7 @@ function startBrokerProfileRetry(
   provisions: boolean,
   log: (msg: string) => void,
   secretsReload: Pick<GatewayRpcClient, "secretsReload">,
+  onReadiness?: (readiness: BrokerProfileReadiness) => void,
 ): NodeJS.Timeout | null {
   if (!provisions) return null;
   let sweepInFlight = false;
@@ -826,7 +859,12 @@ function startBrokerProfileRetry(
     if (sweepInFlight) return;
     sweepInFlight = true;
     void materializeDeferredBrokerProfiles(log, { secretsReload })
-      .catch((error) => log(`⚠ [agent-model-token] sweep failed: ${String(error)}`))
+      .then((readiness) => onReadiness?.(readiness))
+      .catch((error) => {
+        const reason = String(error);
+        onReadiness?.({ settled: false, deferred: [], reason });
+        log(`⚠ [agent-model-token] sweep failed: ${reason}`);
+      })
       .finally(() => {
         sweepInFlight = false;
       });
@@ -867,28 +905,106 @@ export async function waitForOpenClawHealthz(input: {
   }
 }
 
+export function dashboardBridgeReady(input: {
+  required: boolean;
+  openclawDir: string;
+  gatewayId: string;
+  now?: () => number;
+}): { ready: boolean; state: "ready" | "missing" | "stale" | "invalid" | "not-required" } {
+  if (!input.required) return { ready: true, state: "not-required" };
+  const dashboard = observeDashboardControl(
+    input.openclawDir,
+    input.gatewayId,
+    (input.now ?? Date.now)(),
+  );
+  const state = dashboard.dashboardControlState ?? "invalid";
+  return {
+    ready: state === "ready",
+    state,
+  };
+}
+
+export async function waitForDashboardBridgeReady(input: {
+  required: boolean;
+  openclawDir: string;
+  gatewayId: string;
+  log: (message: string) => void;
+  probe?: () => { ready: boolean; state: string };
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  if (!input.required) return;
+  const sleep = input.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const probe = input.probe ?? (() => dashboardBridgeReady(input));
+  let lastState: string | null = null;
+  while (true) {
+    const result = probe();
+    if (result.ready) return;
+    if (result.state !== lastState) {
+      lastState = result.state;
+      input.log(`[fleet] waiting for Dashboard bridge capability handshake (state=${result.state})`);
+    }
+    await sleep(500);
+  }
+}
+
 export async function probeSurgeReadiness(input: {
   runtimeStatus: FleetRuntime["status"];
   handoffReleased: boolean;
   provisioning?: boolean;
   processSettled?: boolean;
   probeHealthz: () => Promise<boolean>;
-}): Promise<{ ready: boolean; openclawUp: boolean }> {
-  if (input.processSettled === false) return { ready: false, openclawUp: false };
+  brokerProfilesSettled?: boolean;
+  dashboardBridgeReady?: boolean;
+}): Promise<{
+  ready: boolean;
+  openclawUp: boolean;
+  brokerProfilesSettled: boolean;
+  dashboardBridgeReady: boolean;
+}> {
+  const brokerProfilesSettled = input.brokerProfilesSettled ?? true;
+  const dashboardBridgeReady = input.dashboardBridgeReady ?? true;
+  if (input.processSettled === false) {
+    return { ready: false, openclawUp: false, brokerProfilesSettled, dashboardBridgeReady };
+  }
   const openclawUp = input.runtimeStatus === "ready" && input.provisioning !== true
     ? await input.probeHealthz()
     : input.runtimeStatus === "ready";
   return {
-    ready: input.handoffReleased && openclawUp,
+    ready: input.handoffReleased && openclawUp && brokerProfilesSettled && dashboardBridgeReady,
     openclawUp,
+    brokerProfilesSettled,
+    dashboardBridgeReady,
   };
 }
 
-function createSurgeReadinessHandler(input: {
+interface FleetReadinessInput {
   runtime: FleetRuntime;
-  surgeReadiness: SurgeReadinessGate;
-  prelaunchState?: () => Promise<BuilderPrelaunchState>;
   probeHealthz: () => Promise<boolean>;
+  brokerProfilesSettled: () => boolean;
+  dashboardBridgeReady: () => boolean;
+}
+
+async function probeFleetReadiness(
+  input: FleetReadinessInput,
+  handoffReleased: boolean,
+  processSettled: boolean,
+) {
+  return probeSurgeReadiness({
+    runtimeStatus: input.runtime.status,
+    handoffReleased,
+    provisioning: input.runtime.activeProvisioning > 0,
+    processSettled,
+    probeHealthz: input.probeHealthz,
+    brokerProfilesSettled: input.brokerProfilesSettled(),
+    dashboardBridgeReady: input.dashboardBridgeReady(),
+  });
+}
+
+function createSurgeReadinessHandler(input: {
+  surgeReadiness: SurgeReadinessGate;
+  readiness: FleetReadinessInput;
+  prelaunchState?: () => Promise<BuilderPrelaunchState>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
@@ -897,23 +1013,42 @@ function createSurgeReadinessHandler(input: {
       const prelaunchState = input.prelaunchState
         ? await input.prelaunchState()
         : "none";
-      const { ready, openclawUp } = await probeSurgeReadiness({
-        runtimeStatus: input.runtime.status,
+      const processSettled = prelaunchState === "none" || prelaunchState === "serving";
+      const readiness = await probeFleetReadiness(input.readiness, handoffReleased, processSettled);
+      res.status(readiness.ready ? 200 : 503).json({
+        ...readiness,
+        runtimeStatus: input.readiness.runtime.status,
         handoffReleased,
-        provisioning: input.runtime.activeProvisioning > 0,
-        processSettled: prelaunchState === "none" || prelaunchState === "serving",
-        probeHealthz: input.probeHealthz,
-      });
-      res.status(ready ? 200 : 503).json({
-        ready,
-        runtimeStatus: input.runtime.status,
-        handoffReleased,
-        openclawUp,
         prelaunchState,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       input.log(`[surge-handoff] readiness probe failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  };
+}
+
+function createStartupReadinessHandler(input: {
+  readiness: FleetReadinessInput;
+  prelaunchState?: () => Promise<BuilderPrelaunchState>;
+  log: (message: string) => void;
+}): express.RequestHandler {
+  return async (_req, res) => {
+    try {
+      const prelaunchState = input.prelaunchState
+        ? await input.prelaunchState()
+        : "none";
+      const processSettled = prelaunchState === "none" || prelaunchState === "serving";
+      const readiness = await probeFleetReadiness(input.readiness, true, processSettled);
+      res.status(readiness.ready ? 200 : 503).json({
+        ...readiness,
+        runtimeStatus: input.readiness.runtime.status,
+        prelaunchState,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[fleet] startup readiness probe failed: ${message}`);
       res.status(500).json({ ready: false, error: message });
     }
   };
@@ -2091,6 +2226,7 @@ function createHeartbeatEmitter(input: {
   };
 }
 
+// eslint-disable-next-line max-lines-per-function -- controller startup owns one ordered lifecycle for listeners, reconciliation, health, and shutdown.
 export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
@@ -2120,6 +2256,8 @@ export async function startFleetController(
 
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
+  const dashboardBridgeRequired = process.env.OPENCLAW_DASHBOARD_BRIDGE_REQUIRED === "true";
+  let brokerProfilesSettled = !caps.provision;
 
 const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
@@ -2145,12 +2283,54 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   };
 
   const probeHealthz = () => probeOpenClawHealth(`http://127.0.0.1:${gatewayPort}/healthz`);
+  const probeDashboardBridge = () => dashboardBridgeReady({
+    required: dashboardBridgeRequired,
+    openclawDir,
+    gatewayId: opts.gatewayId,
+  });
+  const readiness: FleetReadinessInput = {
+    runtime,
+    probeHealthz,
+    brokerProfilesSettled: () => brokerProfilesSettled,
+    dashboardBridgeReady: () => probeDashboardBridge().ready,
+  };
   const waitForOpenClawUp = async (timeoutMs?: number): Promise<void> => {
     await waitForOpenClawHealthz({ probeHealthz, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    if (caps.provision) {
+      let lastSweepError: string | null = null;
+      await waitForBrokerProfilesSettled({
+        sweep: async () => {
+          try {
+            const profileReadiness = await materializeDeferredBrokerProfiles(opts.log, {
+              secretsReload: opts.rpc,
+            });
+            brokerProfilesSettled = profileReadiness.settled;
+            lastSweepError = null;
+            return profileReadiness;
+          } catch (error) {
+            const reason = String(error);
+            brokerProfilesSettled = false;
+            if (reason !== lastSweepError) {
+              opts.log(`⚠ [agent-model-token] startup sweep failed: ${reason}`);
+              lastSweepError = reason;
+            }
+            return { settled: false, deferred: [], reason };
+          }
+        },
+      });
+    }
+    await waitForDashboardBridgeReady({
+      required: dashboardBridgeRequired,
+      openclawDir,
+      gatewayId: opts.gatewayId,
+      log: opts.log,
+      probe: probeDashboardBridge,
+    });
     if (runtime.status === "ready") return;
     runtime.status = "ready";
     opts.log(
-      `[fleet] OpenClaw healthz ready; transitioning gateways/${opts.gatewayId} to status=ready`,
+      `[fleet] OpenClaw healthz, broker profiles, and Dashboard bridge ready; ` +
+        `transitioning gateways/${opts.gatewayId} to status=ready`,
     );
     await emitHeartbeat("ready");
   };
@@ -2193,11 +2373,16 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     }),
   }));
 
-  app.get("/surge-ready", createSurgeReadinessHandler({
-    runtime,
-    surgeReadiness,
+  app.get("/startup-ready", createStartupReadinessHandler({
+    readiness,
     prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
-    probeHealthz,
+    log: opts.log,
+  }));
+
+  app.get("/surge-ready", createSurgeReadinessHandler({
+    surgeReadiness,
+    readiness,
+    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
     log: opts.log,
   }));
 
@@ -2211,7 +2396,14 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
-  const brokerProfileTimer = startBrokerProfileRetry(caps.provision, opts.log, opts.rpc);
+  const brokerProfileTimer = startBrokerProfileRetry(
+    caps.provision,
+    opts.log,
+    opts.rpc,
+    (profileReadiness) => {
+      brokerProfilesSettled = profileReadiness.settled;
+    },
+  );
 
   const surgeGate = createBuilderSurgeGateWiring({
     adapter: wrappedAdapter,

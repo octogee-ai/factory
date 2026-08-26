@@ -22,7 +22,6 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { projectOpenClawConfigStatus } from "../../lib/openclaw-config-status.js";
 import {
-  OPENCLAW_CONTROL_AUDIT_COLLECTION,
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
   createOpenClawControlTicket,
 } from "@octogee/core/openclaw-control-tickets";
@@ -488,19 +487,6 @@ async function mintOpenClawTicket(
       ...minted.document,
       createdAt: FieldValue.serverTimestamp(),
       expireAt: Timestamp.fromMillis(minted.document.expiresAt),
-    });
-    tx.set(db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
-      gatewayId,
-      workspaceSlug: scope.workspaceSlug,
-      revisionId,
-      uid,
-      event: "ticket_mint",
-      outcome: "ok",
-      reason: "none",
-      brokerProfile: principal.brokerProfile,
-      permissionSetIds: principal.permissionSetIds,
-      grantRevision: principal.grantRevision,
-      createdAt: FieldValue.serverTimestamp(),
     });
     return { kind: "minted" as const, minted };
   });

@@ -15,19 +15,28 @@ export interface OpenClawControlRedemptionResponse {
   expiresAt: number;
 }
 
-export type OpenClawControlAuditCategory =
-  | "read"
-  | "config_mutation"
-  | "tools_invoke"
-  | "forbidden_mutation"
-  | "unknown";
+export const OPENCLAW_CONTROL_BROKER_TIMEOUT_MS = 5_000;
+export const OPENCLAW_CONTROL_AUTHORIZATION_CACHE_TTL_MS = 10_000;
+const MAX_AUTHORIZATION_CACHE_PRUNE_PER_CALL = 64;
 
-export type OpenClawControlAuditReason =
-  | "none"
-  | "method_denied"
-  | "rate_limited"
-  | "upstream_unavailable"
-  | "protocol_invalid";
+export type OpenClawControlBrokerFailureKind = "timeout" | "unavailable";
+
+export class OpenClawControlBrokerError extends Error {
+  constructor(
+    readonly kind: OpenClawControlBrokerFailureKind,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "OpenClawControlBrokerError";
+  }
+}
+
+export function openClawControlBrokerFailureKind(
+  error: unknown,
+): OpenClawControlBrokerFailureKind | null {
+  return error instanceof OpenClawControlBrokerError ? error.kind : null;
+}
 
 function baseUrl(env: NodeJS.ProcessEnv): string {
   const value = env.OPENCLAW_CONTROL_BROKER_URL ?? env.OCTOGEE_API_URL;
@@ -41,12 +50,24 @@ async function post(
   env: NodeJS.ProcessEnv,
   fetchImpl?: typeof fetch,
 ): Promise<Response> {
-  return internalFetch(`${baseUrl(env)}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(5_000),
-  }, { fetchImpl });
+  const url = `${baseUrl(env)}${path}`;
+  const timeout = AbortSignal.timeout(OPENCLAW_CONTROL_BROKER_TIMEOUT_MS);
+  try {
+    return await internalFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: timeout,
+    }, { fetchImpl });
+  } catch (error) {
+    throw new OpenClawControlBrokerError(
+      timeout.aborted ? "timeout" : "unavailable",
+      timeout.aborted
+        ? "OpenClaw Control broker request timed out"
+        : "OpenClaw Control broker request failed",
+      { cause: error },
+    );
+  }
 }
 
 function boundedIdentifier(value: unknown, maxLength: number): value is string {
@@ -100,10 +121,27 @@ export async function redeemOpenClawControlTicket(args: {
     ticket: args.ticket,
   }, args.env ?? process.env, args.fetchImpl);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`OpenClaw Control ticket broker returned ${res.status}`);
-  const body = await res.json() as unknown;
+  if (!res.ok) {
+    throw new OpenClawControlBrokerError(
+      "unavailable",
+      `OpenClaw Control ticket broker returned ${res.status}`,
+    );
+  }
+  let body: unknown;
+  try {
+    body = await res.json() as unknown;
+  } catch (error) {
+    throw new OpenClawControlBrokerError(
+      "unavailable",
+      "OpenClaw Control ticket broker returned invalid JSON",
+      { cause: error },
+    );
+  }
   if (!validRedemptionResponse(body)) {
-    throw new Error("OpenClaw Control ticket broker returned invalid JSON");
+    throw new OpenClawControlBrokerError(
+      "unavailable",
+      "OpenClaw Control ticket broker returned invalid JSON",
+    );
   }
   return {
     uid: body.uid,
@@ -129,31 +167,103 @@ export async function authorizeOpenClawControlSession(args: {
     sessionId: args.sessionId,
   }, args.env ?? process.env, args.fetchImpl);
   if (res.status === 403 || res.status === 404) return false;
-  if (res.status !== 204) throw new Error(`OpenClaw Control authorization broker returned ${res.status}`);
+  if (res.status !== 204) {
+    throw new OpenClawControlBrokerError(
+      "unavailable",
+      `OpenClaw Control authorization broker returned ${res.status}`,
+    );
+  }
   return true;
 }
 
-export async function auditOpenClawControlRpc(args: {
-  gatewayId: string;
-  revisionId: string;
-  sessionId: string;
-  event: "rpc_allow" | "rpc_deny" | "rpc_result";
-  category: OpenClawControlAuditCategory;
-  outcome: "ok" | "denied" | "error";
-  reason: OpenClawControlAuditReason;
-  env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
-}): Promise<void> {
-  const res = await post("/internal/openclaw-control/audit", {
-    gatewayId: args.gatewayId,
-    revisionId: args.revisionId,
-    sessionId: args.sessionId,
-    events: [{
-      event: args.event,
-      methodCategory: args.category,
-      outcome: args.outcome,
-      reason: args.reason,
-    }],
-  }, args.env ?? process.env, args.fetchImpl);
-  if (res.status !== 204) throw new Error(`OpenClaw Control audit broker returned ${res.status}`);
+type OpenClawControlAuthorizationInput = Parameters<typeof authorizeOpenClawControlSession>[0];
+type OpenClawControlAuthorizer = (
+  args: OpenClawControlAuthorizationInput,
+) => Promise<boolean>;
+
+function authorizationCacheKey(args: OpenClawControlAuthorizationInput): string {
+  return JSON.stringify([args.gatewayId, args.revisionId, args.sessionId]);
+}
+
+export interface OpenClawControlAuthorizationCacheOptions {
+  authorize?: OpenClawControlAuthorizer;
+  ttlMs?: number;
+  now?: () => number;
+}
+
+export class OpenClawControlAuthorizationCache {
+  private readonly authorized = new Map<string, number>();
+  private readonly inFlight = new Map<string, Promise<boolean>>();
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  private readonly authorizeBroker: OpenClawControlAuthorizer;
+
+  constructor(options: OpenClawControlAuthorizationCacheOptions = {}) {
+    this.ttlMs = options.ttlMs ?? OPENCLAW_CONTROL_AUTHORIZATION_CACHE_TTL_MS;
+    if (!Number.isSafeInteger(this.ttlMs) || this.ttlMs <= 0) {
+      throw new Error("OpenClaw Dashboard authorization cache TTL must be a positive integer");
+    }
+    this.now = options.now ?? Date.now;
+    this.authorizeBroker = options.authorize ?? authorizeOpenClawControlSession;
+  }
+
+  async authorize(
+    args: OpenClawControlAuthorizationInput,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<boolean> {
+    this.pruneExpired();
+    const key = authorizationCacheKey(args);
+    if (options.forceRefresh) return this.authorizeFresh(key, args);
+
+    const expiresAt = this.authorized.get(key);
+    if (expiresAt !== undefined) {
+      if (expiresAt > this.now()) return true;
+      this.authorized.delete(key);
+    }
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+
+    const pending = this.authorizeFresh(key, args);
+    this.inFlight.set(key, pending);
+    pending.then(
+      () => {
+        if (this.inFlight.get(key) === pending) this.inFlight.delete(key);
+      },
+      () => {
+        if (this.inFlight.get(key) === pending) this.inFlight.delete(key);
+      },
+    );
+    return pending;
+  }
+
+  private async authorizeFresh(
+    key: string,
+    args: OpenClawControlAuthorizationInput,
+  ): Promise<boolean> {
+    try {
+      const allowed = await this.authorizeBroker(args);
+      if (allowed) this.authorized.set(key, this.now() + this.ttlMs);
+      else this.authorized.delete(key);
+      return allowed;
+    } catch (error) {
+      this.authorized.delete(key);
+      throw error;
+    }
+  }
+
+  private pruneExpired(): void {
+    const now = this.now();
+    let inspected = 0;
+    for (const [key, expiresAt] of this.authorized) {
+      if (expiresAt <= now) this.authorized.delete(key);
+      inspected += 1;
+      if (inspected >= MAX_AUTHORIZATION_CACHE_PRUNE_PER_CALL) return;
+    }
+  }
+}
+
+export function createOpenClawControlAuthorizationCache(
+  options: OpenClawControlAuthorizationCacheOptions = {},
+): OpenClawControlAuthorizationCache {
+  return new OpenClawControlAuthorizationCache(options);
 }

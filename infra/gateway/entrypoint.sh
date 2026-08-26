@@ -157,6 +157,20 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     log "Pre-boot: configured builder credential unavailable; retrying in 5s..."
     sleep 5
   done
+  log "Pre-boot: restoring Builder OpenClaw runtime state for ${GATEWAY_BUILDER_SLUG}..."
+  while true; do
+    if "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-restore.ts; then
+      break
+    else
+      restore_status=$?
+    fi
+    if [ "$restore_status" -eq 2 ]; then
+      log "FATAL: Builder runtime state is corrupt or unauthorized"
+      exit 2
+    fi
+    log "Pre-boot: Builder runtime state restore unavailable; retrying in 5s..."
+    sleep 5
+  done
 else
   if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
     mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
@@ -332,6 +346,7 @@ fi
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
+  supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else
   log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
   openclaw gateway run --bind lan --port 18789 &

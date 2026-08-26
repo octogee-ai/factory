@@ -7,6 +7,11 @@ export interface WsUpgradeContext {
     ticket?: string;
 }
 export type PathMatcher = string | ((pathname: string) => boolean);
+export declare class WsUpgradeAuthorizationError extends Error {
+    readonly statusCode: 401 | 503 | 504;
+    readonly errorCode: string;
+    constructor(statusCode: 401 | 503 | 504, errorCode: string);
+}
 export interface WsUpgradeRoute {
     match: PathMatcher;
     extractTicket?: (pathname: string) => string | null;

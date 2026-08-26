@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  auditOpenClawControlRpc,
   authorizeOpenClawControlSession,
+  createOpenClawControlAuthorizationCache,
+  OPENCLAW_CONTROL_BROKER_TIMEOUT_MS,
+  openClawControlBrokerFailureKind,
   redeemOpenClawControlTicket,
 } from "./broker.js";
 
@@ -64,43 +66,6 @@ describe("OpenClaw Dashboard broker client", () => {
     })).rejects.toThrow("authorization broker returned 409");
   });
 
-  it("sends only canonical audit category/outcome and never raw tool or upstream material", async () => {
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      const serialized = String(init?.body);
-      expect(JSON.parse(serialized)).toEqual({
-        gatewayId: "bender",
-        revisionId: "bender-r7",
-        sessionId,
-        events: [{
-          event: "rpc_allow",
-          methodCategory: "tools_invoke",
-          outcome: "ok",
-          reason: "none",
-        }],
-      });
-      for (const forbidden of [
-        "memory_search",
-        "prior decision",
-        "gateway-token",
-        "upstream exploded",
-      ]) {
-        expect(serialized).not.toContain(forbidden);
-      }
-      return new Response(null, { status: 204 });
-    }) as unknown as typeof fetch;
-    await auditOpenClawControlRpc({
-      gatewayId: "bender",
-      revisionId: "bender-r7",
-      sessionId,
-      event: "rpc_allow",
-      category: "tools_invoke",
-      outcome: "ok",
-      reason: "none",
-      env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
-      fetchImpl,
-    });
-  });
-
   it("rejects a malformed redemption response before issuing a local session", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       uid: "",
@@ -117,5 +82,79 @@ describe("OpenClaw Dashboard broker client", () => {
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
     })).rejects.toThrow(/invalid JSON/i);
+  });
+
+  it("classifies a broker deadline separately from an unavailable broker", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+    const timedOutFetch = vi.fn(async () => {
+      throw new DOMException("request aborted", "AbortError");
+    }) as unknown as typeof fetch;
+
+    await expect(authorizeOpenClawControlSession({
+      sessionId,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
+      fetchImpl: timedOutFetch,
+    })).rejects.toSatisfy((error) => openClawControlBrokerFailureKind(error) === "timeout");
+    expect(timeout).toHaveBeenCalledWith(OPENCLAW_CONTROL_BROKER_TIMEOUT_MS);
+    timeout.mockRestore();
+
+    const unavailableFetch = vi.fn(async () => {
+      throw new TypeError("connection refused");
+    }) as unknown as typeof fetch;
+    await expect(authorizeOpenClawControlSession({
+      sessionId,
+      gatewayId: "bender",
+      revisionId: "bender-r7",
+      env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
+      fetchImpl: unavailableFetch,
+    })).rejects.toSatisfy((error) => openClawControlBrokerFailureKind(error) === "unavailable");
+  });
+
+  it("single-flights only positive authorizations until their short TTL expires", async () => {
+    let now = 1_000;
+    let calls = 0;
+    let resolveAuthorization!: (allowed: boolean) => void;
+    const authorize = vi.fn(() => {
+      calls += 1;
+      if (calls > 1) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => { resolveAuthorization = resolve; });
+    });
+    const cache = createOpenClawControlAuthorizationCache({ authorize, now: () => now, ttlMs: 10_000 });
+    const input = { sessionId, gatewayId: "bender", revisionId: "bender-r7" };
+
+    const concurrent = Promise.all([
+      cache.authorize(input),
+      cache.authorize(input),
+      cache.authorize(input),
+    ]);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    resolveAuthorization(true);
+    await expect(concurrent).resolves.toEqual([true, true, true]);
+
+    await expect(cache.authorize(input)).resolves.toBe(true);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    now += 10_000;
+    await expect(cache.authorize(input)).resolves.toBe(true);
+    expect(authorize).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache broker denials or failures and forces WS rechecks past a positive cache", async () => {
+    const now = 1_000;
+    const authorize = vi.fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error("broker unavailable"))
+      .mockResolvedValueOnce(true);
+    const cache = createOpenClawControlAuthorizationCache({ authorize, now: () => now, ttlMs: 10_000 });
+    const input = { sessionId, gatewayId: "bender", revisionId: "bender-r7" };
+
+    await expect(cache.authorize(input)).resolves.toBe(true);
+    await expect(cache.authorize(input, { forceRefresh: true })).resolves.toBe(false);
+    await expect(cache.authorize(input)).rejects.toThrow("broker unavailable");
+    await expect(cache.authorize(input)).resolves.toBe(true);
+    expect(authorize).toHaveBeenCalledTimes(4);
+    expect(now).toBe(1_000);
   });
 });

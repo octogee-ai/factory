@@ -10,6 +10,7 @@ import {
   evaluateOpenClawControlRpc,
   evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
+  isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
 } from "./rpc-policy.js";
 
@@ -179,6 +180,85 @@ describe("OpenClaw Dashboard RPC policy", () => {
     }
   });
 
+  it("allows native approval methods only for native owner profiles", () => {
+    const approvals = [
+      { method: "approval.history", params: { limit: 50 }, category: "approval_read" },
+      { method: "approval.history", params: { cursor: "next-page", limit: 25, kind: "plugin" }, category: "approval_read" },
+      { method: "approval.get", params: { id: "approval:🦞/percent%" }, category: "approval_read" },
+      { method: "exec.approval.list", params: {}, category: "approval_read" },
+      { method: "plugin.approval.list", params: {}, category: "approval_read" },
+      { method: "openclaw.approval.list", params: {}, category: "approval_read" },
+      {
+        method: "approval.resolve",
+        params: { id: "system:approval-1", kind: "system-agent", decision: "allow-once" },
+        category: "approval_mutation",
+      },
+      {
+        method: "exec.approval.resolve",
+        params: { id: "approval-1", decision: "allow-always" },
+        category: "approval_mutation",
+      },
+      {
+        method: "plugin.approval.resolve",
+        params: { id: "plugin:approval-1", decision: "deny" },
+        category: "approval_mutation",
+      },
+    ] as const;
+
+    for (const profile of ["native-owner", "native-co-owner"] as const) {
+      for (const approval of approvals) {
+        expect(evaluateOpenClawControlRpcForProfile(
+          request(approval.method, approval.params),
+          policyContext(),
+          profile,
+        ), `${profile} ${approval.method}`).toMatchObject({
+          allowed: true,
+          category: approval.category,
+        });
+      }
+    }
+    for (const profile of ["delegated-read", "delegated-config"] as const) {
+      for (const approval of approvals) {
+        expect(evaluateOpenClawControlRpcForProfile(
+          request(approval.method, approval.params),
+          policyContext(),
+          profile,
+        ), `${profile} ${approval.method}`).toMatchObject({
+          allowed: false,
+          category: approval.category,
+          reason: "method-unavailable",
+        });
+      }
+    }
+    expect(isOpenClawControlMutation("approval_read")).toBe(false);
+    expect(isOpenClawControlMutation("approval_mutation")).toBe(true);
+  });
+
+  it("rejects malformed native approval payloads before forwarding", () => {
+    const invalid = [
+      request("approval.history", { limit: 101 }),
+      request("approval.history", { cursor: "", limit: 50 }),
+      request("approval.history", { kind: "unknown" }),
+      request("approval.history", { limit: 50, extra: true }),
+      request("approval.get", {}),
+      request("approval.get", { id: "." }),
+      request("approval.get", { id: String.fromCharCode(0xd800) }),
+      request("exec.approval.list", { cursor: "not-supported" }),
+      request("plugin.approval.list", { extra: true }),
+      request("openclaw.approval.list", { extra: true }),
+      request("approval.resolve", { id: "approval-1", kind: "exec", decision: "approve" }),
+      request("approval.resolve", { id: "approval-1", kind: "unknown", decision: "deny" }),
+      request("exec.approval.resolve", { id: "approval-1", decision: "approve" }),
+    ];
+    for (const frame of invalid) {
+      expect(evaluateOpenClawControlRpcForProfile(
+        frame,
+        policyContext(),
+        "native-owner",
+      ), frame.method).toMatchObject({ allowed: false, reason: "approval-schema-invalid" });
+    }
+  });
+
   it("gives viewers reads only and Trusted Helpers invariant-safe config without tools", () => {
     expect(evaluateDelegatedOpenClawControlRpc(
       request("status"),
@@ -220,14 +300,19 @@ describe("OpenClaw Dashboard RPC policy", () => {
       payload: {
         type: "hello-ok",
         features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+        auth: { scopes: ["operator.read", "operator.write", "operator.approvals"] },
       },
     };
     const viewer = projectOpenClawHelloForProfile(hello, "delegated-read");
     const helper = projectOpenClawHelloForProfile(hello, "delegated-config");
     expect((viewer.payload as any).features.methods).toContain("config.get");
     expect((viewer.payload as any).features.methods).not.toContain("config.patch");
+    expect((viewer.payload as any).features.methods).not.toContain("approval.history");
+    expect((viewer.payload as any).auth.scopes).not.toContain("operator.approvals");
     expect((helper.payload as any).features.methods).toContain("config.patch");
     expect((helper.payload as any).features.methods).not.toContain("tools.invoke");
+    expect((helper.payload as any).features.methods).not.toContain("exec.approval.list");
+    expect((helper.payload as any).auth.scopes).not.toContain("operator.approvals");
     expect((helper.payload as any).features.octogeeAccess).toEqual({
       profile: "delegated-config",
       canConfigure: true,

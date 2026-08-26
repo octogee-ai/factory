@@ -11,12 +11,10 @@ import {
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
 import {
-  OPENCLAW_CONTROL_AUDIT_COLLECTION,
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
   inspectOpenClawControlTicket,
   openClawControlTicketHash,
   type OpenClawControlTicketInspection,
-  type OpenClawControlTicketRejectionReason,
 } from "@octogee/core/openclaw-control-tickets";
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
 import {
@@ -41,55 +39,12 @@ import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gatew
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
-export { OPENCLAW_CONTROL_AUDIT_COLLECTION } from "@octogee/core/openclaw-control-tickets";
 export const OPENCLAW_CONTROL_SESSION_TTL_MS = 60 * 60_000;
-export const OPENCLAW_CONTROL_AUDIT_MAX_BATCH = 32;
 export const OPENCLAW_CONTROL_REQUEST_MAX_BYTES = 16 * 1024;
 
-const CONTROL_EVENTS = new Set([
-  "session_open",
-  "session_close",
-  "rpc_allow",
-  "rpc_deny",
-  "rpc_result",
-]);
-const METHOD_CATEGORIES = new Set([
-  "read",
-  "config_mutation",
-  "tools_invoke",
-  "forbidden_mutation",
-  "unknown",
-]);
-const OUTCOMES = new Set([
-  "ok",
-  "denied",
-  "error",
-  "expired",
-  "revoked",
-  "rate_limited",
-]);
-const REASONS = new Set([
-  "none",
-  "auth_invalid",
-  "entitlement_missing",
-  "revision_mismatch",
-  "ticket_expired",
-  "ticket_replay",
-  "session_revoked",
-  "method_denied",
-  "rate_limited",
-  "upstream_unavailable",
-  "protocol_invalid",
-  "ticket_invalid",
-  "gateway_mismatch",
-  "assignment_missing",
-  "gateway_not_ready",
-]);
-const RPC_EVENTS = new Set(["rpc_allow", "rpc_deny", "rpc_result"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CAPABILITY_DISABLED = "capability-disabled";
 const INVALID_REQUEST = "invalid-request";
-const PROTOCOL_INVALID = "protocol_invalid";
 const ASSIGNMENT_MISSING = "assignment-missing";
 
 interface ControlSession {
@@ -101,13 +56,6 @@ interface ControlSession {
   permissionSetIds: GatewayPermissionSetId[];
   grantRevision: number | null;
   expiresAt: number;
-}
-
-interface AuditEvent {
-  event: string;
-  methodCategory?: string;
-  outcome: string;
-  reason: string;
 }
 
 type SessionAccess =
@@ -418,59 +366,6 @@ function parseSession(
   };
 }
 
-function parseAuditEvent(value: unknown): AuditEvent | null {
-  const event = record(value);
-  if (!event || !exactKeys(event, ["event", "methodCategory", "outcome", "reason"])) return null;
-  const eventName = typeof event.event === "string" && CONTROL_EVENTS.has(event.event)
-    ? event.event
-    : null;
-  const outcome = typeof event.outcome === "string" && OUTCOMES.has(event.outcome)
-    ? event.outcome
-    : null;
-  const reason = typeof event.reason === "string" && REASONS.has(event.reason)
-    ? event.reason
-    : null;
-  if (!eventName || !outcome || !reason) return null;
-  const methodCategory = event.methodCategory;
-  const hasMethodCategory = typeof methodCategory === "string" && METHOD_CATEGORIES.has(methodCategory);
-  if (RPC_EVENTS.has(eventName) !== hasMethodCategory) return null;
-  return {
-    event: eventName,
-    ...(hasMethodCategory ? { methodCategory: methodCategory as string } : {}),
-    outcome,
-    reason,
-  };
-}
-
-function parseAuditEvents(value: unknown): AuditEvent[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > OPENCLAW_CONTROL_AUDIT_MAX_BATCH) {
-    return null;
-  }
-  const events = value.map(parseAuditEvent);
-  return events.every((event): event is AuditEvent => event !== null) ? events : null;
-}
-
-class FixedWindowLimiter {
-  private readonly entries = new Map<string, { startedAt: number; count: number }>();
-
-  constructor(
-    private readonly limit: number,
-    private readonly now: () => number,
-  ) {}
-
-  consume(key: string, count: number): boolean {
-    const current = this.now();
-    const existing = this.entries.get(key);
-    const entry = !existing || current - existing.startedAt >= 60_000
-      ? { startedAt: current, count: 0 }
-      : existing;
-    if (entry.count + count > this.limit) return false;
-    entry.count += count;
-    this.entries.set(key, entry);
-    return true;
-  }
-}
-
 async function sessionAccessInTransaction(args: {
   db: Firestore;
   tx: Transaction;
@@ -539,32 +434,9 @@ function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowe
 interface BrokerContext {
   db: Firestore;
   now: () => number;
-  userAuditLimiter: FixedWindowLimiter;
-  gatewayAuditLimiter: FixedWindowLimiter;
-}
-
-interface RedeemAuditInput {
-  gatewayId: string;
-  revisionId: string;
-  outcome: "ok" | "denied" | "error" | "expired";
-  reason:
-    | OpenClawControlTicketRejectionReason
-    | "none"
-    | typeof PROTOCOL_INVALID
-    | "entitlement_missing"
-    | "assignment_missing"
-    | "gateway_not_ready";
-  createdAt: number;
-  uid?: string;
-  sessionHash?: string;
-  ticketHash?: string;
 }
 
 type AuthenticatedGateway = NonNullable<ReturnType<typeof authenticatedGateway>>;
-type RedeemBaseAudit = Pick<
-  RedeemAuditInput,
-  "gatewayId" | "revisionId" | "createdAt" | "ticketHash"
->;
 type RedeemableTicket = Extract<OpenClawControlTicketInspection, { kind: "redeemable" }>;
 
 interface RedeemAttempt {
@@ -572,7 +444,6 @@ interface RedeemAttempt {
   ticketHash: string;
   sessionHash: string;
   attemptAt: number;
-  baseAudit: RedeemBaseAudit;
 }
 
 type RedeemResult =
@@ -583,55 +454,10 @@ type RedeemResult =
   | { kind: "not-ready" }
   | { kind: "redeemed"; redeemed: RedeemableTicket; expiresAt: number };
 
-function redeemAuditDocument(input: RedeemAuditInput): Record<string, unknown> {
-  return {
-    gatewayId: input.gatewayId,
-    revisionId: input.revisionId,
-    ...(input.uid ? { uid: input.uid } : {}),
-    ...(input.sessionHash ? { sessionHash: input.sessionHash } : {}),
-    ...(input.ticketHash ? { ticketHash: input.ticketHash } : {}),
-    event: "ticket_redeem",
-    outcome: input.outcome,
-    reason: input.reason,
-    createdAt: input.createdAt,
-  };
-}
-
-function setRedeemAudit(
-  context: BrokerContext,
-  tx: Transaction,
-  input: RedeemAuditInput,
-): void {
-  tx.set(
-    context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(),
-    redeemAuditDocument(input),
-  );
-}
-
-async function addRedeemAudit(
-  context: BrokerContext,
-  input: RedeemAuditInput,
-): Promise<void> {
-  await context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).add(
-    redeemAuditDocument(input),
-  );
-}
-
-async function rejectRedeemAttempt(
-  context: BrokerContext,
+function rejectRedeemAttempt(
   res: Response,
-  baseAudit: RedeemBaseAudit,
-  rejection: {
-    reason: RedeemAuditInput["reason"];
-    status: number;
-    error: string;
-  },
-): Promise<null> {
-  await addRedeemAudit(context, {
-    ...baseAudit,
-    outcome: "denied",
-    reason: rejection.reason,
-  });
+  rejection: { status: number; error: string },
+): null {
   res.status(rejection.status).json({ error: rejection.error });
   return null;
 }
@@ -653,11 +479,11 @@ function parseRedeemPayload(
   return { sessionId: body.sessionId, ticketHash };
 }
 
-async function validateRedeemAttempt(
+function validateRedeemAttempt(
   context: BrokerContext,
   req: Request,
   res: Response,
-): Promise<RedeemAttempt | null> {
+): RedeemAttempt | null {
   const authenticated = authenticatedGateway(req);
   if (!authenticated) {
     res.status(403).json({ error: "forbidden" });
@@ -669,55 +495,27 @@ async function validateRedeemAttempt(
   const ticket = boundedString(body?.ticket, 256);
   const ticketHash = ticket ? openClawControlTicketHash(ticket) : undefined;
   const attemptAt = context.now();
-  const baseAudit: RedeemBaseAudit = {
-    gatewayId: authenticated.bound.gatewayId,
-    revisionId: authenticated.revisionId,
-    createdAt: attemptAt,
-    ...(ticketHash ? { ticketHash } : {}),
-  };
   if (!requestFits(req)) {
-    return rejectRedeemAttempt(
-      context,
-      res,
-      baseAudit,
-      { reason: PROTOCOL_INVALID, status: 413, error: "request-too-large" },
-    );
+    return rejectRedeemAttempt(res, { status: 413, error: "request-too-large" });
   }
   if (!claimedGateway || !claimedRevision) {
-    return rejectRedeemAttempt(context, res, baseAudit, {
-      reason: PROTOCOL_INVALID,
-      status: 403,
-      error: "forbidden",
-    });
+    return rejectRedeemAttempt(res, { status: 403, error: "forbidden" });
   }
   if (claimedGateway !== authenticated.bound.gatewayId) {
-    return rejectRedeemAttempt(context, res, baseAudit, {
-      reason: "gateway_mismatch",
-      status: 403,
-      error: "forbidden",
-    });
+    return rejectRedeemAttempt(res, { status: 403, error: "forbidden" });
   }
   if (claimedRevision !== authenticated.revisionId) {
-    return rejectRedeemAttempt(context, res, baseAudit, {
-      reason: "revision_mismatch",
-      status: 403,
-      error: "forbidden",
-    });
+    return rejectRedeemAttempt(res, { status: 403, error: "forbidden" });
   }
   const payload = parseRedeemPayload(body, ticket, ticketHash);
   if (!payload) {
-    return rejectRedeemAttempt(context, res, baseAudit, {
-      reason: PROTOCOL_INVALID,
-      status: 400,
-      error: INVALID_REQUEST,
-    });
+    return rejectRedeemAttempt(res, { status: 400, error: INVALID_REQUEST });
   }
   return {
     authenticated,
     ticketHash: payload.ticketHash,
     sessionHash: openClawControlSessionHash(payload.sessionId),
     attemptAt,
-    baseAudit,
   };
 }
 
@@ -760,35 +558,18 @@ async function loadRedeemDocuments(
 }
 
 function inspectRedeemDocuments(args: {
-  context: BrokerContext;
   attempt: RedeemAttempt;
   documents: RedeemDocuments;
-  tx: Transaction;
 }): RedeemableTicket | RedeemResult {
-  const { context, attempt, documents, tx } = args;
+  const { attempt, documents } = args;
   const inspected = inspectOpenClawControlTicket({
     document: documents.ticket,
     gatewayId: attempt.authenticated.bound.gatewayId,
     revisionId: attempt.authenticated.revisionId,
     now: attempt.attemptAt,
   });
-  if (inspected.kind === "rejected") {
-    setRedeemAudit(context, tx, {
-      ...attempt.baseAudit,
-      ...(inspected.uid ? { uid: inspected.uid } : {}),
-      outcome: inspected.reason === "ticket_expired" ? "expired" : "denied",
-      reason: inspected.reason,
-    });
-    return { kind: "ticket-invalid" };
-  }
+  if (inspected.kind === "rejected") return { kind: "ticket-invalid" };
   if (!documents.sessionExists) return inspected;
-  setRedeemAudit(context, tx, {
-    ...attempt.baseAudit,
-    uid: inspected.uid,
-    sessionHash: attempt.sessionHash,
-    outcome: "denied",
-    reason: PROTOCOL_INVALID,
-  });
   return { kind: "session-conflict" };
 }
 
@@ -810,12 +591,6 @@ function rejectRedeemPrincipal(args: {
       now: args.attempt.attemptAt,
     });
   }
-  setRedeemAudit(args.context, args.tx, {
-    ...args.attempt.baseAudit,
-    uid: args.inspected.uid,
-    outcome: "denied",
-    reason: "entitlement_missing",
-  });
   return { kind: CAPABILITY_DISABLED };
 }
 
@@ -837,12 +612,6 @@ async function redeemPrincipalFailure(args: {
     now: args.attempt.attemptAt,
   });
   if (stored?.assignmentMissing) {
-    setRedeemAudit(args.context, args.tx, {
-      ...args.attempt.baseAudit,
-      uid: args.inspected.uid,
-      outcome: "denied",
-      reason: "assignment_missing",
-    });
     return { kind: ASSIGNMENT_MISSING };
   }
   const principal = stored?.principal ?? null;
@@ -857,13 +626,12 @@ async function redeemPrincipalFailure(args: {
 }
 
 function persistRedeemedSession(args: {
-  context: BrokerContext;
   attempt: RedeemAttempt;
   documents: RedeemDocuments;
   inspected: RedeemableTicket;
   tx: Transaction;
 }): RedeemResult {
-  const { attempt, context, documents, inspected, tx } = args;
+  const { attempt, documents, inspected, tx } = args;
   const expiresAt = attempt.attemptAt + OPENCLAW_CONTROL_SESSION_TTL_MS;
   tx.update(documents.ticketRef, { redeemedAt: attempt.attemptAt });
   tx.set(documents.sessionRef, {
@@ -878,13 +646,6 @@ function persistRedeemedSession(args: {
     expiresAt,
     expireAt: Timestamp.fromMillis(expiresAt),
   });
-  setRedeemAudit(context, tx, {
-    ...attempt.baseAudit,
-    uid: inspected.uid,
-    sessionHash: attempt.sessionHash,
-    outcome: "ok",
-    reason: "none",
-  });
   return { kind: "redeemed", redeemed: inspected, expiresAt };
 }
 
@@ -894,7 +655,7 @@ async function applyRedeemAttempt(
   tx: Transaction,
 ): Promise<RedeemResult> {
   const documents = await loadRedeemDocuments(context, attempt, tx);
-  const inspected = inspectRedeemDocuments({ context, attempt, documents, tx });
+  const inspected = inspectRedeemDocuments({ attempt, documents });
   if (inspected.kind !== "redeemable") return inspected;
   const principalFailure = await redeemPrincipalFailure({
     context,
@@ -910,16 +671,8 @@ async function applyRedeemAttempt(
     attempt.authenticated.bound.gatewayId,
     attempt.authenticated.revisionId,
     attempt.attemptAt,
-  )) {
-    setRedeemAudit(context, tx, {
-      ...attempt.baseAudit,
-      uid: inspected.uid,
-      outcome: "error",
-      reason: "gateway_not_ready",
-    });
-    return { kind: "not-ready" };
-  }
-  return persistRedeemedSession({ context, attempt, documents, inspected, tx });
+  )) return { kind: "not-ready" };
+  return persistRedeemedSession({ attempt, documents, inspected, tx });
 }
 
 async function redeemAttemptInTransaction(
@@ -948,7 +701,7 @@ async function redeemControlTicket(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const attempt = await validateRedeemAttempt(context, req, res);
+    const attempt = validateRedeemAttempt(context, req, res);
     if (!attempt) return;
     sendRedeemResult(await redeemAttemptInTransaction(context, attempt), res);
   } catch (err) {
@@ -998,106 +751,16 @@ async function authorizeControlSession(
   }
 }
 
-async function auditControlEvents(
-  context: BrokerContext,
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  if (!requestFits(req)) {
-    res.status(413).json({ error: "request-too-large" });
-    return;
-  }
-  const bound = boundGateway(req, res);
-  if (!bound) return;
-  const body = record(req.body);
-  if (
-    !body ||
-    !exactKeys(body, ["gatewayId", "revisionId", "sessionId", "events"]) ||
-    !validSessionId(body.sessionId)
-  ) {
-    res.status(400).json({ error: INVALID_REQUEST });
-    return;
-  }
-  const events = parseAuditEvents(body.events);
-  if (!events) {
-    res.status(400).json({ error: INVALID_REQUEST });
-    return;
-  }
-  const revisionId = body.revisionId as string;
-  const sessionHash = openClawControlSessionHash(body.sessionId);
-  if (!context.gatewayAuditLimiter.consume(bound.gatewayId, events.length)) {
-    res.status(429).json({ error: "audit-rate-limited", retryable: true });
-    return;
-  }
-  try {
-    const readResult = await context.db.runTransaction((tx) => sessionAccessInTransaction({
-      db: context.db,
-      tx,
-      gatewayId: bound.gatewayId,
-      revisionId,
-      sessionHash,
-      now: context.now(),
-    }));
-    if (readResult.kind !== "allowed") {
-      sendSessionAccessFailure(readResult, res);
-      return;
-    }
-    if (!context.userAuditLimiter.consume(
-      `${bound.gatewayId}:${readResult.session.uid}`,
-      events.length,
-    )) {
-      res.status(429).json({ error: "audit-rate-limited", retryable: true });
-      return;
-    }
-    const writeResult = await context.db.runTransaction(async (tx) => {
-      const access = await sessionAccessInTransaction({
-        db: context.db,
-        tx,
-        gatewayId: bound.gatewayId,
-        revisionId,
-        sessionHash,
-        now: context.now(),
-      });
-      if (access.kind !== "allowed") return access;
-      for (const event of events) {
-        tx.set(context.db.collection(OPENCLAW_CONTROL_AUDIT_COLLECTION).doc(), {
-          gatewayId: bound.gatewayId,
-          revisionId,
-          uid: access.session.uid,
-          sessionHash,
-          ...event,
-          createdAt: context.now(),
-        });
-      }
-      return access;
-    });
-    if (writeResult.kind !== "allowed") {
-      sendSessionAccessFailure(writeResult, res);
-      return;
-    }
-    res.status(204).end();
-  } catch (err) {
-    next(err);
-  }
-}
-
 export function createOpenClawControlBrokerRoutes(args: {
   db: Firestore;
   now?: () => number;
-  auditEventsPerMinute?: number;
 }): Router {
   const router = Router();
-  const now = args.now ?? Date.now;
-  const auditLimit = args.auditEventsPerMinute ?? 240;
   const context: BrokerContext = {
     db: args.db,
-    now,
-    userAuditLimiter: new FixedWindowLimiter(auditLimit, now),
-    gatewayAuditLimiter: new FixedWindowLimiter(auditLimit * 4, now),
+    now: args.now ?? Date.now,
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
-  router.post("/audit", (req, res, next) => auditControlEvents(context, req, res, next));
   return router;
 }

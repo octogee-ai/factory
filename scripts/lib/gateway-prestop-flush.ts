@@ -5,6 +5,7 @@ export interface GatewayPreStopFlushDeps {
   syncWorkspaces: () => Promise<unknown>;
   syncBlobs?: () => Promise<void>;
   syncSystemConfig?: () => Promise<void | { acceptedCommit: string }>;
+  syncRuntimeState?: () => Promise<void>;
   releaseGiteaKey?: () => Promise<void>;
   log: (msg: string) => void;
   now?: () => number;
@@ -19,7 +20,13 @@ export interface GatewaySystemConfigConvergenceCheckpointDeps {
 }
 
 export interface GatewayPreStopFlushStep {
-  name: "session-quiesce" | "workspace-git" | "blob-sync" | "system-config" | "gitea-key-release";
+  name:
+    | "session-quiesce"
+    | "workspace-git"
+    | "blob-sync"
+    | "system-config"
+    | "runtime-state"
+    | "gitea-key-release";
   status: "done" | "failed" | "skipped";
   error?: string;
   durationMs: number;
@@ -77,10 +84,12 @@ export async function runGatewayPreStopFlush(
   );
 
   const quiesce = await runStep(deps, "session-quiesce", deps.quiesceSessions);
+  const runtimeStatePromise = runStep(deps, "runtime-state", deps.syncRuntimeState);
   const workspace = await runStep(deps, "workspace-git", deps.syncWorkspaces);
   const blobs = await runStep(deps, "blob-sync", deps.syncBlobs);
   const systemConfig = await runStep(deps, "system-config", deps.syncSystemConfig);
-  const durableSteps = [workspace.step, blobs.step, systemConfig.step];
+  const runtimeState = await runtimeStatePromise;
+  const durableSteps = [workspace.step, blobs.step, systemConfig.step, runtimeState.step];
   const safeToReleaseKey = [quiesce.step, ...durableSteps]
     .every((step) => step.status !== "failed");
   const keyRelease = await runStep(
@@ -121,6 +130,7 @@ export async function runGatewaySystemConfigConvergenceCheckpoint(
     { name: "workspace-git", status: "skipped", durationMs: 0 },
     { name: "blob-sync", status: "skipped", durationMs: 0 },
     systemConfig.step,
+    { name: "runtime-state", status: "skipped", durationMs: 0 },
     { name: "gitea-key-release", status: "skipped", durationMs: 0 },
   ];
   const durationMs = now() - started;

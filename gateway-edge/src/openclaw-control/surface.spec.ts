@@ -16,12 +16,17 @@ import {
   attachOpenClawControlWsRoute,
   createOpenClawControlHttpRouter,
   isOpenClawControlWsPath,
+  openClawControlRpcDeadlineMs,
   openClawControlUpstreamBase,
   openClawControlUpstreamPath,
 } from "./surface.js";
 import { OpenClawControlSessionManager } from "./session.js";
 import { OPENCLAW_CONTROL_ALLOWED_METHODS } from "./rpc-policy.js";
 import { OpenClawControlResourceLimiter } from "./limits.js";
+import {
+  createOpenClawControlAuthorizationCache,
+  OpenClawControlBrokerError,
+} from "./broker.js";
 
 const servers: http.Server[] = [];
 const tempDirs: string[] = [];
@@ -57,6 +62,7 @@ function appWith(args: {
   sessions: OpenClawControlSessionManager;
   redeem?: Parameters<typeof createOpenClawControlHttpRouter>[0]["redeem"];
   authorize?: Parameters<typeof createOpenClawControlHttpRouter>[0]["authorize"];
+  authorizationCache?: Parameters<typeof createOpenClawControlHttpRouter>[0]["authorizationCache"];
   loadGatewayToken?: Parameters<typeof createOpenClawControlHttpRouter>[0]["loadGatewayToken"];
   httpTimeoutMs?: number;
 }) {
@@ -105,6 +111,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       "/openclaw\\..\\hooks",
       "/openclaw-evil/hooks",
       "/openclaw/ws?token=gateway-secret",
+      "/openclaw/approve/%2E%2E%2Fescape",
     ]) {
       expect(() => openClawControlUpstreamPath(unsafe, "bender"), unsafe)
         .toThrow(/outside|sensitive/i);
@@ -196,7 +203,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .get(`/api/g/bender/openclaw/launch/${ticket}`)
       .set("accept", "text/html");
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(503);
     expect(response.type).toBe("text/html");
     expect(response.text).toContain("octogee-openclaw-dashboard-error");
     expect(response.text).not.toContain(ticket);
@@ -301,6 +308,8 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/automations",
     "/settings/plugins",
     "/settings/devices",
+    "/settings/approvals",
+    "/approve/approval%3A%F0%9F%A6%9E%2Fpercent%25",
     "/chat/octogee-eggman-coach",
     "/dashboard/octogee-eggman-coach",
     "/settings/agents/octogee-eggman-coach/files",
@@ -357,6 +366,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/api/users/one/two/avatar",
     "/avatar/octogee-eggman-coach/extra",
     "/assets/app.js/extra",
+    "/approve/approval%3Aok/extra",
   ])("rejects non-UI HTTP resource %s before loading or forwarding the gateway token", async (suffix) => {
     let requests = 0;
     const loadGatewayToken = vi.fn(async () => "gateway-secret");
@@ -409,59 +419,76 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .get("/api/g/bender/openclaw/assets/agents-page.js")
       .set("cookie", cookie);
 
-    expect(unavailable.status).toBe(502);
-    expect(unavailable.body).toEqual({ error: "openclaw-unavailable", retryable: true });
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body).toEqual({ error: "openclaw-broker-unavailable", retryable: true });
     expect(recovered.status).toBe(200);
     expect(recovered.text).toBe("export const loaded = true;");
     expect(authorizations).toBe(2);
   });
 
-  it.each(["success-first", "retryable-first"] as const)(
-    "keeps one session usable when concurrent 204 and 409 checks finish %s",
-    async (completionOrder) => {
-      const upstream = http.createServer((_req, res) => {
-        res.setHeader("content-type", "text/javascript");
-        res.end("export const loaded = true;");
-      });
-      const port = await listen(upstream);
-      const manager = sessions();
-      const cookie = issue(manager);
-      const attempts: Array<{
-        resolve: (value: boolean) => void;
-        reject: (reason: Error) => void;
-      }> = [];
-      const application = appWith({
-        env: env(port),
-        sessions: manager,
-        authorize: async () => {
-          if (attempts.length >= 2) return true;
-          return new Promise<boolean>((resolve, reject) => attempts.push({ resolve, reject }));
-        },
-      });
+  it("single-flights concurrent authorization and reuses its positive result", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.setHeader("content-type", "text/javascript");
+      res.end("export const loaded = true;");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+    const cookie = issue(manager);
+    let resolveAuthorization!: (value: boolean) => void;
+    const authorize = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveAuthorization = resolve;
+    }));
+    const application = appWith({ env: env(port), sessions: manager, authorize });
 
-      const first = request(application)
-        .get("/api/g/bender/openclaw/assets/tasks-page.js")
-        .set("cookie", cookie);
-      const second = request(application)
-        .get("/api/g/bender/openclaw/assets/agents-page.js")
-        .set("cookie", cookie);
-      const responses = Promise.all([first, second]);
+    const first = request(application)
+      .get("/api/g/bender/openclaw/assets/tasks-page.js")
+      .set("cookie", cookie);
+    const second = request(application)
+      .get("/api/g/bender/openclaw/assets/agents-page.js")
+      .set("cookie", cookie);
+    const responses = Promise.all([first, second]);
 
-      await vi.waitFor(() => expect(attempts).toHaveLength(2));
-      const successIndex = completionOrder === "success-first" ? 0 : 1;
-      attempts[successIndex]!.resolve(true);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      attempts[1 - successIndex]!.reject(
-        new Error("OpenClaw Control authorization broker returned 409"),
-      );
+    await vi.waitFor(() => expect(authorize).toHaveBeenCalledTimes(1));
+    resolveAuthorization(true);
+    expect((await responses).map((response) => response.status)).toEqual([200, 200]);
 
-      expect((await responses).map((response) => response.status).sort()).toEqual([200, 502]);
-      const recovered = await request(application)
-        .get("/api/g/bender/openclaw/assets/skills-page.js")
-        .set("cookie", cookie);
-      expect(recovered.status).toBe(200);
-    },
-  );
+    const cached = await request(application)
+      .get("/api/g/bender/openclaw/assets/skills-page.js")
+      .set("cookie", cookie);
+    expect(cached.status).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache broker timeout failures", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const port = await listen(upstream);
+    const manager = sessions();
+    const cookie = issue(manager);
+    let attempts = 0;
+    const application = appWith({
+      env: env(port),
+      sessions: manager,
+      authorize: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new OpenClawControlBrokerError("timeout", "broker timed out");
+        }
+        return true;
+      },
+    });
+
+    const timeout = await request(application)
+      .get("/api/g/bender/openclaw/assets/tasks-page.js")
+      .set("cookie", cookie);
+    const recovered = await request(application)
+      .get("/api/g/bender/openclaw/assets/agents-page.js")
+      .set("cookie", cookie);
+
+    expect(timeout.status).toBe(504);
+    expect(timeout.body).toEqual({ error: "openclaw-broker-timeout", retryable: true });
+    expect(recovered.status).toBe(200);
+    expect(attempts).toBe(2);
+  });
 
   it("redacts rejected sensitive query parameters from the HTTP response", async () => {
     const manager = sessions();
@@ -471,7 +498,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .set("cookie", issue(manager));
 
     expect(response.status).toBe(502);
-    expect(response.body).toEqual({ error: "openclaw-unavailable", retryable: true });
+    expect(response.body).toEqual({ error: "openclaw-upstream-unavailable", retryable: true });
     expect(JSON.stringify(response.body)).not.toContain("gateway-secret");
     expect(JSON.stringify(response.body)).not.toContain("sensitive query parameter");
   });
@@ -538,11 +565,11 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       httpTimeoutMs: 20,
     })).get("/api/g/bender/openclaw/assets/app.js").set("cookie", issue(manager));
     expect(response.status).toBe(504);
-    expect(response.body).toEqual({ error: "openclaw-timeout", retryable: true });
+    expect(response.body).toEqual({ error: "openclaw-upstream-timeout", retryable: true });
     expect(JSON.stringify(response.body)).not.toContain("gateway-secret");
   });
 
-  it("gives the current Dashboard asset graph a thirty-second default upstream budget", async () => {
+  it("gives the current Dashboard asset graph a fifteen-second default upstream budget", async () => {
     const timeout = vi.spyOn(http.ClientRequest.prototype, "setTimeout");
     const upstream = http.createServer((_req, res) => res.end("ok"));
     const port = await listen(upstream);
@@ -553,7 +580,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       .set("cookie", issue(manager));
 
     expect(response.status).toBe(200);
-    expect(timeout).toHaveBeenCalledWith(30_000, expect.any(Function));
+    expect(timeout).toHaveBeenCalledWith(15_000, expect.any(Function));
     timeout.mockRestore();
   });
 
@@ -576,9 +603,99 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.text).toContain("octogee-openclaw-dashboard-error");
     expect(response.text).not.toContain("gateway-secret");
   });
+
+  it("assigns bounded RPC deadlines by method risk", () => {
+    expect(openClawControlRpcDeadlineMs({ category: "read", method: "status" })).toBe(15_000);
+    expect(openClawControlRpcDeadlineMs({ category: "config_mutation", method: "config.patch" })).toBe(30_000);
+    expect(openClawControlRpcDeadlineMs({ category: "approval_mutation", method: "approval.resolve" })).toBe(30_000);
+    expect(openClawControlRpcDeadlineMs({ category: "tools_invoke", method: "tools.invoke" })).toBe(30_000);
+    expect(openClawControlRpcDeadlineMs({ category: "config_mutation", method: "config.apply" })).toBe(60_000);
+    expect(openClawControlRpcDeadlineMs({ category: "config_mutation", method: "config.apply", overrideMs: 20 })).toBe(20);
+  });
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
+  it("shares a positive authorization cache between Dashboard assets and the WebSocket attachment", async () => {
+    const upstream = http.createServer((_req, res) => res.end("asset"));
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const cookie = issue(manager);
+    const authorize = vi.fn(async () => true);
+    const authorizationCache = createOpenClawControlAuthorizationCache({ authorize });
+    const edge = http.createServer(appWith({
+      env: env(upstreamPort),
+      sessions: manager,
+      authorizationCache,
+    }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorizationCache,
+      loadGatewayToken: async () => "gateway-secret",
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+
+    const asset = await request(edge)
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("cookie", cookie);
+    expect(asset.status).toBe(200);
+
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie, origin: "https://api.octogee.com" },
+    });
+    await new Promise<void>((resolve, reject) => {
+      browser.once("open", resolve);
+      browser.once("error", reject);
+    });
+    expect(authorize).toHaveBeenCalledTimes(1);
+
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
+  it.each([
+    ["timeout", 504, "OPENCLAW_BROKER_TIMEOUT"],
+    ["unavailable", 503, "OPENCLAW_BROKER_UNAVAILABLE"],
+  ] as const)("returns typed %s broker failures during the WebSocket handshake", async (kind, status, code) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(),
+      sessions: manager,
+      authorize: async () => {
+        throw new OpenClawControlBrokerError(kind, `broker ${kind}`);
+      },
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const outcome = await new Promise<{ status: number; errorCode: string | undefined }>((resolve, reject) => {
+      const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+        headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+      });
+      browser.once("unexpected-response", (_request, response) => {
+        const errorCode = response.headers["x-octogee-ws-error"];
+        response.resume();
+        browser.terminate();
+        resolve({ status: response.statusCode ?? 0, errorCode: typeof errorCode === "string" ? errorCode : undefined });
+      });
+      browser.once("open", () => reject(new Error("broker-failed handshake unexpectedly opened")));
+      browser.once("error", () => undefined);
+    });
+    errorSpy.mockRestore();
+
+    expect(outcome).toEqual({ status, errorCode: code });
+  });
+
   it.each([
     "result",
     "late-result",
@@ -645,7 +762,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         sessions: manager,
         authorize: async () => true,
         loadGatewayToken: async () => "gateway-secret",
-        audit: async () => {},
         rpcTimeoutMs: ["late-result", "late-malformed-response", "hard-timeout"].includes(terminal)
           ? 30
           : 30_000,
@@ -815,7 +931,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
     });
     router.attach(edge);
     const edgePort = await listen(edge);
@@ -855,7 +970,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
-  it("requires the exact Origin, rewrites connect, forwards native owner exec tools, and scrubs frames/audit", async () => {
+  it("requires the exact Origin, rewrites connect, forwards native owner exec tools, and scrubs frames", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     let upstreamOrigin: string | undefined;
     const upstream = http.createServer();
@@ -900,14 +1015,12 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const manager = sessions();
     const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
     const router = new WsUpgradeRouter();
-    const audit = vi.fn(async () => {});
     attachOpenClawControlWsRoute({
       router,
       env: env(upstreamPort),
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit,
       resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
       rpcTimeoutMs: 100,
     });
@@ -1020,13 +1133,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     expect(upstreamOrigin).toBeUndefined();
     expect(JSON.stringify(browserFrames)).not.toContain("gateway-secret");
     expect(JSON.stringify(browserFrames)).not.toContain("browser-token");
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
-      category: "tools_invoke",
-      event: "rpc_allow",
-      outcome: "ok",
-    }));
-    expect(JSON.stringify(audit.mock.calls)).not.toContain("exec");
-    expect(JSON.stringify(audit.mock.calls)).not.toContain("command");
   });
 
   it("forwards hidden native-owner methods and returns the runtime's response", async () => {
@@ -1076,7 +1182,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
     });
     router.attach(edge);
     const edgePort = await listen(edge);
@@ -1151,7 +1256,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
       resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
       rpcTimeoutMs: 20,
     });
@@ -1228,7 +1332,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
       resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
       rpcTimeoutMs: 30,
     });
@@ -1279,7 +1382,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
-  it("continues native-owner RPCs after one request times out", async () => {
+  it("quarantines repeated timed-out tools.invoke work and releases the socket after cleanup", async () => {
     let toolRequests = 0;
     let connections = 0;
     const upstream = http.createServer();
@@ -1317,7 +1420,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
       resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
       rpcTimeoutMs: 20,
     });
@@ -1356,7 +1458,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    expect(toolRequests).toBe(2);
+    expect(toolRequests).toBe(1);
 
     const second = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
@@ -1403,7 +1505,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       sessions: manager,
       authorize: async () => (authorizations += 1) < 3,
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
       authorizationIntervalMs: 10,
     });
     router.attach(edge);
@@ -1468,7 +1569,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         return true;
       },
       loadGatewayToken: async () => "gateway-secret",
-      audit: async () => {},
       authorizationIntervalMs: 60_000,
     });
     router.attach(edge);

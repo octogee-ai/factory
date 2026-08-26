@@ -11,6 +11,7 @@ import {
   cloneRetryDelayMs,
   cloneRetryReady,
   customerEnsureRetryReady,
+  dashboardBridgeReady,
   cancelRemovedEviction,
   createConfiguredBuilderReconcileAdmission,
   createBuilderSurgeGateWiring,
@@ -33,6 +34,8 @@ import {
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
   runProvisioningWork,
+  waitForBrokerProfilesSettled,
+  waitForDashboardBridgeReady,
   waitForOpenClawHealthz,
 } from "../lib/fleet-provisioner.js";
 import {
@@ -1936,7 +1939,12 @@ describe("in-pod gateway heartbeat", () => {
       runtimeStatus: "ready",
       handoffReleased: true,
       probeHealthz,
-    })).resolves.toEqual({ ready: true, openclawUp: true });
+    })).resolves.toEqual({
+      ready: true,
+      openclawUp: true,
+      brokerProfilesSettled: true,
+      dashboardBridgeReady: true,
+    });
     expect(probeHealthz).toHaveBeenCalledOnce();
 
     probeHealthz.mockResolvedValueOnce(false);
@@ -1944,14 +1952,24 @@ describe("in-pod gateway heartbeat", () => {
       runtimeStatus: "ready",
       handoffReleased: true,
       probeHealthz,
-    })).resolves.toEqual({ ready: false, openclawUp: false });
+    })).resolves.toEqual({
+      ready: false,
+      openclawUp: false,
+      brokerProfilesSettled: true,
+      dashboardBridgeReady: true,
+    });
 
     probeHealthz.mockClear();
     await expect(probeSurgeReadiness({
       runtimeStatus: "booting",
       handoffReleased: true,
       probeHealthz,
-    })).resolves.toEqual({ ready: false, openclawUp: false });
+    })).resolves.toEqual({
+      ready: false,
+      openclawUp: false,
+      brokerProfilesSettled: true,
+      dashboardBridgeReady: true,
+    });
     expect(probeHealthz).not.toHaveBeenCalled();
   });
 
@@ -1963,9 +1981,78 @@ describe("in-pod gateway heartbeat", () => {
       handoffReleased: true,
       provisioning: true,
       probeHealthz,
-    })).resolves.toEqual({ ready: true, openclawUp: true });
+    })).resolves.toEqual({
+      ready: true,
+      openclawUp: true,
+      brokerProfilesSettled: true,
+      dashboardBridgeReady: true,
+    });
 
     expect(probeHealthz).not.toHaveBeenCalled();
+  });
+
+  it("holds readiness closed until the broker profiles and Dashboard bridge both settle", async () => {
+    const probeHealthz = vi.fn(async () => true);
+
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      brokerProfilesSettled: false,
+      dashboardBridgeReady: true,
+      probeHealthz,
+    })).resolves.toMatchObject({ ready: false, openclawUp: true });
+
+    await expect(probeSurgeReadiness({
+      runtimeStatus: "ready",
+      handoffReleased: true,
+      brokerProfilesSettled: true,
+      dashboardBridgeReady: false,
+      probeHealthz,
+    })).resolves.toMatchObject({ ready: false, openclawUp: true });
+  });
+
+  it("retries the initial broker-profile sweep until every profile is settled", async () => {
+    const sweep = vi.fn()
+      .mockResolvedValueOnce({ settled: false, deferred: ["octogee-alice-coach"] })
+      .mockResolvedValueOnce({ settled: true, deferred: [] });
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(waitForBrokerProfilesSettled({ sweep, sleep })).resolves.toBeUndefined();
+
+    expect(sweep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("waits for the Dashboard bridge capability handshake with bounded state logs", async () => {
+    const probe = vi.fn()
+      .mockReturnValueOnce({ ready: false, state: "missing" })
+      .mockReturnValueOnce({ ready: false, state: "missing" })
+      .mockReturnValueOnce({ ready: false, state: "stale" })
+      .mockReturnValueOnce({ ready: true, state: "ready" });
+    const log = vi.fn();
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(waitForDashboardBridgeReady({
+      required: true,
+      openclawDir: "/unused",
+      gatewayId: "gw-test",
+      log,
+      probe,
+      sleep,
+    })).resolves.toBeUndefined();
+
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenNthCalledWith(1, expect.stringContaining("state=missing"));
+    expect(log).toHaveBeenNthCalledWith(2, expect.stringContaining("state=stale"));
+    expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats a Dashboard bridge as ready when the isolated gateway contract is disabled", () => {
+    expect(dashboardBridgeReady({
+      required: false,
+      openclawDir: "/does-not-exist",
+      gatewayId: "gw-test",
+    })).toEqual({ ready: true, state: "not-required" });
   });
 
   it("reports the OpenClaw runtime version through the signed fleet state endpoint", () => {

@@ -14,6 +14,22 @@ export interface WsUpgradeContext {
 
 export type PathMatcher = string | ((pathname: string) => boolean);
 
+export class WsUpgradeAuthorizationError extends Error {
+  constructor(
+    readonly statusCode: 401 | 503 | 504,
+    readonly errorCode: string,
+  ) {
+    super(`WebSocket authorization failed (${errorCode})`);
+    this.name = "WsUpgradeAuthorizationError";
+  }
+}
+
+function upgradeFailureStatusText(statusCode: number): string {
+  if (statusCode === 401) return "Unauthorized";
+  if (statusCode === 504) return "Gateway Timeout";
+  return "Service Unavailable";
+}
+
 export interface WsUpgradeRoute {
   match: PathMatcher;
   extractTicket?: (pathname: string) => string | null;
@@ -83,6 +99,15 @@ export class WsUpgradeRouter {
     const route = this.routes.find((r) => r.matchesPath(pathname));
     if (!route) return false;
     void this.handleRoute(route, req, socket, head).catch((err) => {
+      if (err instanceof WsUpgradeAuthorizationError) {
+        writeStatusAndDestroy(
+          socket,
+          err.statusCode,
+          upgradeFailureStatusText(err.statusCode),
+          { "x-octogee-ws-error": safeWsErrorCode(err.errorCode) },
+        );
+        return;
+      }
       console.error("WsUpgradeRouter route failed", err);
       writeStatusAndDestroy(socket, 503, "Service Unavailable");
     });
@@ -142,9 +167,19 @@ function routeHeaderMatches(route: CompiledRoute, req: IncomingMessage): boolean
   return typeof got === "string" && constantTimeEqual(got, route.requireHeaderKey.expected);
 }
 
-function writeStatusAndDestroy(socket: Duplex, code: number, text: string): void {
-  socket.write(`HTTP/1.1 ${code} ${text}\r\n\r\n`);
+function writeStatusAndDestroy(
+  socket: Duplex,
+  code: number,
+  text: string,
+  headers: Readonly<Record<string, string>> = {},
+): void {
+  const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+  socket.write(`HTTP/1.1 ${code} ${text}\r\n${lines}\r\n`);
   socket.destroy();
+}
+
+function safeWsErrorCode(value: string): string {
+  return /^[A-Z0-9_]{1,128}$/u.test(value) ? value : "UPGRADE_AUTHORIZATION_FAILED";
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

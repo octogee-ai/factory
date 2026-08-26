@@ -24,6 +24,10 @@ import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
+import {
+  resolveBuilderRuntimeStateScope,
+  snapshotBuilderRuntimeState,
+} from "../lib/builder-runtime-state.js";
 import { pathToFileURL } from "node:url";
 
 export interface PreStopFlushConfig {
@@ -87,6 +91,33 @@ export function createPreStopSystemConfigFlush(
   return async () => {
     const result = checkpointDurableSystemConfigForSlug(builderSlug, { log: logFn }, sync);
     return { acceptedCommit: result.acceptedCommit! };
+  };
+}
+
+export function createPreStopBuilderRuntimeStateFlush(
+  config: PreStopFlushConfig,
+  brokerClient: Pick<
+    ReturnType<typeof createFleetBrokerClient>,
+    "builderRuntimeStateSnapshotUrls" | "builderRuntimeStatePrune"
+  >,
+  snapshot: typeof snapshotBuilderRuntimeState = snapshotBuilderRuntimeState,
+  wait: (milliseconds: number) => Promise<void> = async (milliseconds) => {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+  },
+): (() => Promise<void>) | undefined {
+  if (config.gatewayClass !== "builder") return undefined;
+  const scope = {
+    ...resolveBuilderRuntimeStateScope(),
+    gatewayClass: config.gatewayClass,
+    gatewayId: config.gatewayId,
+    builderSlug: config.builderSlug,
+  };
+  return async () => {
+    let result = await snapshot({ scope, broker: brokerClient, log });
+    for (let attempt = 0; result.status === "locked" && attempt < 2; attempt += 1) {
+      await wait(250);
+      result = await snapshot({ scope, broker: brokerClient, log });
+    }
   };
 }
 
@@ -160,6 +191,10 @@ async function main(): Promise<void> {
           storeForSlug: () => createBrokeredBlobStore(brokerClient),
         }),
     syncSystemConfig: createPreStopSystemConfigFlush(builderSlug),
+    syncRuntimeState: createPreStopBuilderRuntimeStateFlush(
+      { builderSlug, gatewayClass, gatewayId },
+      brokerClient,
+    ),
     releaseGiteaKey: createPreStopGiteaKeyRelease(builderSlug),
     log,
   });
