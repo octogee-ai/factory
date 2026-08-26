@@ -45,6 +45,23 @@ cd "$FORK_DIR"
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/openclaw-[0-9]*.tgz
 
+if [ ! -f dist/build-info.json ]; then
+  echo "FATAL: dist/build-info.json is missing — run pnpm build before packing" >&2
+  exit 1
+fi
+RUNTIME_BUILD_ID="$(node -e '
+  const info = require("./dist/build-info.json");
+  if (typeof info.buildId === "string") process.stdout.write(info.buildId.trim());
+')"
+if [ -z "$RUNTIME_BUILD_ID" ]; then
+  echo "FATAL: dist/build-info.json has no buildId — run pnpm build before packing" >&2
+  exit 1
+fi
+if ! rg -l -F -- "$RUNTIME_BUILD_ID" dist/control-ui/assets >/dev/null; then
+  echo "FATAL: bundled Control UI build identity does not match runtime — run pnpm build from a stable HEAD before packing" >&2
+  exit 1
+fi
+
 PKG_BACKUP="$(mktemp)"
 cp package.json "$PKG_BACKUP"
 restore() { cp "$PKG_BACKUP" package.json; rm -rf vendor; rm -f "$PKG_BACKUP"; }
