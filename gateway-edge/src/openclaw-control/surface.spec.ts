@@ -774,6 +774,87 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     },
   );
 
+  it("holds the browser connect until the loopback gateway challenge arrives", async () => {
+    const upstreamFrames: Array<Record<string, unknown>> = [];
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      setTimeout(() => {
+        upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+      }, 50);
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "delayed-challenge" },
+      }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        upstreamFrames.push(frame);
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+            },
+          }));
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      audit: async () => {},
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    const hello = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("delayed connect did not complete")), 1_000);
+      browser.once("open", () => {
+        setTimeout(() => {
+          browser.send(JSON.stringify({
+            type: "req",
+            id: "early-connect",
+            method: "connect",
+            params: {},
+          }));
+        }, 10);
+      });
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          clearTimeout(deadline);
+          resolve(frame);
+        }
+      });
+    });
+
+    await expect(hello).resolves.toMatchObject({ id: "early-connect", ok: true });
+    expect(upstreamFrames).toContainEqual(expect.objectContaining({
+      id: "early-connect",
+      method: "connect",
+      params: expect.objectContaining({ auth: { token: "gateway-secret" } }),
+    }));
+    expect(browser.readyState).toBe(WebSocket.OPEN);
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
   it("requires the exact Origin, rewrites connect, forwards native owner exec tools, and scrubs frames/audit", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     let upstreamOrigin: string | undefined;

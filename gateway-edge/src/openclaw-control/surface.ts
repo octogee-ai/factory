@@ -816,6 +816,7 @@ class OpenClawControlSocketBridge {
   private gatewayToken = "";
   private upstream?: WebSocket;
   private nonce: string | null = null;
+  private bufferedConnect?: BrowserRpcFrame;
   private connectForwarded = false;
   private installedMethods?: Set<string>;
   private currentConfig?: OpenClawConfigSnapshot;
@@ -943,6 +944,7 @@ class OpenClawControlSocketBridge {
     this.closing = true;
     if (this.authorizationTimer) clearInterval(this.authorizationTimer);
     if (this.quarantineTimer) clearTimeout(this.quarantineTimer);
+    this.bufferedConnect = undefined;
     this.admittingIds.clear();
     this.retainUncertainLeases(reason);
     if (!this.socketReleased) {
@@ -1073,7 +1075,9 @@ class OpenClawControlSocketBridge {
       this.closeBoth("protocol-invalid");
       return;
     }
-    this.nonce = challengeNonce(frame) ?? this.nonce;
+    const receivedNonce = challengeNonce(frame);
+    this.nonce = receivedNonce ?? this.nonce;
+    if (receivedNonce) this.flushBufferedConnect();
     const response = isResponseFrame(frame) ? frame : undefined;
     if (frame.type === "res" && !response) {
       this.closeBoth("protocol-invalid");
@@ -1135,7 +1139,7 @@ class OpenClawControlSocketBridge {
 
   private handleBrowserMessage(data: RawData, isBinary: boolean): void {
     const upstream = this.upstreamSocket();
-    if (!this.touch() || isBinary || frameBytes(data) > MAX_WS_FRAME_BYTES || upstream.readyState !== WebSocket.OPEN) {
+    if (!this.touch() || isBinary || frameBytes(data) > MAX_WS_FRAME_BYTES) {
       this.closeBoth("invalid-dashboard-frame");
       return;
     }
@@ -1148,7 +1152,11 @@ class OpenClawControlSocketBridge {
     }
     if (this.rejectQuarantined(frame) || this.rejectPending(frame)) return;
     if (frame.method === "connect") {
-      this.forwardConnect(frame);
+      this.acceptConnect(frame);
+      return;
+    }
+    if (upstream.readyState !== WebSocket.OPEN) {
+      this.closeBoth("invalid-dashboard-frame");
       return;
     }
     if (!this.installedMethods) {
@@ -1172,6 +1180,25 @@ class OpenClawControlSocketBridge {
     if (!this.pending.has(frame.id) && !this.admittingIds.has(frame.id)) return false;
     this.args.browser.send(openClawControlPolicyError(frame, "request-id-pending"));
     return true;
+  }
+
+  private acceptConnect(frame: BrowserRpcFrame): void {
+    if (this.connectForwarded || this.bufferedConnect || this.installedMethods) {
+      this.args.browser.send(openClawControlPolicyError(frame, "connect-state"));
+      return;
+    }
+    if (this.upstreamSocket().readyState !== WebSocket.OPEN || !this.nonce) {
+      this.bufferedConnect = frame;
+      return;
+    }
+    this.forwardConnect(frame);
+  }
+
+  private flushBufferedConnect(): void {
+    const frame = this.bufferedConnect;
+    if (!frame || !this.nonce || this.upstreamSocket().readyState !== WebSocket.OPEN) return;
+    this.bufferedConnect = undefined;
+    this.forwardConnect(frame);
   }
 
   private forwardConnect(frame: BrowserRpcFrame): void {

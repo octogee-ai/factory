@@ -1274,6 +1274,35 @@ async function findAssignedUidBySlug(
   return null;
 }
 
+async function findUidBySlug(
+  db: Firestore,
+  gatewayId: string,
+  podName: string | undefined,
+  slug: string,
+): Promise<string | null> {
+  const assignedUid = await findAssignedUidBySlug(db, gatewayId, slug);
+  if (assignedUid) return assignedUid;
+
+  const gateway = (
+    await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()
+  ).data();
+  const uid = projectGatewayMutableConfigForGateway(gateway, gatewayId)?.ownerUid ?? null;
+  if (
+    typeof uid !== "string" ||
+    !configuredBuilderCredentialBootstrapAllowed(gateway, {
+      gatewayId,
+      podName,
+      slug,
+      uid,
+    })
+  ) return null;
+
+  const user = (
+    await db.collection("users").doc(uid).get()
+  ).data() as Record<string, unknown> | undefined;
+  return slugFromAssignedUser(user) === slug ? uid : null;
+}
+
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
   resolveFreeTierModel: FreeTierModelResolver;
@@ -1469,7 +1498,7 @@ function installSnapshotRoutes(
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    const uid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
+    const uid = await findUidBySlug(db, bound.gatewayId, bound.podName, slug);
     if (!uid) {
       res.status(404).json({ error: "not_found" });
       return;

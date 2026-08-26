@@ -229,6 +229,10 @@ spec:
               value: {{ .Values.builderSlug | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
+            {{- if and (eq .Release.Namespace "octogee-test") (contains "-main." $gatewayImageTag) }}
+            - name: OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
+              value: "1"
+            {{- end }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS

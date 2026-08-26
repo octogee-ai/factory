@@ -30,12 +30,13 @@ const REQUIRED_VALUES: Record<string, string> = {
 function helmTemplate(
   releaseName = "octogee-gw-default",
   setValues: Record<string, string> = {},
+  namespace = "octogee-test",
 ): string {
   const args = [
     "template",
     releaseName,
     CHART_PATH,
-    "--namespace=octogee-test",
+    `--namespace=${namespace}`,
   ];
   const merged = { ...REQUIRED_VALUES, ...setValues };
   const dedicated = setValues.gatewayClass === "builder" ||
@@ -109,6 +110,31 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
     expect(gateway).toMatch(
       /name:\s*AGENTS_DIR[\s\S]*?value:\s*"\/home\/node\/\.openclaw\/agents"/,
+    );
+  });
+
+  it("allows OpenClaw main preview builds to cross non-monotonic build hashes", () => {
+    const preview = findDoc(helmTemplate("octogee-gw-preview", {
+      gatewayId: "preview",
+      "image.tag": "515369d-oc2026.8.1-main.16c097b2@sha256:abc123",
+    }), "Deployment", "octogee-gateway-preview") ?? "";
+    const stable = findDoc(helmTemplate("octogee-gw-stable", {
+      gatewayId: "stable",
+      "image.tag": "515369d-oc2026.8.1@sha256:def456",
+    }), "Deployment", "octogee-gateway-stable") ?? "";
+    const prodPreview = findDoc(helmTemplate("octogee-gw-prod-preview", {
+      gatewayId: "prod-preview",
+      "image.tag": "515369d-oc2026.8.1-main.16c097b2@sha256:abc123",
+    }, "octogee"), "Deployment", "octogee-gateway-prod-preview") ?? "";
+
+    expect(containerBlock(preview, "gateway")).toMatch(
+      /name:\s*OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS[\s\S]*?value:\s*"1"/,
+    );
+    expect(containerBlock(stable, "gateway")).not.toContain(
+      "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
+    );
+    expect(containerBlock(prodPreview, "gateway")).not.toContain(
+      "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
     );
   });
 
