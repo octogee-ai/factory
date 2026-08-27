@@ -441,6 +441,22 @@ export function mattermostAccountBindingsNeedingActivation(
 
 export const SAFE_DEFAULT_AGENT_ID = "octogee-unmatched-route";
 
+export const SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS = [
+  { relativePath: `agents/${SAFE_DEFAULT_AGENT_ID}`, kind: "directory" },
+  { relativePath: `workspace-${SAFE_DEFAULT_AGENT_ID}`, kind: "directory" },
+  { relativePath: `workspaces/${SAFE_DEFAULT_AGENT_ID}`, kind: "directory" },
+  { relativePath: `memory/${SAFE_DEFAULT_AGENT_ID}.sqlite`, kind: "file" },
+  { relativePath: `memory/${SAFE_DEFAULT_AGENT_ID}.sqlite-wal`, kind: "file" },
+  { relativePath: `memory/${SAFE_DEFAULT_AGENT_ID}.sqlite-shm`, kind: "file" },
+] as const;
+
+export function isSafeDefaultAgentPortableStatePath(relativePath: string): boolean {
+  return SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS.some((item) =>
+    item.kind === "directory"
+      ? relativePath === item.relativePath || relativePath.startsWith(`${item.relativePath}/`)
+      : relativePath === item.relativePath);
+}
+
 export function buildSafeDefaultAgent(): Record<string, unknown> {
   return {
     id: SAFE_DEFAULT_AGENT_ID,

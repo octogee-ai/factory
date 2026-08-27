@@ -3,6 +3,7 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +52,7 @@ import {
   type CompleteSurgeHandoffRequestBody,
 } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import type { ConfiguredBuilderPortableStatePlan } from "../lib/local-coach-wired.js";
 import {
   hasMountedMarker,
   writeMigratingInPin,
@@ -2106,12 +2108,12 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
   });
 
-  it("leaves a configured Builder final import untouched until signed surge release", async () => {
+  it("omits neutral fallback state from a configured Builder final import before surge release", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-finish-"));
     migrationTempRoots.push(stateDir);
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(configPath, JSON.stringify({
-      agents: { list: [{ id: "discord-helper" }] },
+      agents: { list: [{ id: "discord-helper" }, { id: "octogee-unmatched-route" }] },
     }));
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
     vi.stubEnv("OPENCLAW_DIR", stateDir);
@@ -2140,7 +2142,18 @@ describe("queued-rsync migration control handlers", () => {
     });
     const daemon = mkFakeChild();
     const copy = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(daemon).mockReturnValueOnce(copy);
+    let stageDir = "";
+    const stagedFallbackFiles = [
+      "agents/octogee-unmatched-route/agent/state.json",
+      "workspace-octogee-unmatched-route/MEMORY.md",
+      "memory/octogee-unmatched-route.sqlite",
+    ];
+    spawnMock.mockReturnValueOnce(daemon).mockImplementationOnce(() => {
+      for (const relativePath of stagedFallbackFiles) {
+        expect(fsSync.existsSync(path.join(stageDir, relativePath))).toBe(false);
+      }
+      return copy;
+    });
     const deps = mkDeps({
       adapter,
       migrationRsyncPort: 30873,
@@ -2166,6 +2179,16 @@ describe("queued-rsync migration control handlers", () => {
       vi.fn(),
     );
     expect(prepareResponse.getStatus()).toBe(200);
+    const [, daemonArgs] = spawnMock.mock.calls[0] as [string, string[]];
+    const rsyncConfigPath = daemonArgs
+      .find((arg) => arg.startsWith("--config="))!
+      .slice("--config=".length);
+    stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(rsyncConfigPath, "utf-8"))![1]!;
+    for (const relativePath of stagedFallbackFiles) {
+      const absolutePath = path.join(stageDir, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "legacy fallback state");
+    }
 
     const finishBody: FinishRsyncImportRequestBody = {
       migrationId: "mig-builder-finish",
@@ -2192,6 +2215,9 @@ describe("queued-rsync migration control handlers", () => {
     expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(mounted).toEqual([]);
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining("omitted system fallback state from staged import"),
+    );
   });
 
   it("rejects a final import whose config transfer mode does not match the prepared Builder session", async () => {
@@ -2465,6 +2491,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     migrationId: string;
     importDir: string;
     daemon: ReturnType<typeof mkFakeChild>;
+    mode?: "pre" | "final";
   }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => input.importDir),
@@ -2484,7 +2511,7 @@ describe("agent sqlite stores across an rsync carry", () => {
       migrationId: input.migrationId,
       slug: "chris",
       rpcPhase: "prepare-rsync-import",
-      mode: "final",
+      mode: input.mode ?? "final",
       transferUser: "migration",
       transferKey: "c".repeat(64),
     };
@@ -2506,12 +2533,13 @@ describe("agent sqlite stores across an rsync carry", () => {
   async function finishImport(
     deps: MigrationHandlerDeps,
     migrationId: string,
+    mode: "pre" | "final" = "final",
   ): Promise<ReturnType<typeof mkResponse>> {
     const body: FinishRsyncImportRequestBody = {
       migrationId,
       slug: "chris",
       rpcPhase: "finish-rsync-import",
-      mode: "final",
+      mode,
     };
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(
@@ -2523,6 +2551,66 @@ describe("agent sqlite stores across an rsync carry", () => {
     );
     return response;
   }
+
+  it.each(["pre", "final"] as const)(
+    "omits neutral fallback state from a staged %s import",
+    async (mode) => {
+      const importDir = await mkTempRoot();
+      const migrationId = `mig-neutral-fallback-${mode}`;
+      const { deps, stageDir } = await prepareImport({
+        migrationId,
+        importDir,
+        daemon: mkFakeChild(),
+        mode,
+      });
+      const stagedFallbackFiles = [
+        "agents/octogee-unmatched-route/agent/state.json",
+        "workspace-octogee-unmatched-route/MEMORY.md",
+        "workspaces/octogee-unmatched-route/MEMORY.md",
+        "memory/octogee-unmatched-route.sqlite",
+      ];
+      for (const relativePath of stagedFallbackFiles) {
+        const absolutePath = path.join(stageDir, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "legacy fallback state");
+      }
+      const copy = mkFakeChild({ exitCode: 0 });
+      spawnMock.mockImplementationOnce(() => {
+        for (const relativePath of stagedFallbackFiles) {
+          expect(fsSync.existsSync(path.join(stageDir, relativePath))).toBe(false);
+        }
+        expect(fsSync.existsSync(path.join(stageDir, "workspaces"))).toBe(false);
+        return copy;
+      });
+
+      const { getStatus } = await finishImport(deps, migrationId, mode);
+
+      expect(getStatus()).toBe(200);
+      expect(deps.log).toHaveBeenCalledWith(
+        expect.stringContaining("omitted system fallback state from staged import"),
+      );
+    },
+  );
+
+  it("does not follow an untrusted staged fallback ancestor", async () => {
+    const importDir = await mkTempRoot();
+    const outside = await mkTempRoot();
+    const sentinel = path.join(outside, "octogee-unmatched-route", "MEMORY.md");
+    await fs.mkdir(path.dirname(sentinel), { recursive: true });
+    await fs.writeFile(sentinel, "outside stage");
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-neutral-symlink",
+      importDir,
+      daemon: mkFakeChild(),
+    });
+    await fs.symlink(outside, path.join(stageDir, "workspaces"));
+
+    const { getStatus } = await finishImport(deps, "mig-neutral-symlink");
+
+    expect(getStatus()).toBe(500);
+    await expect(fs.readFile(sentinel, "utf-8")).resolves.toBe("outside stage");
+    expect(spawnMock.mock.calls).toHaveLength(1);
+  });
 
   it("rejects a carried store that does not open instead of delivering it", async () => {
     const importDir = await mkTempRoot();
@@ -3485,6 +3573,26 @@ describe("findPathTraversalViolation", () => {
     expect(findPathTraversalViolation([
       "memory/octogee-attacker-proj-cityscout-coach.sqlite",
     ], slug)).toContain("outside the per-slug allowlist");
+  });
+
+  it("rejects neutral route agent state even when a configured Builder plan includes it", () => {
+    const configuredBuilderStatePlan: ConfiguredBuilderPortableStatePlan = {
+      agentIds: ["octogee-unmatched-route"],
+      agentDirs: ["agents/octogee-unmatched-route/agent"],
+      sessionStorePaths: ["agents/octogee-unmatched-route/sessions/sessions.json"],
+      paths: [
+        { relativePath: "agents/octogee-unmatched-route", kind: "directory" },
+        { relativePath: "workspace-octogee-unmatched-route", kind: "directory" },
+        { relativePath: "workspaces/octogee-unmatched-route", kind: "directory" },
+        { relativePath: "memory/octogee-unmatched-route.sqlite", kind: "file" },
+      ],
+    };
+    expect(findPathTraversalViolation([
+      "agents/octogee-unmatched-route/",
+      "workspace-octogee-unmatched-route/",
+      "workspaces/octogee-unmatched-route/",
+      "memory/octogee-unmatched-route.sqlite",
+    ], slug, "final", [], configuredBuilderStatePlan)).toContain("outside the per-slug allowlist");
   });
 
   it("returns the FIRST violation found (deterministic for ops messages)", () => {

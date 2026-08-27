@@ -82,11 +82,14 @@ function writeConfiguredBuilderState(
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify({
     agents: {
-      list: [{
-        id: "discord-helper",
-        agentDir: path.join(stateDir, "agents", "discord-helper", "runtime"),
-        workspace: path.join(stateDir, "workspaces", "discord-helper"),
-      }],
+      list: [
+        {
+          id: "discord-helper",
+          agentDir: path.join(stateDir, "agents", "discord-helper", "runtime"),
+          workspace: path.join(stateDir, "workspaces", "discord-helper"),
+        },
+        { id: "octogee-unmatched-route" },
+      ],
     },
     session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
   }));
@@ -101,6 +104,19 @@ function writeConfiguredBuilderState(
     const absolutePath = path.join(stateDir, relativePath);
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, contents);
+  }
+}
+
+function writeSafeDefaultAgentState(stateDir: string, contents: string): void {
+  const files = [
+    ["agents/octogee-unmatched-route/agent/state.json", contents],
+    ["workspace-octogee-unmatched-route/MEMORY.md", contents],
+    ["memory/octogee-unmatched-route.sqlite", contents],
+  ] as const;
+  for (const [relativePath, fileContents] of files) {
+    const absolutePath = path.join(stateDir, relativePath);
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, fileContents);
   }
 }
 
@@ -243,6 +259,29 @@ describe("surge handoff Kubernetes projection", () => {
       fs.writeFileSync(
         path.join(targetState, "workspaces", "discord-helper", "notes.md"),
         "changed workspace state",
+      );
+      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
+    } finally {
+      fs.rmSync(sourceState, { recursive: true, force: true });
+      fs.rmSync(targetState, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes neutral fallback state from configured Builder durable digests", () => {
+    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
+    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
+    try {
+      writeConfiguredBuilderState(sourceState);
+      writeConfiguredBuilderState(targetState);
+      writeSafeDefaultAgentState(sourceState, "legacy source fallback");
+      writeSafeDefaultAgentState(targetState, "target fallback");
+
+      const sourceDigest = runBuilderDigest(sourceState, path.join(sourceState, "openclaw.json"));
+      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).toEqual(sourceDigest);
+
+      fs.writeFileSync(
+        path.join(targetState, "workspaces", "discord-helper", "notes.md"),
+        "changed transferred workspace state",
       );
       expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
     } finally {

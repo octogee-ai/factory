@@ -107,6 +107,7 @@ import {
   buildProjectAgentAccounts,
   buildProjectAgents,
   gatewayAgentRoster,
+  isSafeDefaultAgentPortableStatePath,
   mattermostAccountBindingsNeedingActivation,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
@@ -1099,7 +1100,9 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
   if (builderPlan) assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
   const candidates = [
     ...(builderPlan
-      ? builderPlan.paths.map((item) => ({ cwd: stateDir, path: item.relativePath }))
+      ? builderPlan.paths
+        .filter((item) => !isSafeDefaultAgentPortableStatePath(item.relativePath))
+        .map((item) => ({ cwd: stateDir, path: item.relativePath }))
       : [
         ...agentIdsForMigration(slug).map((agentId) => ({
           cwd: stateDir,

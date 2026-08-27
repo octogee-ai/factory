@@ -84,6 +84,10 @@ import {
   isSafeConfiguredAgentId,
   type ConfiguredBuilderPortableStatePlan,
 } from "./local-coach-wired.js";
+import {
+  isSafeDefaultAgentPortableStatePath,
+  SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS,
+} from "./openclaw-config-builders.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
@@ -1466,6 +1470,56 @@ async function copyStageToOpenClaw(stageDir: string, importDir: string): Promise
   );
 }
 
+async function hasRealStageAncestors(stageDir: string, relativePath: string): Promise<boolean> {
+  const root = await fs.lstat(stageDir);
+  if (!root.isDirectory() || root.isSymbolicLink()) {
+    throw new Error("rsync stage root is not a real directory");
+  }
+  let parent = stageDir;
+  for (const segment of relativePath.split("/").slice(0, -1)) {
+    parent = path.join(parent, segment);
+    try {
+      const stat = await fs.lstat(parent);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`rsync staged path has a non-directory ancestor: ${relativePath}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+  return true;
+}
+
+async function omitSafeDefaultAgentStateFromStage(stageDir: string): Promise<string[]> {
+  const omitted: string[] = [];
+  for (const { relativePath } of SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS) {
+    if (!await hasRealStageAncestors(stageDir, relativePath)) continue;
+    const absolutePath = path.join(stageDir, relativePath);
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      await fs.rm(absolutePath, { recursive: true, force: true });
+    } else {
+      await fs.unlink(absolutePath);
+    }
+    omitted.push(relativePath);
+  }
+  if (!await hasRealStageAncestors(stageDir, "workspaces/.placeholder")) return omitted;
+  try {
+    await fs.rmdir(path.join(stageDir, "workspaces"));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw error;
+  }
+  return omitted;
+}
+
 interface RsyncPhaseRequest<T extends MigrationRequestBody> {
   body: T;
   mode: MigrationTransferMode;
@@ -1690,7 +1744,14 @@ async function validateStagedRsyncImport(
   slug: string,
   mode: MigrationTransferMode,
   configTransferMode: MigrationConfigTransferMode,
+  log: (message: string) => void,
 ): Promise<string | null> {
+  if (mode !== "keys") {
+    const omitted = await omitSafeDefaultAgentStateFromStage(session.stageDir);
+    if (omitted.length > 0) {
+      log(`[migration-rsync] omitted system fallback state from staged import: ${omitted.join(",")}`);
+    }
+  }
   const entries = await listRelativeEntries(session.stageDir);
   const configuredBuilderStateDir = resolveOpenClawStateDir();
   const configuredBuilderStatePlan = configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
@@ -1773,7 +1834,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     );
     try {
       await stopRsyncDaemon(session.child);
-      const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode);
+      const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode, log);
       if (rejection !== null) {
         log(
           `[migration-rsync] ⚠ finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${rejection}`,
@@ -2282,7 +2343,8 @@ function agentStateEntryAllowed(input: {
 }): boolean {
   if (input.mode === "keys") return false;
   return input.configuredBuilderStatePlan
-    ? configuredBuilderStatePlanAllowsEntry(input.raw, input.configuredBuilderStatePlan)
+    ? !isSafeDefaultAgentPortableStatePath(input.entry) &&
+      configuredBuilderStatePlanAllowsEntry(input.raw, input.configuredBuilderStatePlan)
     : isOwnedAgentStatePath(input.raw, input.entry, input.slug, input.configuredAgentIds);
 }
 

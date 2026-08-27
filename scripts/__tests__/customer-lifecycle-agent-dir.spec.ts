@@ -327,6 +327,77 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
+  it.each(["broker", "prod"] as const)(
+    "does not export the neutral route agent state from a configured Builder (%s)",
+    async (adapterKind) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        process.env.OPENCLAW_STATE_DIR = tempRoot;
+        vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+        const fallbackAgentId = "octogee-unmatched-route";
+        const coachAgentId = "octogee-alice-coach";
+        const projectAgentId = "octogee-alice-proj-orbit-coach";
+        await fs.writeFile(path.join(tempRoot, "openclaw.json"), JSON.stringify({
+          agents: {
+            list: [
+              { id: fallbackAgentId },
+              {
+                id: coachAgentId,
+                default: true,
+                workspace: path.join(tempRoot, "customers", "alice"),
+              },
+              {
+                id: projectAgentId,
+                workspace: path.join(tempRoot, "customers", "alice", "projects", "orbit"),
+              },
+            ],
+          },
+        }));
+        for (const [relativePath, contents] of [
+          [`agents/${fallbackAgentId}/agent/state.json`, "fallback-agent"],
+          [`workspace-${fallbackAgentId}/notes.md`, "fallback-workspace"],
+          [`memory/${fallbackAgentId}.sqlite`, "fallback-memory"],
+          [`agents/${coachAgentId}/agent/state.json`, "coach-agent"],
+          [`customers/alice/notes.md`, "coach-workspace"],
+          [`memory/${coachAgentId}.sqlite`, "coach-memory"],
+          [`agents/${projectAgentId}/agent/state.json`, "project-agent"],
+          [`customers/alice/projects/orbit/notes.md`, "project-workspace"],
+          [`memory/${projectAgentId}.sqlite`, "project-memory"],
+        ]) {
+          const absolutePath = path.join(tempRoot, relativePath);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, contents);
+        }
+
+        const adapter = adapterKind === "broker"
+          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+            client: mkClient(brokerSnapshot),
+            rpc: {} as GatewayRpcClient,
+            log: vi.fn(),
+          })
+          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
+            db: {} as Firestore,
+            rpc: {} as GatewayRpcClient,
+            log: vi.fn(),
+          });
+
+        const paths = await adapter.listExportPaths("alice");
+
+        expect(paths).toEqual(expect.arrayContaining([
+          { cwd: tempRoot, path: `agents/${coachAgentId}` },
+          { cwd: tempRoot, path: `agents/${projectAgentId}` },
+          { cwd: tempRoot, path: "customers/alice" },
+          { cwd: tempRoot, path: `memory/${coachAgentId}.sqlite` },
+          { cwd: tempRoot, path: `memory/${projectAgentId}.sqlite` },
+        ]));
+        expect(paths).not.toEqual(expect.arrayContaining([
+          { cwd: tempRoot, path: `agents/${fallbackAgentId}` },
+          { cwd: tempRoot, path: `workspace-${fallbackAgentId}` },
+          { cwd: tempRoot, path: `memory/${fallbackAgentId}.sqlite` },
+        ]));
+      });
+    },
+  );
+
   it("retains a configured Builder overlay during imported cleanup, stopping only its chat accounts", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
