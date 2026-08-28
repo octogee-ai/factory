@@ -98,6 +98,7 @@ const approvedPlugins = [
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
+  "octogee-activity-tools",
   "parallel",
   "openai",
 ];
@@ -402,7 +403,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: brokerPluginConfig,
     });
-    expect(out.plugins.entries).not.toHaveProperty("octogee-activity-tools");
+    expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
+      enabled: true,
+      config: { activityEnabled: true, heartbeatMs: 5000 },
+    });
   });
 
   it("forces shared account DMs to an allowlist while preserving Builder-owned DM settings", () => {
@@ -1380,6 +1384,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       expect(out.plugins.entries[pluginId].config).toEqual(brokerPluginConfig);
     }
     expect(out.plugins.entries["octogee-workspace-tools"].config).toEqual({});
+    expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
+      enabled: true,
+      config: { activityEnabled: true, heartbeatMs: 5000 },
+    });
     expect(out.plugins.entries).not.toHaveProperty("octogee-preview-tools");
     expect(out.plugins.entries).not.toHaveProperty("octogee-publish-tools");
     expect(out.plugins.entries["octogee-web-tools"].config).toEqual({

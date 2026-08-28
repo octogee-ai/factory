@@ -91,6 +91,19 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("octogee-activity-tools resolves to its behavioral suite", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-activity-tools/plugin-runtime-native.ts"],
+      ["octogee-activity-tools"],
+    );
+    const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
+    expect(unitPackage).toEqual({
+      name: "octogee-activity-tools",
+      dir: "infra/gateway/extensions/octogee-activity-tools",
+      typecheck: "npm run typecheck --silent",
+    });
+  });
+
   it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {
     expectJobs(
       ["infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
