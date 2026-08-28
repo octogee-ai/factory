@@ -167,7 +167,6 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
-  "octogee-activity-tools",
   "parallel",
   "openai",
 ];
@@ -242,10 +241,6 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     },
   },
   "octogee-workspace-tools": { enabled: true, config: {} },
-  "octogee-activity-tools": {
-    enabled: true,
-    config: { activityEnabled: true, scheduledActivityEnabled: true, heartbeatMs: 5000 },
-  },
   parallel: { enabled: true },
 };
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
