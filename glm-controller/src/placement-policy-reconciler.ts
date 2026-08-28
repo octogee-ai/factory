@@ -199,7 +199,6 @@ export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
   sharedGatewayIds: readonly string[];
   idleMs: number;
-  liveRunBuilderSlugs: string[];
   users: PlacementPolicyUser[];
   gateways: PlacementPolicyGateway[];
   assignments: PlacementPolicyAssignment[];
@@ -279,7 +278,6 @@ export interface SupersedeRollingSharedGatewayInput {
 
 export interface BuilderRuntimeActivity {
   lastActiveAt: number | null;
-  liveRun: boolean;
 }
 
 type AuthoritativeLeaseStatus = "provisioning" | "activating" | "returning";
@@ -330,7 +328,6 @@ export interface PlacementPolicyReconcilerDeps {
     builderSlug: string;
     gatewayId: string;
     userData: Record<string, unknown>;
-    liveRun: boolean;
   }): Promise<BuilderRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
@@ -1530,11 +1527,10 @@ function builderActivityRequiresRuntime(
   now: () => number,
   idleMs: number,
 ): boolean {
-  return activity.liveRun ||
-    (!returnRequested && (
-      activity.lastActiveAt === null ||
-      now() - activity.lastActiveAt < idleMs
-    ));
+  return !returnRequested && (
+    activity.lastActiveAt === null ||
+    now() - activity.lastActiveAt < idleMs
+  );
 }
 
 async function reconcileActiveLease(
@@ -1589,7 +1585,6 @@ async function reconcileActiveLease(
     builderSlug,
     gatewayId: targetGatewayId!,
     userData: user.data,
-    liveRun: context.state.liveRunBuilderSlugs.includes(builderSlug),
   });
   if (builderActivityRequiresRuntime(
     activity,
@@ -2913,7 +2908,7 @@ async function readPlacementPolicySnapshot(
 ): Promise<PlacementPolicySnapshot> {
   const { db, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
   const now = nowFn();
-  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, liveRunsSnap, assignmentDocs] =
+  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, assignmentDocs] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
       mirroredOrScan(informer.users(), () => db.collection("users").get()),
@@ -2922,7 +2917,6 @@ async function readPlacementPolicySnapshot(
       db.collection(GLM_OPERATIONS_COLLECTION)
         .where("status", "in", [...PLACEMENT_ACTIVE_OPERATION_STATUSES])
         .get(),
-      db.collectionGroup("liveRuns").where("expiresAt", ">", now).get(),
       mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
     ]);
   const pool = parseSharedGatewayPoolConfig(configSnap.data());
@@ -2971,10 +2965,6 @@ async function readPlacementPolicySnapshot(
     defaultGatewayId,
     sharedGatewayIds,
     idleMs,
-    liveRunBuilderSlugs: [...new Set(liveRunsSnap.docs.flatMap((doc) => {
-      const parts = doc.ref.path.split("/");
-      return parts[0] === "workspaces" && parts[1] ? [parts[1]] : [];
-    }))],
     users: userDocs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     assignments,
