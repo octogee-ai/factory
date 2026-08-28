@@ -350,9 +350,9 @@ describe("identity and degraded-projection fixtures", () => {
     expect(admitted?.inputPostId).toBe(queued?.inputPostId);
   });
 
-  it("renders late Activity and partial/missing projections without timestamp joins", () => {
+  it("renders partial Mattermost history without timestamp joins", () => {
     expect(identity.degradationCases.map(({ name }) => name)).toEqual([
-      "late-activity", "missing-activity", "missing-live", "activity-only",
+      "late-detail", "summary-only", "activity-only",
     ]);
     for (const value of identity.degradationCases) {
       expect(value.expectedBehavior).not.toMatch(/timestamp|fabricat/i);
