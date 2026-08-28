@@ -97,24 +97,19 @@ function projectRepoProvisionInput(): Record<string, unknown> {
   return JSON.parse(String((call![1] as RequestInit).body));
 }
 
-interface ProjectPairMattermostFixture {
+interface ProjectMattermostFixture {
   primaryId: string;
   primaryName: string;
-  activityId?: string;
   existingPrimary?: boolean;
   primaryType?: "P" | "O";
   teamId?: string;
 }
 
-function mockProjectPairMattermost(options: ProjectPairMattermostFixture): void {
+function mockProjectMattermost(options: ProjectMattermostFixture): void {
   const teamId = options.teamId ?? "team-abc";
-  const activityId = options.activityId ?? `${options.primaryId}-activity`;
-  const activityName = `${options.primaryName}-activity`;
   const primaryMembers = new Set<string>();
-  const activityMembers = new Set<string>();
   let primaryExists = options.existingPrimary ?? false;
   let primaryType = options.primaryType ?? "P";
-  let activityExists = false;
 
   const channel = (id: string, name: string, type: "P" | "O") => ({
     id,
@@ -139,33 +134,18 @@ function mockProjectPairMattermost(options: ProjectPairMattermostFixture): void 
       if (!primaryExists) throw notFound(path);
       return channel(options.primaryId, options.primaryName, primaryType);
     }
-    if (verb === "GET" && path === `/teams/${teamId}/channels/name/${activityName}`) {
-      if (!activityExists) throw notFound(path);
-      return channel(activityId, activityName, primaryType);
-    }
     if (verb === "GET" && path === `/channels/${options.primaryId}`) {
       if (!primaryExists) throw notFound(path);
       return channel(options.primaryId, options.primaryName, primaryType);
     }
-    if (verb === "GET" && path === `/channels/${activityId}`) {
-      if (!activityExists) throw notFound(path);
-      return channel(activityId, activityName, primaryType);
-    }
     if (verb === "GET" && path === `/channels/${options.primaryId}/members?page=0&per_page=200`) {
       return [...primaryMembers].map((userId) => ({ user_id: userId }));
-    }
-    if (verb === "GET" && path === `/channels/${activityId}/members?page=0&per_page=200`) {
-      return [...activityMembers].map((userId) => ({ user_id: userId }));
     }
     if (verb === "POST" && path === "/channels") {
       if (body?.name === options.primaryName && !primaryExists) {
         primaryExists = true;
         primaryType = body.type === "O" ? "O" : "P";
         return channel(options.primaryId, options.primaryName, primaryType);
-      }
-      if (body?.name === activityName && !activityExists) {
-        activityExists = true;
-        return channel(activityId, activityName, primaryType);
       }
     }
     if (
@@ -180,11 +160,6 @@ function mockProjectPairMattermost(options: ProjectPairMattermostFixture): void 
       if (typeof body?.user_id !== "string") throw new Error("primary member user_id is required");
       primaryMembers.add(body.user_id);
       return { user_id: body.user_id, channel_id: options.primaryId, roles: "channel_user" };
-    }
-    if (verb === "POST" && path === `/channels/${activityId}/members`) {
-      if (typeof body?.user_id !== "string") throw new Error("activity member user_id is required");
-      activityMembers.add(body.user_id);
-      return { user_id: body.user_id, channel_id: activityId, roles: "channel_user" };
     }
     throw new Error(`Unexpected MM call: ${verb} ${path}`);
   });
@@ -495,7 +470,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-new-123",
       primaryName: "alice-proj-mygame-general",
     });
@@ -559,7 +534,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-new-123",
       primaryName: "alice-proj-mygame-general",
     });
@@ -617,7 +592,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-no-coach-1",
       primaryName: "alice-proj-mygame-general",
     });
@@ -678,7 +653,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-priv-1",
       primaryName: "alice-proj-privthing-general",
     });
@@ -705,7 +680,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-new-999",
       primaryName: "alice-proj-mygame-general",
     });
@@ -765,7 +740,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-retry-456",
       primaryName: "alice-proj-mygame-general",
     });
@@ -823,7 +798,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       userId: "mock-mm-user", username: "alice-mm", coachUserId: "mock-mm-coach",
       coachDmChannelId: null, generalChannelId: null, adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-retry-gitea-fail",
       primaryName: "alice-proj-mygame-general",
     });
@@ -864,7 +839,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-existing-999",
       primaryName: "alice-proj-mygame-general",
       existingPrimary: true,
@@ -923,10 +898,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-legacy-O",
       primaryName: "alice-proj-mygame-general",
-      activityId: "ch-activity-legacy",
       existingPrimary: true,
       primaryType: "O",
     });
@@ -1058,7 +1032,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-active-1",
       primaryName: "alice-proj-mygame-general",
       existingPrimary: true,
@@ -1101,7 +1075,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       generalChannelId: null,
       adminChannelId: null,
     });
-    mockProjectPairMattermost({
+    mockProjectMattermost({
       primaryId: "ch-repair-789",
       primaryName: "alice-proj-mygame-general",
       existingPrimary: true,
