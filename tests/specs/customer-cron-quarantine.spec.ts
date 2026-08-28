@@ -17,6 +17,105 @@ const mikeSession = `agent:${mikeAgent}:mattermost:channel:mike-channel`;
 
 type CronRow = Record<string, string | number | null>;
 
+function parsedOrRaw(value: string | number | null) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function jobJson(values: CronRow) {
+  const scheduleKind = String(values.schedule_kind);
+  const schedule = scheduleKind === "stream"
+    ? { kind: scheduleKind, command: ["true"] }
+    : scheduleKind === "on-exit"
+      ? { kind: scheduleKind, command: "true" }
+      : { kind: scheduleKind, expr: "0 * * * *" };
+  const payloadKind = String(values.payload_kind);
+  const payload: Record<string, unknown> = payloadKind === "script"
+    ? { kind: payloadKind, script: "return true" }
+    : payloadKind === "command"
+      ? { kind: payloadKind, argv: ["true"] }
+      : payloadKind === "agentTurn"
+        ? { kind: payloadKind, message: "hello" }
+        : { kind: payloadKind, text: "hello" };
+  if (values.payload_model != null) payload.model = values.payload_model;
+  if (values.payload_fallbacks_json != null) {
+    payload.fallbacks = parsedOrRaw(values.payload_fallbacks_json);
+  }
+  if (values.payload_allow_unsafe_external_content != null) {
+    payload.allowUnsafeExternalContent = values.payload_allow_unsafe_external_content === 1;
+  }
+  if (values.payload_tools_allow_json != null) {
+    payload.toolsAllow = parsedOrRaw(values.payload_tools_allow_json);
+  }
+
+  const delivery: Record<string, unknown> = {
+    mode: values.delivery_mode,
+    channel: values.delivery_channel,
+    to: values.delivery_to,
+    accountId: values.delivery_account_id,
+  };
+  if (values.delivery_completion_mode != null || values.delivery_completion_to != null) {
+    delivery.completionDestination = {
+      mode: values.delivery_completion_mode,
+      to: values.delivery_completion_to,
+    };
+  }
+  if (
+    values.failure_delivery_mode != null ||
+    values.failure_delivery_channel != null ||
+    values.failure_delivery_to != null ||
+    values.failure_delivery_account_id != null
+  ) {
+    delivery.failureDestination = {
+      mode: values.failure_delivery_mode,
+      channel: values.failure_delivery_channel,
+      to: values.failure_delivery_to,
+      accountId: values.failure_delivery_account_id,
+    };
+  }
+  const failureAlert = values.failure_alert_mode != null ||
+    values.failure_alert_channel != null ||
+    values.failure_alert_to != null ||
+    values.failure_alert_account_id != null
+    ? {
+        mode: values.failure_alert_mode,
+        channel: values.failure_alert_channel,
+        to: values.failure_alert_to,
+        accountId: values.failure_alert_account_id,
+      }
+    : undefined;
+
+  return JSON.stringify({
+    id: values.job_id,
+    name: String(values.job_id),
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: values.updated_at,
+    owner: {
+      agentId: values.owner_agent_id,
+      sessionKey: values.owner_session_key,
+      accountId: values.owner_agent_id === mikeAgent ? mikeAccount : ceckertAccount,
+    },
+    agentId: values.agent_id,
+    sessionKey: values.session_key,
+    sessionTarget: values.session_target,
+    wakeMode: "now",
+    schedule,
+    payload,
+    delivery,
+    ...(values.trigger_script != null ? { trigger: { script: values.trigger_script } } : {}),
+    ...(failureAlert ? { failureAlert } : {}),
+    ...(values.scheduled_tool_policy_json != null
+      ? { scheduledToolPolicy: parsedOrRaw(values.scheduled_tool_policy_json) }
+      : {}),
+    state: {},
+  });
+}
+
 function row(jobId: string, overrides: Partial<CronRow> = {}): CronRow {
   const values: CronRow = {
     store_key: storeKey,
@@ -47,23 +146,24 @@ function row(jobId: string, overrides: Partial<CronRow> = {}): CronRow {
     failure_alert_to: null,
     failure_alert_mode: null,
     failure_alert_account_id: null,
+    scheduled_tool_policy_json: null,
     job_json: "",
     updated_at: 1,
     ...overrides,
   };
   if (!overrides.job_json) {
-    values.job_json = JSON.stringify({
-      id: jobId,
-      owner: {
-        agentId: values.owner_agent_id,
-        sessionKey: values.owner_session_key,
-        accountId: values.owner_agent_id === mikeAgent ? mikeAccount : ceckertAccount,
-      },
-      agentId: values.agent_id,
-      sessionKey: values.session_key,
-      sessionTarget: values.session_target,
-    });
+    values.job_json = jobJson(values);
   }
+  return values;
+}
+
+function rowWithJobPatch(
+  jobId: string,
+  patch: Record<string, unknown>,
+  overrides: Partial<CronRow> = {},
+): CronRow {
+  const values = row(jobId, overrides);
+  values.job_json = JSON.stringify({ ...JSON.parse(String(values.job_json)), ...patch });
   return values;
 }
 
@@ -80,33 +180,18 @@ function fixture() {
     CREATE TABLE cron_jobs (
       store_key TEXT NOT NULL,
       job_id TEXT NOT NULL,
+      declaration_key TEXT,
       owner_agent_id TEXT,
-      owner_session_key TEXT,
+      name TEXT NOT NULL,
+      description TEXT,
+      enabled INTEGER NOT NULL,
       agent_id TEXT,
-      session_key TEXT,
-      session_target TEXT NOT NULL,
-      schedule_kind TEXT NOT NULL,
       payload_kind TEXT NOT NULL,
-      trigger_script TEXT,
-      payload_model TEXT,
-      payload_fallbacks_json TEXT,
-      payload_allow_unsafe_external_content INTEGER,
-      payload_tools_allow_json TEXT,
-      delivery_mode TEXT,
-      delivery_channel TEXT,
-      delivery_to TEXT,
-      delivery_account_id TEXT,
-      delivery_completion_mode TEXT,
-      delivery_completion_to TEXT,
-      failure_delivery_mode TEXT,
-      failure_delivery_channel TEXT,
-      failure_delivery_to TEXT,
-      failure_delivery_account_id TEXT,
-      failure_alert_channel TEXT,
-      failure_alert_to TEXT,
-      failure_alert_mode TEXT,
-      failure_alert_account_id TEXT,
       job_json TEXT NOT NULL,
+      state_json TEXT NOT NULL DEFAULT '{}',
+      runtime_updated_at_ms INTEGER,
+      schedule_identity TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (store_key, job_id)
     );
@@ -145,29 +230,69 @@ function fixture() {
     row("safe-tools", {
       payload_kind: "agentTurn",
       payload_tools_allow_json: JSON.stringify(["read", "web_search"]),
-      job_json: JSON.stringify({
-        id: "safe-tools",
-        owner: { agentId: ceckertAgent, sessionKey: ceckertSession, accountId: ceckertAccount },
-        agentId: ceckertAgent,
-        sessionKey: ceckertSession,
-        sessionTarget: "main",
-        scheduledToolPolicy: {
-          mode: "account",
-          ownerSessionKey: ceckertSession,
-          ownerAccountId: ceckertAccount,
-        },
+      scheduled_tool_policy_json: JSON.stringify({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: ceckertSession,
+        ownerAccountId: ceckertAccount,
+      }),
+    }),
+    row("invalid-job-json", { job_json: "{" }),
+    rowWithJobPatch("job-id-shadow-mismatch", { id: "other-job-id" }),
+    rowWithJobPatch("owner-agent-shadow-mismatch", {
+      owner: { agentId: mikeAgent, sessionKey: ceckertSession, accountId: ceckertAccount },
+    }),
+    rowWithJobPatch("agent-shadow-mismatch", { agentId: mikeAgent }),
+    rowWithJobPatch("payload-kind-shadow-mismatch", {
+      payload: { kind: "command", argv: ["true"] },
+    }),
+    row("scheduled-policy-version", {
+      payload_kind: "agentTurn",
+      payload_tools_allow_json: JSON.stringify(["read"]),
+      scheduled_tool_policy_json: JSON.stringify({
+        version: 2,
+        mode: "account",
+        ownerSessionKey: ceckertSession,
+        ownerAccountId: ceckertAccount,
       }),
     }),
     row("wildcard-session-target", { session_target: "session:*" }),
     row("owned-session-target", { session_target: `session:${ceckertSession}` }),
     row("malformed-session-target", { session_target: "MAIN" }),
   ];
-  const columns = Object.keys(rows[0]);
+  const columns = [
+    "store_key", "job_id", "declaration_key", "owner_agent_id", "name", "description", "enabled",
+    "agent_id", "payload_kind", "job_json", "state_json", "runtime_updated_at_ms",
+    "schedule_identity", "sort_order", "updated_at",
+  ];
   const insert = db.prepare(
     `INSERT INTO cron_jobs (${columns.join(", ")}) VALUES (${columns.map((column) => `@${column}`).join(", ")})`,
   );
   for (const cronRow of rows) {
-    insert.run(cronRow);
+    let job: Record<string, unknown> = {};
+    try {
+      job = JSON.parse(String(cronRow.job_json));
+    } catch {
+      job = {};
+    }
+    const normalizedRow: CronRow = {
+      store_key: cronRow.store_key,
+      job_id: cronRow.job_id,
+      declaration_key: null,
+      name: typeof job.name === "string" ? job.name : String(cronRow.job_id),
+      description: null,
+      enabled: 1,
+      owner_agent_id: cronRow.owner_agent_id,
+      agent_id: cronRow.agent_id,
+      payload_kind: cronRow.payload_kind,
+      job_json: cronRow.job_json,
+      state_json: "{}",
+      runtime_updated_at_ms: cronRow.updated_at,
+      schedule_identity: null,
+      sort_order: 0,
+      updated_at: cronRow.updated_at,
+    };
+    insert.run(normalizedRow);
     db.prepare("INSERT INTO cron_job_scratch VALUES (?, ?, ?)").run(storeKey, cronRow.job_id, "scratch");
   }
   db.close();
@@ -188,7 +313,7 @@ describe("customer cron routing quarantine", () => {
       const { root } = fixture();
       const result = run(root, gatewayClass);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("quarantined 20 unsafe customer cron job(s)");
+      expect(result.stdout).toContain("quarantined 26 unsafe customer cron job(s)");
 
       const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
       expect(db.prepare("SELECT job_id FROM cron_jobs ORDER BY job_id").all()).toEqual([
@@ -205,17 +330,23 @@ describe("customer cron routing quarantine", () => {
         "utf8",
       ));
       expect(quarantine.jobs.map((job: { jobId: string }) => job.jobId).sort()).toEqual([
+        "agent-shadow-mismatch",
         "command",
         "duplicate-tools",
         "exit",
         "foreign-delivery-account",
         "foreign-session",
         "group-tools",
+        "invalid-job-json",
+        "job-id-shadow-mismatch",
         "malformed-session-target",
         "malformed-tools",
         "mike-job-naming-ceckert",
         "owned-session-target",
+        "owner-agent-shadow-mismatch",
         "pattern-tools",
+        "payload-kind-shadow-mismatch",
+        "scheduled-policy-version",
         "script",
         "stream",
         "trigger",
@@ -228,6 +359,17 @@ describe("customer cron routing quarantine", () => {
       ]);
       expect(quarantine.jobs.find((job: { jobId: string }) => job.jobId === "mike-job-naming-ceckert").reason)
         .toBe("owner-agent-mismatch");
+      const reasons = Object.fromEntries(
+        quarantine.jobs.map((job: { jobId: string; reason: string }) => [job.jobId, job.reason]),
+      );
+      expect(reasons).toMatchObject({
+        "invalid-job-json": "invalid-job-json",
+        "job-id-shadow-mismatch": "job-id-shadow-mismatch",
+        "owner-agent-shadow-mismatch": "owner-agent-shadow-mismatch",
+        "agent-shadow-mismatch": "agent-shadow-mismatch",
+        "payload-kind-shadow-mismatch": "payload-kind-shadow-mismatch",
+        "scheduled-policy-version": "scheduled-authority-mismatch",
+      });
     },
   );
 
