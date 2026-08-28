@@ -4,15 +4,12 @@ import {
   createReleaseDigestManifest,
   selectMainBuildImages,
   releaseDigestManifestReference,
-  releaseDigestAliasPlan,
-  releaseDigestKeepTagPlan,
   validateBaselineReleaseDigestManifest,
   validateReleaseDigestManifest,
 } from "../../.github/actions/release-digest-manifest/release-digest-manifest.mjs";
 
 const repository = "us-west1-docker.pkg.dev/octogee/octogee";
 const sourceSha = "a".repeat(40);
-const releaseSha = sourceSha;
 const otherSha = "b".repeat(40);
 const digest = (suffix: string) => `sha256:${suffix.repeat(64).slice(0, 64)}`;
 
@@ -130,101 +127,6 @@ describe("release digest manifest", () => {
     });
   });
 
-  it("creates release aliases directly from recorded digests, including the gateway OpenClaw tag", () => {
-    expect(releaseDigestAliasPlan(manifest(), releaseSha)).toEqual([
-      {
-        source: `${repository}/artifact-worker@${digest("1")}`,
-        target: `${repository}/artifact-worker:aaaaaaa`,
-      },
-      {
-        source: `${repository}/gateway-edge@${digest("2")}`,
-        target: `${repository}/gateway-edge:aaaaaaa`,
-      },
-      {
-        source: `${repository}/gateway-edge@${digest("2")}`,
-        target: `${repository}/gateway-edge:aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/glm-controller@${digest("3")}`,
-        target: `${repository}/glm-controller:aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-api@${digest("4")}`,
-        target: `${repository}/octogee-api:aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-gateway@${digest("5")}`,
-        target: `${repository}/octogee-gateway:aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-gateway@${digest("5")}`,
-        target: `${repository}/octogee-gateway:aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/octogee-gateway-builder@${digest("6")}`,
-        target: `${repository}/octogee-gateway-builder:aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-gateway-builder@${digest("6")}`,
-        target: `${repository}/octogee-gateway-builder:aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/octogee-ops-agent@${digest("7")}`,
-        target: `${repository}/octogee-ops-agent:aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-project-runner@${digest("8")}`,
-        target: `${repository}/octogee-project-runner:aaaaaaa`,
-      },
-    ]);
-  });
-
-  it("creates exact-digest retention tags for every platform and gateway image", () => {
-    expect(releaseDigestKeepTagPlan(manifest(), releaseSha, "prod")).toEqual([
-      {
-        source: `${repository}/gateway-edge@${digest("2")}`,
-        target: `${repository}/gateway-edge:keep-release-prod-aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/octogee-gateway@${digest("5")}`,
-        target: `${repository}/octogee-gateway:keep-release-prod-aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/octogee-gateway-builder@${digest("6")}`,
-        target: `${repository}/octogee-gateway-builder:keep-release-prod-aaaaaaa-oc2026.7.1`,
-      },
-      {
-        source: `${repository}/artifact-worker@${digest("1")}`,
-        target: `${repository}/artifact-worker:keep-release-prod-aaaaaaa`,
-      },
-      {
-        source: `${repository}/glm-controller@${digest("3")}`,
-        target: `${repository}/glm-controller:keep-release-prod-aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-api@${digest("4")}`,
-        target: `${repository}/octogee-api:keep-release-prod-aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-ops-agent@${digest("7")}`,
-        target: `${repository}/octogee-ops-agent:keep-release-prod-aaaaaaa`,
-      },
-      {
-        source: `${repository}/octogee-project-runner@${digest("8")}`,
-        target: `${repository}/octogee-project-runner:keep-release-prod-aaaaaaa`,
-      },
-    ]);
-    expect(() => releaseDigestKeepTagPlan(manifest(), releaseSha, "build-week"))
-      .toThrow("retention environment must be test or prod");
-  });
-
-  it("scopes retention tags to TEST when a TEST release is selected", () => {
-    expect(releaseDigestKeepTagPlan(manifest(), releaseSha, "test")).toContainEqual({
-      source: `${repository}/glm-controller@${digest("3")}`,
-      target: `${repository}/glm-controller:keep-release-test-aaaaaaa`,
-    });
-  });
-
   it("rejects incomplete or non-digest payloads before a manifest can be published", () => {
     expect(() => createReleaseDigestManifest({
       sourceSha,
@@ -254,20 +156,8 @@ describe("release digest manifest", () => {
     malformed.surfaces.platform["gateway-edge"] = malformed.surfaces.gateway["gateway-edge"];
     delete malformed.surfaces.gateway["gateway-edge"];
 
-    expect(() => releaseDigestAliasPlan(malformed, releaseSha)).toThrow(
+    expect(() => validateReleaseDigestManifest(malformed, sourceSha, repository)).toThrow(
       "manifest gateway surface must contain exactly: gateway-edge, octogee-gateway, octogee-gateway-builder",
-    );
-  });
-
-  it("rejects a manifest whose source SHA does not match the release being cut", () => {
-    expect(() => releaseDigestAliasPlan(manifest(), otherSha)).toThrow(
-      "manifest sourceSha does not match the release SHA",
-    );
-  });
-
-  it("refuses to alias a release manifest from a different repository", () => {
-    expect(() => releaseDigestAliasPlan(manifest(), releaseSha, `${repository}-other`)).toThrow(
-      "manifest repository does not match the expected repository",
     );
   });
 
@@ -290,9 +180,6 @@ describe("release digest manifest", () => {
     );
     expect(validateBaselineReleaseDigestManifest(manifest(), sourceSha, repository)).toEqual(manifest());
     expect(() => validateReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toThrow(
-      "manifest schemaVersion must be 3",
-    );
-    expect(() => releaseDigestAliasPlan(legacyManifest(), sourceSha, repository)).toThrow(
       "manifest schemaVersion must be 3",
     );
     expect(() => validateReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toThrow(
