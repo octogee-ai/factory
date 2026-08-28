@@ -105,45 +105,49 @@ describe("agent conversation v3 type contract", () => {
 type PlacementFixture = {
   primaryPosts: Array<{ id: string; channel_id: string; root_id: string; props: { octogee: unknown } }>;
   activityPosts: Array<{ id: string; channel_id: string; root_id: string; props: { octogee: Record<string, unknown> } }>;
-  liveRuns: Array<{ path: string; document: Record<string, unknown> }>;
-  expected: { rootDerivations: Array<{ postId: string; normalizedActivityRootPostId: string; updateCount: number }> };
+  expected: {
+    rootAdoptions: Array<{
+      mainRootPostId: string;
+      activityRootPostId: string;
+      createdPostCount: number;
+      updateCount: number;
+    }>;
+  };
 };
 
 describe("agent conversation projection fixtures", () => {
   const placement = fixture<PlacementFixture>("projection-placement.json");
 
-  it("places Mattermost refs directly at props.octogee and liveRuns refs at the document root", () => {
+  it("places same-channel Mattermost refs directly at props.octogee", () => {
     for (const post of [...placement.primaryPosts, ...placement.activityPosts]) {
       expect(post.props.octogee).toHaveProperty("projectionKind");
       expect(post.props.octogee).not.toHaveProperty("ref");
-    }
-    for (const liveRun of placement.liveRuns) {
-      expect(liveRun.document).toHaveProperty("projectionKind");
-      expect(liveRun.document).not.toHaveProperty("ref");
+      const ref = projection(post.props.octogee);
+      expect(post.channel_id).toBe(ref.mainChannelId);
+      expect(ref.activityChannelId).toBe(ref.mainChannelId);
     }
   });
 
   it("keys every admission by inputPostId so queued inputs never collide", () => {
-    const admissions = placement.liveRuns.filter(
-      ({ document }) => projection(document).projectionKind === "admission",
+    const admissions = placement.primaryPosts.filter(
+      ({ props }) => projection(props.octogee).projectionKind === "admission",
     );
     expect(admissions.length).toBeGreaterThanOrEqual(2);
-    expect(new Set(admissions.map(({ path }) => path)).size).toBe(admissions.length);
-    for (const { path: documentPath, document } of admissions) {
-      const ref = projection(document);
+    const inputPostIds = admissions.map(({ props }) => {
+      const ref = projection(props.octogee);
       if (ref.projectionKind !== "admission") throw new Error("expected admission fixture");
-      expect(documentPath).toMatch(new RegExp(`/admission-${ref.inputPostId}$`));
       expect(ref).not.toHaveProperty("runId");
       expect(ref.turnId).toBeTruthy();
       expect(ref.inputPostId).toBeTruthy();
-    }
+      return ref.inputPostId;
+    });
+    expect(new Set(inputPostIds).size).toBe(admissions.length);
   });
 
   it("keeps conversationId and mainChannelId aliases equal in every projection", () => {
     const values = [
       ...placement.primaryPosts.map(({ props }) => props.octogee),
       ...placement.activityPosts.map(({ props }) => props.octogee),
-      ...placement.liveRuns.map(({ document }) => document),
     ];
     for (const value of values) {
       const ref = projection(value);
@@ -151,12 +155,10 @@ describe("agent conversation projection fixtures", () => {
     }
   });
 
-  it("derives the Activity root self-ID from the create response without an edit", () => {
-    for (const expected of placement.expected.rootDerivations) {
-      const root = placement.activityPosts.find(({ id }) => id === expected.postId);
-      expect(root).toBeDefined();
-      expect(root?.props.octogee).not.toHaveProperty("activityRootPostId");
-      expect(expected.normalizedActivityRootPostId).toBe(root?.id);
+  it("adopts the existing Mattermost turn root without creating or editing an Activity root", () => {
+    for (const expected of placement.expected.rootAdoptions) {
+      expect(expected.activityRootPostId).toBe(expected.mainRootPostId);
+      expect(expected.createdPostCount).toBe(0);
       expect(expected.updateCount).toBe(0);
     }
   });

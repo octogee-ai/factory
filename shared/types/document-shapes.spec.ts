@@ -55,7 +55,7 @@ describe("shared document shapes", () => {
       id: "general",
       kind: "general",
       name: "General",
-      mattermost: { channelId: "channel-1", activityChannelId: "activity-1" },
+      mattermost: { channelId: "channel-1" },
       createdAt: "server-time",
     } satisfies Channel;
     const member = {
@@ -96,7 +96,7 @@ describe("shared document shapes", () => {
     } satisfies IntegrationStatusDoc;
 
     expect(workspace.visibility).toBe("public");
-    expect(channel.mattermost.activityChannelId).toBe("activity-1");
+    expect(channel.mattermost.channelId).toBe("channel-1");
     expect(member.role).toBe("member");
     expect(agent.mattermost.userId).toBe("mm-agent-1");
     expect(notification.deliveredVia).toEqual(["inbox", "toast"]);

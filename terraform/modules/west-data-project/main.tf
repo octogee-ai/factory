@@ -50,7 +50,6 @@ locals {
     "connectFlows.expireAt"                   = { collection = "connectFlows", field = "expireAt" }
     "openclawControlTickets.expireAt"         = { collection = "openclawControlTickets", field = "expireAt" }
     "openclawControlSessions.expireAt"        = { collection = "openclawControlSessions", field = "expireAt" }
-    "agentControls.gcAt"                      = { collection = "agentControls", field = "gcAt", disable_indexes = true }
     "modelBrokerUsageEvents.expiresAt"        = { collection = "modelBrokerUsageEvents", field = "expiresAt", disable_indexes = true }
     "modelBrokerUsageWindows.expiresAt"       = { collection = "modelBrokerUsageWindows", field = "expiresAt", disable_indexes = true }
     "modelBrokerWeekWindows.expiresAt"        = { collection = "modelBrokerWeekWindows", field = "expiresAt", disable_indexes = true }

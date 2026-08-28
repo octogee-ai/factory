@@ -210,10 +210,6 @@
       "types": "./dist/types/project-retention.d.ts",
       "default": "./dist/types/project-retention.js"
     },
-    "./types/run-live": {
-      "types": "./dist/types/run-live.d.ts",
-      "default": "./dist/types/run-live.js"
-    },
     "./types/sizing": {
       "types": "./dist/types/sizing.d.ts",
       "default": "./dist/types/sizing.js"

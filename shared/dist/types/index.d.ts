@@ -60,5 +60,3 @@ export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './opencla
 export { OpenclawWireError, isResponseFrame, waitForWsOpen, startConnectChallengeTracker, sendWsRequest, } from './openclaw-wire-core.js';
 export type { AgentRunOrigin, AgentRunStatus, AgentAttention, AgentRunRef, AgentAdmissionOrigin, AgentAdmissionStatus, AgentAdmissionRef, ConversationProjectionRef, ActivityCreateRef, AgentActivityKind, AgentActivityIngressRef, AgentActivityDetail, AgentActivityAttachment, AgentActivityCompletedItem, AgentActivityControlTransition, AgentActivityEnvelopeBaseV1, AgentActivityEnvelopeV1, } from './agent-conversation.js';
 export { AGENT_CONVERSATION_SCHEMA_VERSION, AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION, AGENT_ACTIVITY_RESERVED_ITEM_IDS, agentActivityCanonicalKey, } from './agent-conversation.js';
-export type { RunLiveDoc, RunLiveOutcome } from './run-live.js';
-export { RUN_LIVE_SCHEMA_VERSION, RUN_LIVE_TTL_MS, RUN_LIVE_TERMINAL_TTL_MS, RUN_LIVE_OPS_AGENT_ID, runLiveCollectionPath, runLiveDocPath, } from './run-live.js';

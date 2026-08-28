@@ -7,15 +7,12 @@ function channel(id: string, channelId: string) {
 }
 
 describe("collectChannelBindings", () => {
-  it("uses each primary project channel once for fleet membership even when legacy aliases are stored", async () => {
+  it("uses each project channel once for fleet membership", async () => {
     const workspaceChannels = [channel("general", "workspace-primary")];
     const projectChannels = [
       {
         ...channel("general", "project-primary"),
-        data: () => ({
-          kind: "general",
-          mattermost: { channelId: "project-primary", activityChannelId: "legacy-sibling" },
-        }),
+        data: () => ({ kind: "general", mattermost: { channelId: "project-primary" } }),
       },
     ];
     const db = {
