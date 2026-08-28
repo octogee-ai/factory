@@ -86,7 +86,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   {
     name: JOBS.octogeeActivityTools,
     dir: "infra/gateway/extensions/octogee-activity-tools",
-    typecheck: 'echo "octogee-activity-tools — no tsconfig; vitest is the gate"',
+    typecheck: "npm run typecheck --silent",
   },
   {
     name: JOBS.octogeeAccessTools,

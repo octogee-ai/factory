@@ -375,7 +375,6 @@
         "enabled": true,
         "config": {
           "activityEnabled": true,
-          "scheduledActivityEnabled": true,
           "heartbeatMs": 5000
         }
       },

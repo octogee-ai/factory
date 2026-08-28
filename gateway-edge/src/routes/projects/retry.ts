@@ -198,8 +198,6 @@ async function writeRetryGeneralChannel(
     name: "general",
     mattermost: {
       channelId: mmChannelId,
-      activityChannelId: FieldValue.delete(),
-      activityPair: FieldValue.delete(),
     },
     createdAt: FieldValue.serverTimestamp(),
   }, { merge: true });

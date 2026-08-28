@@ -377,7 +377,11 @@ describe("platform migration writer quiescence", () => {
   it("records and pauses the declared scheduler and CronJob writer sets before claiming quiescence", async () => {
     const state = dependencies();
     await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
-    expect(state.schedulerPauses).toEqual(platformMigrationScheduledWriterNames("us-west1"));
+    expect(state.schedulerPauses).toEqual([
+      "firebase-schedule-cleanupFeedRetention-us-west1",
+      "firebase-schedule-processGatewayAccessLifecycle-us-west1",
+      "firebase-schedule-reapExpiredAgentImports-us-west1",
+    ]);
     expect(state.cronSuspensions).toEqual(migrationCronJobNames.map((name) => `${name}=true`));
     expect(state.getReceipt()).toMatchObject({
       scheduledWriters: {

@@ -14,8 +14,7 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
           "inputPostId": "steer-1",
-          "activityChannelId": "activity-1",
-          "activityRootPostId": "activity-root-1",
+          "activityRootPostId": "turn-1",
           "attention": "routine"
         }
       ],
@@ -36,8 +35,7 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
           "inputPostId": "retry-marker-1",
-          "activityChannelId": "activity-1",
-          "activityRootPostId": "activity-root-2",
+          "activityRootPostId": "turn-1",
           "attention": "routine"
         }
       ],
@@ -57,8 +55,7 @@
           "status": "running",
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
-          "activityChannelId": "activity-1",
-          "activityRootPostId": "activity-child-root-1",
+          "activityRootPostId": "turn-1",
           "attention": "routine"
         }
       ],
@@ -78,8 +75,7 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "scheduled-root-1",
           "inputPostId": "scheduled-root-1",
-          "activityChannelId": "activity-1",
-          "activityRootPostId": "activity-scheduled-root-1",
+          "activityRootPostId": "scheduled-root-1",
           "attention": "routine"
         }
       ],
@@ -94,7 +90,6 @@
           "conversationId": "main-1",
           "turnId": "turn-queued-1",
           "mainChannelId": "main-1",
-          "activityChannelId": "activity-1",
           "inputPostId": "input-queued-1",
           "origin": "followup",
           "status": "queued",
@@ -112,8 +107,7 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-active-1",
           "inputPostId": "input-queued-1",
-          "activityChannelId": "activity-1",
-          "activityRootPostId": "activity-active-root-1",
+          "activityRootPostId": "turn-active-1",
           "attention": "routine"
         }
       ],
@@ -122,27 +116,21 @@
   ],
   "degradationCases": [
     {
-      "name": "late-activity",
-      "available": ["main", "live"],
-      "missing": ["activity-until-replay"],
+      "name": "late-detail",
+      "available": ["summary"],
+      "missing": ["activity-until-history-replay"],
       "expectedBehavior": "join-by-run-id-when-activity-arrives"
     },
     {
-      "name": "missing-activity",
-      "available": ["main", "live"],
+      "name": "summary-only",
+      "available": ["summary"],
       "missing": ["activity"],
-      "expectedBehavior": "render-main-with-missing-activity-label"
-    },
-    {
-      "name": "missing-live",
-      "available": ["main", "activity"],
-      "missing": ["live"],
-      "expectedBehavior": "render-durable-history-without-live-hud"
+      "expectedBehavior": "render-summary-without-activity-detail"
     },
     {
       "name": "activity-only",
       "available": ["activity"],
-      "missing": ["main", "live"],
+      "missing": ["summary"],
       "expectedBehavior": "retain-run-detail-for-later-identity-join"
     }
   ]

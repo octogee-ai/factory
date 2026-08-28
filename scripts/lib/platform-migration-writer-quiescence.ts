@@ -12,7 +12,6 @@ export const PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS = 600_000;
 export const PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS = 180_000;
 export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
   "cleanupFeedRetention",
-  "reapExpiredRunLiveDocs",
   "reapExpiredAgentImports",
   "processGatewayAccessLifecycle",
 ] as const;

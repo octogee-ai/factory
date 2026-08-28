@@ -125,7 +125,7 @@ async function seedPublicAliceGame(
   });
 }
 
-async function seedProjectActivityChannel(): Promise<void> {
+async function seedProjectChannel(): Promise<void> {
   await db
     .collection("workspaces")
     .doc("alice")
@@ -136,7 +136,6 @@ async function seedProjectActivityChannel(): Promise<void> {
     .set({
       mattermost: {
         channelId: "ch-alice-game",
-        activityChannelId: "ch-alice-game-activity",
       },
     }, { merge: true });
 }
@@ -292,7 +291,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
   it("adds the caller to the primary project channel on first join", async () => {
     await seedPublicAliceGame();
-    await seedProjectActivityChannel();
+    await seedProjectChannel();
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (path === "/users/mm-bob" && (!method || method === "GET")) return { id: "mm-bob", delete_at: 0 };
       return { ok: true };
@@ -313,7 +312,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
   it("returns 422 and leaves the caller unjoined when the Mattermost identity is missing", async () => {
     await seedPublicAliceGame();
-    await seedProjectActivityChannel();
+    await seedProjectChannel();
     const { MattermostIdentityMissingError } = await import("../lib/channel-lifecycle.js");
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
@@ -338,7 +337,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
   it("resolves the caller's Mattermost identity before adding them to the chat team", async () => {
     await seedPublicAliceGame();
-    await seedProjectActivityChannel();
+    await seedProjectChannel();
     const teamAddCalls: string[] = [];
     mockMmApi.mockImplementation(async (path: string, method = "GET") => {
       if (path === "/users/mm-bob" && method === "GET") {
@@ -438,7 +437,7 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
 
   it("removes the caller from the primary project channel on leave", async () => {
     await seedPublicAliceGame();
-    await seedProjectActivityChannel();
+    await seedProjectChannel();
     await db
       .collection("workspaces")
       .doc("alice")
@@ -611,7 +610,7 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
 
   it("removes the guest from the primary project channel", async () => {
     await seedPublicAliceGame({ ownerUid: CALLER_UID });
-    await seedProjectActivityChannel();
+    await seedProjectChannel();
     await db
       .collection("workspaces")
       .doc("alice")

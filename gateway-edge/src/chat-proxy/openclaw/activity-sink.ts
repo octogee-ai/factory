@@ -35,7 +35,7 @@ const ACTIVITY_ITEM_KIND_PREFIX = "activity." as const;
 const UPLOAD_RESULT_UNKNOWN = "upload-result-unknown" as const;
 
 export interface ActivitySinkBinding {
-  activityChannelId: string;
+  mainChannelId: string;
   channelCreateAt: number;
   attentionMention: string;
 }
@@ -63,9 +63,7 @@ export interface ActivitySinkResult {
   receipt: {
     eventKey: string;
     postId?: string;
-    activityChannelId: string;
     activityRootPostId: string;
-    rootOwnership: "adopted" | "sink-created";
   };
 }
 
@@ -228,7 +226,6 @@ function projectedActivityKind(envelope: AgentActivityEnvelopeV1): string {
 
 function octogeeProps(
   envelope: AgentActivityEnvelopeV1,
-  binding: ActivitySinkBinding,
   activityRootPostId: string | undefined,
   attention: AgentAttention,
 ): Record<string, unknown> {
@@ -249,7 +246,6 @@ function octogeeProps(
     mainChannelId: envelope.ref.mainChannelId,
     mainRootPostId: envelope.ref.mainRootPostId,
     ...(envelope.ref.inputPostId ? { inputPostId: envelope.ref.inputPostId } : {}),
-    activityChannelId: binding.activityChannelId,
     ...(activityRootPostId ? { activityRootPostId } : {}),
     itemId: envelope.ref.itemId,
     ordinal: envelope.ref.ordinal,
@@ -369,7 +365,7 @@ function postTransitionEventKey(post: ActivityMattermostPost): string | null {
 }
 
 function emptyAnchor(binding: ActivitySinkBinding): string {
-  return `empty:${binding.activityChannelId}:${binding.channelCreateAt}`;
+  return `empty:${binding.mainChannelId}:${binding.channelCreateAt}`;
 }
 
 function isEmptyAnchor(anchor: string): boolean {
@@ -395,7 +391,7 @@ class ActivitySinkWriter implements ActivitySink {
 
   private async historyAnchor(binding: ActivitySinkBinding): Promise<string> {
     const { deps } = this.runtime;
-    const page = await deps.mm.listChannelPosts(binding.activityChannelId, undefined, 1);
+    const page = await deps.mm.listChannelPosts(binding.mainChannelId, undefined, 1);
     return page.posts[0]?.id ?? emptyAnchor(binding);
   }
 
@@ -431,7 +427,7 @@ class ActivitySinkWriter implements ActivitySink {
     const visited = new Set<string>();
     while (true) {
       const page = await deps.mm.listChannelPosts(
-        binding.activityChannelId,
+        binding.mainChannelId,
         before,
         historyPageSize,
       );
@@ -455,13 +451,6 @@ class ActivitySinkWriter implements ActivitySink {
     }
   }
 
-  private adoptsMainRoot(
-    envelope: AgentActivityEnvelopeV1,
-    binding: ActivitySinkBinding,
-  ): boolean {
-    return binding.activityChannelId === envelope.ref.mainChannelId;
-  }
-
   private assertAdoptedRootPost(
     post: ActivityMattermostPost | null,
     envelope: AgentActivityEnvelopeV1,
@@ -470,7 +459,7 @@ class ActivitySinkWriter implements ActivitySink {
     if (
       !post ||
       post.id !== envelope.ref.mainRootPostId ||
-      post.channelId !== binding.activityChannelId ||
+      post.channelId !== binding.mainChannelId ||
       post.rootId !== ""
     ) {
       throw new ActivitySinkIntegrityError("adopted Activity root failed exact Mattermost verification");
@@ -488,35 +477,16 @@ class ActivitySinkWriter implements ActivitySink {
 
   private async rootPostId(
     envelope: AgentActivityEnvelopeV1,
-    binding: ActivitySinkBinding,
   ): Promise<string> {
-    if (this.adoptsMainRoot(envelope, binding)) {
-      const expectedEventKey = runRootEventKey(envelope.ref);
-      const root = await this.runtime.deps.receipts.read(expectedEventKey);
-      if (
-        !root ||
-        root.eventKey !== expectedEventKey ||
-        root.state !== "committed" ||
-        root.postId !== envelope.ref.mainRootPostId
-      ) {
-        throw new ActivitySinkUnavailableError("adopted Activity run root is not committed");
-      }
-      return root.postId;
-    }
-    const { deps } = this.runtime;
     const expectedEventKey = runRootEventKey(envelope.ref);
-    const root = await deps.receipts.read(expectedEventKey);
+    const root = await this.runtime.deps.receipts.read(expectedEventKey);
     if (
       !root ||
       root.eventKey !== expectedEventKey ||
       root.state !== "committed" ||
-      !root.postId
+      root.postId !== envelope.ref.mainRootPostId
     ) {
-      deps.alerts?.integrityFailure({
-        eventKey: envelope.eventKey,
-        reason: "activity-root-missing",
-      });
-      throw new ActivitySinkUnavailableError("Activity run root is not committed");
+      throw new ActivitySinkUnavailableError("adopted Activity run root is not committed");
     }
     return root.postId;
   }
@@ -535,22 +505,19 @@ class ActivitySinkWriter implements ActivitySink {
     binding: ActivitySinkBinding,
     expectedEventKey: string,
   ): Promise<Record<string, unknown>> {
-    if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+    if (envelope.type === TURN_STARTED) {
       this.assertAdoptedRootPost(post, envelope, binding);
       return {};
     }
-    const expectedRootId = envelope.type === TURN_STARTED ? "" : await this.rootPostId(envelope, binding);
+    const expectedRootId = await this.rootPostId(envelope);
     const props = this.activityPostProps(post);
     if (
-      post.channelId !== binding.activityChannelId ||
+      post.channelId !== binding.mainChannelId ||
       post.rootId !== expectedRootId ||
       props.eventKey !== expectedEventKey ||
       props.runId !== envelope.ref.runId ||
       props.itemId !== envelope.ref.itemId ||
-      props.activityChannelId !== binding.activityChannelId ||
-      (expectedRootId
-        ? props.activityRootPostId !== expectedRootId
-        : props.activityRootPostId !== undefined)
+      props.activityRootPostId !== expectedRootId
     ) {
       throw new ActivitySinkIntegrityError("Activity post failed exact channel/run/item/root verification");
     }
@@ -715,7 +682,7 @@ class ActivitySinkWriter implements ActivitySink {
     let session: MattermostUploadSession | null | undefined;
     if (state.state === "none") {
       session = await deps.mm.createUploadSession(
-        binding.activityChannelId,
+        binding.mainChannelId,
         expected.filename,
         expected.byteLength,
       );
@@ -757,7 +724,7 @@ class ActivitySinkWriter implements ActivitySink {
       if (post.id !== receipt.postId) {
         throw new ActivitySinkIntegrityError("receipt post id does not match Mattermost");
       }
-    } else if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+    } else if (envelope.type === TURN_STARTED) {
       return null;
     } else {
       post = await this.scanUncertainSuffix(
@@ -774,7 +741,6 @@ class ActivitySinkWriter implements ActivitySink {
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     post: ActivityMattermostPost,
-    binding: ActivitySinkBinding,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { deps, now } = this.runtime;
     if (!receipt.postId) {
@@ -800,9 +766,7 @@ class ActivitySinkWriter implements ActivitySink {
     await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
     return {
       outcome: "duplicate",
-      postIds: envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)
-        ? []
-        : [post.id],
+      postIds: envelope.type === TURN_STARTED ? [] : [post.id],
     };
   }
 
@@ -875,7 +839,7 @@ class ActivitySinkWriter implements ActivitySink {
         eventKey: envelope.eventKey,
         payloadDigest: digest,
         historyAnchorPostId: existing?.historyAnchorPostId ?? (
-          envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)
+          envelope.type === TURN_STARTED
             ? envelope.ref.mainRootPostId
             : await this.historyAnchor(binding)
         ),
@@ -941,7 +905,7 @@ class ActivitySinkWriter implements ActivitySink {
     if (attachmentState.state === UPLOAD_RESULT_UNKNOWN) {
       message += `\n\n_attachment unavailable: expected ${attachmentState.sha256} (${attachmentState.byteLength} bytes)_`;
     }
-    const baseOctogee = octogeeProps(envelope, binding, rootId, policy.attention);
+    const baseOctogee = octogeeProps(envelope, rootId, policy.attention);
     const controlOctogee = preparedControl?.post.props.octogee;
     const preparedOctogee = controlOctogee && typeof controlOctogee === "object" && !Array.isArray(controlOctogee)
       ? controlOctogee as Record<string, unknown>
@@ -961,7 +925,7 @@ class ActivitySinkWriter implements ActivitySink {
         }
       : { octogee: baseOctogee };
     const created = await deps.mm.createActivityPost({
-      channelId: binding.activityChannelId,
+      channelId: binding.mainChannelId,
       rootId,
       message,
       props,
@@ -985,9 +949,9 @@ class ActivitySinkWriter implements ActivitySink {
     const { envelope, binding } = input;
     if (recoveredClaim) {
       const recovered = await this.recoverExistingPost(envelope, receipt, binding);
-      if (recovered) return this.commitRecovered(envelope, receipt, recovered, binding);
+      if (recovered) return this.commitRecovered(envelope, receipt, recovered);
     }
-    if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+    if (envelope.type === TURN_STARTED) {
       if (!activityRootPostId) {
         throw new ActivitySinkIntegrityError("adopted Activity root is unavailable");
       }
@@ -1033,8 +997,8 @@ class ActivitySinkWriter implements ActivitySink {
     const actionIds = Object.keys(prepared.receipt.actionDigests).sort();
     if (
       prepared.receipt.eventKey !== envelope.eventKey ||
-      prepared.receipt.controlChannelId !== binding.activityChannelId ||
-      prepared.post.channelId !== binding.activityChannelId ||
+      prepared.receipt.controlChannelId !== binding.mainChannelId ||
+      prepared.post.channelId !== binding.mainChannelId ||
       prepared.post.message !== message ||
       prepared.post.attachments.length === 0 ||
       actionIds.length === 0 ||
@@ -1069,38 +1033,34 @@ class ActivitySinkWriter implements ActivitySink {
   private async resolveActivityRootPostId(
     envelope: AgentActivityEnvelopeV1,
     binding: ActivitySinkBinding,
-    adoptedMainRoot: boolean,
   ): Promise<string | undefined> {
-    if (adoptedMainRoot && envelope.type === TURN_STARTED) {
+    if (envelope.type === TURN_STARTED) {
       return this.adoptedRootPostId(envelope, binding);
     }
-    if (envelope.type === TURN_STARTED) return undefined;
-    return this.rootPostId(envelope, binding);
+    return this.rootPostId(envelope);
   }
 
   private claimPostIds(
     postIds: string[],
     envelope: AgentActivityEnvelopeV1,
-    adoptedMainRoot: boolean,
   ): string[] {
-    return adoptedMainRoot && envelope.type === TURN_STARTED ? [] : postIds;
+    return envelope.type === TURN_STARTED ? [] : postIds;
   }
 
   private async resolveClaimResult(input: {
     claim: ActivitySinkClaimResult;
     appendInput: NormalizedActivitySinkAppendInput;
-    adoptedMainRoot: boolean;
     activityRootPostId: string | undefined;
     preparedControl: ActivitySinkPreparedControl | null;
   }): Promise<ActivitySinkBareResult> {
-    const { claim, appendInput, adoptedMainRoot, activityRootPostId, preparedControl } = input;
+    const { claim, appendInput, activityRootPostId, preparedControl } = input;
     const { envelope } = appendInput;
     if ("postIds" in claim) {
-      return { ...claim, postIds: this.claimPostIds(claim.postIds, envelope, adoptedMainRoot) };
+      return { ...claim, postIds: this.claimPostIds(claim.postIds, envelope) };
     }
     if (claim.outcome === "duplicate") {
       const postIds = claim.receipt.postId ? [claim.receipt.postId] : [];
-      return { outcome: "duplicate", postIds: this.claimPostIds(postIds, envelope, adoptedMainRoot) };
+      return { outcome: "duplicate", postIds: this.claimPostIds(postIds, envelope) };
     }
     return this.appendClaimed(
       appendInput,
@@ -1111,35 +1071,20 @@ class ActivitySinkWriter implements ActivitySink {
     );
   }
 
-  private resolvedAcknowledgementRoot(input: {
-    envelope: AgentActivityEnvelopeV1;
-    adoptedMainRoot: boolean;
-    activityRootPostId: string | undefined;
-    bare: ActivitySinkBareResult;
-  }): string | undefined {
-    if (input.adoptedMainRoot) return input.activityRootPostId;
-    if (input.envelope.type === TURN_STARTED) return input.bare.postIds[0];
-    return input.activityRootPostId;
-  }
-
   private acknowledgementReceipt(input: {
     envelope: AgentActivityEnvelopeV1;
-    binding: ActivitySinkBinding;
-    adoptedMainRoot: boolean;
     resolvedRootPostId: string;
     bare: ActivitySinkBareResult;
   }): ActivitySinkResult["receipt"] {
-    const { envelope, binding, adoptedMainRoot, resolvedRootPostId, bare } = input;
+    const { envelope, resolvedRootPostId, bare } = input;
     let postId = bare.postIds[0];
-    if (!postId && adoptedMainRoot && envelope.type === TURN_STARTED) {
+    if (!postId && envelope.type === TURN_STARTED) {
       postId = resolvedRootPostId;
     }
     return {
       eventKey: envelope.eventKey,
       ...(postId ? { postId } : {}),
-      activityChannelId: binding.activityChannelId,
       activityRootPostId: resolvedRootPostId,
-      rootOwnership: adoptedMainRoot ? "adopted" : "sink-created",
     };
   }
 
@@ -1170,38 +1115,25 @@ class ActivitySinkWriter implements ActivitySink {
     assertAttachmentPayload(normalized);
     const input = await sanitizeInput(normalized);
     const { envelope, binding, attachment } = input;
-    const adoptedMainRoot = this.adoptsMainRoot(envelope, binding);
-    const activityRootPostId = await this.resolveActivityRootPostId(
-      envelope,
-      binding,
-      adoptedMainRoot,
-    );
+    if (binding.mainChannelId !== envelope.ref.mainChannelId) {
+      throw new ActivitySinkIntegrityError("Activity binding does not match the main channel");
+    }
+    const activityRootPostId = await this.resolveActivityRootPostId(envelope, binding);
     const preparedControl = await this.prepareControl(envelope, binding, activityRootPostId);
     const digest = await activityPayloadDigestFromSource(envelope, attachment);
     const claim = await this.claimEvent(envelope, binding, digest);
     const bare = await this.resolveClaimResult({
       claim,
       appendInput: input,
-      adoptedMainRoot,
       activityRootPostId,
       preparedControl,
     });
-    const resolvedRootPostId = this.resolvedAcknowledgementRoot({
-      envelope,
-      adoptedMainRoot,
-      activityRootPostId,
-      bare,
-    });
-    if (
-      !resolvedRootPostId ||
-      (envelope.type === TURN_STARTED && !adoptedMainRoot && bare.postIds.length !== 1)
-    ) {
+    const resolvedRootPostId = activityRootPostId;
+    if (!resolvedRootPostId) {
       throw new ActivitySinkIntegrityError("Activity acknowledgement has no unique run root");
     }
     const receipt = this.acknowledgementReceipt({
       envelope,
-      binding,
-      adoptedMainRoot,
       resolvedRootPostId,
       bare,
     });

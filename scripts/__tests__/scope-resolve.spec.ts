@@ -84,24 +84,24 @@ describe("resolveScope — ownership", () => {
     );
   });
 
+  it("octogee-access-tools resolves to its own job", () => {
+    expectJobs(
+      ["infra/gateway/extensions/octogee-access-tools/access-client.ts"],
+      ["octogee-access-tools"],
+    );
+  });
+
   it("octogee-activity-tools resolves to its behavioral suite", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-activity-tools/plugin-runtime.ts"],
+      ["infra/gateway/extensions/octogee-activity-tools/plugin-runtime-native.ts"],
       ["octogee-activity-tools"],
     );
     const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
     expect(unitPackage).toEqual({
       name: "octogee-activity-tools",
       dir: "infra/gateway/extensions/octogee-activity-tools",
-      typecheck: 'echo "octogee-activity-tools — no tsconfig; vitest is the gate"',
+      typecheck: "npm run typecheck --silent",
     });
-  });
-
-  it("octogee-access-tools resolves to its own job", () => {
-    expectJobs(
-      ["infra/gateway/extensions/octogee-access-tools/access-client.ts"],
-      ["octogee-access-tools"],
-    );
   });
 
   it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {

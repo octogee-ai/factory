@@ -244,7 +244,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
   "octogee-workspace-tools": { enabled: true, config: {} },
   "octogee-activity-tools": {
     enabled: true,
-    config: { activityEnabled: true, scheduledActivityEnabled: true, heartbeatMs: 5000 },
+    config: { activityEnabled: true, heartbeatMs: 5000 },
   },
   parallel: { enabled: true },
 };

@@ -33,17 +33,6 @@ import {
   type ActivityReceiptClaimInput,
   type ActivityReceiptFirestoreLike,
 } from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
-import type { AgentControlRecordV1 } from "../../../gateway-edge/src/chat-proxy/openclaw/agent-control-service.js";
-import {
-  createAgentControlRegistry,
-  createFirestoreAgentControlStore,
-} from "./agent-control-registry.js";
-import { createAgentControlRoutes } from "./agent-control-routes.js";
-import {
-  createAgentControlActorFactsResolver,
-  createMattermostAgentControlPostDeleter,
-  type MattermostAgentControlActorFacts,
-} from "./agent-control-actor-facts.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 interface AgentIdentity {
@@ -57,7 +46,6 @@ interface AgentIdentity {
 
 interface ChannelProjectionTarget {
   primaryChannelId: string;
-  activityChannelId: string;
   channelDocPath: string;
 }
 
@@ -170,13 +158,6 @@ function extractRefPath(ref: unknown): string | null {
   return segments.length > 0 ? segments.join("/") : null;
 }
 
-function workspaceSlugFromChannelPath(path: string | null): string | null {
-  if (!path) return null;
-  const parts = path.split("/").filter(Boolean);
-  if (parts[0] !== "workspaces") return null;
-  return isValidUsername(parts[1]) ? parts[1] : null;
-}
-
 interface BoundChannelPath {
   workspaceSlug: string;
   ownerPath: string;
@@ -246,13 +227,6 @@ function ordinaryChannelKind(binding: BoundChannelPath): string | null {
   if (binding.channelName === "coach-dm") return "coach-dm";
   if (binding.channelName === "admin") return "admin";
   return null;
-}
-
-// Workspace username for ANY of the customer's agents — coach or project
-// agent (approvals and run-live writes authorize by assigned slug).
-function usernameFromAgentId(agentId: string): string | null {
-  const parsed = parseAgentId(agentId);
-  return parsed.kind === "unknown" ? null : parsed.username;
 }
 
 async function assignedHere(db: Firestore, gatewayId: string, slug: string): Promise<boolean> {
@@ -368,7 +342,7 @@ async function resolveChannelProjectionTarget(
   const binding = boundChannelPath(channelDocPath);
   if (!binding) return null;
   if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
-  return { primaryChannelId, activityChannelId: primaryChannelId, channelDocPath: channelDocPath! };
+  return { primaryChannelId, channelDocPath: channelDocPath! };
 }
 
 type SessionContextLookup = {
@@ -491,7 +465,6 @@ async function resolveAuthorizedConversationTarget(
   }
   return {
     primaryChannelId: conversationId,
-    activityChannelId: conversationId,
     channelDocPath: channel.binding.lane === "project"
       ? `workspaces/${channel.binding.workspaceSlug}/projects/${channel.binding.projectSlug}/channels/${channel.binding.channelName}`
       : `workspaces/${channel.binding.workspaceSlug}/channels/${channel.binding.channelName}`,
@@ -709,89 +682,6 @@ async function resolveDispatchContext(
   return resolveGroupDispatchContext(input, identity, parsed);
 }
 
-function runLivePathIdentity(path: string): {
-  slug: string;
-  channelPath: string;
-  documentId: string;
-  binding: BoundChannelPath;
-} | null {
-  const marker = "/liveRuns/";
-  const markerIndex = path.indexOf(marker);
-  if (markerIndex <= 0 || markerIndex !== path.lastIndexOf(marker)) return null;
-  const channelPath = path.slice(0, markerIndex);
-  const documentId = path.slice(markerIndex + marker.length);
-  const slug = workspaceSlugFromChannelPath(channelPath);
-  const binding = boundChannelPath(channelPath);
-  if (!slug || !binding || binding.workspaceSlug !== slug || !safeDocId(documentId)) return null;
-  return { slug, channelPath, documentId, binding };
-}
-
-function validRunLiveV3(
-  doc: Record<string, unknown>,
-  identity: ReturnType<typeof runLivePathIdentity> & {},
-): boolean {
-  const conversationId = typeof doc.conversationId === "string" ? doc.conversationId : "";
-  const mainChannelId = typeof doc.mainChannelId === "string" ? doc.mainChannelId : "";
-  const activityChannelId = typeof doc.activityChannelId === "string" ? doc.activityChannelId : "";
-  if (!conversationId || conversationId !== mainChannelId || activityChannelId !== mainChannelId) return false;
-  if (doc.projectionKind === "run") {
-    const runId = typeof doc.runId === "string" ? doc.runId : "";
-    return Boolean(runId) && identity.documentId === runId;
-  }
-  if (doc.projectionKind === "admission") {
-    const inputPostId = typeof doc.inputPostId === "string" ? doc.inputPostId : "";
-    return Boolean(inputPostId) && identity.documentId === `admission-${inputPostId}`;
-  }
-  return false;
-}
-
-function validRunLiveV2(
-  identity: NonNullable<ReturnType<typeof runLivePathIdentity>>,
-  doc: Record<string, unknown>,
-): boolean {
-  const runId = typeof doc.runId === "string" ? doc.runId : "";
-  const workspaceId = typeof doc.workspaceId === "string" ? doc.workspaceId : "";
-  const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
-  return (
-    Boolean(runId) &&
-    workspaceId === identity.slug &&
-    channelPath === identity.channelPath &&
-    identity.documentId === runId
-  );
-}
-
-export function validateRunLiveWrite(
-  body: Record<string, unknown>,
-): { path: string; slug: string; doc: Record<string, unknown> } | null {
-  const path = typeof body.path === "string" ? body.path : "";
-  const doc = body.doc && typeof body.doc === "object" ? body.doc as Record<string, unknown> : null;
-  const slug = typeof body.workspaceSlug === "string" ? body.workspaceSlug : "";
-  if (!path || !doc || !isValidUsername(slug)) return null;
-  const identity = runLivePathIdentity(path);
-  if (!identity || identity.slug !== slug) return null;
-  if (doc.schemaVersion === 3) {
-    return validRunLiveV3(doc, identity) ? { path, slug, doc } : null;
-  }
-  return validRunLiveV2(identity, doc) ? { path, slug, doc } : null;
-}
-
-async function canonicalRunLiveChannel(
-  db: Firestore,
-  path: string,
-): Promise<{
-  identity: NonNullable<ReturnType<typeof runLivePathIdentity>>;
-  channelId: string;
-} | null> {
-  const identity = runLivePathIdentity(path);
-  if (!identity) return null;
-  const channel = await db.doc(identity.channelPath).get();
-  if (!channel.exists) return null;
-  const channelId = readPath(channel.data() ?? {}, "mattermost.channelId");
-  return typeof channelId === "string" && channelId.length > 0
-    ? { identity, channelId }
-    : null;
-}
-
 function receiptBody(req: Request): Record<string, unknown> {
   const body = req.body;
   return body && typeof body === "object" && !Array.isArray(body)
@@ -952,59 +842,6 @@ async function resolveUidByMmUser(
   const slug = typeof data.username === "string" ? data.username : "";
   if (!slug || !(await assignedHere(db, gatewayId, slug))) return "forbidden";
   return uid;
-}
-
-async function resolveControlActorUid(
-  db: Firestore,
-  mmUserId: string,
-): Promise<string | null | "forbidden"> {
-  if (!mmUserId) return null;
-  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
-  if (snap.docs.length > 1) return "forbidden";
-  return snap.docs[0]?.id ?? null;
-}
-
-async function controlBelongsToGateway(
-  db: Firestore,
-  record: AgentControlRecordV1,
-  gatewayId: string,
-): Promise<boolean> {
-  if (record.gatewayId !== gatewayId) return false;
-  const slug = usernameFromAgentId(record.correlation.agentId);
-  return !!slug && assignedHere(db, gatewayId, slug);
-}
-
-async function resolveControlActorFacts(
-  db: Firestore,
-  record: AgentControlRecordV1,
-  actorMmUserId: string,
-  gatewayId: string,
-  resolveMattermostFacts: (
-    record: AgentControlRecordV1,
-    actorMmUserId: string,
-  ) => Promise<MattermostAgentControlActorFacts>,
-): Promise<{
-  actorUid: string;
-  isCurrentMember: boolean;
-  isAgentOrBot: boolean;
-  isInputAuthor: boolean;
-  isChannelOwner: boolean;
-  isSystemAdmin: boolean;
-} | null> {
-  const actorUid = await resolveControlActorUid(db, actorMmUserId);
-  if (!actorUid || actorUid === "forbidden") return null;
-  const [ownerUid, systemConfig, mattermostFacts] = await Promise.all([
-    resolveChannelOwnerUid(db, gatewayId, record.primaryChannelId),
-    db.doc(`users/${actorUid}/system/config`).get(),
-    resolveMattermostFacts(record, actorMmUserId),
-  ]);
-  if (ownerUid === "forbidden") return null;
-  return {
-    actorUid,
-    ...mattermostFacts,
-    isChannelOwner: ownerUid === actorUid,
-    isSystemAdmin: systemConfig.data()?.role === "admin",
-  };
 }
 
 // Resolve the customer's serving revision for WS redemption. A BACKFILLED
@@ -1337,51 +1174,6 @@ function mountActivityRoutes(
 
   mountSessionContextRoute(router, db, opsMattermostUserId);
 
-  router.post("/activity/run-live", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const valid = validateRunLiveWrite((req.body ?? {}) as Record<string, unknown>);
-    if (!valid) {
-      res.status(400).json({ error: "invalid_run_live_doc" });
-      return;
-    }
-    const canonical = await canonicalRunLiveChannel(db, valid.path);
-    if (
-      !canonical ||
-      canonical.identity.slug !== valid.slug ||
-      (valid.doc.schemaVersion === 3 && (
-        valid.doc.conversationId !== canonical.channelId ||
-        valid.doc.mainChannelId !== canonical.channelId
-      ))
-    ) {
-      res.status(400).json({ error: "invalid_run_live_doc" });
-      return;
-    }
-    if (!(await assignedHere(db, bound.gatewayId, valid.slug))) {
-      forbidden(res);
-      return;
-    }
-    await db.doc(valid.path).set(valid.doc, { merge: true });
-    res.status(204).end();
-  });
-
-  router.post("/activity/run-live/delete", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const path = stringBody(req, "path");
-    const canonical = await canonicalRunLiveChannel(db, path);
-    if (!canonical) {
-      res.status(400).json({ error: "invalid_run_live_path" });
-      return;
-    }
-    if (!(await assignedHere(db, bound.gatewayId, canonical.identity.slug))) {
-      forbidden(res);
-      return;
-    }
-    await db.doc(path).delete();
-    res.status(204).end();
-  });
-
   mountActivityReceiptRoutes(router, db);
 
   router.post("/activity/channel-owner", async (req, res) => {
@@ -1522,53 +1314,13 @@ function mountActivityReceiptRoutes(router: Router, db: Firestore): void {
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
   opsMattermostUserId?: string;
-  resolveMattermostActorFacts?: (
-    record: AgentControlRecordV1,
-    actorMmUserId: string,
-  ) => Promise<MattermostAgentControlActorFacts>;
-  deleteMattermostInputPost?: (postId: string) => Promise<void>;
 }): Router {
   const router = Router();
   const { db } = opts;
   const opsMattermostUserId = validMattermostUserId(opts.opsMattermostUserId)
     ? opts.opsMattermostUserId
     : null;
-  const agentControlRegistry = createAgentControlRegistry({
-    store: createFirestoreAgentControlStore(db as never),
-  });
-  let mattermostActorFacts = opts.resolveMattermostActorFacts;
-  const resolveMattermostActorFacts = (
-    record: AgentControlRecordV1,
-    actorMmUserId: string,
-  ): Promise<MattermostAgentControlActorFacts> => {
-    mattermostActorFacts ??= createAgentControlActorFactsResolver({
-      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
-      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
-    });
-    return mattermostActorFacts(record, actorMmUserId);
-  };
-  let deleteMattermostInputPost = opts.deleteMattermostInputPost;
-  const deleteInputPost = (postId: string): Promise<void> => {
-    deleteMattermostInputPost ??= createMattermostAgentControlPostDeleter({
-      mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
-      adminToken: process.env.MM_ADMIN_TOKEN ?? "",
-    });
-    return deleteMattermostInputPost(postId);
-  };
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db, opsMattermostUserId);
-  router.use("/agent-control", createAgentControlRoutes({
-    registry: agentControlRegistry,
-    belongsToGateway: (record, gatewayId) => controlBelongsToGateway(db, record, gatewayId),
-    resolveActorFacts: (record, actorMmUserId, gatewayId) =>
-      resolveControlActorFacts(
-        db,
-        record,
-        actorMmUserId,
-        gatewayId,
-        resolveMattermostActorFacts,
-      ),
-    deleteInputPost,
-  }));
   return router;
 }

@@ -204,8 +204,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
           name: "general",
           mattermost: {
             channelId: "channel-1",
-            activityChannelId: "DELETE_FIELD",
-            activityPair: "DELETE_FIELD",
           },
           createdAt: "SERVER_TS",
         },
@@ -303,8 +301,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     h.generalChannel = {
       mattermost: {
         channelId: "archived-channel",
-        activityChannelId: "archived-activity",
-        activityPair: { generation: 1, desired: "archived", status: "active" },
       },
     };
     h.mmApi.mockImplementation(async (path: string, method?: string) => {
@@ -333,10 +329,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(h.mmApi).not.toHaveBeenCalledWith("/channels", "POST", expect.anything());
     expect(h.channelWrites[0]?.data).toMatchObject({
       mattermost: { channelId: "archived-channel" },
-    });
-    expect(h.channelWrites[0]?.data.mattermost).toMatchObject({
-      activityChannelId: "DELETE_FIELD",
-      activityPair: "DELETE_FIELD",
     });
   });
 });

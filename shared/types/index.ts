@@ -539,13 +539,3 @@ export {
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   agentActivityCanonicalKey,
 } from './agent-conversation.js';
-
-export type { RunLiveDoc, RunLiveOutcome } from './run-live.js';
-export {
-  RUN_LIVE_SCHEMA_VERSION,
-  RUN_LIVE_TTL_MS,
-  RUN_LIVE_TERMINAL_TTL_MS,
-  RUN_LIVE_OPS_AGENT_ID,
-  runLiveCollectionPath,
-  runLiveDocPath,
-} from './run-live.js';

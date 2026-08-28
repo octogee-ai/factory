@@ -51,10 +51,6 @@ import {
   parseAssignmentDoc,
 } from "@octogee/core/assignment-doc";
 import {
-  requestBuilderActivationLease,
-  type BuilderRuntimeDemandRequest,
-} from "@octogee/core/builder-activation-lease";
-import {
   GATEWAYS_COLLECTION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
@@ -210,9 +206,6 @@ interface FleetBrokerRouteDeps {
     uid: string;
     reason: "waiting_for_unlock" | "hard_cap_exhausted";
   }) => void | Promise<void>;
-  requestBuilderActivation?: (
-    input: BuilderRuntimeDemandRequest,
-  ) => ReturnType<typeof requestBuilderActivationLease>;
   now?: () => number;
 }
 
@@ -945,84 +938,6 @@ export async function findAssignedUserByAgentId(
   return null;
 }
 
-type LateDuplicateAllocation = {
-  ownerUid: string;
-  leaseId: unknown;
-  generation: unknown;
-};
-
-function lateDuplicateAllocation(
-  gatewayData: Record<string, unknown> | undefined,
-): LateDuplicateAllocation | null {
-  const allocated = recordBodyValue(gatewayData?.allocation);
-  if (!allocated) return null;
-  const ownerUid = typeof allocated.claimedByUid === "string"
-    ? allocated.claimedByUid
-    : "";
-  if (
-    allocated.kind !== "disposable-builder" ||
-    !ownerUid ||
-    gatewayData?.ownerUid !== ownerUid
-  ) {
-    return null;
-  }
-  return {
-    ownerUid,
-    leaseId: allocated.leaseId,
-    generation: allocated.generation,
-  };
-}
-
-function parkedRunDuplicate(
-  leaseValue: unknown,
-  allocation: LateDuplicateAllocation,
-  eventKey: string,
-): Record<string, unknown> | null {
-  const parked = recordBodyValue(leaseValue);
-  if (
-    !parked ||
-    parked.status !== "parked" ||
-    parked.leaseId !== allocation.leaseId ||
-    parked.generation !== allocation.generation ||
-    (parked.eventKey !== eventKey && parked.lastEventKey !== eventKey) ||
-    typeof parked.leaseId !== "string" ||
-    !Number.isSafeInteger(parked.generation)
-  ) {
-    return null;
-  }
-  return {
-    status: "parked",
-    leaseId: parked.leaseId,
-    generation: parked.generation,
-    duplicate: true,
-  };
-}
-
-async function findLateParkedRunDuplicate(
-  db: Firestore,
-  gatewayId: string,
-  agentId: string,
-  eventKey: string,
-): Promise<Record<string, unknown> | null> {
-  const gateway = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!gateway.exists) return null;
-  const gatewayData = gateway.data() as Record<string, unknown> | undefined;
-  const allocation = lateDuplicateAllocation(gatewayData);
-  if (!allocation) return null;
-  const user = await db.collection("users").doc(allocation.ownerUid).get();
-  const userData = user.exists
-    ? user.data() as Record<string, unknown> | undefined
-    : undefined;
-  if (!userData || !agentBelongsToAssignedWorkspace(userData, agentId)) {
-    return null;
-  }
-  return parkedRunDuplicate(
-    readPath(userData, "provisioning.openclaw.activationLease"),
-    allocation,
-    eventKey,
-  );
-}
-
 async function findUsersByAgentId(
   db: Firestore,
   agentId: string,
@@ -1550,9 +1465,6 @@ type ResolvedFleetBrokerRouteDeps = {
   resolveChatIdentity: ResolveChatIdentity;
   verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier;
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
-  requestBuilderActivation: (
-    input: BuilderRuntimeDemandRequest,
-  ) => ReturnType<typeof requestBuilderActivationLease>;
   now: () => number;
   reconcileCoachProjectMembership: (input: ProjectCoachMembershipInput) => Promise<void>;
 };
@@ -1587,7 +1499,6 @@ async function verifyOwnerWorkspaceTurnFailClosed(
   }
 }
 
-// eslint-disable-next-line complexity -- dependency defaults remain centralized so tests and production resolve the same broker contract.
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): ResolvedFleetBrokerRouteDeps {
@@ -1621,8 +1532,6 @@ function resolveFleetBrokerRouteDeps(
       opts.db,
       opts.onSignupOfferBudgetInterruption,
     ),
-    requestBuilderActivation:
-      opts.requestBuilderActivation ?? requestBuilderActivationLease,
     now: opts.now ?? Date.now,
     reconcileCoachProjectMembership: projectCoachMembershipReconciler(opts),
   };
@@ -2174,71 +2083,6 @@ function installProvisioningRoutes(
   });
 }
 
-function installRunActivationRoute(
-  router: Router,
-  deps: ResolvedFleetBrokerRouteDeps,
-): void {
-  const { db, requestBuilderActivation, now } = deps;
-
-  router.post("/activity/run-start", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const body = objectBody(req);
-    const allowed = new Set(["gatewayId", "agentId", "runId"]);
-    if (Object.keys(body).some((key) => !allowed.has(key))) {
-      res.status(400).json({ error: "invalid_run_activation" });
-      return;
-    }
-    const agentId = validAgentId(body.agentId);
-    const runId = validAgentId(body.runId);
-    if (!agentId || !runId) {
-      res.status(400).json({ error: "invalid_run_activation" });
-      return;
-    }
-    const assigned = await findAssignedUserByAgentId(
-      db,
-      bound.gatewayId,
-      agentId,
-    );
-    if (!assigned) {
-      const duplicate = await findLateParkedRunDuplicate(
-        db,
-        bound.gatewayId,
-        agentId,
-        `run-start:${runId}`,
-      );
-      if (duplicate) {
-        res.status(200).json(duplicate);
-        return;
-      }
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-    const assignmentSnapshot = await db.doc(
-      `gateways/${bound.gatewayId}/assignments/${assigned.uid}`,
-    ).get();
-    const assignment = assignmentSnapshot.exists
-      ? assignmentSnapshot.data() as Record<string, unknown>
-      : undefined;
-    const observedAt = now();
-    await runBrokered(res, async () => {
-      const result = await requestBuilderActivation({
-        db,
-        uid: assigned.uid,
-        reportingGatewayId: bound.gatewayId,
-        assignmentEpoch:
-          typeof assignment?.epoch === "number" ? assignment.epoch : undefined,
-        eventKey: `run-start:${runId}`,
-        cause: "run-start",
-        observedAt,
-        createdBy: `openclaw-run:${bound.gatewayId}:${agentId}`,
-        now: observedAt,
-      });
-      res.status(result.statusCode).json(result.body);
-    });
-  });
-}
-
 function installGatewayOpsRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2250,8 +2094,6 @@ function installGatewayOpsRoutes(
     pruneBuilderRuntimeState,
     now,
   } = deps;
-
-  installRunActivationRoute(router, deps);
 
   router.post("/system-config-status", async (req, res) => {
     const bound = boundGateway(req, res);

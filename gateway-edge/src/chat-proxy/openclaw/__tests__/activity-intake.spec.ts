@@ -77,7 +77,6 @@ const binding = {
   mainChannelId: "main-1",
   mainRootPostId: "turn-1",
   inputPostId: "turn-1",
-  activityChannelId: "activity-1",
   channelDocPath: "workspaces/acme/channels/build",
   channelCreateAt: 100,
   coachToken: "coach-token",
@@ -101,9 +100,7 @@ describe("normalized Activity intake", () => {
       receipt: {
         eventKey: validEnvelope().eventKey,
         postId: "post-1",
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
-        rootOwnership: "sink-created" as const,
+        activityRootPostId: "turn-1",
       },
     }));
     const envelope = validEnvelope();
@@ -121,45 +118,40 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "persisted",
         postIds: ["post-1"],
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
+        activityRootPostId: "turn-1",
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
     expect(onPersisted).toHaveBeenCalledWith({
       envelope,
       binding,
-      activityRootPostId: "activity-root-1",
+      activityRootPostId: "turn-1",
       outcome: "persisted",
     });
   });
 
   it("accepts a same-channel turn-start receipt that adopts the input root", async () => {
     const envelope = startedEnvelope("human");
-    const sameChannelBinding = { ...binding, activityChannelId: binding.mainChannelId };
     const append = vi.fn(async () => ({
       outcome: "persisted" as const,
       postIds: [],
       receipt: {
         eventKey: envelope.eventKey,
         postId: binding.mainRootPostId,
-        activityChannelId: binding.mainChannelId,
         activityRootPostId: binding.mainRootPostId,
-        rootOwnership: "adopted" as const,
       },
     }));
 
     await expect(processActivityIntake(
       { remoteAddress: "127.0.0.1", envelope },
       {
-        registry: { readiness: () => "ready", resolve: vi.fn(async () => sameChannelBinding) },
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
         sinkFor: vi.fn(() => ({ append })),
       },
     )).resolves.toMatchObject({
       status: 201,
       body: {
         postIds: [],
-        activityChannelId: binding.mainChannelId,
         activityRootPostId: binding.mainRootPostId,
       },
     });
@@ -179,9 +171,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: envelope.eventKey,
               postId: "post-1",
-              activityChannelId: "activity-1",
-              activityRootPostId: "activity-root-1",
-              rootOwnership: "sink-created" as const,
+              activityRootPostId: "turn-1",
             },
           }),
         })),
@@ -198,123 +188,7 @@ describe("normalized Activity intake", () => {
     });
   });
 
-  it.each(["human", "scheduled"] as const)(
-    "requests the same trusted Builder activation for a %s run after its durable Activity append",
-    async (origin) => {
-      const envelope = startedEnvelope(origin);
-      const trustedBinding = { ...binding, origin };
-      const order: string[] = [];
-      const requestBuilderActivation = vi.fn(async () => {
-        order.push("activation");
-      });
-      const append = vi.fn(async () => {
-        order.push("append");
-        return {
-          outcome: "persisted" as const,
-          postIds: ["activity-root-1"],
-          receipt: {
-            eventKey: envelope.eventKey,
-            postId: "activity-root-1",
-            activityChannelId: "activity-1",
-            activityRootPostId: "activity-root-1",
-            rootOwnership: "sink-created" as const,
-          },
-        };
-      });
-
-      await processActivityIntake(
-        { remoteAddress: "127.0.0.1", envelope },
-        {
-          registry: {
-            readiness: () => "ready",
-            resolve: vi.fn(async () => trustedBinding),
-          },
-          sinkFor: vi.fn(() => ({ append })),
-          requestBuilderActivation,
-        },
-      );
-
-      expect(order).toEqual(["append", "activation"]);
-      expect(requestBuilderActivation).toHaveBeenCalledWith({
-        agentId: "agent-1",
-        runId: "run-1",
-      });
-      expect(requestBuilderActivation.mock.calls[0]?.[0]).not.toHaveProperty("uid");
-      expect(requestBuilderActivation.mock.calls[0]?.[0]).not.toHaveProperty("sizingTier");
-      expect(requestBuilderActivation.mock.calls[0]?.[0]).not.toHaveProperty("gatewayClass");
-      expect(requestBuilderActivation.mock.calls[0]?.[0]).not.toHaveProperty("targetGatewayId");
-    },
-  );
-
-  it.each([400, 403, 409])(
-    "keeps a persisted Activity acknowledgement successful when activation is rejected with %s",
-    async (status) => {
-      const envelope = startedEnvelope("human");
-      const log = vi.fn();
-      const result = await processActivityIntake(
-        { remoteAddress: "127.0.0.1", envelope },
-        {
-          registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
-          sinkFor: vi.fn(() => ({
-            append: vi.fn(async () => ({
-              outcome: "persisted" as const,
-              postIds: ["activity-root-1"],
-              receipt: {
-                eventKey: envelope.eventKey,
-                postId: "activity-root-1",
-                activityChannelId: "activity-1",
-                activityRootPostId: "activity-root-1",
-                rootOwnership: "sink-created" as const,
-              },
-            })),
-          })),
-          requestBuilderActivation: vi.fn(async () => {
-            throw Object.assign(new Error("activation rejected"), { status });
-          }),
-          log,
-        },
-      );
-
-      expect(result.status).toBe(201);
-      expect(log).toHaveBeenCalledWith("builder_activation", expect.objectContaining({
-        outcome: "rejected",
-        status,
-        runId: "run-1",
-      }));
-    },
-  );
-
-  it("returns a retryable intake failure when activation infrastructure is unavailable", async () => {
-    const envelope = startedEnvelope("human");
-    await expect(processActivityIntake(
-      { remoteAddress: "127.0.0.1", envelope },
-      {
-        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
-        sinkFor: vi.fn(() => ({
-          append: vi.fn(async () => ({
-            outcome: "persisted" as const,
-            postIds: ["activity-root-1"],
-            receipt: {
-              eventKey: envelope.eventKey,
-              postId: "activity-root-1",
-              activityChannelId: "activity-1",
-              activityRootPostId: "activity-root-1",
-              rootOwnership: "sink-created" as const,
-            },
-          })),
-        })),
-        requestBuilderActivation: vi.fn(async () => {
-          throw Object.assign(new Error("broker unavailable"), { status: 503 });
-        }),
-      },
-    )).rejects.toMatchObject({
-      status: 503,
-      code: "activation_unavailable",
-      retryable: true,
-    });
-  });
-
-  it("returns the same authoritative Activity sibling on a duplicate acknowledgement", async () => {
+  it("returns the same authoritative thread root on a duplicate acknowledgement", async () => {
     const result = await processActivityIntake(
       { remoteAddress: "127.0.0.1", envelope: validEnvelope() },
       {
@@ -326,9 +200,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: validEnvelope().eventKey,
               postId: "post-1",
-              activityChannelId: "activity-1",
-              activityRootPostId: "activity-root-1",
-              rootOwnership: "sink-created" as const,
+              activityRootPostId: "turn-1",
             },
           })),
         })),
@@ -340,8 +212,7 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "duplicate",
         postIds: ["post-1"],
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
+        activityRootPostId: "turn-1",
       },
     });
   });

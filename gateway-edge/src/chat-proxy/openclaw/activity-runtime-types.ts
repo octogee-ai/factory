@@ -9,7 +9,6 @@ export interface AgentIdentity {
 
 export interface ChannelTarget {
   primaryChannelId: string;
-  activityChannelId: string;
   channelDocPath: string;
 }
 

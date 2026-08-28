@@ -45,23 +45,25 @@ describe('chat proxy HTTP ownership', () => {
     },
   );
 
-  it('reports the activity intake as unavailable before its runtime is installed', async () => {
+  it('reports the activity intake as unconfigured without the local producer secret', async () => {
     expect(await request('/internal/openclaw/activity/v1/events', 'POST')).toEqual({
       status: 503,
-      body: { error: 'runtime_unsynchronized', retryable: true },
+      body: { error: 'activity_intake_unconfigured', retryable: true },
     });
   });
 
-  it.each([
-    '/internal/openclaw/agent-control/callback',
-    '/internal/openclaw/mattermost/interactions/default',
-  ])('fails closed on %s before its runtime handler is installed', async (path) => {
-    const response = await request(path, 'POST');
+  it('fails closed on the Mattermost callback before its runtime handler is installed', async () => {
+    const response = await request('/internal/openclaw/mattermost/interactions/default', 'POST');
     expect(response.status).toBe(503);
     expect(response.body.error).toBe('service_unavailable');
   });
 
-  it.each(['/metrics', '/api/auth/mattermost', '/api/v4/users/me'])(
+  it.each([
+    '/metrics',
+    '/api/auth/mattermost',
+    '/api/v4/users/me',
+    '/internal/openclaw/agent-control/callback',
+  ])(
     'does not claim retired or separately composed path %s',
     async (path) => {
       expect((await request(path)).status).toBe(404);
