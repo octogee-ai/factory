@@ -86,14 +86,14 @@ describe("OpenClaw runtime broker env", () => {
     });
 
     await broker.resolveAgentIdentity("octogee-alice-coach");
-    await broker.resolveChannelTarget("channel-1");
+    await broker.resolveConversationTarget("octogee-alice-coach", "channel-1");
 
     expect(calls).toEqual([
       {
         path: "/internal/openclaw/activity/agent-identity",
         credential: "credential-jwt",
       },
-      { path: "/internal/openclaw/activity/channel-target", credential: null },
+      { path: "/internal/openclaw/activity/conversation-target", credential: null },
     ]);
   });
 
@@ -104,88 +104,6 @@ describe("OpenClaw runtime broker env", () => {
     expect(() => createOpenClawRuntimeBrokerFromEnv({ GATEWAY_ID: "default" })).toThrow(
       "OPENCLAW_RUNTIME_BROKER_URL is required",
     );
-  });
-
-  it("requests run activation with only the gateway-bound agent and run identities", async () => {
-    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
-    const broker = createOpenClawRuntimeBroker({
-      baseUrl: "http://octogee-api:3001/",
-      gatewayId: "shared-blue",
-      fetchImpl: vi.fn(async (input, init) => {
-        calls.push({
-          url: String(input),
-          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
-        });
-        return new Response(JSON.stringify({
-          status: "requested",
-          leaseId: "lease-1",
-          generation: 1,
-          sizingTier: "xs",
-        }), {
-          status: 202,
-          headers: { "content-type": "application/json" },
-        });
-      }),
-    });
-
-    await expect(broker.requestBuilderRunActivation({
-      agentId: "agent-alice",
-      runId: "run-1",
-    })).resolves.toEqual({
-      status: "requested",
-      leaseId: "lease-1",
-      generation: 1,
-      sizingTier: "xs",
-    });
-    expect(calls).toEqual([{
-      url: "http://octogee-api:3001/internal/fleet/activity/run-start",
-      body: {
-        gatewayId: "shared-blue",
-        agentId: "agent-alice",
-        runId: "run-1",
-      },
-    }]);
-  });
-
-  it("derives the workspace binding for a root-level liveRuns v3 admission", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    const broker = createOpenClawRuntimeBroker({
-      baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
-      fetchImpl: vi.fn(async (_input, init) => {
-        calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(null, { status: 204 });
-      }),
-    });
-    const doc = {
-      schemaVersion: 3 as const,
-      projectionKind: "admission" as const,
-      conversationId: "main-1",
-      turnId: "input-1",
-      mainChannelId: "main-1",
-      activityChannelId: "main-1",
-      inputPostId: "input-1",
-      origin: "followup" as const,
-      status: "queued" as const,
-      attention: "routine" as const,
-      revision: 2,
-      updatedAt: 10,
-      expiresAt: 20,
-    };
-
-    await broker.writeRunLiveDoc(
-      "workspaces/acme/channels/build/liveRuns/admission-input-1",
-      doc,
-    );
-
-    expect(calls).toEqual([
-      {
-        gatewayId: "gw-bender",
-        workspaceSlug: "acme",
-        path: "workspaces/acme/channels/build/liveRuns/admission-input-1",
-        doc,
-      },
-    ]);
   });
 
   it("requires GATEWAY_ID when the broker URL is configured", () => {
@@ -206,7 +124,8 @@ describe("OpenClaw runtime broker env", () => {
       expect.objectContaining({
         redeemOpenClawWs: expect.any(Function),
         getUserGatewayId: expect.any(Function),
-        agentControlRegistry: expect.any(Object),
+        resolveConversationTarget: expect.any(Function),
+        activityWriteReceiptsFor: expect.any(Function),
       }),
     );
   });

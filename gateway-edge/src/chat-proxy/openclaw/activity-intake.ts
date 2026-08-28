@@ -980,10 +980,10 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   receiptsFor(binding: ActiveActivityRunBinding): ActivityWriteReceiptStore;
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
-  requestBuilderActivation(input: {
+  requestBuilderActivation?: (input: {
     agentId: string;
     runId: string;
-  }): Promise<unknown>;
+  }) => Promise<unknown>;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
   controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];

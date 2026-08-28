@@ -31,7 +31,7 @@ describe("dispatchGatewayEdgeRequest — fleet-prefix raw-passthrough seam", () 
     expect(req.url).toBe(url);
   });
 
-  it.each(["/healthz", "/healthz/bridge", "/internal/openclaw/agent-control/callback"])(
+  it.each(["/healthz"])(
     "routes chat-proxy-owned path %s to the chat proxy, never the app",
     (path) => {
       const app = vi.fn();
@@ -46,8 +46,6 @@ describe("dispatchGatewayEdgeRequest — fleet-prefix raw-passthrough seam", () 
 
   it.each([
     "/api/g/gw-bender/healthz",
-    "/api/g/gw-bender/healthz/bridge",
-    "/api/g/gw-bender/internal/openclaw/agent-control/callback",
   ])(
     "strips the fleet prefix before the chat-proxy ownership check — %s routes to the proxy, never the app",
     (path) => {

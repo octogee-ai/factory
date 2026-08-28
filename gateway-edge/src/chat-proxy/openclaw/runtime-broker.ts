@@ -3,9 +3,7 @@ import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type {
   AgentIdentity,
   AuthorizedConversationTarget,
-  ChannelTarget,
 } from "./activity-runtime-types.js";
-import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
@@ -20,10 +18,6 @@ import {
   BrokeredActivityWriteReceiptStore,
   type ActivityWriteReceiptBrokerPort,
 } from "./activity-write-receipt-broker.js";
-import {
-  createAgentControlRegistryClient,
-  type AgentControlRegistryClient,
-} from "./agent-control-registry-client.js";
 
 export interface RedeemedOpenClawWs {
   uid: string;
@@ -50,21 +44,13 @@ export interface OpenClawRuntimeBroker {
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
-  resolveChannelTarget(primaryChannelId: string): Promise<ChannelTarget | null>;
   resolveConversationTarget(
     agentId: string,
     conversationId: string,
   ): Promise<AuthorizedConversationTarget | null>;
-  requestBuilderRunActivation(input: {
-    agentId: string;
-    runId: string;
-  }): Promise<Record<string, unknown>>;
-  writeRunLiveDoc(path: string, doc: RunLiveDoc | ConversationRunLiveDocV3): Promise<void>;
-  deleteRunLiveDoc(path: string): Promise<void>;
   activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
-  agentControlRegistry: AgentControlRegistryClient;
 }
 
 export class OpenClawRuntimeBrokerError extends Error {
@@ -87,14 +73,6 @@ function trimBaseUrl(baseUrl: string): string {
 function nonBlank(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-function workspaceSlugFromRunLivePath(path: string): string {
-  const parts = path.split("/");
-  if (parts[0] !== "workspaces" || !parts[1] || !parts.includes("liveRuns")) {
-    throw new OpenClawRuntimeBrokerError(400, "malformed run-live path");
-  }
-  return parts[1];
 }
 
 export function runtimeBrokerBaseUrlFromEnv(
@@ -283,12 +261,6 @@ export function createOpenClawRuntimeBroker(opts: {
     return readJsonOrNull(res);
   };
 
-  const agentControlRegistry = createAgentControlRegistryClient({
-    baseUrl,
-    gatewayId,
-    fetchImpl: opts.fetchImpl,
-  });
-
   const receiptPort = createActivityWriteReceiptBrokerPort(post);
 
   return {
@@ -357,14 +329,6 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return (body?.identity as AgentIdentity | undefined) ?? null;
     },
-    async resolveChannelTarget(primaryChannelId: string): Promise<ChannelTarget | null> {
-      const body = await postJson(
-        "/internal/openclaw/activity/channel-target",
-        { primaryChannelId },
-        new Set([200, 404]),
-      );
-      return (body?.target as ChannelTarget | undefined) ?? null;
-    },
     async resolveConversationTarget(
       agentId: string,
       conversationId: string,
@@ -375,34 +339,6 @@ export function createOpenClawRuntimeBroker(opts: {
         new Set([200, 404]),
       );
       return (body?.target as AuthorizedConversationTarget | undefined) ?? null;
-    },
-    async requestBuilderRunActivation(input): Promise<Record<string, unknown>> {
-      const body = await postJson(
-        "/internal/fleet/activity/run-start",
-        input,
-        new Set([200, 202]),
-      );
-      if (!body) {
-        throw new OpenClawRuntimeBrokerError(502, "malformed run activation response");
-      }
-      return body;
-    },
-    async writeRunLiveDoc(
-      path: string,
-      doc: RunLiveDoc | ConversationRunLiveDocV3,
-    ): Promise<void> {
-      await post(
-        "/internal/openclaw/activity/run-live",
-        { workspaceSlug: workspaceSlugFromRunLivePath(path), path, doc },
-        new Set([204]),
-      );
-    },
-    async deleteRunLiveDoc(path: string): Promise<void> {
-      await post(
-        "/internal/openclaw/activity/run-live/delete",
-        { path },
-        new Set([204]),
-      );
     },
     activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore {
       return new BrokeredActivityWriteReceiptStore(receiptPort, channelDocPath);
@@ -423,7 +359,6 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return stringField(body, "uid");
     },
-    agentControlRegistry,
   };
 }
 

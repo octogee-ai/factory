@@ -53,18 +53,12 @@ export function verifyAgentControlRouterRequest(
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(proof.signature, "hex"));
 }
 
-type CallbackRoute =
-  | { kind: "agent-control"; gatewayId: string }
-  | { kind: "mattermost-interaction"; gatewayId: string; accountId: string };
+type CallbackRoute = { gatewayId: string; accountId: string };
 
 function parseRoute(url: string): CallbackRoute | null {
   if (!url.startsWith("/")) return null;
   const queryStart = url.indexOf("?");
   const path = queryStart === -1 ? url : url.slice(0, queryStart);
-  const control = /^\/internal\/openclaw\/agent-control\/([^/]+)\/callback$/.exec(path);
-  if (control && isValidGatewayId(control[1])) {
-    return { kind: "agent-control", gatewayId: control[1] };
-  }
   const interaction = /^\/internal\/openclaw\/mattermost\/([^/]+)\/mattermost\/interactions\/([^/]+)$/.exec(path);
   if (
     interaction &&
@@ -72,7 +66,6 @@ function parseRoute(url: string): CallbackRoute | null {
     /^[A-Za-z0-9_-]{1,128}$/.test(interaction[2])
   ) {
     return {
-      kind: "mattermost-interaction",
       gatewayId: interaction[1],
       accountId: interaction[2],
     };
@@ -196,9 +189,6 @@ function readUpstreamBody(
 }
 
 function downstreamPath(route: CallbackRoute): string {
-  if (route.kind === "agent-control") {
-    return `/api/g/${route.gatewayId}/internal/openclaw/agent-control/callback`;
-  }
   return `/api/g/${route.gatewayId}/internal/openclaw/mattermost/interactions/${route.accountId}`;
 }
 

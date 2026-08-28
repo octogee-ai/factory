@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.NODE_ENV = 'test';
@@ -56,10 +55,7 @@ vi.mock('../openclaw/upstream.js', () => ({
   requestDevicePairBootstrapToken: h.ctl.requestBootstrap,
 }));
 
-const {
-  establishUpstreamWithRotation,
-  openBackgroundBridgeUpstream,
-} = await import('../proxy.js');
+const { establishUpstreamWithRotation } = await import('../proxy.js');
 
 function fakeUpstream(label: string) {
   return { label, terminate: vi.fn() };
@@ -145,94 +141,5 @@ describe('establishUpstreamWithRotation', () => {
 
     expect(result).toEqual({ ok: false, httpStatus: '503 Service Unavailable' });
     expect(h.ctl.invalidatedGateways).toEqual(['gw-1']);
-  });
-});
-
-describe('openBackgroundBridgeUpstream', () => {
-  beforeEach(() => {
-    h.ctl.fetchAuth.mockReset();
-    h.ctl.openUpstream.mockReset();
-    h.ctl.requestBootstrap.mockReset().mockResolvedValue('one-time-bootstrap-token');
-    h.ctl.invalidatedGateways = [];
-    h.ctl.clearedDeviceToken = 0;
-  });
-
-  it('rotates a stale device token once and reconnects without interactive traffic', async () => {
-    const enrollment = fakeUpstream('shared-token-enrollment');
-    const recovered = fakeUpstream('background-recovered');
-    const setBootStatus = vi.fn();
-    h.ctl.fetchAuth
-      .mockResolvedValueOnce({ source: 'device-token-file', deviceToken: 'stale-device-token' })
-      .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-legacy-token' });
-    h.ctl.openUpstream
-      .mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'))
-      .mockResolvedValueOnce(enrollment)
-      .mockImplementationOnce(async (params: { onDeviceToken?: (auth: { deviceToken: string }) => Promise<void> }) => {
-        await params.onDeviceToken?.({ deviceToken: 'issued-device-token' });
-        return recovered;
-      });
-
-    await expect(openBackgroundBridgeUpstream(
-      'eggman-devdays',
-      'ws://gateway',
-      { set: setBootStatus },
-    )).resolves.toBe(recovered);
-
-    expect(h.ctl.clearedDeviceToken).toBe(1);
-    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(2);
-    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(3);
-    expect(setBootStatus).not.toHaveBeenCalled();
-  });
-
-  it('maps a second authentication failure after the one rotation attempt', async () => {
-    const setBootStatus = vi.fn();
-    h.ctl.fetchAuth
-      .mockResolvedValueOnce({ source: 'device-token-file', deviceToken: 'stale-device-token' })
-      .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-legacy-token' });
-    h.ctl.openUpstream.mockRejectedValue(new h.OpenclawWireError('auth-failed'));
-
-    await expect(openBackgroundBridgeUpstream(
-      'eggman-devdays',
-      'ws://gateway',
-      { set: setBootStatus },
-    )).rejects.toMatchObject({ code: 'auth-failed' });
-
-    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(2);
-    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(2);
-    expect(setBootStatus).toHaveBeenCalledOnce();
-    expect(setBootStatus).toHaveBeenCalledWith('auth-failed');
-  });
-
-  it('maps non-authentication reconnect failures to unreachable without rotation', async () => {
-    const setBootStatus = vi.fn();
-    h.ctl.fetchAuth.mockResolvedValueOnce({
-      source: 'device-token-file',
-      deviceToken: 'current-device-token',
-    });
-    h.ctl.openUpstream.mockRejectedValueOnce(new h.OpenclawWireError('handshake-timeout'));
-
-    await expect(openBackgroundBridgeUpstream(
-      'eggman-devdays',
-      'ws://gateway',
-      { set: setBootStatus },
-    )).rejects.toMatchObject({ code: 'handshake-timeout' });
-
-    expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(1);
-    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(1);
-    expect(setBootStatus).toHaveBeenCalledWith('unreachable');
-  });
-
-  it('owns authentication for the sole background projection reconnect path', () => {
-    const source = readFileSync(new URL('../proxy.ts', import.meta.url), 'utf8');
-    const runLiveStart = source.indexOf('async function startRunLiveProjectionBackground');
-    const publisherStart = source.indexOf('export async function startChatProxyBackground');
-    const runLive = source.slice(runLiveStart, publisherStart);
-    const boot = source.slice(publisherStart);
-
-    expect(runLive).toContain('openBackgroundBridgeUpstream(');
-    expect(runLive).not.toContain('fetchGatewayAuth(');
-    expect(boot).toContain('startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker)');
-    expect(boot).not.toContain('openBackgroundBridgeUpstream(');
-    expect(boot).not.toContain('fetchGatewayAuth(');
   });
 });
