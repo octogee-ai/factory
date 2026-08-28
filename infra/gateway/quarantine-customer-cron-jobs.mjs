@@ -30,14 +30,7 @@ const SAFE_SESSION_TARGETS = new Set(["main", "isolated", "current"]);
 const CUSTOMER_AGENT_ID = /^octogee-[a-z0-9-]+(?:-proj-[a-z0-9-]+)?-coach$/;
 const WEBHOOK_DESTINATION_REASON = "webhook-destination";
 const REQUIRED_CRON_COLUMNS = [
-  "store_key", "job_id", "owner_agent_id", "owner_session_key", "agent_id", "session_key",
-  "session_target", "schedule_kind", "payload_kind", "trigger_script", "payload_model",
-  "payload_fallbacks_json", "payload_allow_unsafe_external_content", "payload_tools_allow_json",
-  "delivery_mode", "delivery_channel", "delivery_to", "delivery_account_id",
-  "delivery_completion_mode", "delivery_completion_to", "failure_delivery_mode",
-  "failure_delivery_channel", "failure_delivery_to", "failure_delivery_account_id",
-  "failure_alert_channel", "failure_alert_to", "failure_alert_mode", "failure_alert_account_id",
-  "job_json", "updated_at",
+  "store_key", "job_id", "owner_agent_id", "agent_id", "payload_kind", "job_json", "updated_at",
 ];
 
 function objectValue(value) {
@@ -79,6 +72,56 @@ function parseJson(raw) {
   }
 }
 
+function jsonValue(value) {
+  return value == null ? null : JSON.stringify(value);
+}
+
+function recordValue(record, key) {
+  return record === null ? null : record[key] ?? null;
+}
+
+function policyFields(job) {
+  const owner = objectValue(job.owner);
+  const schedule = objectValue(job.schedule);
+  const trigger = objectValue(job.trigger);
+  const payload = objectValue(job.payload);
+  const delivery = objectValue(job.delivery);
+  const completion = objectValue(recordValue(delivery, "completionDestination"));
+  const failureDelivery = objectValue(recordValue(delivery, "failureDestination"));
+  const failureAlert = objectValue(job.failureAlert);
+  return {
+    owner_session_key: recordValue(owner, "sessionKey"),
+    session_key: recordValue(job, "sessionKey"),
+    session_target: recordValue(job, "sessionTarget"),
+    schedule_kind: recordValue(schedule, "kind"),
+    trigger_script: recordValue(trigger, "script"),
+    payload_model: recordValue(payload, "model"),
+    payload_fallbacks_json: jsonValue(recordValue(payload, "fallbacks")),
+    payload_allow_unsafe_external_content: recordValue(payload, "allowUnsafeExternalContent"),
+    payload_tools_allow_json: jsonValue(recordValue(payload, "toolsAllow")),
+    delivery_mode: recordValue(delivery, "mode"),
+    delivery_channel: recordValue(delivery, "channel"),
+    delivery_to: recordValue(delivery, "to"),
+    delivery_account_id: recordValue(delivery, "accountId"),
+    delivery_completion_mode: recordValue(completion, "mode"),
+    delivery_completion_to: recordValue(completion, "to"),
+    delivery_completion_present: delivery != null && Object.hasOwn(delivery, "completionDestination"),
+    failure_delivery_mode: recordValue(failureDelivery, "mode"),
+    failure_delivery_channel: recordValue(failureDelivery, "channel"),
+    failure_delivery_to: recordValue(failureDelivery, "to"),
+    failure_delivery_account_id: recordValue(failureDelivery, "accountId"),
+    failure_alert_channel: recordValue(failureAlert, "channel"),
+    failure_alert_to: recordValue(failureAlert, "to"),
+    failure_alert_mode: recordValue(failureAlert, "mode"),
+    failure_alert_account_id: recordValue(failureAlert, "accountId"),
+  };
+}
+
+function cronPolicyRow(row) {
+  const job = objectValue(parseJson(row.job_json));
+  return job ? { ...row, ...policyFields(job) } : row;
+}
+
 function parseMattermostSession(sessionKey) {
   if (typeof sessionKey !== "string") return null;
   const match = /^agent:([^:]+):mattermost:(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(sessionKey);
@@ -116,7 +159,9 @@ function payloadQuarantineReason(row) {
     [HOST_EXEC_SCHEDULES.has(row.schedule_kind), "host-exec-schedule"],
     [HOST_EXEC_PAYLOADS.has(row.payload_kind), "host-exec-payload"],
     [row.trigger_script != null, "trigger-script"],
-    [row.payload_allow_unsafe_external_content === 1, "unsafe-external-content"],
+    [row.payload_allow_unsafe_external_content === true, "unsafe-external-content"],
+    [row.payload_allow_unsafe_external_content != null &&
+      typeof row.payload_allow_unsafe_external_content !== "boolean", "invalid-unsafe-external-content"],
     [row.payload_model != null && !SAFE_MODELS.has(row.payload_model), "unsafe-model"],
     [!safeModelList(row.payload_fallbacks_json), "unsafe-fallbacks"],
     [!safeToolList(row.payload_tools_allow_json), "unsafe-tools"],
@@ -153,6 +198,7 @@ function jobAuthorityReason(row, job, authority) {
   }
   const scheduledPolicy = objectValue(job.scheduledToolPolicy);
   const scheduledAuthorityMismatch = row.payload_tools_allow_json != null && (
+    scheduledPolicy?.version !== 1 ||
     scheduledPolicy?.mode !== "account" ||
     scheduledPolicy.ownerSessionKey !== row.owner_session_key ||
     scheduledPolicy.ownerAccountId !== accountId
@@ -186,16 +232,24 @@ function deliveryQuarantineReason(row, authority) {
     [row.delivery_mode === "webhook", WEBHOOK_DESTINATION_REASON],
     [row.failure_delivery_mode === "webhook", WEBHOOK_DESTINATION_REASON],
     [row.failure_alert_mode === "webhook", WEBHOOK_DESTINATION_REASON],
-    [row.delivery_completion_mode != null, WEBHOOK_DESTINATION_REASON],
-    [row.delivery_completion_to != null, WEBHOOK_DESTINATION_REASON],
+    [row.delivery_completion_present, WEBHOOK_DESTINATION_REASON],
   ]);
 }
 
 function rowQuarantineReason(row, bindings) {
-  const payloadReason = payloadQuarantineReason(row);
-  if (payloadReason) return payloadReason;
   const job = objectValue(parseJson(row.job_json));
   if (!job) return "invalid-job-json";
+  const owner = objectValue(job.owner);
+  const payload = objectValue(job.payload);
+  const shadowReason = firstQuarantineReason([
+    [job.id !== row.job_id, "job-id-shadow-mismatch"],
+    [owner?.agentId !== row.owner_agent_id, "owner-agent-shadow-mismatch"],
+    [job.agentId !== row.agent_id, "agent-shadow-mismatch"],
+    [payload?.kind !== row.payload_kind, "payload-kind-shadow-mismatch"],
+  ]);
+  if (shadowReason) return shadowReason;
+  const payloadReason = payloadQuarantineReason(row);
+  if (payloadReason) return payloadReason;
   const authority = resolveRowAuthority(row, bindings);
   if (authority.reason) return authority.reason;
   const jobReason = jobAuthorityReason(row, job, authority);
@@ -247,8 +301,9 @@ function assertCronSafetyColumns(db) {
 function readUnsafeCronRows(db, bindings) {
   const rows = db.prepare(`SELECT ${REQUIRED_CRON_COLUMNS.join(", ")} FROM cron_jobs`).all();
   return rows.flatMap((row) => {
-    const reason = rowQuarantineReason(row, bindings);
-    return reason ? [{ ...row, quarantine_reason: reason }] : [];
+    const policyRow = cronPolicyRow(row);
+    const reason = rowQuarantineReason(policyRow, bindings);
+    return reason ? [{ ...policyRow, quarantine_reason: reason }] : [];
   });
 }
 
