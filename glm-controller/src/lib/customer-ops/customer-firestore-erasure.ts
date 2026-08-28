@@ -77,7 +77,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   projectPreviewStates: { uidFields: ["ownerUid"] },
   projectPreviews: { uidFields: ["ownerUid"] },
   agentImports: { uidFields: ["uid"] },
-  agentControls: {},
   glmGateways: {},
   platformConfig: {},
   revisionTombstones: {},
