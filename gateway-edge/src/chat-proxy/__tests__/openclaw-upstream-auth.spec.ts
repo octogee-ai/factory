@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { openUpstream } from "../openclaw/upstream.js";
+import {
+  openUpstream,
+  requestDevicePairBootstrapToken,
+} from "../openclaw/upstream.js";
 import {
   buildDeviceAuthPayloadV3,
   generateIdentity,
@@ -37,16 +40,30 @@ function verifyConnectSignature(params: any, identity: ReturnType<typeof generat
 }
 
 async function withMockGateway<T>(
-  fn: (url: string, captured: { params: any }) => Promise<T>,
-  opts: { helloAuth?: Record<string, unknown> } = {},
+  fn: (url: string, captured: { params: any; setupParams: any }) => Promise<T>,
+  opts: {
+    helloAuth?: Record<string, unknown>;
+    setupResult?: (url: string) => Record<string, unknown>;
+  } = {},
 ): Promise<T> {
   const wss = new WebSocketServer({ port: 0 });
-  const captured = { params: null as any };
+  const captured = { params: null as any, setupParams: null as any };
+  let gatewayUrl = "";
 
   wss.on("connection", (ws: WebSocket) => {
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "nonce-1" } }));
     ws.on("message", (raw) => {
       const frame = JSON.parse(raw.toString());
+      if (frame?.method === "device.pair.setupCode" && opts.setupResult) {
+        captured.setupParams = frame.params;
+        ws.send(JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: opts.setupResult(gatewayUrl),
+        }));
+        return;
+      }
       if (frame?.method !== "connect") return;
       captured.params = frame.params;
       ws.send(
@@ -71,8 +88,9 @@ async function withMockGateway<T>(
   await new Promise<void>((resolve) => wss.once("listening", resolve));
   const addr = wss.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
+  gatewayUrl = `ws://127.0.0.1:${port}`;
   try {
-    return await fn(`ws://127.0.0.1:${port}`, captured);
+    return await fn(gatewayUrl, captured);
   } finally {
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
@@ -80,6 +98,81 @@ async function withMockGateway<T>(
 }
 
 describe("openUpstream OpenClaw auth", () => {
+  it("refuses to mint a device bootstrap credential through a non-loopback upstream", async () => {
+    const ws = { send: vi.fn() } as unknown as WebSocket;
+
+    await expect(requestDevicePairBootstrapToken({
+      ws,
+      url: "wss://gateway.example",
+      timeoutMs: 30_000,
+    })).rejects.toMatchObject({ code: "connect-failed" });
+
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it("uses auth.bootstrapToken and signs the one-time pairing reconnect with it", async () => {
+    const identity = generateIdentity();
+    await withMockGateway(async (url, captured) => {
+      const ws = await openUpstream({
+        url,
+        bootstrapToken: "one-time-bootstrap-token",
+        identity,
+        timeoutMs: 30_000,
+      });
+      ws.close();
+
+      expect(captured.params?.auth).toEqual({
+        bootstrapToken: "one-time-bootstrap-token",
+      });
+      expect(verifyConnectSignature(captured.params, identity, "one-time-bootstrap-token"))
+        .toBe(true);
+    });
+  });
+
+  it("requests a full-access loopback setup and extracts only its one-time bootstrap token", async () => {
+    const identity = generateIdentity();
+    await withMockGateway(
+      async (url, captured) => {
+        const ws = await openUpstream({
+          url,
+          token: "shared-gateway-token",
+          identity,
+          timeoutMs: 30_000,
+        });
+        const bootstrapToken = await requestDevicePairBootstrapToken({
+          ws,
+          url: url.replace(/^ws:/u, "http:"),
+          timeoutMs: 30_000,
+        });
+        ws.close();
+
+        expect(bootstrapToken).toBe("one-time-bootstrap-token");
+        expect(captured.setupParams).toEqual({
+          publicUrl: url,
+          includeQr: false,
+        });
+      },
+      {
+        setupResult: (url) => {
+          const expiresAtMs = Date.now() + 60_000;
+          return {
+            setupId: "setup-1",
+            setupCode: Buffer.from(JSON.stringify({
+              url,
+              bootstrapToken: "one-time-bootstrap-token",
+              expiresAtMs,
+            }), "utf8").toString("base64url"),
+            gatewayUrl: url,
+            auth: "token",
+            urlSource: "request.publicUrl",
+            access: "full",
+            expiresAtMs,
+          };
+        },
+      },
+    );
+  });
+
   it("uses auth.deviceToken and signs with the device token when provided", async () => {
     const identity = generateIdentity();
     await withMockGateway(async (url, captured) => {

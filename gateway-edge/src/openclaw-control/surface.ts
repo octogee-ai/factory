@@ -12,6 +12,7 @@ import {
   acquireSystemConfigMutationLease,
   type SystemConfigMutationLease,
 } from "@octogee/core/system-config-mutation-lease";
+import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
 import type { SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
 import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 import { Router, type Request, type Response } from "express";
@@ -177,7 +178,7 @@ const DASHBOARD_STATIC_EXTENSIONS = new Set([
   ".webmanifest",
   ".webp",
 ]);
-const LONG_RUNNING_RPC_METHODS = new Set(["config.apply"]);
+const LONG_RUNNING_RPC_METHODS = new Set(["browser.request", "config.apply"]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
 const retainedMutationLeases = new Set<SystemConfigMutationLease>();
@@ -281,6 +282,13 @@ function isDashboardControlResourcePath(pathname: string): boolean {
   if (resource) return isEncodedResourceSegment(resource[1]);
   const userAvatar = /^\/api\/users\/([^/]+)\/avatar$/u.exec(pathname);
   return isEncodedResourceSegment(userAvatar?.[1]);
+}
+
+function isDashboardAssistantMediaResource(parsed: URL): boolean {
+  if (parsed.pathname !== "/__openclaw__/assistant-media") return false;
+  const sources = parsed.searchParams.getAll("source");
+  return sources.length === 1 && sources[0]!.length > 0 && sources[0]!.length <= 8_192 &&
+    [...parsed.searchParams.keys()].every((key) => key === "source");
 }
 
 function approvalIdFromEncodedDeepLink(pathname: string): string | null {
@@ -388,6 +396,7 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     DASHBOARD_ROOT_ASSETS.has(route) ||
     isDashboardStaticAsset(route) ||
     isDashboardControlResourcePath(route) ||
+    isDashboardAssistantMediaResource(parsed) ||
     isDashboardProviderIcon(route) ||
     isDashboardApprovalDeepLink(route);
 }
@@ -536,6 +545,7 @@ function rejectDashboardHttpRequest(
   res: Response,
   frameAncestor: string,
   gatewayId: string,
+  brokerProfile: OpenClawBrokerProfile,
 ): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     securityHeaders(res, frameAncestor);
@@ -544,6 +554,12 @@ function rejectDashboardHttpRequest(
     return true;
   }
   if (!isOpenClawControlHttpResource(req.originalUrl, gatewayId)) {
+    securityHeaders(res, frameAncestor);
+    res.status(404).json({ error: "dashboard-resource-not-found" });
+    return true;
+  }
+  if (brokerProfile !== "native-owner" &&
+    isDashboardAssistantMediaResource(openClawControlHttpSuffix(req.originalUrl, gatewayId))) {
     securityHeaders(res, frameAncestor);
     res.status(404).json({ error: "dashboard-resource-not-found" });
     return true;
@@ -740,7 +756,7 @@ export function createOpenClawControlHttpRouter(
         return;
       }
       metrics?.session(identity, "authorize", "ok");
-      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId)) return;
+      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId, session.brokerProfile)) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
         outcome = "policy_denied";

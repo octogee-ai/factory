@@ -8,6 +8,10 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
+import type {
+  GatewayPermissionSetId,
+  OpenClawBrokerProfile,
+} from "@octogee/core/gateway-principal-access";
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
@@ -44,15 +48,26 @@ function sessions(now = () => 1_000): OpenClawControlSessionManager {
   return new OpenClawControlSessionManager({ key: Buffer.alloc(32, 1), now });
 }
 
-function issue(manager: OpenClawControlSessionManager): string {
+function issue(
+  manager: OpenClawControlSessionManager,
+  brokerProfile: OpenClawBrokerProfile = "native-owner",
+): string {
+  const permissionSetByProfile: Record<Exclude<OpenClawBrokerProfile, "native-owner">, GatewayPermissionSetId> = {
+    "native-co-owner": "co-owner.v1",
+    "delegated-config": "trusted-helper.v1",
+    "delegated-read": "agent-viewer.v1",
+  };
+  const permissionSetIds = brokerProfile === "native-owner"
+    ? []
+    : [permissionSetByProfile[brokerProfile]];
   return manager.issue({
     sessionId: SESSION_ID,
     uid: "uid-owner",
     gatewayId: "bender",
     revisionId: "bender-r7",
-    brokerProfile: "native-owner",
-    permissionSetIds: [],
-    grantRevision: null,
+    brokerProfile,
+    permissionSetIds,
+    grantRevision: brokerProfile === "native-owner" ? null : 1,
     absoluteExpiresAt: 3_601_000,
   }).cookie.split(";", 1)[0];
 }
@@ -322,6 +337,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/__openclaw__/link-favicon/docs.example.test",
     "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord",
     "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+    "/__openclaw__/assistant-media?source=%2Fhome%2Fnode%2F.openclaw%2Fmedia%2Fbrowser.png",
     "/api/users/profile%2Fa%20b/avatar?v=hash%2Fimage",
     "/favicon.svg",
     "/provider-icons/ProviderIcon-openai.svg",
@@ -355,6 +371,34 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(requests).toBe(1);
     expect(authorization).toBe("Bearer gateway-secret");
     expect(loadGatewayToken).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<OpenClawBrokerProfile>([
+    "native-co-owner",
+    "delegated-config",
+    "delegated-read",
+  ])("does not expose owner assistant media to the %s profile", async (brokerProfile) => {
+    let requests = 0;
+    const loadGatewayToken = vi.fn(async () => "gateway-secret");
+    const upstream = http.createServer((_req, res) => {
+      requests += 1;
+      res.end("unexpected");
+    });
+    const port = await listen(upstream);
+    const manager = sessions();
+
+    const response = await request(appWith({
+      env: env(port),
+      sessions: manager,
+      loadGatewayToken,
+    }))
+      .get("/api/g/bender/openclaw/__openclaw__/assistant-media?source=%2Fhome%2Fnode%2F.openclaw%2Fmedia%2Fbrowser.png")
+      .set("cookie", issue(manager, brokerProfile));
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: "dashboard-resource-not-found" });
+    expect(requests).toBe(0);
+    expect(loadGatewayToken).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -610,6 +654,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(openClawControlRpcDeadlineMs({ category: "approval_mutation", method: "approval.resolve" })).toBe(30_000);
     expect(openClawControlRpcDeadlineMs({ category: "tools_invoke", method: "tools.invoke" })).toBe(30_000);
     expect(openClawControlRpcDeadlineMs({ category: "config_mutation", method: "config.apply" })).toBe(60_000);
+    expect(openClawControlRpcDeadlineMs({ category: "unknown", method: "browser.request" })).toBe(60_000);
     expect(openClawControlRpcDeadlineMs({ category: "config_mutation", method: "config.apply", overrideMs: 20 })).toBe(20);
   });
 });

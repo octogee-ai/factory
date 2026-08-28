@@ -146,7 +146,7 @@ describe("system_config restore", () => {
       id: "/ceckert-coach",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .toMatchObject({ schemaVersion: 2 });
+      .toMatchObject({ schemaVersion: 3 });
     expect(JSON.parse(fs.readFileSync(
       path.join(openclawDir, "secrets", "mattermost-accounts.json"),
       "utf8",
@@ -201,7 +201,7 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("Mac");
     expect(tracked).not.toContain("botToken");
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf-8"))).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       lastMigration: "initial",
     });
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
@@ -284,7 +284,7 @@ describe("system_config restore", () => {
     expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
     expect(seeded.tools).toEqual({
       profile: "coding",
-      alsoAllow: expect.arrayContaining(["octogee_project_create", "workspace_commit"]),
+      alsoAllow: expect.arrayContaining(["octogee_project_create", "workspace_commit", "browser"]),
       web: expect.any(Object),
     });
     expect(seeded.tools).not.toHaveProperty("deny");
@@ -293,7 +293,17 @@ describe("system_config restore", () => {
     expect(seeded.commands).not.toHaveProperty("bash");
     expect(seeded).not.toHaveProperty("cron");
     expect(seeded.plugins.allow).toContain("codex");
+    expect(seeded.plugins.allow).toContain("browser");
+    expect(seeded.plugins.entries.browser).toEqual({ enabled: true });
     expect(seeded.plugins.entries.codex).toEqual({ enabled: true });
+    expect(seeded.browser).toEqual({
+      enabled: true,
+      defaultProfile: "openclaw",
+      headless: true,
+      noSandbox: true,
+      evaluateEnabled: true,
+      executablePath: "/usr/bin/chromium",
+    });
     expect(seeded.channels.mattermost.baseUrl).toBe("${MM_URL}");
     expect(seeded.gateway.controlUi.basePath).toBe("/g/robert-xs-bd6a8f5a/openclaw");
   });
@@ -817,8 +827,8 @@ describe("system_config restore", () => {
       "acme-coach": "legacy-coach-pat",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 2,
-      lastMigration: "lift-platform-host-code-lockdown",
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
       pendingStateCleanup: "legacy-mac",
     });
   });
@@ -878,8 +888,8 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("must-be-rejected-by-audit");
     expect(fs.existsSync(path.join(openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 2,
-      lastMigration: "lift-platform-host-code-lockdown",
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
     });
   });
 
@@ -949,12 +959,12 @@ describe("system_config restore", () => {
     expect(migrated.tools).toEqual({
       profile: "coding",
       deny: ["builder-tool"],
-      alsoAllow: ["octogee_project_create"],
+      alsoAllow: ["octogee_project_create", "browser"],
       subagents: { tools: { deny: ["builder-subagent-deny"] } },
     });
     expect(migrated.plugins).toEqual({
-      allow: ["mattermost", "codex"],
-      entries: { codex: { enabled: true } },
+      allow: ["mattermost", "codex", "browser"],
+      entries: { codex: { enabled: true }, browser: { enabled: true } },
     });
     expect(migrated.agents.list).toEqual([
       {
@@ -968,8 +978,8 @@ describe("system_config restore", () => {
       },
     ]);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 2,
-      lastMigration: "lift-platform-host-code-lockdown",
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
     });
     await expect(reconcileSystemConfigSchema(openclawDir, {
       GATEWAY_CLASS: "builder",
@@ -1028,12 +1038,88 @@ describe("system_config restore", () => {
     });
 
     const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
-    expect(migrated.tools).toEqual({ exec: { mode: "deny", host: "sandbox" }, deny: ["builder-only"] });
+    expect(migrated.tools).toEqual({
+      exec: { mode: "deny", host: "sandbox" },
+      deny: ["builder-only"],
+      alsoAllow: ["browser"],
+    });
     expect(migrated.plugins.entries.codex).toEqual({
       enabled: true,
       config: { appServer: { sandbox: "danger-full-access", approvalPolicy: "never" } },
     });
-    expect(migrated.plugins.allow).toEqual(["mattermost", "codex"]);
+    expect(migrated.plugins.entries.browser).toEqual({ enabled: true });
+    expect(migrated.plugins.allow).toEqual(["mattermost", "codex", "browser"]);
+  });
+
+  it("adds managed browser defaults to a v2 Builder config without replacing Builder settings", async () => {
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: 2,
+      lastMigration: "lift-platform-host-code-lockdown",
+    });
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      tools: { profile: "coding", alsoAllow: ["builder-tool"] },
+      plugins: { allow: ["mattermost"], entries: {} },
+      agents: { list: [{ id: "octogee-acme-coach", default: true }] },
+    });
+
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(true);
+
+    const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(migrated.tools).toEqual({
+      profile: "coding",
+      alsoAllow: ["builder-tool", "browser"],
+    });
+    expect(migrated.plugins).toEqual({
+      allow: ["mattermost", "browser"],
+      entries: { browser: { enabled: true } },
+    });
+    expect(migrated.browser).toEqual({
+      enabled: true,
+      defaultProfile: "openclaw",
+      headless: true,
+      noSandbox: true,
+      evaluateEnabled: true,
+      executablePath: "/usr/bin/chromium",
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
+    });
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(false);
+  });
+
+  it("preserves an explicit Builder browser opt-out during the v3 migration", async () => {
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: 2,
+      lastMigration: "lift-platform-host-code-lockdown",
+    });
+    const disabled = {
+      browser: { enabled: false, headless: false },
+      tools: { profile: "coding", deny: ["browser"], alsoAllow: ["builder-tool"] },
+      plugins: {
+        allow: ["mattermost"],
+        entries: { browser: { enabled: false } },
+      },
+    };
+    writeJson(path.join(repoDir, "openclaw.json"), disabled);
+
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(true);
+
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")))
+      .toEqual(disabled);
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
+    });
   });
 
   it("fails closed when tracked migration metadata is malformed", async () => {

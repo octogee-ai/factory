@@ -80,6 +80,16 @@ describe("OpenClaw Dashboard RPC policy", () => {
       context,
       "native-owner",
     )).toMatchObject({ allowed: true, category: "unknown" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("browser.request", { method: "GET", path: "/tabs" }),
+      context,
+      "native-owner",
+    )).toMatchObject({ allowed: true, category: "unknown" });
+    expect(evaluateOpenClawControlRpcForProfile(
+      request("browser.request", { method: "GET", path: "/tabs" }),
+      context,
+      "native-co-owner",
+    )).toMatchObject({ allowed: false, reason: "method-unavailable" });
   });
 
   it("fences native owner config writes behind the migration freeze and the platform wiring invariants only", () => {
@@ -318,6 +328,28 @@ describe("OpenClaw Dashboard RPC policy", () => {
       canConfigure: true,
       canUseShell: false,
     });
+  });
+
+  it("advertises browser control only to the native owner", () => {
+    const hello = {
+      type: "res",
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS, "browser.request"] },
+      },
+    };
+
+    expect((projectOpenClawServerFrameForProfile(
+      hello,
+      undefined,
+      "native-owner",
+    )?.payload as any).features.methods).toContain("browser.request");
+    expect((projectOpenClawServerFrameForProfile(
+      hello,
+      undefined,
+      "native-co-owner",
+    )?.payload as any).features.methods).not.toContain("browser.request");
   });
 
   it("preserves native baseHash and replacePaths while validating the exact proposed candidate", () => {

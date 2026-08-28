@@ -116,9 +116,9 @@ describe("helm/octogee-gateway/ — sizing tier explicit override", () => {
 });
 
 describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () => {
-  it("Builder profile without sizingTier renders extra-small (class default)", () => {
+  it("Builder profile without sizingTier renders small (class default)", () => {
     const out = helmTemplate({ profile: "builder" });
-    expectResourcesMatchTier(out, "xs");
+    expectResourcesMatchTier(out, "s");
   });
 
   it("standard profile without sizingTier renders small resources", () => {
@@ -134,7 +134,7 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
   it("Builder-profile pod label is the resolved tier, not the bare profile string", () => {
     const out = helmTemplate({ profile: "builder" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("xs");
+    expect(c.podLabels.tier).toBe("s");
   });
 
   it("standard-profile pod label resolves to small", () => {

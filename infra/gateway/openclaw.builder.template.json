@@ -86,6 +86,14 @@
     },
     "list": []
   },
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "openclaw",
+    "headless": true,
+    "noSandbox": true,
+    "evaluateEnabled": true,
+    "executablePath": "/usr/bin/chromium"
+  },
   "tools": {
     "profile": "coding",
     "alsoAllow": [
@@ -142,7 +150,8 @@
       "octogee_google_sheets_read",
       "octogee_google_sheets_write",
       "octogee_obsidian_read",
-      "octogee_obsidian_write"
+      "octogee_obsidian_write",
+      "browser"
     ],
     "web": {
       "search": {
@@ -225,6 +234,7 @@
       "octogee-workspace-tools",
       "parallel",
       "openai",
+      "browser",
       "codex"
     ],
     "entries": {
@@ -232,6 +242,9 @@
         "enabled": true
       },
       "anthropic": {
+        "enabled": true
+      },
+      "browser": {
         "enabled": true
       },
       "codex": {

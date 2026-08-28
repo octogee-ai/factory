@@ -126,8 +126,20 @@ vi.mock('../openclaw/gateway-token.js', () => ({
 
 vi.mock('../openclaw/upstream.js', () => ({
   OpenclawWireError: h.OpenclawWireError,
-  openUpstream: async ({ token, deviceToken }: { token?: string; deviceToken?: string }) =>
-    h.ctl.openUpstream(deviceToken ?? token ?? ''),
+  openUpstream: async ({
+    token,
+    deviceToken,
+    onDeviceToken,
+  }: {
+    token?: string;
+    deviceToken?: string;
+    onDeviceToken?: (auth: { deviceToken: string }) => Promise<void>;
+  }) => {
+    const upstream = h.ctl.openUpstream(deviceToken ?? token ?? '');
+    if (token) await onDeviceToken?.({ deviceToken: 'mock-device-token' });
+    return upstream;
+  },
+  requestDevicePairBootstrapToken: async () => 'mock-bootstrap-token',
 }));
 
 vi.mock('../openclaw/inbound-gate.js', () => ({

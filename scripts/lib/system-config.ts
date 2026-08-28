@@ -59,6 +59,7 @@ import {
   CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
   readSystemConfigCommitBlob,
   SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
+  SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED,
   SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
@@ -504,6 +505,78 @@ export function liftPlatformHostCodeLockdown(
   return changes.includes(true);
 }
 
+const BUILDER_BROWSER_DEFAULTS: Readonly<UnknownRecord> = {
+  enabled: true,
+  defaultProfile: "openclaw",
+  headless: true,
+  noSandbox: true,
+  evaluateEnabled: true,
+  executablePath: "/usr/bin/chromium",
+};
+
+function stringListIncludes(value: unknown, item: string): boolean {
+  return Array.isArray(value) && value.includes(item);
+}
+
+function addStringListItem(record: UnknownRecord, key: string, item: string): boolean {
+  const current = record[key];
+  if (Array.isArray(current)) {
+    if (current.includes(item)) return false;
+    record[key] = [...current, item];
+    return true;
+  }
+  if (current !== undefined) return false;
+  record[key] = [item];
+  return true;
+}
+
+function builderBrowserExplicitlyDisabled(config: UnknownRecord): boolean {
+  const browser = asRecord(config.browser);
+  const tools = asRecord(config.tools);
+  const plugins = asRecord(config.plugins);
+  const browserPlugin = asRecord(asRecord(plugins?.entries)?.browser);
+  return browser?.enabled === false ||
+    plugins?.enabled === false ||
+    browserPlugin?.enabled === false ||
+    stringListIncludes(tools?.deny, "browser");
+}
+
+function enableBuilderBrowser(config: UnknownRecord): boolean {
+  if (builderBrowserExplicitlyDisabled(config)) return false;
+  let changed = false;
+  let browser = asRecord(config.browser);
+  if (!browser) {
+    browser = structuredClone(BUILDER_BROWSER_DEFAULTS);
+    config.browser = browser;
+    changed = true;
+  } else {
+    for (const [key, value] of Object.entries(BUILDER_BROWSER_DEFAULTS)) {
+      if (browser[key] !== undefined) continue;
+      browser[key] = value;
+      changed = true;
+    }
+  }
+
+  const tools = asRecord(config.tools) ?? {};
+  if (!asRecord(config.tools)) config.tools = tools;
+  changed = addStringListItem(tools, "alsoAllow", "browser") || changed;
+
+  const plugins = asRecord(config.plugins) ?? {};
+  if (!asRecord(config.plugins)) config.plugins = plugins;
+  changed = addStringListItem(plugins, "allow", "browser") || changed;
+  const entries = asRecord(plugins.entries) ?? {};
+  if (!asRecord(plugins.entries)) plugins.entries = entries;
+  const browserPlugin = asRecord(entries.browser);
+  if (!browserPlugin) {
+    entries.browser = { enabled: true };
+    changed = true;
+  } else if (browserPlugin.enabled === undefined) {
+    browserPlugin.enabled = true;
+    changed = true;
+  }
+  return changed;
+}
+
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
   const pubKey = generateCustomerSshKey(slug);
   await createGiteaUser(slug, pubKey);
@@ -767,18 +840,21 @@ async function reconcileTrackedOpenClawConfig(
 
   const macLaneRemoved = schemaVersion !== undefined &&
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED;
+  const hostCodeLockdownLifted = schemaVersion !== undefined &&
+    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED;
   if (!macLaneRemoved) {
     removeLegacyMacConfig(tracked, env);
     const secrets = extractLegacyMattermostAccountSecrets(tracked);
     if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
   }
-  liftPlatformHostCodeLockdown(tracked, env);
+  if (!hostCodeLockdownLifted) liftPlatformHostCodeLockdown(tracked, env);
+  enableBuilderBrowser(tracked);
   const after = `${JSON.stringify(tracked, null, 2)}\n`;
   if (after !== before) atomicWrite(repoConfigPath, after);
   const keepPendingCleanup = !macLaneRemoved || metadata?.pendingStateCleanup !== undefined;
   atomicWrite(metadataPath, `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    lastMigration: "lift-platform-host-code-lockdown",
+    lastMigration: "enable-builder-browser",
     ...(keepPendingCleanup ? { pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP } : {}),
   }, null, 2)}\n`);
   ensureSystemConfigGitignore(repoDir);

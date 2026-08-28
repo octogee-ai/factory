@@ -9,19 +9,21 @@ import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { publicAppOrigins } from "@octogee/core/deployment-environment";
-import { openUpstream, OpenclawWireError } from "./openclaw/upstream.js";
+import { OpenclawWireError } from "./openclaw/upstream.js";
 import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
   clearGatewayDeviceToken,
   fetchGatewayAuth,
   invalidateGatewayToken,
-  persistGatewayDeviceToken,
   GatewayTokenError,
   type GatewayOpenClawAuth,
 } from "./openclaw/gateway-token.js";
 import { resolveBridgeGatewayId } from "./openclaw/bridge-gateway-id.js";
 import { startBridgeUpstreamReconnectLoop } from "./openclaw/bridge-reconnect.js";
-import { openAuthenticatedUpstream } from "./openclaw/authenticated-upstream.js";
+import {
+  openAuthenticatedUpstream,
+  openUpstreamWithGatewayAuth,
+} from "./openclaw/authenticated-upstream.js";
 import { shouldForwardFrame } from "./openclaw/frame-filter.js";
 import {
   createGateState,
@@ -93,6 +95,7 @@ if (process.env.NODE_ENV !== "test") {
   }
 }
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
+const DEFAULT_OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 
@@ -616,7 +619,7 @@ export async function establishUpstreamWithRotation(
   const auth = await fetchInitialGatewayAuth(gatewayId);
   if (!auth.ok) return auth;
 
-  const first = await tryOpenGatewayUpstream(gatewayUrl, auth.auth);
+  const first = await tryOpenGatewayUpstream(gatewayId, gatewayUrl, auth.auth);
   if (first.ok) return acceptUpstreamHandshake(first.upstream);
   if (first.code !== AUTH_FAILED) return rejectUpstreamHandshake(first.code);
 
@@ -624,7 +627,7 @@ export async function establishUpstreamWithRotation(
   const fresh = await fetchGatewayAuthAfterRotation(gatewayId);
   if (!fresh.ok) return fresh;
 
-  const retry = await tryOpenGatewayUpstream(gatewayUrl, fresh.auth);
+  const retry = await tryOpenGatewayUpstream(gatewayId, gatewayUrl, fresh.auth);
   if (retry.ok) return acceptRotationRecovery(retry.upstream);
   return rejectRotationHandshake(retry.code);
 }
@@ -653,19 +656,16 @@ async function fetchGatewayAuthAfterRotation(gatewayId: string): Promise<Gateway
 }
 
 async function tryOpenGatewayUpstream(
+  gatewayId: string,
   gatewayUrl: string,
   auth: GatewayOpenClawAuth,
 ): Promise<OpenAttempt> {
   try {
-    const upstream = await openUpstream({
+    const upstream = await openUpstreamWithGatewayAuth({
+      gatewayId,
       url: gatewayUrl,
-      token: auth.token,
-      deviceToken: auth.deviceToken,
-      identity: getOpenClawDeviceIdentity(),
-      onDeviceToken: async (issued) => {
-        await persistGatewayDeviceToken({ token: issued.deviceToken });
-      },
-    });
+      pairingUrl: process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
+    }, auth);
     return { ok: true, upstream };
   } catch (e) {
     const code = e instanceof OpenclawWireError ? e.code : "unknown";
@@ -892,7 +892,7 @@ export function _clearCaches(): void {
 }
 
 export function gatewayHealthUrl(
-  base: string = process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
+  base: string = process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
 ): string {
   return `${base}/healthz`;
 }
@@ -1194,7 +1194,7 @@ async function startRunLiveProjectionBackground(
       bridgeBootStatus.set(BRIDGE_UNSYNCHRONIZED);
       const ws = await openBackgroundBridgeUpstream(
         gatewayId,
-        process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+        process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
       );
       let closed = false;
       let onClose: (() => void) | undefined;
@@ -1410,7 +1410,7 @@ export async function startChatProxyBackground(): Promise<void> {
       wired = wireActivityBridge({
         db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
         runtimeBroker,
-        upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+        upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
         gatewayToken: '',
         identity: getOpenClawDeviceIdentity(),
         mmBaseUrl: MM_PUBLIC_URL,
@@ -1461,7 +1461,7 @@ export async function startChatProxyBackground(): Promise<void> {
       openOnce: async () => {
         const ws = await openBackgroundBridgeUpstream(
           gatewayId,
-          process.env.OPENCLAW_GATEWAY_URL ?? 'http://127.0.0.1:18789',
+          process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
         );
         let closed = false;
         let registered: (() => void) | null = null;

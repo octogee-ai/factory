@@ -24,11 +24,13 @@ const h = vi.hoisted(() => {
   const ctl: {
     fetchAuth: ReturnType<typeof vi.fn>;
     openUpstream: ReturnType<typeof vi.fn>;
+    requestBootstrap: ReturnType<typeof vi.fn>;
     invalidatedGateways: string[];
     clearedDeviceToken: number;
   } = {
     fetchAuth: vi.fn(),
     openUpstream: vi.fn(),
+    requestBootstrap: vi.fn(),
     invalidatedGateways: [],
     clearedDeviceToken: 0,
   };
@@ -51,6 +53,7 @@ vi.mock('../openclaw/gateway-token.js', () => ({
 vi.mock('../openclaw/upstream.js', () => ({
   OpenclawWireError: h.OpenclawWireError,
   openUpstream: h.ctl.openUpstream,
+  requestDevicePairBootstrapToken: h.ctl.requestBootstrap,
 }));
 
 const {
@@ -59,13 +62,14 @@ const {
 } = await import('../proxy.js');
 
 function fakeUpstream(label: string) {
-  return { label };
+  return { label, terminate: vi.fn() };
 }
 
 describe('establishUpstreamWithRotation', () => {
   beforeEach(() => {
     h.ctl.fetchAuth.mockReset();
     h.ctl.openUpstream.mockReset();
+    h.ctl.requestBootstrap.mockReset().mockResolvedValue('one-time-bootstrap-token');
     h.ctl.invalidatedGateways = [];
     h.ctl.clearedDeviceToken = 0;
   });
@@ -91,13 +95,18 @@ describe('establishUpstreamWithRotation', () => {
   });
 
   it('invalidates legacy auth, refetches skip-cache, and returns the retry upstream after auth-failed', async () => {
+    const enrollment = fakeUpstream('shared-token-enrollment');
     const recovered = fakeUpstream('recovered');
     h.ctl.fetchAuth
       .mockResolvedValueOnce({ source: 'legacy-token', token: 'stale-token' })
       .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-token' });
     h.ctl.openUpstream
       .mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'))
-      .mockResolvedValueOnce(recovered);
+      .mockResolvedValueOnce(enrollment)
+      .mockImplementationOnce(async (params: { onDeviceToken?: (auth: { deviceToken: string }) => Promise<void> }) => {
+        await params.onDeviceToken?.({ deviceToken: 'issued-device-token' });
+        return recovered;
+      });
 
     const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
 
@@ -143,11 +152,13 @@ describe('openBackgroundBridgeUpstream', () => {
   beforeEach(() => {
     h.ctl.fetchAuth.mockReset();
     h.ctl.openUpstream.mockReset();
+    h.ctl.requestBootstrap.mockReset().mockResolvedValue('one-time-bootstrap-token');
     h.ctl.invalidatedGateways = [];
     h.ctl.clearedDeviceToken = 0;
   });
 
   it('rotates a stale device token once and reconnects without interactive traffic', async () => {
+    const enrollment = fakeUpstream('shared-token-enrollment');
     const recovered = fakeUpstream('background-recovered');
     const setBootStatus = vi.fn();
     h.ctl.fetchAuth
@@ -155,7 +166,11 @@ describe('openBackgroundBridgeUpstream', () => {
       .mockResolvedValueOnce({ source: 'legacy-token', token: 'fresh-legacy-token' });
     h.ctl.openUpstream
       .mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'))
-      .mockResolvedValueOnce(recovered);
+      .mockResolvedValueOnce(enrollment)
+      .mockImplementationOnce(async (params: { onDeviceToken?: (auth: { deviceToken: string }) => Promise<void> }) => {
+        await params.onDeviceToken?.({ deviceToken: 'issued-device-token' });
+        return recovered;
+      });
 
     await expect(openBackgroundBridgeUpstream(
       'eggman-devdays',
@@ -165,7 +180,7 @@ describe('openBackgroundBridgeUpstream', () => {
 
     expect(h.ctl.clearedDeviceToken).toBe(1);
     expect(h.ctl.fetchAuth).toHaveBeenCalledTimes(2);
-    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(2);
+    expect(h.ctl.openUpstream).toHaveBeenCalledTimes(3);
     expect(setBootStatus).not.toHaveBeenCalled();
   });
 

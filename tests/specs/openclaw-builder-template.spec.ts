@@ -19,7 +19,15 @@ function read(name: string): Template {
   return JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway", name), "utf8")) as Template;
 }
 
-const BUILDER_OWNED_TOP_LEVEL = new Set(["tools", "plugins", "commands", "cron", "skills", "gateway"]);
+const BUILDER_OWNED_TOP_LEVEL = new Set([
+  "browser",
+  "tools",
+  "plugins",
+  "commands",
+  "cron",
+  "skills",
+  "gateway",
+]);
 
 describe("infra/gateway/openclaw.builder.template.json — the Builder seed is the shared seed at full power", () => {
   const shared = read("openclaw.template.json");
@@ -34,19 +42,27 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed is t
     const { terminal: _builderTerminal, ...builderGateway } = builder.gateway;
     expect(builderGateway).toEqual(sharedGateway);
     expect(Object.keys(builder).sort()).toEqual(
-      Object.keys(shared).filter((key) => key !== "cron" && key !== "skills").sort(),
+      [...Object.keys(shared).filter((key) => key !== "cron" && key !== "skills"), "browser"].sort(),
     );
   });
 
-  it("drops every host-code fence: no denies, no exec/elevated/fs/sessions/subagents policy, terminal on", () => {
+  it("drops host-code fences while enabling the managed browser and terminal", () => {
     expect(builder.tools).toEqual({
       profile: shared.tools.profile,
-      alsoAllow: shared.tools.alsoAllow,
+      alsoAllow: [...shared.tools.alsoAllow as string[], "browser"],
       web: shared.tools.web,
     });
-    for (const tool of CUSTOMER_CODE_DENIED_TOOLS) {
+    for (const tool of CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => tool !== "browser")) {
       expect(JSON.stringify(builder.tools)).not.toContain(`"${tool}"`);
     }
+    expect(builder.browser).toEqual({
+      enabled: true,
+      defaultProfile: "openclaw",
+      headless: true,
+      noSandbox: true,
+      evaluateEnabled: true,
+      executablePath: "/usr/bin/chromium",
+    });
     expect(builder.gateway.terminal).toEqual({ enabled: true });
     for (const command of ["bash", "config", "mcp", "plugins", "debug"]) {
       expect(builder.commands).not.toHaveProperty(command);
@@ -55,11 +71,12 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed is t
     expect(builder).not.toHaveProperty("skills");
   });
 
-  it("ships codex enabled for BYOSUB and otherwise the identical plugin surface", () => {
-    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "codex"]);
+  it("ships the browser and codex plugins on top of the shared plugin surface", () => {
+    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "browser", "codex"]);
+    expect(builder.plugins.entries.browser).toEqual({ enabled: true });
     expect(builder.plugins.entries.codex).toEqual({ enabled: true });
-    const { codex: _sharedCodex, ...sharedEntries } = shared.plugins.entries;
-    const { codex: _builderCodex, ...builderEntries } = builder.plugins.entries;
+    const { codex: _sharedCodex, browser: _sharedBrowser, ...sharedEntries } = shared.plugins.entries;
+    const { codex: _builderCodex, browser: _builderBrowser, ...builderEntries } = builder.plugins.entries;
     expect(builderEntries).toEqual(sharedEntries);
   });
 });

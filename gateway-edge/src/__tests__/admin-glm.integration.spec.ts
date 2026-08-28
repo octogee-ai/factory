@@ -1072,7 +1072,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     const g = res.body.gateways.find((x: any) => x.gatewayId === "default");
-    expect(g.sizing.tier).toBe("xs");
+    expect(g.sizing.tier).toBe("s");
     expect(g.sizing.resolvedFrom).toBe("class-default");
   });
 

@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import {
+  OpenclawWireError,
   startConnectChallengeTracker,
   waitForWsOpen,
   sendWsRequest,
+  type OpenclawWireErrorCode,
 } from "@octogee/shared/types/openclaw-wire-core";
 import {
   signConnectDevice,
@@ -14,10 +16,11 @@ import {
 export {
   OpenclawWireError,
   type OpenclawWireErrorCode,
-} from "@octogee/shared/types/openclaw-wire-core";
+};
 
 const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+const SETUP_CODE_RESPONSE_PREFIX = "device.pair.setupCode returned";
 
 const DEFAULT_OPERATOR_SCOPES = [
   "operator.admin",
@@ -31,6 +34,7 @@ const DEFAULT_OPERATOR_SCOPES = [
 export interface OpenUpstreamParams {
   url: string;
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   identity: DeviceIdentity;
   scopes?: string[];
@@ -38,16 +42,158 @@ export interface OpenUpstreamParams {
   onDeviceToken?: (auth: { deviceToken: string; role?: string; scopes?: string[] }) => void | Promise<void>;
 }
 
-type UpstreamAuth = { deviceToken: string } | { token: string } | undefined;
+type UpstreamAuth =
+  | { deviceToken: string }
+  | { bootstrapToken: string }
+  | { token: string }
+  | undefined;
 
 function authForParams(params: OpenUpstreamParams): UpstreamAuth {
   if (params.deviceToken) return { deviceToken: params.deviceToken };
+  if (params.bootstrapToken) return { bootstrapToken: params.bootstrapToken };
   if (params.token) return { token: params.token };
   return undefined;
 }
 
 function tokenForDeviceSignature(params: OpenUpstreamParams): string | null {
-  return params.deviceToken || params.token || null;
+  return params.deviceToken || params.bootstrapToken || params.token || null;
+}
+
+export interface RequestDevicePairBootstrapTokenParams {
+  ws: WebSocket;
+  url: string;
+  timeoutMs: number;
+}
+
+function loopbackPairingUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new OpenclawWireError("connect-failed", "OpenClaw pairing URL is invalid");
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/u, "");
+  const loopback =
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(hostname);
+  if (!loopback || parsed.username || parsed.password) {
+    throw new OpenclawWireError(
+      "connect-failed",
+      "native OpenClaw device bootstrap requires a credential-free loopback URL",
+    );
+  }
+  if (parsed.protocol === "http:") parsed.protocol = "ws:";
+  else if (parsed.protocol === "https:") parsed.protocol = "wss:";
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new OpenclawWireError(
+      "connect-failed",
+      "native OpenClaw device bootstrap requires an HTTP or WebSocket URL",
+    );
+  }
+  parsed.search = "";
+  parsed.hash = "";
+  const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/u, "");
+  return `${parsed.protocol}//${parsed.host}${path}`;
+}
+
+function setupCodeResponseError(detail: string): OpenclawWireError {
+  return new OpenclawWireError("invalid-response", `${SETUP_CODE_RESPONSE_PREFIX} ${detail}`);
+}
+
+function assertValidOptionalExpiry(
+  value: unknown,
+  invalidDetail: string,
+): asserts value is number | undefined {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" || !Number.isSafeInteger(value) || value <= Date.now())
+  ) {
+    throw setupCodeResponseError(invalidDetail);
+  }
+}
+
+function decodeSetupCode(value: unknown): unknown {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > 65_536 ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    throw setupCodeResponseError("an invalid code");
+  }
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw setupCodeResponseError("an invalid code");
+  }
+}
+
+function requireBootstrapToken(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 4096) {
+    throw setupCodeResponseError("no bootstrap credential");
+  }
+  return value.trim();
+}
+
+function setupBootstrapToken(payload: unknown, expectedUrl: string): string {
+  if (!payload || typeof payload !== "object") {
+    throw setupCodeResponseError("no payload");
+  }
+  const result = payload as {
+    setupCode?: unknown;
+    access?: unknown;
+    expiresAtMs?: unknown;
+  };
+  if (result.access !== "full") {
+    throw new OpenclawWireError(
+      "invalid-response",
+      "device.pair.setupCode did not grant the required full local access profile",
+    );
+  }
+  assertValidOptionalExpiry(result.expiresAtMs, "an expired setup");
+  const decoded = decodeSetupCode(result.setupCode);
+  if (!decoded || typeof decoded !== "object") {
+    throw setupCodeResponseError("an invalid payload");
+  }
+  const setup = decoded as {
+    url?: unknown;
+    bootstrapToken?: unknown;
+    expiresAtMs?: unknown;
+  };
+  if (setup.url !== expectedUrl) {
+    throw new OpenclawWireError(
+      "invalid-response",
+      "device.pair.setupCode returned a different gateway URL",
+    );
+  }
+  assertValidOptionalExpiry(setup.expiresAtMs, "an expired code");
+  if (
+    typeof result.expiresAtMs === "number" &&
+    typeof setup.expiresAtMs === "number" &&
+    result.expiresAtMs !== setup.expiresAtMs
+  ) {
+    throw new OpenclawWireError(
+      "invalid-response",
+      "device.pair.setupCode returned conflicting expiry metadata",
+    );
+  }
+  return requireBootstrapToken(setup.bootstrapToken);
+}
+
+export async function requestDevicePairBootstrapToken(
+  params: RequestDevicePairBootstrapTokenParams,
+): Promise<string> {
+  const publicUrl = loopbackPairingUrl(params.url);
+  const payload = await sendWsRequest({
+    ws: params.ws,
+    id: randomUUID(),
+    method: "device.pair.setupCode",
+    params: { publicUrl, includeQr: false },
+    timeoutMs: params.timeoutMs,
+  });
+  return setupBootstrapToken(payload, publicUrl);
 }
 
 function helloAuthInfo(helloOk: unknown):

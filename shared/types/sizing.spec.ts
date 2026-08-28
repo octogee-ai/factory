@@ -8,6 +8,7 @@ import {
   type SizingTier,
 } from './sizing.js';
 import { GATEWAY_CLASSES, GATEWAY_PROFILES } from './glm.js';
+import { BUILDER_TIERS } from './billing-tiers.js';
 
 describe('sizing-tier SSOT', () => {
   it('declares tiers in ascending size order', () => {
@@ -54,7 +55,7 @@ describe('sizing-tier SSOT', () => {
   });
 
   it('profiles use the matching class defaults', () => {
-    expect(PROFILE_DEFAULT_TIER.builder).toBe('xs');
+    expect(PROFILE_DEFAULT_TIER.builder).toBe('s');
     expect(PROFILE_DEFAULT_TIER.standard).toBe('l');
   });
 
@@ -65,9 +66,13 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('builder class defaults to xs and the Barn defaults to l', () => {
-    expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('xs');
+  it('builder class defaults to s and the Barn defaults to l', () => {
+    expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('s');
     expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('l');
+  });
+
+  it('provisions the entry Builder entitlement with browser headroom', () => {
+    expect(BUILDER_TIERS.hobby.instance).toBe('s');
   });
 
   it('s is the one-builder headroom tier between xs and m', () => {
@@ -87,7 +92,7 @@ describe('resolveSizingTier', () => {
 
   it('falls back to the profile default (small) when sizingTier is missing', () => {
     const result = resolveSizingTier({ sizingTier: undefined, profile: 'builder' });
-    expect(result.tier).toBe('xs');
+    expect(result.tier).toBe('s');
     expect(result.resolvedFrom).toBe('profile-default');
   });
 
@@ -103,7 +108,7 @@ describe('resolveSizingTier', () => {
       gatewayClass: 'builder',
       profile: 'standard',
     });
-    expect(result.tier).toBe('xs');
+    expect(result.tier).toBe('s');
     expect(result.resolvedFrom).toBe('class-default');
   });
 

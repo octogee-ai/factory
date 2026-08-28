@@ -69,6 +69,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `gcloud storage cp` the same object manually (see the README).
 # When our patches land upstream, swap back to `npm install -g openclaw@${OPENCLAW_VERSION}`.
 ARG OPENCLAW_VERSION=latest
+ARG OPENCLAW_COMPATIBILITY_HOST_VERSION=""
+ENV OPENCLAW_COMPATIBILITY_HOST_VERSION=${OPENCLAW_COMPATIBILITY_HOST_VERSION}
 ARG OPENCLAW_MATTERMOST_FORK_SHA=""
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
@@ -169,20 +171,20 @@ RUN set -e; \
         || { echo "FATAL: vendored @openclaw/codex repack failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
       test -n "$VENDORED_CODEX" || { echo "FATAL: vendored @openclaw/codex repack produced no tarball"; exit 1; }; \
-      openclaw plugins install "npm-pack:$VENDORED_CODEX" --force > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: vendored @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       rm -rf "$CODEX_REPACK"; \
     else \
-      openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \
     if [ -f "$OC_VENDOR/openclaw-parallel-plugin.tgz" ]; then \
       echo "parallel: installing vendored fork tarball (@${OPENCLAW_VERSION} not on npm)"; \
-      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: vendored @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     else \
-      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \
@@ -193,7 +195,7 @@ RUN set -e; \
       if [ -n "${OPENCLAW_MATTERMOST_FORK_SHA}" ]; then \
         test -s /tmp/openclaw-mattermost-fork.tgz; \
         echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
-        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force > /tmp/oc-plugin.log 2>&1 \
+        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
         printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","replyToModeByChatType":{"direct":"all"},"threadSessionScope":"channel"}}}' \
           | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \
@@ -202,7 +204,7 @@ RUN set -e; \
           || { echo "FATAL: fork @openclaw/mattermost config validation failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       else \
         echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
-        openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" > /tmp/oc-plugin.log 2>&1 \
+        openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
           || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       fi; \
       tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \

@@ -111,7 +111,7 @@ describe("requestBuilderActivationLease", () => {
         status: "requested",
         leaseId: "lease-one",
         generation: 1,
-        sizingTier: "xs",
+        sizingTier: "s",
       },
     });
 
@@ -127,7 +127,7 @@ describe("requestBuilderActivationLease", () => {
             eventKey: "ticket:req-1",
             cause: "ticket",
             entitlementTier: "hobby",
-            sizingTier: "xs",
+            sizingTier: "s",
           },
         },
       },
@@ -421,7 +421,7 @@ describe("requestBuilderActivationLease", () => {
         status: "requested",
         leaseId: "lease-one",
         generation: 1,
-        sizingTier: "xs",
+        sizingTier: "s",
       },
     });
 
@@ -432,7 +432,7 @@ describe("requestBuilderActivationLease", () => {
             status: "requested",
             cause: "ticket",
             entitlementTier: "hobby",
-            sizingTier: "xs",
+            sizingTier: "s",
           },
         },
       },

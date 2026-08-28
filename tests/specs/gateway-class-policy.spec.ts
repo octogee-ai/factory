@@ -527,6 +527,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           "builder-provider": { baseUrl: "https://builder.example/v1", keep: true },
         },
       },
+      browser: {
+        enabled: true,
+        defaultProfile: "openclaw",
+        headless: true,
+        noSandbox: true,
+        evaluateEnabled: true,
+        executablePath: "/usr/bin/chromium",
+      },
       agents: {
         defaults: {
           models: { "builder/provider-model": { label: "Builder model" } },
@@ -548,14 +556,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       ],
       tools: {
         profile: "research",
-        allow: ["read", "discord_send", "exec"],
-        alsoAllow: ["discord_admin", "exec"],
+        allow: ["read", "discord_send", "exec", "browser"],
+        alsoAllow: ["discord_admin", "exec", "browser"],
         deny: ["builder-tool"],
         exec: { mode: "unrestricted", keep: true },
         fs: { workspaceOnly: false },
       },
       plugins: {
-        allow: ["discord-bridge", "codex"],
+        allow: ["discord-bridge", "browser", "codex"],
         load: { paths: ["/tmp/discord-bridge"] },
         installs: { "discord-bridge": { source: "file", path: "/tmp/discord-bridge" } },
         entries: {
@@ -571,6 +579,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
               },
             },
           },
+          browser: { enabled: true },
           codex: { enabled: true },
         },
       },
@@ -644,7 +653,15 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       guildId: "builder-guild",
     });
-    expect(out.plugins.allow).toEqual(["discord-bridge", "codex"]);
+    expect(out.browser).toEqual({
+      enabled: true,
+      defaultProfile: "openclaw",
+      headless: true,
+      noSandbox: true,
+      evaluateEnabled: true,
+      executablePath: "/usr/bin/chromium",
+    });
+    expect(out.plugins.allow).toEqual(["discord-bridge", "browser", "codex"]);
     expect(out.plugins.entries["discord-bridge"]).toEqual({
       enabled: true,
       config: {
@@ -660,6 +677,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.load).toBeUndefined();
     expect(out.plugins.installs).toBeUndefined();
     expect(out.plugins.entries.codex).toEqual({ enabled: true });
+    expect(out.plugins.entries.browser).toEqual({ enabled: true });
     expect(out.auth.profiles["openai-codex:default"]).toEqual({
       provider: "openai-codex",
       mode: "oauth",
@@ -690,8 +708,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
     expect(out.tools).toEqual({
       profile: "research",
-      allow: ["read", "discord_send", "exec"],
-      alsoAllow: ["discord_admin", "exec"],
+      allow: ["read", "discord_send", "exec", "browser"],
+      alsoAllow: ["discord_admin", "exec", "browser"],
       deny: ["builder-tool"],
       exec: { mode: "unrestricted", keep: true },
       fs: { workspaceOnly: false },

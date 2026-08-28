@@ -566,9 +566,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   it("wires the activity-bridge broadcast env vars on the gateway container (Appendix A anti-recurrence: the env var was the silent killer)", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default");
     expect(dep).not.toBeNull();
-    expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_ALL_AGENT_RUNS/);
+    expect(dep).toMatch(/name:\s*OCTOGEE_BROADCAST_ALL_AGENT_RUNS/);
 
-expect(dep).toMatch(/name:\s*OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS/);
+    expect(dep).toMatch(/name:\s*OCTOGEE_BROADCAST_DIAGNOSTIC_EVENTS/);
   });
 
   it("every doc starts with `apiVersion:` (regression: requireIdentity helper used to leak its values onto the first line)", () => {

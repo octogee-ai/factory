@@ -267,9 +267,9 @@ spec:
             # secret-resolver → POST /internal/byok/agent-model-token. The broker
             # resolves platform-or-BYOK per owner and meters per ownerUid.
             {{- end }}
-            - name: OPENCLAW_BROADCAST_ALL_AGENT_RUNS
+            - name: OCTOGEE_BROADCAST_ALL_AGENT_RUNS
               value: "1"
-            - name: OPENCLAW_BROADCAST_DIAGNOSTIC_EVENTS
+            - name: OCTOGEE_BROADCAST_DIAGNOSTIC_EVENTS
               value: "1"
             # Node.js runtime tuning sized per the resolved sizing tier
             # ($preset.nodejs). UV pool default of 4 leaves parallel

@@ -3,11 +3,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
-import { generateIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
-
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
-import { fetchGatewayAuth, persistGatewayDeviceToken } from "../chat-proxy/openclaw/gateway-token.js";
-import { openUpstream } from "../chat-proxy/openclaw/upstream.js";
+import { openAuthenticatedUpstream } from "../chat-proxy/openclaw/authenticated-upstream.js";
 import type { AgentImportAuthorizationIntent } from "@octogee/shared/types/agent-import";
 import { agentImportBrokerBaseUrlFromEnv, createAgentImportStore } from "./agent-import-store.js";
 import {
@@ -126,20 +123,30 @@ export async function readAgentImportWorkspaceState(
   };
 }
 
-let runtimeIdentity: DeviceIdentity | null = null;
+export interface AgentImportOpenClawDeps {
+  gatewayId(): string;
+  gatewayUrl(): string;
+  openAuthenticatedUpstream: typeof openAuthenticatedUpstream;
+  attachRpcClient: typeof attachUpstreamRpcClient;
+}
 
-async function invokeLocalOpenClaw(method: string, params: JsonObject): Promise<unknown> {
-  const gatewayId = process.env.GATEWAY_ID ?? "";
-  const auth = await fetchGatewayAuth({ gatewayId, allowLegacyFallback: true });
-  runtimeIdentity ??= generateIdentity();
-  const ws = await openUpstream({
-    url: process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
-    token: auth.token,
-    deviceToken: auth.deviceToken,
-    identity: runtimeIdentity,
-    onDeviceToken: async (issued) => persistGatewayDeviceToken({ token: issued.deviceToken }),
+const agentImportOpenClawDeps: AgentImportOpenClawDeps = {
+  gatewayId: () => process.env.GATEWAY_ID ?? "",
+  gatewayUrl: () => process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
+  openAuthenticatedUpstream,
+  attachRpcClient: attachUpstreamRpcClient,
+};
+
+export async function invokeLocalOpenClaw(
+  method: string,
+  params: JsonObject,
+  deps: AgentImportOpenClawDeps = agentImportOpenClawDeps,
+): Promise<unknown> {
+  const ws = await deps.openAuthenticatedUpstream({
+    gatewayId: deps.gatewayId(),
+    url: deps.gatewayUrl(),
   });
-  const rpc = attachUpstreamRpcClient(ws, { timeoutMs: 30_000 });
+  const rpc = deps.attachRpcClient(ws, { timeoutMs: 30_000 });
   try {
     const result = await rpc.call(method, params);
     if (!result.ok) throw new Error(`agent import ${method} failed: ${result.reason}`);

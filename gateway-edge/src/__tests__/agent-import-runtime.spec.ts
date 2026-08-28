@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createAgentImportDoctorClient,
+  invokeLocalOpenClaw,
   readAgentImportWorkspaceState,
+  type AgentImportOpenClawDeps,
 } from "../lib/agent-import-runtime.js";
 
 const roots: string[] = [];
@@ -28,6 +30,31 @@ afterEach(() => {
 });
 
 describe("agent import runtime", () => {
+  it("uses the shared authenticated local upstream for import RPCs", async () => {
+    const ws = { close: vi.fn() };
+    const rpc = {
+      call: vi.fn(async () => ({ ok: true as const, result: { outcome: "unchanged" } })),
+      dispose: vi.fn(),
+    };
+    const deps = {
+      gatewayId: () => "eggman-devdays",
+      gatewayUrl: () => "http://127.0.0.1:18789",
+      openAuthenticatedUpstream: vi.fn(async () => ws),
+      attachRpcClient: vi.fn(() => rpc),
+    } as unknown as AgentImportOpenClawDeps;
+
+    await expect(invokeLocalOpenClaw("config.doctor", { candidate: {} }, deps))
+      .resolves.toEqual({ outcome: "unchanged" });
+
+    expect(deps.openAuthenticatedUpstream).toHaveBeenCalledWith({
+      gatewayId: "eggman-devdays",
+      url: "http://127.0.0.1:18789",
+    });
+    expect(rpc.call).toHaveBeenCalledWith("config.doctor", { candidate: {} });
+    expect(rpc.dispose).toHaveBeenCalledTimes(1);
+    expect(ws.close).toHaveBeenCalledTimes(1);
+  });
+
   it("sends the secret-free doctor candidate only to the authenticated pod-local doctor", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       outcome: "unchanged",

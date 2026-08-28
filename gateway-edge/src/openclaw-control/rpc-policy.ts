@@ -693,13 +693,19 @@ export function projectOpenClawHelloForProfile(
   frame: Record<string, unknown>,
   profile: OpenClawBrokerProfile,
 ): Record<string, unknown> {
-  if (profile === "native-owner" || profile === "native-co-owner") {
+  if (profile === "native-owner") {
     return structuredClone(frame);
   }
   const projected = structuredClone(frame);
   const payload = record(projected.payload);
   const features = record(payload?.features);
   if (payload?.type !== "hello-ok") return projected;
+  if (profile === "native-co-owner") {
+    if (Array.isArray(features?.methods)) {
+      features.methods = features.methods.filter((method) => method !== "browser.request");
+    }
+    return projected;
+  }
   const auth = record(payload.auth);
   if (auth) {
     auth.scopes = Array.isArray(auth.scopes)
@@ -1010,8 +1016,13 @@ export function projectOpenClawServerFrameForProfile(
   requestedMethod: string | undefined,
   profile: OpenClawBrokerProfile,
 ): Record<string, unknown> | null {
-  if (profile === "native-owner" || profile === "native-co-owner") {
+  if (profile === "native-owner") {
     return structuredClone(frame);
+  }
+  if (profile === "native-co-owner") {
+    return record(frame.payload)?.type === "hello-ok"
+      ? projectOpenClawHelloForProfile(frame, profile)
+      : structuredClone(frame);
   }
   if (requestedMethod === "config.get" && frame.type === "res") {
     return projectDelegatedConfigGet(frame);
