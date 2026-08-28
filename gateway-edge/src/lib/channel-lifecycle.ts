@@ -55,7 +55,7 @@ export async function setStoredPrimaryChannelArchived(
   const stored = await readStoredChannel(channelDocPath);
   const primary = await requireMattermostChannel(stored.primaryChannelId, "primary");
   assertChannelBinding(primary, stored.binding, "primary");
-  await setMattermostChannelArchived(primary.id, archived);
+  await setMattermostChannelArchived(primary, archived);
 }
 
 export async function setStoredChannelArchived(
@@ -97,6 +97,7 @@ interface StoredMattermostChannel {
   name: string;
   teamId: string;
   type: "P" | "O";
+  deleteAt: number;
 }
 
 async function verifiedPrimaryChannelIdFor(channelDocPath: string): Promise<string> {
@@ -148,11 +149,18 @@ async function readMattermostChannel(path: string): Promise<StoredMattermostChan
     typeof record.id !== "string"
     || typeof record.name !== "string"
     || typeof record.team_id !== "string"
+    || typeof record.delete_at !== "number"
     || (record.type !== "P" && record.type !== "O")
   ) {
     throw new MattermostChannelBindingError(`Mattermost returned an invalid channel for ${path}`);
   }
-  return { id: record.id, name: record.name, teamId: record.team_id, type: record.type };
+  return {
+    id: record.id,
+    name: record.name,
+    teamId: record.team_id,
+    type: record.type,
+    deleteAt: record.delete_at,
+  };
 }
 
 function assertChannelBinding(
@@ -167,12 +175,16 @@ function assertChannelBinding(
   }
 }
 
-async function setMattermostChannelArchived(channelId: string, archived: boolean): Promise<void> {
+async function setMattermostChannelArchived(
+  channel: StoredMattermostChannel,
+  archived: boolean,
+): Promise<void> {
+  if ((channel.deleteAt > 0) === archived) return;
   if (archived) {
-    await mmApi(`/channels/${channelId}`, "DELETE");
+    await mmApi(`/channels/${channel.id}`, "DELETE");
     return;
   }
-  await mmApi(`/channels/${channelId}/restore`, "POST");
+  await mmApi(`/channels/${channel.id}/restore`, "POST");
 }
 
 async function requireMattermostUser(mmUserId: string): Promise<{ id: string; deleteAt: number }> {

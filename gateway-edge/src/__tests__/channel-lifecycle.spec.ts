@@ -35,8 +35,14 @@ const {
 
 const channelPath = "workspaces/alice/channels/general";
 
-function channel(id: string, name: string, teamId = "team", type: "P" | "O" = "P") {
-  return { id, name, team_id: teamId, type };
+function channel(
+  id: string,
+  name: string,
+  teamId = "team",
+  type: "P" | "O" = "P",
+  deleteAt = 0,
+) {
+  return { id, name, team_id: teamId, type, delete_at: deleteAt };
 }
 
 beforeEach(() => {
@@ -89,10 +95,19 @@ describe("channel lifecycle", () => {
   });
 
   it("archives and restores the primary independently from a stored legacy sibling", async () => {
+    let deleteAt = 0;
     h.mmApi.mockImplementation(async (path: string, method = "GET") => {
-      if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general");
-      if (path === "/channels/primary" && method === "DELETE") return {};
-      if (path === "/channels/primary/restore" && method === "POST") return {};
+      if (path === "/channels/primary" && method === "GET") {
+        return channel("primary", "alice-general", "team", "P", deleteAt);
+      }
+      if (path === "/channels/primary" && method === "DELETE") {
+        deleteAt = Date.now();
+        return {};
+      }
+      if (path === "/channels/primary/restore" && method === "POST") {
+        deleteAt = 0;
+        return {};
+      }
       throw new Error(`unexpected ${method} ${path}`);
     });
 
@@ -119,6 +134,64 @@ describe("channel lifecycle", () => {
     expect(h.mmApi).toHaveBeenCalledWith("/channels/primary");
     expect(h.mmApi).toHaveBeenCalledWith("/channels/primary", "DELETE");
     expect(h.mmApi.mock.calls.some(([path]) => String(path).includes("legacy"))).toBe(false);
+  });
+
+  it("treats an already archived primary channel as an idempotent no-op", async () => {
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") {
+        return channel("primary", "alice-general", "team", "P", Date.now());
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await setStoredPrimaryChannelArchived(channelPath, true);
+
+    expect(h.mmApi).toHaveBeenCalledTimes(1);
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/primary");
+  });
+
+  it("treats an already active primary channel as an idempotent no-op", async () => {
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") {
+        return channel("primary", "alice-general");
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await setStoredPrimaryChannelArchived(channelPath, false);
+
+    expect(h.mmApi).toHaveBeenCalledTimes(1);
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/primary");
+  });
+
+  it("rejects channel state without a numeric deletion timestamp", async () => {
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") {
+        return { ...channel("primary", "alice-general"), delete_at: "0" };
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await expect(setStoredPrimaryChannelArchived(channelPath, true))
+      .rejects.toBeInstanceOf(MattermostChannelBindingError);
+
+    expect(h.mmApi).toHaveBeenCalledTimes(1);
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/primary");
+  });
+
+  it("rejects an already archived channel whose stored binding is forged", async () => {
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") {
+        return channel("primary", "other-general", "other-team", "P", Date.now());
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await expect(setStoredPrimaryChannelArchived(channelPath, true))
+      .rejects.toBeInstanceOf(MattermostChannelBindingError);
+
+    expect(h.mmApi).toHaveBeenCalledTimes(1);
+    expect(h.mmApi).toHaveBeenCalledWith("/channels/primary");
   });
 
   it("maps a missing Mattermost identity without treating channel lifecycle failures as membership errors", () => {
