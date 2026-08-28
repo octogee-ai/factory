@@ -423,8 +423,7 @@ function agentCanRunInConversation(
   if (!agentCanReadSession(agentId, workspaceSlug, binding)) return false;
   return parsed.kind === "project" || (
     binding.lane === "workspace" &&
-    binding.channelName !== "admin" &&
-    binding.channelName !== "coach-dm"
+    binding.channelName !== "admin"
   );
 }
 
