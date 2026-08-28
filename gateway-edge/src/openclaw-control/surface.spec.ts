@@ -342,6 +342,8 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/favicon.svg",
     "/provider-icons/ProviderIcon-openai.svg",
     "/assets/app-4c3f.js?build=1",
+    "/fonts/instrument-sans.css",
+    "/fonts/instrument-sans-latin.woff2",
   ])("forwards the gateway token only for the required UI resource %s", async (suffix) => {
     let requests = 0;
     let authorization: string | undefined;
@@ -410,6 +412,9 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     "/api/users/one/two/avatar",
     "/avatar/octogee-eggman-coach/extra",
     "/assets/app.js/extra",
+    "/fonts/license.txt",
+    "/fonts/nested/font.woff2",
+    "/fonts/font.js",
     "/approve/approval%3Aok/extra",
   ])("rejects non-UI HTTP resource %s before loading or forwarding the gateway token", async (suffix) => {
     let requests = 0;

@@ -178,6 +178,7 @@ const DASHBOARD_STATIC_EXTENSIONS = new Set([
   ".webmanifest",
   ".webp",
 ]);
+const DASHBOARD_FONT_EXTENSIONS = new Set([".css", ".woff2"]);
 const LONG_RUNNING_RPC_METHODS = new Set(["browser.request", "config.apply"]);
 const defaultSessions = new OpenClawControlSessionManager();
 const defaultLimiter = new OpenClawControlResourceLimiter();
@@ -370,6 +371,13 @@ function isDashboardStaticAsset(pathname: string): boolean {
   return DASHBOARD_STATIC_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
 }
 
+function isDashboardFontAsset(pathname: string): boolean {
+  if (!pathname.startsWith("/fonts/")) return false;
+  const filename = pathname.slice("/fonts/".length);
+  return /^[A-Za-z0-9@+._-]+$/u.test(filename) &&
+    DASHBOARD_FONT_EXTENSIONS.has(path.extname(filename).toLowerCase());
+}
+
 function isDashboardProviderIcon(pathname: string): boolean {
   return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
 }
@@ -395,6 +403,7 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     isDashboardDynamicRoute(route) ||
     DASHBOARD_ROOT_ASSETS.has(route) ||
     isDashboardStaticAsset(route) ||
+    isDashboardFontAsset(route) ||
     isDashboardControlResourcePath(route) ||
     isDashboardAssistantMediaResource(parsed) ||
     isDashboardProviderIcon(route) ||
