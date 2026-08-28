@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const repoRoot = resolve(import.meta.dirname, "../..");
 const script = resolve(repoRoot, "scripts/lib/image-fingerprint-reuse.sh");
 const directories: string[] = [];
+const cachedDigest = `sha256:${"a".repeat(64)}`;
+const builtDigest = `sha256:${"b".repeat(64)}`;
 
 afterEach(() => {
   for (const directory of directories.splice(0)) {
@@ -47,8 +49,9 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*"if-deadbeef"*) echo "sha256:cafef00d"; exit 0 ;;',
-        '  *"tags add"*"if-deadbeef"*"abc1234"*) exit 0 ;;',
+        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        '  *"artifacts tags create abc1234"*) exit 0 ;;',
         '  *) exit 1 ;;',
         "esac",
       ].join("\n"),
@@ -63,9 +66,9 @@ describe("image-fingerprint-reuse.sh check", () => {
     expect(result.stdout).toContain("fingerprint=deadbeef");
     expect(result.stdout).toContain("exists=true");
     const calls = readFileSync(log, "utf8");
-    expect(calls).toContain("artifacts docker images describe us-west1-docker.pkg.dev/octogee/octogee/octogee-api:if-deadbeef");
+    expect(calls).toContain("artifacts docker tags list us-west1-docker.pkg.dev/octogee/octogee");
     expect(calls).toContain(
-      "artifacts docker tags add us-west1-docker.pkg.dev/octogee/octogee/octogee-api:if-deadbeef us-west1-docker.pkg.dev/octogee/octogee/octogee-api:abc1234",
+      `artifacts tags create abc1234 --location=us-west1 --repository=octogee --package=octogee-api --version=${cachedDigest}`,
     );
   });
 
@@ -76,8 +79,9 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*"if-deadbeef"*) echo "sha256:cafef00d"; exit 0 ;;',
-        '  *"tags add"*"if-deadbeef"*"abc1234"*) exit 0 ;;',
+        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        '  *"artifacts tags create abc1234"*) exit 0 ;;',
         '  *) exit 1 ;;',
         "esac",
       ].join("\n"),
@@ -91,7 +95,7 @@ describe("image-fingerprint-reuse.sh check", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("::notice::");
     expect(result.stderr).toContain("octogee-api");
-    expect(result.stderr).toContain("sha256:cafef00d");
+    expect(result.stderr).toContain(cachedDigest);
     expect(result.stderr).toContain("if-deadbeef");
     expect(result.stderr).toContain("BUILD_SHA");
   });
@@ -99,7 +103,7 @@ describe("image-fingerprint-reuse.sh check", () => {
   it("falls back to building when no image carries the input fingerprint tag", () => {
     const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-check-"));
     directories.push(directory);
-    const log = fakeGcloud(directory, "exit 1");
+    const log = fakeGcloud(directory, "exit 0");
     fakeNode(directory, 'echo "deadbeef"');
 
     const result = run(["check", "octogee-api", "us-west1-docker.pkg.dev/octogee/octogee", "abc1234", "HEAD"], directory, {
@@ -127,16 +131,17 @@ describe("image-fingerprint-reuse.sh check", () => {
     expect(result.stderr).toContain("::warning::");
   });
 
-  it("falls back to building when the fingerprint tag exists but aliasing it fails", () => {
+  it("fails closed when the fingerprint tag exists but its immutable alias cannot be created", () => {
     const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-check-"));
     directories.push(directory);
     const log = fakeGcloud(
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*"if-deadbeef"*) exit 0 ;;',
-        '  *"tags add"*) exit 1 ;;',
-        '  *) exit 1 ;;',
+        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        '  *"artifacts tags create abc1234"*) exit 1 ;;',
+        '  *) exit 0 ;;',
         "esac",
       ].join("\n"),
     );
@@ -146,9 +151,35 @@ describe("image-fingerprint-reuse.sh check", () => {
       GCLOUD_ARGS_LOG: log,
     });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("exists=false");
-    expect(result.stderr).toContain("::warning::");
+    expect(result.status).toBe(2);
+    expect(result.stdout).not.toContain("exists=false");
+    expect(result.stderr).toContain("failed to create immutable alias");
+  });
+
+  it("fails closed when another producer creates a conflicting short tag during alias creation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-check-"));
+    directories.push(directory);
+    const marker = join(directory, "race");
+    const log = fakeGcloud(
+      directory,
+      [
+        'case "$*" in',
+        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        `  *"tags list"*"tags/abc1234"*) if [ -f "$RACE_MARKER" ]; then echo "${builtDigest}"; fi; exit 0 ;;`,
+        '  *"artifacts tags create abc1234"*) touch "$RACE_MARKER"; exit 1 ;;',
+        '  *) exit 0 ;;',
+        "esac",
+      ].join("\n"),
+    );
+    fakeNode(directory, 'echo "deadbeef"');
+
+    const result = run(["check", "octogee-api", "us-west1-docker.pkg.dev/octogee/octogee", "abc1234", "HEAD"], directory, {
+      GCLOUD_ARGS_LOG: log,
+      RACE_MARKER: marker,
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("immutable tag collision");
   });
 });
 
@@ -160,10 +191,10 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*":abc1234"*) echo "sha256:new"; exit 0 ;;',
-        '  *"images describe"*"if-deadbeef"*) exit 1 ;;',
-        '  *"tags add"*) exit 0 ;;',
-        '  *) exit 1 ;;',
+        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
+        '  *"tags list"*"tags/if-deadbeef"*) exit 0 ;;',
+        '  *"artifacts tags create if-deadbeef"*) exit 0 ;;',
+        '  *) exit 0 ;;',
         "esac",
       ].join("\n"),
     );
@@ -178,7 +209,7 @@ describe("image-fingerprint-reuse.sh record", () => {
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(log, "utf8");
     expect(calls).toContain(
-      "artifacts docker tags add us-west1-docker.pkg.dev/octogee/octogee/octogee-api:abc1234 us-west1-docker.pkg.dev/octogee/octogee/octogee-api:if-deadbeef",
+      `artifacts tags create if-deadbeef --location=us-west1 --repository=octogee --package=octogee-api --version=${builtDigest}`,
     );
   });
 
@@ -197,20 +228,20 @@ describe("image-fingerprint-reuse.sh record", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("::warning::");
     const calls = readFileSync(log, "utf8");
-    expect(calls).not.toContain("tags add");
+    expect(calls).not.toContain("tags create");
   });
 
-  it("is best-effort when the final tag-add transiently fails: warns and exits 0", () => {
+  it("is best-effort when immutable tag creation transiently fails: warns and exits 0", () => {
     const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-record-"));
     directories.push(directory);
     const log = fakeGcloud(
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*":abc1234"*) echo "sha256:new"; exit 0 ;;',
-        '  *"images describe"*"if-deadbeef"*) exit 1 ;;',
-        '  *"tags add"*) exit 1 ;;',
-        '  *) exit 1 ;;',
+        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
+        '  *"tags list"*"tags/if-deadbeef"*) exit 0 ;;',
+        '  *"artifacts tags create if-deadbeef"*) exit 1 ;;',
+        '  *) exit 0 ;;',
         "esac",
       ].join("\n"),
     );
@@ -226,10 +257,37 @@ describe("image-fingerprint-reuse.sh record", () => {
     expect(result.stderr).toContain("::warning::");
   });
 
+  it("fails closed when another producer records a conflicting fingerprint during tag creation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-record-"));
+    directories.push(directory);
+    const marker = join(directory, "race");
+    const log = fakeGcloud(
+      directory,
+      [
+        'case "$*" in',
+        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
+        `  *"tags list"*"tags/if-deadbeef"*) if [ -f "$RACE_MARKER" ]; then echo "${cachedDigest}"; fi; exit 0 ;;`,
+        '  *"artifacts tags create if-deadbeef"*) touch "$RACE_MARKER"; exit 1 ;;',
+        '  *) exit 0 ;;',
+        "esac",
+      ].join("\n"),
+    );
+    fakeNode(directory, "exit 0");
+
+    const result = run(
+      ["record", "octogee-api", "us-west1-docker.pkg.dev/octogee/octogee", "abc1234", "deadbeef"],
+      directory,
+      { GCLOUD_ARGS_LOG: log, RACE_MARKER: marker },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("immutable tag collision");
+  });
+
   it("is a no-op when the fingerprint tag already matches the freshly built digest", () => {
     const directory = mkdtempSync(join(tmpdir(), "octogee-image-fingerprint-record-"));
     directories.push(directory);
-    const log = fakeGcloud(directory, 'echo "sha256:same"');
+    const log = fakeGcloud(directory, `echo "${builtDigest}"`);
     fakeNode(directory, "exit 0");
 
     const result = run(
@@ -240,7 +298,7 @@ describe("image-fingerprint-reuse.sh record", () => {
 
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(log, "utf8");
-    expect(calls).not.toContain("tags add");
+    expect(calls).not.toContain("tags create");
   });
 
   it("fails closed when the fingerprint tag already points at a different digest", () => {
@@ -250,9 +308,9 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        '  *"images describe"*":abc1234"*) echo "sha256:new"; exit 0 ;;',
-        '  *"images describe"*"if-deadbeef"*) echo "sha256:old"; exit 0 ;;',
-        '  *) exit 1 ;;',
+        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
+        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *) exit 0 ;;',
         "esac",
       ].join("\n"),
     );
@@ -266,7 +324,7 @@ describe("image-fingerprint-reuse.sh record", () => {
 
     expect(result.status).toBe(2);
     const calls = readFileSync(log, "utf8");
-    expect(calls).not.toContain("tags add");
+    expect(calls).not.toContain("tags create");
   });
 });
 

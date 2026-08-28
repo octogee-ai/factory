@@ -29,8 +29,9 @@
 # can safely do `... | tee -a "$GITHUB_OUTPUT"` or capture stdout directly.
 # On a cache hit it aliases <ar-repo>/<image>:<short-sha> to the existing
 # if-<hash> digest before printing exists=true. Any failure along the way
-# (fingerprint computation, AR lookup, tag-add) is logged as a warning and
-# falls back to exists=false — reuse is an optimization, never a gate.
+# Fingerprint computation or a missing cached tag falls back to exists=false.
+# An ambiguous cached lookup or target-tag write fails closed because release
+# tags are immutable.
 #
 # `record` runs after a real build+push, tagging the just-pushed
 # <ar-repo>/<image>:<short-sha> digest with if-<fingerprint> so a future
@@ -42,12 +43,66 @@
 # Exit codes:
 #   0  success (including "fell back to building" outcomes)
 #   1  bad invocation
-#   2  fingerprint collision detected (record mode only) — fail closed
+#   2  immutable tag collision or ambiguous tag state — fail closed
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 FINGERPRINT_SCRIPT="$REPO_ROOT/.github/actions/build-image-fingerprint/image-fingerprint.mjs"
+TAG_DIGEST_RESOLVER="$REPO_ROOT/.github/actions/release-digest-manifest/resolve-tag-digest.sh"
+
+resolve_tag_digest() {
+  local registry_suffix="${1#*-docker.pkg.dev/}"
+  "$TAG_DIGEST_RESOLVER" "$1" "${registry_suffix%%/*}" "$2"
+}
+
+create_immutable_tag() {
+  local ar_repo="$1" image="$2" tag="$3" intended_digest="$4"
+  local registry_suffix location registry_project repository_name reference observed create_error lookup_status
+  registry_suffix="${ar_repo#*-docker.pkg.dev/}"
+  location="${ar_repo%%-docker.pkg.dev/*}"
+  registry_project="${registry_suffix%%/*}"
+  repository_name="${registry_suffix#*/}"
+  reference="${ar_repo}/${image}:${tag}"
+
+  lookup_status=0
+  observed="$(resolve_tag_digest "$ar_repo" "$reference")" || lookup_status=$?
+  if [ "$lookup_status" = "0" ]; then
+    if [ "$observed" != "$intended_digest" ]; then
+      echo "immutable tag collision: ${reference} is ${observed}, expected ${intended_digest}" >&2
+      return 2
+    fi
+    return 0
+  fi
+  if [ "$lookup_status" != "3" ]; then
+    echo "could not establish absence of ${reference}; refusing to create it" >&2
+    return 2
+  fi
+
+  create_error="$(mktemp)"
+  if ! gcloud artifacts tags create "$tag" \
+    --location="$location" \
+    --repository="$repository_name" \
+    --package="$image" \
+    --version="$intended_digest" \
+    --project="$registry_project" --quiet 2>"$create_error"; then
+    lookup_status=0
+    observed="$(resolve_tag_digest "$ar_repo" "$reference")" || lookup_status=$?
+    if [ "$lookup_status" = "0" ] && [ "$observed" != "$intended_digest" ]; then
+      cat "$create_error" >&2
+      rm -f "$create_error"
+      echo "immutable tag collision: ${reference} is ${observed}, expected ${intended_digest}" >&2
+      return 2
+    fi
+    if [ "$lookup_status" != "0" ]; then
+      cat "$create_error" >&2
+      rm -f "$create_error"
+      echo "could not create immutable tag ${reference}" >&2
+      return 1
+    fi
+  fi
+  rm -f "$create_error"
+}
 
 usage() {
   echo "usage: image-fingerprint-reuse.sh check <image> <ar-repo> <short-sha> <ref> | record <image> <ar-repo> <short-sha> <fingerprint>" >&2
@@ -86,13 +141,22 @@ case "$mode" in
     # Capture the digest from the same describe call we'd make anyway (no
     # extra AR read) so a reuse hit can name it in the notice below.
     digest=""
-    if ! digest="$(gcloud artifacts docker images describe "$if_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
+    lookup_status=0
+    digest="$(resolve_tag_digest "$ar_repo" "$if_ref")" || lookup_status=$?
+    if [ "$lookup_status" = "3" ]; then
       echo "no cached ${image} image for input fingerprint if-${fingerprint}; will build" >&2
       printf 'exists=false\n'
       exit 0
     fi
+    if [ "$lookup_status" != "0" ]; then
+      echo "::warning::could not resolve ${if_ref}; falling back to build" >&2
+      printf 'exists=false\n'
+      exit 0
+    fi
 
-    if gcloud artifacts docker tags add "$if_ref" "$target_ref" --quiet >&2; then
+    alias_status=0
+    create_immutable_tag "$ar_repo" "$image" "$short_sha" "$digest" || alias_status=$?
+    if [ "$alias_status" = "0" ]; then
       # The reused container's own BUILD_SHA env var still reports whichever
       # commit originally produced these bytes (#1116) — that's honest, but
       # it can read as stale/confusing next to the ${short_sha} AR tag now
@@ -102,8 +166,8 @@ case "$mode" in
       echo "reused ${image} from unchanged inputs (if-${fingerprint})" >&2
       printf 'exists=true\n'
     else
-      echo "::warning::failed to alias ${target_ref} from ${if_ref}; falling back to build" >&2
-      printf 'exists=false\n'
+      echo "failed to create immutable alias ${target_ref} from ${if_ref}" >&2
+      exit 2
     fi
     ;;
 
@@ -121,15 +185,21 @@ case "$mode" in
     # here must never fail the job. Worst case, the if-tag never gets
     # written and a future build with identical inputs just rebuilds.
     new_digest=""
-    if ! new_digest="$(gcloud artifacts docker images describe "$src_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
+    source_status=0
+    new_digest="$(resolve_tag_digest "$ar_repo" "$src_ref")" || source_status=$?
+    if [ "$source_status" != "0" ]; then
       echo "::warning::could not resolve digest for ${src_ref} after build; skipping fingerprint record (a future build will just rebuild)" >&2
       exit 0
     fi
 
     existing_digest=""
-    if existing_digest="$(gcloud artifacts docker images describe "$if_ref" --format='value(image_summary.digest)' --quiet 2>/dev/null)"; then
-      :
-    else
+    lookup_status=0
+    existing_digest="$(resolve_tag_digest "$ar_repo" "$if_ref")" || lookup_status=$?
+    if [ "$lookup_status" != "0" ] && [ "$lookup_status" != "3" ]; then
+      echo "::warning::could not resolve ${if_ref}; skipping fingerprint record" >&2
+      exit 0
+    fi
+    if [ "$lookup_status" = "3" ]; then
       existing_digest=""
     fi
 
@@ -138,8 +208,13 @@ case "$mode" in
     fi
 
     if [ -z "$existing_digest" ]; then
-      if ! gcloud artifacts docker tags add "$src_ref" "$if_ref" --quiet; then
-        echo "::warning::failed to tag ${if_ref} from ${src_ref}; skipping fingerprint record (a future build will just rebuild)" >&2
+      create_status=0
+      create_immutable_tag "$ar_repo" "$image" "if-${fingerprint}" "$new_digest" || create_status=$?
+      if [ "$create_status" = "2" ]; then
+        exit 2
+      fi
+      if [ "$create_status" != "0" ]; then
+        echo "::warning::failed to create ${if_ref}; skipping fingerprint record" >&2
         exit 0
       fi
       echo "recorded ${if_ref} -> ${new_digest}" >&2
