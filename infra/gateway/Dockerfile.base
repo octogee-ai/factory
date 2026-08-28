@@ -75,11 +75,18 @@ ARG OPENCLAW_MATTERMOST_FORK_SHA=""
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
 COPY infra/gateway/verify-openclaw-tool-policy.mjs /tmp/verify-openclaw-tool-policy.mjs
-RUN npm install -g /tmp/openclaw-fork.tgz \
-    && openclaw --version \
-    && OPENCLAW_ROOT="$(npm root -g)/openclaw" \
-    && rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
-    || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
+RUN set -e; \
+    npm install -g /tmp/openclaw-fork.tgz; \
+    OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
+    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
+    test -n "$OPENCLAW_CORE_VERSION"; \
+    if [ -n "$OPENCLAW_COMPATIBILITY_HOST_VERSION" ]; then \
+      test "$OPENCLAW_CORE_VERSION" = "$OPENCLAW_COMPATIBILITY_HOST_VERSION" \
+        || { echo "FATAL: installed OpenClaw core $OPENCLAW_CORE_VERSION does not match compatibility host $OPENCLAW_COMPATIBILITY_HOST_VERSION"; exit 1; }; \
+    fi; \
+    openclaw --version; \
+    rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
+      || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
 RUN OPENCLAW_ROOT="$(npm root -g)/openclaw" \
     && node /tmp/verify-openclaw-tool-policy.mjs "$OPENCLAW_ROOT" \
     || { echo "FATAL: installed OpenClaw runtime violates Octogee tool policy"; exit 1; }
@@ -161,12 +168,15 @@ ENV HOME=/home/node
 # through to the npm path unchanged, so current/preview bases rebuild
 # byte-identically.
 RUN set -e; \
-    OC_VENDOR="$(npm root -g)/openclaw/vendor"; \
+    OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
+    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
+    test -n "$OPENCLAW_CORE_VERSION"; \
+    OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
     if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
-      echo "codex: installing vendored fork tarball (@${OPENCLAW_VERSION} not on npm)"; \
+      echo "codex: installing vendored fork tarball for core $OPENCLAW_CORE_VERSION (image ${OPENCLAW_VERSION})"; \
       CODEX_REPACK="$(mktemp -d)"; \
       tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
-      node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package: " + pkg.name); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_VERSION"; \
+      node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package: " + pkg.name); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
       (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1) \
         || { echo "FATAL: vendored @openclaw/codex repack failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
@@ -175,7 +185,7 @@ RUN set -e; \
         || { echo "FATAL: vendored @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
       rm -rf "$CODEX_REPACK"; \
     else \
-      openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \
@@ -218,8 +228,8 @@ RUN set -e; \
     CODEX_PACKAGE="$(find /opt/openclaw-codex-deps/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)"; \
     test -n "$CODEX_PACKAGE"; \
     INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "@openclaw/codex") process.exit(1); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
-    test "$INSTALLED_CODEX" = "$OPENCLAW_VERSION" \
-      || { echo "FATAL: @openclaw/codex version $INSTALLED_CODEX does not match OpenClaw $OPENCLAW_VERSION"; exit 1; }; \
+    test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION" \
+      || { echo "FATAL: @openclaw/codex version $INSTALLED_CODEX does not match installed OpenClaw core $OPENCLAW_CORE_VERSION"; exit 1; }; \
     find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' 2>/dev/null | grep -q . \
       || { echo "FATAL: @openclaw/parallel-plugin missing from staged /opt tree"; exit 1; }; \
     if [ "$MM_STAGED" = "1" ]; then \

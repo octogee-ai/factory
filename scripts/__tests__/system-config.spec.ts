@@ -647,6 +647,18 @@ describe("system_config restore", () => {
     expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(false);
   });
 
+  it("does not add a legacy default selector under explicit ownership", () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        entries: { "octogee-ceckert-coach": { name: "BenderEcho (ceckert)" } },
+      },
+    };
+
+    expect(removeLegacyMacConfig(config, { GATEWAY_BUILDER_SLUG: "ceckert" })).toBe(false);
+    expect(config.agents.entries["octogee-ceckert-coach"]).not.toHaveProperty("default");
+  });
+
   it("does not default a coach when no Builder slug is configured", () => {
     const config = { agents: { entries: { "octogee-ceckert-coach": {} } } };
 

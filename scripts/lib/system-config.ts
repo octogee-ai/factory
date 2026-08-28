@@ -353,7 +353,7 @@ function selectBuilderCoach(
   env: NodeJS.ProcessEnv,
 ): boolean {
   const builderSlug = env.GATEWAY_BUILDER_SLUG?.trim();
-  if (!builderSlug) return false;
+  if (!builderSlug || agents?.ownership === "explicit") return false;
   const coach = rosterAgentEntry(agents, `octogee-${builderSlug}-coach`);
   if (!coach || coach.default === true) return false;
   coach.default = true;
