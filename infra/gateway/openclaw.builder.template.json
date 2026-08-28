@@ -185,9 +185,6 @@
         "direct": "all"
       },
       "threadSessionScope": "channel",
-      "agentActivity": {
-        "publisher": "external"
-      },
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },

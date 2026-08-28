@@ -435,7 +435,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("enables durable Mattermost run threads and the external Activity writer", () => {
+  it("enables durable Mattermost run threads without the retired activity flag", () => {
     const config: any = { channels: { mattermost: {} } };
 
     applyPreBootPatches(config, {});
@@ -444,8 +444,8 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
-      agentActivity: { publisher: "external" },
     });
+    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
 
   it("creates the Mattermost root settings before the fleet mounts a coach account", () => {
@@ -457,8 +457,8 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
-      agentActivity: { publisher: "external" },
     });
+    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
 
   it("migrates direct threading without replacing other chat-type reply modes", () => {
@@ -480,7 +480,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
   });
 
-  it("normalizes the root external writer while removing legacy account overrides", () => {
+  it("removes obsolete root activity configuration and legacy account overrides", () => {
     const config: any = {
       channels: {
         mattermost: {
@@ -506,7 +506,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
     });
-    expect(config.channels.mattermost).toHaveProperty("agentActivity", { publisher: "external" });
+    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
@@ -984,7 +984,6 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
-          agentActivity: { publisher: "external" },
           baseUrl: "${MM_URL}",
           commands: "legacy-commands",
           accounts: {
@@ -1103,7 +1102,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
-          agentActivity: { publisher: "external" },
           baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {
