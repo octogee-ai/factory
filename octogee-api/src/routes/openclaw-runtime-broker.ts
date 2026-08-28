@@ -158,13 +158,6 @@ function extractRefPath(ref: unknown): string | null {
   return segments.length > 0 ? segments.join("/") : null;
 }
 
-function workspaceSlugFromChannelPath(path: string | null): string | null {
-  if (!path) return null;
-  const parts = path.split("/").filter(Boolean);
-  if (parts[0] !== "workspaces") return null;
-  return isValidUsername(parts[1]) ? parts[1] : null;
-}
-
 interface BoundChannelPath {
   workspaceSlug: string;
   ownerPath: string;

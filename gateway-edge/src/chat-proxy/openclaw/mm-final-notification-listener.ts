@@ -44,24 +44,33 @@ interface BufferedCoachPost extends CoachDmEventPayload {
   fingerprint: string;
 }
 
-function parseCoachPost(data: unknown, coachMmUserId: string): BufferedCoachPost | null {
+function parseMattermostPost(data: unknown): Record<string, unknown> | null {
   const envelope = data as Record<string, unknown> | undefined;
   if (!envelope || typeof envelope.post !== "string") return null;
-  let post: Record<string, unknown>;
   try {
     const parsed = JSON.parse(envelope.post) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    post = parsed as Record<string, unknown>;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+function stringField(post: Record<string, unknown>, field: string): string {
+  const value = post[field];
+  return typeof value === "string" ? value : "";
+}
+
+function parseCoachPost(data: unknown, coachMmUserId: string): BufferedCoachPost | null {
+  const post = parseMattermostPost(data);
+  if (!post) return null;
   const props = post.props;
   if (props !== null && typeof props === "object" && "octogee" in props) return null;
-  const postId = typeof post.id === "string" ? post.id : "";
-  const channelId = typeof post.channel_id === "string" ? post.channel_id : "";
-  const authorId = typeof post.user_id === "string" ? post.user_id : "";
+  const postId = stringField(post, "id");
+  const channelId = stringField(post, "channel_id");
+  const authorId = stringField(post, "user_id");
   if (!postId || !channelId || authorId !== coachMmUserId) return null;
-  const message = typeof post.message === "string" ? post.message : "";
+  const message = stringField(post, "message");
   const createdAt = typeof post.create_at === "number" ? post.create_at : Date.now();
   const updatedAt = typeof post.update_at === "number" ? post.update_at : createdAt;
   return {

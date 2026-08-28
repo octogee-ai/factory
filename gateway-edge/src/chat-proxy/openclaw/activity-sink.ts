@@ -741,7 +741,6 @@ class ActivitySinkWriter implements ActivitySink {
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     post: ActivityMattermostPost,
-    binding: ActivitySinkBinding,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { deps, now } = this.runtime;
     if (!receipt.postId) {
@@ -950,7 +949,7 @@ class ActivitySinkWriter implements ActivitySink {
     const { envelope, binding } = input;
     if (recoveredClaim) {
       const recovered = await this.recoverExistingPost(envelope, receipt, binding);
-      if (recovered) return this.commitRecovered(envelope, receipt, recovered, binding);
+      if (recovered) return this.commitRecovered(envelope, receipt, recovered);
     }
     if (envelope.type === TURN_STARTED) {
       if (!activityRootPostId) {

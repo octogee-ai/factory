@@ -1499,7 +1499,6 @@ async function verifyOwnerWorkspaceTurnFailClosed(
   }
 }
 
-// eslint-disable-next-line complexity -- dependency defaults remain centralized so tests and production resolve the same broker contract.
 function resolveFleetBrokerRouteDeps(
   opts: { db: Firestore } & FleetBrokerRouteDeps,
 ): ResolvedFleetBrokerRouteDeps {
