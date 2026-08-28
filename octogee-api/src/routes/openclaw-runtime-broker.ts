@@ -46,7 +46,6 @@ interface AgentIdentity {
 
 interface ChannelProjectionTarget {
   primaryChannelId: string;
-  activityChannelId: string;
   channelDocPath: string;
 }
 
@@ -350,7 +349,7 @@ async function resolveChannelProjectionTarget(
   const binding = boundChannelPath(channelDocPath);
   if (!binding) return null;
   if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
-  return { primaryChannelId, activityChannelId: primaryChannelId, channelDocPath: channelDocPath! };
+  return { primaryChannelId, channelDocPath: channelDocPath! };
 }
 
 type SessionContextLookup = {
@@ -473,7 +472,6 @@ async function resolveAuthorizedConversationTarget(
   }
   return {
     primaryChannelId: conversationId,
-    activityChannelId: conversationId,
     channelDocPath: channel.binding.lane === "project"
       ? `workspaces/${channel.binding.workspaceSlug}/projects/${channel.binding.projectSlug}/channels/${channel.binding.channelName}`
       : `workspaces/${channel.binding.workspaceSlug}/channels/${channel.binding.channelName}`,

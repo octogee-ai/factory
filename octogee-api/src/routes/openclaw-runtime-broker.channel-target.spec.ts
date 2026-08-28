@@ -49,8 +49,8 @@ beforeEach(() => {
   assignedSlugs.mockReset().mockResolvedValue(["alice"]);
 });
 
-describe("activity channel target", () => {
-  it("returns the primary as the activity target without a stored sibling", async () => {
+describe("channel projection target", () => {
+  it("returns the canonical channel target", async () => {
     const response = await request(app())
       .post("/internal/openclaw/activity/channel-target")
       .send({ primaryChannelId: "primary" });
@@ -59,7 +59,6 @@ describe("activity channel target", () => {
     expect(response.body).toEqual({
       target: {
         primaryChannelId: "primary",
-        activityChannelId: "primary",
         channelDocPath: "workspaces/alice/channels/coach-dm",
       },
     });
@@ -73,10 +72,10 @@ describe("activity channel target", () => {
     expect(response.status).toBe(404);
   });
 
-  it("does not resolve a legacy sibling as a primary target", async () => {
+  it("does not resolve an unknown channel target", async () => {
     const response = await request(app())
       .post("/internal/openclaw/activity/channel-target")
-      .send({ primaryChannelId: "legacy-sibling" });
+      .send({ primaryChannelId: "unknown-channel" });
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "not_found" });

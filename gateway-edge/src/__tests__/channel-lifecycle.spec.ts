@@ -50,7 +50,7 @@ beforeEach(() => {
   h.docs.set("workspaces/alice", { mattermost: { teamId: "team" } });
   h.docs.set(channelPath, {
     kind: "general",
-    mattermost: { channelId: "primary", activityChannelId: "legacy" },
+    mattermost: { channelId: "primary" },
   });
   h.mmApi.mockReset();
   h.logger.error.mockReset();
@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 
 describe("channel lifecycle", () => {
-  it("joins and leaves only the primary channel even when a legacy sibling is stored", async () => {
+  it("joins and leaves the canonical channel", async () => {
     h.mmApi.mockImplementation(async (path: string, method = "GET") => {
       if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general");
       if (path === "/users/member" && method === "GET") return { id: "member", delete_at: 0 };
@@ -72,7 +72,6 @@ describe("channel lifecycle", () => {
 
     expect(h.mmApi).toHaveBeenCalledWith("/channels/primary/members", "POST", { user_id: "member" });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/primary/members/member", "DELETE");
-    expect(h.mmApi.mock.calls.some(([path]) => String(path).includes("legacy"))).toBe(false);
   });
 
   it.each([
@@ -94,7 +93,7 @@ describe("channel lifecycle", () => {
     expect(h.mmApi.mock.calls.some(([, method]) => method === "POST" || method === "DELETE")).toBe(false);
   });
 
-  it("archives and restores the primary independently from a stored legacy sibling", async () => {
+  it("archives and restores the canonical channel", async () => {
     let deleteAt = 0;
     h.mmApi.mockImplementation(async (path: string, method = "GET") => {
       if (path === "/channels/primary" && method === "GET") {

@@ -77,7 +77,6 @@ const binding = {
   mainChannelId: "main-1",
   mainRootPostId: "turn-1",
   inputPostId: "turn-1",
-  activityChannelId: "activity-1",
   channelDocPath: "workspaces/acme/channels/build",
   channelCreateAt: 100,
   coachToken: "coach-token",
@@ -101,9 +100,7 @@ describe("normalized Activity intake", () => {
       receipt: {
         eventKey: validEnvelope().eventKey,
         postId: "post-1",
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
-        rootOwnership: "sink-created" as const,
+        activityRootPostId: "turn-1",
       },
     }));
     const envelope = validEnvelope();
@@ -121,45 +118,40 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "persisted",
         postIds: ["post-1"],
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
+        activityRootPostId: "turn-1",
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
     expect(onPersisted).toHaveBeenCalledWith({
       envelope,
       binding,
-      activityRootPostId: "activity-root-1",
+      activityRootPostId: "turn-1",
       outcome: "persisted",
     });
   });
 
   it("accepts a same-channel turn-start receipt that adopts the input root", async () => {
     const envelope = startedEnvelope("human");
-    const sameChannelBinding = { ...binding, activityChannelId: binding.mainChannelId };
     const append = vi.fn(async () => ({
       outcome: "persisted" as const,
       postIds: [],
       receipt: {
         eventKey: envelope.eventKey,
         postId: binding.mainRootPostId,
-        activityChannelId: binding.mainChannelId,
         activityRootPostId: binding.mainRootPostId,
-        rootOwnership: "adopted" as const,
       },
     }));
 
     await expect(processActivityIntake(
       { remoteAddress: "127.0.0.1", envelope },
       {
-        registry: { readiness: () => "ready", resolve: vi.fn(async () => sameChannelBinding) },
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
         sinkFor: vi.fn(() => ({ append })),
       },
     )).resolves.toMatchObject({
       status: 201,
       body: {
         postIds: [],
-        activityChannelId: binding.mainChannelId,
         activityRootPostId: binding.mainRootPostId,
       },
     });
@@ -179,9 +171,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: envelope.eventKey,
               postId: "post-1",
-              activityChannelId: "activity-1",
-              activityRootPostId: "activity-root-1",
-              rootOwnership: "sink-created" as const,
+              activityRootPostId: "turn-1",
             },
           }),
         })),
@@ -198,7 +188,7 @@ describe("normalized Activity intake", () => {
     });
   });
 
-  it("returns the same authoritative Activity sibling on a duplicate acknowledgement", async () => {
+  it("returns the same authoritative thread root on a duplicate acknowledgement", async () => {
     const result = await processActivityIntake(
       { remoteAddress: "127.0.0.1", envelope: validEnvelope() },
       {
@@ -210,9 +200,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: validEnvelope().eventKey,
               postId: "post-1",
-              activityChannelId: "activity-1",
-              activityRootPostId: "activity-root-1",
-              rootOwnership: "sink-created" as const,
+              activityRootPostId: "turn-1",
             },
           })),
         })),
@@ -224,8 +212,7 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "duplicate",
         postIds: ["post-1"],
-        activityChannelId: "activity-1",
-        activityRootPostId: "activity-root-1",
+        activityRootPostId: "turn-1",
       },
     });
   });

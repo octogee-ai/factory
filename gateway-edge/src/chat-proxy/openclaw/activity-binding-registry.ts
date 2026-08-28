@@ -95,7 +95,6 @@ function authoritativeTarget(
     nonBlank(identity.coachToken) &&
     nonBlank(identity.workspaceSlug) &&
     target.primaryChannelId === ref.mainChannelId &&
-    target.activityChannelId === ref.mainChannelId &&
     target.expectedChannelType === "P"
   );
 }
@@ -126,7 +125,6 @@ export function createActivityBindingRegistry(
         mainChannelId: ref.mainChannelId,
         mainRootPostId: ref.mainRootPostId,
         ...(ref.inputPostId ? { inputPostId: ref.inputPostId } : {}),
-        activityChannelId: target.activityChannelId,
         channelDocPath: target.channelDocPath,
         channelCreateAt,
         coachToken: identity.coachToken,

@@ -31,7 +31,6 @@ export interface AgentRunRef {
   mainChannelId: string;
   mainRootPostId: string;
   inputPostId?: string;
-  activityChannelId: string;
   activityRootPostId?: string;
   itemId?: string;
   toolCallId?: string;
@@ -49,7 +48,6 @@ export interface AgentAdmissionRef {
   conversationId: string;
   turnId: string;
   mainChannelId: string;
-  activityChannelId: string;
   inputPostId: string;
   origin: AgentAdmissionOrigin;
   retryOfRunId?: string;

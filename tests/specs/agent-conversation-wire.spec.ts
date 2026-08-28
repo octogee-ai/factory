@@ -36,7 +36,6 @@ describe("agent conversation v3 type contract", () => {
       status: "running",
       mainChannelId: "main-1",
       mainRootPostId: "turn-1",
-      activityChannelId: "activity-1",
       attention: "routine",
     };
     const admission: AgentAdmissionRef = {
@@ -45,7 +44,6 @@ describe("agent conversation v3 type contract", () => {
       conversationId: "main-1",
       turnId: "turn-2",
       mainChannelId: "main-1",
-      activityChannelId: "activity-1",
       inputPostId: "turn-2",
       origin: "followup",
       status: "queued",
@@ -124,7 +122,6 @@ describe("agent conversation projection fixtures", () => {
       expect(post.props.octogee).not.toHaveProperty("ref");
       const ref = projection(post.props.octogee);
       expect(post.channel_id).toBe(ref.mainChannelId);
-      expect(ref.activityChannelId).toBe(ref.mainChannelId);
     }
   });
 
@@ -238,7 +235,6 @@ describe("agent activity envelope v1 fixtures", () => {
         createHash("sha256").update(canonical, "utf8").digest("hex"),
       );
       expect(envelope.eventKey).toMatch(/^[a-f0-9]{64}$/);
-      expect(envelope.ref).not.toHaveProperty("activityChannelId");
     }
 
     const reserved = (itemId: string) =>

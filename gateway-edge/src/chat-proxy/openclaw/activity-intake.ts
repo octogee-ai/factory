@@ -92,7 +92,6 @@ export interface ActiveActivityRunBinding {
   mainChannelId: string;
   mainRootPostId: string;
   inputPostId?: string;
-  activityChannelId: string;
   channelDocPath: string;
   channelCreateAt: number;
   coachToken: string;
@@ -171,7 +170,6 @@ export function freezeActiveActivityRunBinding(
     "sessionKey",
     "mainChannelId",
     "mainRootPostId",
-    "activityChannelId",
     "channelDocPath",
     "coachToken",
     "attentionMention",
@@ -219,7 +217,6 @@ export interface ActivityIntakeResponse {
   body: {
     outcome: "persisted" | "duplicate";
     postIds: string[];
-    activityChannelId: string;
     activityRootPostId: string;
   };
 }
@@ -636,21 +633,13 @@ function assertActivityAcknowledgement(
 ): void {
   const receiptMatches =
     result.receipt.eventKey === envelope.eventKey &&
-    result.receipt.activityChannelId === binding.activityChannelId &&
     Boolean(result.receipt.activityRootPostId);
-  const adoptedMainRoot = binding.activityChannelId === binding.mainChannelId;
-  const ownershipMatches = result.receipt.rootOwnership ===
-    (adoptedMainRoot ? "adopted" : "sink-created");
   const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
-    adoptedMainRoot
-      ? result.postIds.length === 0 &&
-        result.receipt.postId === binding.mainRootPostId &&
-        result.receipt.activityRootPostId === binding.mainRootPostId
-      : result.postIds.length === 1 &&
-        result.receipt.postId === result.postIds[0] &&
-        result.receipt.activityRootPostId === result.postIds[0]
+    result.postIds.length === 0 &&
+    result.receipt.postId === binding.mainRootPostId &&
+    result.receipt.activityRootPostId === binding.mainRootPostId
   );
-  if (!receiptMatches || !ownershipMatches || !turnStartedReceiptMatches) {
+  if (!receiptMatches || !turnStartedReceiptMatches) {
     throw new ActivitySinkIntegrityError(
       "Activity acknowledgement failed exact root/channel verification",
     );
@@ -709,7 +698,6 @@ export async function processActivityIntake(
       body: {
         outcome: result.outcome,
         postIds: result.postIds,
-        activityChannelId: frozenBinding.activityChannelId,
         activityRootPostId: result.receipt.activityRootPostId,
       },
     };

@@ -28,7 +28,6 @@ function harness() {
   }));
   const resolveConversationTarget = vi.fn(async () => ({
     primaryChannelId: "channel-1",
-    activityChannelId: "channel-1",
     channelDocPath: "workspaces/alice/channels/coach-dm",
     expectedChannelTeamId: "team-1",
     expectedChannelName: "alice-coach",
@@ -48,24 +47,12 @@ describe("same-channel Activity binding registry", () => {
 
     await expect(registry.resolve(ref)).resolves.toMatchObject({
       runId: "run-1",
-      activityChannelId: "channel-1",
       mainChannelId: "channel-1",
       coachToken: "pat-1",
     });
   });
 
-  it("rejects a paired Activity channel and cross-channel session route", async () => {
-    const paired = harness();
-    paired.resolveConversationTarget.mockResolvedValueOnce({
-      primaryChannelId: "channel-1",
-      activityChannelId: "activity-1",
-      channelDocPath: "workspaces/alice/channels/coach-dm",
-      expectedChannelTeamId: "team-1",
-      expectedChannelName: "alice-coach",
-      expectedChannelType: "P",
-    });
-    await expect(paired.registry.resolve(ref)).resolves.toBeNull();
-
+  it("rejects a cross-channel session route", async () => {
     const crossed = harness();
     await expect(crossed.registry.resolve({
       ...ref,

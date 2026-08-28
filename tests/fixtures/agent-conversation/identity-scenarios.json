@@ -14,7 +14,6 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
           "inputPostId": "steer-1",
-          "activityChannelId": "main-1",
           "activityRootPostId": "turn-1",
           "attention": "routine"
         }
@@ -36,7 +35,6 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
           "inputPostId": "retry-marker-1",
-          "activityChannelId": "main-1",
           "activityRootPostId": "turn-1",
           "attention": "routine"
         }
@@ -57,7 +55,6 @@
           "status": "running",
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-1",
-          "activityChannelId": "main-1",
           "activityRootPostId": "turn-1",
           "attention": "routine"
         }
@@ -78,7 +75,6 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "scheduled-root-1",
           "inputPostId": "scheduled-root-1",
-          "activityChannelId": "main-1",
           "activityRootPostId": "scheduled-root-1",
           "attention": "routine"
         }
@@ -94,7 +90,6 @@
           "conversationId": "main-1",
           "turnId": "turn-queued-1",
           "mainChannelId": "main-1",
-          "activityChannelId": "main-1",
           "inputPostId": "input-queued-1",
           "origin": "followup",
           "status": "queued",
@@ -112,7 +107,6 @@
           "mainChannelId": "main-1",
           "mainRootPostId": "turn-active-1",
           "inputPostId": "input-queued-1",
-          "activityChannelId": "main-1",
           "activityRootPostId": "turn-active-1",
           "attention": "routine"
         }
