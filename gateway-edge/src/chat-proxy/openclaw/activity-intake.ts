@@ -197,10 +197,6 @@ export function freezeActiveActivityRunBinding(
 export interface ActivityIntakeDeps {
   registry: ActivityRuntimeRegistry;
   sinkFor(binding: ActiveActivityRunBinding): Pick<ActivitySink, "append">;
-  requestBuilderActivation?: (input: {
-    agentId: string;
-    runId: string;
-  }) => Promise<unknown>;
   log?: (event: string, meta: Record<string, unknown>) => void;
   onPersisted?: (input: {
     envelope: AgentActivityEnvelopeV1;
@@ -633,45 +629,6 @@ function mapSinkError(error: unknown): never {
   throw error;
 }
 
-function activationErrorStatus(error: unknown): number | null {
-  if (!error || typeof error !== "object") return null;
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" && Number.isInteger(status)
-    ? status
-    : null;
-}
-
-async function requestActivationAfterAppend(
-  deps: ActivityIntakeDeps,
-  binding: ActiveActivityRunBinding,
-): Promise<void> {
-  if (!deps.requestBuilderActivation) return;
-  try {
-    await deps.requestBuilderActivation({
-      agentId: binding.agentId,
-      runId: binding.runId,
-    });
-  } catch (error) {
-    const status = activationErrorStatus(error);
-    if (status !== null && status >= 400 && status < 500) {
-      deps.log?.("builder_activation", {
-        outcome: "rejected",
-        status,
-        agentId: binding.agentId,
-        runId: binding.runId,
-      });
-      return;
-    }
-    deps.log?.("builder_activation", {
-      outcome: "unavailable",
-      status,
-      agentId: binding.agentId,
-      runId: binding.runId,
-    });
-    throw new ActivityIntakeError(503, "activation_unavailable", true);
-  }
-}
-
 function assertActivityAcknowledgement(
   result: Awaited<ReturnType<ActivitySink["append"]>>,
   envelope: AgentActivityEnvelopeV1,
@@ -746,9 +703,6 @@ export async function processActivityIntake(
         runId: envelope.ref.runId,
         error: error instanceof Error ? error.message : String(error),
       });
-    }
-    if (envelope.type === "turn.started") {
-      await requestActivationAfterAppend(deps, frozenBinding);
     }
     return {
       status: result.outcome === "persisted" ? 201 : 200,
@@ -980,10 +934,6 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   receiptsFor(binding: ActiveActivityRunBinding): ActivityWriteReceiptStore;
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
-  requestBuilderActivation?: (input: {
-    agentId: string;
-    runId: string;
-  }) => Promise<unknown>;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
   controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
@@ -1003,7 +953,6 @@ export function createProductionActivityIntakeHandler(
         alerts: options.alerts,
         controls: options.controls,
       }),
-      requestBuilderActivation: options.requestBuilderActivation,
       log: options.log,
       onPersisted: options.onPersisted,
     },
