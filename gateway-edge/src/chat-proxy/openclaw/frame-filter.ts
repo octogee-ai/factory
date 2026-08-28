@@ -28,7 +28,6 @@ export const PER_USER_EVENTS = new Set<string>([
   "sessions.changed",
   "session.message",
   "session.tool",
-  "session.approval",
   "diagnostic",
 ]);
 

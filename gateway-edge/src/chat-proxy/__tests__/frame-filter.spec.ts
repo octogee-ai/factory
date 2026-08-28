@@ -176,41 +176,6 @@ describe("shouldForwardFrame — per-user event scoping (#728)", () => {
   });
 
   describe("approval event classes", () => {
-    it("forwards session.approval for the expected user", () => {
-      const frame = eventFrame("session.approval", {
-        sessionKey: `agent:${EXPECTED}:default`,
-        phase: "pending",
-        approval: { id: "ap-session-1", status: "pending" },
-      });
-      expect(shouldForwardFrame(frame, ctx)).toEqual({
-        forward: true,
-        reason: "matched-identity",
-      });
-    });
-
-    it("drops session.approval without a session identity", () => {
-      const frame = eventFrame("session.approval", {
-        phase: "pending",
-        approval: { id: "ap-session-missing", status: "pending" },
-      });
-      expect(shouldForwardFrame(frame, ctx)).toEqual({
-        forward: false,
-        reason: "missing-identity",
-      });
-    });
-
-    it("drops session.approval for a different user", () => {
-      const frame = eventFrame("session.approval", {
-        sessionKey: "agent:octogee-jdog-coach:default",
-        phase: "pending",
-        approval: { id: "ap-session-other", status: "pending" },
-      });
-      expect(shouldForwardFrame(frame, ctx)).toEqual({
-        forward: false,
-        reason: "identity-mismatch",
-      });
-    });
-
     it("forwards exec.approval.requested for the expected user", () => {
       const frame = eventFrame("exec.approval.requested", {
         approvalId: "ap-1",

@@ -475,42 +475,6 @@ describe('observeOutboundForState — populates observed sets', () => {
     expect(state.observedApprovalIds.has('appr-Y')).toBe(true);
   });
 
-  it('extracts the nested approval id from an owned session.approval event', () => {
-    const state = makeState();
-    observeOutboundForState(
-      JSON.stringify({
-        type: 'event',
-        event: 'session.approval',
-        payload: {
-          sessionKey: `agent:${EXPECTED_AGENT}:s1`,
-          phase: 'pending',
-          approval: { id: 'appr-session-live', status: 'pending' },
-        },
-      }),
-      state,
-    );
-
-    expect(state.observedApprovalIds.has('appr-session-live')).toBe(true);
-  });
-
-  it('does not observe a nested approval id from another agent session', () => {
-    const state = makeState();
-    observeOutboundForState(
-      JSON.stringify({
-        type: 'event',
-        event: 'session.approval',
-        payload: {
-          sessionKey: 'agent:octogee-other-coach:s1',
-          phase: 'pending',
-          approval: { id: 'appr-session-leak', status: 'pending' },
-        },
-      }),
-      state,
-    );
-
-    expect(state.observedApprovalIds.has('appr-session-leak')).toBe(false);
-  });
-
   it('ignores events for other agents (defense in depth)', () => {
     const state = makeState();
     const f = JSON.stringify({
