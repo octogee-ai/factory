@@ -74,14 +74,13 @@ describe("same-channel Activity binding registry", () => {
     expect(crossed.resolveAgentIdentity).not.toHaveBeenCalled();
   });
 
-  it("accepts canonical subagent lineage without a run snapshot", async () => {
+  it("accepts the canonical subagent route without inventing unavailable parent lineage", async () => {
     const { registry } = harness();
     await expect(registry.resolve({
       ...ref,
       runId: "child-1",
       origin: "subagent",
-      parentRunId: "run-1",
       sessionKey: "agent:octogee-alice-coach:subagent:child-1",
-    })).resolves.toMatchObject({ runId: "child-1", parentRunId: "run-1" });
+    })).resolves.toMatchObject({ runId: "child-1", origin: "subagent" });
   });
 });

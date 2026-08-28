@@ -1,4 +1,5 @@
 export const VOICE_EVENT_RELAY_PATH = "/internal/openclaw/voice/v1/events";
+export const ACTIVITY_INTAKE_PATH = "/internal/openclaw/activity/v1/events";
 
 export function chatProxyOwnsHttpPath(
   strippedPath: string,
@@ -7,6 +8,7 @@ export function chatProxyOwnsHttpPath(
   return (
     strippedPath === "/healthz" ||
     /^\/internal\/openclaw\/mattermost\/interactions\/[A-Za-z0-9_-]{1,128}$/.test(strippedPath) ||
+    (strippedPath === ACTIVITY_INTAKE_PATH && originalPath === strippedPath) ||
     (strippedPath === VOICE_EVENT_RELAY_PATH &&
       originalPath === strippedPath)
   );

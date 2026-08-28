@@ -789,9 +789,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
         channelId: "ch-retry-456",
       },
     });
-    expect(await getProjectChannel("alice", "mygame", "general")).not.toHaveProperty(
-      "mattermost.activityChannelId",
-    );
     expect(mockMmApi).toHaveBeenCalledWith(
       "/teams/team-abc/channels/name/alice-proj-mygame-general",
     );
@@ -888,9 +885,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
         channelId: "ch-existing-999",
       },
     });
-    expect(await getProjectChannel("alice", "mygame", "general")).not.toHaveProperty(
-      "mattermost.activityChannelId",
-    );
     const primaryCreateCalls = mockMmApi.mock.calls.filter(
       (c) => c[1] === "POST" && c[0] === "/channels" && /general$/.test(c[2]?.name ?? ""),
     );

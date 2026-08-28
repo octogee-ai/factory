@@ -301,8 +301,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     h.generalChannel = {
       mattermost: {
         channelId: "archived-channel",
-        activityChannelId: "archived-activity",
-        activityPair: { generation: 1, desired: "archived", status: "active" },
       },
     };
     h.mmApi.mockImplementation(async (path: string, method?: string) => {

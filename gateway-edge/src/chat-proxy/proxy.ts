@@ -48,9 +48,15 @@ import {
   OpenClawRuntimeBrokerError,
   type OpenClawRuntimeBroker,
 } from "./openclaw/runtime-broker.js";
-import { VOICE_EVENT_RELAY_PATH } from "./http-paths.js";
+import { ACTIVITY_INTAKE_PATH, VOICE_EVENT_RELAY_PATH } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 import { startMmFinalNotificationListeners } from "./openclaw/mm-final-notification-listener.js";
+import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
+import {
+  createActivityBindingRegistry,
+  readMattermostChannelCreateAt,
+} from "./openclaw/activity-binding-registry.js";
+import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { makeCoachDmHandler } from "../notifications/chat-notifier.js";
 import {
   createBrokeredFanOutNotification,
@@ -168,6 +174,42 @@ const ocWsInboundGateTotal = new Counter({
 let mattermostInteractionProxyHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
+
+let activityIntakeHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
+
+function getActivityIntakeHandler():
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null {
+  if (activityIntakeHandler) return activityIntakeHandler;
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!gatewayToken) return null;
+  const broker = getOpenClawRuntimeBroker();
+  const registry = createActivityBindingRegistry({
+    resolveAgentIdentity: (agentId) => broker.resolveAgentIdentity(agentId),
+    resolveConversationTarget: (agentId, conversationId) =>
+      broker.resolveConversationTarget(agentId, conversationId),
+    verifyChannel: (identity, target) => readMattermostChannelCreateAt({
+      baseUrl: MM_INTERNAL_URL,
+      channelId: target.primaryChannelId,
+      token: identity.coachToken,
+      expectedTeamId: target.expectedChannelTeamId,
+      expectedName: target.expectedChannelName,
+      expectedType: target.expectedChannelType,
+    }),
+  });
+  const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
+  activityIntakeHandler = createProductionActivityIntakeHandler({
+    gatewayToken,
+    registry,
+    receiptsFor: (binding) => broker.activityWriteReceiptsFor(binding.channelDocPath),
+    mmClientFor,
+    leaseOwner: `${process.env.GATEWAY_ID?.trim() || "gateway-edge"}:${process.pid}`,
+    log: (event, meta) => logger.warn(`[activity-intake] ${event}`, meta),
+  });
+  return activityIntakeHandler;
+}
 
 const voiceEventRelayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
 const voiceEventRelay = voiceEventRelayToken
@@ -325,6 +367,24 @@ async function handleLocalInternalRoute(
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<boolean> {
+  if (path === ACTIVITY_INTAKE_PATH) {
+    try {
+      const handler = getActivityIntakeHandler();
+      if (!handler) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "activity_intake_unconfigured", retryable: true }));
+      } else {
+        await handler(req, res);
+      }
+    } catch (error) {
+      logger.error("[activity-intake] initialization failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "activity_intake_unavailable", retryable: true }));
+    }
+    return true;
+  }
   if (path !== VOICE_EVENT_RELAY_PATH) return false;
   if (!voiceEventRelay) {
     res.writeHead(503, { "content-type": "application/json" });

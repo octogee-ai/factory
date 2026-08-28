@@ -55,7 +55,7 @@ function validLineage(ref: AgentActivityIngressRef): boolean {
     return !ref.parentRunId && nonBlank(ref.retryOfRunId) && ref.retryOfRunId !== ref.runId;
   }
   if (ref.origin === "subagent") {
-    return nonBlank(ref.parentRunId) && ref.parentRunId !== ref.runId && !ref.retryOfRunId;
+    return !ref.parentRunId && !ref.retryOfRunId;
   }
   return !ref.parentRunId && !ref.retryOfRunId;
 }
@@ -69,7 +69,7 @@ function validRoute(ref: AgentActivityIngressRef): boolean {
     return false;
   }
   if (ref.origin === "subagent") {
-    return ref.sessionKey.startsWith(`agent:${ref.agentId}:subagent:`);
+    return ref.sessionKey.startsWith(`agent:${ref.agentId}:subagent:`) && nonBlank(ref.inputPostId);
   }
   if (ref.origin === "scheduled") {
     return ref.sessionKey.startsWith(`agent:${ref.agentId}:`) &&
