@@ -493,7 +493,11 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
               threadDirectMessages: true,
               threadSessionScope: "channel",
             },
-            "chris-coach": {},
+            "chris-coach": {
+              agentActivity: true,
+              replyToMode: "first",
+            },
+            malformed: "preserve",
           },
         },
       },
@@ -512,6 +516,13 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost.accounts["chris-coach"]).toMatchObject({
+      replyToMode: "first",
+    });
+    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty(
+      "agentActivity",
+    );
+    expect(config.channels.mattermost.accounts.malformed).toBe("preserve");
   });
 });
 
