@@ -107,15 +107,48 @@ describe("gateway base image", () => {
     expect(npmUpgrade).toBeGreaterThan(pluginInstall);
   });
 
-  it("retags vendored Codex to the OpenClaw version before staging it", () => {
+  it("binds Codex to the installed OpenClaw core version before staging it", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
 
+    expect(dockerfile).toContain('OPENCLAW_CORE_VERSION="$(node -e');
+    expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
+    expect(dockerfile).toContain(
+      'test "$OPENCLAW_CORE_VERSION" = "$OPENCLAW_COMPATIBILITY_HOST_VERSION"',
+    );
     expect(dockerfile).toContain('if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then');
     expect(dockerfile).toContain('CODEX_REPACK="$(mktemp -d)"');
     expect(dockerfile).toContain('pkg.name !== "@openclaw/codex"');
     expect(dockerfile).toContain('pkg.version = version');
+    expect(dockerfile).toContain(
+      '"$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"',
+    );
     expect(dockerfile).toContain('openclaw plugins install "npm-pack:$VENDORED_CODEX" --force');
-    expect(dockerfile).toContain('openclaw plugins install "@openclaw/codex@${OPENCLAW_VERSION}"');
+    expect(dockerfile).toContain(
+      'openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}"',
+    );
     expect(dockerfile).toContain('INSTALLED_CODEX="$(node -e');
+    expect(dockerfile).toContain('test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"');
+    expect(dockerfile).not.toContain(
+      '"$CODEX_REPACK/package/package.json" "$OPENCLAW_VERSION"',
+    );
+  });
+
+  it("proves the final Builder image keeps Codex bound to its installed core", () => {
+    for (const filePath of [
+      "cloudbuild-operator-final.yaml",
+      "cloudbuild-operator-final-extra.yaml",
+    ]) {
+      const cloudbuild = readRepoFile(filePath);
+
+      expect(cloudbuild).toContain(
+        'OPENCLAW_CORE_PACKAGE="$$(npm root -g)/openclaw/package.json"',
+      );
+      expect(cloudbuild).toContain(
+        'CODEX_PACKAGE="$$(find /opt/openclaw-codex-deps/npm -type f -path "*/node_modules/@openclaw/codex/package.json" -print -quit)"',
+      );
+      expect(cloudbuild).toContain(
+        'test "$$INSTALLED_CODEX" = "$$INSTALLED_OPENCLAW_CORE"',
+      );
+    }
   });
 });

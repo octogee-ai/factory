@@ -112,8 +112,11 @@ version. This deliberately makes `2026.8.1-main.<upstream8>` and
 
 The Docker-safe main-snapshot label is deployment provenance, not SemVer plugin
 API precedence. Base builds set `OPENCLAW_COMPATIBILITY_HOST_VERSION` to the
-packed release floor (`2026.8.1` in this example); child images inherit it while keeping
-`OPENCLAW_VERSION=2026.8.1-main.<upstream8>` for image and fleet provenance.
+packed release floor (`2026.8.1` in this example), assert that it equals the
+installed root package version, and keep
+`OPENCLAW_VERSION=2026.8.1-main.<upstream8>` separately for image and fleet
+provenance. Version-bound companions use the installed root package version,
+never the synthetic image label.
 
 ✓ `BASE_REF`, `OPENCLAW_COMPATIBILITY_HOST_VERSION`, `OPENCLAW_VERSION`,
 `BRANCH_SUFFIX`, `PREV_REF`, and `PREV_BRANCH` are set and `BASE_REF` still
@@ -332,7 +335,7 @@ source-only).
 
 > ⚠ **Verify BOTH artifacts before upload with the Dockerfile's real install
 > branches.** A root-only scratch install is insufficient for main snapshots:
-> Codex must be repacked to the synthetic host version, Parallel comes from
+> Codex must be repacked to the installed core package version, Parallel comes from
 > its vendored archive, and the patched Mattermost config must validate.
 >
 > ```bash
@@ -345,6 +348,8 @@ source-only).
 > npm install -g --prefix "$ROOT_PREFIX" "$ROOT_TGZ"
 > OPENCLAW="$ROOT_PREFIX/bin/openclaw"
 > OPENCLAW_ROOT="$ROOT_PREFIX/lib/node_modules/openclaw"
+> OPENCLAW_CORE_VERSION=$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$OPENCLAW_ROOT/package.json")
+> test "$OPENCLAW_CORE_VERSION" = "$OPENCLAW_COMPATIBILITY_HOST_VERSION"
 > "$OPENCLAW" --version
 >
 > CODEX_TGZ="$OPENCLAW_ROOT/vendor/openclaw-codex.tgz"
@@ -353,12 +358,12 @@ source-only).
 >   mkdir -p "$CODEX_REPACK"
 >   tar -xzf "$CODEX_TGZ" -C "$CODEX_REPACK"
 >   node -e 'const fs=require("node:fs"); const [f,v]=process.argv.slice(1); const p=JSON.parse(fs.readFileSync(f,"utf8")); if(p.name!=="@openclaw/codex") throw new Error(p.name); p.version=v; fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' \
->     "$CODEX_REPACK/package/package.json" "$OPENCLAW_VERSION"
+>     "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"
 >   (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK")
 >   CODEX_INSTALL=$(find "$CODEX_REPACK" -maxdepth 1 -name '*.tgz' -print -quit)
 >   HOME="$VERIFY_HOME" "$OPENCLAW" plugins install "npm-pack:$CODEX_INSTALL" --force --accept-capabilities
 > else
->   HOME="$VERIFY_HOME" "$OPENCLAW" plugins install "@openclaw/codex@$OPENCLAW_VERSION" --accept-capabilities
+>   HOME="$VERIFY_HOME" "$OPENCLAW" plugins install "@openclaw/codex@$OPENCLAW_CORE_VERSION" --accept-capabilities
 > fi
 >
 > PARALLEL_TGZ="$OPENCLAW_ROOT/vendor/openclaw-parallel-plugin.tgz"
@@ -374,7 +379,7 @@ source-only).
 > HOME="$VERIFY_HOME" "$OPENCLAW" plugins list --json > "$SCRATCH/plugins.json"
 >
 > CODEX_PACKAGE=$(find "$VERIFY_HOME/.openclaw/npm" -path '*/node_modules/@openclaw/codex/package.json' -print -quit)
-> test "$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$CODEX_PACKAGE")" = "$OPENCLAW_VERSION"
+> test "$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$CODEX_PACKAGE")" = "$OPENCLAW_CORE_VERSION"
 > test -n "$(find "$VERIFY_HOME/.openclaw/npm" -type d -path '*/node_modules/@openclaw/parallel-plugin' -print -quit)"
 > test -n "$(find "$VERIFY_HOME/.openclaw/npm" -type d -path '*/node_modules/@openclaw/mattermost' -print -quit)"
 > node -e 'const i=require(process.argv[1]); for (const id of ["codex","parallel","mattermost"]) { const n=(i.plugins??[]).filter(p=>p?.id===id).length; if(n!==1) throw new Error(`${id}: expected one runtime plugin, got ${n}`) }' \
@@ -701,10 +706,12 @@ content-hash specific); it is **not staged, not restored, and not
 required** for the harness to load. Only the `npm` tree needs to survive
 the runtime emptyDir, which the existing whole-`npm` symlink already does.
 
-On upstream-main builds Codex is version-bound to the host. The base image
-re-packs a vendored Codex companion with `OPENCLAW_VERSION` before installation;
-otherwise startup repair treats the package as stale and tries its unpublished
-version from npm.
+On upstream-main builds Codex is version-bound to the installed host package.
+The base image reads that exact version from the installed OpenClaw
+`package.json` and re-packs a vendored Codex companion with it before
+installation. `OPENCLAW_VERSION` remains the synthetic image/fleet identity;
+using it as the Codex package version makes startup repair treat the companion
+as stale and try an unpublished version from npm.
 
 **Verify a staging change cheaply (no full gateway build needed):**
 `kubectl run` a throwaway pod on the freshly-built base image in
