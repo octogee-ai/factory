@@ -380,6 +380,11 @@ export function observeOutboundForState(rawFrame: string, state: GateState): voi
 
   const approvalId = typeof payload.approvalId === 'string' ? payload.approvalId : '';
   if (approvalId) addCapped(state.observedApprovalIds, approvalId);
+
+  if (parsed.event === 'session.approval' && isRecord(payload.approval)) {
+    const sessionApprovalId = typeof payload.approval.id === 'string' ? payload.approval.id : '';
+    if (sessionApprovalId) addCapped(state.observedApprovalIds, sessionApprovalId);
+  }
 }
 
 function observeApprovalReplayResponse(
