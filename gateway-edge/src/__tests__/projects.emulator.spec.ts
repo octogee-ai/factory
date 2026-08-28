@@ -787,9 +787,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       kind: "general",
       mattermost: {
         channelId: "ch-retry-456",
-        activityChannelId: expect.any(String),
       },
     });
+    expect(await getProjectChannel("alice", "mygame", "general")).not.toHaveProperty(
+      "mattermost.activityChannelId",
+    );
     expect(mockMmApi).toHaveBeenCalledWith(
       "/teams/team-abc/channels/name/alice-proj-mygame-general",
     );
@@ -868,7 +870,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     mockProjectPairMattermost({
       primaryId: "ch-existing-999",
       primaryName: "alice-proj-mygame-general",
-      activityId: "ch-activity-existing-999",
       existingPrimary: true,
     });
 
@@ -885,9 +886,11 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
       mattermost: {
         channelId: "ch-existing-999",
-        activityChannelId: "ch-activity-existing-999",
       },
     });
+    expect(await getProjectChannel("alice", "mygame", "general")).not.toHaveProperty(
+      "mattermost.activityChannelId",
+    );
     const primaryCreateCalls = mockMmApi.mock.calls.filter(
       (c) => c[1] === "POST" && c[0] === "/channels" && /general$/.test(c[2]?.name ?? ""),
     );

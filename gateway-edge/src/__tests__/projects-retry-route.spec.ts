@@ -27,7 +27,6 @@ const h = vi.hoisted(() => ({
   } as ProjectUpdate | null,
   mmApi: vi.fn(),
   provisionProjectRepo: vi.fn(),
-  reconcileActivityPair: vi.fn(),
   setProjectAgentEnabled: vi.fn(),
   logger: {
     error: vi.fn(),
@@ -111,10 +110,6 @@ vi.mock("../routes/projects/provisioning.js", () => ({
   provisionProjectRepo: (...args: unknown[]) => h.provisionProjectRepo(...args),
 }));
 
-vi.mock("../lib/activityPair.js", () => ({
-  reconcileActivityPair: (...args: unknown[]) => h.reconcileActivityPair(...args),
-}));
-
 vi.mock("../lib/project-agent-service.js", () => ({
   setProjectAgentEnabled: (...args: unknown[]) => h.setProjectAgentEnabled(...args),
 }));
@@ -165,18 +160,13 @@ beforeEach(() => {
     throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
   });
   h.provisionProjectRepo.mockReset().mockResolvedValue(null);
-  h.reconcileActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
   h.setProjectAgentEnabled.mockReset().mockResolvedValue({ status: 200, body: { success: true } });
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
 
 describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
-  it("recreates project chat, provisions activity, reconciles repo, and activates the project", async () => {
-    h.reconcileActivityPair.mockImplementationOnce(async () => {
-      expect(h.channelWrites).toHaveLength(1);
-      return { activityChannelId: "activity-1" };
-    });
+  it("recreates the project primary channel, reconciles the repo, and activates the project", async () => {
     const res = await request(app())
       .post("/api/projects/mira/orbit/retry-provisioning")
       .expect(200);
@@ -195,15 +185,6 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       expect.objectContaining({ uid: "owner-1", workspaceId: "mira" }),
       "orbit",
       true,
-    );
-    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelDocPath: "workspaces/mira/projects/orbit/channels/general",
-        primaryName: "mira-proj-orbit-general",
-        primaryChannelId: "channel-1",
-        teamId: "team-1",
-        kind: "project",
-      }),
     );
     expect(h.provisionProjectRepo).toHaveBeenCalledWith({
       workspaceId: "mira",
@@ -353,6 +334,9 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(h.channelWrites[0]?.data).toMatchObject({
       mattermost: { channelId: "archived-channel" },
     });
-    expect(h.channelWrites[0]?.data.mattermost).not.toHaveProperty("activityPair");
+    expect(h.channelWrites[0]?.data.mattermost).toMatchObject({
+      activityChannelId: "DELETE_FIELD",
+      activityPair: "DELETE_FIELD",
+    });
   });
 });

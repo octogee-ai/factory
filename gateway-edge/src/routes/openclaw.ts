@@ -18,21 +18,32 @@ const router = Router();
 
 export type ActivityHistoryMode = "channel" | "run-threads";
 
+export interface ActivityHistoryTarget {
+  activityChannelId: string;
+  historyMode: "run-threads";
+  legacyActivityChannelId?: string;
+}
+
 export function resolveActivityHistoryTarget(
   data: Record<string, unknown>,
   requestedChannelId: string,
-): { activityChannelId: string; historyMode: ActivityHistoryMode } | null {
+): ActivityHistoryTarget | null {
   const mattermost = (data.mattermost ?? {}) as {
     channelId?: unknown;
     activityChannelId?: unknown;
   };
   const primaryChannelId = typeof mattermost.channelId === "string" ? mattermost.channelId : "";
-  if (data.kind === "session" && requestedChannelId === primaryChannelId) {
-    return { activityChannelId: primaryChannelId, historyMode: "run-threads" };
-  }
   const activityChannelId =
     typeof mattermost.activityChannelId === "string" ? mattermost.activityChannelId : "";
-  return activityChannelId ? { activityChannelId, historyMode: "channel" } : null;
+  return requestedChannelId === primaryChannelId && primaryChannelId
+    ? {
+        activityChannelId: primaryChannelId,
+        historyMode: "run-threads",
+        ...(activityChannelId && activityChannelId !== primaryChannelId
+          ? { legacyActivityChannelId: activityChannelId }
+          : {}),
+      }
+    : null;
 }
 
 function activationGatewayId(
@@ -166,7 +177,7 @@ router.post(
 );
 
 router.get(
-  "/channels/:channelId/activity-pair",
+  "/channels/:channelId/activity-history",
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -176,12 +187,14 @@ router.get(
         return;
       }
 
-      const fields = ["mattermost.channelId", "mattermost.activityChannelId"] as const;
+      const queryFields = ["mattermost.channelId"] as const;
+      const selectedFields = ["mattermost.channelId", "mattermost.activityChannelId"] as const;
       let matched: { ref: unknown; data: Record<string, unknown> } | null = null;
-      for (const field of fields) {
+      for (const field of queryFields) {
         const snap = await db
           .collectionGroup("channels")
           .where(field, "==", channelId)
+          .select(...selectedFields)
           .get();
         if (snap.docs.length > 0) {
           const doc = snap.docs[0];
@@ -195,7 +208,7 @@ router.get(
       }
       const historyTarget = resolveActivityHistoryTarget(matched.data, channelId);
       if (!historyTarget) {
-        res.status(404).json({ error: "not_paired_yet" });
+        res.status(404).json({ error: "activity_history_unavailable" });
         return;
       }
 

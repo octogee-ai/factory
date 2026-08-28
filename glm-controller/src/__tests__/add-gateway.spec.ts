@@ -346,14 +346,14 @@ describe("createAddGatewayHandler — happy path", () => {
 
   it("accepts the tag-name heartbeat for a digest-pinned image", async () => {
     const digest = "a".repeat(64);
-    const imageTag = `agent-conversation-w9a-8c356bb1@sha256:${digest}`;
+    const imageTag = `8c356bb-oc2026.7.1@sha256:${digest}`;
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       helmImageTags: new Map([["canary", imageTag]]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
       heartbeats: new Map([["canary", {
         lastHeartbeatAt: 1,
-        version: "agent-conversation-w9a-8c356bb1",
+        version: "8c356bb-oc2026.7.1",
       }]]),
       platformReady: new Set(),
     };

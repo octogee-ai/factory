@@ -13,11 +13,11 @@ describe("gatewayHeartbeatMatchesImageTag", () => {
     expect(gatewayHeartbeatMatchesImageTag("cf36a88", "cf36a88-oc2026.7.1")).toBe(false);
   });
 
-  it("matches the tag-name heartbeat for a digest-pinned W9 artifact", () => {
+  it("matches the tag-name heartbeat for a digest-pinned artifact", () => {
     const digest = `sha256:${"a".repeat(64)}`;
     expect(gatewayHeartbeatMatchesImageTag(
-      "agent-conversation-w9a-8c356bb1",
-      `agent-conversation-w9a-8c356bb1@${digest}`,
+      "cf36a88-oc2026.7.1",
+      `cf36a88-oc2026.7.1@${digest}`,
     )).toBe(true);
   });
 

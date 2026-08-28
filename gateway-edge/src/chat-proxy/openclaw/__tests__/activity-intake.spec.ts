@@ -94,6 +94,7 @@ describe("normalized Activity intake", () => {
   });
 
   it("accepts only loopback requests with an exact active runtime binding", async () => {
+    const onPersisted = vi.fn();
     const append = vi.fn(async () => ({
       outcome: "persisted" as const,
       postIds: ["post-1"],
@@ -102,6 +103,7 @@ describe("normalized Activity intake", () => {
         postId: "post-1",
         activityChannelId: "activity-1",
         activityRootPostId: "activity-root-1",
+        rootOwnership: "sink-created" as const,
       },
     }));
     const envelope = validEnvelope();
@@ -110,6 +112,7 @@ describe("normalized Activity intake", () => {
       {
         registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
         sinkFor: vi.fn(() => ({ append })),
+        onPersisted,
       },
     );
 
@@ -123,6 +126,76 @@ describe("normalized Activity intake", () => {
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
+    expect(onPersisted).toHaveBeenCalledWith({
+      envelope,
+      binding,
+      activityRootPostId: "activity-root-1",
+      outcome: "persisted",
+    });
+  });
+
+  it("accepts a same-channel turn-start receipt that adopts the input root", async () => {
+    const envelope = startedEnvelope("human");
+    const sameChannelBinding = { ...binding, activityChannelId: binding.mainChannelId };
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: [],
+      receipt: {
+        eventKey: envelope.eventKey,
+        postId: binding.mainRootPostId,
+        activityChannelId: binding.mainChannelId,
+        activityRootPostId: binding.mainRootPostId,
+        rootOwnership: "adopted" as const,
+      },
+    }));
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => sameChannelBinding) },
+        sinkFor: vi.fn(() => ({ append })),
+      },
+    )).resolves.toMatchObject({
+      status: 201,
+      body: {
+        postIds: [],
+        activityChannelId: binding.mainChannelId,
+        activityRootPostId: binding.mainRootPostId,
+      },
+    });
+  });
+
+  it("keeps a durable append successful when its observer fails", async () => {
+    const envelope = validEnvelope();
+    const log = vi.fn();
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+        sinkFor: vi.fn(() => ({
+          append: async () => ({
+            outcome: "persisted" as const,
+            postIds: ["post-1"],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: "post-1",
+              activityChannelId: "activity-1",
+              activityRootPostId: "activity-root-1",
+              rootOwnership: "sink-created" as const,
+            },
+          }),
+        })),
+        onPersisted: () => {
+          throw new Error("observer unavailable");
+        },
+        log,
+      },
+    )).resolves.toMatchObject({ status: 201, body: { outcome: "persisted" } });
+    expect(log).toHaveBeenCalledWith("activity_intake_observer_failed", {
+      eventKey: envelope.eventKey,
+      runId: envelope.ref.runId,
+      error: "observer unavailable",
+    });
   });
 
   it.each(["human", "scheduled"] as const)(
@@ -144,6 +217,7 @@ describe("normalized Activity intake", () => {
             postId: "activity-root-1",
             activityChannelId: "activity-1",
             activityRootPostId: "activity-root-1",
+            rootOwnership: "sink-created" as const,
           },
         };
       });
@@ -190,6 +264,7 @@ describe("normalized Activity intake", () => {
                 postId: "activity-root-1",
                 activityChannelId: "activity-1",
                 activityRootPostId: "activity-root-1",
+                rootOwnership: "sink-created" as const,
               },
             })),
           })),
@@ -224,6 +299,7 @@ describe("normalized Activity intake", () => {
               postId: "activity-root-1",
               activityChannelId: "activity-1",
               activityRootPostId: "activity-root-1",
+              rootOwnership: "sink-created" as const,
             },
           })),
         })),
@@ -252,6 +328,7 @@ describe("normalized Activity intake", () => {
               postId: "post-1",
               activityChannelId: "activity-1",
               activityRootPostId: "activity-root-1",
+              rootOwnership: "sink-created" as const,
             },
           })),
         })),

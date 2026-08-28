@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { open, unlink, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -25,6 +25,7 @@ import {
   ActivitySinkUnavailableError,
   type ActivityAttachmentSource,
   type ActivitySink,
+  type ActivitySinkResult,
 } from "./activity-sink.js";
 import {
   type ActivityWriteReceiptStore,
@@ -183,7 +184,6 @@ export function freezeActiveActivityRunBinding(
   if (
     !ORIGINS.has(binding.origin) ||
     binding.conversationId !== binding.mainChannelId ||
-    binding.activityChannelId === binding.mainChannelId ||
     !Number.isSafeInteger(binding.channelCreateAt) ||
     binding.channelCreateAt < 0 ||
     !CHANNEL_DOC_PATH.test(binding.channelDocPath) ||
@@ -202,6 +202,12 @@ export interface ActivityIntakeDeps {
     runId: string;
   }) => Promise<unknown>;
   log?: (event: string, meta: Record<string, unknown>) => void;
+  onPersisted?: (input: {
+    envelope: AgentActivityEnvelopeV1;
+    binding: Readonly<ActiveActivityRunBinding>;
+    activityRootPostId: string;
+    outcome: ActivitySinkResult["outcome"];
+  }) => void;
 }
 
 export interface ActivityIntakeRequest {
@@ -675,12 +681,19 @@ function assertActivityAcknowledgement(
     result.receipt.eventKey === envelope.eventKey &&
     result.receipt.activityChannelId === binding.activityChannelId &&
     Boolean(result.receipt.activityRootPostId);
+  const adoptedMainRoot = binding.activityChannelId === binding.mainChannelId;
+  const ownershipMatches = result.receipt.rootOwnership ===
+    (adoptedMainRoot ? "adopted" : "sink-created");
   const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
-    result.postIds.length === 1 &&
-    result.receipt.postId === result.postIds[0] &&
-    result.receipt.activityRootPostId === result.postIds[0]
+    adoptedMainRoot
+      ? result.postIds.length === 0 &&
+        result.receipt.postId === binding.mainRootPostId &&
+        result.receipt.activityRootPostId === binding.mainRootPostId
+      : result.postIds.length === 1 &&
+        result.receipt.postId === result.postIds[0] &&
+        result.receipt.activityRootPostId === result.postIds[0]
   );
-  if (!receiptMatches || !turnStartedReceiptMatches) {
+  if (!receiptMatches || !ownershipMatches || !turnStartedReceiptMatches) {
     throw new ActivitySinkIntegrityError(
       "Activity acknowledgement failed exact root/channel verification",
     );
@@ -719,10 +732,24 @@ export async function processActivityIntake(
       runId: envelope.ref.runId,
       itemId: envelope.ref.itemId,
     });
+    assertActivityAcknowledgement(result, envelope, frozenBinding);
+    try {
+      deps.onPersisted?.({
+        envelope,
+        binding: frozenBinding,
+        activityRootPostId: result.receipt.activityRootPostId,
+        outcome: result.outcome,
+      });
+    } catch (error) {
+      deps.log?.("activity_intake_observer_failed", {
+        eventKey: envelope.eventKey,
+        runId: envelope.ref.runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (envelope.type === "turn.started") {
       await requestActivationAfterAppend(deps, frozenBinding);
     }
-    assertActivityAcknowledgement(result, envelope, frozenBinding);
     return {
       status: result.outcome === "persisted" ? 201 : 200,
       body: {
@@ -943,6 +970,7 @@ function readMultipartBody(
 }
 
 export interface ActivityIntakeHttpOptions {
+  gatewayToken: string;
   maxAttachmentBytes?: number;
   bodyTimeoutMs?: number;
 }
@@ -959,6 +987,7 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
   controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
+  onPersisted?: ActivityIntakeDeps['onPersisted'];
 }
 
 export function createProductionActivityIntakeHandler(
@@ -976,8 +1005,13 @@ export function createProductionActivityIntakeHandler(
       }),
       requestBuilderActivation: options.requestBuilderActivation,
       log: options.log,
+      onPersisted: options.onPersisted,
     },
-    { maxAttachmentBytes: options.maxAttachmentBytes },
+    {
+      gatewayToken: options.gatewayToken,
+      maxAttachmentBytes: options.maxAttachmentBytes,
+      bodyTimeoutMs: options.bodyTimeoutMs,
+    },
   );
 }
 
@@ -987,6 +1021,13 @@ function rejectUnsupportedHttpRequest(req: IncomingMessage, res: ServerResponse)
   res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
   res.end(JSON.stringify({ error: "method_not_allowed", retryable: false }));
   return true;
+}
+
+function authorizedLocalRelay(value: string | undefined, expected: string): boolean {
+  const supplied = value?.startsWith("Bearer ") ? value.slice("Bearer ".length) : "";
+  const actual = Buffer.from(supplied);
+  const target = Buffer.from(expected);
+  return actual.length === target.length && timingSafeEqual(actual, target);
 }
 
 async function parseHttpActivityBody(
@@ -1045,10 +1086,12 @@ async function disposeParsedAttachment(
 
 export function createActivityIntakeHttpHandler(
   deps: ActivityIntakeDeps,
-  options: ActivityIntakeHttpOptions = {},
+  options: ActivityIntakeHttpOptions,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const gatewayToken = options.gatewayToken.trim();
   const maxAttachmentBytes = options.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
   const bodyTimeoutMs = options.bodyTimeoutMs ?? DEFAULT_BODY_TIMEOUT_MS;
+  if (!gatewayToken) throw new Error("activity intake gateway token is required");
   if (!Number.isSafeInteger(maxAttachmentBytes) || maxAttachmentBytes <= 0) {
     throw new Error("maxAttachmentBytes must be a positive safe integer");
   }
@@ -1063,6 +1106,10 @@ export function createActivityIntakeHttpHandler(
       if (!isLoopback(req.socket.remoteAddress)) {
         req.resume();
         throw new ActivityIntakeError(401, "non_loopback", false);
+      }
+      if (!authorizedLocalRelay(req.headers.authorization, gatewayToken)) {
+        req.resume();
+        throw new ActivityIntakeError(401, "unauthorized", false);
       }
       parsed = await parseHttpActivityBody(req, maxAttachmentBytes, bodyTimeoutMs);
       const result = await processActivityIntake(

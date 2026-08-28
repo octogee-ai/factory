@@ -10,7 +10,7 @@ import {
 import type { ProjectAgentMode, ProjectAgentStatus } from "@octogee/shared/types/project";
 import { isValidProjectId, projectAgentId } from "@octogee/shared/types/identity";
 import { isPaidTier } from "./billing-tier.js";
-import { addActivityPairMember, mapActivityPairError } from "./activityPair.js";
+import { addChannelMember, mapMattermostMembershipError } from "./channel-lifecycle.js";
 
 export interface ProjectAgentActor {
   uid: string;
@@ -216,7 +216,7 @@ async function enableProjectAgent(
       projectChannelIds: channelBindings.map((binding) => binding.channelId),
     });
     for (const binding of channelBindings) {
-      await addActivityPairMember(binding.docPath, minted.mmUserId);
+      await addChannelMember(binding.docPath, minted.mmUserId);
     }
     await writeProjectAgentState(projectRef, true, "ready");
   } catch (err) {
@@ -224,7 +224,7 @@ async function enableProjectAgent(
     return settleProjectAgentError(
       projectRef,
       true,
-      mapActivityPairError(err) ?? bad(502, "Agent enabled, but provisioning failed - toggle again to retry"),
+      mapMattermostMembershipError(err) ?? bad(502, "Agent enabled, but provisioning failed - toggle again to retry"),
     );
   }
   logger.info(`[project-agent] enabled + minted ${workspaceId}/${project}`, { uid: actor.uid });

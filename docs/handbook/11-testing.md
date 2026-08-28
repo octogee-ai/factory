@@ -79,7 +79,7 @@ db-backed path) MUST use the real Firestore/Auth emulator — never an inline
 `{ collection, doc, where, get }` stub or `buildFirestoreStub`. A stub encodes
 your *assumption* of the query's behavior; it stays green while real Firestore
 (indexes, query shape, collectionGroup needs) diverges, which is exactly how
-the activity bridge shipped inert in TEST. Pure-logic unit tests spying on a
+the previous Activity projection shipped inert in TEST. Pure-logic unit tests spying on a
 non-db collaborator are unaffected — this targets faking the db/integration
 point itself.
 

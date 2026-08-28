@@ -219,7 +219,7 @@ describe("helm-runner helpers", () => {
     expect(args).toContain("--timeout=10m");
   });
 
-  it("renders a normal digest-bound gateway and gateway-edge release without a W9 experiment", () => {
+  it("renders a digest-bound gateway and gateway-edge release", () => {
     const gatewayTag = `a408f2f-oc2026.7.1@sha256:${"a".repeat(64)}`;
     const gatewayEdgeTag = `a408f2f-oc2026.7.1@sha256:${"b".repeat(64)}`;
 
@@ -239,58 +239,6 @@ describe("helm-runner helpers", () => {
     expect(args).toContain(`gatewayEdge.image.tag=${gatewayEdgeTag}`);
   });
 
-  it("renders publisher-live only with the digest-bound TEST W9 candidate handoff", () => {
-    const testExperiment = {
-      kind: "w9-agent-conversation",
-      mode: "publisher-live",
-      candidateManifest: {
-        path: "infra/gateway/openclaw-candidates/agent-conversation.json",
-        sha256: "b".repeat(64),
-      },
-      mattermostOverlay: {
-        valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
-        imageReference:
-          `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
-      },
-    };
-    const candidateTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
-    const candidateEdgeTag = `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`;
-    const base = {
-      release: "octogee-gw-default-r2",
-      chartPath: "/charts/octogee-gateway",
-      gatewayId: "default",
-      imageTag: candidateTag,
-      imageRepository: REPO,
-      gatewayEdgeImageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
-      gatewayEdgeImageTag: candidateEdgeTag,
-      upgradeTimeout: "10m",
-      conversationExperimentMode: "publisher-live",
-      testExperiment,
-    } as never;
-
-    const args = buildUpgradeArgs({ ...base, namespace: "octogee-test" });
-    expect(args).toContain("conversationExperiment.mode=publisher-live");
-    expect(args).toContain(
-      "gatewayEdge.image.repository=us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
-    );
-    expect(args).toContain(`gatewayEdge.image.tag=${candidateEdgeTag}`);
-    expect(() => buildUpgradeArgs({ ...base, namespace: "octogee" })).toThrow(/TEST-only/);
-    expect(() => buildUpgradeArgs({
-      ...base,
-      namespace: "octogee-test",
-      imageTag: "abc1234",
-    })).toThrow(/gateway and gateway-edge candidate/);
-    expect(() => buildUpgradeArgs({
-      ...base,
-      namespace: "octogee-test",
-      testExperiment: undefined,
-    })).toThrow(/requires.*W9/i);
-    expect(() => buildUpgradeArgs({
-      ...base,
-      namespace: "octogee-test",
-      gatewayEdgeImageTag: undefined,
-    })).toThrow(/gateway-edge/i);
-  });
 });
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {

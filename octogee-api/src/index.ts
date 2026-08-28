@@ -15,7 +15,6 @@ import {
 import { mountClusterRoutes } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import internalBillingRoutes from "../../gateway-edge/src/routes/internal/billing.js";
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
-import { createDefaultActivityPairReportRoutes } from "./routes/activity-pair-report.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { validateStripePriceIds } from "../../gateway-edge/src/lib/stripe-price-ids.js";
 import { createEmailMetrics, setEmailMetrics } from "../../gateway-edge/src/lib/email-metrics.js";
@@ -652,7 +651,6 @@ export function createApp(opts: CreateAppOptions = {}) {
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
-  app.use("/internal/activity-pairs", createDefaultActivityPairReportRoutes(db));
   app.use("/internal/chat-artifacts", chatArtifacts.worker);
   app.use("/internal/product-analytics", createInternalProductAnalyticsRoutes({
     analytics: product.analytics,

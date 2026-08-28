@@ -80,20 +80,20 @@ describe("OpenClaw runtime broker env", () => {
           coachToken: "coach-pat",
         };
         return new Response(JSON.stringify(
-          String(input).endsWith("agent-identity") ? { identity } : { pair: null },
+          String(input).endsWith("agent-identity") ? { identity } : { target: null },
         ), { headers: { "content-type": "application/json" }, status: 200 });
       }),
     });
 
     await broker.resolveAgentIdentity("octogee-alice-coach");
-    await broker.resolveChannelPair("channel-1");
+    await broker.resolveChannelTarget("channel-1");
 
     expect(calls).toEqual([
       {
         path: "/internal/openclaw/activity/agent-identity",
         credential: "credential-jwt",
       },
-      { path: "/internal/openclaw/activity/channel-pair", credential: null },
+      { path: "/internal/openclaw/activity/channel-target", credential: null },
     ]);
   });
 
@@ -163,7 +163,7 @@ describe("OpenClaw runtime broker env", () => {
       conversationId: "main-1",
       turnId: "input-1",
       mainChannelId: "main-1",
-      activityChannelId: "activity-1",
+      activityChannelId: "main-1",
       inputPostId: "input-1",
       origin: "followup" as const,
       status: "queued" as const,

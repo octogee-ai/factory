@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   getWorkspaceMmContext: vi.fn(),
   readChannel: vi.fn(),
   readProject: vi.fn(),
-  removeActivityPairMember: vi.fn(),
+  removeChannelMember: vi.fn(),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -132,8 +132,8 @@ vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
 }));
 
-vi.mock("../lib/activityPair.js", () => ({
-  removeActivityPairMember: (...args: unknown[]) => h.removeActivityPairMember(...args),
+vi.mock("../lib/channel-lifecycle.js", () => ({
+  removeChannelMember: (...args: unknown[]) => h.removeChannelMember(...args),
 }));
 
 const { default: entitiesRoutes } = await import("../routes/entities.js");
@@ -155,7 +155,7 @@ describe("entities routes", () => {
     h.getWorkspaceMmContext.mockReset();
     h.readChannel.mockReset();
     h.readProject.mockReset();
-    h.removeActivityPairMember.mockReset().mockResolvedValue(undefined);
+    h.removeChannelMember.mockReset().mockResolvedValue(undefined);
     h.logger.info.mockReset();
     h.logger.warn.mockReset();
     h.logger.error.mockReset();
@@ -293,7 +293,7 @@ describe("entities routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
-    expect(h.removeActivityPairMember).toHaveBeenCalledWith(
+    expect(h.removeChannelMember).toHaveBeenCalledWith(
       "workspaces/acme/projects/project/channels/general",
       "mmmember",
     );
@@ -321,7 +321,7 @@ describe("entities routes", () => {
       canonicalSource: "mattermost-general",
       canonicalState: "active",
     });
-    h.removeActivityPairMember.mockRejectedValueOnce(new Error("chat unavailable"));
+    h.removeChannelMember.mockRejectedValueOnce(new Error("chat unavailable"));
 
     const res = await request(app()).delete("/api/entities/workspace/acme/members/mmmember");
 

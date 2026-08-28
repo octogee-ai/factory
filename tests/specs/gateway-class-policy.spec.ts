@@ -98,6 +98,7 @@ const approvedPlugins = [
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
+  "octogee-activity-tools",
   "parallel",
   "openai",
 ];
@@ -401,6 +402,10 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-board-tools"]).toEqual({
       enabled: true,
       config: brokerPluginConfig,
+    });
+    expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
+      enabled: true,
+      config: { activityEnabled: true, scheduledActivityEnabled: true, heartbeatMs: 5000 },
     });
   });
 

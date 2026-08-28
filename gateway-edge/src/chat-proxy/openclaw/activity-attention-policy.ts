@@ -9,11 +9,6 @@ export interface ActivityDeliveryPolicy {
   attention: AgentAttention;
 }
 
-export interface PrimaryDeliveryPolicy {
-  target: "main";
-  silent: false;
-}
-
 export interface DeliveryOptions {
   silent: boolean;
   persistentNotification?: boolean;
@@ -42,15 +37,16 @@ export function activityAttentionPolicy(
   ) {
     return { target: "activity", silent: false, attention: "action-required" };
   }
+  if (
+    envelope.type === "item.completed" &&
+    envelope.item.kind === "error" &&
+    envelope.item.status === "failed"
+  ) {
+    return { target: "activity", silent: false, attention: "failure" };
+  }
   const attention =
     envelope.type === "item.completed" && envelope.item.status === "failed"
       ? "failure"
       : "routine";
   return { target: "activity", silent: true, attention };
-}
-
-export function primaryAttentionPolicy(
-  _kind: "answer" | "terminal-failure",
-): PrimaryDeliveryPolicy {
-  return { target: "main", silent: false };
 }

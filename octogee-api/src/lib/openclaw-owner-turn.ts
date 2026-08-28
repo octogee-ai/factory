@@ -147,8 +147,7 @@ function directWorkspaceChannel(path: unknown, slug: string): string | null {
 function channelIsActive(data: Record<string, unknown>): boolean {
   return (data.archivedAt === undefined || data.archivedAt === null)
     && data.status !== "archived"
-    && readPath(data, "commercialLifecycle.status") !== "archived"
-    && readPath(data, "mattermost.activityPair.desired") !== "archived";
+    && readPath(data, "commercialLifecycle.status") !== "archived";
 }
 
 async function workspaceChannelName(

@@ -177,6 +177,7 @@ describe("attention-aware Activity sink", () => {
         postId: "approval-post-1",
         activityChannelId: "activity-1",
         activityRootPostId: "post-1",
+        rootOwnership: "sink-created",
       },
     });
   });
@@ -204,6 +205,176 @@ describe("attention-aware Activity sink", () => {
       rootId: undefined,
       pendingPostId: started.eventKey,
     }));
+  });
+
+  it("adopts the existing primary turn root and writes journal detail beneath it", async () => {
+    const mm = mmClient();
+    const sameChannelBinding = { ...binding, activityChannelId: "main-1" };
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      props: {},
+      fileIds: [],
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    const started = envelope("turn.started");
+
+    await expect(sink.append({ envelope: started, binding: sameChannelBinding })).resolves.toMatchObject({
+      outcome: "persisted",
+      postIds: [],
+      receipt: {
+        postId: "turn-1",
+        activityChannelId: "main-1",
+        activityRootPostId: "turn-1",
+        rootOwnership: "adopted",
+      },
+    });
+    await expect(sink.append({ envelope: started, binding: sameChannelBinding })).resolves.toMatchObject({
+      outcome: "duplicate",
+      postIds: [],
+      receipt: { postId: "turn-1", rootOwnership: "adopted" },
+    });
+    expect(mm.listChannelPosts).not.toHaveBeenCalled();
+    await sink.append({ envelope: envelope("item.completed"), binding: sameChannelBinding });
+
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+    expect(mm.getPost).toHaveBeenCalledTimes(2);
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: "main-1",
+      rootId: "turn-1",
+      silent: true,
+    }));
+  });
+
+  it("posts the terminal error once beneath the primary turn root without silencing it", async () => {
+    const mm = mmClient();
+    const sameChannelBinding = { ...binding, activityChannelId: "main-1" };
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      props: {},
+      fileIds: [],
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding: sameChannelBinding });
+    const terminalError = envelope("item.completed", {
+      item: { kind: "error", status: "failed", summary: "Agent run failed" },
+    });
+    terminalError.ref.itemId = "octogee:terminal-error";
+    terminalError.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(terminalError.ref))
+      .digest("hex");
+
+    await sink.append({ envelope: terminalError, binding: sameChannelBinding });
+    await sink.append({ envelope: terminalError, binding: sameChannelBinding });
+
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: "main-1",
+      rootId: "turn-1",
+      message: "Agent run failed",
+      silent: false,
+    }));
+  });
+
+  it("recovers an adopted root after verification and before receipt commit", async () => {
+    const mm = mmClient();
+    const delegate = new InMemoryActivityWriteReceiptStore();
+    let crashCommit = true;
+    const receipts: ActivityWriteReceiptStore = {
+      claim: (input) => delegate.claim(input),
+      read: (eventKey) => delegate.read(eventKey),
+      markPosted: (eventKey, token, postId, now) => delegate.markPosted(eventKey, token, postId, now),
+      updateAttachment: (eventKey, token, attachment, now) =>
+        delegate.updateAttachment(eventKey, token, attachment, now),
+      async commit(eventKey, token, now) {
+        if (crashCommit) throw new Error("crashed before adopted root commit");
+        await delegate.commit(eventKey, token, now);
+      },
+    };
+    const sameChannelBinding = { ...binding, activityChannelId: "main-1" };
+    const started = envelope("turn.started");
+    vi.mocked(mm.getPost).mockResolvedValue({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      props: {},
+      fileIds: [],
+    });
+    const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
+
+    await expect(first.append({ envelope: started, binding: sameChannelBinding })).rejects.toThrow(
+      "crashed before adopted root commit",
+    );
+    await expect(delegate.read(started.eventKey)).resolves.toMatchObject({
+      state: "posted",
+      postId: "turn-1",
+    });
+    crashCommit = false;
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
+
+    await expect(sink.append({ envelope: started, binding: sameChannelBinding })).resolves.toMatchObject({
+      outcome: "duplicate",
+      postIds: [],
+      receipt: { postId: "turn-1", activityRootPostId: "turn-1", rootOwnership: "adopted" },
+    });
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["deleted", null],
+    ["wrong-channel", { id: "turn-1", channelId: "activity-1", rootId: "", props: {}, fileIds: [] }],
+    ["thread-reply", { id: "turn-1", channelId: "main-1", rootId: "parent-1", props: {}, fileIds: [] }],
+  ])("rejects a %s adopted root before writing a receipt", async (_case, root) => {
+    const mm = mmClient();
+    const sameChannelBinding = { ...binding, activityChannelId: "main-1" };
+    vi.mocked(mm.getPost).mockResolvedValue(root);
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+
+    await expect(sink.append({ envelope: envelope("turn.started"), binding: sameChannelBinding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("fails a committed adopted-root replay after its Mattermost root is deleted", async () => {
+    const mm = mmClient();
+    const sameChannelBinding = { ...binding, activityChannelId: "main-1" };
+    let root: Awaited<ReturnType<ActivityMattermostClient["getPost"]>> = {
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      props: {},
+      fileIds: [],
+    };
+    vi.mocked(mm.getPost).mockImplementation(async () => root);
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+    const started = envelope("turn.started");
+    await sink.append({ envelope: started, binding: sameChannelBinding });
+    root = null;
+
+    await expect(sink.append({ envelope: started, binding: sameChannelBinding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 
   it("replays a crash after Mattermost create by scanning exactly to the stored anchor", async () => {

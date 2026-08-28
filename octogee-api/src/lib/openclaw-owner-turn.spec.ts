@@ -195,7 +195,7 @@ describe("createOwnerWorkspaceTurnVerifier", () => {
     ["archived", [{ path: "workspaces/eggman/channels/launchroom", data: { archivedAt: "now" } }]],
     ["archiving", [{
       path: "workspaces/eggman/channels/launchroom",
-      data: { mattermost: { activityPair: { desired: "archived" } } },
+      data: { archivedAt: true },
     }]],
   ])("rejects a %s channel mapping", async (_label, channels) => {
     const harness = fakeDb({ workspaceOwner: "uid-eggman", channels });

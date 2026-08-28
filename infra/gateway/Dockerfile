@@ -120,6 +120,12 @@ RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions \
 # directory here, where a failure can still stop the image from being pushed.
 RUN node /octogee/infra/gateway/verify-extension-deps.mjs /octogee/extensions
 
+RUN OPENCLAW_ROOT="$(npm root -g)/openclaw" \
+    && TARGET="$OPENCLAW_ROOT/dist/extensions/octogee-activity-tools" \
+    && test -d "$OPENCLAW_ROOT/dist/extensions" \
+    && mkdir -p "$TARGET" \
+    && cp -a /octogee/extensions/octogee-activity-tools/. "$TARGET/"
+
 # ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
 # signature verification through user `_apt` and needs a world-writable

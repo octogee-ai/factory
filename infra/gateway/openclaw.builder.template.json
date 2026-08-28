@@ -180,6 +180,14 @@
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
+      "replyToMode": "all",
+      "replyToModeByChatType": {
+        "direct": "all"
+      },
+      "threadSessionScope": "channel",
+      "agentActivity": {
+        "publisher": "external"
+      },
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },
@@ -232,6 +240,7 @@
       "octogee-ops-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",
+      "octogee-activity-tools",
       "parallel",
       "openai",
       "browser",
@@ -322,6 +331,14 @@
       "octogee-workspace-tools": {
         "enabled": true,
         "config": {}
+      },
+      "octogee-activity-tools": {
+        "enabled": true,
+        "config": {
+          "activityEnabled": true,
+          "scheduledActivityEnabled": true,
+          "heartbeatMs": 5000
+        }
       },
       "parallel": {
         "enabled": true

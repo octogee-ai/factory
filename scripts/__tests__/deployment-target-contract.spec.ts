@@ -119,7 +119,6 @@ describe("deployment target consumers", () => {
       "artifact-worker/cloudbuild.yaml",
       "cloudbuild-base-beta.yaml",
       "cloudbuild-base.yaml",
-      "cloudbuild-gateway-candidate.yaml",
       "cloudbuild-operator-base-extra.yaml",
       "cloudbuild-operator-base.yaml",
       "cloudbuild-operator-final-extra.yaml",
@@ -488,8 +487,6 @@ describe("deployment target consumers", () => {
   it("resolves registry paths in gateway promotion code", () => {
     for (const script of [
       "scripts/ops/promote-gateway.ts",
-      "scripts/lib/openclaw-candidate-manifest.ts",
-      "scripts/lib/w9-test-candidate-promotion.ts",
       "scripts/lib/gateway-mutable-config-backfill.ts",
     ]) {
       const contents = source(script);

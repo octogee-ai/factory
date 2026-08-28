@@ -18,8 +18,7 @@ const h = vi.hoisted(() => ({
   setError: null as Error | null,
   getWorkspaceMmContext: vi.fn(),
   mmApi: vi.fn(),
-  reconcileActivityPair: vi.fn(),
-  reconcileStoredActivityPair: vi.fn(),
+  setStoredChannelArchived: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -64,9 +63,8 @@ vi.mock("../lib/mattermost-context.js", () => ({
   getWorkspaceMmContext: (...args: unknown[]) => h.getWorkspaceMmContext(...args),
 }));
 
-vi.mock("../lib/activityPair.js", () => ({
-  reconcileActivityPair: (...args: unknown[]) => h.reconcileActivityPair(...args),
-  reconcileStoredActivityPair: (...args: unknown[]) => h.reconcileStoredActivityPair(...args),
+vi.mock("../lib/channel-lifecycle.js", () => ({
+  setStoredChannelArchived: (...args: unknown[]) => h.setStoredChannelArchived(...args),
 }));
 
 const {
@@ -113,7 +111,6 @@ function seedSessionDoc(extra: Record<string, unknown> = {}) {
     name: "patchroll",
     mattermost: {
       channelId: "channel-1",
-      activityPair: { generation: 1, desired: "active", status: "active" },
     },
     ...extra,
   });
@@ -134,8 +131,7 @@ beforeEach(() => {
     if (method === "POST" && path === "/channels/channel-1/members") return { ok: true };
     throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
   });
-  h.reconcileActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
-  h.reconcileStoredActivityPair.mockReset().mockResolvedValue({ activityChannelId: "activity-1" });
+  h.setStoredChannelArchived.mockReset().mockResolvedValue(undefined);
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
@@ -171,11 +167,10 @@ describe("sessionChannelNameAvailability", () => {
 });
 
 describe("createSessionChannel", () => {
-  it("resumes a failed pair saga instead of treating the durable primary as a duplicate", async () => {
+  it("returns the stored primary without requiring a sibling", async () => {
     seedSessionDoc({
       mattermost: {
         channelId: "channel-1",
-        activityPair: { generation: 1, desired: "active", status: "failed" },
       },
     });
 
@@ -188,7 +183,7 @@ describe("createSessionChannel", () => {
       status: 200,
       body: { success: true, channelId: "channel-1", name: "patchroll" },
     });
-    expect(h.reconcileStoredActivityPair).toHaveBeenCalledWith(DOC_PATH);
+    expect(h.setStoredChannelArchived).not.toHaveBeenCalled();
     expect(h.mmApi).not.toHaveBeenCalled();
   });
 
@@ -243,11 +238,11 @@ describe("createSessionChannel", () => {
     });
   });
 
-  it("returns 409 when the channel doc already exists", async () => {
+  it("returns the stored primary when the channel doc already exists", async () => {
     seedSessionDoc();
     await expect(createSessionChannel(actor(), input)).resolves.toEqual({
-      status: 409,
-      body: { error: "A channel with this name already exists in your workspace" },
+      status: 200,
+      body: { success: true, channelId: "channel-1", name: "patchroll" },
     });
     expect(h.mmApi).not.toHaveBeenCalled();
   });
@@ -641,13 +636,7 @@ describe("archiveSessionChannel", () => {
     const result = await archiveSessionChannel(actor(), "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
-    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelDocPath: DOC_PATH,
-        primaryChannelId: "channel-1",
-        desired: "archived",
-      }),
-    );
+    expect(h.setStoredChannelArchived).toHaveBeenCalledWith(DOC_PATH, true);
     expect(h.updates).toEqual([
       { path: DOC_PATH, data: { archivedAt: "SERVER_TS" } },
     ]);
@@ -659,7 +648,7 @@ describe("archiveSessionChannel", () => {
     const result = await archiveSessionChannel(actor(), "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
-    expect(h.reconcileActivityPair).not.toHaveBeenCalled();
+    expect(h.setStoredChannelArchived).not.toHaveBeenCalled();
     expect(h.mmApi).not.toHaveBeenCalled();
     expect(h.updates).toEqual([]);
   });
@@ -667,7 +656,7 @@ describe("archiveSessionChannel", () => {
   it("surfaces MM archive failures as 502", async () => {
     seedSessionDoc();
     mockVerifiedMmChannel({ "/channels/channel-1": { status: "OK" } });
-    h.reconcileActivityPair.mockRejectedValueOnce(new Error("MM down"));
+    h.setStoredChannelArchived.mockRejectedValueOnce(new Error("MM down"));
 
     const result = await archiveSessionChannel(actor(), "patchroll");
 
@@ -699,7 +688,6 @@ function seedProjectSessionDoc(extra: Record<string, unknown> = {}) {
     name: "patchroll",
     mattermost: {
       channelId: "channel-1",
-      activityPair: { generation: 1, desired: "active", status: "active" },
     },
     ...extra,
   });
@@ -736,12 +724,12 @@ describe("createProjectSessionChannel", () => {
     });
   });
 
-  it("returns 409 when the project channel doc already exists", async () => {
+  it("returns the stored project primary when the channel doc already exists", async () => {
     seedProjectDoc();
     seedProjectSessionDoc();
     await expect(createProjectSessionChannel(actor(), "orbit", input)).resolves.toEqual({
-      status: 409,
-      body: { error: "A channel with this name already exists in your workspace" },
+      status: 200,
+      body: { success: true, channelId: "channel-1", name: "patchroll" },
     });
   });
 
@@ -853,12 +841,7 @@ describe("archiveProjectSessionChannel", () => {
     const result = await archiveProjectSessionChannel(actor(), "orbit", "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
-    expect(h.reconcileActivityPair).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelDocPath: PROJECT_CHANNEL_DOC_PATH,
-        desired: "archived",
-      }),
-    );
+    expect(h.setStoredChannelArchived).toHaveBeenCalledWith(PROJECT_CHANNEL_DOC_PATH, true);
     expect(h.updates).toEqual([
       { path: PROJECT_CHANNEL_DOC_PATH, data: { archivedAt: "SERVER_TS" } },
     ]);

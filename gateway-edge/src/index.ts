@@ -10,7 +10,6 @@ import { requireAuth, requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
-import { createActivityPairMetrics, setActivityPairMetrics } from "./lib/activity-pair-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
@@ -122,7 +121,6 @@ const httpRequestTotal = new Counter({
 
 setEmailMetrics(createEmailMetrics(metricsRegistry));
 setNotificationMetrics(createNotificationMetrics(metricsRegistry));
-setActivityPairMetrics(createActivityPairMetrics(metricsRegistry));
 
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
@@ -319,7 +317,7 @@ if (process.env.NODE_ENV !== "test") {
         "Supplied per-gateway via the chart's gatewayEdge.env/.secrets ranges " +
         "(threaded by Cowboy); a missing one means a skewed render or a " +
         "dropped-on-apply duplicate. Refusing to boot rather than limp — the " +
-        "openclaw/activity bridges and git locality routes all " +
+        "OpenClaw projection, Activity intake, and git locality routes all " +
         "depend on these.",
     );
     process.exit(1);

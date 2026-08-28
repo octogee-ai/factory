@@ -26,7 +26,6 @@ const PLATFORM_INTERNAL_ROUTES = new Set([
   "/internal/billing/run-auto-top-ups",
   "/internal/notifications/digest",
   "/internal/notifications/social",
-  "/internal/activity-pairs/report",
 ]);
 
 function platformBindingAuthorized(bound: PlatformBinding, path: string): boolean {

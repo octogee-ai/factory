@@ -117,9 +117,6 @@ gatewayContainerSecurityContext:
 chartFingerprint: ""
 deploymentIntentFingerprint: ""
 
-conversationExperiment:
-  mode: "broad"
-
 env:
   gcloudProject: "octogee"
   firebaseProjectId: "octogee"

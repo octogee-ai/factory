@@ -14,7 +14,7 @@ import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
-import { applyOpenClawConversationExperiment } from "../lib/openclaw-conversation-experiment.js";
+import { applyOpenClawMattermostRuntimeConfig } from "../lib/openclaw-mattermost-runtime.js";
 import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 import {
   isBareGatewayId,
@@ -530,7 +530,7 @@ export function applyPreBootPatches(
     builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applySharedMattermostRoutingSafetyPatch(config, env, logFn),
-    applyOpenClawConversationExperiment(config, env.OCTOGEE_ACTIVITY_BRIDGE_MODE),
+    applyOpenClawMattermostRuntimeConfig(config),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),

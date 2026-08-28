@@ -418,13 +418,6 @@ if [[ -z "$MM_ADMIN_PAT" || -z "$MM_ADMIN_PAT_ID" || -z "$MM_ADMIN_PAT_FINGERPRI
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG before trusting this environment."
 fi
 
-info "approval-signing"
-APPROVAL_SIGNING_SECRET=$(ksecret_key approval-signing secret)
-if [[ -z "$APPROVAL_SIGNING_SECRET" ]]; then
-  APPROVAL_SIGNING_SECRET=$(openssl rand -hex 32)
-fi
-ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"
-
 # ── 2b. OpenClaw agent-control signing secret ────────────────────────────
 # HMAC secret for durable control context binding. Must NOT rotate during
 # the lifetime of any pending control — rotating mid-flight invalidates

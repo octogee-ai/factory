@@ -45,8 +45,6 @@ interface SessionChannelDoc {
   archivedAt?: unknown;
   mattermost?: {
     channelId?: unknown;
-    activityChannelId?: unknown;
-    activityPair?: { status?: unknown };
   };
 }
 
@@ -181,16 +179,6 @@ async function createSessionChannelImpl(
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
   });
-  const activityReady = await createSessionActivityPair(
-    docRef.path,
-    channelName,
-    channelId,
-    ctx.teamId,
-    scope,
-  );
-  if (!activityReady) {
-    return bad(502, "Channel creation failed - could not create activity channel");
-  }
   logger.info(`[channels] Created session channel ${scope}`, { uid: actor.uid });
 
   return { status: 200, body: { success: true, channelId, name: normalized.name } };
@@ -242,16 +230,8 @@ async function existingSessionChannelResult(
   if (
     typeof channelId !== "string"
     || channelId.length === 0
-    || data?.mattermost?.activityPair?.status === "active"
   ) {
     return bad(409, "A channel with this name already exists in your workspace");
-  }
-  try {
-    const { reconcileStoredActivityPair } = await import("./activityPair.js");
-    await reconcileStoredActivityPair(docRef.path);
-  } catch (err) {
-    logger.error(`[channels] Activity pair retry failed for ${scope}:`, { err });
-    return bad(502, "Channel creation failed - could not create activity channel");
   }
   return { status: 200, body: { success: true, channelId, name } };
 }
@@ -274,30 +254,6 @@ async function createPrimarySessionChannel(
   } catch (err) {
     logger.error(`[channels] MM channel creation failed for ${scope}:`, { err });
     return null;
-  }
-}
-
-async function createSessionActivityPair(
-  channelDocPath: string,
-  primaryName: string,
-  primaryChannelId: string,
-  teamId: string,
-  scope: string,
-): Promise<boolean> {
-  try {
-    const { reconcileActivityPair } = await import("./activityPair.js");
-    await reconcileActivityPair({
-      channelDocPath,
-      primaryName,
-      primaryChannelId,
-      teamId,
-      type: "P",
-      kind: "custom",
-    });
-    return true;
-  } catch (err) {
-    logger.error(`[channels] Activity pair creation failed for ${scope}:`, { err });
-    return false;
   }
 }
 
@@ -533,21 +489,13 @@ async function archiveSessionChannelImpl(
   const bindingFailure = await verifyChannelBinding(actor.workspaceId, project, name, found.channelId);
   if (bindingFailure) return bindingFailure;
 
-  const ctx = await getWorkspaceMmContext(actor.uid, actor.workspaceId, actor.userData);
-  if (!ctx?.teamId) return bad(502, "Channel archive failed - workspace chat is not ready");
   try {
-    const { reconcileActivityPair } = await import("./activityPair.js");
-    await reconcileActivityPair({
-      channelDocPath: found.docRef.path,
-      primaryName: laneChannelName(actor.workspaceId, project, name),
-      primaryChannelId: found.channelId,
-      teamId: ctx.teamId,
-      type: "P",
-      kind: "custom",
-      desired: "archived",
-    });
+    const {
+      setStoredChannelArchived,
+    } = await import("./channel-lifecycle.js");
+    await setStoredChannelArchived(found.docRef.path, true);
   } catch (err) {
-    logger.error(`[channels] Activity pair archive failed for ${scope}:`, { err });
+    logger.error(`[channels] Channel archive failed for ${scope}:`, { err });
     return bad(502, "Channel archive failed");
   }
 

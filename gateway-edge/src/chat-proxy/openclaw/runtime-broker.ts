@@ -1,6 +1,10 @@
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
-import type { AgentIdentity, ChannelPair } from "./activity-bridge.js";
+import type {
+  AgentIdentity,
+  AuthorizedConversationTarget,
+  ChannelTarget,
+} from "./activity-runtime-types.js";
 import type { ConversationRunLiveDocV3, RunLiveDoc } from "./run-live-doc.js";
 import {
   ActivityReceiptConflictError,
@@ -46,7 +50,11 @@ export interface OpenClawRuntimeBroker {
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
   getUserGatewayId(uid: string): Promise<string | null>;
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
-  resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null>;
+  resolveChannelTarget(primaryChannelId: string): Promise<ChannelTarget | null>;
+  resolveConversationTarget(
+    agentId: string,
+    conversationId: string,
+  ): Promise<AuthorizedConversationTarget | null>;
   requestBuilderRunActivation(input: {
     agentId: string;
     runId: string;
@@ -349,13 +357,24 @@ export function createOpenClawRuntimeBroker(opts: {
       );
       return (body?.identity as AgentIdentity | undefined) ?? null;
     },
-    async resolveChannelPair(primaryChannelId: string): Promise<ChannelPair | null> {
+    async resolveChannelTarget(primaryChannelId: string): Promise<ChannelTarget | null> {
       const body = await postJson(
-        "/internal/openclaw/activity/channel-pair",
+        "/internal/openclaw/activity/channel-target",
         { primaryChannelId },
         new Set([200, 404]),
       );
-      return (body?.pair as ChannelPair | undefined) ?? null;
+      return (body?.target as ChannelTarget | undefined) ?? null;
+    },
+    async resolveConversationTarget(
+      agentId: string,
+      conversationId: string,
+    ): Promise<AuthorizedConversationTarget | null> {
+      const body = await postJson(
+        "/internal/openclaw/activity/conversation-target",
+        { agentId, conversationId },
+        new Set([200, 404]),
+      );
+      return (body?.target as AuthorizedConversationTarget | undefined) ?? null;
     },
     async requestBuilderRunActivation(input): Promise<Record<string, unknown>> {
       const body = await postJson(

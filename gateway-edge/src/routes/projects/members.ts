@@ -73,8 +73,8 @@ async function removeProjectGuest(ctx: ProjectCtx, guestUid: string, res: Respon
 
   const guest = await readGuestActor(guestUid);
   if (guest.mmUserId) {
-    const { removeActivityPairMember } = await import("../../lib/activityPair.js");
-    await removeActivityPairMember(`${ctx.projectRef.path}/channels/general`, guest.mmUserId);
+    const { removeChannelMember } = await import("../../lib/channel-lifecycle.js");
+    await removeChannelMember(`${ctx.projectRef.path}/channels/general`, guest.mmUserId);
   }
   await removeGuestMember(ctx, memberRef);
   await revokeGuestGiteaAccess(ctx, guest);

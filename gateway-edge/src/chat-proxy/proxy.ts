@@ -10,7 +10,6 @@ import { Registry, Counter, Gauge, Histogram } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { publicAppOrigins } from "@octogee/core/deployment-environment";
 import { OpenclawWireError } from "./openclaw/upstream.js";
-import { getOpenClawDeviceIdentity } from "./openclaw/device-identity.js";
 import {
   clearGatewayDeviceToken,
   fetchGatewayAuth,
@@ -43,14 +42,12 @@ import {
 } from "../roll-roster.js";
 import { logger } from "../middleware/logging.js";
 import {
+  coachWiredInParsedConfig,
   listLocalCoachWiredSlugs,
   readOpenclawConfig,
-  coachWiredInParsedConfig,
 } from "@octogee/core/local-coach-wired";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
-const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
-const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
   createBridgeBootStatus,
@@ -62,30 +59,40 @@ import {
   OpenClawRuntimeBrokerError,
   type OpenClawRuntimeBroker,
 } from "./openclaw/runtime-broker.js";
-import type { ActivityBridgeHandle } from "./openclaw/activity-bridge.js";
-import type { MmCoachEventListenerManager } from "./openclaw/mm-event-listener.js";
 import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
-import { createReceiptBackedRetryMarker } from "./openclaw/agent-control-retry-marker.js";
+import {
+  createReceiptBackedRetryMarker,
+  verifyReceiptBackedRetryLineage,
+} from "./openclaw/agent-control-retry-marker.js";
+import { verifyHistoricalSubagentParent } from "./openclaw/subagent-lineage-authority.js";
 import {
   createMattermostSigningKeySource,
   createMattermostTriggerVerifier,
 } from "./openclaw/mattermost-trigger.js";
 import type { ActivitySinkControlLifecycle } from "./openclaw/activity-sink.js";
-import { ACTIVITY_INTAKE_PATH } from "./http-paths.js";
+import { ACTIVITY_INTAKE_PATH, SCHEDULED_ANCHOR_ADMISSION_PATH, VOICE_EVENT_RELAY_PATH } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 import { createVoiceWsUpgradeHandler } from "../voice/route.js";
+import type { AgentEventSource } from "../voice/brain.js";
 import { SileroVad } from "../voice/silero-vad.js";
+import { createOpenClawVoiceEventRelay } from "../voice/openclaw-event-relay.js";
 import {
-  resolveActivityBridgeMode,
-  resolveActivityBridgeSelection,
-} from "./openclaw/activity-bridge-selection.js";
+  createScheduledAnchorAdmission,
+  verifyScheduledAnchorBinding,
+} from "./openclaw/scheduled-anchor.js";
+import { createScheduledAnchorAdmissionHandler } from "./openclaw/scheduled-anchor-route.js";
 import {
   CandidateActivityRuntimeRegistry,
   readMattermostChannelCreateAt,
   replaceCandidateRuntimeSnapshot,
   resolveCandidateActivityBinding,
 } from "./openclaw/candidate-activity-runtime.js";
+import {
+  createActivityCoachTracker,
+  type ActivityCoachTracker,
+  wireActivityCoachEventListeners,
+} from "./openclaw/activity-coach-tracker.js";
 export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
@@ -98,6 +105,9 @@ const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid"
 const DEFAULT_OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
 const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
+const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
+const COACH_RECONCILE_INTERVAL_MS = 60_000;
 
 const bridgeLog = createBridgeLog();
 
@@ -260,101 +270,24 @@ const ocWsInboundGateTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-const bridgeMetrics = {
-  eventsReceived: new Counter({
-    name: 'octogee_bridge_event_received_total',
-    help: 'Agent events received by the activity bridge from the gateway upstream WS',
-    labelNames: ['stream'] as const,
-    registers: [metricsRegistry],
-  }),
-  eventsPosted: new Counter({
-    name: 'octogee_bridge_event_posted_total',
-    help: 'Agent events successfully posted/edited to the activity channel',
-    labelNames: ['stream', 'kind'] as const,
-    registers: [metricsRegistry],
-  }),
-  eventsDropped: new Counter({
-    name: 'octogee_bridge_event_dropped_total',
-    help: 'Agent events dropped by the bridge with structured reason',
-    labelNames: ['stream', 'reason'] as const,
-    registers: [metricsRegistry],
-  }),
-  postLatencyMsCreate: new Histogram({
-    name: 'octogee_bridge_mm_post_create_ms',
-    help: 'MM createPost latency from the bridge',
-    labelNames: ['kind', 'status_class'] as const,
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-    registers: [metricsRegistry],
-  }),
-  postLatencyMsEdit: new Histogram({
-    name: 'octogee_bridge_mm_post_edit_ms',
-    help: 'MM editPost latency from the bridge',
-    labelNames: ['kind', 'status_class'] as const,
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-    registers: [metricsRegistry],
-  }),
-  resolutionMs: new Histogram({
-    name: 'octogee_bridge_resolution_ms',
-    help: 'Agent identity + channel resolution latency',
-    labelNames: ['outcome'] as const,
-    buckets: [0.5, 1, 5, 10, 25, 50, 100, 250, 500],
-    registers: [metricsRegistry],
-  }),
-  approvalDispatchMs: new Histogram({
-    name: 'octogee_bridge_approval_dispatch_ms',
-    help: 'Approval-callback dispatch latency to OC typed RPC',
-    labelNames: ['outcome'] as const,
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500],
-    registers: [metricsRegistry],
-  }),
-  reactionDispatchMs: new Histogram({
-    name: 'octogee_bridge_reaction_dispatch_ms',
-    help: 'MM reaction → OC abort/redirect dispatch latency',
-    labelNames: ['emoji', 'outcome'] as const,
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500],
-    registers: [metricsRegistry],
-  }),
-  e2eRootPostMs: new Histogram({
-    name: 'octogee_bridge_e2e_root_post_ms',
-    help: 'End-to-end lifecycle.start → root post visible',
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-    registers: [metricsRegistry],
-  }),
-  e2eApprovalVisibleMs: new Histogram({
-    name: 'octogee_bridge_e2e_approval_visible_ms',
-    help: 'End-to-end approval click → buttons removed',
-    buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-    registers: [metricsRegistry],
-  }),
-  upstreamReconnects: new Counter({
-    name: 'octogee_bridge_upstream_reconnects_total',
-    help: 'Bridge upstream-WS reconnect count',
-    registers: [metricsRegistry],
-  }),
-  sessionSubscribe: new Counter({
-    name: 'octogee_bridge_session_subscribe_total',
-    help: 'Bridge upstream sessions.subscribe outcome (ok|failed)',
-    labelNames: ['outcome'] as const,
-    registers: [metricsRegistry],
-  }),
-  seqGap: new Counter({
-    name: 'octogee_bridge_seq_gap_total',
-    help: 'Bridge upstream broadcast seq-gap handling (tolerated|forced-reconnect); count is missed frames',
-    labelNames: ['outcome'] as const,
-    registers: [metricsRegistry],
-  }),
-};
+const activityIntakeTotal = new Counter({
+  name: 'octogee_activity_intake_total',
+  help: 'Durable Activity intake outcomes',
+  labelNames: ['outcome'] as const,
+  registers: [metricsRegistry],
+});
 
-const approvalDroppedCounter = new Counter({
-  name: 'octogee_bridge_approval_dropped_total',
-  help: 'Approval callback drops with reason',
-  labelNames: ['reason'] as const,
+const activityReactionDispatchMs = new Histogram({
+  name: 'octogee_activity_reaction_dispatch_ms',
+  help: 'Mattermost reaction to OpenClaw control dispatch latency',
+  labelNames: ['emoji', 'outcome'] as const,
+  buckets: [10, 25, 50, 100, 250, 500, 1000, 2500],
   registers: [metricsRegistry],
 });
 
 const bridgeBootStatusGauge = new Gauge({
-  name: 'octogee_bridge_boot_status',
-  help: 'Activity bridge boot state — one label is 1, the rest 0',
+  name: 'octogee_activity_projection_boot_status',
+  help: 'Activity projection boot state — one label is 1, the rest 0',
   labelNames: ['status'] as const,
   registers: [metricsRegistry],
 });
@@ -400,6 +333,27 @@ export function installActivityIntakeHandler(
 ): void {
   activityIntakeHandler = handler;
 }
+
+let scheduledAnchorAdmissionHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
+
+export function installScheduledAnchorAdmissionHandler(
+  handler: ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>) | null,
+): void {
+  scheduledAnchorAdmissionHandler = handler;
+}
+
+const voiceEventRelayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+const voiceEventRelay = voiceEventRelayToken
+  ? createOpenClawVoiceEventRelay({
+      gatewayToken: voiceEventRelayToken,
+      log: (message, fields) => logger.warn(`[voice] ${message}`, fields),
+    })
+  : null;
+const unavailableVoiceEventSource: AgentEventSource = {
+  subscribe: () => () => undefined,
+};
 
 const FRAME_DROP_LOG_WINDOW_MS = 60_000;
 // Retry-After hint for a WS upgrade refused because the serving revision is not
@@ -541,19 +495,81 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
+async function handleLocalInternalRoute(
+  path: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<boolean> {
+  if (path === ACTIVITY_INTAKE_PATH) {
+    if (!activityIntakeHandler) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "runtime_unsynchronized", retryable: true }));
+    } else {
+      await activityIntakeHandler(req, res);
+    }
+    return true;
+  }
+  if (path === SCHEDULED_ANCHOR_ADMISSION_PATH) {
+    if (!scheduledAnchorAdmissionHandler) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "admission_unavailable" }));
+    } else {
+      await scheduledAnchorAdmissionHandler(req, res);
+    }
+    return true;
+  }
+  if (path !== VOICE_EVENT_RELAY_PATH) return false;
+  if (!voiceEventRelay) {
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "voice_relay_unconfigured" }));
+  } else {
+    await voiceEventRelay.handle(req, res);
+  }
+  return true;
+}
+
+function handleHealthRoute(path: string, res: http.ServerResponse): boolean {
+  if (path === "/healthz" || path === "/health" || path === "/_health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return true;
+  }
+  if (path !== "/healthz/bridge") return false;
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(bridgeHealthBody(bridgeBootStatus.snapshot(), Date.now())));
+  return true;
+}
+
+async function handleControlRoute(
+  path: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<boolean> {
+  if (/^\/internal\/openclaw\/mattermost\/interactions\/[A-Za-z0-9_-]{1,128}$/.test(path)) {
+    if (!mattermostInteractionProxyHandler) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "service_unavailable", reason: "interaction proxy not initialized" }));
+    } else {
+      await mattermostInteractionProxyHandler(req, res);
+    }
+    return true;
+  }
+  if (path !== "/internal/openclaw/agent-control/callback") return false;
+  if (!agentControlCallbackHandler) {
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "service_unavailable", reason: "agent control handler not initialized" }));
+  } else {
+    await agentControlCallbackHandler(req, res);
+  }
+  return true;
+}
+
 export async function chatProxyHandleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
   const originalPath = (req.url || "").split("?")[0];
-  if (originalPath === ACTIVITY_INTAKE_PATH) {
-    if (!activityIntakeHandler) {
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "runtime_unsynchronized", retryable: true }));
-      return;
-    }
-    return activityIntakeHandler(req, res);
-  }
+  if (await handleLocalInternalRoute(originalPath, req, res)) return;
 
   setCors(req, res);
 
@@ -564,36 +580,8 @@ export async function chatProxyHandleRequest(
   }
 
   const urlPath = applyGatewayPrefixStripInPlace(req);
-
-  if (urlPath === "/healthz" || urlPath === "/health" || urlPath === "/_health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok" }));
-    return;
-  }
-
-  if (urlPath === "/healthz/bridge") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(bridgeHealthBody(bridgeBootStatus.snapshot(), Date.now())));
-    return;
-  }
-
-  if (/^\/internal\/openclaw\/mattermost\/interactions\/[A-Za-z0-9_-]{1,128}$/.test(urlPath)) {
-    if (!mattermostInteractionProxyHandler) {
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "service_unavailable", reason: "interaction proxy not initialized" }));
-      return;
-    }
-    return mattermostInteractionProxyHandler(req, res);
-  }
-
-  if (urlPath === "/internal/openclaw/agent-control/callback") {
-    if (!agentControlCallbackHandler) {
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "service_unavailable", reason: "agent control handler not initialized" }));
-      return;
-    }
-    return agentControlCallbackHandler(req, res);
-  }
+  if (handleHealthRoute(urlPath, res)) return;
+  if (await handleControlRoute(urlPath, req, res)) return;
 
   req.resume();
   res.writeHead(404, { "Content-Type": "application/json" });
@@ -943,7 +931,8 @@ export function attachChatProxyWsUpgrade(
       redeemOpenClawWs: (ticket, purpose) =>
         (opts.runtimeBroker ?? getOpenClawRuntimeBroker()).redeemOpenClawWs(ticket, purpose),
     },
-    establishUpstream: establishUpstreamWithRotation,
+    eventSourceForAgent: (agentId) => voiceEventRelay?.source(agentId) ?? unavailableVoiceEventSource,
+    isAgentReady: (agentId) => voiceEventRelay?.readiness(agentId).ready ?? false,
     upgradeGate,
     isAllowedWsOrigin,
     stripGatewayPrefix,
@@ -1027,75 +1016,33 @@ export function attachChatProxyWsUpgrade(
   (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
 }
 
-async function buildEditDiffFetcher() {
-  const giteaToken = process.env.GITEA_TOKEN;
-  if (!giteaToken || giteaToken.trim().length === 0) {
-    console.warn(
-      '[chat-proxy] GITEA_TOKEN not set — edit diffs will render as placeholders. ' +
-      'Mount K8s secret `gitea-token/token` on chat-proxy to enable.',
-    );
-    return undefined;
-  }
-  const ns = process.env.K8S_NAMESPACE || 'octogee';
-
-  const giteaUrl = `http://octogee-gitea-http.${ns}.svc.cluster.local:3000`;
-  const giteaPublicBaseUrl = process.env.GITEA_PUBLIC_BASE_URL || undefined;
-  const { createGiteaEditDiffFetcher } = await import('./openclaw/gitea-edit-diff-fetcher.js');
-  return createGiteaEditDiffFetcher({
-    giteaUrl,
-    giteaToken,
-    giteaPublicBaseUrl,
-    log: bridgeLog,
-  });
+async function readMountedCoachCustomers(): Promise<readonly string[] | null> {
+  if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
+  const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
+  if (!config) return null;
+  return listLocalCoachWiredSlugs(
+    COACH_RECONCILE_CUSTOMERS_DIR,
+    (slug) => coachWiredInParsedConfig(config, slug),
+  );
 }
 
-function buildMountedCustomersReader(
-  reconcileGatewayId: string | null,
-): (() => Promise<string[] | null>) | undefined {
-  if (!reconcileGatewayId) return undefined;
-  // Local-derived, no Firestore: this pod's coach-wired PVC dirs plus OpenClaw
-  // config are the bridge's own mounted-customer source of truth.
-  return async (): Promise<string[] | null> => {
-    try {
-      if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
-      const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
-      if (!config) return null;
-      return listLocalCoachWiredSlugs(COACH_RECONCILE_CUSTOMERS_DIR, (slug) =>
-        coachWiredInParsedConfig(config, slug),
-      );
-    } catch (err) {
-      console.warn(
-        `[chat-proxy] local coach-wired read failed for reconcile: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      return null;
-    }
-  };
-}
-
-function wireCoachEventListeners(
-  handle: ActivityBridgeHandle,
-  listeners: MmCoachEventListenerManager,
-): void {
-  handle.onCoachTurnCompleted(listeners.completeCoachTurn);
-  for (const coach of handle.getTrackedCoaches?.() ?? []) {
-    listeners.addCoach(coach);
-  }
-  handle.onActivityChannelTracked?.((coach) => {
-    listeners.addCoach(coach);
-  });
-  handle.onActivityChannelUntracked?.((coach) => {
-    listeners.removeCoach(coach.coachMmUserId);
-  });
+function startActivityCoachMountReconciliation(tracker: ActivityCoachTracker): void {
+  const timer = setInterval(() => {
+    void tracker.reconcileMountedCustomers();
+  }, COACH_RECONCILE_INTERVAL_MS);
+  timer.unref();
 }
 
 function installProductionActivityIntake(
   controls: ActivitySinkControlLifecycle,
   runtimeBroker: OpenClawRuntimeBroker,
+  tracker: ActivityCoachTracker,
 ): void {
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!gatewayToken) throw new Error("activity intake gateway token is required");
   const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
   installActivityIntakeHandler(createProductionActivityIntakeHandler({
+    gatewayToken,
     registry: activityRuntimeRegistry,
     receiptsFor: (binding) => runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath),
     mmClientFor,
@@ -1110,6 +1057,43 @@ function installProductionActivityIntake(
     },
     controls,
     log: (event, meta) => logger.info(`[${event}]`, meta),
+    onPersisted: ({ envelope, binding, activityRootPostId, outcome }) => {
+      activityIntakeTotal.inc({ outcome });
+      void tracker.observe({ envelope, binding, activityRootPostId }).catch((error) => {
+        logger.error("[activity] coach state projection failed", {
+          runId: envelope.ref.runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  }));
+}
+
+function installProductionScheduledAnchorAdmission(runtimeBroker: OpenClawRuntimeBroker): void {
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!gatewayToken) {
+    installScheduledAnchorAdmissionHandler(null);
+    return;
+  }
+  const admission = createScheduledAnchorAdmission({
+    broker: runtimeBroker,
+    mmClientFor: createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL }),
+    verifyChannel: async (identity, target) => {
+      await readMattermostChannelCreateAt({
+        baseUrl: MM_INTERNAL_URL,
+        channelId: target.primaryChannelId,
+        token: identity.coachToken,
+        expectedTeamId: target.expectedChannelTeamId,
+        expectedName: target.expectedChannelName,
+        expectedType: target.expectedChannelType,
+      });
+    },
+    ownerId: `${process.env.HOSTNAME ?? "gateway-edge"}:${process.pid}`,
+  });
+  installScheduledAnchorAdmissionHandler(createScheduledAnchorAdmissionHandler({
+    gatewayToken,
+    admit: admission.admit,
+    log: (message, fields) => logger.error(`[activity] ${message}`, fields),
   }));
 }
 
@@ -1140,16 +1124,80 @@ async function startRunLiveProjectionBackground(
   const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
   const bindingDeps = {
     resolveAgentIdentity: (agentId: string) => runtimeBroker.resolveAgentIdentity(agentId),
-    readActivityChannelCreateAt: (channelId: string, token: string) =>
+    resolveConversationTarget: (agentId: string, conversationId: string) =>
+      runtimeBroker.resolveConversationTarget(agentId, conversationId),
+    verifyActivityChannel: (
+      identity: import("./openclaw/activity-runtime-types.js").AgentIdentity,
+      target: import("./openclaw/activity-runtime-types.js").AuthorizedConversationTarget,
+    ) =>
       readMattermostChannelCreateAt({
         baseUrl: MM_INTERNAL_URL,
-        channelId,
-        token,
+        channelId: target.activityChannelId,
+        token: identity.coachToken,
+        expectedTeamId: target.expectedChannelTeamId,
+        expectedName: target.expectedChannelName,
+        expectedType: target.expectedChannelType,
       }),
+    verifyScheduledAnchor: (input: {
+      agentId: string;
+      invocationId: string;
+      target: string;
+      rootPostId: string;
+      channelDocPath: string;
+      coachToken: string;
+      coachMmUserId: string;
+    }) => verifyScheduledAnchorBinding({
+      request: {
+        agentId: input.agentId,
+        invocationId: input.invocationId,
+        target: input.target,
+      },
+      rootPostId: input.rootPostId,
+      coachMmUserId: input.coachMmUserId,
+      receipts: runtimeBroker.activityWriteReceiptsFor(input.channelDocPath),
+      mm: activityMmClientFor(input.coachToken),
+    }),
+    verifyRetryLineage: (input: {
+      binding: import("./openclaw/activity-intake.js").ActiveActivityRunBinding;
+      coachMmUserId: string;
+    }) => verifyReceiptBackedRetryLineage({
+      ...input,
+      receipts: runtimeBroker.activityWriteReceiptsFor(input.binding.channelDocPath),
+      mm: activityMmClientFor(input.binding.coachToken),
+    }),
+    verifyHistoricalSubagentParent: (input: {
+      binding: import("./openclaw/activity-intake.js").ActiveActivityRunBinding;
+      coachMmUserId: string;
+    }) => verifyHistoricalSubagentParent({
+      ...input,
+      mm: activityMmClientFor(input.binding.coachToken),
+    }),
   };
-  activityRuntimeRegistry.configureResolver((run) =>
-    resolveCandidateActivityBinding(run, bindingDeps),
+  activityRuntimeRegistry.configureResolver((run, activeLineage) =>
+    resolveCandidateActivityBinding(run, bindingDeps, activeLineage),
   );
+  const coachTracker = createActivityCoachTracker({
+    resolveCoach: async (binding) => {
+      const identity = await runtimeBroker.resolveAgentIdentity(binding.agentId);
+      if (
+        !identity ||
+        identity.agentId !== binding.agentId ||
+        !identity.coachToken ||
+        !identity.coachMmUserId ||
+        !identity.workspaceSlug
+      ) {
+        return null;
+      }
+      return {
+        activityChannelId: binding.activityChannelId,
+        coachMmUserId: identity.coachMmUserId,
+        coachToken: identity.coachToken,
+        workspaceSlug: identity.workspaceSlug,
+      };
+    },
+    readMountedCustomers: readMountedCoachCustomers,
+    log: (message, meta) => logger.error(`[activity] ${message}`, meta),
+  });
   const retryMarker = createReceiptBackedRetryMarker({
     runtimeRegistry: activityRuntimeRegistry,
     receiptsFor,
@@ -1174,19 +1222,32 @@ async function startRunLiveProjectionBackground(
     claimToken: randomUUID,
     leaseOwner,
     createRetryMarker: retryMarker,
-    resolveChannelPair: (conversationId) => runtimeBroker.resolveChannelPair(conversationId),
+    resolveChannelTarget: (conversationId) => runtimeBroker.resolveChannelTarget(conversationId),
     resolveAgentIdentity: (agentId) => runtimeBroker.resolveAgentIdentity(agentId),
-    replaceRuntimeSnapshot: (snapshot) =>
-      replaceCandidateRuntimeSnapshot(activityRuntimeRegistry, snapshot, bindingDeps),
+    replaceRuntimeSnapshot: (snapshot, commitWrites) =>
+      replaceCandidateRuntimeSnapshot(
+        activityRuntimeRegistry,
+        snapshot,
+        bindingDeps,
+        (runs) => coachTracker.replaceSnapshot(runs),
+        commitWrites,
+      ),
     writeLiveDoc: (path, doc) => runtimeBroker.writeRunLiveDoc(path, doc),
     deleteLiveDoc: (path) => runtimeBroker.deleteRunLiveDoc(path),
     log: (message, meta) => logger.error(message, meta),
   });
   installAgentControlCallbackHandler(controlled.callbackHandler);
-  installProductionActivityIntake(controlled.activityControls, runtimeBroker);
+  installProductionActivityIntake(controlled.activityControls, runtimeBroker, coachTracker);
   const liveBridge = controlled.bridge;
   const gatewayId = gatewayIdResult.gatewayId;
   const healthUrl = gatewayHealthUrl();
+  let rpc: ActivityBridgeRpcClient | null = null;
+  await startCoachEventListeners({
+    gatewayId,
+    runtimeBroker,
+    tracker: coachTracker,
+    getRpcClient: () => rpc,
+  });
   startBridgeUpstreamReconnectLoop({
     probeReady: () => probeGatewayReady(healthUrl),
     probeIntervalMs: 500,
@@ -1206,7 +1267,10 @@ async function startRunLiveProjectionBackground(
       await connectRunLiveBridgeUpstream(liveBridge, {
         ws,
         log: bridgeLog,
-        onRpcChange: controlled.setRpc,
+        onRpcChange: (nextRpc) => {
+          controlled.setRpc(nextRpc);
+          rpc = nextRpc;
+        },
         observeUpstreamFrame: controlled.observeUpstreamFrame,
       });
       return {
@@ -1228,20 +1292,15 @@ interface ActivityBridgeRpcClient {
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
 }
 
-interface PublisherLiveBridge {
-  handle: ActivityBridgeHandle;
-  __getRpcClient?: () => ActivityBridgeRpcClient | null;
-}
-
-async function startPublisherLiveCoachListeners(input: {
+async function startCoachEventListeners(input: {
   gatewayId: string;
   runtimeBroker: OpenClawRuntimeBroker;
-  wired: PublisherLiveBridge;
+  tracker: ActivityCoachTracker;
+  getRpcClient(): ActivityBridgeRpcClient | null;
 }): Promise<void> {
   const mmWsUrl = MM_PUBLIC_URL.replace(/^http/, 'ws') + '/api/v4/websocket';
   const { startMmCoachEventListeners } = await import('./openclaw/mm-event-listener.js');
   const { handleReactionAdded } = await import('./openclaw/reaction-handler.js');
-  const { handleReplyAsSteer } = await import('./openclaw/reply-handler.js');
   const { makeCoachDmHandler } = await import('../notifications/chat-notifier.js');
   const {
     createBrokeredFanOutNotification,
@@ -1251,48 +1310,22 @@ async function startPublisherLiveCoachListeners(input: {
     baseUrl: notificationBrokerBaseUrlFromEnv(),
     gatewayId: input.gatewayId,
   });
-  const getRpcClient = (): ActivityBridgeRpcClient | null => input.wired.__getRpcClient?.() ?? null;
   const ownerOf = (channelId: string) => input.runtimeBroker.resolveChannelOwnerUid(channelId);
   const uidOf = (mmUserId: string) => input.runtimeBroker.resolveOctogeeUidByMmUser(mmUserId);
   const coachListeners = startMmCoachEventListeners({
     mmWsUrl,
     log: bridgeLog,
     openWebSocket: () => new WebSocket(mmWsUrl),
-    isTrackedChannel: (channelId) =>
-      input.wired.handle.isTrackedActivityChannel?.(channelId) ?? false,
-    resolveRunForRootPost: (postId) =>
-      input.wired.handle.getRunStateByRootPostId?.(postId) ?? null,
-    onReply: async (reply) => {
-      const rpc = getRpcClient();
-      if (!rpc) {
-        console.warn(
-          `[mm-event-listener] reply-as-steer skipped — no upstream RPC client for session ${reply.sessionKey}`,
-        );
-        return;
-      }
-      await handleReplyAsSteer(reply, {
-        resolveChannelOwnerUid: ownerOf,
-        resolveOctogeeUidByMmUser: uidOf,
-        dispatchSteer: async ({ sessionKey, message, idempotencyKey }) => {
-          await rpc.call('chat.send', {
-            sessionKey,
-            message,
-            deliver: false,
-            idempotencyKey,
-          });
-        },
-        log: bridgeLog,
-      });
-    },
+    isTrackedChannel: (channelId) => input.tracker.isTrackedActivityChannel(channelId),
+    resolveRunForRootPost: (postId) => input.tracker.getRunStateByRootPostId(postId),
     onReaction: async (reaction) => {
       await handleReactionAdded(reaction, {
-        resolveRunForRootPost: (postId) =>
-          input.wired.handle.getRunStateByRootPostId?.(postId) ?? null,
+        resolveRunForRootPost: (postId) => input.tracker.getRunStateByRootPostId(postId),
         resolveChannelOwnerUid: ownerOf,
         resolveOctogeeUidByMmUser: uidOf,
         effects: {
           dispatchAbort: async (sessionKey) => {
-            const rpc = getRpcClient();
+            const rpc = input.getRpcClient();
             if (!rpc) {
               console.warn(
                 `[reaction-handler] abort dispatch skipped — no upstream RPC client for session ${sessionKey}`,
@@ -1304,9 +1337,9 @@ async function startPublisherLiveCoachListeners(input: {
         },
         log: bridgeLog,
         metrics: {
-          reactionDispatchMs: bridgeMetrics.reactionDispatchMs,
+          reactionDispatchMs: activityReactionDispatchMs,
           reactionDropped: new Counter({
-            name: 'octogee_bridge_reaction_dropped_total',
+            name: 'octogee_activity_reaction_dropped_total',
             help: 'Reaction-handler drops with reason',
             labelNames: ['reason'] as const,
             registers: [metricsRegistry],
@@ -1320,28 +1353,24 @@ async function startPublisherLiveCoachListeners(input: {
       log: bridgeLog,
     }),
   });
-  wireCoachEventListeners(input.wired.handle, coachListeners);
-  console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + reply-as-steer)');
+  wireActivityCoachEventListeners(input.tracker, coachListeners);
+  startActivityCoachMountReconciliation(input.tracker);
+  console.log('[chat-proxy] MM coach event listeners started (per-coach WS: reactions + notifications)');
 }
 
 type ResolvedBridgeGatewayId = Extract<ReturnType<typeof resolveBridgeGatewayId>, { ok: true }>;
 
-interface PublisherLiveBootstrap {
+interface ActivityProjectionBootstrap {
   gatewayIdResult: ResolvedBridgeGatewayId;
-  getMountedCustomers: ReturnType<typeof buildMountedCustomersReader>;
   gatewayId: string;
-  routerKey: string;
   runtimeBroker: OpenClawRuntimeBroker;
 }
 
-function bootstrapPublisherLive(): PublisherLiveBootstrap | null {
+function bootstrapActivityProjection(): ActivityProjectionBootstrap | null {
   const gatewayIdResult = resolveBridgeGatewayId(process.env);
-  const getMountedCustomers = buildMountedCustomersReader(
-    gatewayIdResult.ok ? gatewayIdResult.gatewayId : null,
-  );
   if (!gatewayIdResult.ok) {
     console.error(
-      `[chat-proxy] activity bridge boot aborted — ${gatewayIdResult.reason}. ` +
+      `[chat-proxy] activity projection boot aborted — ${gatewayIdResult.reason}. ` +
       'Set GATEWAY_ID env var on the chat-proxy sidecar (helm chart values.env.gatewayId). ' +
       'See the current Activity design documentation.',
     );
@@ -1349,16 +1378,15 @@ function bootstrapPublisherLive(): PublisherLiveBootstrap | null {
     return null;
   }
   const gatewayId = gatewayIdResult.gatewayId;
-  const routerKey = process.env.AGENT_CONTROL_ROUTER_KEY ?? '';
   mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
     gatewayId,
-    routerKey,
+    routerKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? '',
     log: (message, meta) => logger.error(message, meta),
   });
   try {
     const runtimeBroker = getOpenClawRuntimeBroker();
     console.log('[chat-proxy] OpenClaw runtime Firestore broker enabled');
-    return { gatewayIdResult, getMountedCustomers, gatewayId, routerKey, runtimeBroker };
+    return { gatewayIdResult, gatewayId, runtimeBroker };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[chat-proxy] FATAL: OpenClaw runtime broker misconfigured: ${msg}`);
@@ -1369,128 +1397,17 @@ function bootstrapPublisherLive(): PublisherLiveBootstrap | null {
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(console.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
-  const bridgeSelection = resolveActivityBridgeSelection(resolveActivityBridgeMode(process.env));
-  console.log(`[chat-proxy] Activity bridge mode: ${bridgeSelection.mode}`);
   void (async () => {
-    const bootstrap = bootstrapPublisherLive();
+    const bootstrap = bootstrapActivityProjection();
     if (!bootstrap) return;
-    const { gatewayIdResult, getMountedCustomers, gatewayId, routerKey, runtimeBroker } = bootstrap;
-    if (bridgeSelection.startRunLiveBridge) {
-      try {
-        await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[chat-proxy] FATAL: run-live bridge wire failed: ${message}`);
-        process.exit(1);
-      }
-      return;
-    }
-    const { wireActivityBridge, connectBridgeUpstream, createResyncFloor } = await import('./openclaw/bridge-boot.js');
-    // One forced-reconnect cooldown floor for the bridge's whole life: it must outlive
-    // any single WS so SEQ_GAP_COOLDOWN_MS actually spaces the reconnects it triggers
-    // (a forced close resets the per-connection window, but not this).
-    const resyncFloor = createResyncFloor();
-    let wired: Awaited<ReturnType<typeof wireActivityBridge>>;
+    const { gatewayIdResult, runtimeBroker } = bootstrap;
+    installProductionScheduledAnchorAdmission(runtimeBroker);
     try {
-      const namespace = process.env.K8S_NAMESPACE || 'octogee';
-      const controlKey = process.env.OCTOGEE_AGENT_CONTROL_SIGNING_SECRET ?? '';
-      const activityMmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
-      const receiptsFor = (binding: { channelDocPath: string }) =>
-        runtimeBroker.activityWriteReceiptsFor(binding.channelDocPath);
-      const resolveCoachToken = async (agentId: string): Promise<string | null> =>
-        (await runtimeBroker.resolveAgentIdentity(agentId))?.coachToken ?? null;
-      const leaseOwner = `${process.env.HOSTNAME ?? 'gateway-edge'}:${process.pid}`;
-      const retryMarker = createReceiptBackedRetryMarker({
-        runtimeRegistry: activityRuntimeRegistry,
-        receiptsFor,
-        resolveCoachToken,
-        mmClientFor: activityMmClientFor,
-        leaseOwner,
-      });
-      wired = wireActivityBridge({
-        db: db as unknown as Parameters<typeof wireActivityBridge>[0]['db'],
-        runtimeBroker,
-        upstreamUrl: process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
-        gatewayToken: '',
-        identity: getOpenClawDeviceIdentity(),
-        mmBaseUrl: MM_PUBLIC_URL,
-        metrics: { ...bridgeMetrics, approvalDropped: approvalDroppedCounter },
-        log: bridgeLog,
-        debugLog: (msg, meta) => logger.debug(msg, meta),
-        editDiffFetcher: await buildEditDiffFetcher(),
-        getMountedCustomers,
-        agentControl: {
-          gatewayId,
-          namespace,
-          registry: runtimeBroker.agentControlRegistry,
-          runtimeRegistry: activityRuntimeRegistry,
-          receiptsFor,
-          mmClientFor: activityMmClientFor,
-          resolveCoachToken,
-          triggerVerifier: createMattermostTriggerVerifier({
-            source: createMattermostSigningKeySource({ baseUrl: MM_INTERNAL_URL }),
-          }),
-          controlKey,
-          routerKey,
-          leaseOwnerId: () => leaseOwner,
-          claimToken: randomUUID,
-          leaseOwner,
-          createRetryMarker: retryMarker,
-          log: (message, meta) => logger.error(message, meta),
-        },
-      });
+      await startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[chat-proxy] FATAL: activity bridge wire failed: ${msg}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[chat-proxy] FATAL: activity projection wire failed: ${message}`);
       process.exit(1);
     }
-    if (!wired.agentControlCallbackHandler || !wired.activityControls) {
-      await wired.stop();
-      console.error('[chat-proxy] FATAL: agent control substrate was not installed');
-      process.exit(1);
-    }
-    installAgentControlCallbackHandler(wired.agentControlCallbackHandler);
-    installProductionActivityIntake(wired.activityControls, runtimeBroker);
-
-    await startPublisherLiveCoachListeners({ gatewayId, runtimeBroker, wired });
-
-    const healthUrl = gatewayHealthUrl();
-    startBridgeUpstreamReconnectLoop({
-      probeReady: () => probeGatewayReady(healthUrl),
-      probeIntervalMs: 500,
-      openOnce: async () => {
-        const ws = await openBackgroundBridgeUpstream(
-          gatewayId,
-          process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL,
-        );
-        let closed = false;
-        let registered: (() => void) | null = null;
-        ws.on('close', () => {
-          closed = true;
-          bridgeBootStatus.set('unreachable');
-          registered?.();
-        });
-        await connectBridgeUpstream(wired, {
-          ws,
-          log: bridgeLog,
-          metrics: bridgeMetrics,
-          resyncFloor,
-        });
-        return {
-          onClose: (handler) => {
-            if (closed) {
-              handler();
-            } else {
-              registered = handler;
-            }
-          },
-        };
-      },
-      log: bridgeLog,
-      onConnected: () => {
-        bridgeBootStatus.set('connected');
-        console.log('[chat-proxy] activity bridge upstream WS connected');
-      },
-    });
   })();
 }

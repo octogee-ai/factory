@@ -755,8 +755,10 @@ The stack currently exists to provide these product behaviors:
 - reuse of successfully resolved, unchanged exec-backed SecretRefs during
   automatic config writes and refreshes;
 - an authenticated in-process `secrets.apply` gateway RPC;
-- avoidance of config-apply self-wait during channel reload while upstream
-  [issue #131138](https://github.com/openclaw/openclaw/issues/131138) remains open.
+- avoidance of config-apply self-wait during channel reload. Upstream
+  [PR #131180](https://github.com/openclaw/openclaw/pull/131180) merged after
+  this cycle's frozen `f9b08635` cutoff, so remove the overlay in the next
+  frozen-main refresh.
 
 The current fork diff and tests own the implementation detail. During a roll,
 drop any patch already provided upstream and keep new hooks as small as

@@ -871,9 +871,9 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     ]));
   });
 
-  it("pins the W9 gateway-edge candidate artifact alongside the gateway image", async () => {
-    const digestTag = `agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`;
-    const edgeTag = `agent-conversation-w9a-8c356bb1@sha256:${"d".repeat(64)}`;
+  it("pins the gateway-edge artifact alongside the gateway image", async () => {
+    const digestTag = `8c356bb-oc2026.7.1@sha256:${"a".repeat(64)}`;
+    const edgeTag = `8c356bb-oc2026.7.1@sha256:${"d".repeat(64)}`;
     const callbacks: SnapshotCallbacks = {};
     const reconcileImagePins = vi.fn(async () => {});
     const stop = startReconciler({
@@ -886,18 +886,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
               gatewayEdgeImage: {
                 imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
                 imageTag: edgeTag,
-              },
-              testExperiment: {
-                kind: "w9-agent-conversation",
-                mode: "publisher-live",
-                candidateManifest: {
-                  path: "infra/gateway/openclaw-candidates/agent-conversation.json",
-                  sha256: "b".repeat(64),
-                },
-                mattermostOverlay: {
-                  valuesPath: "infra/candidates/values.mattermost-silent-post.yaml",
-                  imageReference: `mattermostdevelopment/mattermost-team-edition:cce485f@sha256:${"c".repeat(64)}`,
-                },
               },
             }),
           },

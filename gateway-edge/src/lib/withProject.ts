@@ -3,7 +3,7 @@ import type { Project } from "@octogee/shared/types/index";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
 import { logger } from "../middleware/logging.js";
-import { mapActivityPairError } from "./activityPair.js";
+import { mapMattermostMembershipError } from "./channel-lifecycle.js";
 import { isValidProjectId, USERNAME_RE } from "@octogee/shared/types/identity";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 
@@ -50,7 +50,7 @@ export async function projectIsArchived(project: Project): Promise<boolean> {
 
 function respondToHandlerError(res: Response, err: unknown, fallbackErrorMessage: string): void {
   if (res.headersSent) return;
-  const mapped = mapActivityPairError(err);
+  const mapped = mapMattermostMembershipError(err);
   res.status(mapped?.status ?? 500).json(mapped?.body ?? { error: fallbackErrorMessage });
 }
 

@@ -32,12 +32,6 @@ export interface GatewayDoc {
     retirementVersion?: number;
     retirementClaim?: GatewayRetirementClaim | null;
 }
-export declare const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
-export declare const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
-export interface W9GatewayEdgeImage {
-    imageRepository: string;
-    imageTag: string;
-}
 export interface GatewayEdgeImage {
     imageRepository: string;
     imageTag: string;
@@ -48,25 +42,11 @@ export interface GatewayProfileImages {
         imageTag: string;
     };
 }
-export interface W9TestPublisherLiveExperiment {
-    kind: "w9-agent-conversation";
-    mode: "publisher-live";
-    candidateManifest: {
-        path: typeof W9_CANDIDATE_MANIFEST_PATH;
-        sha256: string;
-    };
-    mattermostOverlay: {
-        valuesPath: typeof W9_MATTERMOST_OVERLAY_VALUES_PATH;
-        imageReference: string;
-    };
-}
-export declare function isW9TestPublisherLiveExperiment(value: unknown): value is W9TestPublisherLiveExperiment;
 export interface ReleasePayload {
     imageRepository: string;
     imageTag: string;
     profileImages?: GatewayProfileImages;
     gatewayEdgeImage?: GatewayEdgeImage;
-    testExperiment?: W9TestPublisherLiveExperiment;
 }
 export declare function isReleasePayload(value: unknown): value is ReleasePayload;
 export declare function isGatewayEdgeImage(value: unknown, gatewayImageRepository: string): value is GatewayEdgeImage;
@@ -84,7 +64,6 @@ export type ReleasePayloadSchemaUpgrade = {
     reason: "payload-hash-mismatch" | "unsupported-payload-schema";
 };
 export declare function upgradeReleasePayloadSchema(payload: unknown, persistedPayloadHash: unknown): ReleasePayloadSchemaUpgrade;
-export declare function isW9GatewayEdgeImage(value: unknown, gatewayImageTag: string, gatewayImageRepository: string): value is W9GatewayEdgeImage;
 export interface ReleaseDoc {
     gatewayId: string;
     release: number;
@@ -165,7 +144,7 @@ export declare function gatewayEdgeServiceName(id: string): string;
 export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
-export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag", "testExperiment"];
+export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag"];
 export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "managedBy", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {

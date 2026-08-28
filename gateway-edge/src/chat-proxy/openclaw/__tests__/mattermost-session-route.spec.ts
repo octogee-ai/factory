@@ -28,12 +28,16 @@ describe('parseMattermostSessionRoute', () => {
       peerKind: 'group',
       primaryChannelId: 'group-1',
     });
+    expect(parseMattermostSessionRoute('agent:coach:mattermost:direct:user-1')).toEqual({
+      agentId: 'coach',
+      peerKind: 'direct',
+      primaryChannelId: 'user-1',
+    });
   });
 
   it.each([
     '',
     'agent:coach:main',
-    'agent:coach:mattermost:direct:user-1',
     'agent:coach:mattermost:channel:channel-1:thread',
     'agent:coach:mattermost:channel:channel-1:thread:root:extra',
   ])('rejects malformed or non-channel Mattermost session key %j', (sessionKey) => {

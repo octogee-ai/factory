@@ -1,6 +1,6 @@
 // One-off: seed a GitHub-backed project doc through the real create route so the
 // project gets its full provisioning (Firestore doc + members + MM channel +
-// activity pair) — never a bare Firestore write.
+// primary Mattermost channel) — never a bare Firestore write.
 //
 // Auth: mints a custom token for OPERATOR_UID (admin) via the Admin SDK, then
 // exchanges it for an ID token at identitytoolkit, so the request hits

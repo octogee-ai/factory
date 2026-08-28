@@ -1203,7 +1203,7 @@ async function runBrokered(
   }
 }
 
-async function collectChannelBindings(
+export async function collectChannelBindings(
   db: Firestore,
   slug: string,
 ): Promise<{
@@ -1229,15 +1229,8 @@ async function collectChannelBindings(
       const data = ch.data();
       const b = mapProjectChannelDoc(p.id, data);
       if (b) bindings.push(b);
-      const mattermost = data.mattermost as {
-        channelId?: unknown;
-        activityChannelId?: unknown;
-      } | undefined;
-      for (const channelId of [mattermost?.channelId, mattermost?.activityChannelId]) {
-        if (typeof channelId === "string" && channelId) {
-          channelIds.push(channelId);
-        }
-      }
+      const channelId = (data.mattermost as { channelId?: unknown } | undefined)?.channelId;
+      if (typeof channelId === "string" && channelId) channelIds.push(channelId);
     }
     if (channelIds.length > 0) projectMemberships.push({ projectId: p.id, channelIds });
   }

@@ -12,6 +12,9 @@ import {
 import { createActivityIntakeHttpHandler } from "../openclaw/activity-intake.js";
 import type { ActivityAttachmentSource } from "../openclaw/activity-sink.js";
 
+const GATEWAY_TOKEN = "gateway-token";
+const AUTHORIZATION = `Bearer ${GATEWAY_TOKEN}`;
+
 function envelopeWithAttachment(bytes?: Uint8Array): AgentActivityEnvelopeV1 {
   const ref = {
     conversationId: "main-1",
@@ -84,7 +87,7 @@ async function sendIncompleteBody(
   const response = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
     request = http.request(`${baseUrl}/internal/openclaw/activity/v1/events`, {
       method: "POST",
-      headers: { "content-type": contentType },
+      headers: { authorization: AUTHORIZATION, "content-type": contentType },
     }, (incoming) => {
       const chunks: Buffer[] = [];
       incoming.on("data", (responseChunk: Buffer) => chunks.push(responseChunk));
@@ -122,6 +125,30 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
     });
   });
 
+  it("rejects missing and incorrect local relay credentials before parsing the body", async () => {
+    const readiness = vi.fn(() => "ready" as const);
+    installActivityIntakeHandler(createActivityIntakeHttpHandler({
+      registry: { readiness, resolve: vi.fn() },
+      sinkFor: vi.fn(),
+    }, { gatewayToken: GATEWAY_TOKEN }));
+
+    await withServer(async (baseUrl) => {
+      for (const authorization of [undefined, "Bearer wrong-token"]) {
+        const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(authorization ? { authorization } : {}),
+          },
+          body: "{}",
+        });
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toEqual({ error: "unauthorized", retryable: false });
+      }
+    });
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
   it("owns the bare loopback JSON route and returns the normalized 201 response", async () => {
     const envelope = envelopeWithAttachment();
     const append = vi.fn(async () => ({
@@ -132,6 +159,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         postId: "post-1",
         activityChannelId: "activity-1",
         activityRootPostId: "activity-root-1",
+        rootOwnership: "sink-created" as const,
       },
     }));
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
@@ -147,12 +175,12 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         })),
       },
       sinkFor: () => ({ append }),
-    }));
+    }, { gatewayToken: GATEWAY_TOKEN }));
 
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { authorization: AUTHORIZATION, "content-type": "application/json" },
         body: JSON.stringify(envelope),
       });
       expect(response.status).toBe(201);
@@ -191,7 +219,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         })),
       },
       sinkFor: () => ({ append }),
-    }, { maxAttachmentBytes: 4 }));
+    }, { gatewayToken: GATEWAY_TOKEN, maxAttachmentBytes: 4 }));
 
     await withServer(async (baseUrl) => {
       const form = new FormData();
@@ -199,6 +227,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       form.set("detail", new Blob([bytes], { type: "text/plain" }), "tool.txt");
       const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
+        headers: { authorization: AUTHORIZATION },
         body: form,
       });
       expect(response.status).toBe(413);
@@ -238,6 +267,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
           postId: "post-1",
           activityChannelId: "activity-1",
           activityRootPostId: "activity-root-1",
+          rootOwnership: "sink-created" as const,
         },
       };
     });
@@ -254,7 +284,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
         })),
       },
       sinkFor: () => ({ append }),
-    }, { maxAttachmentBytes: 1024 }));
+    }, { gatewayToken: GATEWAY_TOKEN, maxAttachmentBytes: 1024 }));
 
     await withServer(async (baseUrl, responseEnded) => {
       const form = new FormData();
@@ -262,6 +292,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       form.set("detail", new Blob([bytes], { type: "text/plain" }), "tool.txt");
       const responsePromise = fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
+        headers: { authorization: AUTHORIZATION },
         body: form,
       });
       await disposalStartedPromise;
@@ -292,6 +323,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
           postId: "post-1",
           activityChannelId: "activity-1",
           activityRootPostId: "activity-root-1",
+          rootOwnership: "sink-created" as const,
         },
       };
     });
@@ -309,7 +341,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       },
       sinkFor: () => ({ append }),
       log,
-    }));
+    }, { gatewayToken: GATEWAY_TOKEN }));
 
     await withServer(async (baseUrl) => {
       const form = new FormData();
@@ -317,6 +349,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       form.set("detail", new Blob([bytes], { type: "text/plain" }), "tool.txt");
       const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
+        headers: { authorization: AUTHORIZATION },
         body: form,
       });
       expect(response.status).toBe(201);
@@ -330,11 +363,11 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: { readiness: () => "ready", resolve: vi.fn() },
       sinkFor: vi.fn(),
-    }));
+    }, { gatewayToken: GATEWAY_TOKEN }));
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { authorization: AUTHORIZATION, "content-type": "application/json" },
         body: JSON.stringify({ padding: "x".repeat(256 * 1024) }),
       });
       expect(response.status).toBe(413);
@@ -346,7 +379,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: { readiness: () => "ready", resolve: vi.fn() },
       sinkFor: vi.fn(),
-    }, { bodyTimeoutMs: 20 }));
+    }, { gatewayToken: GATEWAY_TOKEN, bodyTimeoutMs: 20 }));
 
     await withServer(async (baseUrl) => {
       const outcome = await sendIncompleteBody(baseUrl, "application/json", "{");
@@ -361,7 +394,7 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
     installActivityIntakeHandler(createActivityIntakeHttpHandler({
       registry: { readiness: () => "ready", resolve: vi.fn() },
       sinkFor: vi.fn(),
-    }, { bodyTimeoutMs: 20 }));
+    }, { gatewayToken: GATEWAY_TOKEN, bodyTimeoutMs: 20 }));
 
     await withServer(async (baseUrl) => {
       const outcome = await sendIncompleteBody(
@@ -388,12 +421,12 @@ describe("POST /internal/openclaw/activity/v1/events", () => {
       },
       sinkFor: vi.fn(),
       log,
-    }));
+    }, { gatewayToken: GATEWAY_TOKEN }));
 
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/internal/openclaw/activity/v1/events`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { authorization: AUTHORIZATION, "content-type": "application/json" },
         body: JSON.stringify(envelope),
       });
       expect(response.status).toBe(503);

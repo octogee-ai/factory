@@ -126,11 +126,11 @@ async function joinProject(ctx: ProjectCtx, res: Response): Promise<void> {
   if (!memberRef) return;
 
   const actor = await readProjectActor(ctx.uid);
-  const { addActivityPairMember, ensureActiveMattermostUser } = await import("../../lib/activityPair.js");
+  const { addChannelMember, ensureActiveMattermostUser } = await import("../../lib/channel-lifecycle.js");
   if (actor.mmUserId) await ensureActiveMattermostUser(actor.mmUserId);
   if (!(await ensureProjectJoinerTeamMember(ctx, actor, res))) return;
 
-  await addActivityPairMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId!);
+  await addChannelMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId!);
   await writeProjectJoin(ctx, memberRef);
   await grantProjectGiteaAccess(ctx, actor);
 
@@ -196,8 +196,8 @@ async function leaveProject(ctx: ProjectCtx, res: Response): Promise<void> {
 
   const actor = await readProjectActor(ctx.uid);
   if (actor.mmUserId) {
-    const { removeActivityPairMember } = await import("../../lib/activityPair.js");
-    await removeActivityPairMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId);
+    const { removeChannelMember } = await import("../../lib/channel-lifecycle.js");
+    await removeChannelMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId);
   }
   await writeProjectLeave(ctx, memberRef);
   await revokeProjectGiteaAccess(ctx, actor);

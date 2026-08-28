@@ -431,8 +431,8 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
     }
 
     await markWorkspaceMemberRevoking(target, mmUserId);
-    const { removeActivityPairMember } = await import("../lib/activityPair.js");
-    await removeActivityPairMember(target.channelDocPath, mmUserId);
+    const { removeChannelMember } = await import("../lib/channel-lifecycle.js");
+    await removeChannelMember(target.channelDocPath, mmUserId);
     await removeMemberDocument(target, mmUserId);
 
     logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);

@@ -3,7 +3,6 @@ import type { AgentActivityEnvelopeV1 } from "@octogee/shared/types/agent-conver
 import {
   activityAttentionPolicy,
   assertCompatibleDeliveryOptions,
-  primaryAttentionPolicy,
 } from "../activity-attention-policy.js";
 
 const ref = {
@@ -40,17 +39,24 @@ function item(
 }
 
 describe("activity attention policy", () => {
-  it("silences every routine Activity create, including detailed failures", () => {
+  it("silences routine Activity creates, including detailed tool failures", () => {
     for (const envelope of [
       item("commentary", "completed"),
       item("tool", "failed"),
-      item("error", "failed"),
     ]) {
       expect(activityAttentionPolicy(envelope)).toMatchObject({
         target: "activity",
         silent: true,
       });
     }
+  });
+
+  it("delivers the terminal error notice non-silently", () => {
+    expect(activityAttentionPolicy(item("error", "failed"))).toEqual({
+      target: "activity",
+      silent: false,
+      attention: "failure",
+    });
   });
 
   it("delivers waiting approvals normally while keeping resolution edits non-notifying", () => {
@@ -74,11 +80,6 @@ describe("activity attention policy", () => {
       silent: null,
       attention: "routine",
     });
-  });
-
-  it("never silences main answers or the one primary terminal-failure notice", () => {
-    expect(primaryAttentionPolicy("answer")).toEqual({ target: "main", silent: false });
-    expect(primaryAttentionPolicy("terminal-failure")).toEqual({ target: "main", silent: false });
   });
 
   it("rejects persistent notification semantics on silent creates", () => {

@@ -931,7 +931,7 @@ fi
 
 set_section bootstrap
 # ── Env contract (POST-BENDER-CLEANUP-SPEC §2.7) ──────────────────────
-# The gateway-edge sidecar runs the folded MM WS bridge + activity bridge,
+# The gateway-edge sidecar runs the folded MM WS proxy and Activity intake,
 # so it MUST have MM_INTERNAL_URL (in-cluster MM Service DNS). The
 # browser-facing URL is no longer an env on this container — octogee-api's
 # API_PUBLIC_URL (verified via the mint preflight in 5d.b) is the single

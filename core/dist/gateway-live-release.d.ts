@@ -1,6 +1,6 @@
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { type GatewayDoc, type GatewayLifecycleStatus, type ReleaseDoc, type ReleasePayload, type GatewayProfileImages, type GatewayEdgeImage, type W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
+import { type GatewayDoc, type GatewayLifecycleStatus, type ReleaseDoc, type ReleasePayload, type GatewayProfileImages, type GatewayEdgeImage } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
@@ -21,7 +21,6 @@ export interface GatewayArtifact {
     imageTag: string;
     profileImages?: GatewayProfileImages;
     gatewayEdgeImage?: GatewayEdgeImage;
-    testExperiment?: W9TestPublisherLiveExperiment;
 }
 export interface InitialGatewayReleaseArgs {
     gatewayId: string;

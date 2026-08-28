@@ -59,7 +59,7 @@
       "title": "Mattermost observability",
       "options": {
         "mode": "markdown",
-        "content": "Mattermost's native Prometheus metrics (`:8067/metrics`) are an **Enterprise-licensed** feature \u2014 the unlicensed server returns `404`, so `mattermost_*` series are unavailable. This board instead tracks MM health from the **gateway-edge bridge** (our MM interaction latency + error counters) plus container metrics. Native MM metrics light up automatically if a license is added."
+        "content": "Mattermost's native Prometheus metrics (`:8067/metrics`) are an **Enterprise-licensed** feature \u2014 the unlicensed server returns `404`, so `mattermost_*` series are unavailable. This board instead tracks gateway-edge Activity/control traffic plus container metrics. Native MM metrics light up automatically if a license is added."
       },
       "gridPos": {
         "h": 5,
@@ -71,7 +71,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "Bridge \u2192 Mattermost interaction (gateway-edge)",
+      "title": "Gateway-edge \u2192 Mattermost interaction",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -84,7 +84,7 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "MM post-create latency (p95)",
+      "title": "Activity intake outcomes",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -96,14 +96,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
-          "legendFormat": "p95 create",
+          "expr": "sum(rate(octogee_activity_intake_total{namespace=\"$namespace\"}[5m])) by (outcome) or vector(0)",
+          "legendFormat": "{{outcome}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -119,9 +119,12 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -138,7 +141,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "MM post-edit latency (p95)",
+      "title": "Reaction control drops",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -150,14 +153,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
-          "legendFormat": "p95 edit",
+          "expr": "sum(rate(octogee_activity_reaction_dropped_total{namespace=\"$namespace\"}[5m])) by (reason) or vector(0)",
+          "legendFormat": "{{reason}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -173,9 +176,12 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -192,7 +198,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Bridge member-resolve failures",
+      "title": "OpenClaw WS connections",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -204,8 +210,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_member_resolve_failures_total{namespace=\"$namespace\"}[5m])) or vector(0)",
-          "legendFormat": "fail/s",
+          "expr": "sum(chat_proxy_openclaw_ws_connections_active{namespace=\"$namespace\"}) or vector(0)",
+          "legendFormat": "active",
           "refId": "A"
         }
       ],

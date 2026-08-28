@@ -1,6 +1,6 @@
 {
   "uid": "octogee-bridge",
-  "title": "Gateways \u2014 Activity Bridge & WS",
+  "title": "Gateways \u2014 Activity Publisher & WS",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
@@ -56,7 +56,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "Activity bridge (gateway-edge \u2192 Mattermost)",
+      "title": "Activity publisher (OpenClaw plugin \u2192 Mattermost)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -69,7 +69,7 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Events received / posted / dropped",
+      "title": "Durable intake outcomes",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -81,27 +81,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(octogee_bridge_event_received_total{namespace=\"$namespace\"}[5m])) or vector(0)",
-          "legendFormat": "received",
+          "expr": "sum(rate(octogee_activity_intake_total{namespace=\"$namespace\"}[5m])) by (outcome) or vector(0)",
+          "legendFormat": "{{outcome}}",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(octogee_bridge_event_posted_total{namespace=\"$namespace\"}[5m])) or vector(0)",
-          "legendFormat": "posted",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(octogee_bridge_event_dropped_total{namespace=\"$namespace\"}[5m])) or vector(0)",
-          "legendFormat": "dropped",
-          "refId": "C"
         }
       ],
       "fieldConfig": {
@@ -144,7 +126,7 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "E2E root-post latency p95",
+      "title": "Integrity and delivery violations",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -156,14 +138,23 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
-          "legendFormat": "p95",
+          "expr": "sum(rate(octogee_activity_orphan_total{namespace=\"$namespace\"}[5m])) or vector(0)",
+          "legendFormat": "orphan",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(octogee_activity_routine_normal_delivery_total{namespace=\"$namespace\"}[5m])) or vector(0)",
+          "legendFormat": "routine-not-silent",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -179,9 +170,12 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -198,7 +192,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "E2E approval-visible latency p95",
+      "title": "Terminal and attachment failures",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -210,14 +204,23 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{namespace=\"$namespace\"}[5m])) by (le)) or vector(0)",
-          "legendFormat": "p95",
+          "expr": "sum(rate(octogee_activity_missing_final_total{namespace=\"$namespace\"}[5m])) or vector(0)",
+          "legendFormat": "missing-final",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(octogee_activity_attachment_unknown_total{namespace=\"$namespace\"}[5m])) or vector(0)",
+          "legendFormat": "attachment-unknown",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -233,9 +236,12 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -252,7 +258,7 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Bridge boot status",
+      "title": "Projection boot status",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -263,7 +269,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(octogee_bridge_boot_status{namespace=\"$namespace\"}) or vector(0)",
+          "expr": "max(octogee_activity_projection_boot_status{namespace=\"$namespace\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A"
         }

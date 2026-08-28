@@ -26,14 +26,14 @@ vi.mock("../lib/gitea", () => ({
   giteaWriteFiles: vi.fn(),
 }));
 
-const mockAddActivityPairMember = vi.fn();
-const mockRemoveActivityPairMember = vi.fn();
-vi.mock("../lib/activityPair", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/activityPair")>();
+const mockAddChannelMember = vi.fn();
+const mockRemoveChannelMember = vi.fn();
+vi.mock("../lib/channel-lifecycle", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/channel-lifecycle")>();
   return {
     ...actual,
-    addActivityPairMember: (...args: unknown[]) => mockAddActivityPairMember(...args),
-    removeActivityPairMember: (...args: unknown[]) => mockRemoveActivityPairMember(...args),
+    addChannelMember: (...args: unknown[]) => mockAddChannelMember(...args),
+    removeChannelMember: (...args: unknown[]) => mockRemoveChannelMember(...args),
   };
 });
 
@@ -173,8 +173,8 @@ beforeEach(async () => {
   mockMmApi.mockReset();
   mockGiteaApi.mockReset();
   mockGetWorkspaceMmContext.mockReset();
-  mockAddActivityPairMember.mockReset().mockResolvedValue(undefined);
-  mockRemoveActivityPairMember.mockReset().mockResolvedValue(undefined);
+  mockAddChannelMember.mockReset().mockResolvedValue(undefined);
+  mockRemoveChannelMember.mockReset().mockResolvedValue(undefined);
   mockGetWorkspaceMmContext.mockResolvedValue({ teamId: "team-alice" });
   await seedCaller(CALLER_UID);
 });
@@ -290,7 +290,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
     );
   });
 
-  it("adds the caller to the activity sibling channel on first join", async () => {
+  it("adds the caller to the primary project channel on first join", async () => {
     await seedPublicAliceGame();
     await seedProjectActivityChannel();
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
@@ -305,7 +305,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockAddActivityPairMember).toHaveBeenCalledWith(
+    expect(mockAddChannelMember).toHaveBeenCalledWith(
       "workspaces/alice/projects/game/channels/general",
       "mm-bob",
     );
@@ -314,14 +314,14 @@ describe("POST /api/projects/:wid/:pid/join", () => {
   it("returns 422 and leaves the caller unjoined when the Mattermost identity is missing", async () => {
     await seedPublicAliceGame();
     await seedProjectActivityChannel();
-    const { MattermostIdentityMissingError } = await import("../lib/activityPair.js");
+    const { MattermostIdentityMissingError } = await import("../lib/channel-lifecycle.js");
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
       const err = new Error("not found") as Error & { status?: number };
       err.status = 404;
       throw err;
     });
-    mockAddActivityPairMember.mockRejectedValueOnce(
+    mockAddChannelMember.mockRejectedValueOnce(
       new MattermostIdentityMissingError("Mattermost user mm-bob was not found"),
     );
 
@@ -358,7 +358,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
     expect(res.status).toBe(422);
     expect(teamAddCalls).toHaveLength(0);
-    expect(mockAddActivityPairMember).not.toHaveBeenCalled();
+    expect(mockAddChannelMember).not.toHaveBeenCalled();
   });
 });
 
@@ -425,7 +425,7 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
     expect(res.body.success).toBe(true);
     expect(await getMemberDoc(CALLER_UID)).toBeUndefined();
     expect((await getProjectDoc())?.memberCount).toBe(1);
-    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+    expect(mockRemoveChannelMember).toHaveBeenCalledWith(
       "workspaces/alice/projects/game/channels/general",
       "mm-bob",
     );
@@ -436,7 +436,7 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
     );
   });
 
-  it("removes the caller from the activity sibling channel on leave", async () => {
+  it("removes the caller from the primary project channel on leave", async () => {
     await seedPublicAliceGame();
     await seedProjectActivityChannel();
     await db
@@ -457,7 +457,7 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+    expect(mockRemoveChannelMember).toHaveBeenCalledWith(
       "workspaces/alice/projects/game/channels/general",
       "mm-bob",
     );
@@ -598,7 +598,7 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
     expect(res.body.success).toBe(true);
     expect(await getMemberDoc("guest-uid")).toBeUndefined();
     expect((await getProjectDoc())?.memberCount).toBe(1);
-    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+    expect(mockRemoveChannelMember).toHaveBeenCalledWith(
       "workspaces/alice/projects/game/channels/general",
       "mm-guest",
     );
@@ -609,7 +609,7 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
     );
   });
 
-  it("removes the guest from the activity sibling channel", async () => {
+  it("removes the guest from the primary project channel", async () => {
     await seedPublicAliceGame({ ownerUid: CALLER_UID });
     await seedProjectActivityChannel();
     await db
@@ -633,7 +633,7 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
       .set(await authHeader());
 
     expect(res.status).toBe(200);
-    expect(mockRemoveActivityPairMember).toHaveBeenCalledWith(
+    expect(mockRemoveChannelMember).toHaveBeenCalledWith(
       "workspaces/alice/projects/game/channels/general",
       "mm-guest",
     );

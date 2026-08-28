@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   updateFailures: new Map<string, Error>(),
   deletes: [] as string[],
   mmApi: vi.fn(),
-  addActivityPairMember: vi.fn(),
+  addChannelMember: vi.fn(),
   createProjectAgentBot: vi.fn(),
   retireProjectAgentBot: vi.fn(),
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -61,11 +61,11 @@ vi.mock("../lib/mattermost.js", () => ({
   mmApi: (...args: unknown[]) => h.mmApi(...args),
 }));
 
-vi.mock("../lib/activityPair.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/activityPair.js")>();
+vi.mock("../lib/channel-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/channel-lifecycle.js")>();
   return {
     ...actual,
-    addActivityPairMember: (...args: unknown[]) => h.addActivityPairMember(...args),
+    addChannelMember: (...args: unknown[]) => h.addChannelMember(...args),
   };
 });
 
@@ -134,7 +134,7 @@ beforeEach(() => {
   h.updateFailures.clear();
   h.deletes.length = 0;
   h.mmApi.mockReset();
-  h.addActivityPairMember.mockReset().mockResolvedValue(undefined);
+  h.addChannelMember.mockReset().mockResolvedValue(undefined);
   h.createProjectAgentBot.mockReset().mockResolvedValue({ mmUserId: "bot-1", token: "pat-1" });
   h.retireProjectAgentBot.mockReset().mockResolvedValue(undefined);
   h.logger.error.mockReset();
@@ -254,7 +254,7 @@ describe("setProjectAgentEnabled — enable", () => {
     });
   });
 
-  it("writes the flag, mints the bot, converges every project activity pair, and reports active", async () => {
+  it("writes the flag, mints the bot, joins every project primary channel, and reports active", async () => {
     seedProject();
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
@@ -269,7 +269,7 @@ describe("setProjectAgentEnabled — enable", () => {
       displayName: "BenderEcho",
       projectChannelIds: ["po-1"],
     });
-    expect(h.addActivityPairMember).toHaveBeenCalledWith(
+    expect(h.addChannelMember).toHaveBeenCalledWith(
       `${PROJECT_PATH}/channels/general`,
       "bot-1",
     );
@@ -305,9 +305,9 @@ describe("setProjectAgentEnabled — enable", () => {
     expect(h.logger.error).toHaveBeenCalled();
   });
 
-  it("keeps the flag but reports 502 when activity-pair membership cannot converge", async () => {
+  it("keeps the flag but reports 502 when primary membership cannot converge", async () => {
     seedProject();
-    h.addActivityPairMember.mockRejectedValue(new Error("activity pair mismatch"));
+    h.addChannelMember.mockRejectedValue(new Error("primary membership mismatch"));
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
@@ -322,10 +322,10 @@ describe("setProjectAgentEnabled — enable", () => {
     expect(h.logger.error).toHaveBeenCalled();
   });
 
-  it("maps a MattermostIdentityMissingError from activity-pair membership to the sanitized 422 instead of the generic 502", async () => {
+  it("maps a MattermostIdentityMissingError from primary membership to the sanitized 422 instead of the generic 502", async () => {
     seedProject();
-    const { MattermostIdentityMissingError } = await import("../lib/activityPair.js");
-    h.addActivityPairMember.mockRejectedValue(
+    const { MattermostIdentityMissingError } = await import("../lib/channel-lifecycle.js");
+    h.addChannelMember.mockRejectedValue(
       new MattermostIdentityMissingError("Mattermost user bot-1 was not found"),
     );
 

@@ -8,6 +8,11 @@ import {
   isValidProjectId,
   isValidUsername,
   parseAgentId,
+  projectChannelName,
+  projectGeneralChannelName,
+  workspaceCoachChannelName,
+  workspaceCustomChannelName,
+  workspaceGeneralChannelName,
   type ParsedAgentId,
 } from "@octogee/shared/types/identity";
 import {
@@ -46,17 +51,20 @@ interface AgentIdentity {
   uid: string;
   coachMmUserId: string;
   coachToken: string;
-  primaryChannelId: string;
-  activityChannelId: string;
-  channelDocPath: string;
   workspaceSlug: string;
   projectSlug: string;
 }
 
-interface ChannelPair {
+interface ChannelProjectionTarget {
   primaryChannelId: string;
   activityChannelId: string;
   channelDocPath: string;
+}
+
+interface AuthorizedConversationTarget extends ChannelProjectionTarget {
+  expectedChannelTeamId: string;
+  expectedChannelName: string;
+  expectedChannelType: "P";
 }
 
 const TICKETS = "gatewayTickets";
@@ -279,28 +287,12 @@ interface CoachSecret {
   coachMmUserId: string;
 }
 
-interface CoachChannelPair {
-  primaryChannelId: string;
-  activityChannelId: string;
-}
-
 type AgentScope = Omit<AgentIdentity, "coachMmUserId" | "coachToken">;
 
 function readCoachSecret(data: Record<string, unknown>): CoachSecret | null {
   const coachToken = typeof data.personalToken === "string" ? data.personalToken : "";
   const coachMmUserId = typeof data.coachMmUserId === "string" ? data.coachMmUserId : "";
   return coachToken && coachMmUserId ? { coachToken, coachMmUserId } : null;
-}
-
-function readCoachChannelPair(data: Record<string, unknown>): CoachChannelPair | null {
-  const primaryChannelId = readPath(data, "mattermost.channelId");
-  const activityChannelId = readPath(data, "mattermost.activityChannelId");
-  return typeof primaryChannelId === "string" &&
-    primaryChannelId.length > 0 &&
-    typeof activityChannelId === "string" &&
-    activityChannelId.length > 0
-    ? { primaryChannelId, activityChannelId }
-    : null;
 }
 
 // Project-agent secrets carry {personalToken, mmUserId}; adapt to the coach
@@ -324,21 +316,9 @@ async function resolveAgentScope(
   const uid = await resolveUidBySlug(db, slug);
   if (!uid) return null;
 
-  const channelDocPath =
-    parsed.kind === "project"
-      ? `workspaces/${slug}/projects/${parsed.project}/channels/general`
-      : `workspaces/${slug}/channels/coach-dm`;
-
-  const channelSnap = await db.doc(channelDocPath).get();
-  if (!channelSnap.exists) return null;
-  const channel = readCoachChannelPair(channelSnap.data() ?? {});
-  if (!channel) return null;
   return {
     agentId,
     uid,
-    primaryChannelId: channel.primaryChannelId,
-    activityChannelId: channel.activityChannelId,
-    channelDocPath,
     workspaceSlug: slug,
     projectSlug: parsed.kind === "project" ? parsed.project : "workspace",
   };
@@ -362,21 +342,19 @@ async function resolveAgentIdentity(
     ? readProjectAgentSecret(tokenSnap.data() ?? {})
     : readCoachSecret(tokenSnap.data() ?? {});
   return secret
-    ? { ...scope, coachMmUserId: secret.coachMmUserId, coachToken: secret.coachToken }
+    ? {
+        ...scope,
+        coachMmUserId: secret.coachMmUserId,
+        coachToken: secret.coachToken,
+      }
     : null;
 }
 
-function trimTrailingSlashes(value: string): string {
-  let out = value;
-  while (out.endsWith("/")) out = out.slice(0, -1);
-  return out;
-}
-
-async function resolveChannelPair(
+async function resolveChannelProjectionTarget(
   db: Firestore,
   gatewayId: string,
   primaryChannelId: string,
-): Promise<ChannelPair | null | "forbidden"> {
+): Promise<ChannelProjectionTarget | null | "forbidden"> {
   if (!primaryChannelId) return null;
   const snap = await db
     .collectionGroup("channels")
@@ -390,13 +368,7 @@ async function resolveChannelPair(
   const binding = boundChannelPath(channelDocPath);
   if (!binding) return null;
   if (!(await assignedHere(db, gatewayId, binding.workspaceSlug))) return "forbidden";
-  const data = doc.data() ?? {};
-  if (data.kind === "session") {
-    return { primaryChannelId, activityChannelId: primaryChannelId, channelDocPath: channelDocPath! };
-  }
-  const activityChannelId = readPath(data, "mattermost.activityChannelId");
-  if (typeof activityChannelId !== "string" || !activityChannelId) return null;
-  return { primaryChannelId, activityChannelId, channelDocPath: channelDocPath! };
+  return { primaryChannelId, activityChannelId: primaryChannelId, channelDocPath: channelDocPath! };
 }
 
 type SessionContextLookup = {
@@ -442,6 +414,32 @@ function agentCanReadSession(
   );
 }
 
+function agentCanRunInConversation(
+  agentId: string,
+  workspaceSlug: string,
+  binding: BoundChannelPath,
+): boolean {
+  const parsed = parseAgentId(agentId);
+  if (!agentCanReadSession(agentId, workspaceSlug, binding)) return false;
+  return parsed.kind === "project" || (
+    binding.lane === "workspace" &&
+    binding.channelName !== "admin" &&
+    binding.channelName !== "coach-dm"
+  );
+}
+
+function mattermostChannelName(binding: BoundChannelPath): string | null {
+  if (binding.lane === "project") {
+    return binding.channelName === "general"
+      ? projectGeneralChannelName(binding.workspaceSlug, binding.projectSlug!)
+      : projectChannelName(binding.workspaceSlug, binding.projectSlug!, binding.channelName);
+  }
+  if (binding.channelName === "general") return workspaceGeneralChannelName(binding.workspaceSlug);
+  if (binding.channelName === "coach-dm") return workspaceCoachChannelName(binding.workspaceSlug);
+  if (binding.channelName === "admin") return null;
+  return workspaceCustomChannelName(binding.workspaceSlug, binding.channelName);
+}
+
 async function sessionOwnerIsActive(
   db: Firestore,
   binding: BoundChannelPath,
@@ -459,7 +457,6 @@ function authorizedChannelContext(
   binding: BoundChannelPath,
 ): Exclude<SessionContextLookup, null | "forbidden"> | null {
   if (data.archivedAt) return null;
-  if (readPath(data, "mattermost.activityPair.desired") === "archived") return null;
   const ordinaryKind = ordinaryChannelKind(binding);
   if (ordinaryKind !== null) {
     return data.kind === ordinaryKind ? { authorized: true } : null;
@@ -467,6 +464,42 @@ function authorizedChannelContext(
   if (data.kind !== "session") return null;
   const purpose = typeof data.purpose === "string" ? data.purpose : "";
   return purpose.length > 0 ? { authorized: true, purpose } : { authorized: true };
+}
+
+async function resolveAuthorizedConversationTarget(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  conversationId: string,
+): Promise<AuthorizedConversationTarget | null | "forbidden"> {
+  const identity = await resolveAgentScope(db, gatewayId, agentId);
+  if (identity === "forbidden") return identity;
+  if (!identity) return null;
+  const channel = await resolveSessionChannel(db, conversationId);
+  if (channel === "forbidden") return channel;
+  if (!channel) return null;
+  if (!agentCanRunInConversation(agentId, identity.workspaceSlug, channel.binding)) {
+    return "forbidden";
+  }
+  if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
+  if (!authorizedChannelContext(channel.data, channel.binding)) return null;
+  const expectedChannelName = mattermostChannelName(channel.binding);
+  if (!expectedChannelName) return "forbidden";
+  const workspace = await db.doc(`workspaces/${identity.workspaceSlug}`).get();
+  const expectedChannelTeamId = readPath(workspace.data() ?? {}, "mattermost.teamId");
+  if (!workspace.exists || typeof expectedChannelTeamId !== "string" || !expectedChannelTeamId) {
+    return null;
+  }
+  return {
+    primaryChannelId: conversationId,
+    activityChannelId: conversationId,
+    channelDocPath: channel.binding.lane === "project"
+      ? `workspaces/${channel.binding.workspaceSlug}/projects/${channel.binding.projectSlug}/channels/${channel.binding.channelName}`
+      : `workspaces/${channel.binding.workspaceSlug}/channels/${channel.binding.channelName}`,
+    expectedChannelTeamId,
+    expectedChannelName,
+    expectedChannelType: "P",
+  };
 }
 
 interface ResolveSessionContextInput {
@@ -597,7 +630,6 @@ async function resolveCoachOwnerDispatchContext(
     && workspace.data()?.ownerUid === identity.uid
     && owner.exists
     && readPath(owner.data() ?? {}, "mattermost.userId") === input.senderId
-    && identity.channelDocPath === `workspaces/${parsed.username}/channels/coach-dm`
   ) return { authorized: true };
   return "forbidden";
 }
@@ -608,9 +640,6 @@ async function resolveDirectDispatchContext(
   parsed: KnownAgentId,
 ): Promise<DispatchContextLookup> {
   if (parsed.kind !== "coach") return "forbidden";
-  if (identity.channelDocPath !== `workspaces/${parsed.username}/channels/coach-dm`) {
-    return "forbidden";
-  }
 
   const gateway = await input.db.doc(`gateways/${input.gatewayId}`).get();
   const isBuilderGateway = gateway.exists && gateway.data()?.gatewayClass === "builder";
@@ -685,6 +714,7 @@ function runLivePathIdentity(path: string): {
   slug: string;
   channelPath: string;
   documentId: string;
+  binding: BoundChannelPath;
 } | null {
   const marker = "/liveRuns/";
   const markerIndex = path.indexOf(marker);
@@ -692,8 +722,9 @@ function runLivePathIdentity(path: string): {
   const channelPath = path.slice(0, markerIndex);
   const documentId = path.slice(markerIndex + marker.length);
   const slug = workspaceSlugFromChannelPath(channelPath);
-  if (!slug || !documentId || documentId.includes("/")) return null;
-  return { slug, channelPath, documentId };
+  const binding = boundChannelPath(channelPath);
+  if (!slug || !binding || binding.workspaceSlug !== slug || !safeDocId(documentId)) return null;
+  return { slug, channelPath, documentId, binding };
 }
 
 function validRunLiveV3(
@@ -703,7 +734,7 @@ function validRunLiveV3(
   const conversationId = typeof doc.conversationId === "string" ? doc.conversationId : "";
   const mainChannelId = typeof doc.mainChannelId === "string" ? doc.mainChannelId : "";
   const activityChannelId = typeof doc.activityChannelId === "string" ? doc.activityChannelId : "";
-  if (!conversationId || conversationId !== mainChannelId || !activityChannelId) return false;
+  if (!conversationId || conversationId !== mainChannelId || activityChannelId !== mainChannelId) return false;
   if (doc.projectionKind === "run") {
     const runId = typeof doc.runId === "string" ? doc.runId : "";
     return Boolean(runId) && identity.documentId === runId;
@@ -716,8 +747,7 @@ function validRunLiveV3(
 }
 
 function validRunLiveV2(
-  path: string,
-  slug: string,
+  identity: NonNullable<ReturnType<typeof runLivePathIdentity>>,
   doc: Record<string, unknown>,
 ): boolean {
   const runId = typeof doc.runId === "string" ? doc.runId : "";
@@ -725,9 +755,9 @@ function validRunLiveV2(
   const channelPath = typeof doc.channelPath === "string" ? doc.channelPath : "";
   return (
     Boolean(runId) &&
-    workspaceId === slug &&
-    channelPath.startsWith(`workspaces/${slug}/`) &&
-    path === `${trimTrailingSlashes(channelPath)}/liveRuns/${runId}`
+    workspaceId === identity.slug &&
+    channelPath === identity.channelPath &&
+    identity.documentId === runId
   );
 }
 
@@ -743,15 +773,24 @@ export function validateRunLiveWrite(
   if (doc.schemaVersion === 3) {
     return validRunLiveV3(doc, identity) ? { path, slug, doc } : null;
   }
-  return validRunLiveV2(path, slug, doc) ? { path, slug, doc } : null;
+  return validRunLiveV2(identity, doc) ? { path, slug, doc } : null;
 }
 
-function slugFromRunLivePath(path: string): string | null {
-  const parts = path.split("/").filter(Boolean);
-  if (parts[0] !== "workspaces") return null;
-  if (!isValidUsername(parts[1])) return null;
-  if (!parts.includes("liveRuns")) return null;
-  return parts[1];
+async function canonicalRunLiveChannel(
+  db: Firestore,
+  path: string,
+): Promise<{
+  identity: NonNullable<ReturnType<typeof runLivePathIdentity>>;
+  channelId: string;
+} | null> {
+  const identity = runLivePathIdentity(path);
+  if (!identity) return null;
+  const channel = await db.doc(identity.channelPath).get();
+  if (!channel.exists) return null;
+  const channelId = readPath(channel.data() ?? {}, "mattermost.channelId");
+  return typeof channelId === "string" && channelId.length > 0
+    ? { identity, channelId }
+    : null;
 }
 
 function receiptBody(req: Request): Record<string, unknown> {
@@ -876,7 +915,7 @@ async function matchingChannelDocuments(
   channelId: string,
 ): Promise<ChannelDocumentMatches> {
   const docs = new Map<string, ChannelLookupDocument>();
-  for (const field of ["mattermost.channelId", "mattermost.activityChannelId"]) {
+  for (const field of ["mattermost.channelId"]) {
     const snap = await db.collectionGroup("channels").where(field, "==", channelId).limit(2).get();
     for (const doc of snap.docs) {
       const path = extractRefPath((doc as { ref?: unknown }).ref);
@@ -1256,19 +1295,45 @@ function mountActivityRoutes(
     res.json({ identity });
   });
 
-  router.post("/activity/channel-pair", async (req, res) => {
+  const resolveChannelTarget = async (req: Request, res: Response): Promise<void> => {
     const bound = boundGateway(req, res);
     if (!bound) return;
-    const pair = await resolveChannelPair(db, bound.gatewayId, stringBody(req, "primaryChannelId"));
-    if (pair === "forbidden") {
+    const target = await resolveChannelProjectionTarget(
+      db,
+      bound.gatewayId,
+      stringBody(req, "primaryChannelId"),
+    );
+    if (target === "forbidden") {
       forbidden(res);
       return;
     }
-    if (!pair) {
+    if (!target) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    res.json({ pair });
+    res.json({ target });
+  };
+
+  router.post("/activity/channel-target", resolveChannelTarget);
+
+  router.post("/activity/conversation-target", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const target = await resolveAuthorizedConversationTarget(
+      db,
+      bound.gatewayId,
+      stringBody(req, "agentId"),
+      stringBody(req, "conversationId"),
+    );
+    if (target === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!target) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ target });
   });
 
   mountSessionContextRoute(router, db, opsMattermostUserId);
@@ -1278,6 +1343,18 @@ function mountActivityRoutes(
     if (!bound) return;
     const valid = validateRunLiveWrite((req.body ?? {}) as Record<string, unknown>);
     if (!valid) {
+      res.status(400).json({ error: "invalid_run_live_doc" });
+      return;
+    }
+    const canonical = await canonicalRunLiveChannel(db, valid.path);
+    if (
+      !canonical ||
+      canonical.identity.slug !== valid.slug ||
+      (valid.doc.schemaVersion === 3 && (
+        valid.doc.conversationId !== canonical.channelId ||
+        valid.doc.mainChannelId !== canonical.channelId
+      ))
+    ) {
       res.status(400).json({ error: "invalid_run_live_doc" });
       return;
     }
@@ -1293,12 +1370,12 @@ function mountActivityRoutes(
     const bound = boundGateway(req, res);
     if (!bound) return;
     const path = stringBody(req, "path");
-    const slug = slugFromRunLivePath(path);
-    if (!slug) {
+    const canonical = await canonicalRunLiveChannel(db, path);
+    if (!canonical) {
       res.status(400).json({ error: "invalid_run_live_path" });
       return;
     }
-    if (!(await assignedHere(db, bound.gatewayId, slug))) {
+    if (!(await assignedHere(db, bound.gatewayId, canonical.identity.slug))) {
       forbidden(res);
       return;
     }
@@ -1306,6 +1383,40 @@ function mountActivityRoutes(
     res.status(204).end();
   });
 
+  mountActivityReceiptRoutes(router, db);
+
+  router.post("/activity/channel-owner", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const ownerUid = await resolveChannelOwnerUid(db, bound.gatewayId, stringBody(req, "channelId"));
+    if (ownerUid === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!ownerUid) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ ownerUid });
+  });
+
+  router.post("/activity/user-by-mm", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = await resolveUidByMmUser(db, bound.gatewayId, stringBody(req, "mmUserId"));
+    if (uid === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!uid) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ uid });
+  });
+}
+
+function mountActivityReceiptRoutes(router: Router, db: Firestore): void {
   router.post("/activity/write-receipts/claim", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1406,36 +1517,6 @@ function mountActivityRoutes(
     } catch (error) {
       respondReceiptStoreError(res, error);
     }
-  });
-
-  router.post("/activity/channel-owner", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const ownerUid = await resolveChannelOwnerUid(db, bound.gatewayId, stringBody(req, "channelId"));
-    if (ownerUid === "forbidden") {
-      forbidden(res);
-      return;
-    }
-    if (!ownerUid) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json({ ownerUid });
-  });
-
-  router.post("/activity/user-by-mm", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const uid = await resolveUidByMmUser(db, bound.gatewayId, stringBody(req, "mmUserId"));
-    if (uid === "forbidden") {
-      forbidden(res);
-      return;
-    }
-    if (!uid) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json({ uid });
   });
 }
 

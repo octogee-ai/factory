@@ -281,8 +281,8 @@ describe("versionFromImageTag", () => {
   });
 
   it("uses the immutable tag name for a digest-pinned candidate heartbeat", () => {
-    expect(versionFromImageTag(`agent-conversation-w9a-8c356bb1@sha256:${"a".repeat(64)}`)).toBe(
-      "agent-conversation-w9a-8c356bb1",
+    expect(versionFromImageTag(`8c356bb-oc2026.7.1@sha256:${"a".repeat(64)}`)).toBe(
+      "8c356bb-oc2026.7.1",
     );
   });
 });

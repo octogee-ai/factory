@@ -8,10 +8,7 @@ import {
   projectGatewayMutableConfigForGateway,
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
-import {
-  IMAGE_TAG_PATTERN,
-  isW9CandidateImageTag,
-} from "./image-tag.js";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import {
   GLM_GATEWAYS_COLLECTION,
   isOperatorManaged,
@@ -67,15 +64,6 @@ export interface GatewayDoc {
   retirementClaim?: GatewayRetirementClaim | null;
 }
 
-export const W9_CANDIDATE_MANIFEST_PATH =
-  "infra/gateway/openclaw-candidates/agent-conversation.json";
-export const W9_MATTERMOST_OVERLAY_VALUES_PATH =
-  "infra/candidates/values.mattermost-silent-post.yaml";
-export interface W9GatewayEdgeImage {
-  imageRepository: string;
-  imageTag: string;
-}
-
 export interface GatewayEdgeImage {
   imageRepository: string;
   imageTag: string;
@@ -88,54 +76,15 @@ export interface GatewayProfileImages {
   };
 }
 
-export interface W9TestPublisherLiveExperiment {
-  kind: "w9-agent-conversation";
-  mode: "publisher-live";
-  candidateManifest: {
-    path: typeof W9_CANDIDATE_MANIFEST_PATH;
-    sha256: string;
-  };
-  mattermostOverlay: {
-    valuesPath: typeof W9_MATTERMOST_OVERLAY_VALUES_PATH;
-    imageReference: string;
-  };
-}
-
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DIGEST_BOUND_IMAGE_TAG_PATTERN =
   /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
-const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN =
-  /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
-
-export function isW9TestPublisherLiveExperiment(
-  value: unknown,
-): value is W9TestPublisherLiveExperiment {
-  if (!isPlainRecord(value) || value.kind !== "w9-agent-conversation" || value.mode !== "publisher-live") {
-    return false;
-  }
-  const candidateManifest = value.candidateManifest;
-  const mattermostOverlay = value.mattermostOverlay;
-  return (
-    isPlainRecord(candidateManifest) &&
-    candidateManifest.path === W9_CANDIDATE_MANIFEST_PATH &&
-    typeof candidateManifest.sha256 === "string" &&
-    SHA256_PATTERN.test(candidateManifest.sha256) &&
-    isPlainRecord(mattermostOverlay) &&
-    mattermostOverlay.valuesPath === W9_MATTERMOST_OVERLAY_VALUES_PATH &&
-    typeof mattermostOverlay.imageReference === "string" &&
-    DIGEST_BOUND_IMAGE_REFERENCE_PATTERN.test(mattermostOverlay.imageReference)
-  );
-}
-
-// Immutable release payload: the build artifact plus its bounded W9 TEST
-// experiment contract. Gateway policy lives exclusively on gateways/{gatewayId},
-// never in a release or revision.
+// Immutable release payload. Gateway policy lives exclusively on
+// gateways/{gatewayId}, never in a release or revision.
 export interface ReleasePayload {
   imageRepository: string;
   imageTag: string;
   profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
-  testExperiment?: W9TestPublisherLiveExperiment;
 }
 
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
@@ -143,7 +92,6 @@ const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "imageTag",
   "profileImages",
   "gatewayEdgeImage",
-  "testExperiment",
 ]);
 
 const RELEASE_PAYLOAD_REQUIRED_FIELDS = [
@@ -164,19 +112,8 @@ export function isReleasePayload(value: unknown): value is ReleasePayload {
   ) {
     return false;
   }
-  if (value.testExperiment === undefined) {
-    return (
-      !isW9CandidateImageTag(value.imageTag) &&
-      (value.gatewayEdgeImage === undefined ||
-        (isGatewayEdgeImage(value.gatewayEdgeImage, value.imageRepository) &&
-          !isW9CandidateImageTag(value.gatewayEdgeImage.imageTag)))
-    );
-  }
-  return (
-    isW9CandidateImageTag(value.imageTag) &&
-    isW9TestPublisherLiveExperiment(value.testExperiment) &&
-    isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository)
-  );
+  return value.gatewayEdgeImage === undefined ||
+    isGatewayEdgeImage(value.gatewayEdgeImage, value.imageRepository);
 }
 
 function isGatewayProfileImages(
@@ -282,29 +219,6 @@ function hasReleasePayloadIdentity(
     typeof value.imageTag === "string" &&
     value.imageTag.length > 0 &&
     IMAGE_TAG_PATTERN.test(value.imageTag)
-  );
-}
-
-function w9CandidateImageName(imageTag: string): string {
-  return imageTag.slice(0, imageTag.indexOf("@"));
-}
-
-export function isW9GatewayEdgeImage(
-  value: unknown,
-  gatewayImageTag: string,
-  gatewayImageRepository: string,
-): value is W9GatewayEdgeImage {
-  const gatewayPackageSuffix = "/octogee-gateway";
-  const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
-    ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/gateway-edge`
-    : "";
-  return (
-    isPlainRecord(value) &&
-    value.imageRepository === expectedRepository &&
-    typeof value.imageTag === "string" &&
-    isW9CandidateImageTag(value.imageTag) &&
-    isW9CandidateImageTag(gatewayImageTag) &&
-    w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag)
   );
 }
 
@@ -531,7 +445,6 @@ export type GatewayFieldClassification =
 export const RELEASE_FIELDS = [
   "imageRepository",
   "imageTag",
-  "testExperiment",
 ] as const;
 
 // gateways/{gatewayId} DOC fields that mutate without cutting a release.

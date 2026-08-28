@@ -237,16 +237,6 @@ spec:
           annotations:
             summary: "In-pod runner {{ $labels.runner }} is crash-looping"
             description: "Runner {{ $labels.runner }} on {{ $labels.pod }} restarted {{ $value }} times in 10m. Check its structured restart logs."
-    - name: octogee.activity-pairs
-      rules:
-        - alert: ActivityPairReconciliationFailures
-          expr: sum by (namespace) (increase(octogee_activity_pair_reconciliations_total{namespace=~"octogee|octogee-test",result="failure"}[15m])) >= 3
-          for: 5m
-          labels:
-            severity: critical
-          annotations:
-            summary: "Repeated Activity pair reconciliation failures in {{ $labels.namespace }}"
-            description: "At least three Activity pair reconciliations failed within 15m. Pair membership or archive state may be unsafe; inspect gateway-edge logs and run the report-only inventory."
     - name: octogee.email
       rules:
         - alert: ResendBounceRateHigh
@@ -286,14 +276,6 @@ spec:
             description: "Delivery feedback is broken in {{ $labels.namespace }} — check the Resend webhook URL, signing secret, and event subscriptions (delivered/bounced/complained/delivery_delayed/failed)."
     - name: octogee.cronjobs
       rules:
-        - alert: ActivityPairAuditCronStale
-          expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"} > 3600) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",cronjob="activity-pair-audit"})
-          for: 15m
-          labels:
-            severity: critical
-          annotations:
-            summary: "Activity pair report has not completed cleanly in {{ $labels.namespace }}"
-            description: "The report-only Activity pair inventory has not produced a drift-free success within one hour. Inspect the CronJob output; it never mutates pairs."
         - alert: DigestDailyCronStale
           expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-daily"} > 90000) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-daily"})
           for: 30m

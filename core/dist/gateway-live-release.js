@@ -100,9 +100,6 @@ export function gatewayArtifactFromReleasePayload(payload) {
         ...(payload.gatewayEdgeImage === undefined
             ? {}
             : { gatewayEdgeImage: payload.gatewayEdgeImage }),
-        ...(payload.testExperiment === undefined
-            ? {}
-            : { testExperiment: payload.testExperiment }),
     };
 }
 function isGatewayArtifact(value) {

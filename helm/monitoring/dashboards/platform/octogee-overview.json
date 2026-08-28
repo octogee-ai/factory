@@ -605,7 +605,7 @@
     {
       "id": 11,
       "type": "stat",
-      "title": "Bridge connected",
+      "title": "Activity projection connected",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -616,7 +616,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "min(octogee_bridge_boot_status{namespace=\"$namespace\",status=\"connected\"}) or vector(0)",
+          "expr": "min(octogee_activity_projection_boot_status{namespace=\"$namespace\",status=\"connected\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -642,7 +642,7 @@
           },
           "links": [
             {
-              "title": "Open Activity bridge",
+              "title": "Open Activity publisher",
               "url": "/d/octogee-bridge/activity-bridge?var-namespace=${namespace}&var-datasource=${datasource}&from=${__from}&to=${__to}"
             }
           ]

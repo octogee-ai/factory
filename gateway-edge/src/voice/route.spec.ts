@@ -1,12 +1,12 @@
 import { once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { TALK_PROTOCOL_VERSION, type TalkServerEvent } from "@octogee/shared/types/voice";
 import type { SttStream, SttStreamEvents, TtsRequest, VoiceRelayClient } from "./relay-client.js";
 import {
-  VOICE_AGENT_UNAVAILABLE_MESSAGE,
   VOICE_NOT_CONFIGURED_MESSAGE,
+  VOICE_AGENT_UNAVAILABLE_MESSAGE,
   VOICE_RELAY_UNAVAILABLE_MESSAGE,
   createVoiceWsUpgradeHandler,
   type VoiceWsRouteDeps,
@@ -53,21 +53,25 @@ function fakeRelay() {
   return { client, stts, ttsRequests };
 }
 
-async function fakeOcGateway() {
-  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await once(wss, "listening");
-  let sock: WebSocket | null = null;
-  wss.on("connection", (s) => {
-    sock = s;
-  });
-  cleanups.push(async () => {
-    for (const c of wss.clients) c.terminate();
-    await new Promise<void>((r) => wss.close(() => r()));
-  });
+function eventFanout() {
+  const listeners = new Map<string, Set<(event: import("./brain.js").BrainEvent) => void>>();
   return {
-    url: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
-    emit: (frame: unknown) => sock!.send(JSON.stringify(frame)),
-    connected: () => sock !== null,
+    source(agentId: string) {
+      return {
+        subscribe(listener: (event: import("./brain.js").BrainEvent) => void) {
+          const subscribers = listeners.get(agentId) ?? new Set();
+          subscribers.add(listener);
+          listeners.set(agentId, subscribers);
+          return () => {
+            subscribers.delete(listener);
+            if (subscribers.size === 0) listeners.delete(agentId);
+          };
+        },
+      };
+    },
+    emit(agentId: string, event: import("./brain.js").BrainEvent) {
+      for (const listener of listeners.get(agentId) ?? []) listener(event);
+    },
   };
 }
 
@@ -75,19 +79,16 @@ async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
   const relayStatus = { configured: true, engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } };
   const relay = fakeRelay();
   const posts: Array<Record<string, unknown>> = [];
-  const oc = await fakeOcGateway();
+  const events = eventFanout();
   const deps: VoiceWsRouteDeps = {
     runtimeBroker: {
       redeemOpenClawWs: vi.fn(async () => ({
         kind: "redeemed" as const,
-        redeemed: { uid: "uid-mom", gatewayId: "gw-mom", gatewayUrl: oc.url, expectedAgentId: "mom-coach" },
+        redeemed: { uid: "uid-mom", gatewayId: "gw-mom", gatewayUrl: "http://unused", expectedAgentId: "mom-coach" },
       })),
     },
-    establishUpstream: async (_gatewayId, gatewayUrl) => {
-      const upstream = new WebSocket(gatewayUrl);
-      await once(upstream, "open");
-      return { ok: true, upstream };
-    },
+    eventSourceForAgent: events.source,
+    isAgentReady: () => true,
     upgradeGate: null,
     isAllowedWsOrigin: () => true,
     stripGatewayPrefix: (p) => p.replace(/^\/g\/[^/]+/, ""),
@@ -115,7 +116,7 @@ async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
   await once(server, "listening");
   cleanups.push(async () => new Promise<void>((r) => server.close(() => r())));
   const base = `ws://127.0.0.1:${(server.address() as { port: number }).port}`;
-  return { base, deps, relay, posts, oc, relayStatus };
+  return { base, deps, relay, posts, events, relayStatus };
 }
 
 async function waitFor(pred: () => boolean, ms = 3000) {
@@ -163,15 +164,6 @@ describe("voice ws route", () => {
     });
   });
 
-  it("an agent connection that cannot be established is reported the same way", async () => {
-    const { base } = await serverWith({ establishUpstream: async () => ({ ok: false, httpStatus: "502 Bad Gateway" }) });
-    const ws = new WebSocket(`${base}/g/gw-mom/api/voice/ws/${TICKET}`);
-    expect(await firstEventThenClose(ws)).toEqual({
-      event: { type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false },
-      code: 1000,
-    });
-  });
-
   it("refuses when the roster gate says the uid is not served here", async () => {
     const refuse = vi.fn((socket: { write: (s: string) => void; destroy: () => void }) => {
       socket.write("HTTP/1.1 409 Conflict\r\n\r\n");
@@ -188,6 +180,39 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     expect(((await once(ws, "error")) as [Error])[0].message).toMatch(/409/);
     expect(refuse).toHaveBeenCalled();
+  });
+
+  it("returns a typed agent-unavailable error when the local plugin relay has no fresh source heartbeat", async () => {
+    const { base } = await serverWith({ isAgentReady: () => false });
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
+    expect(await firstEventThenClose(ws)).toEqual({
+      event: { type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false },
+      code: 1000,
+    });
+  });
+
+  it("ends an active Talk session when the plugin heartbeat expires", async () => {
+    let ready = true;
+    const { base } = await serverWith({ isAgentReady: () => ready, agentReadinessPollMs: 5 });
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
+    const events: TalkServerEvent[] = [];
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary) events.push(JSON.parse(data.toString()) as TalkServerEvent);
+    });
+    await once(ws, "open");
+    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1", mmToken: "mm-token-1234567890" }));
+    await waitFor(() => events.some((event) => event.type === "session.ready"));
+    ready = false;
+    const [code, reason] = (await once(ws, "close")) as [number, Buffer];
+
+    expect(code).toBe(1000);
+    expect(reason.toString()).toBe("agent-unavailable");
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      code: "internal",
+      message: VOICE_AGENT_UNAVAILABLE_MESSAGE,
+      recoverable: false,
+    });
   });
 
   it("a session that throws mid-frame is torn down with a typed error while the server keeps serving other sessions", async () => {
@@ -225,7 +250,7 @@ describe("voice ws route", () => {
   });
 
   it("runs a talk turn end to end: audio → relay STT → Mattermost post → agent events → speech frames", async () => {
-    const { base, relay, posts, oc } = await serverWith();
+    const { base, relay, posts, events: source } = await serverWith();
     const ws = new WebSocket(`${base}/g/gw-mom/api/voice/ws/${TICKET}`);
     const events: TalkServerEvent[] = [];
     const audio: Buffer[] = [];
@@ -250,27 +275,16 @@ describe("voice ws route", () => {
     relay.stts[1].events.onFinal?.("Where are my glasses?");
     await waitFor(() => posts.length === 1);
     expect(posts[0]).toMatchObject({ channel_id: "chan1", message: "🎙 Where are my glasses?" });
-    expect(oc.connected()).toBe(true);
-
     const session = "agent:mom-coach:mattermost:channel:chan1";
-    const agentEvent = (runId: string, seq: number, stream: string, data: Record<string, unknown>) =>
-      oc.emit({ type: "event", event: "agent", payload: { runId, seq, stream, ts: Date.now(), sessionKey: session, data } });
-    agentEvent("run-typed", 1, "lifecycle", { phase: "start" });
-    agentEvent("run-typed", 2, "assistant", { delta: "This answers a typed message, not the voice turn. " });
-    agentEvent("run-typed", 3, "lifecycle", { phase: "end" });
-    oc.emit({
-      type: "event",
-      event: "diagnostic",
-      payload: {
-        sessionKey: session,
-        type: "message.received",
-        ts: Date.now(),
-        data: { type: "message.received", ts: Date.now(), seq: 4, sessionKey: session, channel: "mattermost", chatId: "chan1", messageId: "post-1", source: "dispatchInboundMessage" },
-      },
-    });
-    agentEvent("run-1", 5, "lifecycle", { phase: "start" });
-    agentEvent("run-1", 6, "assistant", { delta: "They are on the kitchen table. " });
-    agentEvent("run-1", 7, "lifecycle", { phase: "end" });
+    const agentEvent = (runId: string, stream: string, data: Record<string, unknown>) =>
+      source.emit("mom-coach", { kind: "agent", runId, stream, ts: Date.now(), sessionKey: session, data });
+    agentEvent("run-typed", "lifecycle", { phase: "start" });
+    agentEvent("run-typed", "assistant", { delta: "This answers a typed message, not the voice turn. " });
+    agentEvent("run-typed", "lifecycle", { phase: "end" });
+    source.emit("mom-coach", { kind: "inbound", messageId: "post-1", sessionKey: session, ts: Date.now() });
+    agentEvent("run-1", "lifecycle", { phase: "start" });
+    agentEvent("run-1", "assistant", { delta: "They are on the kitchen table. " });
+    agentEvent("run-1", "lifecycle", { phase: "end" });
     await waitFor(() => events.some((e) => e.type === "audio.end"));
     expect(relay.ttsRequests.map((r) => r.text)).toEqual(["They are on the kitchen table."]);
     expect(audio.length).toBeGreaterThan(0);

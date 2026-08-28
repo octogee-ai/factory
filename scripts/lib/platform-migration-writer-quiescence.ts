@@ -21,7 +21,6 @@ export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [
   "notification-digest-daily",
   "notification-digest-weekly",
   "credit-auto-top-up",
-  "activity-pair-audit",
 ] as const;
 
 export function platformMigrationScheduledWriterNames(region: string): string[] {

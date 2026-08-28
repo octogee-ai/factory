@@ -95,7 +95,6 @@ REQUIRED_SECRETS=(
   "google-oauth"             # octogee-api: Google OAuth + Drive picker
   "connect-state-secret"     # octogee-api: OAuth state HMAC
   "gitea-token"             # octogee-api + glm-controller
-  "approval-signing"        # gateway-edge activity bridge callback HMAC
   "agent-control-signing"        # gateway-edge: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
   "agent-control-router"    # private Mattermost callback-router → gateway-edge HMAC
   "byot-sync-internal"      # octogee-api → gateway-edge BYOT sync HMAC
@@ -121,7 +120,6 @@ REQUIRED_KEYS=(
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-openrouter:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "agent-control-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "agent-control-router:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"

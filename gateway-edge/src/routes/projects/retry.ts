@@ -24,17 +24,8 @@ interface RetryMember {
   label: string;
 }
 
-interface RetryActivityInput {
-  ctx: ProjectCtx;
-  res: Response;
-  teamId: string;
-  channelName: string;
-  mmChannelId: string;
-}
-
 interface RetryChannel {
   id: string;
-  resetActivityPair: boolean;
 }
 
 function errorMessage(err: unknown): string {
@@ -154,8 +145,8 @@ async function retryChannelId(
 ): Promise<RetryChannel | null> {
   try {
     const restored = await restoreStoredRetryChannel(ctx, teamId, channelName);
-    if (restored) return { id: restored, resetActivityPair: false };
-    return { id: await ensureRetryChannel(ctx, teamId, channelName), resetActivityPair: true };
+    if (restored) return { id: restored };
+    return { id: await ensureRetryChannel(ctx, teamId, channelName) };
   } catch (err) {
     const message = errorMessage(err);
     await markRetryFailed(ctx.projectRef, message);
@@ -197,40 +188,9 @@ async function addRetryMembersOrFail(
   return false;
 }
 
-async function provisionRetryActivity(
-  ctx: ProjectCtx,
-  teamId: string,
-  channelName: string,
-  mmChannelId: string,
-): Promise<void> {
-  const { reconcileActivityPair } = await import("../../lib/activityPair.js");
-  await reconcileActivityPair({
-    channelDocPath: `${ctx.projectRef.path}/channels/general`,
-    primaryName: channelName,
-    primaryChannelId: mmChannelId,
-    teamId,
-    type: "P",
-    kind: "project",
-  });
-}
-
-async function provisionRetryActivityOrFail(input: RetryActivityInput): Promise<boolean> {
-  try {
-    await provisionRetryActivity(input.ctx, input.teamId, input.channelName, input.mmChannelId);
-    return true;
-  } catch (err) {
-    const message = errorMessage(err);
-    await markRetryFailed(input.ctx.projectRef, message);
-    logger.error(`[projects] Retry activity-pair failed for ${input.ctx.wid}/${input.ctx.pid}: ${message}`);
-    input.res.status(502).json({ error: "Retry failed — could not provision activity channel" });
-    return false;
-  }
-}
-
 async function writeRetryGeneralChannel(
   ctx: ProjectCtx,
   mmChannelId: string,
-  resetActivityPair: boolean,
 ): Promise<void> {
   await ctx.projectRef.collection("channels").doc("general").set({
     id: "general",
@@ -238,10 +198,8 @@ async function writeRetryGeneralChannel(
     name: "general",
     mattermost: {
       channelId: mmChannelId,
-      ...(resetActivityPair ? {
-        activityChannelId: FieldValue.delete(),
-        activityPair: FieldValue.delete(),
-      } : {}),
+      activityChannelId: FieldValue.delete(),
+      activityPair: FieldValue.delete(),
     },
     createdAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -315,14 +273,7 @@ async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise
 
   const members = retryMembers(callerCtx);
   if (!(await addRetryMembersOrFail(ctx, res, channel.id, members))) return;
-  await writeRetryGeneralChannel(ctx, channel.id, channel.resetActivityPair);
-  if (!(await provisionRetryActivityOrFail({
-    ctx,
-    res,
-    teamId: callerCtx.teamId,
-    channelName,
-    mmChannelId: channel.id,
-  }))) return;
+  await writeRetryGeneralChannel(ctx, channel.id);
 
   const visibility = restoredVisibility(ctx);
   if (!(await reconcileRetryRepoOrFail(ctx, res, visibility))) return;

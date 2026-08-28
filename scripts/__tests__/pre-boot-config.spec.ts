@@ -434,32 +434,30 @@ describe("applyPreBootPatches — MM env sync", () => {
   });
 });
 
-describe("applyPreBootPatches — conversation experiment", () => {
-  it("enables durable Mattermost run threads in the standard broad mode", () => {
+describe("applyPreBootPatches — Mattermost runtime", () => {
+  it("enables durable Mattermost run threads and the external Activity writer", () => {
     const config: any = { channels: { mattermost: {} } };
 
-    applyPreBootPatches(config, {
-      OCTOGEE_ACTIVITY_BRIDGE_MODE: "broad",
-    });
+    applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
+      agentActivity: { publisher: "external" },
     });
   });
 
   it("creates the Mattermost root settings before the fleet mounts a coach account", () => {
     const config: any = { channels: { mattermost: {} } };
 
-    applyPreBootPatches(config, {
-      OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
-    });
+    applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
+      agentActivity: { publisher: "external" },
     });
   });
 
@@ -473,9 +471,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
       },
     };
 
-    applyPreBootPatches(config, {
-      OCTOGEE_ACTIVITY_BRIDGE_MODE: "broad",
-    });
+    applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost.replyToModeByChatType).toEqual({
       direct: "all",
@@ -484,7 +480,7 @@ describe("applyPreBootPatches — conversation experiment", () => {
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
   });
 
-  it("keeps Mattermost delivery native while enabling the external publisher", () => {
+  it("normalizes the root external writer while removing legacy account overrides", () => {
     const config: any = {
       channels: {
         mattermost: {
@@ -503,16 +499,14 @@ describe("applyPreBootPatches — conversation experiment", () => {
       },
     };
 
-    applyPreBootPatches(config, {
-      OCTOGEE_ACTIVITY_BRIDGE_MODE: "publisher-live",
-    });
+    applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
     });
-    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost).toHaveProperty("agentActivity", { publisher: "external" });
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
@@ -990,6 +984,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
+          agentActivity: { publisher: "external" },
           baseUrl: "${MM_URL}",
           commands: "legacy-commands",
           accounts: {
@@ -1108,6 +1103,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
+          agentActivity: { publisher: "external" },
           baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {

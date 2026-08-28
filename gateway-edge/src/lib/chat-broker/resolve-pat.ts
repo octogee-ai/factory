@@ -90,14 +90,10 @@ async function matchingChannelPaths(
   db: SecretsDb,
   channelId: string,
 ): Promise<string[]> {
-  const snapshots = await Promise.all(
-    ["mattermost.channelId", "mattermost.activityChannelId"].map((field) =>
-      db.collectionGroup("channels").where(field, "==", channelId).get()
-    ),
-  );
-  return [...new Set(snapshots.flatMap((snapshot) =>
-    snapshot.docs.map((doc) => doc.ref.path)
-  ))];
+  const snapshot = await db.collectionGroup("channels")
+    .where("mattermost.channelId", "==", channelId)
+    .get();
+  return [...new Set(snapshot.docs.map((doc) => doc.ref.path))];
 }
 
 async function workspaceChannelReadable(

@@ -9,17 +9,12 @@ import {
   type HelmInstanceValue,
 } from "@octogee/shared/types/glm";
 import {
-  isW9GatewayEdgeImage,
-  isW9TestPublisherLiveExperiment,
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
-import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import { withoutGatewayWorkloadIdentity } from "./gateway-service-account-policy.js";
-import type { W9TestPublisherLiveExperiment } from "@octogee/shared/types/gateway-releases";
-import { deploymentEnvironmentForNamespace } from "@octogee/core/deployment-environment";
 
 // The simple-roll convergence arm (GATEWAY-SIMPLE-ROLL-SPEC): every gateway has
 // ONE stable-name Helm release; a roll is a desiredRelease write that surfaces
@@ -234,8 +229,6 @@ export interface GatewayUpsertOpts {
   imageTag: string;
   gatewayEdgeImageRepository?: string;
   gatewayEdgeImageTag?: string;
-  conversationExperimentMode?: "publisher-live";
-  testExperiment?: W9TestPublisherLiveExperiment;
   serviceAccountName?: string;
   serviceAccount?: HelmInstanceValue["serviceAccount"];
   gatewayContainerSecurityContext?: Record<string, unknown>;
@@ -301,43 +294,6 @@ export function deploymentIntentFingerprintForComparison(input: {
   });
 }
 
-function w9TestExperimentForNamespace(input: {
-  namespace: string;
-  artifact: ReleasePayload;
-}): Pick<
-  GatewayUpsertOpts,
-  | "conversationExperimentMode"
-  | "testExperiment"
-  | "gatewayEdgeImageRepository"
-  | "gatewayEdgeImageTag"
-> {
-  const testExperiment = input.artifact.testExperiment;
-  if (testExperiment === undefined) {
-    if (isW9CandidateImageTag(input.artifact.imageTag)) {
-      throw new Error("digest-bound W9 candidate image requires its W9 TEST experiment");
-    }
-    return {};
-  }
-  if (
-    deploymentEnvironmentForNamespace(input.namespace) !== "test" ||
-    !isW9CandidateImageTag(input.artifact.imageTag) ||
-    !isW9GatewayEdgeImage(
-      input.artifact.gatewayEdgeImage,
-      input.artifact.imageTag,
-      input.artifact.imageRepository,
-    ) ||
-    !isW9TestPublisherLiveExperiment(testExperiment)
-  ) {
-    throw new Error("publisher-live W9 experiment is TEST-only and requires its digest-bound candidate");
-  }
-  return {
-    conversationExperimentMode: "publisher-live",
-    testExperiment,
-    gatewayEdgeImageRepository: input.artifact.gatewayEdgeImage.imageRepository,
-    gatewayEdgeImageTag: input.artifact.gatewayEdgeImage.imageTag,
-  };
-}
-
 // Tenant identity (KSA, secrets, GATEWAY_ID) and every resource name key off
 // the bare gatewayId — the chart's revisionId value defaults to it.
 export function gatewayUpsertOptsFromRelease(input: {
@@ -361,10 +317,6 @@ export function gatewayUpsertOptsFromRelease(input: {
   }
   const gatewayClass = resolveGatewayClass(classKnobs(gateway));
   const gatewayImage = gatewayImageFor(gateway, artifact);
-  const experiment = w9TestExperimentForNamespace({
-    namespace: input.namespace,
-    artifact,
-  });
   const intent: Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> = {
     namespace: input.namespace,
     gatewayId: gateway.gatewayId,
@@ -372,11 +324,8 @@ export function gatewayUpsertOptsFromRelease(input: {
     builderSlug: gateway.builderSlug ?? undefined,
     imageRepository: gatewayImage.imageRepository,
     imageTag: gatewayImage.imageTag,
-    gatewayEdgeImageRepository:
-      experiment.gatewayEdgeImageRepository ?? artifact.gatewayEdgeImage.imageRepository,
-    gatewayEdgeImageTag:
-      experiment.gatewayEdgeImageTag ?? artifact.gatewayEdgeImage.imageTag,
-    ...experiment,
+    gatewayEdgeImageRepository: artifact.gatewayEdgeImage.imageRepository,
+    gatewayEdgeImageTag: artifact.gatewayEdgeImage.imageTag,
     serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: withoutGatewayWorkloadIdentity(gateway.serviceAccount),
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,

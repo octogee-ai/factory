@@ -8,13 +8,6 @@ import type {
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
 import {
-  isW9GatewayEdgeImage,
-  isW9TestPublisherLiveExperiment,
-  type W9TestPublisherLiveExperiment,
-} from "@octogee/shared/types/gateway-releases";
-import { isW9CandidateImageTag } from "@octogee/shared/types/image-tag";
-import {
-  deploymentEnvironmentForNamespace,
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
 import type { GatewayServiceAccountIdentity } from "./gateway-service-account-ensurer.js";
@@ -40,8 +33,6 @@ upsertInstance(opts: {
     imageTag: string;
     gatewayEdgeImageRepository?: string;
     gatewayEdgeImageTag?: string;
-    conversationExperimentMode?: "publisher-live";
-    testExperiment?: W9TestPublisherLiveExperiment;
     serviceAccountName?: string;
     serviceAccount?: HelmInstancesMap[string]["serviceAccount"];
     gatewayContainerSecurityContext?: Record<string, unknown>;
@@ -352,8 +343,6 @@ export interface BuildUpgradeArgsOpts {
   imageRepository: string;
   gatewayEdgeImageRepository?: string;
   gatewayEdgeImageTag?: string;
-  conversationExperimentMode?: "publisher-live";
-  testExperiment?: W9TestPublisherLiveExperiment;
   upgradeTimeout: string;
   chartFingerprint?: string;
   deploymentIntentFingerprint?: string;
@@ -391,7 +380,6 @@ type UpgradeStringOption = {
     | "deploymentTargetId"
     | "deploymentProjectId"
     | "gatewayServiceAccount"
-    | "conversationExperimentMode"
     | "gatewayEdgeImageRepository"
     | "gatewayEdgeImageTag"
     | "rollStrategy"
@@ -426,7 +414,6 @@ const UPGRADE_STRING_OPTIONS: UpgradeStringOption[] = [
   { option: "gcpProject", key: "gatewayEdge.env.GCP_PROJECT_ID" },
   { option: "kmsKeyName", key: "gatewayEdge.env.OCTOGEE_KMS_KEY_NAME" },
   { option: "gatewayServiceAccount", key: "gatewayEdge.env.GATEWAY_SERVICE_ACCOUNT" },
-  { option: "conversationExperimentMode", key: "conversationExperiment.mode" },
   { option: "gatewayEdgeImageRepository", key: "gatewayEdge.image.repository" },
   { option: "gatewayEdgeImageTag", key: "gatewayEdge.image.tag" },
   { option: "rollStrategy", key: "rollStrategy" },
@@ -497,39 +484,6 @@ function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
   args.push(`--timeout=${opts.upgradeTimeout}`);
 }
 
-function validateW9TestExperimentRender(opts: BuildUpgradeArgsOpts): void {
-  const testExperiment = opts.testExperiment;
-  const mode = opts.conversationExperimentMode;
-  if (testExperiment === undefined && mode === undefined) {
-    if (
-      isW9CandidateImageTag(opts.imageTag) ||
-      (opts.gatewayEdgeImageTag !== undefined &&
-        isW9CandidateImageTag(opts.gatewayEdgeImageTag))
-    ) {
-      throw new Error("digest-bound W9 candidate image requires its W9 test experiment");
-    }
-    return;
-  }
-  if (
-    deploymentEnvironmentForNamespace(opts.namespace) !== "test" ||
-    mode !== "publisher-live" ||
-    !isW9CandidateImageTag(opts.imageTag) ||
-    !isW9GatewayEdgeImage(
-      opts.gatewayEdgeImageRepository === undefined || opts.gatewayEdgeImageTag === undefined
-        ? undefined
-        : {
-            imageRepository: opts.gatewayEdgeImageRepository,
-            imageTag: opts.gatewayEdgeImageTag,
-          },
-      opts.imageTag,
-      opts.imageRepository,
-    ) ||
-    !isW9TestPublisherLiveExperiment(testExperiment)
-  ) {
-    throw new Error("publisher-live is TEST-only and requires its digest-bound W9 gateway and gateway-edge candidate handoff");
-  }
-}
-
 /**
  * Builds the `helm upgrade --install` argv. Extracted from upsertInstance
  * so the per-knob conditionals don't push the orchestrator over the
@@ -549,7 +503,6 @@ export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   // imageTag carried just digits and every reconcile failed with
   // "at '/imageTag': got number, want string". Numeric fields (replicas)
   // still use `--set` — they want number semantics.
-  validateW9TestExperimentRender(opts);
   const args = baseUpgradeArgs(opts);
   appendOptionalStringArgs(args, opts);
   appendOptionalNumberArgs(args, opts);

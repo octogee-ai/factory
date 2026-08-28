@@ -297,9 +297,9 @@ def d_overview():
         stat("Cowboy reconcile age", [f'(time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})) or vector(0)'],
              unit="s", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}],
              drilldown=panel_link("Open fleet health", "/d/octogee-fleet/fleet-health")),
-        stat("Bridge connected", [f'min(octogee_bridge_boot_status{{namespace="{NS}",status="connected"}}) or vector(0)'],
+        stat("Activity projection connected", [f'min(octogee_activity_projection_boot_status{{namespace="{NS}",status="connected"}}) or vector(0)'],
              thresholds=[{"color": "red", "value": None}, {"color": "green", "value": 1}],
-             drilldown=panel_link("Open Activity bridge", "/d/octogee-bridge/activity-bridge")),
+             drilldown=panel_link("Open Activity publisher", "/d/octogee-bridge/activity-bridge")),
         row("Traffic and outcomes"),
         stat("API req/s", [f'sum(rate(http_requests_total{{namespace="{NS}",job="octogee-api"}}[5m])) or vector(0)'], unit="reqps",
              drilldown=panel_link("Open API health", "/d/octogee-services/service-health")),
@@ -424,13 +424,12 @@ def d_mattermost():
     p = [
         text("Mattermost observability", "Mattermost's native Prometheus metrics (`:8067/metrics`) are an "
              "**Enterprise-licensed** feature — the unlicensed server returns `404`, so `mattermost_*` series are "
-             "unavailable. This board instead tracks MM health from the **gateway-edge bridge** (our MM interaction "
-             "latency + error counters) plus container metrics. Native MM metrics light up automatically if a license "
-             "is added.", h=5),
-        row("Bridge → Mattermost interaction (gateway-edge)"),
-        ts("MM post-create latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_create_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95 create")], unit="ms"),
-        ts("MM post-edit latency (p95)", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_mm_post_edit_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95 edit")], unit="ms"),
-        ts("Bridge member-resolve failures", [(f'sum(rate(octogee_bridge_member_resolve_failures_total{{namespace="{NS}"}}[5m])) or vector(0)', "fail/s")], unit="short"),
+             "unavailable. This board instead tracks gateway-edge Activity/control traffic plus container metrics. "
+             "Native MM metrics light up automatically if a license is added.", h=5),
+        row("Gateway-edge → Mattermost interaction"),
+        ts("Activity intake outcomes", [(f'sum(rate(octogee_activity_intake_total{{namespace="{NS}"}}[5m])) by (outcome) or vector(0)', "{{outcome}}")], unit="ops", legend=True),
+        ts("Reaction control drops", [(f'sum(rate(octogee_activity_reaction_dropped_total{{namespace="{NS}"}}[5m])) by (reason) or vector(0)', "{{reason}}")], unit="ops", legend=True),
+        ts("OpenClaw WS connections", [(f'sum(chat_proxy_openclaw_ws_connections_active{{namespace="{NS}"}}) or vector(0)', "active")]),
         row("Container health"),
         ts("Mattermost pod memory", [(f'sum(container_memory_working_set_bytes{{namespace="{NS}",pod=~"mattermost.*",container!=""}})', "mem")], unit="bytes"),
         ts("Mattermost pod restarts", [(f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}",pod=~"mattermost.*"}}[1h]))', "restarts/h")]),
@@ -575,21 +574,23 @@ def d_fleet():
 
 def d_bridge():
     p = [
-        row("Activity bridge (gateway-edge → Mattermost)"),
-        ts("Events received / posted / dropped", [
-            (f'sum(rate(octogee_bridge_event_received_total{{namespace="{NS}"}}[5m])) or vector(0)', "received"),
-            (f'sum(rate(octogee_bridge_event_posted_total{{namespace="{NS}"}}[5m])) or vector(0)', "posted"),
-            (f'sum(rate(octogee_bridge_event_dropped_total{{namespace="{NS}"}}[5m])) or vector(0)', "dropped")], unit="ops", legend=True),
-        ts("E2E root-post latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_root_post_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95")], unit="ms"),
-        ts("E2E approval-visible latency p95", [(f'histogram_quantile(0.95, sum(rate(octogee_bridge_e2e_approval_visible_ms_bucket{{namespace="{NS}"}}[5m])) by (le)) or vector(0)', "p95")], unit="ms"),
-        stat("Bridge boot status", [f'max(octogee_bridge_boot_status{{namespace="{NS}"}}) or vector(0)']),
+        row("Activity publisher (OpenClaw plugin → Mattermost)"),
+        ts("Durable intake outcomes", [
+            (f'sum(rate(octogee_activity_intake_total{{namespace="{NS}"}}[5m])) by (outcome) or vector(0)', "{{outcome}}")], unit="ops", legend=True),
+        ts("Integrity and delivery violations", [
+            (f'sum(rate(octogee_activity_orphan_total{{namespace="{NS}"}}[5m])) or vector(0)', "orphan"),
+            (f'sum(rate(octogee_activity_routine_normal_delivery_total{{namespace="{NS}"}}[5m])) or vector(0)', "routine-not-silent")], unit="ops", legend=True),
+        ts("Terminal and attachment failures", [
+            (f'sum(rate(octogee_activity_missing_final_total{{namespace="{NS}"}}[5m])) or vector(0)', "missing-final"),
+            (f'sum(rate(octogee_activity_attachment_unknown_total{{namespace="{NS}"}}[5m])) or vector(0)', "attachment-unknown")], unit="ops", legend=True),
+        stat("Projection boot status", [f'max(octogee_activity_projection_boot_status{{namespace="{NS}"}}) or vector(0)']),
         row("OpenClaw WS proxy (folded chat-proxy)"),
         ts("Active WS connections", [(f'sum(chat_proxy_openclaw_ws_connections_active{{namespace="{NS}"}}) or vector(0)', "active")]),
         ts("WS handshakes / rotations recovered", [
             (f'sum(rate(chat_proxy_openclaw_ws_handshakes_total{{namespace="{NS}"}}[5m])) or vector(0)', "handshakes/s"),
             (f'sum(rate(chat_proxy_openclaw_ws_rotation_recovered_total{{namespace="{NS}"}}[5m])) or vector(0)', "rotations/s")], unit="ops", legend=True),
     ]
-    return dashboard("octogee-bridge", "Gateways — Activity Bridge & WS", p,
+    return dashboard("octogee-bridge", "Gateways — Activity Publisher & WS", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
 
 

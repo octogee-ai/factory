@@ -5,10 +5,9 @@ import { Counter, Gauge, type Registry } from "prom-client";
 import { internalFetch } from "@octogee/core/internal-fetch";
 import { TALK_CAPABILITIES_DEFAULT, type TalkCapabilities, type TalkErrorCode, type TalkServerEvent } from "@octogee/shared/types/voice";
 import { createActivityMmClientFactory } from "../chat-proxy/openclaw/mm-client.js";
-import { shouldForwardFrame } from "../chat-proxy/openclaw/frame-filter.js";
 import type { OpenClawRuntimeBroker } from "../chat-proxy/openclaw/runtime-broker.js";
 import type { RollRosterUpgradeGate } from "../roll-roster.js";
-import { createMattermostBrain, type AgentEventSource, type BrainEvent } from "./brain.js";
+import { createMattermostBrain, type AgentEventSource } from "./brain.js";
 import { createVoiceRelayClient, type VoiceRelayClient } from "./relay-client.js";
 import type { SpeechProbabilityModel } from "./silero-vad.js";
 import { TalkSession } from "./talk-session.js";
@@ -16,20 +15,17 @@ import { TalkSession } from "./talk-session.js";
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
 const MAX_CLIENT_AUDIO_FRAME_BYTES = 64 * 1024;
 const MAX_CLIENT_TEXT_FRAME_BYTES = 16 * 1024;
-const INBOUND_DIAGNOSTIC_TYPE = "message.received";
 
 export const VOICE_NOT_CONFIGURED_MESSAGE = "Voice is not set up on this server yet.";
 export const VOICE_RELAY_UNAVAILABLE_MESSAGE = "The voice service is not reachable right now.";
 export const VOICE_AGENT_UNAVAILABLE_MESSAGE = "Your Octo is not reachable right now.";
 export const VOICE_ENGINE_FAILED_MESSAGE = "The voice engine could not start.";
 
-export type VoiceUpstreamOutcome =
-  | { ok: true; upstream: WebSocket }
-  | { ok: false; httpStatus: string };
-
 export interface VoiceWsRouteDeps {
   runtimeBroker: Pick<OpenClawRuntimeBroker, "redeemOpenClawWs">;
-  establishUpstream: (gatewayId: string, gatewayUrl: string) => Promise<VoiceUpstreamOutcome>;
+  eventSourceForAgent: (agentId: string) => AgentEventSource;
+  isAgentReady: (agentId: string) => boolean;
+  agentReadinessPollMs?: number;
   upgradeGate: RollRosterUpgradeGate | null;
   isAllowedWsOrigin: (origin: string | undefined) => boolean;
   stripGatewayPrefix: (urlPath: string) => string;
@@ -51,7 +47,6 @@ interface RelayStatus {
 interface RedeemedVoiceTicket {
   uid: string;
   gatewayId: string;
-  gatewayUrl: string;
   expectedAgentId: string;
 }
 
@@ -69,79 +64,6 @@ function trimTrailingSlashes(url: string): string {
 function rawDataToBuffer(data: WebSocket.RawData): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.isBuffer(data) ? data : Buffer.from(data);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function agentFrameToEvent(payload: Record<string, unknown>): BrainEvent | null {
-  if (typeof payload.runId !== "string" || typeof payload.stream !== "string") return null;
-  return {
-    kind: "agent",
-    runId: payload.runId,
-    stream: payload.stream,
-    ts: typeof payload.ts === "number" ? payload.ts : Date.now(),
-    ...(typeof payload.sessionKey === "string" ? { sessionKey: payload.sessionKey } : {}),
-    data: asRecord(payload.data) ?? {},
-  };
-}
-
-function diagnosticFrameToEvent(payload: Record<string, unknown>): BrainEvent | null {
-  const data = asRecord(payload.data) ?? payload;
-  const type = typeof payload.type === "string" ? payload.type : data.type;
-  if (type !== INBOUND_DIAGNOSTIC_TYPE) return null;
-  const messageId = typeof data.messageId === "string" || typeof data.messageId === "number" ? String(data.messageId) : "";
-  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : data.sessionKey;
-  if (!messageId || typeof sessionKey !== "string" || !sessionKey) return null;
-  return {
-    kind: "inbound",
-    messageId,
-    sessionKey,
-    ts: typeof payload.ts === "number" ? payload.ts : Date.now(),
-  };
-}
-
-function ocFrameToBrainEvent(text: string): BrainEvent | null {
-  let frame: { type?: unknown; event?: unknown; payload?: unknown };
-  try {
-    frame = JSON.parse(text) as typeof frame;
-  } catch {
-    return null;
-  }
-  if (frame.type !== "event") return null;
-  const payload = asRecord(frame.payload);
-  if (!payload) return null;
-  if (frame.event === "agent") return agentFrameToEvent(payload);
-  if (frame.event === "diagnostic") return diagnosticFrameToEvent(payload);
-  return null;
-}
-
-/**
- * Fan-out of the OpenClaw upstream's `agent` events and inbound-message
- * receipts (`diagnostic` `message.received`) for one identity.
- */
-export function createUpstreamAgentEventSource(upstream: WebSocket, expectedAgentId: string): AgentEventSource & { stop(): void } {
-  const listeners = new Set<(event: BrainEvent) => void>();
-  const onMessage = (data: WebSocket.RawData, isBinary: boolean) => {
-    if (isBinary) return;
-    const text = data.toString();
-    if (!shouldForwardFrame(text, { expectedAgentId }).forward) return;
-    const event = ocFrameToBrainEvent(text);
-    if (!event) return;
-    for (const listener of listeners) listener(event);
-  };
-  upstream.on("message", onMessage);
-  return {
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    stop() {
-      upstream.off("message", onMessage);
-      listeners.clear();
-    },
-  };
 }
 
 async function readRelayStatus(deps: VoiceWsRouteDeps, gatewayId: string): Promise<RelayStatus | null> {
@@ -240,6 +162,13 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
   return async (req: http.IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
     const redeemed = await admit(req, socket);
     if (!redeemed) return;
+    if (!deps.isAgentReady(redeemed.expectedAgentId)) {
+      refuseWithError(req, socket, head, "fail:agent-unavailable", {
+        code: "internal",
+        message: VOICE_AGENT_UNAVAILABLE_MESSAGE,
+      });
+      return;
+    }
 
     const status = await readRelayStatus(deps, redeemed.gatewayId);
     if (!status) {
@@ -253,20 +182,11 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
     const engines = status.engines;
     const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
 
-    const upstreamOutcome = await deps.establishUpstream(redeemed.gatewayId, redeemed.gatewayUrl);
-    if (!upstreamOutcome.ok) {
-      log("voice ws upstream failed", { uid: redeemed.uid, gatewayId: redeemed.gatewayId, httpStatus: upstreamOutcome.httpStatus });
-      refuseWithError(req, socket, head, "fail:upstream", { code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE });
-      return;
-    }
-    const upstream = upstreamOutcome.upstream;
-
     let vad: SpeechProbabilityModel;
     try {
       vad = await deps.createVad();
     } catch (err) {
       log("voice ws vad load failed", { error: err instanceof Error ? err.message : String(err) });
-      upstream.close();
       refuseWithError(req, socket, head, "fail:vad", { code: "internal", message: VOICE_ENGINE_FAILED_MESSAGE });
       return;
     }
@@ -274,7 +194,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
     wss.handleUpgrade(req, socket, head, (client) => {
       handshakes.inc({ outcome: "ok" });
       active.inc();
-      const events = createUpstreamAgentEventSource(upstream, redeemed.expectedAgentId);
+      const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
       const relay = deps.createRelayClient?.(redeemed.gatewayId)
         ?? createVoiceRelayClient({ baseUrl: deps.relayBaseUrl, gatewayId: redeemed.gatewayId, fetchImpl: deps.fetchImpl });
       const mmClients = createActivityMmClientFactory({
@@ -301,17 +221,14 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
       log("voice ws session open", { uid: redeemed.uid, gatewayId: redeemed.gatewayId, sessionId: session.sessionId });
 
       let closed = false;
+      const agentReadinessPollMs = Math.max(100, Math.floor(deps.agentReadinessPollMs ?? 1_000));
+      let agentReadinessTimer: ReturnType<typeof setInterval> | null = null;
       const teardown = (reason: string) => {
         if (closed) return;
         closed = true;
+        if (agentReadinessTimer) clearInterval(agentReadinessTimer);
         active.dec();
         session.close();
-        events.stop();
-        try {
-          upstream.close();
-        } catch {
-          /* already closed */
-        }
         try {
           client.close(1000, reason);
         } catch {
@@ -319,6 +236,12 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         }
         log("voice ws session closed", { uid: redeemed.uid, sessionId: session.sessionId, reason });
       };
+      agentReadinessTimer = setInterval(() => {
+        if (deps.isAgentReady(redeemed.expectedAgentId)) return;
+        send({ type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false });
+        teardown("agent-unavailable");
+      }, agentReadinessPollMs);
+      agentReadinessTimer.unref?.();
 
       const onFrame = (data: WebSocket.RawData, isBinary: boolean) => {
         const buf = rawDataToBuffer(data);
@@ -350,14 +273,6 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
       });
       client.on("close", () => teardown("client-closed"));
       client.on("error", () => teardown("client-error"));
-      upstream.on("close", () => {
-        send({ type: "error", code: "internal", message: "agent connection dropped", recoverable: false });
-        teardown("upstream-closed");
-      });
-      upstream.on("error", () => {
-        send({ type: "error", code: "internal", message: "agent connection failed", recoverable: false });
-        teardown("upstream-error");
-      });
     });
   };
 }

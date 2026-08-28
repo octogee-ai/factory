@@ -348,22 +348,6 @@
     "./mattermost/provision": {
       "types": "./dist/mattermost/provision.d.ts",
       "default": "./dist/mattermost/provision.js"
-    },
-    "./mattermost/reconcileActivityPair": {
-      "types": "./dist/mattermost/reconcileActivityPair.d.ts",
-      "default": "./dist/mattermost/reconcileActivityPair.js"
-    },
-    "./mattermost/activityPairAudit": {
-      "types": "./dist/mattermost/activityPairAudit.d.ts",
-      "default": "./dist/mattermost/activityPairAudit.js"
-    },
-    "./mattermost/activityPairReport": {
-      "types": "./dist/mattermost/activityPairReport.d.ts",
-      "default": "./dist/mattermost/activityPairReport.js"
-    },
-    "./mattermost/provisionWorkspaceActivityPairs": {
-      "types": "./dist/mattermost/provisionWorkspaceActivityPairs.d.ts",
-      "default": "./dist/mattermost/provisionWorkspaceActivityPairs.js"
     }
   },
   "typesVersions": {
@@ -610,18 +594,6 @@
       ],
       "mattermost/provision": [
         "dist/mattermost/provision.d.ts"
-      ],
-      "mattermost/reconcileActivityPair": [
-        "dist/mattermost/reconcileActivityPair.d.ts"
-      ],
-      "mattermost/activityPairAudit": [
-        "dist/mattermost/activityPairAudit.d.ts"
-      ],
-      "mattermost/activityPairReport": [
-        "dist/mattermost/activityPairReport.d.ts"
-      ],
-      "mattermost/provisionWorkspaceActivityPairs": [
-        "dist/mattermost/provisionWorkspaceActivityPairs.d.ts"
       ]
     }
   },

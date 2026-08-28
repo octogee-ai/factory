@@ -9,9 +9,7 @@ import { filterOutCustomerBindings } from "./apply-config-patch.js";
 import { FieldValue } from "firebase-admin/firestore";
 import * as fs from "fs";
 import * as path from "path";
-import { isValidUsername, usernameValidationError, workspaceCoachChannelName, workspaceGeneralChannelName, } from "@octogee/shared/types/identity";
-import { persistWorkspaceChannelsWithActivityPairs, provisionWorkspaceActivityPair, } from "./mattermost/provisionWorkspaceActivityPairs.js";
-import { mmApiCallStrict as mmApiCallDefault } from "./mattermost/client.js";
+import { isValidUsername, usernameValidationError, } from "@octogee/shared/types/identity";
 import { log, OPENCLAW_DIR, CUSTOMERS_DIR, agentExists, } from "./config.js";
 import { db } from "./firebase.js";
 import { CREW_IDENTITY } from "./crew.js";
@@ -225,7 +223,6 @@ export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
     await writeUserOperationalFields(ctx, provisioningObj, mmUpdate);
     await writeWorkspaceDoc(ctx, mmUpdate);
     await seedWorkspaceChannels(ctx, mmUpdate);
-    await provisionActivityPairsForWorkspace(ctx, mmUpdate);
     await seedWorkspaceOwner(ctx);
     await writeAgentDoc(ctx, mmUpdate);
     registerAgentIds(ctx.uid, allAgentIds);
@@ -319,39 +316,6 @@ async function seedWorkspaceChannels(ctx, mmUpdate) {
             mattermost: { channelId: coachDmChannelId },
             createdAt: FieldValue.serverTimestamp(),
         }, { merge: true });
-    }
-}
-async function provisionActivityPairsForWorkspace(ctx, mmUpdate) {
-    const generalChannelId = mmUpdate["mattermost.generalChannelId"];
-    const coachDmChannelId = mmUpdate["mattermost.channelId"];
-    const apTeamId = mmUpdate["mattermost.teamId"] ?? "";
-    const mmApiCall = mmApiCallDefault;
-    if (!apTeamId)
-        throw new Error(`activity-pair provisioning failed for ${ctx.slug}: Mattermost team is missing`);
-    const activityResult = await persistWorkspaceChannelsWithActivityPairs({
-        workspaceSlug: ctx.slug,
-        teamId: apTeamId,
-        generalChannel: generalChannelId
-            ? { id: generalChannelId, name: workspaceGeneralChannelName(ctx.slug) }
-            : null,
-        coachDmChannel: coachDmChannelId
-            ? {
-                id: coachDmChannelId,
-                name: mmUpdate["mattermost.channelName"] ||
-                    workspaceCoachChannelName(ctx.slug),
-            }
-            : null,
-    }, {
-        provisionPair: (apInput) => provisionWorkspaceActivityPair(apInput, { db, mmApiCall, log }),
-        log,
-    });
-    if (activityResult.failures.length > 0) {
-        const failureSummary = activityResult.failures.map((f) => `${f.kind}=${f.error}`).join("; ");
-        log(`[provisioner] ❌ ${activityResult.failures.length} activity-pair(s) failed for ${ctx.slug}: ${failureSummary}`);
-        throw new Error(`activity-pair provisioning failed for ${ctx.slug}: ${failureSummary}`);
-    }
-    if (activityResult.successes.length > 0) {
-        log(`[provisioner] ✓ activity pairs created for ${ctx.slug}: ${activityResult.successes.map((s) => s.kind).join(", ")}`);
     }
 }
 async function seedWorkspaceOwner(ctx) {

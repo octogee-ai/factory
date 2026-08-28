@@ -5,8 +5,8 @@ describe("bridge lifecycle logging", () => {
   it.each([
     "[mm-proxy/ws] upstream open (mmUserId=user-1)",
     "[mm-proxy/ws] authenticated mmUserId=user-1",
-    "[bridge-boot] upstream gateway WS closed",
-    "[bridge-boot] sessions.subscribe ok after 1 retries",
+    "[run-live-bridge] snapshot synchronization complete",
+    "[run-live-bridge] snapshot refresh scheduled",
   ])("emits normal lifecycle state at info severity: %s", (message) => {
     const info = vi.fn();
     const warn = vi.fn();
@@ -26,8 +26,8 @@ describe("bridge lifecycle logging", () => {
     "[mm-proxy/ws] upstream error: reset",
     "[mm-proxy/ws] invalid authentication frame",
     "[mm-proxy/ws] roll roster refused MM WS",
-    "[bridge-boot] sessions.subscribe failed: denied",
-    "[activity-bridge] listener threw: boom",
+    "[run-live-bridge] snapshot refresh failed: denied",
+    "[activity-sink] durable write failed: boom",
   ])("keeps failures at warning severity: %s", (message) => {
     const info = vi.fn();
     const warn = vi.fn();

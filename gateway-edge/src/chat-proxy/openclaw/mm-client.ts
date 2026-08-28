@@ -1,4 +1,4 @@
-import type { MmClient, MmPostInput } from "./activity-bridge.js";
+import type { MmClient, MmPostInput } from "./activity-runtime-types.js";
 import { assertCompatibleDeliveryOptions } from "./activity-attention-policy.js";
 
 export interface MmClientFactoryOptions {
@@ -23,6 +23,7 @@ export interface ActivityMattermostPost {
   id: string;
   channelId: string;
   rootId: string;
+  userId?: string;
   message?: string;
   props: Record<string, unknown>;
   fileIds: string[];
@@ -72,6 +73,7 @@ interface MmPostResponse {
   id?: unknown;
   channel_id?: unknown;
   root_id?: unknown;
+  user_id?: unknown;
   props?: unknown;
   file_ids?: unknown;
   message?: unknown;
@@ -87,6 +89,7 @@ function postFromResponse(value: MmPostResponse): ActivityMattermostPost | null 
     id: value.id,
     channelId: value.channel_id,
     rootId: typeof value.root_id === "string" ? value.root_id : "",
+    ...(typeof value.user_id === "string" ? { userId: value.user_id } : {}),
     ...(typeof value.message === "string" ? { message: value.message } : {}),
     props:
       value.props && typeof value.props === "object"

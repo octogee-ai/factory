@@ -161,7 +161,6 @@ export async function createProjectForActor(
     await writeProjectOwnerMember(projectRef, plan.uid);
     const callerCtx = await getWorkspaceMmContext(plan.uid, plan.workspaceId, plan.userData);
     const channel = await provisionProjectMattermost(projectRef, plan, callerCtx, artifacts);
-    await provisionProjectActivityPair(projectRef, plan, channel);
     await provisionProjectCodeRepo(plan, artifacts);
     await markProjectActive(projectRef, plan.targetVisibility);
     await enableProjectAgentByDefault(plan);
@@ -447,29 +446,6 @@ async function writeProjectGeneralChannel(
   });
 }
 
-async function provisionProjectActivityPair(
-  projectRef: FirebaseFirestore.DocumentReference,
-  plan: ProjectCreatePlan,
-  channel: { teamId: string; mmChannelId: string },
-): Promise<void> {
-  try {
-    const { reconcileActivityPair } = await import("./activityPair.js");
-    await reconcileActivityPair({
-      channelDocPath: `${projectRef.path}/channels/general`,
-      primaryName: projectGeneralChannelName(plan.workspaceId, plan.slug),
-      primaryChannelId: channel.mmChannelId,
-      teamId: channel.teamId,
-      type: "P",
-      kind: "project",
-    });
-  } catch (err) {
-    throw new ProjectProvisioningError(
-      errorMessage(err),
-      "Project provisioning failed - could not create activity channel",
-    );
-  }
-}
-
 async function provisionProjectCodeRepo(
   plan: ProjectCreatePlan,
   artifacts: ProjectProvisioningArtifacts,
@@ -556,12 +532,7 @@ async function cleanupProjectProvisioning(
   const failures: string[] = [];
   if (artifacts.primaryChannel) {
     try {
-      if (artifacts.generalChannelStored) {
-        const { reconcileStoredActivityPair } = await import("./activityPair.js");
-        await reconcileStoredActivityPair(`${projectRef.path}/channels/general`, "archived");
-      } else {
-        await archiveUnstoredProjectChannel(artifacts.primaryChannel);
-      }
+      await archiveUnstoredProjectChannel(artifacts.primaryChannel);
     } catch (error) {
       failures.push(`Mattermost cleanup: ${errorMessage(error)}`);
     }

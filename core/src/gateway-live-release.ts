@@ -23,7 +23,6 @@ import {
   type ReleasePayload,
   type GatewayProfileImages,
   type GatewayEdgeImage,
-  type W9TestPublisherLiveExperiment,
 } from "@octogee/shared/types/gateway-releases";
 
 export {
@@ -101,7 +100,6 @@ export interface GatewayArtifact {
   imageTag: string;
   profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
-  testExperiment?: W9TestPublisherLiveExperiment;
 }
 
 export interface InitialGatewayReleaseArgs {
@@ -206,9 +204,6 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
     ...(payload.gatewayEdgeImage === undefined
       ? {}
       : { gatewayEdgeImage: payload.gatewayEdgeImage }),
-    ...(payload.testExperiment === undefined
-      ? {}
-      : { testExperiment: payload.testExperiment }),
   };
 }
 

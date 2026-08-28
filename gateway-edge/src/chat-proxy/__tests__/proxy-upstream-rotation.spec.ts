@@ -222,16 +222,17 @@ describe('openBackgroundBridgeUpstream', () => {
     expect(setBootStatus).toHaveBeenCalledWith('unreachable');
   });
 
-  it('owns authentication for both background reconnect paths', () => {
+  it('owns authentication for the sole background projection reconnect path', () => {
     const source = readFileSync(new URL('../proxy.ts', import.meta.url), 'utf8');
     const runLiveStart = source.indexOf('async function startRunLiveProjectionBackground');
     const publisherStart = source.indexOf('export async function startChatProxyBackground');
     const runLive = source.slice(runLiveStart, publisherStart);
-    const publisher = source.slice(publisherStart);
+    const boot = source.slice(publisherStart);
 
     expect(runLive).toContain('openBackgroundBridgeUpstream(');
-    expect(publisher).toContain('openBackgroundBridgeUpstream(');
     expect(runLive).not.toContain('fetchGatewayAuth(');
-    expect(publisher).not.toContain('fetchGatewayAuth(');
+    expect(boot).toContain('startRunLiveProjectionBackground(gatewayIdResult, runtimeBroker)');
+    expect(boot).not.toContain('openBackgroundBridgeUpstream(');
+    expect(boot).not.toContain('fetchGatewayAuth(');
   });
 });

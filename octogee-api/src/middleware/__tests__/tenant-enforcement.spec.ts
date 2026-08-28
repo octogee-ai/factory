@@ -143,7 +143,6 @@ function app(opts: {
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
-  a.post("/internal/activity-pairs/report", enforcement, handler);
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
   a.post("/internal/product-analytics/events", enforcement, handler);
@@ -214,7 +213,6 @@ describe("tenant enforcement middleware", () => {
   it.each([
     "/internal/billing/check-trial-expiry",
     "/internal/billing/run-auto-top-ups",
-    "/internal/activity-pairs/report",
   ])("allows the cron caller on %s", async (path) => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
       .post(path)

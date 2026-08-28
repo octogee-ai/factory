@@ -12,11 +12,11 @@ describe("secret repair guidance", () => {
     expect(script).not.toContain('Quick fix: ./scripts/bootstrap-env.sh');
   });
 
-  it("requires the approval-signing secret consumed by the activity bridge", () => {
+  it("does not retain the unused legacy Activity approval secret", () => {
     const script = readFileSync(path.join(repoRoot, "scripts/verify-secrets.sh"), "utf8");
 
-    expect(script).toContain('"approval-signing"');
-    expect(script).toContain('"approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"');
+    expect(script).not.toContain('"approval-signing"');
+    expect(script).not.toContain('"approval-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"');
   });
 
   it("retains the tracked Mattermost PAT during launch", () => {
@@ -38,11 +38,11 @@ describe("secret repair guidance", () => {
     expect(script).toContain('--from-literal=admin_token_fingerprint="$MM_ADMIN_PAT_FINGERPRINT"');
   });
 
-  it("materializes approval-signing once and reuses the existing value", () => {
+  it("does not materialize the unused legacy Activity approval secret", () => {
     const script = readFileSync(path.join(repoRoot, "scripts/setup-secrets.sh"), "utf8");
 
-    expect(script).toContain('APPROVAL_SIGNING_SECRET=$(ksecret_key approval-signing secret)');
-    expect(script).toContain('ksecret approval-signing --from-literal=secret="$APPROVAL_SIGNING_SECRET"');
+    expect(script).not.toContain('APPROVAL_SIGNING_SECRET');
+    expect(script).not.toContain('ksecret approval-signing');
   });
 
   it("requires an explicit WEST platform-migration ceremony before rotating restored Mattermost credentials", () => {

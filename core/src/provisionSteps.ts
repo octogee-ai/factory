@@ -13,15 +13,8 @@ import * as path from "path";
 import {
   isValidUsername,
   usernameValidationError,
-  workspaceCoachChannelName,
-  workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
 import type { MmUpdate } from "./customer-lifecycle.js";
-import {
-  persistWorkspaceChannelsWithActivityPairs,
-  provisionWorkspaceActivityPair,
-} from "./mattermost/provisionWorkspaceActivityPairs.js";
-import { mmApiCallStrict as mmApiCallDefault } from "./mattermost/client.js";
 import {
   log, OPENCLAW_DIR, CUSTOMERS_DIR,
   agentExists,
@@ -386,7 +379,6 @@ export async function markProvisioningComplete(
   await writeUserOperationalFields(ctx, provisioningObj, mmUpdate);
   await writeWorkspaceDoc(ctx, mmUpdate);
   await seedWorkspaceChannels(ctx, mmUpdate);
-  await provisionActivityPairsForWorkspace(ctx, mmUpdate);
   await seedWorkspaceOwner(ctx);
   await writeAgentDoc(ctx, mmUpdate);
   registerAgentIds(ctx.uid, allAgentIds);
@@ -520,52 +512,6 @@ async function seedWorkspaceChannels(
     );
   }
 
-}
-
-async function provisionActivityPairsForWorkspace(
-  ctx: ProvisioningContext,
-  mmUpdate: MmUpdate,
-): Promise<void> {
-  const generalChannelId = mmUpdate["mattermost.generalChannelId"] as string | undefined;
-  const coachDmChannelId = mmUpdate["mattermost.channelId"] as string | undefined;
-  const apTeamId = (mmUpdate["mattermost.teamId"] as string | undefined) ?? "";
-  const mmApiCall = mmApiCallDefault;
-  if (!apTeamId) throw new Error(`activity-pair provisioning failed for ${ctx.slug}: Mattermost team is missing`);
-
-  const activityResult = await persistWorkspaceChannelsWithActivityPairs(
-    {
-      workspaceSlug: ctx.slug,
-      teamId: apTeamId,
-      generalChannel: generalChannelId
-        ? { id: generalChannelId, name: workspaceGeneralChannelName(ctx.slug) }
-        : null,
-      coachDmChannel: coachDmChannelId
-        ? {
-            id: coachDmChannelId,
-            name:
-              (mmUpdate["mattermost.channelName"] as string | undefined) ||
-              workspaceCoachChannelName(ctx.slug),
-          }
-        : null,
-    },
-    {
-      provisionPair: (apInput) =>
-        provisionWorkspaceActivityPair(apInput, { db, mmApiCall, log }),
-      log,
-    },
-  );
-  if (activityResult.failures.length > 0) {
-    const failureSummary = activityResult.failures.map((f) => `${f.kind}=${f.error}`).join("; ");
-    log(
-      `[provisioner] ❌ ${activityResult.failures.length} activity-pair(s) failed for ${ctx.slug}: ${failureSummary}`,
-    );
-    throw new Error(`activity-pair provisioning failed for ${ctx.slug}: ${failureSummary}`);
-  }
-  if (activityResult.successes.length > 0) {
-    log(
-      `[provisioner] ✓ activity pairs created for ${ctx.slug}: ${activityResult.successes.map((s) => s.kind).join(", ")}`,
-    );
-  }
 }
 
 async function seedWorkspaceOwner(ctx: ProvisioningContext): Promise<void> {

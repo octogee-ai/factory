@@ -128,18 +128,20 @@ vi.mock('../openclaw/upstream.js', () => ({
   OpenclawWireError: h.OpenclawWireError,
   openUpstream: async ({
     token,
+    bootstrapToken,
     deviceToken,
     onDeviceToken,
   }: {
     token?: string;
+    bootstrapToken?: string;
     deviceToken?: string;
-    onDeviceToken?: (auth: { deviceToken: string }) => Promise<void>;
+    onDeviceToken?: (auth: { deviceToken: string }) => void | Promise<void>;
   }) => {
-    const upstream = h.ctl.openUpstream(deviceToken ?? token ?? '');
-    if (token) await onDeviceToken?.({ deviceToken: 'mock-device-token' });
+    const upstream = h.ctl.openUpstream(deviceToken ?? bootstrapToken ?? token ?? '');
+    await onDeviceToken?.({ deviceToken: 'test-device-token' });
     return upstream;
   },
-  requestDevicePairBootstrapToken: async () => 'mock-bootstrap-token',
+  requestDevicePairBootstrapToken: vi.fn(async () => 'test-bootstrap-token'),
 }));
 
 vi.mock('../openclaw/inbound-gate.js', () => ({

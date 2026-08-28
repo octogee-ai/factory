@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
-import { IMAGE_TAG_PATTERN, isW9CandidateImageTag, } from "./image-tag.js";
+import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { GLM_GATEWAYS_COLLECTION, isOperatorManaged, } from "./glm.js";
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
 // (gateways/{id}) + immutable releases (releases/{n}) + ONE stable-name
@@ -11,32 +11,12 @@ import { GLM_GATEWAYS_COLLECTION, isOperatorManaged, } from "./glm.js";
 // are subcollections of the durable gateway identity doc.
 export const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
-export const W9_CANDIDATE_MANIFEST_PATH = "infra/gateway/openclaw-candidates/agent-conversation.json";
-export const W9_MATTERMOST_OVERLAY_VALUES_PATH = "infra/candidates/values.mattermost-silent-post.yaml";
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DIGEST_BOUND_IMAGE_TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
-const DIGEST_BOUND_IMAGE_REFERENCE_PATTERN = /^[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
-export function isW9TestPublisherLiveExperiment(value) {
-    if (!isPlainRecord(value) || value.kind !== "w9-agent-conversation" || value.mode !== "publisher-live") {
-        return false;
-    }
-    const candidateManifest = value.candidateManifest;
-    const mattermostOverlay = value.mattermostOverlay;
-    return (isPlainRecord(candidateManifest) &&
-        candidateManifest.path === W9_CANDIDATE_MANIFEST_PATH &&
-        typeof candidateManifest.sha256 === "string" &&
-        SHA256_PATTERN.test(candidateManifest.sha256) &&
-        isPlainRecord(mattermostOverlay) &&
-        mattermostOverlay.valuesPath === W9_MATTERMOST_OVERLAY_VALUES_PATH &&
-        typeof mattermostOverlay.imageReference === "string" &&
-        DIGEST_BOUND_IMAGE_REFERENCE_PATTERN.test(mattermostOverlay.imageReference));
-}
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set([
     "imageRepository",
     "imageTag",
     "profileImages",
     "gatewayEdgeImage",
-    "testExperiment",
 ]);
 const RELEASE_PAYLOAD_REQUIRED_FIELDS = [
     "imageRepository",
@@ -54,15 +34,8 @@ export function isReleasePayload(value) {
         !isGatewayProfileImages(value.profileImages, value.imageRepository, value.imageTag)) {
         return false;
     }
-    if (value.testExperiment === undefined) {
-        return (!isW9CandidateImageTag(value.imageTag) &&
-            (value.gatewayEdgeImage === undefined ||
-                (isGatewayEdgeImage(value.gatewayEdgeImage, value.imageRepository) &&
-                    !isW9CandidateImageTag(value.gatewayEdgeImage.imageTag))));
-    }
-    return (isW9CandidateImageTag(value.imageTag) &&
-        isW9TestPublisherLiveExperiment(value.testExperiment) &&
-        isW9GatewayEdgeImage(value.gatewayEdgeImage, value.imageTag, value.imageRepository));
+    return value.gatewayEdgeImage === undefined ||
+        isGatewayEdgeImage(value.gatewayEdgeImage, value.imageRepository);
 }
 function isGatewayProfileImages(value, gatewayImageRepository, gatewayImageTag) {
     if (!isPlainRecord(value) || Object.keys(value).length !== 1)
@@ -123,21 +96,6 @@ function hasReleasePayloadIdentity(value) {
         typeof value.imageTag === "string" &&
         value.imageTag.length > 0 &&
         IMAGE_TAG_PATTERN.test(value.imageTag));
-}
-function w9CandidateImageName(imageTag) {
-    return imageTag.slice(0, imageTag.indexOf("@"));
-}
-export function isW9GatewayEdgeImage(value, gatewayImageTag, gatewayImageRepository) {
-    const gatewayPackageSuffix = "/octogee-gateway";
-    const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
-        ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/gateway-edge`
-        : "";
-    return (isPlainRecord(value) &&
-        value.imageRepository === expectedRepository &&
-        typeof value.imageTag === "string" &&
-        isW9CandidateImageTag(value.imageTag) &&
-        isW9CandidateImageTag(gatewayImageTag) &&
-        w9CandidateImageName(value.imageTag) === w9CandidateImageName(gatewayImageTag));
 }
 export function isAssignmentState(value) {
     return value === "serving" || value === "quiescing" || value === "migrating";
@@ -235,7 +193,6 @@ function compareKeys(a, b) {
 export const RELEASE_FIELDS = [
     "imageRepository",
     "imageTag",
-    "testExperiment",
 ];
 // gateways/{gatewayId} DOC fields that mutate without cutting a release.
 // Separate-collection observations (assignment docs, runtime heartbeat /

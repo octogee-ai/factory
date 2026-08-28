@@ -65,8 +65,14 @@ export interface ActivitySinkResult {
     postId?: string;
     activityChannelId: string;
     activityRootPostId: string;
+    rootOwnership: "adopted" | "sink-created";
   };
 }
+
+type ActivitySinkBareResult = Pick<ActivitySinkResult, "outcome" | "postIds">;
+type ActivitySinkClaimResult =
+  | Awaited<ReturnType<ActivityWriteReceiptStore["claim"]>>
+  | ActivitySinkBareResult;
 
 export interface ActivitySinkPreparedControl {
   receipt: {
@@ -449,7 +455,54 @@ class ActivitySinkWriter implements ActivitySink {
     }
   }
 
-  private async rootPostId(envelope: AgentActivityEnvelopeV1): Promise<string> {
+  private adoptsMainRoot(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+  ): boolean {
+    return binding.activityChannelId === envelope.ref.mainChannelId;
+  }
+
+  private assertAdoptedRootPost(
+    post: ActivityMattermostPost | null,
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+  ): asserts post is ActivityMattermostPost {
+    if (
+      !post ||
+      post.id !== envelope.ref.mainRootPostId ||
+      post.channelId !== binding.activityChannelId ||
+      post.rootId !== ""
+    ) {
+      throw new ActivitySinkIntegrityError("adopted Activity root failed exact Mattermost verification");
+    }
+  }
+
+  private async adoptedRootPostId(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+  ): Promise<string> {
+    const post = await this.runtime.deps.mm.getPost(envelope.ref.mainRootPostId);
+    this.assertAdoptedRootPost(post, envelope, binding);
+    return post.id;
+  }
+
+  private async rootPostId(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+  ): Promise<string> {
+    if (this.adoptsMainRoot(envelope, binding)) {
+      const expectedEventKey = runRootEventKey(envelope.ref);
+      const root = await this.runtime.deps.receipts.read(expectedEventKey);
+      if (
+        !root ||
+        root.eventKey !== expectedEventKey ||
+        root.state !== "committed" ||
+        root.postId !== envelope.ref.mainRootPostId
+      ) {
+        throw new ActivitySinkUnavailableError("adopted Activity run root is not committed");
+      }
+      return root.postId;
+    }
     const { deps } = this.runtime;
     const expectedEventKey = runRootEventKey(envelope.ref);
     const root = await deps.receipts.read(expectedEventKey);
@@ -482,7 +535,11 @@ class ActivitySinkWriter implements ActivitySink {
     binding: ActivitySinkBinding,
     expectedEventKey: string,
   ): Promise<Record<string, unknown>> {
-    const expectedRootId = envelope.type === TURN_STARTED ? "" : await this.rootPostId(envelope);
+    if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+      this.assertAdoptedRootPost(post, envelope, binding);
+      return {};
+    }
+    const expectedRootId = envelope.type === TURN_STARTED ? "" : await this.rootPostId(envelope, binding);
     const props = this.activityPostProps(post);
     if (
       post.channelId !== binding.activityChannelId ||
@@ -700,6 +757,8 @@ class ActivitySinkWriter implements ActivitySink {
       if (post.id !== receipt.postId) {
         throw new ActivitySinkIntegrityError("receipt post id does not match Mattermost");
       }
+    } else if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+      return null;
     } else {
       post = await this.scanUncertainSuffix(
         envelope.eventKey,
@@ -715,6 +774,7 @@ class ActivitySinkWriter implements ActivitySink {
     envelope: AgentActivityEnvelopeV1,
     receipt: ActivityWriteReceiptV1,
     post: ActivityMattermostPost,
+    binding: ActivitySinkBinding,
   ): Promise<Pick<ActivitySinkResult, "outcome" | "postIds">> {
     const { deps, now } = this.runtime;
     if (!receipt.postId) {
@@ -738,7 +798,12 @@ class ActivitySinkWriter implements ActivitySink {
       );
     }
     await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
-    return { outcome: "duplicate", postIds: [post.id] };
+    return {
+      outcome: "duplicate",
+      postIds: envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)
+        ? []
+        : [post.id],
+    };
   }
 
   private async handleControl(
@@ -809,7 +874,11 @@ class ActivitySinkWriter implements ActivitySink {
       return await deps.receipts.claim({
         eventKey: envelope.eventKey,
         payloadDigest: digest,
-        historyAnchorPostId: existing?.historyAnchorPostId ?? await this.historyAnchor(binding),
+        historyAnchorPostId: existing?.historyAnchorPostId ?? (
+          envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)
+            ? envelope.ref.mainRootPostId
+            : await this.historyAnchor(binding)
+        ),
         leaseOwner: deps.leaseOwner,
         now: now(),
         leaseMs,
@@ -916,7 +985,24 @@ class ActivitySinkWriter implements ActivitySink {
     const { envelope, binding } = input;
     if (recoveredClaim) {
       const recovered = await this.recoverExistingPost(envelope, receipt, binding);
-      if (recovered) return this.commitRecovered(envelope, receipt, recovered);
+      if (recovered) return this.commitRecovered(envelope, receipt, recovered, binding);
+    }
+    if (envelope.type === TURN_STARTED && this.adoptsMainRoot(envelope, binding)) {
+      if (!activityRootPostId) {
+        throw new ActivitySinkIntegrityError("adopted Activity root is unavailable");
+      }
+      await this.runtime.deps.receipts.markPosted(
+        envelope.eventKey,
+        receipt.leaseToken,
+        activityRootPostId,
+        this.runtime.now(),
+      );
+      await this.runtime.deps.receipts.commit(
+        envelope.eventKey,
+        receipt.leaseToken,
+        this.runtime.now(),
+      );
+      return { outcome: "persisted", postIds: [] };
     }
     if (envelope.type === "turn.finalized") {
       await this.runtime.deps.receipts.commit(
@@ -980,6 +1066,102 @@ class ActivitySinkWriter implements ActivitySink {
     return prepared;
   }
 
+  private async resolveActivityRootPostId(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+    adoptedMainRoot: boolean,
+  ): Promise<string | undefined> {
+    if (adoptedMainRoot && envelope.type === TURN_STARTED) {
+      return this.adoptedRootPostId(envelope, binding);
+    }
+    if (envelope.type === TURN_STARTED) return undefined;
+    return this.rootPostId(envelope, binding);
+  }
+
+  private claimPostIds(
+    postIds: string[],
+    envelope: AgentActivityEnvelopeV1,
+    adoptedMainRoot: boolean,
+  ): string[] {
+    return adoptedMainRoot && envelope.type === TURN_STARTED ? [] : postIds;
+  }
+
+  private async resolveClaimResult(input: {
+    claim: ActivitySinkClaimResult;
+    appendInput: NormalizedActivitySinkAppendInput;
+    adoptedMainRoot: boolean;
+    activityRootPostId: string | undefined;
+    preparedControl: ActivitySinkPreparedControl | null;
+  }): Promise<ActivitySinkBareResult> {
+    const { claim, appendInput, adoptedMainRoot, activityRootPostId, preparedControl } = input;
+    const { envelope } = appendInput;
+    if ("postIds" in claim) {
+      return { ...claim, postIds: this.claimPostIds(claim.postIds, envelope, adoptedMainRoot) };
+    }
+    if (claim.outcome === "duplicate") {
+      const postIds = claim.receipt.postId ? [claim.receipt.postId] : [];
+      return { outcome: "duplicate", postIds: this.claimPostIds(postIds, envelope, adoptedMainRoot) };
+    }
+    return this.appendClaimed(
+      appendInput,
+      claim.receipt,
+      claim.recovered,
+      activityRootPostId,
+      preparedControl,
+    );
+  }
+
+  private resolvedAcknowledgementRoot(input: {
+    envelope: AgentActivityEnvelopeV1;
+    adoptedMainRoot: boolean;
+    activityRootPostId: string | undefined;
+    bare: ActivitySinkBareResult;
+  }): string | undefined {
+    if (input.adoptedMainRoot) return input.activityRootPostId;
+    if (input.envelope.type === TURN_STARTED) return input.bare.postIds[0];
+    return input.activityRootPostId;
+  }
+
+  private acknowledgementReceipt(input: {
+    envelope: AgentActivityEnvelopeV1;
+    binding: ActivitySinkBinding;
+    adoptedMainRoot: boolean;
+    resolvedRootPostId: string;
+    bare: ActivitySinkBareResult;
+  }): ActivitySinkResult["receipt"] {
+    const { envelope, binding, adoptedMainRoot, resolvedRootPostId, bare } = input;
+    let postId = bare.postIds[0];
+    if (!postId && adoptedMainRoot && envelope.type === TURN_STARTED) {
+      postId = resolvedRootPostId;
+    }
+    return {
+      eventKey: envelope.eventKey,
+      ...(postId ? { postId } : {}),
+      activityChannelId: binding.activityChannelId,
+      activityRootPostId: resolvedRootPostId,
+      rootOwnership: adoptedMainRoot ? "adopted" : "sink-created",
+    };
+  }
+
+  private async attachPreparedControlReceipt(
+    preparedControl: ActivitySinkPreparedControl | null,
+    receipt: ActivitySinkResult["receipt"],
+    bare: ActivitySinkBareResult,
+  ): Promise<void> {
+    if (!preparedControl) return;
+    const controls = this.runtime.deps.controls;
+    if (!controls) {
+      throw new ActivitySinkIntegrityError("prepared agent control has no lifecycle");
+    }
+    if (!receipt.postId || bare.postIds.length !== 1) {
+      throw new ActivitySinkIntegrityError("agent control acknowledgement has no unique post");
+    }
+    await controls.attachReceipt({
+      ...preparedControl.receipt,
+      postId: receipt.postId,
+    });
+  }
+
   async append(rawInput: ActivitySinkAppendInput): Promise<ActivitySinkResult> {
     const normalized: NormalizedActivitySinkAppendInput = {
       ...rawInput,
@@ -988,50 +1170,42 @@ class ActivitySinkWriter implements ActivitySink {
     assertAttachmentPayload(normalized);
     const input = await sanitizeInput(normalized);
     const { envelope, binding, attachment } = input;
-    const activityRootPostId = envelope.type === TURN_STARTED
-      ? undefined
-      : await this.rootPostId(envelope);
+    const adoptedMainRoot = this.adoptsMainRoot(envelope, binding);
+    const activityRootPostId = await this.resolveActivityRootPostId(
+      envelope,
+      binding,
+      adoptedMainRoot,
+    );
     const preparedControl = await this.prepareControl(envelope, binding, activityRootPostId);
     const digest = await activityPayloadDigestFromSource(envelope, attachment);
     const claim = await this.claimEvent(envelope, binding, digest);
-    let bare: Pick<ActivitySinkResult, "outcome" | "postIds">;
-    if ("postIds" in claim) {
-      bare = claim;
-    } else if (claim.outcome === "duplicate") {
-      bare = {
-        outcome: "duplicate",
-        postIds: claim.receipt.postId ? [claim.receipt.postId] : [],
-      };
-    } else {
-      bare = await this.appendClaimed(
-        input,
-        claim.receipt,
-        claim.recovered,
-        activityRootPostId,
-        preparedControl,
-      );
-    }
-    const resolvedRootPostId = envelope.type === TURN_STARTED
-      ? bare.postIds[0]
-      : activityRootPostId;
-    if (!resolvedRootPostId || (envelope.type === TURN_STARTED && bare.postIds.length !== 1)) {
+    const bare = await this.resolveClaimResult({
+      claim,
+      appendInput: input,
+      adoptedMainRoot,
+      activityRootPostId,
+      preparedControl,
+    });
+    const resolvedRootPostId = this.resolvedAcknowledgementRoot({
+      envelope,
+      adoptedMainRoot,
+      activityRootPostId,
+      bare,
+    });
+    if (
+      !resolvedRootPostId ||
+      (envelope.type === TURN_STARTED && !adoptedMainRoot && bare.postIds.length !== 1)
+    ) {
       throw new ActivitySinkIntegrityError("Activity acknowledgement has no unique run root");
     }
-    const receipt = {
-      eventKey: envelope.eventKey,
-      ...(bare.postIds[0] ? { postId: bare.postIds[0] } : {}),
-      activityChannelId: binding.activityChannelId,
-      activityRootPostId: resolvedRootPostId,
-    };
-    if (preparedControl) {
-      if (!receipt.postId || bare.postIds.length !== 1) {
-        throw new ActivitySinkIntegrityError("agent control acknowledgement has no unique post");
-      }
-      await this.runtime.deps.controls!.attachReceipt({
-        ...preparedControl.receipt,
-        postId: receipt.postId,
-      });
-    }
+    const receipt = this.acknowledgementReceipt({
+      envelope,
+      binding,
+      adoptedMainRoot,
+      resolvedRootPostId,
+      bare,
+    });
+    await this.attachPreparedControlReceipt(preparedControl, receipt, bare);
     return { ...bare, receipt };
   }
 
