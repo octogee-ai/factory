@@ -99,6 +99,8 @@ import {
 } from "./surge-customer-handoff.js";
 import {
   decideRollStateMigration,
+  heartbeatOpenclawIdentity,
+  heartbeatOpenclawSourceSha,
   heartbeatOpenclawVersion,
   openclawVersionFromGatewayImageTag,
   type RollStateMigrationDecision,
@@ -541,7 +543,7 @@ async function readGatewayOpenclawVersionFromFirestore(
 ): Promise<string | null> {
   const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
   const runtime = snap.exists ? snap.data() : undefined;
-  return isGatewayRuntimeDoc(runtime) ? heartbeatOpenclawVersion(runtime.heartbeat) : null;
+  return isGatewayRuntimeDoc(runtime) ? heartbeatOpenclawIdentity(runtime.heartbeat) : null;
 }
 
 function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
@@ -882,10 +884,19 @@ function reconcileGatewaySurgeHandoff(input: {
   gateway: DurableGateway;
   runtime: GatewayRuntimeDoc | undefined;
   desiredImage: { imageRepository: string; imageTag: string };
+  desiredOpenclawSourceSha: string | null;
   pendingArtifact: ReleasePayload | null;
   helmObserved: ObservedHelmInstance | null;
 }): Promise<{ ready: boolean }> {
-  const { passDeps, gateway, runtime, desiredImage, pendingArtifact, helmObserved } = input;
+  const {
+    passDeps,
+    gateway,
+    runtime,
+    desiredImage,
+    desiredOpenclawSourceSha,
+    pendingArtifact,
+    helmObserved,
+  } = input;
   const supersedingImageTag = supersedingGatewayImageTag({
     gateway,
     desiredImage,
@@ -903,6 +914,8 @@ function reconcileGatewaySurgeHandoff(input: {
     stateMigration: decideRollStateMigration({
       sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),
       targetOpenclawVersion: openclawVersionFromGatewayImageTag(desiredImage.imageTag),
+      sourceOpenclawSourceSha: heartbeatOpenclawSourceSha(runtime?.heartbeat),
+      targetOpenclawSourceSha: desiredOpenclawSourceSha,
     }),
     ...(supersedingImageTag ? { supersedingImageTag } : {}),
   });
@@ -946,6 +959,7 @@ export async function refineGatewayConvergenceAction(input: {
     gateway,
     runtime,
     desiredImage,
+    desiredOpenclawSourceSha: artifact.openclawSourceSha ?? null,
     pendingArtifact,
     helmObserved,
   });

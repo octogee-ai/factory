@@ -74,6 +74,8 @@ function samplePayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload 
 describe("isReleasePayload", () => {
   it("accepts the artifact schema and rejects mutable policy or credential state", () => {
     expect(isReleasePayload(samplePayload())).toBe(true);
+    expect(isReleasePayload(samplePayload({ openclawSourceSha: "a".repeat(40) }))).toBe(true);
+    expect(isReleasePayload({ ...samplePayload(), openclawSourceSha: "aaaaaaa" })).toBe(false);
     expect(isReleasePayload({ ...samplePayload(), gatewayClass: "shared" })).toBe(false);
     expect(isReleasePayload({ ...samplePayload(), byosub: { stale: true } })).toBe(false);
     expect(isReleasePayload({ ...samplePayload(), coOwnerUids: [] })).toBe(false);

@@ -111,7 +111,7 @@ interface HarnessOptions {
   openclawVersions?: Record<string, string | null>;
 }
 
-const SAME_OPENCLAW = "2026.7.2-beta.7";
+const SAME_OPENCLAW = "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)";
 
 function mkDeps(options: HarnessOptions = {}) {
   const client = options.client ?? happyClient();

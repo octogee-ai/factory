@@ -461,10 +461,14 @@ describe("rollout op — awaits the roll arm's convergence", () => {
   });
 
   it("journals a state migration when the release keeps the gateway's openclaw version", async () => {
+    const openclawSourceSha = "a".repeat(40);
     const deps = mkDeps({
       readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
-      readReleasePayload: async () => mkPayload({ imageTag: "cafe123-oc2026.7.2-beta.7" }),
-      readGatewayOpenclawVersion: async () => "2026.7.2-beta.7",
+      readReleasePayload: async () => mkPayload({
+        imageTag: "cafe123-oc2026.7.2-beta.7",
+        openclawSourceSha,
+      }),
+      readGatewayOpenclawVersion: async () => "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
     });
 
     const res = await createRolloutHandler(deps)(
@@ -475,8 +479,9 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(res.success).toBe(true);
     expect(res.output).toEqual({
       stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "2026.7.2-beta.7",
+        sourceOpenclawVersion: "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
         targetOpenclawVersion: "2026.7.2-beta.7",
+        targetOpenclawSourceSha: openclawSourceSha,
       }),
     });
     expect((res.output?.stateMigration as { strategy: string }).strategy).toBe("migrate-state");
@@ -500,6 +505,8 @@ describe("rollout op — awaits the roll arm's convergence", () => {
         strategy: "provision-fresh",
         sourceOpenclawVersion: "2026.7.1",
         targetOpenclawVersion: "2026.7.2-beta.7",
+        sourceOpenclawSourceSha: null,
+        targetOpenclawSourceSha: null,
         reason: expect.stringContaining("2026.7.1"),
       },
     });

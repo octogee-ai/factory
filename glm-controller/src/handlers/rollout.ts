@@ -10,7 +10,7 @@ import {
 export interface RolloutDeps {
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
-  /** The openclaw version the live pod reports through its heartbeat. */
+  /** The OpenClaw version and source build the live pod reports through its heartbeat. */
   readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
   activateDesiredRelease: (input: {
     gatewayId: string;
@@ -164,6 +164,7 @@ async function runReleaseRoll(
   const stateMigration = decideRollStateMigration({
     sourceOpenclawVersion: await deps.readGatewayOpenclawVersion(target.gatewayId),
     targetOpenclawVersion: openclawVersionFromGatewayImageTag(recorded.payload.imageTag),
+    targetOpenclawSourceSha: recorded.payload.openclawSourceSha,
   });
   deps.log(
     `[rollout] ${target.gatewayId} → release ${target.targetRelease}: ` +

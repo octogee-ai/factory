@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createReleaseDigestManifest,
+  createMainBuildReleaseDigestManifest,
   selectMainBuildImages,
   releaseDigestManifestReference,
   validateBaselineReleaseDigestManifest,
@@ -11,12 +12,14 @@ import {
 const repository = "us-west1-docker.pkg.dev/octogee/octogee";
 const sourceSha = "a".repeat(40);
 const otherSha = "b".repeat(40);
+const openclawSourceSha = "c".repeat(40);
 const digest = (suffix: string) => `sha256:${suffix.repeat(64).slice(0, 64)}`;
 
 function manifest() {
   return createReleaseDigestManifest({
     sourceSha,
     openclawVersion: "2026.7.1",
+    openclawSourceSha,
     repository,
     images: {
       "artifact-worker": digest("1"),
@@ -106,9 +109,10 @@ describe("release digest manifest", () => {
 
   it("records the complete immutable platform and gateway digest set under its full source SHA", () => {
     expect(manifest()).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       sourceSha,
       openclawVersion: "2026.7.1",
+      openclawSourceSha,
       repository,
       surfaces: {
         gateway: {
@@ -131,6 +135,7 @@ describe("release digest manifest", () => {
     expect(() => createReleaseDigestManifest({
       sourceSha,
       openclawVersion: "2026.7.1",
+      openclawSourceSha,
       repository,
       images: {
         "artifact-worker": digest("1"),
@@ -171,20 +176,45 @@ describe("release digest manifest", () => {
     );
   });
 
-  it("accepts the exact pre-runner and pre-Builder shapes only for baseline carry-forward", () => {
+  it("accepts retired manifest schemas only for baseline carry-forward", () => {
+    const preOpenclawSourceManifest = { ...manifest(), schemaVersion: 3 };
+    delete preOpenclawSourceManifest.openclawSourceSha;
     expect(validateBaselineReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toEqual(
       legacyManifest(),
     );
     expect(validateBaselineReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toEqual(
       preBuilderManifest(),
     );
+    expect(validateBaselineReleaseDigestManifest(
+      preOpenclawSourceManifest,
+      sourceSha,
+      repository,
+    )).toEqual(preOpenclawSourceManifest);
     expect(validateBaselineReleaseDigestManifest(manifest(), sourceSha, repository)).toEqual(manifest());
     expect(() => validateReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toThrow(
-      "manifest schemaVersion must be 3",
+      "manifest schemaVersion must be 4",
     );
     expect(() => validateReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toThrow(
-      "manifest schemaVersion must be 3",
+      "manifest schemaVersion must be 4",
     );
+  });
+
+  it("carries the gateway build identity when the gateway surface is unchanged", () => {
+    const baseline = manifest();
+    expect(createMainBuildReleaseDigestManifest({
+      sourceSha: otherSha,
+      openclawVersion: "2026.7.2",
+      openclawSourceSha: "d".repeat(40),
+      baselineOpenclawVersion: baseline.openclawVersion,
+      baselineOpenclawSourceSha: baseline.openclawSourceSha,
+      repository,
+      baselineImages: { ...baseline.surfaces.gateway, ...baseline.surfaces.platform },
+      exactImages: {},
+      changedScopes: { platform: false, gateway: false },
+    })).toMatchObject({
+      openclawVersion: "2026.7.1",
+      openclawSourceSha,
+    });
   });
 
   it("rejects legacy baselines with any image-set change other than the absent runner", () => {

@@ -4,9 +4,11 @@ import { refineGatewayConvergenceAction } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 import { decideRollStateMigration } from "../roll-state-migration.js";
 
+const openclawSourceSha = "a".repeat(40);
 const unchangedOpenclaw = decideRollStateMigration({
-  sourceOpenclawVersion: "2026.7.1",
+  sourceOpenclawVersion: "OpenClaw 2026.7.1 (aaaaaaaa)",
   targetOpenclawVersion: "2026.7.1",
+  targetOpenclawSourceSha: openclawSourceSha,
 });
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
@@ -40,6 +42,7 @@ function gateway(): DurableGateway {
 const artifact: ReleasePayload = {
   imageRepository: repository,
   imageTag: "def5678-oc2026.7.1",
+  openclawSourceSha,
 };
 
 function runtime(version: string, openclawVersion?: string): GatewayRuntimeDoc {
@@ -47,7 +50,9 @@ function runtime(version: string, openclawVersion?: string): GatewayRuntimeDoc {
     heartbeat: {
       status: "ready",
       version,
-      ...(openclawVersion === undefined ? {} : { openclawVersion }),
+      ...(openclawVersion === undefined
+        ? {}
+        : { openclawVersion: `OpenClaw ${openclawVersion} (aaaaaaaa)` }),
     },
   } as GatewayRuntimeDoc;
 }
@@ -243,8 +248,9 @@ describe("gateway convergence surge wiring", () => {
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
       stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "2026.7.1",
+        sourceOpenclawVersion: "OpenClaw 2026.7.1 (aaaaaaaa)",
         targetOpenclawVersion: "2026.7.2-beta.7",
+        targetOpenclawSourceSha: openclawSourceSha,
       }),
     }));
   });
@@ -277,7 +283,7 @@ describe("gateway convergence surge wiring", () => {
         status: "ready",
         version: "def5678-oc2026.7.1",
         openclawVersion: "unknown",
-        configStatus: { openclawVersion: "2026.7.1" },
+        configStatus: { openclawVersion: "2026.7.1", openclawForkSha: openclawSourceSha },
       },
     } as GatewayRuntimeDoc;
 
@@ -291,7 +297,12 @@ describe("gateway convergence surge wiring", () => {
     });
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      stateMigration: unchangedOpenclaw,
+      stateMigration: decideRollStateMigration({
+        sourceOpenclawVersion: "2026.7.1",
+        targetOpenclawVersion: "2026.7.1",
+        sourceOpenclawSourceSha: openclawSourceSha,
+        targetOpenclawSourceSha: openclawSourceSha,
+      }),
     }));
   });
 

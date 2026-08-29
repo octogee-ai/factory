@@ -14,6 +14,7 @@ import { createCentralReleaseAuthority } from "../lib/artifact-registry.js";
  */
 
 const sourceSha = "a".repeat(40);
+const openclawSourceSha = "c".repeat(40);
 const manifestDigest = `sha256:${"b".repeat(64)}`;
 const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 const digest = (seed: string) => `sha256:${seed.repeat(64).slice(0, 64)}`;
@@ -90,6 +91,7 @@ describe("release digest manifest — generator/authority contract", () => {
     serveManifest(createReleaseDigestManifest({
       sourceSha,
       openclawVersion: "2026.7.2-beta.7",
+      openclawSourceSha,
       repository,
       images: BUILT_IMAGES,
     }));
@@ -98,12 +100,14 @@ describe("release digest manifest — generator/authority contract", () => {
 
     expect(resolved.sourceSha).toBe(sourceSha);
     expect(resolved.openclawVersion).toBe("2026.7.2-beta.7");
+    expect(resolved.openclawSourceSha).toBe(openclawSourceSha);
   });
 
   it("carries every built image through to the resolved surfaces, and nothing else", async () => {
     serveManifest(createReleaseDigestManifest({
       sourceSha,
       openclawVersion: "2026.7.2-beta.7",
+      openclawSourceSha,
       repository,
       images: BUILT_IMAGES,
     }));

@@ -83,6 +83,7 @@ const DIGEST_BOUND_IMAGE_TAG_PATTERN =
 export interface ReleasePayload {
   imageRepository: string;
   imageTag: string;
+  openclawSourceSha?: string;
   profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
 }
@@ -90,6 +91,7 @@ export interface ReleasePayload {
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set<string>([
   "imageRepository",
   "imageTag",
+  "openclawSourceSha",
   "profileImages",
   "gatewayEdgeImage",
 ]);
@@ -106,6 +108,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 export function isReleasePayload(value: unknown): value is ReleasePayload {
   if (!isPlainRecord(value)) return false;
   if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value)) return false;
+  if (
+    value.openclawSourceSha !== undefined &&
+    (typeof value.openclawSourceSha !== "string" || !/^[a-f0-9]{40}$/.test(value.openclawSourceSha))
+  ) {
+    return false;
+  }
   if (
     value.profileImages !== undefined &&
     !isGatewayProfileImages(value.profileImages, value.imageRepository, value.imageTag)
