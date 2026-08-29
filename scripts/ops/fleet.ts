@@ -154,30 +154,6 @@ const VERBS: readonly VerbHelp[] = [
     writes: false,
   },
   {
-    verb: "release cut",
-    summary: "Cut a CENTRAL TEST gateway release from an exact digest manifest.",
-    args: "<version> --sha=<sha> [--gateway-scope=shared|all] [--idempotency-key=<key>] [--apply]",
-    description:
-      "Requires an explicit full main SHA, then sends one Admin API request. The server reads the exact CENTRAL digest manifest, cuts the selected shared or all-gateway desired releases, journals each mutation, and enqueues Cowboy. Dry-run by default; pass --apply to send the request.",
-    examples: [
-      "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
-      "fleet --env=test release cut v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --gateway-scope=all --apply",
-    ],
-    writes: true,
-  },
-  {
-    verb: "release promote",
-    summary: "Promote an explicitly selected CENTRAL main manifest to PROD.",
-    args: "<version> --sha=<sha> [--idempotency-key=<key>] [--apply]",
-    description:
-      "Sends one Admin API request. The server requires the same full main SHA selected for TEST, resolves its exact CENTRAL digest manifest, and promotes those bytes through the PROD desired-state release path. Dry-run by default; pass --apply to send the request.",
-    examples: [
-      "fleet --env=prod release promote v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567",
-      "fleet --env=prod release promote v0.4.0 --sha=0123456789abcdef0123456789abcdef01234567 --apply",
-    ],
-    writes: true,
-  },
-  {
     verb: "gw ls",
     summary: "List gateways (alias for ls gateways).",
     args: "",
@@ -208,14 +184,14 @@ const VERBS: readonly VerbHelp[] = [
     writes: true,
   },
   {
-    verb: "gw roll",
-    summary: "Request a gateway image rollout through the Admin API.",
-    args: "<gw-id> --image-tag=<tag> [--image-repository=<repo>] [--apply]",
+    verb: "gw deploy",
+    summary: "Deploy an existing immutable build to one gateway.",
+    args: "<gw-id> --sha=<full-main-sha> [--idempotency-key=<key>] [--apply]",
     description:
-      "Uses POST /api/admin/gateways/:id/rollout so maintenance and the operations journal match the Admin UI. Dry-run by default; pass --apply to send the request.",
+      "Selects the build's immutable digest manifest and asks Cowboy to converge only the named gateway. Building and deployment are independent. Dry-run by default; pass --apply to send the instruction.",
     examples: [
-      "fleet --env=test gw roll canary --image-tag=abc1234",
-      "fleet --env=test gw roll canary --image-tag=abc1234 --apply",
+      "fleet --env=test gw deploy canary --sha=0123456789abcdef0123456789abcdef01234567",
+      "fleet --env=test gw deploy canary --sha=0123456789abcdef0123456789abcdef01234567 --apply",
     ],
     writes: true,
   },
@@ -614,17 +590,16 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
       }
       return withIdempotency({ method: "POST", path: "/api/admin/gateways", body });
     }
-    case "roll": {
-      const gatewayId = requiredGatewayId(args, "gw roll");
-      const imageRepository = stringFlag(args, "image-repository");
-      if (imageRepository) canonicalGatewayRepository(args, "gw roll");
+    case "deploy": {
+      const gatewayId = requiredGatewayId(args, "gw deploy");
+      const sourceSha = requiredFlag(args, "sha", "gw deploy", "full-main-sha");
+      if (!/^[a-f0-9]{40}$/.test(sourceSha)) {
+        throw new Error("gw deploy requires --sha=<full-lowercase-main-sha>");
+      }
       return withIdempotency({
         method: "POST",
-        path: `/api/admin/gateways/${gatewayId}/rollout`,
-        body: {
-          imageTag: requiredFlag(args, "image-tag", "gw roll", "tag"),
-          ...(imageRepository ? { imageRepository } : {}),
-        },
+        path: `/api/admin/gateways/${gatewayId}/deploy`,
+        body: { sourceSha },
       });
     }
     case "park": {
@@ -668,87 +643,6 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
     default:
       throw new Error(`Unknown gateway mutation: gw ${action ?? ""}`.trim());
   }
-}
-
-const SEMVER_NUMBER = "(?:0|[1-9]\\d*)";
-const SEMVER_PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
-const RELEASE_VERSION_PATTERN = new RegExp(
-  `^v${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}` +
-    `(?:-${SEMVER_PRERELEASE_IDENTIFIER}(?:\\.${SEMVER_PRERELEASE_IDENTIFIER})*)?$`,
-);
-const SOURCE_SHA_PATTERN = /^[a-f0-9]{40}$/;
-
-function releaseIdempotencyRequest(
-  request: Omit<AdminFleetRequest, "idempotencyKey">,
-  args: ParsedFleetArgs,
-  defaultIdempotencyKey: string,
-): AdminFleetRequest {
-  const idempotencyKey = stringFlag(args, "idempotency-key");
-  if (args.flags["idempotency-key"] !== undefined && !idempotencyKey) {
-    throw new Error("release mutation requires --idempotency-key=<key>");
-  }
-  return { ...request, idempotencyKey: idempotencyKey ?? defaultIdempotencyKey };
-}
-
-function requiredReleaseVersion(args: ParsedFleetArgs, command: string): string {
-  const version = args.positional[2];
-  if (!version || !RELEASE_VERSION_PATTERN.test(version)) {
-    throw new Error(`${command} requires a v-prefixed semantic version`);
-  }
-  if (args.positional.length !== 3) {
-    throw new Error(`${command} accepts exactly one <version>`);
-  }
-  return version;
-}
-
-function validateReleaseFlags(args: ParsedFleetArgs, command: string, allowed: readonly string[]): void {
-  const accepted = new Set(["apply", "idempotency-key", ...allowed]);
-  const unsupported = Object.keys(args.flags).filter((flag) => !accepted.has(flag));
-  if (unsupported.length > 0) {
-    throw new Error(`${command} does not accept --${unsupported.join(", --")}`);
-  }
-  if (args.flags.apply !== undefined && args.flags.apply !== true) {
-    throw new Error(`${command} accepts --apply without a value`);
-  }
-}
-
-export function resolveFleetReleaseMutation(
-  args: ParsedFleetArgs,
-): AdminFleetRequest {
-  const action = args.positional[1];
-  if (action === "cut") {
-    if (args.env !== "test") throw new Error("release cut requires --env=test");
-    validateReleaseFlags(args, "release cut", ["sha", "gateway-scope"]);
-    const version = requiredReleaseVersion(args, "release cut");
-    const sourceSha = stringFlag(args, "sha");
-    if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw new Error("release cut requires a full lowercase --sha");
-    }
-    const gatewayScope = stringFlag(args, "gateway-scope");
-    if (gatewayScope !== undefined && gatewayScope !== "shared" && gatewayScope !== "all") {
-      throw new Error("release cut --gateway-scope must be shared or all");
-    }
-    return releaseIdempotencyRequest({
-      method: "POST",
-      path: "/api/admin/releases/cut",
-      body: { version, sourceSha, ...(gatewayScope === "all" ? { gatewayScope } : {}) },
-    }, args, `release-cut:${version}:${sourceSha}:${gatewayScope ?? "shared"}`);
-  }
-  if (action === "promote") {
-    if (args.env !== "prod") throw new Error("release promote requires --env=prod");
-    validateReleaseFlags(args, "release promote", ["sha"]);
-    const version = requiredReleaseVersion(args, "release promote");
-    const sourceSha = stringFlag(args, "sha");
-    if (!sourceSha || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw new Error("release promote requires a full lowercase --sha");
-    }
-    return releaseIdempotencyRequest({
-      method: "POST",
-      path: `/api/admin/releases/${encodeURIComponent(version)}/promote`,
-      body: { sourceSha },
-    }, args, `release-promote:${version}:${sourceSha}`);
-  }
-  throw new Error(`Unknown release mutation: release ${action ?? ""}`.trim());
 }
 
 export type FleetBuilderMutation =
@@ -873,14 +767,6 @@ export async function executeFleetGatewayMutation(
   apply: boolean,
 ): Promise<{ applied: boolean; response: unknown }> {
   return executeFleetAdminMutation(client, request, apply);
-}
-
-export async function executeFleetReleaseMutation(
-  client: Pick<AdminFleetClient, "request">,
-  request: AdminFleetRequest,
-  apply: boolean,
-): Promise<{ applied: boolean; response: unknown }> {
-  return executeFleetGatewayMutation(client, request, apply);
 }
 
 export interface ForceRestartPod {
@@ -1767,22 +1653,6 @@ async function runFleetBuilderMutation(apply: boolean): Promise<void> {
   console.log(JSON.stringify(result.response, null, 2));
 }
 
-async function runFleetReleaseMutation(apply: boolean): Promise<void> {
-  const request = resolveFleetReleaseMutation(args);
-  console.log(bold(`RELEASE ${args.positional[1]?.toUpperCase() ?? ""} ${args.positional[2] ?? ""}`));
-  console.log(dim(`  environment: ${args.env}`));
-  console.log(dim(`  version: ${args.positional[2] ?? ""}`));
-  console.log(dim(`  source SHA: ${stringFlag(args, "sha") ?? ""}`));
-  console.log(dim(`  ${request.method} ${request.path}`));
-  if (!apply) {
-    console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
-    return;
-  }
-  const result = await executeFleetReleaseMutation(fleetAdminClient(), request, true);
-  console.log(green(`${CHECK} Admin API release request accepted`));
-  console.log(JSON.stringify(result.response, null, 2));
-}
-
 async function runFleetGatewayRestart(): Promise<void> {
   const restart = resolveFleetGatewayRestart(args);
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
@@ -2082,8 +1952,6 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
-    case "release":
-      return runFleetReleaseMutation(apply);
     case "gw":
       return runFleetGatewayMutation(apply);
     case "builder":

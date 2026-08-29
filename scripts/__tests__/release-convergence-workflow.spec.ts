@@ -11,7 +11,7 @@ const verifyEnv = readFileSync(
   "utf8",
 );
 describe("gateway image build workflow", () => {
-  it("builds images only — desired state is written by Release platform through the fleet CLI", () => {
+  it("builds images only — the operator deploys existing builds with Fleet", () => {
     expect(workflow).not.toContain("update-environment-desired-state:");
     expect(workflow).not.toContain("promotion-authority:");
     expect(workflow).not.toContain("alias-with-oc-version:");

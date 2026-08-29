@@ -1,170 +1,33 @@
-import { describe, it, expect } from "vitest";
-import { validateRolloutBody, validateDesiredStatusPatch } from "../lib/admin-fleet-router";
+import { describe, expect, it } from "vitest";
+import { validateDeployBody, validateDesiredStatusPatch } from "../lib/admin-fleet-router";
 
 describe("validateDesiredStatusPatch", () => {
-  it("rejects retired — retirement must go through DELETE for full teardown", () => {
-    const r = validateDesiredStatusPatch("retired");
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body.error).toMatch(/DELETE \/gateways\/:id/);
-    }
+  it("rejects retired because retirement requires teardown", () => {
+    const result = validateDesiredStatusPatch("retired");
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error.body.error).toMatch(/DELETE \/gateways\/:id/);
   });
 
-  it("rejects an unknown status with the offending value", () => {
-    const r = validateDesiredStatusPatch("zombie");
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body).toMatchObject({ got: "zombie" });
+  it("accepts active lifecycle states", () => {
+    for (const status of ["running", "paused", "draining"] as const) {
+      expect(validateDesiredStatusPatch(status)).toEqual({ ok: status });
     }
-  });
-
-  it.each(["running", "paused", "draining"] as const)("accepts %s", (status) => {
-    const r = validateDesiredStatusPatch(status);
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok).toBe(status);
   });
 });
 
-describe("validateRolloutBody", () => {
-  it("rejects when imageTag is missing", () => {
-    const r = validateRolloutBody({});
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body).toMatchObject({ error: "missing imageTag" });
-    }
+describe("validateDeployBody", () => {
+  it("accepts one exact full source SHA", () => {
+    const sourceSha = "a".repeat(40);
+    expect(validateDeployBody({ sourceSha })).toEqual({ ok: { sourceSha } });
   });
 
-  it("rejects when imageTag isn't a 7–40 char lowercase hex SHA", () => {
-    const r = validateRolloutBody({ imageTag: "NOT-A-SHA" });
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body).toMatchObject({
-        error: expect.stringContaining("hex SHA"),
-        got: "NOT-A-SHA",
-      });
-    }
-  });
-
-  it("rejects when imageRepository is provided but not in the canonical AR", () => {
-    const r = validateRolloutBody({
-      imageTag: "abc1234",
-      imageRepository: "docker.io/whatever/octogee-gateway",
+  it("rejects short SHAs and additional process fields", () => {
+    expect(validateDeployBody({ sourceSha: "deadbeef" })).toMatchObject({
+      error: { status: 400 },
     });
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body).toMatchObject({
-        expectedPrefixes: ["us-central1-docker.pkg.dev/octogee/octogee/"],
-      });
-    }
-  });
-
-  it("accepts a 7-char hex tag with no repo", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) {
-      expect(r.ok).toEqual({
-        imageTag: "abc1234",
-        imageRepository: null,
-      });
-    }
-  });
-
-  it("accepts a 40-char hex tag plus the canonical AR repo", () => {
-    const tag = "0123456789abcdef0123456789abcdef01234567";
-    const repo = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-    const r = validateRolloutBody({
-      imageTag: tag,
-      imageRepository: repo,
-    });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) {
-      expect(r.ok).toEqual({ imageTag: tag, imageRepository: repo });
-    }
-  });
-
-  it("rejects a retired target's Artifact Registry repo", () => {
-    const repo = "us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-    const r = validateRolloutBody({ imageTag: "abc1234", imageRepository: repo });
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body.error).toContain("canonical Octogee Artifact Registry repo");
-    }
-  });
-
-  it("accepts a pinned-bundle tag like <sha>-oc<version>", () => {
-    const r = validateRolloutBody({ imageTag: "a9d7600-oc2026.5.2" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) {
-      expect(r.ok.imageTag).toBe("a9d7600-oc2026.5.2");
-    }
-  });
-
-  it.each([
-    "a9d7600-oc2026.5.3-1",
-    "a9f521f-oc2026.5.12-diag",
-    "a9f521f-oc2026.5.16-beta.6",
-  ])("accepts a pinned-bundle tag with the suffix %s", (imageTag) => {
-    const r = validateRolloutBody({ imageTag });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok.imageTag).toBe(imageTag);
-  });
-
-  it("accepts a non-canonical -oc suffix (operator-trusted, not strict semver)", () => {
-    const r = validateRolloutBody({ imageTag: "a9d7600-oc5.2" });
-    expect("ok" in r).toBe(true);
-  });
-
-  it("still anchors on the hex SHA even with an -oc suffix", () => {
-    const r = validateRolloutBody({ imageTag: "ZZZZZZZ-oc2026.5.12" });
-    expect("error" in r).toBe(true);
-  });
-
-  it("omits profile when not provided (cattle rollouts unchanged)", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok.profile).toBeUndefined();
-  });
-
-  it("accepts profile='builder'", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234", profile: "builder" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok.profile).toBe("builder");
-  });
-
-  it("rejects the retired operator profile", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234", profile: "operator" });
-    expect("error" in r).toBe(true);
-  });
-
-  it("accepts profile='standard' (explicit revert to cattle image)", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234", profile: "standard" });
-    expect("ok" in r).toBe(true);
-    if ("ok" in r) expect(r.ok.profile).toBe("standard");
-  });
-
-  it("rejects an unknown profile", () => {
-    const r = validateRolloutBody({ imageTag: "abc1234", profile: "superuser" });
-    expect("error" in r).toBe(true);
-    if ("error" in r) {
-      expect(r.error.status).toBe(400);
-      expect(r.error.body).toMatchObject({
-        error: expect.stringContaining("profile"),
-        got: "superuser",
-      });
-    }
-  });
-
-  it("rejects a non-string profile", () => {
-    const r = validateRolloutBody({
-      imageTag: "abc1234",
-      profile: 123 as unknown as string,
-    });
-    expect("error" in r).toBe(true);
+    expect(validateDeployBody({
+      sourceSha: "a".repeat(40),
+      version: "v1.2.3",
+    })).toMatchObject({ error: { status: 400 } });
   });
 });

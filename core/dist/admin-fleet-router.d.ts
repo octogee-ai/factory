@@ -190,13 +190,6 @@ interface RolloutBodyError {
     status: number;
     body: Record<string, unknown>;
 }
-interface RolloutBodyOk {
-    imageTag: string;
-    imageRepository: string | null;
-    profile?: GatewayProfile;
-    gatewayClass?: GatewayClass;
-    imageProfile?: GatewayImageProfile;
-}
 export declare function validateDesiredStatusPatch(desiredStatus: string): {
     error: {
         status: number;
@@ -208,16 +201,12 @@ export declare function validateDesiredStatusPatch(desiredStatus: string): {
 } | {
     ok: "running" | "paused" | "draining";
 };
-export declare function validateRolloutBody(body: Partial<{
-    imageTag: string;
-    imageRepository: string;
-    profile: string;
-    gatewayClass: string;
-    imageProfile: string;
-}>): {
+export declare function validateDeployBody(body: unknown): {
     error: RolloutBodyError;
 } | {
-    ok: RolloutBodyOk;
+    ok: {
+        sourceSha: string;
+    };
 };
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;

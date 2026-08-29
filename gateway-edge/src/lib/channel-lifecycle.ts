@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { db } from "./db.js";
 import { mmApi } from "./mattermost.js";
 import { logger } from "../middleware/logging.js";
 import {
+  CHANNEL_NAME_MAX_LENGTH,
   projectChannelName,
   workspaceAdminChannelName,
   workspaceCoachChannelName,
@@ -36,7 +38,31 @@ export async function removeChannelMember(
   channelDocPath: string,
   mmUserId: string,
 ): Promise<void> {
-  await deleteMember(await verifiedPrimaryChannelIdFor(channelDocPath), mmUserId);
+  const stored = await readStoredChannel(channelDocPath);
+  const primary = await requireMattermostChannel(stored.primaryChannelId, "primary");
+  assertChannelBinding(primary, stored.binding, "primary");
+
+  const legacy = stored.legacyActivityChannelId && stored.legacyActivityChannelId !== primary.id
+    ? await readMattermostChannel(`/channels/${encodeURIComponent(stored.legacyActivityChannelId)}`)
+    : null;
+  if (legacy) assertLegacyActivityBinding(legacy, stored.binding, primary.type);
+
+  const removedLegacy = legacy ? await deleteMember(legacy.id, mmUserId) : false;
+  try {
+    await deleteMember(primary.id, mmUserId);
+  } catch (error) {
+    if (legacy && removedLegacy) {
+      try {
+        await addMember(legacy.id, mmUserId);
+      } catch (compensationError) {
+        throw new AggregateError(
+          [error, compensationError],
+          "primary membership removal failed and legacy Activity membership compensation failed",
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 export async function addChannelMember(
@@ -84,6 +110,7 @@ export async function assertMattermostUserExists(mmUserId: string): Promise<void
 
 interface StoredChannel {
   primaryChannelId: string;
+  legacyActivityChannelId: string | null;
   binding: ExpectedBinding;
 }
 
@@ -115,11 +142,15 @@ async function readStoredChannel(channelDocPath: string): Promise<StoredChannel>
   const data = snap.data() ?? {};
   const mattermost = (data.mattermost ?? {}) as Record<string, unknown>;
   const primaryChannelId = typeof mattermost.channelId === "string" ? mattermost.channelId : "";
+  const legacyActivityChannelId = typeof mattermost.activityChannelId === "string" && mattermost.activityChannelId
+    ? mattermost.activityChannelId
+    : null;
   if (!primaryChannelId) {
     throw new MattermostChannelBindingError(`channel document ${channelDocPath} has no primary channel`);
   }
   return {
     primaryChannelId,
+    legacyActivityChannelId,
     binding: await expectedBinding(channelDocPath),
   };
 }
@@ -173,6 +204,31 @@ function assertChannelBinding(
       `${label} channel binding mismatch: expected ${binding.teamId}/${binding.primaryName}, got ${channel.teamId}/${channel.name}`,
     );
   }
+}
+
+function assertLegacyActivityBinding(
+  channel: StoredMattermostChannel,
+  binding: ExpectedBinding,
+  primaryType: "P" | "O",
+): void {
+  const expectedName = legacyActivityChannelName(binding.primaryName);
+  if (
+    channel.teamId !== binding.teamId
+    || channel.name !== expectedName
+    || channel.type !== primaryType
+  ) {
+    throw new MattermostChannelBindingError(
+      `legacy Activity channel binding mismatch: expected ${binding.teamId}/${expectedName}/${primaryType}, got ${channel.teamId}/${channel.name}/${channel.type}`,
+    );
+  }
+}
+
+function legacyActivityChannelName(primaryName: string): string {
+  const direct = `${primaryName}-activity`;
+  if (direct.length <= CHANNEL_NAME_MAX_LENGTH) return direct;
+  const hash = createHash("sha256").update(primaryName).digest("hex").slice(0, 12);
+  const suffix = `-act-${hash}`;
+  return `${primaryName.slice(0, CHANNEL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
 }
 
 async function setMattermostChannelArchived(
@@ -229,12 +285,14 @@ async function addMember(channelId: string, mmUserId: string): Promise<void> {
   }
 }
 
-async function deleteMember(channelId: string, mmUserId: string): Promise<void> {
+async function deleteMember(channelId: string, mmUserId: string): Promise<boolean> {
   try {
     await mmApi(`/channels/${channelId}/members/${mmUserId}`, "DELETE");
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("404") && !message.includes("not_found")) throw error;
+    return false;
   }
 }
 

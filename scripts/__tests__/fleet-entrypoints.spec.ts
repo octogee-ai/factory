@@ -25,14 +25,12 @@ import {
 import {
   buildFleetMigrateOperationInput,
   executeFleetAdminMutation,
-  executeFleetReleaseMutation,
   executeFleetGatewayMutation,
   parseForceRestartPodList,
   parseFleetArgs,
   releaseStatusRows,
   resolveFleetBuilderMutationRequest,
   resolveFleetBuilderMutation,
-  resolveFleetReleaseMutation,
   runForcedGatewayRestart,
   fleetServiceAccountCredential,
   resolveFleetGatewayMutation,
@@ -1059,34 +1057,6 @@ describe("fleet CLI args", () => {
     expect(fleetServiceAccountCredential({ type: "external_account" }, "octogee-test")).toBeNull();
   });
 
-  it("maps normal CENTRAL release commands to journaled Admin API requests with deterministic idempotency keys", () => {
-    const sourceSha = "a".repeat(40);
-    expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", `--sha=${sourceSha}`]),
-    )).toEqual({
-      method: "POST",
-      path: "/api/admin/releases/cut",
-      body: { version: "v0.4.0", sourceSha },
-      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:shared`,
-    });
-    expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", `--sha=${sourceSha}`, "--gateway-scope=all"]),
-    )).toEqual({
-      method: "POST",
-      path: "/api/admin/releases/cut",
-      body: { version: "v0.4.0", sourceSha, gatewayScope: "all" },
-      idempotencyKey: `release-cut:v0.4.0:${sourceSha}:all`,
-    });
-    expect(resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0", `--sha=${sourceSha}`]),
-    )).toEqual({
-      method: "POST",
-      path: "/api/admin/releases/v0.4.0/promote",
-      body: { sourceSha },
-      idempotencyKey: `release-promote:v0.4.0:${sourceSha}`,
-    });
-  });
-
   it("uses the sole enabled Firestore admin only as the unspecified-actor fallback", () => {
     expect(resolveFleetOperatorUidFromUserConfigs([
       { uid: "builder", role: "builder", disabled: false },
@@ -1118,20 +1088,7 @@ describe("fleet CLI args", () => {
     })).toThrow(/admin role/);
   });
 
-  it("preserves an explicit release idempotency key over its deterministic default", () => {
-    expect(resolveFleetReleaseMutation(
-      parseFleetArgs([
-        "--env=test",
-        "release",
-        "cut",
-        "v0.4.0",
-        "--sha=" + "a".repeat(40),
-        "--idempotency-key=operator-retry",
-      ]),
-    )).toMatchObject({ idempotencyKey: "operator-retry" });
-  });
-
-  it("rejects duplicate flags and non-semver release versions", () => {
+  it("rejects duplicate flags", () => {
     expect(() => parseFleetArgs([
       "--env=test",
       "release",
@@ -1147,47 +1104,6 @@ describe("fleet CLI args", () => {
       "cut",
       "v0.4.0",
     ])).toThrow("duplicate --env flag");
-    for (const version of ["v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-01", "v1.2.3-alpha.01"]) {
-      expect(() => resolveFleetReleaseMutation(
-        parseFleetArgs(["--env=test", "release", "cut", version, "--sha=" + "a".repeat(40)]),
-      )).toThrow("release cut requires a v-prefixed semantic version");
-    }
-  });
-
-  it("keeps release mutations dry-run by default and sends exactly one Admin API request with --apply", async () => {
-    const request = vi.fn(async () => ({ release: 2 }));
-    const mutation = resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--sha", "a".repeat(40)]),
-    );
-
-    await expect(executeFleetReleaseMutation({ request }, mutation, false)).resolves.toEqual({
-      applied: false,
-      response: null,
-    });
-    expect(request).not.toHaveBeenCalled();
-    await expect(executeFleetReleaseMutation({ request }, mutation, true)).resolves.toEqual({
-      applied: true,
-      response: { release: 2 },
-    });
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("rejects release commands outside their CENTRAL environment and never derives a version from git tags", () => {
-    expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "cut", "v0.4.0", "--sha=" + "a".repeat(40)]),
-    )).toThrow("release cut requires --env=test");
-    expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "promote", "v0.4.0"]),
-    )).toThrow("release promote requires --env=prod");
-    expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=test", "release", "cut", "v0.4.0", "--sha=deadbeef"]),
-    )).toThrow("release cut requires a full lowercase --sha");
-    expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0"]),
-    )).toThrow("release promote requires a full lowercase --sha");
-    expect(() => resolveFleetReleaseMutation(
-      parseFleetArgs(["--env=prod", "release", "promote", "v0.4.0", "--sha=deadbeef"]),
-    )).toThrow("release promote requires a full lowercase --sha");
   });
 
   it("renders the raw Cowboy lifecycle alongside release and heartbeat observations", () => {
@@ -1317,12 +1233,13 @@ describe("fleet CLI args", () => {
   });
 
   it("maps each existing Admin gateway action to its API request", () => {
+    const sourceSha = "a".repeat(40);
     expect(resolveFleetGatewayMutation(parseFleetArgs([
-      "--env=test", "gw", "roll", "canary", "--image-tag=abc1234",
+      "--env=test", "gw", "deploy", "canary", `--sha=${sourceSha}`,
     ]))).toEqual({
       method: "POST",
-      path: "/api/admin/gateways/canary/rollout",
-      body: { imageTag: "abc1234" },
+      path: "/api/admin/gateways/canary/deploy",
+      body: { sourceSha },
     });
     expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "park", "canary",
@@ -1460,8 +1377,11 @@ describe("fleet CLI args", () => {
 
   it("rejects incomplete gateway mutation input before any request", () => {
     expect(() => resolveFleetGatewayMutation(parseFleetArgs([
-      "--env=test", "gw", "roll", "canary",
-    ]))).toThrow("gw roll requires --image-tag=<tag>");
+      "--env=test", "gw", "deploy", "canary",
+    ]))).toThrow("gw deploy requires --sha=<full-main-sha>");
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "deploy", "canary", "--sha=deadbeef",
+    ]))).toThrow("gw deploy requires --sha=<full-lowercase-main-sha>");
   });
 
   it("rejects cross-environment image repositories and unsafe gateway paths", () => {
