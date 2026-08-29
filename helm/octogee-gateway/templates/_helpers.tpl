@@ -138,7 +138,11 @@ tier isn't declared in `.Values.tiers`.
 
 {{- define "octogee-gateway.imageLabel" -}}
 {{- $imageTag := .Values.image.tag | default .Values.imageTag -}}
-{{- if and (le (len $imageTag) 63) (regexMatch "^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$" $imageTag) -}}
+{{- $imageReference := index (splitList "@" $imageTag) 0 -}}
+{{- $shortSha := regexFind "^[a-f0-9]{7}" $imageReference -}}
+{{- if $shortSha -}}
+{{- $shortSha -}}
+{{- else if and (le (len $imageTag) 63) (regexMatch "^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$" $imageTag) -}}
 {{- $imageTag -}}
 {{- else -}}
 {{- printf "sha256-%s" (trunc 56 (sha256sum $imageTag)) -}}

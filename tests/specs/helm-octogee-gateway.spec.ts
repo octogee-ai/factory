@@ -2,7 +2,6 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { parseDocument } from "yaml";
@@ -355,10 +354,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       "Deployment",
       "octogee-gateway-bender",
     ) ?? "";
-    expect(dep).toMatch(/gateway-image:\s*"?deadbee1"?/);
+    expect(dep).toMatch(/gateway-image:\s*"?deadbee"?/);
   });
 
-  it("keeps a digest-pinned image intact while deriving an API-valid gateway-image label", () => {
+  it("keeps a digest-pinned image intact while labeling the pod with its short build SHA", () => {
     const candidateTag = `8c356bb-oc2026.7.1@sha256:${"a".repeat(64)}`;
     const dep = findDoc(
       helmTemplate("octogee-gw-default", { imageTag: candidateTag }),
@@ -370,10 +369,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(dep).toContain(
       `image: "registry.example/octogee-gateway:${candidateTag}"`,
     );
-    expect(label).toBe(
-      `sha256-${createHash("sha256").update(candidateTag).digest("hex").slice(0, 56)}`,
-    );
-    expect(label).toHaveLength(63);
+    expect(label).toBe("8c356bb");
     expect(label).toMatch(/^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/);
   });
 
