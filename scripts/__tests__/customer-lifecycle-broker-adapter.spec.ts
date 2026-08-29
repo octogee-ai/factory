@@ -1366,6 +1366,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("preserves isolated coach policy while refreshing no-op routing monitors", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
     routingActivationMocks.pending = true;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const patch = args.buildPatch({
@@ -1377,8 +1378,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
           },
         },
       }) as {
+        agents: { list: Array<{ id?: string; tools?: unknown }> };
         channels: { mattermost: { accounts: Record<string, unknown> } };
       };
+      expect(
+        patch.agents.list.find((agent) => agent.id === "octogee-alice-proj-orbit-coach"),
+      ).not.toHaveProperty("tools");
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
         groupPolicy: "allowlist",
         groupAllowFrom: ["mm-alice"],
@@ -2698,7 +2703,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
     const args = call[0] as {
       buildPatch: (current: unknown) => {
-        agents: { list: Array<{ id?: string; workspace?: string }> };
+        agents: { list: Array<{ id?: string; workspace?: string; tools?: unknown }> };
         bindings: Array<{ agentId: string; match: { accountId: string; peer: { id: string } } }>;
         channels: {
           mattermost: {
@@ -2724,6 +2729,9 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       "octogee-alice-proj-orbit-coach",
       "octogee-bob-coach",
     ]);
+    expect(
+      patch.agents.list.find((agent) => agent.id === "octogee-alice-proj-orbit-coach")?.tools,
+    ).toMatchObject({ profile: "minimal", exec: { mode: "deny" } });
     expect(
       Object.fromEntries(
         patch.bindings

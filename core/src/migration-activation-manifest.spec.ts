@@ -15,6 +15,9 @@ import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
 import {
   CUSTOMER_CODE_DENIED_TOOLS,
   CUSTOMER_WORKFLOW_TOOLS,
+  PRODUCTIVITY_TOOL_NAMES,
+  PROJECT_AGENT_ALLOWED_TOOLS,
+  PROJECT_AGENT_DENIED_TOOLS,
   platformInvariantViolations,
   reconcilePlatformInvariants,
 } from "./system-config-invariants";
@@ -545,6 +548,51 @@ describe("migration activation manifest", () => {
       agents: { entries: Record<string, Record<string, unknown>> };
     };
     expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
+  });
+
+  it("lifts the exact shared project-agent tool fence when activating a Builder", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { entries: {} },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const projectAgentId = "octogee-alice-proj-orbit-coach";
+    const sharedProjectTools = {
+      profile: "minimal",
+      alsoAllow: [...PROJECT_AGENT_ALLOWED_TOOLS],
+      deny: [...PROJECT_AGENT_DENIED_TOOLS],
+      exec: { mode: "deny", host: "node" },
+      fs: { workspaceOnly: true },
+      toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      projectAgents: [{
+        agentId: projectAgentId,
+        accountId: "alice-proj-orbit",
+        agent: { id: projectAgentId, tools: sharedProjectTools },
+        mattermostAccount: {},
+        bindings: [],
+      }],
+    }, {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { entries: Record<string, Record<string, unknown>> };
+    };
+    expect(patch.agents.entries[projectAgentId]).not.toHaveProperty("tools");
   });
 
   it("preserves a Builder-owned coach tool policy during activation", async () => {

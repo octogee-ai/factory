@@ -771,6 +771,7 @@ async function applyAddCustomerConfigPatch(
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
     ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
+    hostCode: builderGateway ? "builder-full" : "customer-restricted",
   });
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
