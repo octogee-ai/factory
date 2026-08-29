@@ -184,7 +184,6 @@
       "replyToModeByChatType": {
         "direct": "all"
       },
-      "threadSessionScope": "channel",
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },

@@ -435,7 +435,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("enables durable Mattermost run threads without the retired activity flag", () => {
+  it("sets Mattermost reply behavior without the retired activity flag", () => {
     const config: any = { channels: { mattermost: {} } };
 
     applyPreBootPatches(config, {});
@@ -443,7 +443,6 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
-      threadSessionScope: "channel",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
@@ -456,7 +455,6 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
-      threadSessionScope: "channel",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
@@ -508,10 +506,10 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost).toMatchObject({
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
-      threadSessionScope: "channel",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
+    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
@@ -994,7 +992,6 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
         mattermost: {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          threadSessionScope: "channel",
           baseUrl: "${MM_URL}",
           commands: "legacy-commands",
           accounts: {
@@ -1112,7 +1109,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
         mattermost: {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          threadSessionScope: "channel",
           baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {
