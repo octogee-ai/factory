@@ -158,6 +158,52 @@ export function repoFileEntries(
     .filter((file) => !target || isTargetDirectoryEntryReadable(target, file.path, file.type));
 }
 
+function directBlobPaths(manifest: Manifest, prefix: string, gitPaths: Set<string>): Set<string> {
+  return new Set(Object.keys(manifest).filter((manifestPath) => {
+    if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) return false;
+    const relative = manifestPath.slice(prefix.length);
+    return relative.length > 0 && !relative.includes("/");
+  }));
+}
+
+interface BlobDirectoryEntryInput {
+  target: Parameters<typeof repoContentsApi>[0] | undefined;
+  manifestPath: string;
+  entryPath: string;
+  name: string;
+  emittedPaths: Set<string>;
+  directBlobPaths: Set<string>;
+}
+
+function blobDirectoryEntry({
+  target,
+  manifestPath,
+  entryPath,
+  name,
+  emittedPaths,
+  directBlobPaths,
+}: BlobDirectoryEntryInput,
+): WorkspaceFileEntry | null {
+  if (directBlobPaths.has(entryPath) || emittedPaths.has(entryPath)) return null;
+  if (target && (!isTargetPathReadable(target, manifestPath) || !isTargetDirectoryEntryReadable(target, entryPath, "dir"))) {
+    return null;
+  }
+  emittedPaths.add(entryPath);
+  return { name, path: entryPath, type: "dir", size: 0, source: "blob" };
+}
+
+function blobFileEntry(
+  target: Parameters<typeof repoContentsApi>[0] | undefined,
+  manifestPath: string,
+  entry: Manifest[string],
+  name: string,
+  emittedPaths: Set<string>,
+): WorkspaceFileEntry | null {
+  if (emittedPaths.has(manifestPath) || (target && !isTargetPathReadable(target, manifestPath))) return null;
+  emittedPaths.add(manifestPath);
+  return { name, path: manifestPath, type: "file", size: entry.size ?? 0, source: "blob" };
+}
+
 export function blobFileEntries(
   manifest: Manifest,
   path: string,
@@ -167,11 +213,7 @@ export function blobFileEntries(
   const prefix = path ? `${path}/` : "";
   const entries: WorkspaceFileEntry[] = [];
   const emittedPaths = new Set(gitPaths);
-  const directBlobPaths = new Set(Object.keys(manifest).filter((manifestPath) => {
-    if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) return false;
-    const relative = manifestPath.slice(prefix.length);
-    return relative.length > 0 && !relative.includes("/");
-  }));
+  const directPaths = directBlobPaths(manifest, prefix, gitPaths);
 
   for (const [manifestPath, entry] of Object.entries(manifest)) {
     if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) continue;
@@ -182,25 +224,20 @@ export function blobFileEntries(
     const [name, ...remainder] = relative.split("/");
     const entryPath = `${prefix}${name}`;
     if (remainder.length > 0) {
-      if (directBlobPaths.has(entryPath) || emittedPaths.has(entryPath)) continue;
-      if (!target || (isTargetPathReadable(target, manifestPath) && isTargetDirectoryEntryReadable(target, entryPath, "dir"))) {
-        entries.push({ name, path: entryPath, type: "dir", size: 0, source: "blob" });
-        emittedPaths.add(entryPath);
-      }
+      const directory = blobDirectoryEntry({
+        target,
+        manifestPath,
+        entryPath,
+        name,
+        emittedPaths,
+        directBlobPaths: directPaths,
+      });
+      if (directory) entries.push(directory);
       continue;
     }
 
-    const file: WorkspaceFileEntry = {
-      name,
-      path: manifestPath,
-      type: "file",
-      size: entry.size ?? 0,
-      source: "blob",
-    };
-    if (!emittedPaths.has(manifestPath) && (!target || isTargetPathReadable(target, manifestPath))) {
-      entries.push(file);
-      emittedPaths.add(manifestPath);
-    }
+    const file = blobFileEntry(target, manifestPath, entry, name, emittedPaths);
+    if (file) entries.push(file);
   }
 
   return entries;
