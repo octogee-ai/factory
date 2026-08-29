@@ -57,11 +57,7 @@ shutdown() {
 }
 trap shutdown TERM INT
 
-# ── Boot banner ─────────────────────────────────────────────────────────────
-# One grep-able line so operators can confirm what's running without
-# exec'ing in to read package.json. BUILD_SHA + OPENCLAW_VERSION +
-# OPENCLAW_FORK_SHA are baked in by Cloud Build.
-log "boot: gateway-image=${BUILD_SHA:-unknown} openclaw=${OPENCLAW_VERSION:-unknown} fork=${OPENCLAW_FORK_SHA:-unknown}"
+log "boot: gateway-image=${BUILD_SHA:-unknown}"
 
 # ── Ensure workspace structure exists (idempotent) ──────────────────────────
 mkdir -p "$OPENCLAW_DIR/customers"

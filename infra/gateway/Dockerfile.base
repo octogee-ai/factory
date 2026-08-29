@@ -1,10 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # octogee-gateway-base — OpenClaw runtime + all heavy/stable deps
 #
-# Rebuild this ONLY when upgrading OpenClaw or changing system packages:
-#   gcloud builds submit --config cloudbuild-base.yaml \
-#     --substitutions=_OPENCLAW_VERSION=2026.4.5 \
-#     --project=octogee
+# Rebuilt from the current OpenClaw main artifact on every gateway build.
 #
 # What lives here (changes rarely → cached across gateway builds):
 #   - OpenClaw npm install
@@ -63,15 +60,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── OpenClaw from private fork tarball ──────────────────────────────────────
-# See infra/gateway/openclaw-tarball/README.md for what's patched and why.
-# Cloud Build stages the pinned tarball from gs://octogee-openclaw-fork/ into
-# this path before the docker build runs. Local docker builds need to
-# `gcloud storage cp` the same object manually (see the README).
-# When our patches land upstream, swap back to `npm install -g openclaw@${OPENCLAW_VERSION}`.
-ARG OPENCLAW_VERSION=latest
-ARG OPENCLAW_COMPATIBILITY_HOST_VERSION=""
-ENV OPENCLAW_COMPATIBILITY_HOST_VERSION=${OPENCLAW_COMPATIBILITY_HOST_VERSION}
-ARG OPENCLAW_MATTERMOST_FORK_SHA=""
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
 COPY infra/gateway/verify-openclaw-tool-policy.mjs /tmp/verify-openclaw-tool-policy.mjs
@@ -80,10 +68,6 @@ RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     test -n "$OPENCLAW_CORE_VERSION"; \
-    if [ -n "$OPENCLAW_COMPATIBILITY_HOST_VERSION" ]; then \
-      test "$OPENCLAW_CORE_VERSION" = "$OPENCLAW_COMPATIBILITY_HOST_VERSION" \
-        || { echo "FATAL: installed OpenClaw core $OPENCLAW_CORE_VERSION does not match compatibility host $OPENCLAW_COMPATIBILITY_HOST_VERSION"; exit 1; }; \
-    fi; \
     openclaw --version; \
     rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
       || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
@@ -173,7 +157,7 @@ RUN set -e; \
     test -n "$OPENCLAW_CORE_VERSION"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
     if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
-      echo "codex: installing vendored fork tarball for core $OPENCLAW_CORE_VERSION (image ${OPENCLAW_VERSION})"; \
+      echo "codex: installing vendored fork tarball for core $OPENCLAW_CORE_VERSION"; \
       CODEX_REPACK="$(mktemp -d)"; \
       tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
       node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package: " + pkg.name); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
@@ -190,35 +174,18 @@ RUN set -e; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \
     if [ -f "$OC_VENDOR/openclaw-parallel-plugin.tgz" ]; then \
-      echo "parallel: installing vendored fork tarball (@${OPENCLAW_VERSION} not on npm)"; \
+      echo "parallel: installing vendored fork tarball"; \
       openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: vendored @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     else \
-      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
+      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
         || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     fi; \
     tail -n 3 /tmp/oc-plugin.log; \
-    MM_STAGED=0; \
-    if [ -d "$(npm root -g)/openclaw/dist/extensions/mattermost" ]; then \
-      echo "mattermost: bundled dist extension present (<=6.10) — no external install"; \
-    else \
-      if [ -n "${OPENCLAW_MATTERMOST_FORK_SHA}" ]; then \
-        test -s /tmp/openclaw-mattermost-fork.tgz; \
-        echo "mattermost: installing local fork ${OPENCLAW_MATTERMOST_FORK_SHA}"; \
-        openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-          || { echo "FATAL: fork @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-        printf '%s\n' '{"channels":{"mattermost":{"replyToMode":"all","replyToModeByChatType":{"direct":"all"},"threadSessionScope":"channel"}}}' \
-          | openclaw config patch --stdin > /tmp/oc-plugin.log 2>&1 \
-          || { echo "FATAL: fork @openclaw/mattermost rejected durable run threads"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-        openclaw config validate > /tmp/oc-plugin.log 2>&1 \
-          || { echo "FATAL: fork @openclaw/mattermost config validation failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-      else \
-        echo "mattermost: bundled dist absent (externalized, 6.11+) — installing @openclaw/mattermost@${OPENCLAW_VERSION}"; \
-        openclaw plugins install "@openclaw/mattermost@${OPENCLAW_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-          || { echo "FATAL: @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-      fi; \
-      tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
-    fi; \
+    test -s /tmp/openclaw-mattermost-fork.tgz; \
+    openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: local @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
     rm -f /tmp/oc-plugin.log /tmp/openclaw-mattermost-fork.tgz; \
     mkdir -p /opt/openclaw-codex-deps; \
     cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm; \
