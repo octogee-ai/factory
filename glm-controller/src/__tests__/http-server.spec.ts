@@ -3,7 +3,6 @@ import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHttpServer,
-  createMaintenanceHttpServer,
   type HttpServerDeps,
 } from "../http-server";
 
@@ -1148,21 +1147,5 @@ describe("createHttpServer — fleet-events watcher sharing", () => {
 
     expect((await streamOnce(app)).status).toBe(200);
     expect(registry.attachCount("users")).toBe(2);
-  });
-});
-
-describe("createMaintenanceHttpServer", () => {
-  it("keeps a frozen controller Ready without exposing admin operations", async () => {
-    const app = createMaintenanceHttpServer();
-
-    const health = await request(app).get("/healthz");
-    expect(health.status).toBe(200);
-    expect(health.body).toEqual({ ok: true, service: "glm-controller" });
-
-    const metrics = await request(app).get("/metrics");
-    expect(metrics.status).toBe(200);
-
-    const admin = await request(app).get("/api/admin/gateways");
-    expect(admin.status).toBe(404);
   });
 });

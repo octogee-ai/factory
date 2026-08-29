@@ -198,7 +198,6 @@ describe("deployment target consumers", () => {
   it("does not embed the active cluster context in fleet operations", () => {
     for (const script of [
       "scripts/ops/fleet.ts",
-      "scripts/ops/set-glm-maintenance.ts",
     ]) {
       expect(source(script), script).not.toContain(
         "gke_octogee_us-central1_octogee-gateway",
@@ -475,16 +474,12 @@ describe("deployment target consumers", () => {
     expect(verify).not.toContain("Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks");
   });
 
-  it("resolves registry paths in gateway promotion code", () => {
-    for (const script of [
-      "scripts/ops/promote-gateway.ts",
-      "scripts/lib/gateway-mutable-config-backfill.ts",
-    ]) {
-      const contents = source(script);
-      expect(contents, script).toContain("@octogee/core/deployment-environment");
-      expect(contents, script).not.toContain("us-central1");
-      expect(contents, script).not.toContain("-docker.pkg.dev/octogee/octogee");
-    }
+  it("resolves registry paths in gateway configuration tooling", () => {
+    const script = "scripts/lib/gateway-mutable-config-backfill.ts";
+    const contents = source(script);
+    expect(contents).toContain("@octogee/core/deployment-environment");
+    expect(contents).not.toContain("us-central1");
+    expect(contents).not.toContain("-docker.pkg.dev/octogee/octogee");
   });
 
   it("delivers the active gateway repository to the Admin fleet UI", () => {

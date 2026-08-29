@@ -7,6 +7,7 @@ const REQUIRED_PLUGINS = [
     "anthropic",
     "memory-core",
     "octogee-chat-tools",
+    "octogee-activity-tools",
     "octogee-access-tools",
     "octogee-connector-tools",
     "octogee-ops-tools",
@@ -27,6 +28,10 @@ const PLUGIN_ENTRIES = REQUIRED_PLUGINS.filter((id) => id !== "memory-core");
 const FLEET_BROKER_URL_PLACEHOLDER = "${FLEET_BROKER_URL}";
 const OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 const PLATFORM_PLUGIN_CONFIGS = {
+    "octogee-activity-tools": {
+        activityEnabled: true,
+        heartbeatMs: 5_000,
+    },
     "octogee-chat-tools": {
         siteUrl: "${MM_SITE_URL}",
         brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,

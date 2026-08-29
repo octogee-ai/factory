@@ -9,7 +9,7 @@ import { createCentralReleaseAuthority } from "../lib/artifact-registry.js";
  * packages, and nothing used to hold them together: a partial revert
  * (9659ddc49) took the generator back to schemaVersion 1 with four platform
  * images while the authority kept demanding schemaVersion 3 and a fifth image
- * no build produces. Every `release cut` then failed on a manifest our own
+ * no build produces. Every deployment then failed on a manifest our own
  * generator had just written. This is the test that would have caught it.
  */
 
@@ -135,7 +135,7 @@ describe("release digest manifest — generator/authority contract", () => {
     // new package name, so a v1 manifest cannot supply the digest the gateway
     // release needs. Everything else about a v1 manifest resolves fine.
     // Operational consequence: the first PROD promotion after this ships must
-    // come from a release cut of this source, not a carried-over v1 cut.
+    // use a build whose manifest carries the Builder image.
     serveManifest({
       schemaVersion: 1,
       sourceSha,

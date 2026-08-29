@@ -74,6 +74,68 @@ describe("channel lifecycle", () => {
     expect(h.mmApi).toHaveBeenCalledWith("/channels/primary/members/member", "DELETE");
   });
 
+  it("revokes membership from a verified legacy Activity channel before the canonical channel", async () => {
+    h.docs.set(channelPath, {
+      kind: "general",
+      mattermost: { channelId: "primary", activityChannelId: "legacy" },
+    });
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general");
+      if (path === "/channels/legacy" && method === "GET") return channel("legacy", "alice-general-activity");
+      if (path.endsWith("/members/member") && method === "DELETE") return {};
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await removeChannelMember(channelPath, "member");
+
+    expect(h.mmApi.mock.calls).toEqual([
+      ["/channels/primary"],
+      ["/channels/legacy"],
+      ["/channels/legacy/members/member", "DELETE"],
+      ["/channels/primary/members/member", "DELETE"],
+    ]);
+  });
+
+  it("refuses a forged legacy Activity pointer before revoking either membership", async () => {
+    h.docs.set(channelPath, {
+      kind: "general",
+      mattermost: { channelId: "primary", activityChannelId: "legacy" },
+    });
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general");
+      if (path === "/channels/legacy" && method === "GET") return channel("legacy", "victim-general", "victim-team");
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await expect(removeChannelMember(channelPath, "member"))
+      .rejects.toBeInstanceOf(MattermostChannelBindingError);
+
+    expect(h.mmApi.mock.calls.some(([, method]) => method === "DELETE")).toBe(false);
+  });
+
+  it("restores legacy Activity membership when canonical revocation fails", async () => {
+    h.docs.set(channelPath, {
+      kind: "general",
+      mattermost: { channelId: "primary", activityChannelId: "legacy" },
+    });
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general");
+      if (path === "/channels/legacy" && method === "GET") return channel("legacy", "alice-general-activity");
+      if (path === "/channels/legacy/members/member" && method === "DELETE") return {};
+      if (path === "/channels/primary/members/member" && method === "DELETE") throw new Error("primary failed");
+      if (path === "/channels/legacy/members" && method === "POST") return {};
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await expect(removeChannelMember(channelPath, "member")).rejects.toThrow("primary failed");
+
+    expect(h.mmApi).toHaveBeenCalledWith(
+      "/channels/legacy/members",
+      "POST",
+      { user_id: "member" },
+    );
+  });
+
   it.each([
     ["add", addChannelMember],
     ["remove", removeChannelMember],

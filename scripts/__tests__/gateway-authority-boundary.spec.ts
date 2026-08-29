@@ -16,7 +16,6 @@ const POLICY_AND_CREDENTIAL_SOURCES = [
   "scripts/entrypoints/pre-boot-config.ts",
   "scripts/ops/capture-byosub-credential.ts",
   "scripts/ops/assign-customer-gateway.ts",
-  "scripts/ops/promote-gateway.ts",
   "scripts/ops/set-gateway-overrides.ts",
 ] as const;
 

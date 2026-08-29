@@ -249,7 +249,7 @@ import {
   createProjectHostingRetirementClient,
   retireWorkspaceBeforeLegacyHostingDeletion,
 } from "./project-hosting-retirement-client.js";
-import { startHttpServer, startMaintenanceHttpServer } from "./http-server.js";
+import { startHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
   cancelStripeSubscription,
@@ -296,11 +296,6 @@ import { PRIMARY_SHARED_GATEWAY_ID } from "@octogee/shared/types/shared-gateway-
 import { startSharedGatewayAutoscaler } from "./shared-gateway-autoscaler.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
-  createFirestoreMaintenanceGate,
-  startMaintenanceRestartWatcher,
-  type ControllerMaintenanceGate,
-} from "./maintenance-gate.js";
-import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
   createFirestorePlacementPolicyReconcilerDeps,
   startPlacementPolicyReconciler,
@@ -329,7 +324,6 @@ const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
   15_000,
 );
 const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
-const MAINTENANCE_GATE_POLL_MS = 5_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const NAMESPACE = (function () {
@@ -441,8 +435,6 @@ interface ControllerDeps {
   ) => Promise<void>;
   handlers: OperationHandlers;
   log: (msg: string) => void;
-  maintenanceGate?: ControllerMaintenanceGate;
-
   syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string }>,
   ) => Promise<void>;
@@ -464,38 +456,6 @@ interface ControllerDeps {
   // Fed by the reconciler's fleet listeners; absent in unit fixtures that only
   // exercise reconcile scheduling.
   informer?: FleetInformer;
-}
-
-function maintenanceFreezeReasonSuffix(reason: string | null): string {
-  return reason ? `: ${reason}` : "";
-}
-
-async function maintenanceGateFrozen(
-  gate: ControllerMaintenanceGate | undefined,
-  log: (msg: string) => void,
-  scope: string,
-): Promise<boolean> {
-  if (!gate) return false;
-  try {
-    const state = await gate.state();
-    if (!state.frozen) return false;
-    log(
-      `[glm-controller] maintenance freeze blocks ${scope}${maintenanceFreezeReasonSuffix(state.reason)}`,
-    );
-    return true;
-  } catch (err) {
-    log(
-      `[glm-controller] maintenance gate read failed; blocking ${scope}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return true;
-  }
-}
-
-async function controllerWorkFrozen(
-  deps: ControllerDeps,
-  scope: string,
-): Promise<boolean> {
-  return maintenanceGateFrozen(deps.maintenanceGate, deps.log, scope);
 }
 
 function deploymentNameForInstance(gatewayId: string): string {
@@ -1284,7 +1244,6 @@ async function runReconcilePhase<T>(
 }
 
 async function reconcileOnce(deps: ControllerDeps): Promise<void> {
-  if (await controllerWorkFrozen(deps, "reconcile")) return;
   const runtime = await runReconcilePhase(deps, "durable-state", async () => {
     const state = await readDurableRuntimeGateways(deps.db);
     assertDurableRuntimeState(state);
@@ -1305,7 +1264,6 @@ async function reconcileGatewayChanges(
   deps: ControllerDeps,
   gatewayIds: readonly string[],
 ): Promise<void> {
-  if (await controllerWorkFrozen(deps, "targeted reconcile")) return;
   await runReconcilePhase(deps, "convergence", () =>
     convergeGatewaysIfConfigured(deps, gatewayIds)
   );
@@ -1713,10 +1671,6 @@ async function attemptClaimOrQueueOperation(
 ): Promise<{ outcome: "claimed" | "queued" | "skipped" | "fenced"; fresh?: Operation }> {
   try {
     return await deps.db.runTransaction(async (txn) => {
-      if (deps.maintenanceGate) {
-        const gate = await deps.maintenanceGate.stateInTransaction(txn);
-        if (gate.frozen) return { outcome: "skipped" as const };
-      }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return { outcome: "skipped" as const };
       const data = fresh.data() as unknown;
@@ -1883,10 +1837,6 @@ async function reAdoptAndRunOperation(
   let adopted: Operation | null = null;
   try {
     adopted = await deps.db.runTransaction(async (txn) => {
-      if (deps.maintenanceGate) {
-        const gate = await deps.maintenanceGate.stateInTransaction(txn);
-        if (gate.frozen) return null;
-      }
       const fresh = await txn.get(ref);
       if (!fresh.exists) return null;
       const data = fresh.data() as unknown;
@@ -1923,7 +1873,6 @@ async function runClaimedOperation(
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  if (await controllerWorkFrozen(deps, `operation ${op.id}`)) return;
   const fenced = await deps.db.runTransaction(async (txn) => {
     const fresh = await txn.get(ref);
     if (!fresh.exists) return false;
@@ -2238,7 +2187,6 @@ function startControllerBackgroundTasks({
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
-      maintenanceGate: deps.maintenanceGate,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
   );
@@ -2296,30 +2244,6 @@ function createControllerShutdown(
     for (const stop of stoppers) stop();
     process.exit(0);
   };
-}
-
-function holdFrozenController(
-  maintenanceGate: ControllerMaintenanceGate,
-  log: (msg: string) => void,
-): void {
-  const shutdown = createControllerShutdown(
-    [
-      startMaintenanceHttpServer({ port: HTTP_PORT, log }),
-      startMaintenanceRestartWatcher({
-        gate: maintenanceGate,
-        log,
-        restart: () => {
-          log("[glm-controller] maintenance freeze cleared; restarting to resume startup safely");
-          process.exit(0);
-        },
-        restartWhenFrozen: false,
-        intervalMs: MAINTENANCE_GATE_POLL_MS,
-      }),
-    ],
-    log,
-  );
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
 }
 
 interface ControllerRuntime {
@@ -2393,10 +2317,7 @@ function buildSurgeHandoffDeps(input: {
   };
 }
 
-async function createControllerRuntime(
-  db: Firestore,
-  maintenanceGate: ControllerMaintenanceGate,
-): Promise<ControllerRuntime> {
+async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
     runKubectl,
@@ -2521,7 +2442,6 @@ async function createControllerRuntime(
     reconcileImagePins,
     handlers,
     log,
-    maintenanceGate,
     syncFleetIngress: syncEdgeIngressForGateways,
     convergeGateways,
     reconcileSafetyRefreshMs: RECONCILE_SAFETY_REFRESH_MS_DEFAULT,
@@ -2547,15 +2467,7 @@ async function main(): Promise<void> {
     storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
   });
   const db = getFirestore();
-  const maintenanceGate = createFirestoreMaintenanceGate(db);
-  if (await maintenanceGateFrozen(maintenanceGate, log, "startup")) {
-    holdFrozenController(maintenanceGate, log);
-    return;
-  }
-  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(
-    db,
-    maintenanceGate,
-  );
+  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db);
 
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
@@ -2569,16 +2481,10 @@ async function main(): Promise<void> {
     declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
     ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
     convergeGateways: deps.convergeGateways,
-    workFrozen: () => controllerWorkFrozen(deps, "shared pool reconcile"),
     log: deps.log,
     now: () => Date.now(),
   };
   await runSharedGatewayPoolReconcile(sharedGatewayPoolDeps, "startup");
-  if (await controllerWorkFrozen(deps, "orphan-op resume")) {
-    holdFrozenController(maintenanceGate, log);
-    return;
-  }
-
   try {
     await completeHealthyBootstrapAddGatewayOperations({
       db,
@@ -2601,20 +2507,12 @@ async function main(): Promise<void> {
     log,
     resumableKinds: RESUMABLE_OP_KINDS,
     resumableOperation: operationIsRestartResumable,
-    redrive: async (op, ref) => {
-      if (await controllerWorkFrozen(deps, "orphan-op resume")) return;
-      await reAdoptAndRunOperation(op, ref, deps);
-    },
+    redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
   }).catch((err) =>
     log(
       `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
     ),
   );
-
-  if (await controllerWorkFrozen(deps, "background startup")) {
-    holdFrozenController(maintenanceGate, log);
-    return;
-  }
 
   const stoppers = startControllerBackgroundTasks({
     db,
@@ -2633,25 +2531,12 @@ async function main(): Promise<void> {
       recordMaxCapacity: recordSharedGatewayMaxCapacity,
     }, SHARED_GATEWAY_AUTOSCALER_MS),
   );
-  stoppers.push(
-    startMaintenanceRestartWatcher({
-      gate: maintenanceGate,
-      log,
-      restart: () => {
-        log("[glm-controller] maintenance freeze observed; exiting fail-closed");
-        process.exit(0);
-      },
-      restartWhenFrozen: true,
-      intervalMs: MAINTENANCE_GATE_POLL_MS,
-    }),
-  );
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 
 export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
-  if (await controllerWorkFrozen(deps, "glm gateway bootstrap")) return;
   deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
 }
 
@@ -2687,7 +2572,6 @@ function bootstrapGatewayArtifactFromEnvironment(): GatewayArtifact {
 }
 
 export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
-  if (await controllerWorkFrozen(deps, "default gateway bootstrap")) return;
   if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
     deps.log("[glm-controller] durable default gateway bootstrap disabled");
     return;

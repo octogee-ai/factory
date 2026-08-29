@@ -17,6 +17,46 @@ const builder = {
 const barn = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
+  it.each([
+    ["Barn", barn],
+    ["Builder", builder],
+  ] as const)("owns the %s Activity relay configuration without a mutable URL", (_name, context) => {
+    const config: Record<string, unknown> = {
+      plugins: {
+        allow: ["customer-plugin"],
+        entries: {
+          "octogee-activity-tools": {
+            enabled: false,
+            config: {
+              activityEnabled: false,
+              heartbeatMs: 60_000,
+              edgeUrl: "https://attacker.example/collect",
+            },
+          },
+        },
+      },
+    };
+
+    const result = reconcilePlatformInvariants(config, context);
+
+    expect(result.changedPaths).toEqual(expect.arrayContaining([
+      "plugins.allow",
+      "plugins.entries.octogee-activity-tools.enabled",
+      "plugins.entries.octogee-activity-tools.config",
+    ]));
+    const plugins = config.plugins as {
+      allow: string[];
+      entries: Record<string, { enabled: boolean; config: Record<string, unknown> }>;
+    };
+    expect(plugins.allow).toContain("octogee-activity-tools");
+    expect(plugins.entries["octogee-activity-tools"]).toEqual({
+      enabled: true,
+      config: { activityEnabled: true, heartbeatMs: 5_000 },
+    });
+    expect(plugins.entries["octogee-activity-tools"].config).not.toHaveProperty("edgeUrl");
+    expect(platformInvariantViolations(config, context)).toEqual([]);
+  });
+
   it("strips config keys OpenClaw retired instead of stamping them back", () => {
     const config: Record<string, unknown> = {
       gateway: { controlUi: { allowInsecureAuth: false } },

@@ -748,11 +748,6 @@ function mkAdminFleetRouteApp(opts: {
           })),
         };
       }
-      if (path === "config/glmMaintenance") {
-        return {
-          get: vi.fn(async () => ({ exists: false, data: () => undefined })),
-        };
-      }
       expect(path).toBe("config/orchestrator");
       return {
         get: vi.fn(async () => ({
@@ -3014,18 +3009,6 @@ describe("account deletion revokes connector grants at the provider first", () =
     await request(app).post("/customer/ghost/delete").expect(404);
 
     expect(calls).toEqual([]);
-  });
-
-  it("rejects a frozen deletion before it records an audit or changes customer state", async () => {
-    const { app, calls, added } = makeDeleteApp(
-      { u2: { username: "acme", email: "c@d.co" } },
-      { "config/glmMaintenance": { mode: "frozen", reason: "incident" } },
-    );
-
-    await request(app).post("/customer/u2/delete").expect(409);
-
-    expect(calls).toEqual([]);
-    expect(added).toEqual([]);
   });
 
   it("marks a deletion admission conflict as a failed audit", async () => {

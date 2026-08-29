@@ -1,27 +1,11 @@
 import type { OperationAuditAliasOutcome, OperationAuditPartialOutcome, OperationAuditReleaseRolloutLinkage } from "@octogee/shared/types/glm";
-import { type OperationAuditActionClaim, type OperationAuditIntentInput, type OperationsDb, type OperationsDocRef } from "./operation-audit.js";
-export declare const GLM_MAINTENANCE_DOC_PATH = "config/glmMaintenance";
-export interface NormalFleetMutationDb extends OperationsDb {
-    doc(path: string): OperationsDocRef;
-}
-interface MaintenanceGateSnapshot {
-    exists: boolean;
-    data(): Record<string, unknown> | undefined;
-}
-export declare class FleetMutationFrozenError extends Error {
-    readonly reason: string | null;
-    constructor(reason: string | null);
-}
-export declare class FleetMutationMaintenanceUnavailableError extends Error {
-    constructor(cause: unknown);
-}
+import { type OperationAuditActionClaim, type OperationAuditIntentInput, type OperationsDb } from "./operation-audit.js";
+export type NormalFleetMutationDb = OperationsDb;
 export declare class FleetMutationIdempotencyError extends Error {
     readonly auditId: string;
     readonly status: "recorded" | "in-progress" | "completed" | "failed";
     constructor(auditId: string, status: "recorded" | "in-progress" | "completed" | "failed");
 }
-export declare function assertNormalFleetMutationOpen(db: NormalFleetMutationDb): Promise<void>;
-export declare function assertNormalFleetMutationSnapshotOpen(snapshot: MaintenanceGateSnapshot): void;
 export type NormalFleetMutationResult = {
     outcome: "completed";
     aliasOutcomes?: OperationAuditAliasOutcome[];
@@ -50,4 +34,3 @@ export interface NormalFleetMutationInput<T> extends OperationAuditIntentInput {
     classifyResult?: (result: T) => NormalFleetMutationResult;
 }
 export declare function runNormalFleetMutation<T>(db: NormalFleetMutationDb, input: NormalFleetMutationInput<T>): Promise<T>;
-export {};

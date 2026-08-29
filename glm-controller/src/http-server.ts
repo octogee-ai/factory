@@ -250,12 +250,6 @@ function addHealthAndMetricsRoutes(app: Express): void {
   });
 }
 
-export function createMaintenanceHttpServer(): Express {
-  const app = express();
-  addHealthAndMetricsRoutes(app);
-  return app;
-}
-
 export function createHttpServer(deps: HttpServerDeps): Express {
   const app = express();
   app.use(corsMiddleware);
@@ -325,19 +319,6 @@ export function startHttpServer(
   const app = createHttpServer(deps);
   const server: Server = app.listen(deps.port, () => {
     deps.log(`[glm-controller] http server listening on :${deps.port}`);
-  });
-  return () => {
-    server.close();
-  };
-}
-
-export function startMaintenanceHttpServer(input: {
-  port: number;
-  log: (msg: string) => void;
-}): () => void {
-  const app = createMaintenanceHttpServer();
-  const server: Server = app.listen(input.port, () => {
-    input.log(`[glm-controller] maintenance http server listening on :${input.port}`);
   });
   return () => {
     server.close();
