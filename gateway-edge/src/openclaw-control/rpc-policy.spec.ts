@@ -117,6 +117,12 @@ describe("OpenClaw Dashboard RPC policy", () => {
       .toMatchObject({ allowed: false, category: "config_mutation", reason: "platform-invariant" });
     expect(evaluateOpenClawControlRpcForProfile(staleButOwnerShaped, context, "native-owner"))
       .toMatchObject({ allowed: true, category: "config_mutation" });
+    const fullOwnerConfig = request("config.set", {
+      raw: JSON.stringify(current),
+      baseHash: "hash-1",
+    });
+    expect(evaluateOpenClawControlRpcForProfile(fullOwnerConfig, policyContext(), "native-owner"))
+      .toMatchObject({ allowed: true, category: "config_mutation", outbound: fullOwnerConfig });
     expect(evaluateOpenClawControlRpcForProfile(ownerEdit, policyContext(), "native-owner"))
       .toMatchObject({ allowed: false, category: "config_mutation", reason: "config-invalid" });
   });

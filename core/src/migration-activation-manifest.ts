@@ -14,7 +14,11 @@ import {
 } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
-import { reconcileCustomerAgentEntry } from "./system-config-invariants.js";
+import {
+  reconcileBuilderAgentEntry,
+  reconcileCustomerAgentEntry,
+  type GatewayConfigClass,
+} from "./system-config-invariants.js";
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
@@ -463,6 +467,7 @@ export async function applyOpenClawActivationManifest(
     cache?: ConfigCache;
     signal?: AbortSignal;
     log: (msg: string) => void;
+    gatewayClass?: GatewayConfigClass;
     onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
     authInheritanceAnchor?: {
       agentId: string;
@@ -475,6 +480,9 @@ export async function applyOpenClawActivationManifest(
   restartExistingAccountIds: string[];
 }> {
   const authInheritanceAnchor = opts.authInheritanceAnchor;
+  const reconcileAgent = opts.gatewayClass === "builder"
+    ? reconcileBuilderAgentEntry
+    : reconcileCustomerAgentEntry;
   if (
     authInheritanceAnchor &&
     rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId
@@ -483,7 +491,7 @@ export async function applyOpenClawActivationManifest(
   }
   const normalizedAuthInheritanceAnchor = authInheritanceAnchor && {
     ...authInheritanceAnchor,
-    agent: reconcileCustomerAgentEntry(
+    agent: reconcileAgent(
       authInheritanceAnchor.agentId,
       authInheritanceAnchor.agent,
     ),
@@ -502,7 +510,7 @@ export async function applyOpenClawActivationManifest(
         const targetUsesKeyedEntries = isRecord(agents?.entries);
         const activationAgents = manifestAgents(manifest).map((entry) => ({
           ...entry,
-          agent: reconcileCustomerAgentEntry(
+          agent: reconcileAgent(
             entry.agentId,
             activationAgentForTarget(
               entry.agent,
