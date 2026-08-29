@@ -15,6 +15,7 @@ const DIGEST_BOUND_IMAGE_TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set([
     "imageRepository",
     "imageTag",
+    "openclawSourceSha",
     "profileImages",
     "gatewayEdgeImage",
 ]);
@@ -30,6 +31,10 @@ export function isReleasePayload(value) {
         return false;
     if (!hasReleasePayloadShape(value) || !hasReleasePayloadIdentity(value))
         return false;
+    if (value.openclawSourceSha !== undefined &&
+        (typeof value.openclawSourceSha !== "string" || !/^[a-f0-9]{40}$/.test(value.openclawSourceSha))) {
+        return false;
+    }
     if (value.profileImages !== undefined &&
         !isGatewayProfileImages(value.profileImages, value.imageRepository, value.imageTag)) {
         return false;

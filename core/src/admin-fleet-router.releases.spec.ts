@@ -444,6 +444,7 @@ function immutableBuild(sourceSha = "a".repeat(40)): ReleaseDigestManifest {
     sourceSha,
     manifestDigest: `sha256:${"b".repeat(64)}`,
     openclawVersion: "2026.8.1",
+    openclawSourceSha: "f".repeat(40),
     repository: "us-central1-docker.pkg.dev/octogee/octogee",
     surfaces: {
       gateway: {
@@ -490,6 +491,7 @@ describe("POST /gateways/:id/deploy", () => {
     expect(store.get(`gateways/shared-a/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toMatchObject({
       payload: {
         imageTag: `aaaaaaa-oc2026.8.1@sha256:${"c".repeat(64)}`,
+        openclawSourceSha: "f".repeat(40),
         profileImages: {
           builder: { imageTag: `aaaaaaa-oc2026.8.1@sha256:${"d".repeat(64)}` },
         },

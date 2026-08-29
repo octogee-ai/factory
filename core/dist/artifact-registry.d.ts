@@ -31,6 +31,7 @@ export interface ReleaseDigestManifest {
     sourceSha: string;
     manifestDigest: string;
     openclawVersion: string;
+    openclawSourceSha?: string;
     repository: string;
     surfaces: {
         gateway: Record<string, string>;

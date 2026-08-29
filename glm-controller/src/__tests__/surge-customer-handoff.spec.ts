@@ -12,8 +12,9 @@ import { decideRollStateMigration } from "../roll-state-migration.js";
 import type { OperationStatus } from "@octogee/shared/types/glm";
 
 const MIGRATE_STATE = decideRollStateMigration({
-  sourceOpenclawVersion: "2026.7.2-beta.7",
+  sourceOpenclawVersion: "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
   targetOpenclawVersion: "2026.7.2-beta.7",
+  targetOpenclawSourceSha: "a".repeat(40),
 });
 const PROVISION_FRESH = decideRollStateMigration({
   sourceOpenclawVersion: "2026.7.1",

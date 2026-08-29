@@ -282,6 +282,7 @@ export interface ReleaseDigestManifest {
   sourceSha: string;
   manifestDigest: string;
   openclawVersion: string;
+  openclawSourceSha?: string;
   repository: string;
   surfaces: {
     gateway: Record<string, string>;
@@ -396,6 +397,13 @@ function validateReleaseDigestManifest(input: unknown, manifestDigest: string, e
   if (typeof manifest.openclawVersion !== "string" || !OPENCLAW_VERSION_PATTERN.test(manifest.openclawVersion)) {
     throw new Error("release digest manifest openclawVersion is invalid");
   }
+  if (
+    manifest.openclawSourceSha !== undefined &&
+    (typeof manifest.openclawSourceSha !== "string" ||
+      !SOURCE_SHA_PATTERN.test(manifest.openclawSourceSha))
+  ) {
+    throw new Error("release digest manifest openclawSourceSha is invalid");
+  }
   if (manifest.repository !== expectedRepository) {
     throw new Error("release digest manifest repository does not match CENTRAL Artifact Registry");
   }
@@ -419,6 +427,9 @@ function validateReleaseDigestManifest(input: unknown, manifestDigest: string, e
     sourceSha,
     manifestDigest: assertDigest(manifestDigest, "release digest manifest"),
     openclawVersion: manifest.openclawVersion,
+    ...(typeof manifest.openclawSourceSha === "string"
+      ? { openclawSourceSha: manifest.openclawSourceSha }
+      : {}),
     repository: expectedRepository,
     surfaces: { gateway, platform: parseSurface("platform") },
   };
@@ -432,6 +443,9 @@ function validateResolvedReleaseDigestManifest(
     {
       sourceSha: manifest.sourceSha,
       openclawVersion: manifest.openclawVersion,
+      ...(manifest.openclawSourceSha
+        ? { openclawSourceSha: manifest.openclawSourceSha }
+        : {}),
       repository: manifest.repository,
       surfaces: manifest.surfaces,
     },

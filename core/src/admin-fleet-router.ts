@@ -2940,6 +2940,9 @@ function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleaseP
   const payload: ReleasePayload = {
     imageRepository: `${manifest.repository}/octogee-gateway`,
     imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
+    ...(manifest.openclawSourceSha
+      ? { openclawSourceSha: manifest.openclawSourceSha }
+      : {}),
     profileImages: {
       builder: {
         imageRepository: `${manifest.repository}/octogee-gateway-builder`,

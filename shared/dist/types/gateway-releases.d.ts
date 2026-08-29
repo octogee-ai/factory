@@ -45,6 +45,7 @@ export interface GatewayProfileImages {
 export interface ReleasePayload {
     imageRepository: string;
     imageTag: string;
+    openclawSourceSha?: string;
     profileImages?: GatewayProfileImages;
     gatewayEdgeImage?: GatewayEdgeImage;
 }
