@@ -24,7 +24,7 @@ Start from the OpenClaw checkout that has `origin` pointing at
 cd /path/to/openclaw
 git fetch origin
 git switch octogee/gateway-scaling-patches-main
-git rebase --rebase-merges origin/main
+git rebase origin/main
 ```
 
 Keep the overlay small. If upstream now supplies a behavior, drop the related
@@ -37,8 +37,12 @@ Build and test the changed behavior:
 pnpm install --frozen-lockfile
 pnpm build
 
-pnpm exec vitest run \
-  src/gateway/server.sessions.delete-lifecycle.test.ts \
+node scripts/run-vitest.mjs run \
+  --config test/vitest/vitest.gateway-server.config.ts \
+  src/gateway/server.sessions.delete-lifecycle.test.ts
+
+node scripts/run-vitest.mjs run \
+  --config test/vitest/vitest.extension-mattermost.config.ts \
   extensions/mattermost/src/mattermost/admission.test.ts \
   extensions/mattermost/src/mattermost/activity-gateway-runtime.test.ts \
   extensions/mattermost/src/mattermost/gateway-methods.test.ts
@@ -107,12 +111,12 @@ reliable on OpenClaw's large export map.
 The branch is authoritative. At the time of a refresh, re-check each patch
 against upstream `main` and remove anything OpenClaw has adopted.
 
-| Patch area | Why Octogee carries it |
-| --- | --- |
-| Sandbox-backed file discovery | Keeps native `ls`, `find`, and `grep` available while [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) awaits a maintainer decision. |
-| Secret handling | Reuses unchanged resolved SecretRefs and exposes the authenticated `secrets.apply` RPC needed by Octogee configuration flow. |
-| Mattermost admission and activity | Provides durable ingress admission, live run control, authoritative delivery facts, and gateway activity snapshots for the Octogee chat experience. |
-| No-archive session deletion | Lets Ops Agent delete transient one-shot sessions without spending CPU compressing an archive, which prevents gateway event-loop starvation. |
+| Patch area | Latest assessment | Why Octogee carries it |
+| --- | --- | --- |
+| Sandbox-backed file discovery | Upstream still has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open and is narrowed to proven Linux confined-host support plus sandbox/remote bridges. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
+| Secret handling | Upstream has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids re-running secret providers for unrelated config writes and supports Octogee's configuration flow. |
+| Mattermost admission and activity | Upstream requester-receipt work does not provide durable Mattermost ingress admission, live run control, delivery observation, or gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
+| No-archive session deletion | Upstream has the internal purge primitive for lifecycle-owned cleanup, but its public `sessions.delete` schema cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and gateway event-loop starvation. |
 
 The gateway base still verifies actual runtime contracts such as the expected
 configuration behavior and tool-policy shape. Those are product checks, not
