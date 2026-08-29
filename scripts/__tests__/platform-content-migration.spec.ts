@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -17,19 +16,17 @@ import {
   databaseProbeManifest,
   discoverDisk,
   discoverWorkload,
-  readCanonicalOpenclawVersion,
   targetInventoryProbeManifest,
 } from '../ops/migrate-platform-content.js'
 
 describe('platform content migration plan', () => {
-  it('resolves the canonical exact-commit Builder image to its Artifact Registry digest', () => {
+  it('resolves the exact-commit Builder image to its Artifact Registry digest', () => {
     const commands: Array<{ command: string; args: readonly string[] }> = []
     const image = resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
       artifactRegistryProjectId: 'octogee',
       artifactRegistryRepository: 'octogee',
       releaseCommit: 'a'.repeat(40),
-      canonicalOpenclawVersion: '2026.7.1',
       run: (command, args) => {
         commands.push({ command, args })
         if (args[0] === 'artifacts') {
@@ -40,7 +37,6 @@ describe('platform content migration plan', () => {
           substitutions: {
             COMMIT_SHA: 'a'.repeat(40),
             _IMAGE_TAG: 'aaaaaaa',
-            _OPENCLAW_VERSION: '2026.7.1',
           },
           results: {
             images: [{
@@ -54,17 +50,16 @@ describe('platform content migration plan', () => {
 
     expect(image).toEqual({
       releaseCommit: 'a'.repeat(40),
-      canonicalOpenclawVersion: '2026.7.1',
-      tag: 'aaaaaaa-oc2026.7.1',
+      tag: 'aaaaaaa',
       digest: `sha256:${'b'.repeat(64)}`,
-      reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa-oc2026.7.1@sha256:${'b'.repeat(64)}`,
+      reference: `us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa@sha256:${'b'.repeat(64)}`,
     })
     expect(commands).toEqual([
       {
         command: 'gcloud',
         args: [
           'artifacts', 'docker', 'images', 'describe',
-          'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa-oc2026.7.1',
+          'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa',
           '--project=octogee', '--format=json',
         ],
       },
@@ -82,25 +77,6 @@ describe('platform content migration plan', () => {
     ])
   })
 
-  it('reads the canonical OpenClaw version from the real repository layout', () => {
-    expect(readCanonicalOpenclawVersion(path.resolve(process.cwd(), '..'))).toBe(
-      '2026.8.1-main.46ae614e',
-    )
-  })
-
-  it('rejects duplicate canonical OpenClaw version declarations', () => {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'octogee-openclaw-version-'))
-    fs.writeFileSync(path.join(repo, 'cloudbuild.yaml'), [
-      'substitutions:',
-      '  _OPENCLAW_VERSION: "2026.7.1"',
-      '  _OPENCLAW_VERSION: "2026.7.2"',
-    ].join('\n'))
-
-    expect(() => readCanonicalOpenclawVersion(repo)).toThrow(
-      'could not resolve the canonical OpenClaw version',
-    )
-  })
-
   it.each([
     ['missing Artifact Registry digest', '{}'],
     ['mutable digest', JSON.stringify({ image_summary: { digest: 'latest' } })],
@@ -110,7 +86,6 @@ describe('platform content migration plan', () => {
       artifactRegistryProjectId: 'octogee',
       artifactRegistryRepository: 'octogee',
       releaseCommit: 'a'.repeat(40),
-      canonicalOpenclawVersion: '2026.7.1',
       run: () => output,
     })).toThrow('did not resolve to an immutable digest')
   })
@@ -122,16 +97,6 @@ describe('platform content migration plan', () => {
       substitutions: {
         COMMIT_SHA: 'c'.repeat(40),
         _IMAGE_TAG: 'aaaaaaa',
-        _OPENCLAW_VERSION: '2026.7.1',
-      },
-      results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
-    }]],
-    ['a different OpenClaw version', [{
-      status: 'SUCCESS',
-      substitutions: {
-        COMMIT_SHA: 'a'.repeat(40),
-        _IMAGE_TAG: 'aaaaaaa',
-        _OPENCLAW_VERSION: '2026.7.0',
       },
       results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'b'.repeat(64)}` }] },
     }]],
@@ -140,7 +105,6 @@ describe('platform content migration plan', () => {
       substitutions: {
         COMMIT_SHA: 'a'.repeat(40),
         _IMAGE_TAG: 'aaaaaaa',
-        _OPENCLAW_VERSION: '2026.7.1',
       },
       results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'c'.repeat(64)}` }] },
     }]],
@@ -150,31 +114,20 @@ describe('platform content migration plan', () => {
       artifactRegistryProjectId: 'octogee',
       artifactRegistryRepository: 'octogee',
       releaseCommit: 'a'.repeat(40),
-      canonicalOpenclawVersion: '2026.7.1',
       run: (_command, args) => args[0] === 'artifacts'
         ? JSON.stringify({ image_summary: { digest: `sha256:${'b'.repeat(64)}` } })
         : JSON.stringify(builds),
     })).toThrow('does not have trusted exact-source Cloud Build provenance')
   })
 
-  it('rejects a non-release commit or canonical version before querying Artifact Registry', () => {
+  it('rejects a non-release commit before querying Artifact Registry', () => {
     expect(() => resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
       artifactRegistryProjectId: 'octogee',
       artifactRegistryRepository: 'octogee',
       releaseCommit: 'short',
-      canonicalOpenclawVersion: '2026.7.1',
       run: () => { throw new Error('must not query') },
     })).toThrow('exact 40-character Git commit')
-
-    expect(() => resolvePlatformContentMigrationOperatorImage({
-      artifactRegistryLocation: 'us-west1',
-      artifactRegistryProjectId: 'octogee',
-      artifactRegistryRepository: 'octogee',
-      releaseCommit: 'a'.repeat(40),
-      canonicalOpenclawVersion: 'latest',
-      run: () => { throw new Error('must not query') },
-    })).toThrow('canonical OpenClaw version')
   })
 
   it('allows only the central-to-west pair for the same environment', () => {
@@ -378,7 +331,6 @@ describe('platform content migration plan', () => {
   it('derives and receipts the exact-release operator image instead of accepting an environment override', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'ops/migrate-platform-content.ts'), 'utf8')
     expect(source).toContain('resolvePlatformContentMigrationOperatorImage')
-    expect(source).toContain('readCanonicalOpenclawVersion')
     expect(source).toContain('operatorImage: image')
     expect(source).not.toContain('PLATFORM_CONTENT_MIGRATION_COPY_IMAGE')
   })

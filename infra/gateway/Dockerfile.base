@@ -136,21 +136,9 @@ ENV HOME=/home/node
 # (plugins.entries.<x>.enabled) resolving each package from the managed npm root,
 # NOT the plugins/installs.json cache, so only that tree must survive the emptyDir.
 #
-# This Dockerfile.base is SHARED by every matrix base (current + previous), which
-# span the externalization boundary: 6.11+ dropped the bundled mattermost dist
-# (install required), <=6.10 still ships it bundled (no external @openclaw/mattermost
-# at that version exists on npm). So mattermost install is version-ADAPTIVE — keyed
-# on whether the bundled `dist/extensions/mattermost` survived in the installed
-# openclaw. Pinned to ${OPENCLAW_VERSION} (the package publishes in lockstep) so a
-# mattermost-only npm bump can't drift past the host pluginApi. The canonical
-# fork can pin a compiled local Mattermost artifact while matrix slots without
-# a channel patch keep the published package.
-# Companion installs prefer a tarball VENDORED inside the fork tarball
-# (vendor/, written by pack-fork-tarball.sh only when the exact version is
-# missing from npm — the dev slot's upstream-main snapshots are never
-# published). Published slots ship no vendored companion tarballs and fall
-# through to the npm path unchanged, so current/preview bases rebuild
-# byte-identically.
+# The current-main packer vendors Codex and Parallel only when their companion
+# packages are not yet published. Mattermost is always installed from the
+# locally packed artifact because it contains the Octogee channel overlay.
 RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \

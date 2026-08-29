@@ -8,7 +8,6 @@ type OperatorImageTarget = {
 
 export type PlatformContentMigrationOperatorImage = {
   releaseCommit: string;
-  canonicalOpenclawVersion: string;
   tag: string;
   digest: string;
   reference: string;
@@ -16,12 +15,10 @@ export type PlatformContentMigrationOperatorImage = {
 
 type ResolvePlatformContentMigrationOperatorImageInput = OperatorImageTarget & {
   releaseCommit: string;
-  canonicalOpenclawVersion: string;
   run: CommandRunner;
 };
 
 const COMMIT = /^[a-f0-9]{40}$/;
-const OPENCLAW_VERSION = /^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 function record(value: unknown): Record<string, unknown> {
@@ -44,10 +41,7 @@ export function resolvePlatformContentMigrationOperatorImage(
   if (!COMMIT.test(input.releaseCommit)) {
     throw new Error("operator image resolution requires an exact 40-character Git commit");
   }
-  if (!OPENCLAW_VERSION.test(input.canonicalOpenclawVersion)) {
-    throw new Error("operator image resolution requires a canonical OpenClaw version");
-  }
-  const tag = `${input.releaseCommit.slice(0, 7)}-oc${input.canonicalOpenclawVersion}`;
+  const tag = input.releaseCommit.slice(0, 7);
   const image = `${input.artifactRegistryLocation}-docker.pkg.dev/${input.artifactRegistryProjectId}/${input.artifactRegistryRepository}/octogee-gateway-builder:${tag}`;
   let digest: unknown;
   try {
@@ -89,7 +83,6 @@ export function resolvePlatformContentMigrationOperatorImage(
     return build.status === "SUCCESS"
       && substitutions.COMMIT_SHA === input.releaseCommit
       && substitutions._IMAGE_TAG === input.releaseCommit.slice(0, 7)
-      && substitutions._OPENCLAW_VERSION === input.canonicalOpenclawVersion
       && images.some((candidate) => candidate.name === sourceImage && candidate.digest === digest);
   });
   if (!trustedBuild) {
@@ -97,7 +90,6 @@ export function resolvePlatformContentMigrationOperatorImage(
   }
   return {
     releaseCommit: input.releaseCommit,
-    canonicalOpenclawVersion: input.canonicalOpenclawVersion,
     tag,
     digest,
     reference: `${image}@${digest}`,

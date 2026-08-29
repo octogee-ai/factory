@@ -115,27 +115,6 @@ function quiesce(settings: DeploymentEnvironmentSettings, target: Workload): voi
   if (replicas !== 0 || (active !== undefined && active !== 0) || (ready !== undefined && ready !== 0)) throw new Error(`${target.name} is not quiesced`);
 }
 
-export function readCanonicalOpenclawVersion(repoRoot: string): string {
-  const configuration = fs.readFileSync(path.join(repoRoot, "cloudbuild.yaml"), "utf8");
-  const key = "_OPENCLAW_VERSION:";
-  const declarations = configuration
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(key));
-  if (declarations.length !== 1) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  const serialized = declarations[0]!.slice(key.length).trim();
-  if (!serialized.startsWith('"') || !serialized.endsWith('"')) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  const version = serialized.slice(1, -1);
-  if (!/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(version)) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  return version;
-}
-
 function passwordEnvironment(target: Workload, service: "mattermost" | "gitea"): unknown {
   const variable = service === "mattermost" ? "MM_DB_PASSWORD" : "GITEA__DATABASE__PASSWD";
   const matches = target.env.filter((value) => record(value, "workload environment").name === variable);
@@ -417,7 +396,6 @@ function main(): void {
     artifactRegistryProjectId: target.artifactRegistryProjectId,
     artifactRegistryRepository: target.artifactRegistryRepository,
     releaseCommit: revision,
-    canonicalOpenclawVersion: readCanonicalOpenclawVersion(fileURLToPath(new URL("../..", import.meta.url))),
     run,
   });
   const states = (["mattermost", "gitea"] as const).map((service) => { const sourceWorkload = workload(source, service); const targetWorkload = workload(target, service); return { service, sourceWorkload, targetWorkload, sourceDisk: disk(source, sourceWorkload), targetDisk: disk(target, targetWorkload) }; });

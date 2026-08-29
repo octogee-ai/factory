@@ -23,10 +23,10 @@ gcloud builds submit --config cloudbuild.yaml \
   --substitutions=_IMAGE_TAG=$(git rev-parse --short HEAD) \
   --project=octogee
 
-# Rebuild base image (only when upgrading OpenClaw)
-# See infra/gateway/openclaw-tarball/README.md for the full patch routine.
+# Rebuild the current OpenClaw base.
+# See infra/gateway/openclaw-tarball/README.md for the update routine.
 gcloud builds submit --config cloudbuild-base.yaml \
-  --substitutions=_OPENCLAW_VERSION=2026.5.4,_OPENCLAW_FORK_SHA=20479cf6 \
+  --substitutions=_REGION=us-central1,_BASE_TAG=main \
   --project=octogee
 ```
 

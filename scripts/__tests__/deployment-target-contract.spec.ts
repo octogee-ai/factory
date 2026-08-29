@@ -103,8 +103,6 @@ describe("deployment target consumers", () => {
   it("passes the selected registry location into every Cloud Build", () => {
     const platform = source(".github/workflows/build-and-deploy.yml");
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
-    const pinnedGateway = source("scripts/build-pinned-gateway.sh");
-    const matrixBases = source("scripts/rebuild-matrix-bases.sh");
 
     expect(platform.match(/_REGION=\$\{\{ steps\.target\.outputs\.artifact_registry_location \}\}/g))
       .toHaveLength(5);
@@ -112,12 +110,9 @@ describe("deployment target consumers", () => {
       .toHaveLength(4);
     expect(gateway).not.toContain("build-gateway-extra-oc");
     expect(gateway).not.toContain("build-operator-extra-oc");
-    expect(pinnedGateway).toContain("_REGION=${TARGET_AR_LOCATION}");
-    expect(matrixBases).toContain("_REGION=${TARGET_AR_LOCATION}");
 
     for (const config of [
       "artifact-worker/cloudbuild.yaml",
-      "cloudbuild-base-beta.yaml",
       "cloudbuild-base.yaml",
       "cloudbuild-operator-base-extra.yaml",
       "cloudbuild-operator-base.yaml",
@@ -153,7 +148,7 @@ describe("deployment target consumers", () => {
     expect(verifySecrets).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
   });
 
-  it("lets canonical bootstrap and base-image tools select candidate targets", () => {
+  it("builds the current OpenClaw base from its selected environment", () => {
     for (const script of [
       "scripts/setup-secrets.sh",
       "scripts/setup-mattermost.sh",
@@ -168,12 +163,10 @@ describe("deployment target consumers", () => {
     }
 
     const workflow = source(".github/workflows/gateway-base-rebuild.yml");
-    const script = source("scripts/rebuild-matrix-bases.sh");
-    expect(workflow).toContain("deployment_target:");
+    expect(workflow).toContain("environment:");
     expect(workflow).toContain("./.github/actions/resolve-deployment-target");
-    expect(workflow).toContain('--deployment-target="${{ steps.target.outputs.target_id }}"');
-    expect(script).toContain("--deployment-target=*)");
-    expect(script).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
+    expect(workflow).toContain("artifact_registry_location");
+    expect(workflow).toContain("cluster_project_id");
   });
 
   it("selects public Firebase credentials by exact registered target", () => {
@@ -237,8 +230,6 @@ describe("deployment target consumers", () => {
       "scripts/rotate-secret.sh",
       "scripts/teardown-env.sh",
       "scripts/setup-cloud-sql.sh",
-      "scripts/build-pinned-gateway.sh",
-      "scripts/rebuild-matrix-bases.sh",
       "scripts/shell-gateway.sh",
       "scripts/shell-gateway-ui.sh",
       "scripts/setup-monitoring.sh",
