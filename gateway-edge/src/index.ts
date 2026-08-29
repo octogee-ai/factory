@@ -57,9 +57,18 @@ import {
   createOpenClawControlAuthorizationCache,
   type OpenClawControlAuthorizationCache,
 } from "./openclaw-control/broker.js";
+import { installGatewayEdgeUnhandledRejectionPolicy } from "./process-rejection-policy.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
+
+if (process.env.NODE_ENV !== "test") {
+  installGatewayEdgeUnhandledRejectionPolicy((error) => {
+    logger.error("gateway-edge credential-dependent operation rejected; continuing without ADC", {
+      error,
+    });
+  });
+}
 
 let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
