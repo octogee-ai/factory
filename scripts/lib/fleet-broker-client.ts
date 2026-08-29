@@ -87,6 +87,13 @@ export interface FleetBrokerClient {
     mimeType: string;
     size: number;
   }): Promise<FleetBrokerBlobSignedUrl>;
+  workspaceManifestReadUrl(input: {
+    slug: string;
+  }): Promise<FleetBrokerBlobSignedUrl>;
+  workspaceManifestWriteUrl(input: {
+    slug: string;
+    ifGenerationMatch: string;
+  }): Promise<FleetBrokerBlobSignedUrl>;
   builderRuntimeStateDownloadUrl(input: {
     slug: string;
   }): Promise<FleetBrokerBlobSignedUrl>;
@@ -266,6 +273,18 @@ export function createFleetBrokerClient(
     blobUploadUrl(input) {
       return postJson<FleetBrokerBlobSignedUrl>(
         "/internal/fleet/blob/upload-url",
+        { gatewayId, ...input },
+      );
+    },
+    workspaceManifestReadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/blob/manifest/read-url",
+        { gatewayId, ...input },
+      );
+    },
+    workspaceManifestWriteUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/blob/manifest/write-url",
         { gatewayId, ...input },
       );
     },

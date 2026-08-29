@@ -174,12 +174,6 @@ describe("POST /extract-zip", () => {
       "image/png",
     );
     expect(mockZipDelete).toHaveBeenCalled();
-    expect(removeFromManifest).toHaveBeenCalledWith(
-      "ws-alice",
-      "alice",
-      "workspace",
-      "imports/site.zip",
-      "blob: remove extracted zip imports/site.zip from manifest",
-    );
+    expect(removeFromManifest).toHaveBeenCalledWith("customers/alice", "imports/site.zip");
   });
 });

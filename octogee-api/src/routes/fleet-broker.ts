@@ -8,6 +8,7 @@ import {
   isValidUsername,
   projectAgentId,
 } from "@octogee/shared/types/identity";
+import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
@@ -107,7 +108,8 @@ type CreateBlobSignedUrl = (input: {
   gcsPath: string;
   action: "read" | "write";
   contentType?: string;
-  ifGenerationMatch?: 0;
+  /** 0 means only-if-absent; any other generation makes the write a compare-and-set. */
+  ifGenerationMatch?: number | string;
 }) => Promise<FleetBrokerBlobSignedUrl>;
 
 type PruneBuilderRuntimeState = (input: {
@@ -681,6 +683,15 @@ function validBlobRelativePath(value: unknown): string {
   return p;
 }
 
+/**
+ * A manifest write is always conditional — an unconditional one would silently
+ * drop the other writer's entries.
+ */
+function validGenerationPrecondition(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{1,20}$/u.test(value)) return null;
+  return value;
+}
+
 function validContentType(value: unknown): string {
   if (typeof value !== "string") return "application/octet-stream";
   const p = value.trim();
@@ -706,6 +717,15 @@ function validBuilderRuntimeStateRecoveryTiers(
 
 function gcsPathForBlob(slug: string, relativePath: string): string {
   return `customers/${slug}/${relativePath}`;
+}
+
+/**
+ * Derived from the assigned slug, never from the request: `validBlobRelativePath`
+ * deliberately rejects dot-prefixed paths, so the manifest is unreachable through
+ * the generic blob endpoints and only these routes can name it.
+ */
+function gcsPathForWorkspaceManifest(slug: string): string {
+  return `customers/${slug}/${MANIFEST_OBJECT_SUFFIX}`;
 }
 
 function gcsPathForBuilderRuntimeStateRoot(slug: string): string {
@@ -2083,6 +2103,49 @@ function installProvisioningRoutes(
   });
 }
 
+/**
+ * The manifest is the one blob object the pod may not name for itself, so it gets
+ * its own routes rather than riding the generic blob path.
+ */
+function installWorkspaceManifestRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db, createBlobSignedUrl } = deps;
+
+  router.post("/blob/manifest/read-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForWorkspaceManifest(assigned.slug),
+        action: "read",
+      });
+      res.json(signed);
+    });
+  });
+
+  router.post("/blob/manifest/write-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    const precondition = validGenerationPrecondition(objectBody(req).ifGenerationMatch);
+    if (precondition === null) {
+      res.status(400).json({ error: "invalid_generation" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForWorkspaceManifest(assigned.slug),
+        action: "write",
+        contentType: "application/json",
+        ifGenerationMatch: precondition,
+      });
+      res.json(signed);
+    });
+  });
+
+}
+
 function installGatewayOpsRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2229,6 +2292,8 @@ function installGatewayOpsRoutes(
       res.json(signed);
     });
   });
+
+  installWorkspaceManifestRoutes(router, deps);
 
   router.post("/builder-runtime-state/download-url", async (req, res) => {
     const configured = await requireConfiguredBuilderRuntimeState(db, req, res);

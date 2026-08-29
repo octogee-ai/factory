@@ -120,7 +120,7 @@ describe("storeWorkspaceBlob", () => {
     expect(h.save).toHaveBeenCalledWith(Buffer.from("pdf"), {
       metadata: { contentType: "application/pdf" },
     });
-    expect(h.updateManifest).toHaveBeenCalledWith("ws-alice", "octogee-alice", "alice-site", {
+    expect(h.updateManifest).toHaveBeenCalledWith("customers/alice/projects/site", {
       "files/report.pdf": expect.objectContaining({
         type: "blob",
         gcsPath: "customers/alice/projects/site/files/report.pdf",
@@ -142,9 +142,7 @@ describe("storeWorkspaceBlob", () => {
       metadata: { contentType: "application/x-custom" },
     });
     expect(h.updateManifest).toHaveBeenCalledWith(
-      "ws-alice",
-      "octogee-alice",
-      "alice-site",
+      "customers/alice/projects/site",
       expect.objectContaining({
         "files/custom.bin": expect.objectContaining({ mimeType: "application/x-custom" }),
       }),
@@ -210,12 +208,7 @@ describe("removeWorkspaceBlob", () => {
     expect(h.file).toHaveBeenCalledWith("customers/alice/projects/site/.thumbs/images/logo.png.png");
     expect(h.delete).toHaveBeenNthCalledWith(1, { ignoreNotFound: true });
     expect(h.delete).toHaveBeenNthCalledWith(2, { ignoreNotFound: true });
-    expect(h.removeFromManifest).toHaveBeenCalledWith(
-      "ws-alice",
-      "octogee-alice",
-      "alice-site",
-      "images/logo.png",
-    );
+    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "images/logo.png");
   });
 
   it("does not attempt thumbnail deletion for non-image blobs", async () => {
@@ -223,11 +216,6 @@ describe("removeWorkspaceBlob", () => {
 
     expect(h.file).toHaveBeenCalledTimes(1);
     expect(h.file).toHaveBeenCalledWith("customers/alice/projects/site/docs/readme.pdf");
-    expect(h.removeFromManifest).toHaveBeenCalledWith(
-      "ws-alice",
-      "octogee-alice",
-      "alice-site",
-      "docs/readme.pdf",
-    );
+    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "docs/readme.pdf");
   });
 });

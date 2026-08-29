@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { ManifestGenerationConflict } from "@octogee/core/workspace-manifest";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 
 const fetchMock = vi.fn();
@@ -30,6 +31,8 @@ function client(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
   return {
     blobDownloadUrl: vi.fn(async () => ({ url: "https://signed.test/download", method: "GET" })),
     blobUploadUrl: vi.fn(async () => ({ url: "https://signed.test/upload", method: "PUT" })),
+    workspaceManifestReadUrl: vi.fn(async () => ({ url: "https://signed.test/manifest-read", method: "GET" })),
+    workspaceManifestWriteUrl: vi.fn(async () => ({ url: "https://signed.test/manifest-write", method: "PUT" })),
     ...overrides,
   } as FleetBrokerClient;
 }
@@ -102,5 +105,43 @@ describe("createBrokeredBlobStore", () => {
       mimeType: "image/png",
       size: 1,
     })).rejects.toThrow("blob upload acme/images/logo.png failed: 413 too large");
+  });
+});
+
+describe("brokered manifest store", () => {
+  it("reads an absent manifest as null rather than failing the sync", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 404 }));
+    const store = createBrokeredBlobStore(client()).manifestFor("acme");
+    await expect(store.read("customers/acme/.files/manifest.json")).resolves.toBeNull();
+  });
+
+  it("carries the GCS generation out of the response headers", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "x-goog-generation": "17" } }),
+    );
+    const store = createBrokeredBlobStore(client()).manifestFor("acme");
+    await expect(store.read("customers/acme/.files/manifest.json")).resolves.toEqual({
+      contents: "{}",
+      generation: "17",
+    });
+  });
+
+  it("refuses a read with no generation — an unconditional write would follow", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    const store = createBrokeredBlobStore(client()).manifestFor("acme");
+    await expect(store.read("customers/acme/.files/manifest.json")).rejects.toThrow(/no generation/i);
+  });
+
+  it("mints the write URL against the generation it is given", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 200 }));
+    const c = client();
+    await createBrokeredBlobStore(c).manifestFor("acme").write("p", "{}", "17");
+    expect(c.workspaceManifestWriteUrl).toHaveBeenCalledWith({ slug: "acme", ifGenerationMatch: "17" });
+  });
+
+  it("turns a precondition failure into a generation conflict so the caller retries", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 412 }));
+    const store = createBrokeredBlobStore(client()).manifestFor("acme");
+    await expect(store.write("p", "{}", "17")).rejects.toBeInstanceOf(ManifestGenerationConflict);
   });
 });

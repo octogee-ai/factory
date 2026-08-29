@@ -3,6 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const noopManifestStore = () => ({
+  read: async () => null,
+  write: async () => {},
+});
+
 const paths = vi.hoisted(() => ({
   root: `/tmp/octogee-durable-sync-${process.pid}`,
   customers: `/tmp/octogee-durable-sync-${process.pid}/customers`,
@@ -31,6 +36,7 @@ const {
   syncCustomerRepositoriesForSlug,
 } = await import("../lib/git.js");
 const { blobSyncAllWithOptions, blobSyncForSlug } = await import("../lib/blob-sync.js");
+const { workspaceGitignore } = await import("../lib/git.js");
 
 beforeEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
@@ -253,7 +259,7 @@ describe("strict durable sync", () => {
 
     await blobSyncForSlug("alice", {
       strict: true,
-      store: { download: vi.fn(async () => {}), upload },
+      store: { manifestFor: noopManifestStore, download: vi.fn(async () => {}), upload },
     });
 
     expect(upload).toHaveBeenCalledTimes(1);
@@ -295,6 +301,7 @@ describe("strict durable sync", () => {
     await expect(blobSyncAllWithOptions({
       strict: true,
       storeForSlug: () => ({
+        manifestFor: noopManifestStore,
         download: vi.fn(async () => {}),
         upload: vi.fn(async () => { throw new Error("storage unavailable"); }),
       }),
@@ -543,5 +550,58 @@ describe("workspace divergence", () => {
 
     expect(testGitExec(project, ["rev-parse", "HEAD"])).toBe(projectHead);
     expect(fs.existsSync(path.join(project, "WIP.md"))).toBe(true);
+  });
+});
+
+describe("blob sync without a manifest", () => {
+  it("uploads and records local blobs when no manifest exists yet", async () => {
+    const blobsDir = path.join(paths.customers, "aug29", ".blobs");
+    fs.mkdirSync(blobsDir, { recursive: true });
+    fs.writeFileSync(path.join(blobsDir, "avatar.png"), "png-bytes");
+
+    const written: Array<{ contents: string; ifGenerationMatch: string }> = [];
+    const upload = vi.fn(async () => {});
+
+    await blobSyncForSlug("aug29", {
+      store: {
+        manifestFor: () => ({
+          read: async () => null,
+          write: async (_p: string, contents: string, ifGenerationMatch: string) => {
+            written.push({ contents, ifGenerationMatch });
+          },
+        }),
+        download: vi.fn(async () => {}),
+        upload,
+      },
+    });
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(written).toHaveLength(1);
+    // Only-if-absent: the manifest did not exist, so this must not clobber one
+    // that appeared in the meantime.
+    expect(written[0].ifGenerationMatch).toBe("0");
+    expect(JSON.parse(written[0].contents)["avatar.png"]).toMatchObject({
+      type: "blob",
+      gcsPath: "customers/aug29/avatar.png",
+    });
+  });
+});
+
+describe("canonical customer git config", () => {
+  it("configures main's upstream, without which a clean checkout never fast-forwards", () => {
+    const repo = path.join(paths.customers, "upstreamcheck");
+    fs.mkdirSync(repo, { recursive: true });
+    const gitDir = externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+    expect(gitDir).not.toBeNull();
+    const config = fs.readFileSync(path.join(gitDir!, "config"), "utf8");
+    expect(config).toContain('[branch "main"]');
+    expect(config).toContain("remote = origin");
+    expect(config).toContain("merge = refs/heads/main");
+  });
+
+  it("ignores the blob manifest — it is server-side state, not repo content", () => {
+    const ignore = workspaceGitignore();
+    expect(ignore).toContain(".files/");
+    expect(ignore).toContain("projects/");
   });
 });

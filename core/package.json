@@ -348,6 +348,10 @@
     "./mattermost/provision": {
       "types": "./dist/mattermost/provision.d.ts",
       "default": "./dist/mattermost/provision.js"
+    },
+    "./workspace-manifest": {
+      "types": "./dist/workspace-manifest.d.ts",
+      "default": "./dist/workspace-manifest.js"
     }
   },
   "typesVersions": {
@@ -594,6 +598,9 @@
       ],
       "mattermost/provision": [
         "dist/mattermost/provision.d.ts"
+      ],
+      "workspace-manifest": [
+        "dist/workspace-manifest.d.ts"
       ]
     }
   },

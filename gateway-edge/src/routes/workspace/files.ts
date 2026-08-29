@@ -3,11 +3,11 @@ import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
+import { BLOB_SIGNED_URL_TTL_MS } from "../../lib/workspace-blob.js";
 import type { Manifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
 import { logger } from "../../middleware/logging.js";
 import {
-  giteaSudoUser,
   HIDDEN,
   isCanvasDashboardDocumentPath,
   isTargetDirectoryEntryReadable,
@@ -179,12 +179,32 @@ export function blobFileEntries(
       type: "file",
       size: entry.size ?? 0,
       source: "blob",
-      ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
     };
     if (!target || isTargetPathReadable(target, manifestPath)) entries.push(file);
   }
 
   return entries;
+}
+
+/**
+ * Thumbnail URLs are signed per response rather than stored: a stored signed URL
+ * outlives nothing and expires while the manifest holding it does not. Only
+ * entries whose thumbnail was actually written get one, so a failed thumbnail
+ * never becomes a broken image.
+ */
+async function signThumbnailUrls(
+  target: Parameters<typeof repoContentsApi>[0],
+  manifest: Manifest,
+  entries: WorkspaceFileEntry[],
+): Promise<WorkspaceFileEntry[]> {
+  const bucket = storage.bucket();
+  return Promise.all(entries.map(async (file) => {
+    if (!manifest[file.path]?.hasThumbnail) return file;
+    const [thumbnailUrl] = await bucket
+      .file(`${target.gcsPrefix}/.thumbs/${file.path}.png`)
+      .getSignedUrl({ action: "read", expires: Date.now() + BLOB_SIGNED_URL_TTL_MS });
+    return { ...file, thumbnailUrl };
+  }));
 }
 
 export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEntry[] {
@@ -206,12 +226,10 @@ async function loadWorkspaceFileEntries(
   const gitFiles = repoFileEntries(contents, target);
   if (target.provider === "github") return sortWorkspaceFiles(gitFiles);
 
-  const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
+  const manifest = await getManifest(target.gcsPrefix, bustCache);
   const gitPaths = new Set(gitFiles.map((file) => file.path));
-  return sortWorkspaceFiles([
-    ...gitFiles,
-    ...blobFileEntries(manifest, path, gitPaths, target),
-  ]);
+  const blobs = await signThumbnailUrls(target, manifest, blobFileEntries(manifest, path, gitPaths, target));
+  return sortWorkspaceFiles([...gitFiles, ...blobs]);
 }
 
 async function workspaceFileEntries(
@@ -258,7 +276,7 @@ async function loadWorkspaceFileIndex(
   const entries: WorkspaceFileIndexEntry[] = readableTreePaths.map((path) => ({ path, source: "git" }));
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    const manifest = await getManifest(target.gcsPrefix);
     for (const path of Object.keys(manifest)) {
       if (gitPaths.has(path) || !validIndexPath(path) || !isTargetPathReadable(target, path)) continue;
       entries.push({ path, source: "blob" });
@@ -371,7 +389,7 @@ async function loadWorkspaceFileResponse(
   ref?: string,
 ): Promise<WorkspaceFileResponse | null> {
   if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    const manifest = await getManifest(target.gcsPrefix);
     const blobEntry = manifest[path];
 
     if (blobEntry) {

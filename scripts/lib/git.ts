@@ -220,6 +220,13 @@ function writeCanonicalGitConfig(
     '[remote "origin"]',
     `\turl = ${source.remoteUrl}`,
     "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    // Without an upstream, syncCleanWorkspaceToRemote reports "no-upstream" and
+    // never fast-forwards, so a server-side write leaves the clone behind until
+    // its next commit turns "behind" into "diverged". This config is rewritten
+    // wholesale on every prepare, so the section has to live here.
+    '[branch "main"]',
+    "\tremote = origin",
+    "\tmerge = refs/heads/main",
     "",
   ].join("\n");
   fs.writeFileSync(configTmp, contents, { encoding: "utf8", mode: 0o600 });
@@ -1430,6 +1437,9 @@ export function workspaceGitignore(): string {
     "# Project repos are their own Gitea clones — committed via their own",
     "# commit path (octogee_project_commit), never swept by workspace commits",
     "projects/",
+    "",
+    "# Blob manifest — server-side state in GCS beside the blobs it indexes",
+    ".files/",
     "",
     "# Build artifacts",
     "node_modules/",

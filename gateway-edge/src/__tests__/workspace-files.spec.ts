@@ -102,7 +102,7 @@ describe("workspace file list helpers", () => {
         gcsPath: "customers/alice/assets/logo.png",
         size: 100,
         mimeType: "image/png",
-        thumbnailUrl: "https://thumb.test/logo.png",
+        hasThumbnail: true,
         uploadedAt: "2026-01-01T00:00:00.000Z",
       },
       "assets/nested/photo.png": {
@@ -134,7 +134,6 @@ describe("workspace file list helpers", () => {
         type: "file",
         size: 100,
         source: "blob",
-        thumbnailUrl: "https://thumb.test/logo.png",
       },
     ]);
   });
