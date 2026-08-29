@@ -30,6 +30,7 @@ import {
   defaultSystemConfigTemplatePath,
 } from "../lib/system-config.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
+import { buildProjectAgents } from "../lib/openclaw-config-builders.js";
 import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
@@ -146,7 +147,7 @@ describe("system_config restore", () => {
       id: "/ceckert-coach",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .toMatchObject({ schemaVersion: 3 });
+      .toMatchObject({ schemaVersion: 4 });
     expect(JSON.parse(fs.readFileSync(
       path.join(openclawDir, "secrets", "mattermost-accounts.json"),
       "utf8",
@@ -201,7 +202,7 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("Mac");
     expect(tracked).not.toContain("botToken");
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf-8"))).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       lastMigration: "initial",
     });
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
@@ -839,8 +840,8 @@ describe("system_config restore", () => {
       "acme-coach": "legacy-coach-pat",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
       pendingStateCleanup: "legacy-mac",
     });
   });
@@ -900,8 +901,8 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("must-be-rejected-by-audit");
     expect(fs.existsSync(path.join(openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
     });
   });
 
@@ -986,12 +987,11 @@ describe("system_config restore", () => {
       },
       {
         id: "octogee-acme-proj-garden-coach",
-        tools: { profile: "minimal", deny: ["exec", "process"], exec: { mode: "deny", host: "node" } },
       },
     ]);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
     });
     await expect(reconcileSystemConfigSchema(openclawDir, {
       GATEWAY_CLASS: "builder",
@@ -1097,13 +1097,49 @@ describe("system_config restore", () => {
       executablePath: "/usr/bin/chromium",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
     });
     await expect(reconcileSystemConfigSchema(openclawDir, {
       GATEWAY_CLASS: "builder",
       GATEWAY_BUILDER_SLUG: "acme",
     })).resolves.toBe(false);
+  });
+
+  it("lifts the platform project-agent fence from a v3 Builder config", async () => {
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: 3,
+      lastMigration: "enable-builder-browser",
+    });
+    const [platformProjectAgent] = buildProjectAgents({
+      slug: "acme",
+      customerDir: "/customers/acme",
+      agentsDir: "/agents",
+      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      projectAgents: [{ projectId: "garden", enabled: true, token: "pat", mmUserId: "bot" }],
+    });
+    const builderTools = { profile: "full", deny: ["browser"] };
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: {
+        list: [
+          platformProjectAgent,
+          { id: "octogee-acme-proj-custom-coach", tools: builderTools },
+        ],
+      },
+    });
+
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(true);
+
+    const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(migrated.agents.list[0]).not.toHaveProperty("tools");
+    expect(migrated.agents.list[1].tools).toEqual(builderTools);
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+    });
   });
 
   it("preserves an explicit Builder browser opt-out during the v3 migration", async () => {
@@ -1129,8 +1165,8 @@ describe("system_config restore", () => {
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")))
       .toEqual(disabled);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      schemaVersion: 4,
+      lastMigration: "lift-builder-project-agent-host-code-lockdown",
     });
   });
 

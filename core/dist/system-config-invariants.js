@@ -538,8 +538,29 @@ export function reconcileBuilderAgentEntry(agentId, entry) {
         fs: { workspaceOnly: true },
         toolsBySender: {},
     };
-    if (parseAgentId(agentId).kind === "coach" &&
-        equal(asObject(agent.tools), sharedCoachTools))
+    const sharedProjectTools = {
+        profile: "minimal",
+        alsoAllow: [...PROJECT_AGENT_ALLOWED_TOOLS],
+        deny: [...PROJECT_AGENT_DENIED_TOOLS],
+        exec: { mode: "deny", host: "node" },
+        fs: { workspaceOnly: true },
+        toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
+    };
+    const sharedProjectToolsWithoutExec = structuredClone(sharedProjectTools);
+    delete sharedProjectToolsWithoutExec.exec;
+    const legacyProjectTools = {
+        profile: "minimal",
+        deny: ["exec", "process"],
+        exec: { mode: "deny", host: "node" },
+    };
+    const parsed = parseAgentId(agentId);
+    const tools = asObject(agent.tools);
+    const platformStamped = parsed.kind === "coach"
+        ? equal(tools, sharedCoachTools)
+        : parsed.kind === "project" && (equal(tools, sharedProjectTools) ||
+            equal(tools, sharedProjectToolsWithoutExec) ||
+            equal(tools, legacyProjectTools));
+    if (platformStamped)
         delete agent.tools;
     return agent;
 }

@@ -763,6 +763,20 @@ describe("buildProjectAgents", () => {
     expect(agents[0].tools.deny).not.toContain("octogee_project_commit");
   });
 
+  it("lets project agents inherit the full-power tool policy on a Builder gateway", () => {
+    const [agent] = buildProjectAgents({
+      slug: "chris",
+      customerDir: "/customers/chris",
+      agentsDir: "/agents",
+      coach: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
+      projectAgents,
+      ownerMmUserId: CHRIS_MM_ID,
+      hostCode: "builder-full",
+    });
+
+    expect(agent).not.toHaveProperty("tools");
+  });
+
 });
 
 describe("buildProjectAgentAccounts", () => {

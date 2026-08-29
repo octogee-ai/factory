@@ -7,7 +7,7 @@ import {
   acquireSystemConfigSyncLeaseSync,
 } from "@octogee/core/system-config-mutation-lease";
 
-import { isValidUsername } from "../../shared/types/identity.js";
+import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import {
   log as defaultLog,
   OPENCLAW_DIR,
@@ -39,7 +39,10 @@ import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
 } from "./system-config-invariants.js";
-import { CUSTOMER_CODE_DENIED_TOOLS } from "@octogee/core/system-config-invariants";
+import {
+  CUSTOMER_CODE_DENIED_TOOLS,
+  reconcileBuilderAgentEntry,
+} from "@octogee/core/system-config-invariants";
 import {
   attributedCommitArgs,
   convergeSystemConfigToRemoteCommit,
@@ -61,6 +64,7 @@ import {
   SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
   SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED,
   SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED,
+  SYSTEM_CONFIG_SCHEMA_VERSION_PROJECT_AGENT_HOST_CODE_LOCKDOWN_LIFTED,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
@@ -441,6 +445,39 @@ function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEn
   return changed;
 }
 
+function liftBuilderProjectAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
+  const slug = env.GATEWAY_BUILDER_SLUG?.trim();
+  if (!slug) return false;
+  const agents = asRecord(config.agents);
+  if (!agents) return false;
+  let changed = false;
+  const lift = (agentId: string, agent: UnknownRecord): UnknownRecord => {
+    const parsed = parseAgentId(agentId);
+    if (
+      parsed.kind !== "project" ||
+      parsed.username !== slug
+    ) return agent;
+    const reconciled = reconcileBuilderAgentEntry(agentId, agent);
+    if (!isDeepStrictEqual(reconciled, agent)) changed = true;
+    return reconciled;
+  };
+  if (Array.isArray(agents.list)) {
+    agents.list = agents.list.map((entry) => {
+      const agent = asRecord(entry);
+      const agentId = agent ? recordString(agent, "id") : "";
+      return agent && agentId ? lift(agentId, agent) : entry;
+    });
+  }
+  const entries = asRecord(agents.entries);
+  if (entries) {
+    for (const [agentId, entry] of Object.entries(entries)) {
+      const agent = asRecord(entry);
+      if (agent) entries[agentId] = lift(agentId, agent);
+    }
+  }
+  return changed;
+}
+
 function liftGatewayCommandFences(config: UnknownRecord): boolean {
   let changed = false;
   const gateway = asRecord(config.gateway);
@@ -498,6 +535,7 @@ export function liftPlatformHostCodeLockdown(
   const changes = [
     liftHostCodeToolFences(asRecord(config.tools)),
     liftBuilderCoachToolFences(config, env),
+    liftBuilderProjectAgentToolFences(config, env),
     liftGatewayCommandFences(config),
     liftAutomationFences(config),
     liftCodexGate(config),
@@ -842,19 +880,22 @@ async function reconcileTrackedOpenClawConfig(
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED;
   const hostCodeLockdownLifted = schemaVersion !== undefined &&
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED;
+  const projectAgentHostCodeLockdownLifted = schemaVersion !== undefined &&
+    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_PROJECT_AGENT_HOST_CODE_LOCKDOWN_LIFTED;
   if (!macLaneRemoved) {
     removeLegacyMacConfig(tracked, env);
     const secrets = extractLegacyMattermostAccountSecrets(tracked);
     if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
   }
   if (!hostCodeLockdownLifted) liftPlatformHostCodeLockdown(tracked, env);
+  if (!projectAgentHostCodeLockdownLifted) liftBuilderProjectAgentToolFences(tracked, env);
   enableBuilderBrowser(tracked);
   const after = `${JSON.stringify(tracked, null, 2)}\n`;
   if (after !== before) atomicWrite(repoConfigPath, after);
   const keepPendingCleanup = !macLaneRemoved || metadata?.pendingStateCleanup !== undefined;
   atomicWrite(metadataPath, `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    lastMigration: "enable-builder-browser",
+    lastMigration: "lift-builder-project-agent-host-code-lockdown",
     ...(keepPendingCleanup ? { pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP } : {}),
   }, null, 2)}\n`);
   ensureSystemConfigGitignore(repoDir);

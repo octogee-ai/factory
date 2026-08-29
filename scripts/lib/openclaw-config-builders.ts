@@ -531,6 +531,7 @@ export interface ProjectAgentsBuildInput {
   coach: { name: string; emoji: string; model: string };
   projectAgents: ReadonlyArray<ProjectAgentState>;
   ownerMmUserId?: string | null;
+  hostCode?: AgentHostCodePolicy;
 }
 
 export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record<string, unknown>> {
@@ -547,15 +548,17 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
         agentDir: `${input.agentsDir}/${agentId}/agent`,
         model: input.coach.model,
         identity: { name: input.coach.name, emoji: input.coach.emoji },
-        tools: {
-          ...ownerToolPolicy,
-          profile: "minimal",
-          alsoAllow: PROJECT_AGENT_ALLOWED_TOOLS,
-          deny: PROJECT_AGENT_DENIED_TOOLS,
-          exec: { mode: "deny", host: "node" },
-          fs: { workspaceOnly: true },
-          toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
-        },
+        ...(input.hostCode === "builder-full" ? {} : {
+          tools: {
+            ...ownerToolPolicy,
+            profile: "minimal",
+            alsoAllow: PROJECT_AGENT_ALLOWED_TOOLS,
+            deny: PROJECT_AGENT_DENIED_TOOLS,
+            exec: { mode: "deny", host: "node" },
+            fs: { workspaceOnly: true },
+            toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
+          },
+        }),
       };
     });
 }
