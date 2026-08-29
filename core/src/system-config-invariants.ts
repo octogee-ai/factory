@@ -621,6 +621,25 @@ export function reconcileCustomerAgentEntry(
   return agent;
 }
 
+export function reconcileBuilderAgentEntry(
+  agentId: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown> {
+  const agent = structuredClone(entry);
+  const sharedCoachTools = {
+    profile: "coding",
+    alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
+    deny: [...CUSTOMER_CODE_DENIED_TOOLS],
+    fs: { workspaceOnly: true },
+    toolsBySender: {},
+  };
+  if (
+    parseAgentId(agentId).kind === "coach" &&
+    equal(asObject(agent.tools), sharedCoachTools)
+  ) delete agent.tools;
+  return agent;
+}
+
 function accountIdForAgentId(agentId: string): string | null {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "coach") return `${parsed.username}-coach`;

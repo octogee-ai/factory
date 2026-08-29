@@ -1,5 +1,6 @@
 import { type ConfigCache } from "./apply-config-patch.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
+import { type GatewayConfigClass } from "./system-config-invariants.js";
 export declare const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export declare const MIGRATION_ACTIVATION_FILE = "activation.json";
 export interface MigrationActivationManifestProjectAgent {
@@ -48,6 +49,7 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
     cache?: ConfigCache;
     signal?: AbortSignal;
     log: (msg: string) => void;
+    gatewayClass?: GatewayConfigClass;
     onRoutingActivationRequired?: (accountIds: readonly string[]) => void;
     authInheritanceAnchor?: {
         agentId: string;

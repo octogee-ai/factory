@@ -524,6 +524,20 @@ export function reconcileCustomerAgentEntry(agentId, entry) {
     forceAgentToolPolicy({}, agent, agentId);
     return agent;
 }
+export function reconcileBuilderAgentEntry(agentId, entry) {
+    const agent = structuredClone(entry);
+    const sharedCoachTools = {
+        profile: "coding",
+        alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
+        deny: [...CUSTOMER_CODE_DENIED_TOOLS],
+        fs: { workspaceOnly: true },
+        toolsBySender: {},
+    };
+    if (parseAgentId(agentId).kind === "coach" &&
+        equal(asObject(agent.tools), sharedCoachTools))
+        delete agent.tools;
+    return agent;
+}
 function accountIdForAgentId(agentId) {
     const parsed = parseAgentId(agentId);
     if (parsed.kind === "coach")

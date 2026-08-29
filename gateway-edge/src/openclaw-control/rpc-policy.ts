@@ -604,10 +604,12 @@ function nativeOwnerConfigMutationDecision(
   const current = context.currentConfig;
   const raw = params ? parsedRaw(params.raw) : null;
   const replacePaths = params ? normalizedReplacePaths(params.replacePaths) : null;
-  if (!current || !raw || !replacePaths) {
+  if (!raw || !replacePaths || request.method === "config.patch" && !current) {
     return { allowed: false, category, reason: "config-invalid" };
   }
-  const proposed = proposedMutationConfig(request.method, current.raw, raw, replacePaths);
+  const proposed = request.method === "config.patch"
+    ? proposedMutationConfig(request.method, current!.raw, raw, replacePaths)
+    : structuredClone(raw);
   if (platformInvariantViolations(proposed, context.invariantContext).length > 0) {
     return { allowed: false, category, reason: "platform-invariant" };
   }

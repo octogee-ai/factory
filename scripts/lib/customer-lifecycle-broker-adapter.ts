@@ -1239,6 +1239,7 @@ async function activateImportedCustomer(
     cache: ctx.configCache,
     signal: opts?.signal,
     log: ctx.log,
+    gatewayClass: ctx.isBuilderGateway() ? "builder" : "shared",
     ...(isConfiguredGatewayBuilder(slug)
       ? {
         authInheritanceAnchor: {

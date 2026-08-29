@@ -435,6 +435,7 @@ describe("migration activation manifest", () => {
     await applyOpenClawActivationManifest(manifest(), {
       rpc: rpc as never,
       log: vi.fn(),
+      gatewayClass: "builder",
       authInheritanceAnchor: { agentId: anchor.id, agent: anchor },
     });
 
@@ -451,17 +452,11 @@ describe("migration activation manifest", () => {
       model: "house",
       default: true,
     });
-    expect(patch.agents.entries[anchor.id]).toMatchObject({
+    expect(patch.agents.entries[anchor.id]).toEqual({
       name: anchor.name,
       heartbeat: anchor.heartbeat,
-      tools: {
-        profile: "minimal",
-        alsoAllow: [],
-        deny: [...CUSTOMER_CODE_DENIED_TOOLS],
-        fs: { workspaceOnly: true },
-        toolsBySender: {},
-      },
     });
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
     expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
   });
 
@@ -491,6 +486,7 @@ describe("migration activation manifest", () => {
     await applyOpenClawActivationManifest(manifest(), {
       rpc: rpc as never,
       log: vi.fn(),
+      gatewayClass: "builder",
       authInheritanceAnchor: { agentId: anchor.id, agent: anchor },
     });
 
@@ -509,6 +505,77 @@ describe("migration activation manifest", () => {
       model: "house",
     });
     expect(withoutTools(patch.agents.list).filter((agent) => agent.id === anchor.id)).toEqual([anchor]);
+    expect(patch.agents.list.find((agent) => agent.id === anchor.id)).not.toHaveProperty("tools");
+    expect(patch.agents.list.find((agent) => agent.id === "octogee-alice-coach"))
+      .not.toHaveProperty("tools");
+  });
+
+  it("lifts the exact shared coach tool fence when activating a Builder", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { entries: {} },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const sharedCoachTools = {
+      profile: "coding",
+      alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
+      deny: [...CUSTOMER_CODE_DENIED_TOOLS],
+      fs: { workspaceOnly: true },
+      toolsBySender: {},
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: { ...manifest().agent, tools: sharedCoachTools },
+    }, {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { entries: Record<string, Record<string, unknown>> };
+    };
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
+  });
+
+  it("preserves a Builder-owned coach tool policy during activation", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { entries: {} },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const tools = { profile: "full", deny: ["browser"] };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: { ...manifest().agent, tools },
+    }, {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { entries: Record<string, Record<string, unknown>> };
+    };
+    expect(patch.agents.entries["octogee-alice-coach"]?.tools).toEqual(tools);
   });
 
   it("requests routing activation before patching only when the stable account route is absent", async () => {

@@ -4,7 +4,7 @@ import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
-import { reconcileCustomerAgentEntry } from "./system-config-invariants.js";
+import { reconcileBuilderAgentEntry, reconcileCustomerAgentEntry, } from "./system-config-invariants.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
 export class LegacyActivationManifestFingerprintError extends Error {
@@ -328,13 +328,16 @@ export async function removeActivationManifest(openclawDir, slug) {
 }
 export async function applyOpenClawActivationManifest(manifest, opts) {
     const authInheritanceAnchor = opts.authInheritanceAnchor;
+    const reconcileAgent = opts.gatewayClass === "builder"
+        ? reconcileBuilderAgentEntry
+        : reconcileCustomerAgentEntry;
     if (authInheritanceAnchor &&
         rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId) {
         throw new Error("activation auth inheritance anchor id mismatch");
     }
     const normalizedAuthInheritanceAnchor = authInheritanceAnchor && {
         ...authInheritanceAnchor,
-        agent: reconcileCustomerAgentEntry(authInheritanceAnchor.agentId, authInheritanceAnchor.agent),
+        agent: reconcileAgent(authInheritanceAnchor.agentId, authInheritanceAnchor.agent),
     };
     const startedAt = Date.now();
     let routingActivationRequired = false;
@@ -347,7 +350,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
             const targetUsesKeyedEntries = isRecord(agents?.entries);
             const activationAgents = manifestAgents(manifest).map((entry) => ({
                 ...entry,
-                agent: reconcileCustomerAgentEntry(entry.agentId, activationAgentForTarget(entry.agent, currentActivationAgent(current, entry.agentId), targetUsesKeyedEntries)),
+                agent: reconcileAgent(entry.agentId, activationAgentForTarget(entry.agent, currentActivationAgent(current, entry.agentId), targetUsesKeyedEntries)),
             }));
             const currentAccounts = current?.channels?.mattermost?.accounts ?? {};
             const missingAccountIds = accountBindingsNeedingActivation(currentBindings, activationAgents.flatMap((entry) => entry.bindings));
