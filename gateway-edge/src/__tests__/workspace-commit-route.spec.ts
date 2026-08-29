@@ -156,7 +156,6 @@ describe("internal workspace commit route", () => {
     expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", {
       message: "checkpoint work",
       author: { name: "Octogee Agent", email: "agent@octogee.test" },
-      excludePathspecs: ["projects"],
     });
     expect(res.body).toEqual({ committed: true, pushed: true, nothingToCommit: false });
     expect(h.info).toHaveBeenCalledWith(expect.stringContaining("internal/workspace/commit slug=acme"));
@@ -198,6 +197,27 @@ describe("internal workspace commit route", () => {
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("committed but push failed slug=acme: rejected"));
   });
 
+  it("logs the underlying git stderr alongside the code", async () => {
+    h.commitAndPushWorkspace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "GIT_FAILED",
+        cwd: "/customers/acme",
+        status: 1,
+        stderr: "The following paths are ignored by one of your .gitignore files:\nprojects",
+      },
+    });
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(500, { error: "git command failed", code: "GIT_FAILED" });
+
+    expect(h.warn).toHaveBeenCalledWith(
+      expect.stringContaining("status=1 stderr=The following paths are ignored"),
+    );
+  });
+
   it("returns a retryable conflict while an import holds the workspace lease", async () => {
     h.commitAndPushWorkspace.mockResolvedValueOnce({
       ok: false,
@@ -227,8 +247,6 @@ describe("internal workspace commit route — Vegas project lane", () => {
       "/customers/acme/projects/orbit",
       expect.objectContaining({ message: "checkpoint" }),
     );
-    const options = h.commitAndPushWorkspace.mock.calls[0][1] as { excludePathspecs?: string[] };
-    expect(options.excludePathspecs).toBeUndefined();
   });
 
   it("fetches GitHub auth on demand and confines it to the commit operation", async () => {

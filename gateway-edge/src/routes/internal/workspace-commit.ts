@@ -5,6 +5,7 @@ import {
   commitAndPushWorkspace,
   isTrustedGithubCustomerCheckout,
   isSafeSlug,
+  type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
 import {
   ConnectorTokenReadError,
@@ -54,6 +55,21 @@ async function onDemandGithubToken(
 
 function customersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+}
+
+function gitErrorDetail(error: WorkspaceGitError): string {
+  switch (error.code) {
+    case "GIT_FAILED":
+      return ` status=${error.status} stderr=${error.stderr}`;
+    case "TIMEOUT":
+      return ` durationMs=${error.durationMs}`;
+    case "OUTPUT_TOO_LARGE":
+      return ` cap=${error.cap}`;
+    case "INTERNAL":
+      return ` message=${error.message}`;
+    default:
+      return "";
+  }
 }
 
 type CommitRequest = { agentId: string; slug: string; project: string | null; message: string };
@@ -131,18 +147,15 @@ router.post("/commit", async (req: Request, res: Response) => {
   const author = resolveCommitAuthor(undefined, slug);
   const githubToken = await onDemandGithubToken(dir, res);
   if (githubToken === null) return;
-  // Workspace-lane commits must never sweep the nested project clones — each
-  // project repo has its own commit path (octogee_project_commit). The
-  // exclusion is enforced here, not just .gitignore, so workspaces seeded
-  // before projects/ was ignored are covered too.
   const r = await commitAndPushWorkspace(dir, {
     message,
     author,
-    ...(project ? {} : { excludePathspecs: ["projects"] }),
     ...(githubToken ? { githubToken } : {}),
   });
   if (!r.ok) {
-    logger.warn(`internal/workspace/commit: git error slug=${slug} code=${r.error.code}`);
+    logger.warn(
+      `internal/workspace/commit: git error slug=${slug} code=${r.error.code}${gitErrorDetail(r.error)}`,
+    );
     if (r.error.code === "WORKSPACE_BUSY") {
       res.status(409).json({ error: "Workspace is busy; retry shortly.", code: r.error.code });
       return;

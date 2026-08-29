@@ -148,19 +148,14 @@ export interface CommitResult {
 
 export async function gitCommit(
   customerDir: string,
-  options: { message: string; author: CommitAuthor; excludePathspecs?: string[] },
+  options: { message: string; author: CommitAuthor },
 ): Promise<{ ok: true; result: CommitResult } | { ok: false; error: WorkspaceGitError }> {
   const message = options.message.trim();
   if (!message || message.length > 5_000) {
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
 
-  const excludes = options.excludePathspecs ?? [];
-  const addArgs =
-    excludes.length > 0
-      ? ["add", "-A", "--", ".", ...excludes.map((p) => `:(exclude)${p}`)]
-      : ["add", "-A"];
-  const addRes = await runGit(customerDir, addArgs);
+  const addRes = await runGit(customerDir, ["add", "-A"]);
   if (!addRes.ok) return addRes;
 
 const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
@@ -296,7 +291,6 @@ export async function commitAndPushWorkspace(
   options: {
     message: string;
     author: CommitAuthor;
-    excludePathspecs?: string[];
     githubToken?: string;
   },
   deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,

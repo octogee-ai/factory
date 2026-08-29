@@ -505,6 +505,7 @@ describe("gitCommit (Phase 6.C.2)", () => {
     git(repo, ["config", "user.email", "agent@octogee.local"]);
     git(repo, ["config", "user.name", "agent"]);
     await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+    await fs.writeFile(path.join(repo, ".gitignore"), "projects/\n");
     git(repo, ["add", "."]);
     git(repo, ["commit", "-m", "initial"]);
   });
@@ -577,7 +578,7 @@ const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "u
     expect(status.entries).toEqual([]);
   });
 
-  it("excludePathspecs keeps nested project clones out of workspace-lane commits", async () => {
+  it("commits the workspace lane while .gitignore keeps nested project clones out", async () => {
     const projectDir = path.join(repo, "projects", "blog");
     await fs.mkdir(projectDir, { recursive: true });
     git(projectDir, ["init", "--initial-branch=main"]);
@@ -587,7 +588,6 @@ const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "u
     const r = await gitCommit(repo, {
       message: "workspace lane",
       author: { name: "Bob", email: "b@x" },
-      excludePathspecs: ["projects"],
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -597,8 +597,8 @@ const cfg = spawnSync("git", ["config", "user.email"], { cwd: repo, encoding: "u
     expect(tracked.stdout).toContain("notes.md");
     expect(tracked.stdout).not.toContain("projects/blog");
 
-    const status = spawnSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf-8" });
-    expect(status.stdout).toContain("projects/");
+    const ignored = spawnSync("git", ["check-ignore", "projects"], { cwd: repo });
+    expect(ignored.status).toBe(0);
   });
 });
 
