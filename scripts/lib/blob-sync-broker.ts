@@ -12,12 +12,6 @@ async function requireOk(resp: Response, label: string): Promise<void> {
   throw new Error(`${label} failed: ${resp.status} ${text}`);
 }
 
-/**
- * The gateway container holds no GCS credentials, so the broker mints a URL and
- * the pod moves the bytes — the same shape as blob download/upload. The write
- * URL is minted against a specific generation, so a losing write fails at GCS
- * rather than dropping the other writer's entries.
- */
 function brokeredManifestStore(client: FleetBrokerClient, slug: string): ManifestStore {
   return {
     async read(objectPath) {
@@ -35,7 +29,7 @@ function brokeredManifestStore(client: FleetBrokerClient, slug: string): Manifes
       const signed = await client.workspaceManifestWriteUrl({ slug, ifGenerationMatch });
       const resp = await fetch(signed.url, {
         method: signed.method,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...signed.requiredHeaders },
         body: contents,
       });
       if (resp.status === 412) throw new ManifestGenerationConflict(objectPath);

@@ -139,6 +139,22 @@ describe("brokered manifest store", () => {
     expect(c.workspaceManifestWriteUrl).toHaveBeenCalledWith({ slug: "acme", ifGenerationMatch: "17" });
   });
 
+  it("sends the precondition the broker signed — as a query param GCS ignores it", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 200 }));
+    const c = client({
+      workspaceManifestWriteUrl: vi.fn(async () => ({
+        url: "https://signed.test/manifest-write",
+        method: "PUT" as const,
+        requiredHeaders: { "x-goog-if-generation-match": "17" },
+      })),
+    } as Partial<FleetBrokerClient>);
+
+    await createBrokeredBlobStore(c).manifestFor("acme").write("p", "{}", "17");
+
+    const headers = (fetchMock.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    expect(headers["x-goog-if-generation-match"]).toBe("17");
+  });
+
   it("turns a precondition failure into a generation conflict so the caller retries", async () => {
     fetchMock.mockResolvedValue(new Response("", { status: 412 }));
     const store = createBrokeredBlobStore(client()).manifestFor("acme");

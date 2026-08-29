@@ -1,26 +1,9 @@
-/**
- * The blob manifest — the index that lets a file listing show binaries stored in
- * GCS alongside the text files tracked in git.
- *
- * It lives beside the blobs it indexes rather than inside the workspace repo.
- * In the repo it had two writers on two channels — the Gitea Contents API
- * server-side and blob-sync through the worktree — and every upload advanced
- * origin/main behind the pod's clone, diverging any workspace holding unpushed
- * work. gateway-edge and blob-sync both read and write this one object, so the
- * shape and the read-modify-write live here, in one place, for both.
- */
-
 export interface ManifestEntry {
   type: "blob";
   gcsPath: string;
   size: number;
   mimeType: string;
   uploadedAt: string;
-  /**
-   * Whether a thumbnail object was actually written. The URL itself is signed at
-   * read time and never stored — a stored signed URL expires while the manifest
-   * that holds it does not.
-   */
   hasThumbnail?: boolean;
 }
 
@@ -118,12 +101,6 @@ export async function readManifest(store: ManifestStore, gcsPrefix: string): Pro
   return parseManifest(objectPath, found.contents);
 }
 
-/**
- * Read-modify-write under a generation precondition. `mutate` reports whether it
- * changed anything so an unchanged manifest costs no write and no new
- * generation. A losing write is retried against freshly read state — never
- * forced — because the other writer's entries must survive.
- */
 export async function mutateManifest(
   store: ManifestStore,
   gcsPrefix: string,
@@ -194,16 +171,22 @@ export interface ManifestBucketFile {
 }
 
 export interface ManifestBucket {
-  file(path: string): ManifestBucketFile;
+  file(path: string, options?: { generation?: string }): ManifestBucketFile;
 }
 
 export function createGcsManifestStore(bucket: ManifestBucket): ManifestStore {
   return {
     async read(objectPath) {
-      const file = bucket.file(objectPath);
       try {
-        const [[buffer], [metadata]] = await Promise.all([file.download(), file.getMetadata()]);
-        return { contents: buffer.toString("utf-8"), generation: String(metadata.generation ?? "") };
+        const [metadata] = await bucket.file(objectPath).getMetadata();
+        const generation = metadata.generation === undefined || metadata.generation === null
+          ? null
+          : String(metadata.generation);
+        if (!generation) {
+          throw new ManifestCorruptError(objectPath, "object metadata carries no generation");
+        }
+        const [buffer] = await bucket.file(objectPath, { generation }).download();
+        return { contents: buffer.toString("utf-8"), generation };
       } catch (err) {
         const code = (err as { code?: unknown } | null)?.code;
         if (code === 404 || code === "404") return null;

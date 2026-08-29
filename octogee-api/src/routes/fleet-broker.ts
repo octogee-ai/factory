@@ -357,6 +357,9 @@ const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
 const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
   const { getStorage } = await import("firebase-admin/storage");
   const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
+  const requiredHeaders = input.ifGenerationMatch === undefined
+    ? undefined
+    : { "x-goog-if-generation-match": String(input.ifGenerationMatch) };
   const [url] = await getStorage()
     .bucket()
     .file(input.gcsPath)
@@ -365,15 +368,14 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
       action: input.action,
       expires,
       ...(input.action === "write" ? { contentType: input.contentType } : {}),
-      ...(input.ifGenerationMatch === undefined
-        ? {}
-        : { queryParams: { ifGenerationMatch: String(input.ifGenerationMatch) } }),
+      ...(requiredHeaders ? { extensionHeaders: requiredHeaders } : {}),
     });
   return {
     url,
     method: input.action === "read" ? "GET" : "PUT",
     gcsPath: input.gcsPath,
     expiresAt: new Date(expires).toISOString(),
+    ...(requiredHeaders ? { requiredHeaders } : {}),
   };
 };
 
@@ -683,10 +685,6 @@ function validBlobRelativePath(value: unknown): string {
   return p;
 }
 
-/**
- * A manifest write is always conditional — an unconditional one would silently
- * drop the other writer's entries.
- */
 function validGenerationPrecondition(value: unknown): string | null {
   if (typeof value !== "string" || !/^\d{1,20}$/u.test(value)) return null;
   return value;
@@ -719,11 +717,6 @@ function gcsPathForBlob(slug: string, relativePath: string): string {
   return `customers/${slug}/${relativePath}`;
 }
 
-/**
- * Derived from the assigned slug, never from the request: `validBlobRelativePath`
- * deliberately rejects dot-prefixed paths, so the manifest is unreachable through
- * the generic blob endpoints and only these routes can name it.
- */
 function gcsPathForWorkspaceManifest(slug: string): string {
   return `customers/${slug}/${MANIFEST_OBJECT_SUFFIX}`;
 }
@@ -2103,10 +2096,6 @@ function installProvisioningRoutes(
   });
 }
 
-/**
- * The manifest is the one blob object the pod may not name for itself, so it gets
- * its own routes rather than riding the generic blob path.
- */
 function installWorkspaceManifestRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,

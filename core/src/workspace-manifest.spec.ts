@@ -130,6 +130,34 @@ describe("mutateManifest", () => {
 });
 
 describe("createGcsManifestStore", () => {
+  it("pins the download to the generation it reports", async () => {
+    const seen: Array<{ path: string; generation?: string }> = [];
+    const store = createGcsManifestStore({
+      file: (path, options) => {
+        seen.push({ path, generation: options?.generation });
+        return {
+          download: vi.fn().mockResolvedValue([Buffer.from("{}")]),
+          getMetadata: vi.fn().mockResolvedValue([{ generation: 42 }]),
+          save: vi.fn(),
+        };
+      },
+    });
+
+    await expect(store.read("p")).resolves.toEqual({ contents: "{}", generation: "42" });
+    expect(seen).toEqual([{ path: "p", generation: undefined }, { path: "p", generation: "42" }]);
+  });
+
+  it("refuses a read whose metadata carries no generation", async () => {
+    const store = createGcsManifestStore({
+      file: () => ({
+        download: vi.fn().mockResolvedValue([Buffer.from("{}")]),
+        getMetadata: vi.fn().mockResolvedValue([{}]),
+        save: vi.fn(),
+      }),
+    });
+    await expect(store.read("p")).rejects.toBeInstanceOf(ManifestCorruptError);
+  });
+
   it("reads a missing object as null and surfaces other errors", async () => {
     const notFound = Object.assign(new Error("no such object"), { code: 404 });
     const store = createGcsManifestStore({

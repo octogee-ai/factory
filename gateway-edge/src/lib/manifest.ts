@@ -8,6 +8,7 @@ import {
   type ManifestStore,
 } from "@octogee/core/workspace-manifest";
 
+import { logger } from "../middleware/logging.js";
 import { storage } from "./db.js";
 
 export type { Manifest, ManifestEntry };
@@ -30,12 +31,17 @@ export async function getManifest(gcsPrefix: string, bustCache = false): Promise
     const cached = manifestCache.get(gcsPrefix);
     if (cached && Date.now() - cached.ts < MANIFEST_TTL_MS) return cached.data;
   }
-  const data = await readManifest(store(), gcsPrefix);
+  let data: Manifest;
+  try {
+    data = await readManifest(store(), gcsPrefix);
+  } catch (err) {
+    logger.error("blob manifest unreadable; listing blobs as empty", { err, gcsPrefix });
+    return {};
+  }
   manifestCache.set(gcsPrefix, { data, ts: Date.now() });
   return data;
 }
 
-/** Quota must never bill against a cached view, and never against unvalidated sizes. */
 export async function getManifestForQuota(gcsPrefix: string): Promise<Manifest> {
   return readManifest(store(), gcsPrefix);
 }

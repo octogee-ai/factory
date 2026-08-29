@@ -220,10 +220,6 @@ function writeCanonicalGitConfig(
     '[remote "origin"]',
     `\turl = ${source.remoteUrl}`,
     "\tfetch = +refs/heads/*:refs/remotes/origin/*",
-    // Without an upstream, syncCleanWorkspaceToRemote reports "no-upstream" and
-    // never fast-forwards, so a server-side write leaves the clone behind until
-    // its next commit turns "behind" into "diverged". This config is rewritten
-    // wholesale on every prepare, so the section has to live here.
     '[branch "main"]',
     "\tremote = origin",
     "\tmerge = refs/heads/main",

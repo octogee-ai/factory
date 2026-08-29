@@ -81,8 +81,11 @@ async function verifyGitDir(dir: string): Promise<string | null> {
 
 export async function gitStatus(
   customerDir: string,
+  options: { untracked?: "normal" | "all" } = {},
 ): Promise<{ ok: true; entries: WorkspaceGitStatusEntry[] } | { ok: false; error: WorkspaceGitError }> {
-  const r = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
+  const args = ["status", "--porcelain=v1", "-z"];
+  if (options.untracked === "all") args.push("-uall");
+  const r = await runGit(customerDir, args);
   if (!r.ok) return r;
   return { ok: true, entries: parsePorcelain(r.stdout) };
 }

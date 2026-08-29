@@ -1,25 +1,9 @@
-/**
- * The blob manifest — the index that lets a file listing show binaries stored in
- * GCS alongside the text files tracked in git.
- *
- * It lives beside the blobs it indexes rather than inside the workspace repo.
- * In the repo it had two writers on two channels — the Gitea Contents API
- * server-side and blob-sync through the worktree — and every upload advanced
- * origin/main behind the pod's clone, diverging any workspace holding unpushed
- * work. gateway-edge and blob-sync both read and write this one object, so the
- * shape and the read-modify-write live here, in one place, for both.
- */
 export interface ManifestEntry {
     type: "blob";
     gcsPath: string;
     size: number;
     mimeType: string;
     uploadedAt: string;
-    /**
-     * Whether a thumbnail object was actually written. The URL itself is signed at
-     * read time and never stored — a stored signed URL expires while the manifest
-     * that holds it does not.
-     */
     hasThumbnail?: boolean;
 }
 export type Manifest = Record<string, ManifestEntry>;
@@ -49,12 +33,6 @@ export interface ManifestStore {
 export declare function parseManifest(objectPath: string, contents: string): Manifest;
 export declare function serializeManifest(manifest: Manifest): string;
 export declare function readManifest(store: ManifestStore, gcsPrefix: string): Promise<Manifest>;
-/**
- * Read-modify-write under a generation precondition. `mutate` reports whether it
- * changed anything so an unchanged manifest costs no write and no new
- * generation. A losing write is retried against freshly read state — never
- * forced — because the other writer's entries must survive.
- */
 export declare function mutateManifest(store: ManifestStore, gcsPrefix: string, mutate: (manifest: Manifest) => boolean, attempts?: number): Promise<void>;
 export declare function putManifestEntries(store: ManifestStore, gcsPrefix: string, entries: Manifest): Promise<void>;
 export declare function removeManifestEntries(store: ManifestStore, gcsPrefix: string, paths: string | string[]): Promise<void>;
@@ -66,6 +44,8 @@ export interface ManifestBucketFile {
     save(contents: string, options: unknown): Promise<unknown>;
 }
 export interface ManifestBucket {
-    file(path: string): ManifestBucketFile;
+    file(path: string, options?: {
+        generation?: string;
+    }): ManifestBucketFile;
 }
 export declare function createGcsManifestStore(bucket: ManifestBucket): ManifestStore;

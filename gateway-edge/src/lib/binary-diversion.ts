@@ -1,4 +1,4 @@
-import { readFile, stat, unlink } from "node:fs/promises";
+import { lstat, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { gitStatus } from "./workspace-git.js";
@@ -17,6 +17,17 @@ export function looksBinary(sample: Buffer): boolean {
   return sample.subarray(0, BINARY_SNIFF_BYTES).includes(0);
 }
 
+async function sniffLooksBinary(absolutePath: string): Promise<boolean> {
+  const handle = await open(absolutePath, "r");
+  try {
+    const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, BINARY_SNIFF_BYTES, 0);
+    return looksBinary(buffer.subarray(0, bytesRead));
+  } finally {
+    await handle.close();
+  }
+}
+
 export function isDivertablePath(relativePath: string): boolean {
   if (relativePath.length === 0 || relativePath.startsWith("/")) return false;
   if (relativePath.split("/").includes("..")) return false;
@@ -31,6 +42,7 @@ export interface DivertedBlob {
 export interface DivertBinariesResult {
   diverted: DivertedBlob[];
   failures: string[];
+  failedPaths: string[];
 }
 
 export interface DivertBinariesDeps {
@@ -40,45 +52,41 @@ export interface DivertBinariesDeps {
 
 const DEFAULT_DEPS: DivertBinariesDeps = { gitStatus, storeWorkspaceBlob };
 
-/**
- * Text belongs in git; binaries belong in GCS, unversioned but backed up. Which
- * store a file lands in cannot depend on the caller picking the right endpoint,
- * so the commit path decides for anything the Agent or a chat drop wrote
- * straight into the worktree.
- *
- * Scoped to the commit's own change set rather than the tree, and the upload
- * happens here — gateway-edge holds GCS credentials on every gateway class,
- * whereas blob-sync is disabled by profile on Builder gateways and would leave
- * the file on an emptyDir that nothing uploads from.
- */
 export async function divertWorktreeBinaries(
   customerDir: string,
   target: WorkspaceBlobTarget,
   deps: DivertBinariesDeps = DEFAULT_DEPS,
 ): Promise<DivertBinariesResult> {
-  const status = await deps.gitStatus(customerDir);
+  const status = await deps.gitStatus(customerDir, { untracked: "all" });
   if (!status.ok) {
-    return { diverted: [], failures: [`git status failed: ${status.error.code}`] };
+    return { diverted: [], failures: [`git status failed: ${status.error.code}`], failedPaths: [] };
   }
 
   const diverted: DivertedBlob[] = [];
   const failures: string[] = [];
+  const failedPaths: string[] = [];
 
   for (const entry of status.entries) {
     if (entry.change === "deleted" || !isDivertablePath(entry.path)) continue;
     const absolute = path.join(customerDir, entry.path);
 
     try {
-      const stats = await stat(absolute);
+      const stats = await lstat(absolute);
+      if (stats.isSymbolicLink()) {
+        failures.push(`${entry.path}: symlink, not diverted`);
+        failedPaths.push(entry.path);
+        continue;
+      }
       if (!stats.isFile()) continue;
-
-      const contents = await readFile(absolute);
-      if (!looksBinary(contents)) continue;
 
       if (stats.size > MAX_DIVERTED_BLOB_BYTES) {
         failures.push(`${entry.path}: ${stats.size} bytes exceeds the blob limit`);
+        failedPaths.push(entry.path);
         continue;
       }
+
+      if (!(await sniffLooksBinary(absolute))) continue;
+      const contents = await readFile(absolute);
 
       await deps.storeWorkspaceBlob(
         target,
@@ -90,8 +98,9 @@ export async function divertWorktreeBinaries(
       diverted.push({ path: entry.path, size: stats.size });
     } catch (err) {
       failures.push(`${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
+      failedPaths.push(entry.path);
     }
   }
 
-  return { diverted, failures };
+  return { diverted, failures, failedPaths };
 }

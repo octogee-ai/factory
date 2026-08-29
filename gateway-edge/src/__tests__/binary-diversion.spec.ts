@@ -1,9 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, truncate, writeFile, mkdir } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { gitStatus } from "../lib/workspace-git.js";
+import { storeWorkspaceBlob } from "../lib/workspace-blob.js";
 import {
   divertWorktreeBinaries,
   isDivertablePath,
@@ -127,7 +130,7 @@ describe("divertWorktreeBinaries", () => {
       target,
       deps([{ path: "gone.png", change: "deleted" }]),
     );
-    expect(result).toEqual({ diverted: [], failures: [] });
+    expect(result).toEqual({ diverted: [], failures: [], failedPaths: [] });
   });
 
   it("reports an upload failure instead of deleting the file", async () => {
@@ -146,7 +149,6 @@ describe("divertWorktreeBinaries", () => {
 
     expect(result.diverted).toEqual([]);
     expect(result.failures[0]).toContain("quota exceeded");
-    // The file must survive a failed upload — deleting it would lose the only copy.
     expect(existsSync(binary)).toBe(true);
   });
 
@@ -162,8 +164,64 @@ describe("divertWorktreeBinaries", () => {
     expect(result.failures).toEqual(["git status failed: GIT_FAILED"]);
   });
 
-  it("caps the blob size it is willing to rehome", async () => {
-    expect(MAX_DIVERTED_BLOB_BYTES).toBe(100 * 1024 * 1024);
+  it("rejects an oversize blob without reading it into memory", async () => {
+    const dir = await workspace();
+    const big = path.join(dir, "huge.bin");
+    await writeFile(big, Buffer.from([0x00]));
+    await truncate(big, MAX_DIVERTED_BLOB_BYTES + 1);
+
+    const store = vi.fn(async () => ({ gcsPath: "g", size: 0 }));
+    const result = await divertWorktreeBinaries(
+      dir,
+      target,
+      deps([{ path: "huge.bin", change: "untracked" }], store),
+    );
+
+    expect(store).not.toHaveBeenCalled();
+    expect(result.failures[0]).toContain("exceeds the blob limit");
+    expect(existsSync(big)).toBe(true);
+  });
+
+  it("refuses a symlink instead of reading and publishing whatever it points at", async () => {
+    const dir = await workspace();
+    const outside = path.join(dir, "..", `octogee-outside-${process.pid}.bin`);
+    await writeFile(outside, Buffer.from([0x00, 0x01, 0x02]));
+    dirs.push(outside);
+    await symlink(outside, path.join(dir, "innocent.bin"));
+
+    const store = vi.fn(async () => ({ gcsPath: "g", size: 3 }));
+    const result = await divertWorktreeBinaries(
+      dir,
+      target,
+      deps([{ path: "innocent.bin", change: "untracked" }], store),
+    );
+
+    expect(store).not.toHaveBeenCalled();
+    expect(result.diverted).toEqual([]);
+    expect(result.failures[0]).toContain("symlink");
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it("finds a binary inside a brand-new directory, which git collapses by default", async () => {
+    const dir = await workspace();
+    execFileSync("git", ["init", "-b", "main", dir]);
+    execFileSync("git", ["-C", dir, "config", "user.email", "t@t.t"]);
+    execFileSync("git", ["-C", dir, "config", "user.name", "t"]);
+    await writeFile(path.join(dir, "README.md"), "hi\n");
+    execFileSync("git", ["-C", dir, "add", "."]);
+    execFileSync("git", ["-C", dir, "commit", "-m", "initial"]);
+
+    await mkdir(path.join(dir, "images"), { recursive: true });
+    await writeFile(path.join(dir, "images/logo.png"), Buffer.from([0x89, 0x50, 0x00]));
+
+    const store = vi.fn(async () => ({ gcsPath: "g", size: 3 }));
+    const result = await divertWorktreeBinaries(dir, target, {
+      gitStatus,
+      storeWorkspaceBlob: store as unknown as typeof storeWorkspaceBlob,
+    });
+
+    expect(result.diverted.map((d) => d.path)).toEqual(["images/logo.png"]);
+    expect(existsSync(path.join(dir, "images/logo.png"))).toBe(false);
   });
 
   it("reads the file it uploads", async () => {

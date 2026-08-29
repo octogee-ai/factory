@@ -80,7 +80,7 @@ beforeEach(() => {
     result: { committed: true, pushed: true, nothingToCommit: false },
   });
   h.verifyWorkspaceCommitProofViaBroker.mockResolvedValue(true);
-  h.divertWorktreeBinaries.mockResolvedValue({ diverted: [], failures: [] });
+  h.divertWorktreeBinaries.mockResolvedValue({ diverted: [], failures: [], failedPaths: [] });
 });
 
 afterEach(() => {
@@ -352,6 +352,7 @@ describe("binary diversion on the commit path", () => {
     h.divertWorktreeBinaries.mockResolvedValue({
       diverted: [{ path: "notes/diagram.png", size: 12 }],
       failures: [],
+      failedPaths: [],
     });
 
     const res = await request(app())
@@ -397,9 +398,10 @@ describe("binary diversion on the commit path", () => {
     h.divertWorktreeBinaries.mockResolvedValue({
       diverted: [],
       failures: ["big.zip: 200000000 bytes exceeds the blob limit"],
+      failedPaths: ["big.zip"],
     });
 
-    await request(app())
+    const res = await request(app())
       .post("/internal/workspace/commit")
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
       .expect(200);
@@ -407,5 +409,6 @@ describe("binary diversion on the commit path", () => {
     expect(h.warn).toHaveBeenCalledWith(
       expect.stringContaining("blob diversion incomplete slug=acme"),
     );
+    expect(res.body).toMatchObject({ blobsNotDiverted: ["big.zip"] });
   });
 });

@@ -7,21 +7,10 @@ import {
 } from "./manifest.js";
 import type { FileTarget } from "./fileTarget.js";
 
-/**
- * What blob storage actually needs from a target. Narrower than FileTarget so an
- * agent-authenticated caller — which has proved its slug but has no user
- * identity to resolve a full target from — can supply it honestly.
- */
 export interface WorkspaceBlobTarget {
   slug: string;
   projectSlug: string | null;
   gcsPrefix: string;
-  /**
-   * Repository coordinates, present only on a fully resolved FileTarget. The
-   * file-listing cache is keyed by them, so a caller that cannot supply them
-   * (the agent commit path) simply does not invalidate — the same as commits,
-   * which never did.
-   */
   provider?: FileTarget["provider"];
   org?: string;
   repoName?: string;
@@ -63,7 +52,6 @@ export interface WorkspaceBlobOptions {
   maxStorageBytes?: number;
 }
 
-/** Matches the blob download URL's lifetime. Signed per request, never stored. */
 export const BLOB_SIGNED_URL_TTL_MS = 60 * 60 * 1000;
 
 interface ThumbnailResult {

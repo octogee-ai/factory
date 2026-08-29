@@ -67,16 +67,12 @@ function blobTarget(slug: string, project: string | null): WorkspaceBlobTarget {
   };
 }
 
-/**
- * A GitHub-backed checkout is the customer's own repository; its binaries stay
- * where the customer put them rather than being rehomed into our bucket.
- */
 async function divertBinaries(
   dir: string,
   slug: string,
   project: string | null,
-): Promise<{ diverted: unknown[]; failures: string[] }> {
-  if (isTrustedGithubCustomerCheckout(dir)) return { diverted: [], failures: [] };
+): Promise<{ diverted: unknown[]; failures: string[]; failedPaths: string[] }> {
+  if (isTrustedGithubCustomerCheckout(dir)) return { diverted: [], failures: [], failedPaths: [] };
   const result = await divertWorktreeBinaries(dir, blobTarget(slug, project));
   if (result.failures.length > 0) {
     logger.warn(
@@ -215,6 +211,7 @@ router.post("/commit", async (req: Request, res: Response) => {
     pushed: r.result.pushed,
     nothingToCommit: r.result.nothingToCommit,
     divertedBlobs: diverted.diverted.length,
+    ...(diverted.failedPaths.length > 0 ? { blobsNotDiverted: diverted.failedPaths } : {}),
   });
 });
 

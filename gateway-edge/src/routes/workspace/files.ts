@@ -186,12 +186,6 @@ export function blobFileEntries(
   return entries;
 }
 
-/**
- * Thumbnail URLs are signed per response rather than stored: a stored signed URL
- * outlives nothing and expires while the manifest holding it does not. Only
- * entries whose thumbnail was actually written get one, so a failed thumbnail
- * never becomes a broken image.
- */
 async function signThumbnailUrls(
   target: Parameters<typeof repoContentsApi>[0],
   manifest: Manifest,
@@ -200,10 +194,15 @@ async function signThumbnailUrls(
   const bucket = storage.bucket();
   return Promise.all(entries.map(async (file) => {
     if (!manifest[file.path]?.hasThumbnail) return file;
-    const [thumbnailUrl] = await bucket
-      .file(`${target.gcsPrefix}/.thumbs/${file.path}.png`)
-      .getSignedUrl({ action: "read", expires: Date.now() + BLOB_SIGNED_URL_TTL_MS });
-    return { ...file, thumbnailUrl };
+    try {
+      const [thumbnailUrl] = await bucket
+        .file(`${target.gcsPrefix}/.thumbs/${file.path}.png`)
+        .getSignedUrl({ action: "read", expires: Date.now() + BLOB_SIGNED_URL_TTL_MS });
+      return { ...file, thumbnailUrl };
+    } catch (err) {
+      logger.error("thumbnail url signing failed", { err, path: file.path });
+      return file;
+    }
   }));
 }
 
