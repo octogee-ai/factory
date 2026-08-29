@@ -8,6 +8,7 @@ import {
   isValidUsername,
   projectAgentId,
 } from "@octogee/shared/types/identity";
+import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
@@ -107,7 +108,7 @@ type CreateBlobSignedUrl = (input: {
   gcsPath: string;
   action: "read" | "write";
   contentType?: string;
-  ifGenerationMatch?: 0;
+  ifGenerationMatch?: number | string;
 }) => Promise<FleetBrokerBlobSignedUrl>;
 
 type PruneBuilderRuntimeState = (input: {
@@ -355,6 +356,9 @@ const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
 const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
   const { getStorage } = await import("firebase-admin/storage");
   const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
+  const requiredHeaders = input.ifGenerationMatch === undefined
+    ? undefined
+    : { "x-goog-if-generation-match": String(input.ifGenerationMatch) };
   const [url] = await getStorage()
     .bucket()
     .file(input.gcsPath)
@@ -363,15 +367,14 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
       action: input.action,
       expires,
       ...(input.action === "write" ? { contentType: input.contentType } : {}),
-      ...(input.ifGenerationMatch === undefined
-        ? {}
-        : { queryParams: { ifGenerationMatch: String(input.ifGenerationMatch) } }),
+      ...(requiredHeaders ? { extensionHeaders: requiredHeaders } : {}),
     });
   return {
     url,
     method: input.action === "read" ? "GET" : "PUT",
     gcsPath: input.gcsPath,
     expiresAt: new Date(expires).toISOString(),
+    ...(requiredHeaders ? { requiredHeaders } : {}),
   };
 };
 
@@ -681,6 +684,11 @@ function validBlobRelativePath(value: unknown): string {
   return p;
 }
 
+function validGenerationPrecondition(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{1,20}$/u.test(value)) return null;
+  return value;
+}
+
 function validContentType(value: unknown): string {
   if (typeof value !== "string") return "application/octet-stream";
   const p = value.trim();
@@ -706,6 +714,10 @@ function validBuilderRuntimeStateRecoveryTiers(
 
 function gcsPathForBlob(slug: string, relativePath: string): string {
   return `customers/${slug}/${relativePath}`;
+}
+
+function gcsPathForWorkspaceManifest(slug: string): string {
+  return `customers/${slug}/${MANIFEST_OBJECT_SUFFIX}`;
 }
 
 function gcsPathForBuilderRuntimeStateRoot(slug: string): string {
@@ -2083,6 +2095,45 @@ function installProvisioningRoutes(
   });
 }
 
+function installWorkspaceManifestRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const { db, createBlobSignedUrl } = deps;
+
+  router.post("/blob/manifest/read-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForWorkspaceManifest(assigned.slug),
+        action: "read",
+      });
+      res.json(signed);
+    });
+  });
+
+  router.post("/blob/manifest/write-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(db, req, res);
+    if (!assigned) return;
+    const precondition = validGenerationPrecondition(objectBody(req).ifGenerationMatch);
+    if (precondition === null) {
+      res.status(400).json({ error: "invalid_generation" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const signed = await createBlobSignedUrl({
+        gcsPath: gcsPathForWorkspaceManifest(assigned.slug),
+        action: "write",
+        contentType: "application/json",
+        ifGenerationMatch: precondition,
+      });
+      res.json(signed);
+    });
+  });
+
+}
+
 function installGatewayOpsRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2229,6 +2280,8 @@ function installGatewayOpsRoutes(
       res.json(signed);
     });
   });
+
+  installWorkspaceManifestRoutes(router, deps);
 
   router.post("/builder-runtime-state/download-url", async (req, res) => {
     const configured = await requireConfiguredBuilderRuntimeState(db, req, res);

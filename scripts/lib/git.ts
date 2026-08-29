@@ -28,6 +28,11 @@ import {
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
+import {
+  isDivertableWorkspacePath,
+  looksLikeWorkspaceBinary,
+  WORKSPACE_BINARY_SNIFF_BYTES,
+} from "@octogee/core/workspace-binary";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 
@@ -220,6 +225,9 @@ function writeCanonicalGitConfig(
     '[remote "origin"]',
     `\turl = ${source.remoteUrl}`,
     "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    '[branch "main"]',
+    "\tremote = origin",
+    "\tmerge = refs/heads/main",
     "",
   ].join("\n");
   fs.writeFileSync(configTmp, contents, { encoding: "utf8", mode: 0o600 });
@@ -1431,6 +1439,9 @@ export function workspaceGitignore(): string {
     "# commit path (octogee_project_commit), never swept by workspace commits",
     "projects/",
     "",
+    "# Blob manifest — server-side state in GCS beside the blobs it indexes",
+    ".files/",
+    "",
     "# Build artifacts",
     "node_modules/",
     "",
@@ -1590,19 +1601,61 @@ function migrateHttpRemoteToSsh(
   return "migrated";
 }
 
+function changedWorktreePaths(status: string): Array<{ path: string; deleted: boolean }> {
+  const paths: Array<{ path: string; deleted: boolean }> = [];
+  const records = status.split("\0");
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record || record.length < 4 || record[2] !== " ") continue;
+    const code = record.slice(0, 2);
+    paths.push({ path: record.slice(3), deleted: code.includes("D") });
+    if (code.includes("R") || code.includes("C")) index += 1;
+  }
+  return paths;
+}
+
+function rejectAutosaveBinaries(repoDir: string, status: string, label: string): void {
+  const binaryPaths: string[] = [];
+  for (const entry of changedWorktreePaths(status)) {
+    if (entry.deleted || !isDivertableWorkspacePath(entry.path)) continue;
+    const source = path.join(repoDir, entry.path);
+    let initial: fs.Stats;
+    try {
+      initial = fs.lstatSync(source);
+    } catch (error) {
+      throw new Error(`${entry.path}: ${errMessage(error)}`);
+    }
+    if (initial.isSymbolicLink()) continue;
+    const descriptor = fs.openSync(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile()) continue;
+      const sample = Buffer.alloc(Math.min(WORKSPACE_BINARY_SNIFF_BYTES, stats.size));
+      fs.readSync(descriptor, sample, 0, sample.length, 0);
+      if (looksLikeWorkspaceBinary(sample)) binaryPaths.push(entry.path);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+  if (binaryPaths.length > 0) {
+    throw new Error(`${label}: binary files require workspace_commit: ${binaryPaths.join(", ")}`);
+  }
+}
+
 function commitLocalChanges(
   repoDir: string,
   label: string,
   strict: boolean,
   runGit: GitRunner,
 ): boolean {
-  const status = runGit(repoDir, ["status", "--porcelain"]);
+  const status = runGit(repoDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   if (status === null) {
     if (strict) throw new Error(`${label}: git status failed`);
     return false;
   }
   if (status === "") return false;
-  if (runGit(repoDir, ["add", "-A"]) === null) {
+  rejectAutosaveBinaries(repoDir, status, label);
+  if (runGit(repoDir, ["add", "-A", "--", "."]) === null) {
     if (strict) throw new Error(`${label}: git add failed`);
     return false;
   }

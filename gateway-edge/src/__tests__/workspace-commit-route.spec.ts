@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
     error: vi.fn(),
     info: vi.fn(),
     verifyWorkspaceCommitProofViaBroker: vi.fn(),
+    divertWorktreeBinaries: vi.fn(),
   };
 });
 
@@ -52,6 +53,10 @@ vi.mock("../lib/workspace-commit-proof-broker.js", () => ({
   verifyWorkspaceCommitProofViaBroker: h.verifyWorkspaceCommitProofViaBroker,
 }));
 
+vi.mock("../lib/binary-diversion.js", () => ({
+  divertWorktreeBinaries: h.divertWorktreeBinaries,
+}));
+
 import workspaceCommitRouter from "../routes/internal/workspace-commit.js";
 
 const originalCustomersDir = process.env.CUSTOMERS_DIR;
@@ -70,11 +75,13 @@ beforeEach(() => {
   h.isTrustedGithubCustomerCheckout.mockReturnValue(false);
   h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue("gh-owner-token");
   h.resolveCommitAuthor.mockReturnValue({ name: "Octogee Agent", email: "agent@octogee.test" });
-  h.commitAndPushWorkspace.mockResolvedValue({
-    ok: true,
-    result: { committed: true, pushed: true, nothingToCommit: false },
+  h.commitAndPushWorkspace.mockImplementation(async (_dir, options) => {
+    const prepared = await options.beforeCommit?.();
+    if (prepared && !prepared.ok) return prepared;
+    return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
   });
   h.verifyWorkspaceCommitProofViaBroker.mockResolvedValue(true);
+  h.divertWorktreeBinaries.mockResolvedValue({ diverted: [], failures: [], failedPaths: [] });
 });
 
 afterEach(() => {
@@ -153,12 +160,12 @@ describe("internal workspace commit route", () => {
 
     expect(h.resolveCustomerDir).toHaveBeenCalledWith("/home/node/.openclaw/customers", "acme");
     expect(h.resolveCommitAuthor).toHaveBeenCalledWith(undefined, "acme");
-    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", {
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", expect.objectContaining({
       message: "checkpoint work",
       author: { name: "Octogee Agent", email: "agent@octogee.test" },
-      excludePathspecs: ["projects"],
-    });
-    expect(res.body).toEqual({ committed: true, pushed: true, nothingToCommit: false });
+      beforeCommit: expect.any(Function),
+    }));
+    expect(res.body).toEqual({ committed: true, pushed: true, nothingToCommit: false, divertedBlobs: 0 });
     expect(h.info).toHaveBeenCalledWith(expect.stringContaining("internal/workspace/commit slug=acme"));
   });
 
@@ -198,6 +205,27 @@ describe("internal workspace commit route", () => {
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("committed but push failed slug=acme: rejected"));
   });
 
+  it("logs the underlying git stderr alongside the code", async () => {
+    h.commitAndPushWorkspace.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "GIT_FAILED",
+        cwd: "/customers/acme",
+        status: 1,
+        stderr: "The following paths are ignored by one of your .gitignore files:\nprojects",
+      },
+    });
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(500, { error: "git command failed", code: "GIT_FAILED" });
+
+    expect(h.warn).toHaveBeenCalledWith(
+      expect.stringContaining("status=1 stderr=The following paths are ignored"),
+    );
+  });
+
   it("returns a retryable conflict while an import holds the workspace lease", async () => {
     h.commitAndPushWorkspace.mockResolvedValueOnce({
       ok: false,
@@ -227,8 +255,6 @@ describe("internal workspace commit route — Vegas project lane", () => {
       "/customers/acme/projects/orbit",
       expect.objectContaining({ message: "checkpoint" }),
     );
-    const options = h.commitAndPushWorkspace.mock.calls[0][1] as { excludePathspecs?: string[] };
-    expect(options.excludePathspecs).toBeUndefined();
   });
 
   it("fetches GitHub auth on demand and confines it to the commit operation", async () => {
@@ -320,5 +346,79 @@ describe("internal workspace commit route — Vegas project lane", () => {
       .expect(503);
 
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("binary diversion on the commit path", () => {
+  it("rehomes binaries before the commit, against the workspace's own blob prefix", async () => {
+    h.divertWorktreeBinaries.mockResolvedValue({
+      diverted: [{ path: "notes/diagram.png", size: 12 }],
+      failures: [],
+      failedPaths: [],
+    });
+
+    const res = await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(200);
+
+    expect(h.divertWorktreeBinaries).toHaveBeenCalledWith("/customers/acme", {
+      slug: "acme",
+      projectSlug: null,
+      gcsPrefix: "customers/acme",
+    });
+    expect(res.body.divertedBlobs).toBe(1);
+  });
+
+  it("uses the project's blob prefix on the project lane", async () => {
+    h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" })
+      .expect(200);
+
+    expect(h.divertWorktreeBinaries).toHaveBeenCalledWith("/customers/acme/projects/orbit", {
+      slug: "acme",
+      projectSlug: "orbit",
+      gcsPrefix: "customers/acme/projects/orbit",
+    });
+  });
+
+  it("stores GitHub-backed checkout binaries with the rest of the workspace blobs", async () => {
+    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(200);
+
+    expect(h.divertWorktreeBinaries).toHaveBeenCalledWith("/customers/acme", {
+      slug: "acme",
+      projectSlug: null,
+      gcsPrefix: "customers/acme",
+    });
+  });
+
+  it("aborts without committing when a binary cannot be rehomed", async () => {
+    h.divertWorktreeBinaries.mockResolvedValue({
+      diverted: [],
+      failures: ["big.zip: 200000000 bytes exceeds the blob limit"],
+      failedPaths: ["big.zip"],
+    });
+
+    await request(app())
+      .post("/internal/workspace/commit")
+      .send({ agentId: "octogee-acme-coach", slug: "acme" })
+      .expect(503, {
+        error: "Binary files could not be stored; no commit was created.",
+        code: "BLOB_DIVERSION_FAILED",
+        paths: ["big.zip"],
+      });
+
+    expect(h.warn).toHaveBeenCalledWith(
+      expect.stringContaining("blob diversion incomplete slug=acme"),
+    );
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledOnce();
   });
 });

@@ -264,13 +264,7 @@ async function deleteOriginalZip(context: ExtractZipContext): Promise<void> {
 
 async function finalizeExtraction(context: ExtractZipContext): Promise<void> {
   await deleteOriginalZip(context);
-  await removeFromManifest(
-    context.sudoUser,
-    context.org,
-    context.repoName,
-    context.zipPath,
-    `blob: remove extracted zip ${context.zipPath} from manifest`,
-  );
+  await removeFromManifest(context.target.gcsPrefix, context.zipPath);
 }
 
 async function extractZip(req: Request, res: Response): Promise<void> {

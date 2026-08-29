@@ -1,18 +1,21 @@
 import * as fs from "fs";
 import * as path from "path";
-import { log, CUSTOMERS_DIR, BLOB_SYNC_MAX_CONCURRENT, BLOB_SYNC_MAX_SIZE } from "./config.js";
+import {
+  putManifestEntries,
+  readManifest,
+  type Manifest,
+  type ManifestEntry,
+  type ManifestStore,
+} from "@octogee/core/workspace-manifest";
+import {
+  log,
+  CUSTOMERS_DIR,
+  BLOB_SYNC_MAX_CONCURRENT,
+  BLOB_SYNC_MAX_SIZE,
+} from "./config.js";
 import { MIME_TYPES } from "./helpers.js";
 
-export interface ManifestEntry {
-  type: "blob";
-  gcsPath: string;
-  size: number;
-  mimeType: string;
-  thumbnailUrl?: string;
-  uploadedAt: string;
-}
-
-export type Manifest = Record<string, ManifestEntry>;
+export type { Manifest, ManifestEntry };
 
 export interface LocalFile {
   path: string;
@@ -21,6 +24,7 @@ export interface LocalFile {
 }
 
 export interface BlobStore {
+  manifestFor(slug: string): ManifestStore;
   download(input: {
     slug: string;
     relativePath: string;
@@ -64,8 +68,24 @@ export interface BlobSyncInputs {
   maxSize?: number;
 }
 
+type ManifestBlobAction = "download" | "skip-download" | "skip";
+
+function manifestBlobAction(
+  entry: ManifestEntry,
+  local: LocalFile | undefined,
+  maxSize: number,
+): ManifestBlobAction {
+  if (entry.size > maxSize) return "skip-download";
+  return !local || new Date(entry.uploadedAt).getTime() > local.mtimeMs ? "download" : "skip";
+}
+
 export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions {
-  const { manifest, localFiles, prevSyncedPaths, maxSize = BLOB_SYNC_MAX_SIZE } = inputs;
+  const {
+    manifest,
+    localFiles,
+    prevSyncedPaths,
+    maxSize = BLOB_SYNC_MAX_SIZE,
+  } = inputs;
 
   const toDownload: BlobSyncActions["toDownload"] = [];
   const toUpload: string[] = [];
@@ -73,18 +93,17 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
   const skippedDownload: BlobSyncActions["skippedDownload"] = [];
   const skippedUpload: BlobSyncActions["skippedUpload"] = [];
 
-const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
+  const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
   const manifestBlobPaths = new Set(blobEntries.map(([p]) => p));
   const prevSet = new Set(prevSyncedPaths);
   const localByPath = new Map(localFiles.map(f => [f.path, f] as const));
 
   for (const [blobPath, entry] of blobEntries) {
-    if (entry.size > maxSize) {
-      skippedDownload.push({ path: blobPath, size: entry.size });
-      continue;
-    }
     const local = localByPath.get(blobPath);
-    if (!local || new Date(entry.uploadedAt).getTime() > local.mtimeMs) {
+    const action = manifestBlobAction(entry, local, maxSize);
+    if (action === "skip-download") {
+      skippedDownload.push({ path: blobPath, size: entry.size });
+    } else if (action === "download") {
       toDownload.push({ path: blobPath, entry });
     }
   }
@@ -111,14 +130,6 @@ function pathExists(p: string): boolean {
   return fs.existsSync(p);
 }
 
-function readJsonOrLog<T>(filePath: string, slug: string, label: string): T | null {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
-  } catch {
-    log(`⚠ [blob-sync] ${slug}: failed to parse ${label}`);
-    return null;
-  }
-}
 
 function readJsonOrEmpty<T>(filePath: string): T | null {
   try {
@@ -206,8 +217,10 @@ function recordUpload(
 
 async function firebaseAdminBlobStore(): Promise<BlobStore> {
   const { getStorage } = await import("firebase-admin/storage");
+  const { createGcsManifestStore } = await import("@octogee/core/workspace-manifest");
   const bucket = getStorage().bucket();
   return {
+    manifestFor: () => createGcsManifestStore(bucket),
     async download(input) {
       await bucket.file(input.gcsPath).download({ destination: input.destination });
     },
@@ -245,11 +258,6 @@ export async function blobSyncAllWithOptions(opts: BlobSyncAllOptions = {}): Pro
   }
 }
 
-function loadManifest(slug: string, manifestPath: string): Manifest | null {
-  if (!pathExists(manifestPath)) return null;
-  return readJsonOrLog<Manifest>(manifestPath, slug, "manifest.json");
-}
-
 function loadPrevSyncState(syncStatePath: string): string[] {
   if (!pathExists(syncStatePath)) return [];
   return readJsonOrEmpty<string[]>(syncStatePath) ?? [];
@@ -257,9 +265,12 @@ function loadPrevSyncState(syncStatePath: string): string[] {
 
 interface SyncPaths {
   customerDir: string;
-  manifestPath: string;
   blobsDir: string;
   syncStatePath: string;
+}
+
+export function gcsPrefixForSlug(slug: string): string {
+  return `customers/${slug}`;
 }
 
 function pathsForSlug(slug: string): SyncPaths {
@@ -267,7 +278,6 @@ function pathsForSlug(slug: string): SyncPaths {
   const blobsDir = path.join(customerDir, ".blobs");
   return {
     customerDir,
-    manifestPath: path.join(customerDir, ".files", "manifest.json"),
     blobsDir,
     syncStatePath: path.join(blobsDir, ".sync-state.json"),
   };
@@ -275,9 +285,9 @@ function pathsForSlug(slug: string): SyncPaths {
 
 export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}): Promise<void> {
   const paths = pathsForSlug(slug);
-
-  const manifest = loadManifest(slug, paths.manifestPath);
-  if (manifest === null) return;
+  const store = opts.store ?? await firebaseAdminBlobStore();
+  const manifestStore = store.manifestFor(slug);
+  const manifest = await readManifest(manifestStore, gcsPrefixForSlug(slug));
 
   mkdirP(paths.blobsDir);
 
@@ -292,9 +302,8 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
     log(`⚠ [blob-sync] ${slug}: skipping upload ${p} (${mb(size)}MB > ${mb(BLOB_SYNC_MAX_SIZE)}MB)`);
   }
 
-  const store = opts.store ?? await firebaseAdminBlobStore();
   const downloads = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
-  const uploads = await runUploads(slug, paths.blobsDir, actions.toUpload, manifest, store);
+  const uploads = await runUploads(slug, paths.blobsDir, actions.toUpload, store);
   const failures = [...downloads.failures, ...uploads.failures];
   if (opts.strict && failures.length > 0) {
     throw new Error(failures.join("; "));
@@ -302,8 +311,8 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
   const cleanupCount = runCleanup(paths.blobsDir, actions.toDelete);
 
   if (uploads.count > 0) {
-    mkdirP(path.dirname(paths.manifestPath));
-    writeFile(paths.manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    await putManifestEntries(manifestStore, gcsPrefixForSlug(slug), uploads.recorded);
+    Object.assign(manifest, uploads.recorded);
   }
   writeFile(paths.syncStatePath, JSON.stringify(Object.keys(manifest)));
 
@@ -352,11 +361,11 @@ async function runUploads(
   slug: string,
   blobsDir: string,
   queue: string[],
-  manifest: Manifest,
   store: BlobStore,
-): Promise<{ count: number; failures: string[] }> {
+): Promise<{ count: number; failures: string[]; recorded: Manifest }> {
   let count = 0;
   const failures: string[] = [];
+  const recorded: Manifest = {};
   for (const relativePath of queue) {
     const localPath = path.join(blobsDir, relativePath);
     const stats = statOrNull(localPath);
@@ -365,14 +374,14 @@ async function runUploads(
     const mimeType = mimeTypeForPath(relativePath);
     try {
       await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
-      recordUpload(manifest, relativePath, slug, stats.size);
+      recordUpload(recorded, relativePath, slug, stats.size);
       count++;
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: failed to upload ${relativePath}: ${err}`);
       failures.push(`upload ${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { count, failures };
+  return { count, failures, recorded };
 }
 
 function runCleanup(blobsDir: string, toDelete: string[]): number {

@@ -3,6 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const noopManifestStore = () => ({
+  read: async () => null,
+  write: async () => {},
+});
+
 const paths = vi.hoisted(() => ({
   root: `/tmp/octogee-durable-sync-${process.pid}`,
   customers: `/tmp/octogee-durable-sync-${process.pid}/customers`,
@@ -31,6 +36,7 @@ const {
   syncCustomerRepositoriesForSlug,
 } = await import("../lib/git.js");
 const { blobSyncAllWithOptions, blobSyncForSlug } = await import("../lib/blob-sync.js");
+const { workspaceGitignore } = await import("../lib/git.js");
 
 beforeEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
@@ -120,6 +126,43 @@ describe("strict durable sync", () => {
     expect(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" })).toBe("");
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: workspaceRemote, encoding: "utf8" })).toBe("workspace checkpoint\n");
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
+  });
+
+  it("refuses to autosave a workspace binary into a Gitea repository", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const remote = path.join(paths.customers, "remotes", "workspace.git");
+    initPushableRepo(customer, remote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), `${workspaceGitignore()}\n`);
+    const binary = Buffer.from([0x89, 0x50, 0x00, 0x47]);
+    fs.writeFileSync(path.join(customer, "cover.png"), binary);
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice: binary files require workspace_commit/u);
+
+    expect(fs.readFileSync(path.join(customer, "cover.png"))).toEqual(binary);
+    expect(testGitExec(remote, ["show", "main:cover.png"])).toBeNull();
+  });
+
+  it("refuses to autosave a project binary into a Gitea repository", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remotes = path.join(paths.customers, "remotes");
+    initPushableRepo(customer, path.join(remotes, "workspace.git"));
+    initPushableRepo(project, path.join(remotes, "project.git"));
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(project, "cover.png"), Buffer.from([0x89, 0x50, 0x00]));
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice\/projects\/launch: binary files require workspace_commit/u);
+
+    expect(fs.existsSync(path.join(project, "cover.png"))).toBe(true);
+    expect(testGitExec(path.join(remotes, "project.git"), ["show", "main:cover.png"])).toBeNull();
   });
 
   it("rejects a strict durable flush when a project checkout is behind canonical origin", async () => {
@@ -253,7 +296,7 @@ describe("strict durable sync", () => {
 
     await blobSyncForSlug("alice", {
       strict: true,
-      store: { download: vi.fn(async () => {}), upload },
+      store: { manifestFor: noopManifestStore, download: vi.fn(async () => {}), upload },
     });
 
     expect(upload).toHaveBeenCalledTimes(1);
@@ -295,6 +338,7 @@ describe("strict durable sync", () => {
     await expect(blobSyncAllWithOptions({
       strict: true,
       storeForSlug: () => ({
+        manifestFor: noopManifestStore,
         download: vi.fn(async () => {}),
         upload: vi.fn(async () => { throw new Error("storage unavailable"); }),
       }),
@@ -543,5 +587,56 @@ describe("workspace divergence", () => {
 
     expect(testGitExec(project, ["rev-parse", "HEAD"])).toBe(projectHead);
     expect(fs.existsSync(path.join(project, "WIP.md"))).toBe(true);
+  });
+});
+
+describe("blob sync without a manifest", () => {
+  it("uploads and records local blobs when no manifest exists yet", async () => {
+    const blobsDir = path.join(paths.customers, "aug29", ".blobs");
+    fs.mkdirSync(blobsDir, { recursive: true });
+    fs.writeFileSync(path.join(blobsDir, "avatar.png"), "png-bytes");
+
+    const written: Array<{ contents: string; ifGenerationMatch: string }> = [];
+    const upload = vi.fn(async () => {});
+
+    await blobSyncForSlug("aug29", {
+      store: {
+        manifestFor: () => ({
+          read: async () => null,
+          write: async (_p: string, contents: string, ifGenerationMatch: string) => {
+            written.push({ contents, ifGenerationMatch });
+          },
+        }),
+        download: vi.fn(async () => {}),
+        upload,
+      },
+    });
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(written).toHaveLength(1);
+    expect(written[0].ifGenerationMatch).toBe("0");
+    expect(JSON.parse(written[0].contents)["avatar.png"]).toMatchObject({
+      type: "blob",
+      gcsPath: "customers/aug29/avatar.png",
+    });
+  });
+});
+
+describe("canonical customer git config", () => {
+  it("configures main's upstream, without which a clean checkout never fast-forwards", () => {
+    const repo = path.join(paths.customers, "upstreamcheck");
+    fs.mkdirSync(repo, { recursive: true });
+    const gitDir = externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+    expect(gitDir).not.toBeNull();
+    const config = fs.readFileSync(path.join(gitDir!, "config"), "utf8");
+    expect(config).toContain('[branch "main"]');
+    expect(config).toContain("remote = origin");
+    expect(config).toContain("merge = refs/heads/main");
+  });
+
+  it("ignores the blob manifest — it is server-side state, not repo content", () => {
+    const ignore = workspaceGitignore();
+    expect(ignore).toContain(".files/");
+    expect(ignore).toContain("projects/");
   });
 });

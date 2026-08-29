@@ -3,11 +3,11 @@ import { storage } from "../../lib/db.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
+import { BLOB_SIGNED_URL_TTL_MS } from "../../lib/workspace-blob.js";
 import type { Manifest } from "../../lib/manifest.js";
 import { isOversizeFile } from "../../lib/github.js";
 import { logger } from "../../middleware/logging.js";
 import {
-  giteaSudoUser,
   HIDDEN,
   isCanvasDashboardDocumentPath,
   isTargetDirectoryEntryReadable,
@@ -158,6 +158,52 @@ export function repoFileEntries(
     .filter((file) => !target || isTargetDirectoryEntryReadable(target, file.path, file.type));
 }
 
+function directBlobPaths(manifest: Manifest, prefix: string, gitPaths: Set<string>): Set<string> {
+  return new Set(Object.keys(manifest).filter((manifestPath) => {
+    if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) return false;
+    const relative = manifestPath.slice(prefix.length);
+    return relative.length > 0 && !relative.includes("/");
+  }));
+}
+
+interface BlobDirectoryEntryInput {
+  target: Parameters<typeof repoContentsApi>[0] | undefined;
+  manifestPath: string;
+  entryPath: string;
+  name: string;
+  emittedPaths: Set<string>;
+  directBlobPaths: Set<string>;
+}
+
+function blobDirectoryEntry({
+  target,
+  manifestPath,
+  entryPath,
+  name,
+  emittedPaths,
+  directBlobPaths,
+}: BlobDirectoryEntryInput,
+): WorkspaceFileEntry | null {
+  if (directBlobPaths.has(entryPath) || emittedPaths.has(entryPath)) return null;
+  if (target && (!isTargetPathReadable(target, manifestPath) || !isTargetDirectoryEntryReadable(target, entryPath, "dir"))) {
+    return null;
+  }
+  emittedPaths.add(entryPath);
+  return { name, path: entryPath, type: "dir", size: 0, source: "blob" };
+}
+
+function blobFileEntry(
+  target: Parameters<typeof repoContentsApi>[0] | undefined,
+  manifestPath: string,
+  entry: Manifest[string],
+  name: string,
+  emittedPaths: Set<string>,
+): WorkspaceFileEntry | null {
+  if (emittedPaths.has(manifestPath) || (target && !isTargetPathReadable(target, manifestPath))) return null;
+  emittedPaths.add(manifestPath);
+  return { name, path: manifestPath, type: "file", size: entry.size ?? 0, source: "blob" };
+}
+
 export function blobFileEntries(
   manifest: Manifest,
   path: string,
@@ -166,25 +212,55 @@ export function blobFileEntries(
 ): WorkspaceFileEntry[] {
   const prefix = path ? `${path}/` : "";
   const entries: WorkspaceFileEntry[] = [];
+  const emittedPaths = new Set(gitPaths);
+  const directPaths = directBlobPaths(manifest, prefix, gitPaths);
 
   for (const [manifestPath, entry] of Object.entries(manifest)) {
     if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) continue;
 
     const relative = manifestPath.slice(prefix.length);
-    if (relative.includes("/")) continue;
+    if (!relative) continue;
 
-    const file: WorkspaceFileEntry = {
-      name: relative,
-      path: manifestPath,
-      type: "file",
-      size: entry.size ?? 0,
-      source: "blob",
-      ...(entry.thumbnailUrl ? { thumbnailUrl: entry.thumbnailUrl } : {}),
-    };
-    if (!target || isTargetPathReadable(target, manifestPath)) entries.push(file);
+    const [name, ...remainder] = relative.split("/");
+    const entryPath = `${prefix}${name}`;
+    if (remainder.length > 0) {
+      const directory = blobDirectoryEntry({
+        target,
+        manifestPath,
+        entryPath,
+        name,
+        emittedPaths,
+        directBlobPaths: directPaths,
+      });
+      if (directory) entries.push(directory);
+      continue;
+    }
+
+    const file = blobFileEntry(target, manifestPath, entry, name, emittedPaths);
+    if (file) entries.push(file);
   }
 
   return entries;
+}
+
+async function signThumbnailUrls(
+  target: Parameters<typeof repoContentsApi>[0],
+  manifest: Manifest,
+  entries: WorkspaceFileEntry[],
+): Promise<WorkspaceFileEntry[]> {
+  const bucket = storage.bucket();
+  return Promise.all(entries.map(async (file) => {
+    if (!manifest[file.path]?.hasThumbnail) return file;
+    try {
+      const [thumbnailUrl] = await bucket
+        .file(`${target.gcsPrefix}/.thumbs/${file.path}.png`)
+        .getSignedUrl({ action: "read", expires: Date.now() + BLOB_SIGNED_URL_TTL_MS });
+      return { ...file, thumbnailUrl };
+    } catch (err) {
+      logger.error("thumbnail url signing failed", { err, path: file.path });
+      return file;
+    }
+  }));
 }
 
 export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEntry[] {
@@ -201,17 +277,14 @@ async function loadWorkspaceFileEntries(
   ref?: string,
 ): Promise<WorkspaceFileEntry[] | null> {
   const contents = await repoContentEntries(target, path, ref);
-  if (!contents) return null;
+  const gitFiles = contents ? repoFileEntries(contents, target) : [];
+  if (target.provider === "github") return contents ? sortWorkspaceFiles(gitFiles) : null;
 
-  const gitFiles = repoFileEntries(contents, target);
-  if (target.provider === "github") return sortWorkspaceFiles(gitFiles);
-
-  const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName, bustCache);
+  const manifest = await getManifest(target.gcsPrefix, bustCache);
   const gitPaths = new Set(gitFiles.map((file) => file.path));
-  return sortWorkspaceFiles([
-    ...gitFiles,
-    ...blobFileEntries(manifest, path, gitPaths, target),
-  ]);
+  const blobs = await signThumbnailUrls(target, manifest, blobFileEntries(manifest, path, gitPaths, target));
+  if (!contents && blobs.length === 0) return null;
+  return sortWorkspaceFiles([...gitFiles, ...blobs]);
 }
 
 async function workspaceFileEntries(
@@ -258,7 +331,7 @@ async function loadWorkspaceFileIndex(
   const entries: WorkspaceFileIndexEntry[] = readableTreePaths.map((path) => ({ path, source: "git" }));
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    const manifest = await getManifest(target.gcsPrefix);
     for (const path of Object.keys(manifest)) {
       if (gitPaths.has(path) || !validIndexPath(path) || !isTargetPathReadable(target, path)) continue;
       entries.push({ path, source: "blob" });
@@ -371,7 +444,7 @@ async function loadWorkspaceFileResponse(
   ref?: string,
 ): Promise<WorkspaceFileResponse | null> {
   if (target.provider !== "github") {
-    const manifest = await getManifest(giteaSudoUser(target), target.org, target.repoName);
+    const manifest = await getManifest(target.gcsPrefix);
     const blobEntry = manifest[path];
 
     if (blobEntry) {

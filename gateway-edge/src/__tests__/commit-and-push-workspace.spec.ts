@@ -128,20 +128,6 @@ describe("commitAndPushWorkspace", () => {
     });
   });
 
-  it("forwards excludePathspecs to gitCommit — the workspace-lane projects/ exclusion rides through", async () => {
-    let seen: unknown;
-    const commit: CommitFn = async (_dir, options) => {
-      seen = options;
-      return { ok: true, result: { sha: "abc123", empty: false } };
-    };
-    await commitAndPushWorkspace(
-      "/d",
-      { message: "m", author, excludePathspecs: ["projects"] },
-      mutationDeps(commit, pushOk),
-    );
-    expect(seen).toMatchObject({ excludePathspecs: ["projects"] });
-  });
-
   it("returns committed-but-not-pushed (with pushError) when push fails — not fatal", async () => {
     const r = await commitAndPushWorkspace("/d", { message: "m", author }, mutationDeps(commitOk(false), pushFail));
     expect(r.ok).toBe(true);

@@ -94,6 +94,7 @@ export interface FleetBrokerBlobSignedUrl {
     method: "GET" | "PUT";
     gcsPath: string;
     expiresAt: string;
+    requiredHeaders?: Record<string, string>;
 }
 export declare const BUILDER_RUNTIME_STATE_RECOVERY_TIERS: readonly ["minute", "hour", "day"];
 export type BuilderRuntimeStateRecoveryTier = (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];

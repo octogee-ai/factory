@@ -110,6 +110,7 @@ export interface FleetBrokerBlobSignedUrl {
   method: "GET" | "PUT";
   gcsPath: string;
   expiresAt: string;
+  requiredHeaders?: Record<string, string>;
 }
 
 export const BUILDER_RUNTIME_STATE_RECOVERY_TIERS = ["minute", "hour", "day"] as const;

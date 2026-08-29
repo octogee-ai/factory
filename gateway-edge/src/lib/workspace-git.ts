@@ -23,6 +23,7 @@ export type WorkspaceGitError =
   | { code: "GIT_FAILED"; cwd: string; status: number; stderr: string }
   | { code: "OUTPUT_TOO_LARGE"; cwd: string; cap: number }
   | { code: "WORKSPACE_BUSY"; cwd: string }
+  | { code: "BLOB_DIVERSION_FAILED"; cwd: string; paths: string[] }
   | { code: "INTERNAL"; message: string };
 
 export interface WorkspaceGitStatusEntry {
@@ -81,8 +82,11 @@ async function verifyGitDir(dir: string): Promise<string | null> {
 
 export async function gitStatus(
   customerDir: string,
+  options: { untracked?: "normal" | "all" } = {},
 ): Promise<{ ok: true; entries: WorkspaceGitStatusEntry[] } | { ok: false; error: WorkspaceGitError }> {
-  const r = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
+  const args = ["status", "--porcelain=v1", "-z"];
+  if (options.untracked === "all") args.push("-uall");
+  const r = await runGit(customerDir, args);
   if (!r.ok) return r;
   return { ok: true, entries: parsePorcelain(r.stdout) };
 }
@@ -148,19 +152,14 @@ export interface CommitResult {
 
 export async function gitCommit(
   customerDir: string,
-  options: { message: string; author: CommitAuthor; excludePathspecs?: string[] },
+  options: { message: string; author: CommitAuthor },
 ): Promise<{ ok: true; result: CommitResult } | { ok: false; error: WorkspaceGitError }> {
   const message = options.message.trim();
   if (!message || message.length > 5_000) {
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
 
-  const excludes = options.excludePathspecs ?? [];
-  const addArgs =
-    excludes.length > 0
-      ? ["add", "-A", "--", ".", ...excludes.map((p) => `:(exclude)${p}`)]
-      : ["add", "-A"];
-  const addRes = await runGit(customerDir, addArgs);
+  const addRes = await runGit(customerDir, ["add", "-A"]);
   if (!addRes.ok) return addRes;
 
 const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
@@ -192,6 +191,17 @@ export interface CommitAndPushResult {
   pushed: boolean;
   nothingToCommit: boolean;
   pushError?: string;
+}
+
+export type WorkspaceCommitPreparation =
+  | { ok: true }
+  | { ok: false; error: WorkspaceGitError };
+
+export interface CommitAndPushOptions {
+  message: string;
+  author: CommitAuthor;
+  githubToken?: string;
+  beforeCommit?: () => Promise<WorkspaceCommitPreparation>;
 }
 
 export interface CommitAndPushDeps {
@@ -293,12 +303,7 @@ export async function syncCleanWorkspaceToRemote(
  */
 export async function commitAndPushWorkspace(
   customerDir: string,
-  options: {
-    message: string;
-    author: CommitAuthor;
-    excludePathspecs?: string[];
-    githubToken?: string;
-  },
+  options: CommitAndPushOptions,
   deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
   const lease = deps.acquireMutationLease({
@@ -307,6 +312,10 @@ export async function commitAndPushWorkspace(
   });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
+    if (options.beforeCommit) {
+      const prepared = await options.beforeCommit();
+      if (!prepared.ok) return prepared;
+    }
     const commitRes = await deps.gitCommit(customerDir, options);
     if (!commitRes.ok) return commitRes;
     const committed = !commitRes.result.empty;

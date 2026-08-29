@@ -5,6 +5,7 @@ import {
   commitAndPushWorkspace,
   isTrustedGithubCustomerCheckout,
   isSafeSlug,
+  type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
 import {
   ConnectorTokenReadError,
@@ -14,6 +15,8 @@ import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
 import { verifyWorkspaceCommitProofViaBroker } from "../../lib/workspace-commit-proof-broker.js";
+import { divertWorktreeBinaries } from "../../lib/binary-diversion.js";
+import type { WorkspaceBlobTarget } from "../../lib/workspace-blob.js";
 
 const router = Router();
 
@@ -54,6 +57,43 @@ async function onDemandGithubToken(
 
 function customersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+}
+
+function blobTarget(slug: string, project: string | null): WorkspaceBlobTarget {
+  return {
+    slug,
+    projectSlug: project,
+    gcsPrefix: project ? `customers/${slug}/projects/${project}` : `customers/${slug}`,
+  };
+}
+
+async function divertBinaries(
+  dir: string,
+  slug: string,
+  project: string | null,
+): Promise<{ diverted: unknown[]; failures: string[]; failedPaths: string[] }> {
+  const result = await divertWorktreeBinaries(dir, blobTarget(slug, project));
+  if (result.failures.length > 0) {
+    logger.warn(
+      `internal/workspace/commit: blob diversion incomplete slug=${slug}: ${result.failures.join("; ")}`,
+    );
+  }
+  return result;
+}
+
+function gitErrorDetail(error: WorkspaceGitError): string {
+  switch (error.code) {
+    case "GIT_FAILED":
+      return ` status=${error.status} stderr=${error.stderr}`;
+    case "TIMEOUT":
+      return ` durationMs=${error.durationMs}`;
+    case "OUTPUT_TOO_LARGE":
+      return ` cap=${error.cap}`;
+    case "INTERNAL":
+      return ` message=${error.message}`;
+    default:
+      return "";
+  }
 }
 
 type CommitRequest = { agentId: string; slug: string; project: string | null; message: string };
@@ -131,18 +171,40 @@ router.post("/commit", async (req: Request, res: Response) => {
   const author = resolveCommitAuthor(undefined, slug);
   const githubToken = await onDemandGithubToken(dir, res);
   if (githubToken === null) return;
-  // Workspace-lane commits must never sweep the nested project clones — each
-  // project repo has its own commit path (octogee_project_commit). The
-  // exclusion is enforced here, not just .gitignore, so workspaces seeded
-  // before projects/ was ignored are covered too.
+
+  let divertedBlobs = 0;
   const r = await commitAndPushWorkspace(dir, {
     message,
     author,
-    ...(project ? {} : { excludePathspecs: ["projects"] }),
     ...(githubToken ? { githubToken } : {}),
+    beforeCommit: async () => {
+      const diverted = await divertBinaries(dir, slug, project);
+      if (diverted.failures.length > 0) {
+        return {
+          ok: false,
+          error: {
+            code: "BLOB_DIVERSION_FAILED" as const,
+            cwd: dir,
+            paths: diverted.failedPaths,
+          },
+        };
+      }
+      divertedBlobs = diverted.diverted.length;
+      return { ok: true };
+    },
   });
   if (!r.ok) {
-    logger.warn(`internal/workspace/commit: git error slug=${slug} code=${r.error.code}`);
+    if (r.error.code === "BLOB_DIVERSION_FAILED") {
+      res.status(503).json({
+        error: "Binary files could not be stored; no commit was created.",
+        code: r.error.code,
+        paths: r.error.paths,
+      });
+      return;
+    }
+    logger.warn(
+      `internal/workspace/commit: git error slug=${slug} code=${r.error.code}${gitErrorDetail(r.error)}`,
+    );
     if (r.error.code === "WORKSPACE_BUSY") {
       res.status(409).json({ error: "Workspace is busy; retry shortly.", code: r.error.code });
       return;
@@ -169,6 +231,7 @@ router.post("/commit", async (req: Request, res: Response) => {
     committed: r.result.committed,
     pushed: r.result.pushed,
     nothingToCommit: r.result.nothingToCommit,
+    divertedBlobs,
   });
 });
 
