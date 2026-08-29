@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createPlatformContentMigrationPlan, parsePlatformContentMigrationArguments } from "../lib/platform-content-migration.js";

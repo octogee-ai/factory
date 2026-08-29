@@ -107,14 +107,11 @@ describe("gateway base image", () => {
     expect(npmUpgrade).toBeGreaterThan(pluginInstall);
   });
 
-  it("binds Codex to the installed OpenClaw core version before staging it", () => {
+  it("uses the installed OpenClaw core version when staging Codex", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
 
     expect(dockerfile).toContain('OPENCLAW_CORE_VERSION="$(node -e');
     expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
-    expect(dockerfile).toContain(
-      'test "$OPENCLAW_CORE_VERSION" = "$OPENCLAW_COMPATIBILITY_HOST_VERSION"',
-    );
     expect(dockerfile).toContain('if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then');
     expect(dockerfile).toContain('CODEX_REPACK="$(mktemp -d)"');
     expect(dockerfile).toContain('pkg.name !== "@openclaw/codex"');
@@ -131,6 +128,7 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toContain(
       '"$CODEX_REPACK/package/package.json" "$OPENCLAW_VERSION"',
     );
+    expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 
   it("proves the final Builder image keeps Codex bound to its installed core", () => {
