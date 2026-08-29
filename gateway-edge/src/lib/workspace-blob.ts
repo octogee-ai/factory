@@ -6,6 +6,31 @@ import {
   removeFromManifest,
 } from "./manifest.js";
 import type { FileTarget } from "./fileTarget.js";
+
+/**
+ * What blob storage actually needs from a target. Narrower than FileTarget so an
+ * agent-authenticated caller — which has proved its slug but has no user
+ * identity to resolve a full target from — can supply it honestly.
+ */
+export interface WorkspaceBlobTarget {
+  slug: string;
+  projectSlug: string | null;
+  gcsPrefix: string;
+  /**
+   * Repository coordinates, present only on a fully resolved FileTarget. The
+   * file-listing cache is keyed by them, so a caller that cannot supply them
+   * (the agent commit path) simply does not invalidate — the same as commits,
+   * which never did.
+   */
+  provider?: FileTarget["provider"];
+  org?: string;
+  repoName?: string;
+}
+
+function invalidateListingCacheIfAddressable(target: WorkspaceBlobTarget): void {
+  if (!target.provider || target.org === undefined || target.repoName === undefined) return;
+  invalidateWorkspaceFileResponseCache(target as FileTarget);
+}
 import {
   getExtension,
   getMimeType,
@@ -48,7 +73,7 @@ interface ThumbnailResult {
 }
 
 async function configuredWorkspaceStorageLimitBytes(
-  target: FileTarget,
+  target: WorkspaceBlobTarget,
 ): Promise<number | undefined> {
   if (target.projectSlug !== null) return undefined;
   const workspace = await db.doc(`workspaces/${target.slug}`).get();
@@ -73,7 +98,7 @@ async function configuredWorkspaceStorageLimitBytes(
 }
 
 async function reserveBlobStorage(
-  target: FileTarget,
+  target: WorkspaceBlobTarget,
   filePath: string,
   fileSize: number,
   limitBytes: number | undefined,
@@ -93,7 +118,7 @@ async function reserveBlobStorage(
 }
 
 async function createBlobThumbnail(
-  target: FileTarget,
+  target: WorkspaceBlobTarget,
   filePath: string,
   fileBuffer: Buffer,
   extension: string,
@@ -144,7 +169,7 @@ async function rollbackReservation(
  * avatar path — one path, no duplication.
  */
 export async function storeWorkspaceBlob(
-  target: FileTarget,
+  target: WorkspaceBlobTarget,
   filePath: string,
   fileBuffer: Buffer,
   mimeType?: string,
@@ -185,7 +210,7 @@ export async function storeWorkspaceBlob(
       },
     });
     if (reservation) await finalizeWorkspaceStorageReservation(db, reservation);
-    invalidateWorkspaceFileResponseCache(target);
+    invalidateListingCacheIfAddressable(target);
 
     return {
       gcsPath,
@@ -199,7 +224,7 @@ export async function storeWorkspaceBlob(
 }
 
 /** Remove a workspace blob, its thumbnail, and its manifest entry — no orphans. */
-export async function removeWorkspaceBlob(target: FileTarget, filePath: string): Promise<void> {
+export async function removeWorkspaceBlob(target: WorkspaceBlobTarget, filePath: string): Promise<void> {
   const manifest = target.projectSlug === null
     ? await getManifestForQuota(target.gcsPrefix)
     : {};
@@ -218,5 +243,5 @@ export async function removeWorkspaceBlob(target: FileTarget, filePath: string):
       removedBytes,
     });
   }
-  invalidateWorkspaceFileResponseCache(target);
+  invalidateListingCacheIfAddressable(target);
 }

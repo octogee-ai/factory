@@ -15,6 +15,8 @@ import { isValidProjectId } from "@octogee/shared/types/identity";
 import { resolveCommitAuthor } from "../workspace/helpers.js";
 import { logger } from "../../middleware/logging.js";
 import { verifyWorkspaceCommitProofViaBroker } from "../../lib/workspace-commit-proof-broker.js";
+import { divertWorktreeBinaries } from "../../lib/binary-diversion.js";
+import type { WorkspaceBlobTarget } from "../../lib/workspace-blob.js";
 
 const router = Router();
 
@@ -55,6 +57,33 @@ async function onDemandGithubToken(
 
 function customersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+}
+
+function blobTarget(slug: string, project: string | null): WorkspaceBlobTarget {
+  return {
+    slug,
+    projectSlug: project,
+    gcsPrefix: project ? `customers/${slug}/projects/${project}` : `customers/${slug}`,
+  };
+}
+
+/**
+ * A GitHub-backed checkout is the customer's own repository; its binaries stay
+ * where the customer put them rather than being rehomed into our bucket.
+ */
+async function divertBinaries(
+  dir: string,
+  slug: string,
+  project: string | null,
+): Promise<{ diverted: unknown[]; failures: string[] }> {
+  if (isTrustedGithubCustomerCheckout(dir)) return { diverted: [], failures: [] };
+  const result = await divertWorktreeBinaries(dir, blobTarget(slug, project));
+  if (result.failures.length > 0) {
+    logger.warn(
+      `internal/workspace/commit: blob diversion incomplete slug=${slug}: ${result.failures.join("; ")}`,
+    );
+  }
+  return result;
 }
 
 function gitErrorDetail(error: WorkspaceGitError): string {
@@ -147,6 +176,9 @@ router.post("/commit", async (req: Request, res: Response) => {
   const author = resolveCommitAuthor(undefined, slug);
   const githubToken = await onDemandGithubToken(dir, res);
   if (githubToken === null) return;
+
+  const diverted = await divertBinaries(dir, slug, project);
+
   const r = await commitAndPushWorkspace(dir, {
     message,
     author,
@@ -182,6 +214,7 @@ router.post("/commit", async (req: Request, res: Response) => {
     committed: r.result.committed,
     pushed: r.result.pushed,
     nothingToCommit: r.result.nothingToCommit,
+    divertedBlobs: diverted.diverted.length,
   });
 });
 
