@@ -173,22 +173,36 @@ router.post("/commit", async (req: Request, res: Response) => {
   const githubToken = await onDemandGithubToken(dir, res);
   if (githubToken === null) return;
 
-  const diverted = await divertBinaries(dir, slug, project);
-  if (diverted.failures.length > 0) {
-    res.status(503).json({
-      error: "Binary files could not be stored; no commit was created.",
-      code: "BLOB_DIVERSION_FAILED",
-      paths: diverted.failedPaths,
-    });
-    return;
-  }
-
+  let divertedBlobs = 0;
   const r = await commitAndPushWorkspace(dir, {
     message,
     author,
     ...(githubToken ? { githubToken } : {}),
+    beforeCommit: async () => {
+      const diverted = await divertBinaries(dir, slug, project);
+      if (diverted.failures.length > 0) {
+        return {
+          ok: false,
+          error: {
+            code: "BLOB_DIVERSION_FAILED" as const,
+            cwd: dir,
+            paths: diverted.failedPaths,
+          },
+        };
+      }
+      divertedBlobs = diverted.diverted.length;
+      return { ok: true };
+    },
   });
   if (!r.ok) {
+    if (r.error.code === "BLOB_DIVERSION_FAILED") {
+      res.status(503).json({
+        error: "Binary files could not be stored; no commit was created.",
+        code: r.error.code,
+        paths: r.error.paths,
+      });
+      return;
+    }
     logger.warn(
       `internal/workspace/commit: git error slug=${slug} code=${r.error.code}${gitErrorDetail(r.error)}`,
     );
@@ -218,7 +232,7 @@ router.post("/commit", async (req: Request, res: Response) => {
     committed: r.result.committed,
     pushed: r.result.pushed,
     nothingToCommit: r.result.nothingToCommit,
-    divertedBlobs: diverted.diverted.length,
+    divertedBlobs,
   });
 });
 

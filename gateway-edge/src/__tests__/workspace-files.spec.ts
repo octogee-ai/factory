@@ -168,6 +168,29 @@ describe("workspace file list helpers", () => {
     });
   });
 
+  it("prefers a direct blob file over a conflicting synthetic directory", () => {
+    const manifest: Manifest = {
+      assets: {
+        type: "blob",
+        gcsPath: "customers/alice/assets",
+        size: 10,
+        mimeType: "application/octet-stream",
+        uploadedAt: "2026-01-01T00:00:00.000Z",
+      },
+      "assets/logo.png": {
+        type: "blob",
+        gcsPath: "customers/alice/assets/logo.png",
+        size: 100,
+        mimeType: "image/png",
+        uploadedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+
+    expect(blobFileEntries(manifest, "", new Set())).toEqual([
+      { name: "assets", path: "assets", type: "file", size: 10, source: "blob" },
+    ]);
+  });
+
   it("sorts directories before files and then by name", () => {
     expect(sortWorkspaceFiles([
       { name: "z.md", path: "z.md", type: "file", size: 1, source: "git" },

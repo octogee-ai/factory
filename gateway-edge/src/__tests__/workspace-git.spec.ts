@@ -413,6 +413,28 @@ describe("platform-owned customer Git metadata", () => {
     }
   });
 
+  it("does not prepare a commit while the workspace mutation lease is held", async () => {
+    const customerDir = await makeRepo();
+    const beforeCommit = vi.fn(async () => ({ ok: true as const }));
+    const result = await commitAndPushWorkspace(
+      customerDir,
+      {
+        message: "checkpoint",
+        author: { name: "Owner", email: "owner@example.com" },
+        beforeCommit,
+      },
+      {
+        acquireMutationLease: vi.fn(() => null),
+        gitCommit: vi.fn(),
+        gitPreparePush: vi.fn(),
+        gitPush: vi.fn(),
+      },
+    );
+
+    expect(result).toEqual({ ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } });
+    expect(beforeCommit).not.toHaveBeenCalled();
+  });
+
   it("ignores an agent-controlled .git pointer while staging workspace files", async () => {
     const previousCustomersDir = process.env.CUSTOMERS_DIR;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-external-"));

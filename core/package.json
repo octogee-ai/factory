@@ -352,6 +352,10 @@
     "./workspace-manifest": {
       "types": "./dist/workspace-manifest.d.ts",
       "default": "./dist/workspace-manifest.js"
+    },
+    "./workspace-binary": {
+      "types": "./dist/workspace-binary.d.ts",
+      "default": "./dist/workspace-binary.js"
     }
   },
   "typesVersions": {
@@ -601,6 +605,9 @@
       ],
       "workspace-manifest": [
         "dist/workspace-manifest.d.ts"
+      ],
+      "workspace-binary": [
+        "dist/workspace-binary.d.ts"
       ]
     }
   },

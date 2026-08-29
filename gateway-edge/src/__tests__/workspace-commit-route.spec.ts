@@ -75,9 +75,10 @@ beforeEach(() => {
   h.isTrustedGithubCustomerCheckout.mockReturnValue(false);
   h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue("gh-owner-token");
   h.resolveCommitAuthor.mockReturnValue({ name: "Octogee Agent", email: "agent@octogee.test" });
-  h.commitAndPushWorkspace.mockResolvedValue({
-    ok: true,
-    result: { committed: true, pushed: true, nothingToCommit: false },
+  h.commitAndPushWorkspace.mockImplementation(async (_dir, options) => {
+    const prepared = await options.beforeCommit?.();
+    if (prepared && !prepared.ok) return prepared;
+    return { ok: true, result: { committed: true, pushed: true, nothingToCommit: false } };
   });
   h.verifyWorkspaceCommitProofViaBroker.mockResolvedValue(true);
   h.divertWorktreeBinaries.mockResolvedValue({ diverted: [], failures: [], failedPaths: [] });
@@ -159,10 +160,11 @@ describe("internal workspace commit route", () => {
 
     expect(h.resolveCustomerDir).toHaveBeenCalledWith("/home/node/.openclaw/customers", "acme");
     expect(h.resolveCommitAuthor).toHaveBeenCalledWith(undefined, "acme");
-    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", {
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", expect.objectContaining({
       message: "checkpoint work",
       author: { name: "Octogee Agent", email: "agent@octogee.test" },
-    });
+      beforeCommit: expect.any(Function),
+    }));
     expect(res.body).toEqual({ committed: true, pushed: true, nothingToCommit: false, divertedBlobs: 0 });
     expect(h.info).toHaveBeenCalledWith(expect.stringContaining("internal/workspace/commit slug=acme"));
   });
@@ -413,6 +415,6 @@ describe("binary diversion on the commit path", () => {
     expect(h.warn).toHaveBeenCalledWith(
       expect.stringContaining("blob diversion incomplete slug=acme"),
     );
-    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
+    expect(h.commitAndPushWorkspace).toHaveBeenCalledOnce();
   });
 });

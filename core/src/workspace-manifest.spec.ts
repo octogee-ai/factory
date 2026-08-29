@@ -55,16 +55,26 @@ describe("manifestObjectPath", () => {
 
 describe("parseManifest", () => {
   it("rejects malformed entries rather than handing back junk", () => {
-    expect(() => parseManifest("p", '{"a.png":{"type":"blob"}}')).toThrow(ManifestCorruptError);
-    expect(() => parseManifest("p", '{"a.png":{"type":"blob","gcsPath":"g","size":-1,"mimeType":"m","uploadedAt":"t"}}'))
+    const objectPath = manifestObjectPath("customers/x");
+    expect(() => parseManifest(objectPath, '{"a.png":{"type":"blob"}}')).toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, '{"a.png":{"type":"blob","gcsPath":"g","size":-1,"mimeType":"m","uploadedAt":"t"}}'))
       .toThrow(ManifestCorruptError);
-    expect(() => parseManifest("p", "not json")).toThrow(ManifestCorruptError);
-    expect(() => parseManifest("p", "[]")).toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, "not json")).toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, "[]")).toThrow(ManifestCorruptError);
   });
 
-  it("accepts a well-formed manifest", () => {
-    const parsed = parseManifest("p", JSON.stringify({ "a.png": entry("customers/x/a.png") }));
+  it("accepts only paths and object locations owned by the manifest prefix", () => {
+    const objectPath = manifestObjectPath("customers/x");
+    const parsed = parseManifest(objectPath, JSON.stringify({ "a.png": entry("customers/x/a.png") }));
     expect(parsed["a.png"]).toMatchObject({ type: "blob", gcsPath: "customers/x/a.png" });
+    expect(() => parseManifest(objectPath, JSON.stringify({ "../secret": entry("customers/x/../secret") })))
+      .toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, JSON.stringify({ ".files/manifest.json": entry("customers/x/.files/manifest.json") })))
+      .toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, JSON.stringify({ "runtime-state/recovery": entry("customers/x/runtime-state/recovery") })))
+      .toThrow(ManifestCorruptError);
+    expect(() => parseManifest(objectPath, JSON.stringify({ "a.png": entry("customers/other/a.png") })))
+      .toThrow(ManifestCorruptError);
   });
 });
 
@@ -72,6 +82,14 @@ describe("readManifest", () => {
   it("treats a missing object as an empty manifest", async () => {
     const { store } = fakeStore();
     await expect(readManifest(store, "customers/aug29")).resolves.toEqual({});
+  });
+
+  it("rejects a manifest entry that points outside its workspace prefix", async () => {
+    const { store } = fakeStore({
+      contents: JSON.stringify({ "private.png": entry("customers/other/private.png") }),
+      generation: "1",
+    });
+    await expect(readManifest(store, "customers/alice")).rejects.toBeInstanceOf(ManifestCorruptError);
   });
 });
 
@@ -166,6 +184,23 @@ describe("createGcsManifestStore", () => {
       }),
     });
     await expect(store.read("p")).resolves.toBeNull();
+  });
+
+  it("retries when a generation-pinned download disappears", async () => {
+    const missing = Object.assign(new Error("generation disappeared"), { code: 404 });
+    const generations = ["1", "2"];
+    const store = createGcsManifestStore({
+      file: (_path, options) => ({
+        getMetadata: vi.fn().mockResolvedValue([{ generation: options ? undefined : generations.shift() }]),
+        download: vi.fn().mockImplementation(async () => {
+          if (options?.generation === "1") throw missing;
+          return [Buffer.from("{}")];
+        }),
+        save: vi.fn(),
+      }),
+    });
+
+    await expect(store.read("p")).resolves.toEqual({ contents: "{}", generation: "2" });
   });
 
   it("translates a precondition failure into a generation conflict", async () => {

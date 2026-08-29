@@ -23,6 +23,7 @@ export type WorkspaceGitError =
   | { code: "GIT_FAILED"; cwd: string; status: number; stderr: string }
   | { code: "OUTPUT_TOO_LARGE"; cwd: string; cap: number }
   | { code: "WORKSPACE_BUSY"; cwd: string }
+  | { code: "BLOB_DIVERSION_FAILED"; cwd: string; paths: string[] }
   | { code: "INTERNAL"; message: string };
 
 export interface WorkspaceGitStatusEntry {
@@ -192,6 +193,17 @@ export interface CommitAndPushResult {
   pushError?: string;
 }
 
+export type WorkspaceCommitPreparation =
+  | { ok: true }
+  | { ok: false; error: WorkspaceGitError };
+
+export interface CommitAndPushOptions {
+  message: string;
+  author: CommitAuthor;
+  githubToken?: string;
+  beforeCommit?: () => Promise<WorkspaceCommitPreparation>;
+}
+
 export interface CommitAndPushDeps {
   gitCommit: typeof gitCommit;
   gitPreparePush: typeof gitPreparePush;
@@ -291,11 +303,7 @@ export async function syncCleanWorkspaceToRemote(
  */
 export async function commitAndPushWorkspace(
   customerDir: string,
-  options: {
-    message: string;
-    author: CommitAuthor;
-    githubToken?: string;
-  },
+  options: CommitAndPushOptions,
   deps: CommitAndPushDeps = COMMIT_AND_PUSH_DEPS,
 ): Promise<{ ok: true; result: CommitAndPushResult } | { ok: false; error: WorkspaceGitError }> {
   const lease = deps.acquireMutationLease({
@@ -304,6 +312,10 @@ export async function commitAndPushWorkspace(
   });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
+    if (options.beforeCommit) {
+      const prepared = await options.beforeCommit();
+      if (!prepared.ok) return prepared;
+    }
     const commitRes = await deps.gitCommit(customerDir, options);
     if (!commitRes.ok) return commitRes;
     const committed = !commitRes.result.empty;

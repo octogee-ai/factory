@@ -1,35 +1,27 @@
-import { lstat, open, readFile, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, unlink } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  isDivertableWorkspacePath,
+  looksLikeWorkspaceBinary,
+  MAX_WORKSPACE_BINARY_BYTES,
+  WORKSPACE_BINARY_SNIFF_BYTES,
+} from "@octogee/core/workspace-binary";
 import { gitStatus } from "./workspace-git.js";
 import { storeWorkspaceBlob, type WorkspaceBlobTarget } from "./workspace-blob.js";
 import { getMimeType, getExtension } from "../routes/workspace/helpers.js";
 
-export const BINARY_SNIFF_BYTES = 8000;
+export const BINARY_SNIFF_BYTES = WORKSPACE_BINARY_SNIFF_BYTES;
 
-export const MAX_DIVERTED_BLOB_BYTES = 100 * 1024 * 1024;
-
-const NEVER_DIVERT_PREFIXES = [".blobs/", ".files/", ".git/"];
+export const MAX_DIVERTED_BLOB_BYTES = MAX_WORKSPACE_BINARY_BYTES;
 
 export function looksBinary(sample: Buffer): boolean {
-  return sample.subarray(0, BINARY_SNIFF_BYTES).includes(0);
-}
-
-async function sniffLooksBinary(absolutePath: string): Promise<boolean> {
-  const handle = await open(absolutePath, "r");
-  try {
-    const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, BINARY_SNIFF_BYTES, 0);
-    return looksBinary(buffer.subarray(0, bytesRead));
-  } finally {
-    await handle.close();
-  }
+  return looksLikeWorkspaceBinary(sample);
 }
 
 export function isDivertablePath(relativePath: string): boolean {
-  if (relativePath.length === 0 || relativePath.startsWith("/")) return false;
-  if (relativePath.split("/").includes("..")) return false;
-  return !NEVER_DIVERT_PREFIXES.some((prefix) => relativePath.startsWith(prefix));
+  return isDivertableWorkspacePath(relativePath);
 }
 
 export interface DivertedBlob {
@@ -69,31 +61,42 @@ export async function divertWorktreeBinaries(
     const absolute = path.join(customerDir, entry.path);
 
     try {
-      const stats = await lstat(absolute);
-      if (stats.isSymbolicLink()) {
+      if ((await lstat(absolute)).isSymbolicLink()) {
         failures.push(`${entry.path}: symlink, not diverted`);
         failedPaths.push(entry.path);
         continue;
       }
-      if (!stats.isFile()) continue;
+      const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const stats = await handle.stat();
+        if (!stats.isFile()) continue;
+        if (stats.size > MAX_DIVERTED_BLOB_BYTES) {
+          failures.push(`${entry.path}: ${stats.size} bytes exceeds the blob limit`);
+          failedPaths.push(entry.path);
+          continue;
+        }
+        const sample = Buffer.alloc(Math.min(BINARY_SNIFF_BYTES, stats.size));
+        const { bytesRead: sampleBytes } = await handle.read(sample, 0, sample.length, 0);
+        if (!looksBinary(sample.subarray(0, sampleBytes))) continue;
 
-      if (stats.size > MAX_DIVERTED_BLOB_BYTES) {
-        failures.push(`${entry.path}: ${stats.size} bytes exceeds the blob limit`);
-        failedPaths.push(entry.path);
-        continue;
+        const contents = Buffer.alloc(stats.size);
+        const { bytesRead } = await handle.read(contents, 0, contents.length, 0);
+        if (bytesRead !== stats.size) throw new Error("file changed while reading");
+        await deps.storeWorkspaceBlob(
+          target,
+          entry.path,
+          contents,
+          getMimeType(getExtension(entry.path)),
+        );
+        const current = await lstat(absolute);
+        if (!current.isFile() || current.dev !== stats.dev || current.ino !== stats.ino) {
+          throw new Error("file changed before removal");
+        }
+        await unlink(absolute);
+        diverted.push({ path: entry.path, size: stats.size });
+      } finally {
+        await handle.close();
       }
-
-      if (!(await sniffLooksBinary(absolute))) continue;
-      const contents = await readFile(absolute);
-
-      await deps.storeWorkspaceBlob(
-        target,
-        entry.path,
-        contents,
-        getMimeType(getExtension(entry.path)),
-      );
-      await unlink(absolute);
-      diverted.push({ path: entry.path, size: stats.size });
     } catch (err) {
       failures.push(`${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
       failedPaths.push(entry.path);

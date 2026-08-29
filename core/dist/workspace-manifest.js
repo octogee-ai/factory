@@ -1,5 +1,7 @@
 export const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";
 export const GENERATION_ABSENT = "0";
+const MANIFEST_OBJECT_TAIL = `/${MANIFEST_OBJECT_SUFFIX}`;
+const RESERVED_MANIFEST_PATH_SEGMENTS = new Set(["runtime-state", "__proto__", "constructor", "prototype"]);
 function trimTrailingSlashes(value) {
     let out = value;
     while (out.endsWith("/"))
@@ -24,18 +26,34 @@ export class ManifestCorruptError extends Error {
 function isNonNegativeInteger(value) {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
-function isManifestEntry(value) {
+function manifestPrefix(objectPath) {
+    if (!objectPath.endsWith(MANIFEST_OBJECT_TAIL))
+        return null;
+    return objectPath.slice(0, -MANIFEST_OBJECT_TAIL.length);
+}
+function isManifestPath(value) {
+    if (value.length === 0 || value.length > 1024 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
+        return false;
+    }
+    const parts = value.split("/");
+    return !parts.some((part) => part.length === 0 || part === "." || part === ".." || part.startsWith(".") || RESERVED_MANIFEST_PATH_SEGMENTS.has(part));
+}
+function isManifestEntry(value, expectedGcsPath) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
     const entry = value;
     return (entry.type === "blob" &&
-        typeof entry.gcsPath === "string" &&
+        entry.gcsPath === expectedGcsPath &&
         typeof entry.mimeType === "string" &&
         typeof entry.uploadedAt === "string" &&
         isNonNegativeInteger(entry.size) &&
         (entry.hasThumbnail === undefined || typeof entry.hasThumbnail === "boolean"));
 }
 export function parseManifest(objectPath, contents) {
+    const gcsPrefix = manifestPrefix(objectPath);
+    if (gcsPrefix === null) {
+        throw new ManifestCorruptError(objectPath, "invalid manifest object path");
+    }
     let raw;
     try {
         raw = JSON.parse(contents);
@@ -48,7 +66,7 @@ export function parseManifest(objectPath, contents) {
     }
     const manifest = {};
     for (const [path, value] of Object.entries(raw)) {
-        if (!isManifestEntry(value)) {
+        if (!isManifestPath(path) || !isManifestEntry(value, `${gcsPrefix}/${path}`)) {
             throw new ManifestCorruptError(objectPath, `invalid entry at ${path}`);
         }
         manifest[path] = value;
@@ -74,7 +92,9 @@ export async function mutateManifest(store, gcsPrefix, mutate, attempts = 3) {
         if (!mutate(manifest))
             return;
         try {
-            await store.write(objectPath, serializeManifest(manifest), found ? found.generation : GENERATION_ABSENT);
+            const contents = serializeManifest(manifest);
+            parseManifest(objectPath, contents);
+            await store.write(objectPath, contents, found ? found.generation : GENERATION_ABSENT);
             return;
         }
         catch (err) {
@@ -89,6 +109,7 @@ export async function putManifestEntries(store, gcsPrefix, entries) {
     const paths = Object.keys(entries);
     if (paths.length === 0)
         return;
+    parseManifest(manifestObjectPath(gcsPrefix), serializeManifest(entries));
     await mutateManifest(store, gcsPrefix, (manifest) => {
         Object.assign(manifest, entries);
         return true;
@@ -114,23 +135,35 @@ function isPreconditionFailure(err) {
 export function createGcsManifestStore(bucket) {
     return {
         async read(objectPath) {
-            try {
-                const [metadata] = await bucket.file(objectPath).getMetadata();
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                let metadata;
+                try {
+                    [metadata] = await bucket.file(objectPath).getMetadata();
+                }
+                catch (err) {
+                    const code = err?.code;
+                    if (code === 404 || code === "404")
+                        return null;
+                    throw err;
+                }
                 const generation = metadata.generation === undefined || metadata.generation === null
                     ? null
                     : String(metadata.generation);
                 if (!generation) {
                     throw new ManifestCorruptError(objectPath, "object metadata carries no generation");
                 }
-                const [buffer] = await bucket.file(objectPath, { generation }).download();
-                return { contents: buffer.toString("utf-8"), generation };
+                try {
+                    const [buffer] = await bucket.file(objectPath, { generation }).download();
+                    return { contents: buffer.toString("utf-8"), generation };
+                }
+                catch (err) {
+                    const code = err?.code;
+                    if ((code === 404 || code === "404") && attempt === 0)
+                        continue;
+                    throw err;
+                }
             }
-            catch (err) {
-                const code = err?.code;
-                if (code === 404 || code === "404")
-                    return null;
-                throw err;
-            }
+            throw new ManifestCorruptError(objectPath, "manifest generation disappeared during read");
         },
         async write(objectPath, contents, ifGenerationMatch) {
             try {

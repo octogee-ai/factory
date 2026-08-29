@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, truncate, writeFile, mkdir } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile, mkdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -200,6 +200,33 @@ describe("divertWorktreeBinaries", () => {
     expect(result.diverted).toEqual([]);
     expect(result.failures[0]).toContain("symlink");
     expect(existsSync(outside)).toBe(true);
+  });
+
+  it("does not remove a path replaced after its binary bytes are read", async () => {
+    const dir = await workspace();
+    const binary = path.join(dir, "logo.bin");
+    const original = Buffer.from([0x00, 0x01, 0x02]);
+    const outside = path.join(dir, "..", `octogee-outside-${process.pid}.bin`);
+    await writeFile(binary, original);
+    await writeFile(outside, Buffer.from([0x00, 0x03]));
+    dirs.push(outside);
+
+    const store = vi.fn(async () => {
+      await unlink(binary);
+      await symlink(outside, binary);
+      return { gcsPath: "g", size: 3 };
+    });
+    const result = await divertWorktreeBinaries(
+      dir,
+      target,
+      deps([{ path: "logo.bin", change: "untracked" }], store),
+    );
+
+    expect(store.mock.calls[0]?.[2]).toEqual(original);
+    expect(result.diverted).toEqual([]);
+    expect(result.failures[0]).toContain("file changed before removal");
+    expect((await lstat(binary)).isSymbolicLink()).toBe(true);
+    expect(await readFile(outside)).toEqual(Buffer.from([0x00, 0x03]));
   });
 
   it("finds a binary inside a brand-new directory, which git collapses by default", async () => {

@@ -128,6 +128,25 @@ describe("strict durable sync", () => {
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
   });
 
+  it("moves workspace binaries to the blob cache before autosave and pre-stop staging", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const remote = path.join(paths.customers, "remotes", "workspace.git");
+    initPushableRepo(customer, remote);
+    fs.writeFileSync(path.join(customer, ".gitignore"), `${workspaceGitignore()}\n`);
+    const binary = Buffer.from([0x89, 0x50, 0x00, 0x47]);
+    fs.writeFileSync(path.join(customer, "cover.png"), binary);
+
+    await syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+
+    expect(fs.existsSync(path.join(customer, "cover.png"))).toBe(false);
+    expect(fs.readFileSync(path.join(customer, ".blobs", "cover.png"))).toEqual(binary);
+    expect(testGitExec(remote, ["show", "main:cover.png"])).toBeNull();
+  });
+
   it("rejects a strict durable flush when a project checkout is behind canonical origin", async () => {
     const customer = path.join(paths.customers, "alice");
     const project = path.join(customer, "projects", "launch");

@@ -13,6 +13,9 @@ export const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";
 
 export const GENERATION_ABSENT = "0";
 
+const MANIFEST_OBJECT_TAIL = `/${MANIFEST_OBJECT_SUFFIX}`;
+const RESERVED_MANIFEST_PATH_SEGMENTS = new Set(["runtime-state", "__proto__", "constructor", "prototype"]);
+
 function trimTrailingSlashes(value: string): string {
   let out = value;
   while (out.endsWith("/")) out = out.slice(0, -1);
@@ -51,12 +54,27 @@ function isNonNegativeInteger(value: unknown): boolean {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isManifestEntry(value: unknown): value is ManifestEntry {
+function manifestPrefix(objectPath: string): string | null {
+  if (!objectPath.endsWith(MANIFEST_OBJECT_TAIL)) return null;
+  return objectPath.slice(0, -MANIFEST_OBJECT_TAIL.length);
+}
+
+function isManifestPath(value: string): boolean {
+  if (value.length === 0 || value.length > 1024 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
+    return false;
+  }
+  const parts = value.split("/");
+  return !parts.some((part) =>
+    part.length === 0 || part === "." || part === ".." || part.startsWith(".") || RESERVED_MANIFEST_PATH_SEGMENTS.has(part),
+  );
+}
+
+function isManifestEntry(value: unknown, expectedGcsPath: string): value is ManifestEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<ManifestEntry>;
   return (
     entry.type === "blob" &&
-    typeof entry.gcsPath === "string" &&
+    entry.gcsPath === expectedGcsPath &&
     typeof entry.mimeType === "string" &&
     typeof entry.uploadedAt === "string" &&
     isNonNegativeInteger(entry.size) &&
@@ -65,6 +83,10 @@ function isManifestEntry(value: unknown): value is ManifestEntry {
 }
 
 export function parseManifest(objectPath: string, contents: string): Manifest {
+  const gcsPrefix = manifestPrefix(objectPath);
+  if (gcsPrefix === null) {
+    throw new ManifestCorruptError(objectPath, "invalid manifest object path");
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(contents);
@@ -76,7 +98,7 @@ export function parseManifest(objectPath: string, contents: string): Manifest {
   }
   const manifest: Manifest = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isManifestEntry(value)) {
+    if (!isManifestPath(path) || !isManifestEntry(value, `${gcsPrefix}/${path}`)) {
       throw new ManifestCorruptError(objectPath, `invalid entry at ${path}`);
     }
     manifest[path] = value;
@@ -108,11 +130,9 @@ export async function mutateManifest(
     const manifest = found ? parseManifest(objectPath, found.contents) : {};
     if (!mutate(manifest)) return;
     try {
-      await store.write(
-        objectPath,
-        serializeManifest(manifest),
-        found ? found.generation : GENERATION_ABSENT,
-      );
+      const contents = serializeManifest(manifest);
+      parseManifest(objectPath, contents);
+      await store.write(objectPath, contents, found ? found.generation : GENERATION_ABSENT);
       return;
     } catch (err) {
       if (!(err instanceof ManifestGenerationConflict)) throw err;
@@ -129,6 +149,7 @@ export async function putManifestEntries(
 ): Promise<void> {
   const paths = Object.keys(entries);
   if (paths.length === 0) return;
+  parseManifest(manifestObjectPath(gcsPrefix), serializeManifest(entries));
   await mutateManifest(store, gcsPrefix, (manifest) => {
     Object.assign(manifest, entries);
     return true;
@@ -171,21 +192,31 @@ export interface ManifestBucket {
 export function createGcsManifestStore(bucket: ManifestBucket): ManifestStore {
   return {
     async read(objectPath) {
-      try {
-        const [metadata] = await bucket.file(objectPath).getMetadata();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let metadata: { generation?: string | number | null };
+        try {
+          [metadata] = await bucket.file(objectPath).getMetadata();
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          if (code === 404 || code === "404") return null;
+          throw err;
+        }
         const generation = metadata.generation === undefined || metadata.generation === null
           ? null
           : String(metadata.generation);
         if (!generation) {
           throw new ManifestCorruptError(objectPath, "object metadata carries no generation");
         }
-        const [buffer] = await bucket.file(objectPath, { generation }).download();
-        return { contents: buffer.toString("utf-8"), generation };
-      } catch (err) {
-        const code = (err as { code?: unknown } | null)?.code;
-        if (code === 404 || code === "404") return null;
-        throw err;
+        try {
+          const [buffer] = await bucket.file(objectPath, { generation }).download();
+          return { contents: buffer.toString("utf-8"), generation };
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          if ((code === 404 || code === "404") && attempt === 0) continue;
+          throw err;
+        }
       }
+      throw new ManifestCorruptError(objectPath, "manifest generation disappeared during read");
     },
     async write(objectPath, contents, ifGenerationMatch) {
       try {
