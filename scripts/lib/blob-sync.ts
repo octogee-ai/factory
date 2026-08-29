@@ -7,19 +7,15 @@ import {
   type ManifestEntry,
   type ManifestStore,
 } from "@octogee/core/workspace-manifest";
-import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import {
   log,
   CUSTOMERS_DIR,
-  OPENCLAW_DIR,
   BLOB_SYNC_MAX_CONCURRENT,
   BLOB_SYNC_MAX_SIZE,
 } from "./config.js";
 import { MIME_TYPES } from "./helpers.js";
 
 export type { Manifest, ManifestEntry };
-
-export const PENDING_BLOB_UPLOAD_DIR = ".pending";
 
 export interface LocalFile {
   path: string;
@@ -50,7 +46,6 @@ export type BlobStoreFactory = (slug: string) => BlobStore | Promise<BlobStore>;
 export interface BlobSyncOptions {
   store?: BlobStore;
   strict?: boolean;
-  acquireWorkspaceMutationLease?: (workspaceDir: string) => { release(): void } | null;
 }
 
 export interface BlobSyncAllOptions {
@@ -70,48 +65,18 @@ export interface BlobSyncInputs {
   manifest: Manifest;
   localFiles: LocalFile[];
   prevSyncedPaths: string[];
-  pendingLocalFiles?: LocalFile[];
   maxSize?: number;
 }
 
-type ManifestBlobAction = "download" | "upload" | "skip-download" | "skip-upload" | "skip";
+type ManifestBlobAction = "download" | "skip-download" | "skip";
 
 function manifestBlobAction(
   entry: ManifestEntry,
   local: LocalFile | undefined,
-  pending: LocalFile | undefined,
   maxSize: number,
 ): ManifestBlobAction {
-  if (pending) return pending.size > maxSize ? "skip-upload" : "upload";
   if (entry.size > maxSize) return "skip-download";
   return !local || new Date(entry.uploadedAt).getTime() > local.mtimeMs ? "download" : "skip";
-}
-
-interface NewBlobQueueInputs {
-  files: LocalFile[];
-  manifestBlobPaths: Set<string>;
-  prevSyncedPaths: Set<string>;
-  maxSize: number;
-  toUpload: string[];
-  skippedUpload: BlobSyncActions["skippedUpload"];
-}
-
-function queueNewBlobFiles({
-  files,
-  manifestBlobPaths,
-  prevSyncedPaths,
-  maxSize,
-  toUpload,
-  skippedUpload,
-}: NewBlobQueueInputs): void {
-  for (const file of files) {
-    if (manifestBlobPaths.has(file.path) || prevSyncedPaths.has(file.path)) continue;
-    if (file.size > maxSize) {
-      skippedUpload.push({ path: file.path, size: file.size });
-    } else {
-      toUpload.push(file.path);
-    }
-  }
 }
 
 export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions {
@@ -119,7 +84,6 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
     manifest,
     localFiles,
     prevSyncedPaths,
-    pendingLocalFiles = [],
     maxSize = BLOB_SYNC_MAX_SIZE,
   } = inputs;
 
@@ -132,40 +96,26 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
   const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
   const manifestBlobPaths = new Set(blobEntries.map(([p]) => p));
   const prevSet = new Set(prevSyncedPaths);
-  const pendingByPath = new Map(pendingLocalFiles.map((file) => [file.path, file] as const));
   const localByPath = new Map(localFiles.map(f => [f.path, f] as const));
 
   for (const [blobPath, entry] of blobEntries) {
     const local = localByPath.get(blobPath);
-    const pending = pendingByPath.get(blobPath);
-    const action = manifestBlobAction(entry, local, pending, maxSize);
-    if (action === "upload") {
-      toUpload.push(blobPath);
-    } else if (action === "skip-upload") {
-      skippedUpload.push({ path: blobPath, size: pending!.size });
-    } else if (action === "skip-download") {
+    const action = manifestBlobAction(entry, local, maxSize);
+    if (action === "skip-download") {
       skippedDownload.push({ path: blobPath, size: entry.size });
     } else if (action === "download") {
       toDownload.push({ path: blobPath, entry });
     }
   }
 
-  queueNewBlobFiles({
-    files: localFiles,
-    manifestBlobPaths,
-    prevSyncedPaths: prevSet,
-    maxSize,
-    toUpload,
-    skippedUpload,
-  });
-  queueNewBlobFiles({
-    files: pendingLocalFiles,
-    manifestBlobPaths,
-    prevSyncedPaths: new Set(),
-    maxSize,
-    toUpload,
-    skippedUpload,
-  });
+  for (const local of localFiles) {
+    if (manifestBlobPaths.has(local.path) || prevSet.has(local.path)) continue;
+    if (local.size > maxSize) {
+      skippedUpload.push({ path: local.path, size: local.size });
+      continue;
+    }
+    toUpload.push(local.path);
+  }
 
   for (const prevPath of prevSyncedPaths) {
     if (!manifestBlobPaths.has(prevPath) && localByPath.has(prevPath)) {
@@ -195,21 +145,6 @@ function mkdirP(dir: string): void {
 
 function writeFile(filePath: string, contents: string): void {
   fs.writeFileSync(filePath, contents, "utf-8");
-}
-
-function isPendingBlobPath(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
-    return false;
-  }
-  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("."));
-}
-
-export function stageBlobUpload(repoDir: string, relativePath: string): void {
-  if (!isPendingBlobPath(relativePath)) throw new Error(`invalid blob path: ${relativePath}`);
-  const source = path.join(repoDir, relativePath);
-  const pendingPath = path.join(repoDir, ".blobs", PENDING_BLOB_UPLOAD_DIR, relativePath);
-  mkdirP(path.dirname(pendingPath));
-  fs.renameSync(source, pendingPath);
 }
 
 function unlinkIfExists(filePath: string): boolean {
@@ -350,32 +285,6 @@ function pathsForSlug(slug: string): SyncPaths {
 
 export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}): Promise<void> {
   const paths = pathsForSlug(slug);
-  const lease = acquireBlobSyncLease(paths.customerDir, slug, opts.acquireWorkspaceMutationLease);
-  if (!lease) throw new Error(`${slug}: workspace mutation lease unavailable`);
-  try {
-    await syncBlobTarget(slug, paths, opts);
-  } finally {
-    lease.release();
-  }
-}
-
-function acquireBlobSyncLease(
-  customerDir: string,
-  slug: string,
-  acquire: BlobSyncOptions["acquireWorkspaceMutationLease"],
-): { release(): void } | null {
-  if (acquire) return acquire(customerDir);
-  const metadataDir = path.join(OPENCLAW_DIR, "git-metadata", slug, "workspace.git");
-  const gitDir = pathExists(metadataDir) ? metadataDir : path.join(customerDir, ".git");
-  if (!pathExists(gitDir)) return { release: () => {} };
-  return acquireWorkspaceMutationLeaseSync({ workspaceDir: customerDir, gitDir });
-}
-
-async function syncBlobTarget(
-  slug: string,
-  paths: SyncPaths,
-  opts: BlobSyncOptions,
-): Promise<void> {
   const store = opts.store ?? await firebaseAdminBlobStore();
   const manifestStore = store.manifestFor(slug);
   const manifest = await readManifest(manifestStore, gcsPrefixForSlug(slug));
@@ -384,9 +293,7 @@ async function syncBlobTarget(
 
   const prevSyncedPaths = loadPrevSyncState(paths.syncStatePath);
   const localFiles = discoverLocalFiles(paths.blobsDir);
-  const pendingDir = path.join(paths.blobsDir, PENDING_BLOB_UPLOAD_DIR);
-  const pendingLocalFiles = discoverLocalFiles(pendingDir);
-  const actions = computeBlobSyncActions({ manifest, localFiles, prevSyncedPaths, pendingLocalFiles });
+  const actions = computeBlobSyncActions({ manifest, localFiles, prevSyncedPaths });
 
   for (const { path: p, size } of actions.skippedDownload) {
     log(`⚠ [blob-sync] ${slug}: skipping ${p} (${mb(size)}MB > ${mb(BLOB_SYNC_MAX_SIZE)}MB)`);
@@ -396,15 +303,7 @@ async function syncBlobTarget(
   }
 
   const downloads = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
-  const pendingPaths = new Set(pendingLocalFiles.map((file) => file.path));
-  const uploads = await runUploads({
-    slug,
-    blobsDir: paths.blobsDir,
-    pendingDir,
-    queue: actions.toUpload,
-    pendingPaths,
-    store,
-  });
+  const uploads = await runUploads(slug, paths.blobsDir, actions.toUpload, store);
   const failures = [...downloads.failures, ...uploads.failures];
   if (opts.strict && failures.length > 0) {
     throw new Error(failures.join("; "));
@@ -415,7 +314,6 @@ async function syncBlobTarget(
     await putManifestEntries(manifestStore, gcsPrefixForSlug(slug), uploads.recorded);
     Object.assign(manifest, uploads.recorded);
   }
-  promotePendingUploads(pendingDir, paths.blobsDir, uploads.pendingPaths);
   writeFile(paths.syncStatePath, JSON.stringify(Object.keys(manifest)));
 
   logSummary(slug, {
@@ -459,31 +357,17 @@ async function runDownloads(
   return { count, failures };
 }
 
-interface UploadInputs {
-  slug: string;
-  blobsDir: string;
-  pendingDir: string;
-  queue: string[];
-  pendingPaths: Set<string>;
-  store: BlobStore;
-}
-
-async function runUploads({
-  slug,
-  blobsDir,
-  pendingDir,
-  queue,
-  pendingPaths,
-  store,
-}: UploadInputs,
-): Promise<{ count: number; pendingPaths: string[]; failures: string[]; recorded: Manifest }> {
+async function runUploads(
+  slug: string,
+  blobsDir: string,
+  queue: string[],
+  store: BlobStore,
+): Promise<{ count: number; failures: string[]; recorded: Manifest }> {
   let count = 0;
-  const uploadedPendingPaths: string[] = [];
   const failures: string[] = [];
   const recorded: Manifest = {};
   for (const relativePath of queue) {
-    const pending = pendingPaths.has(relativePath);
-    const localPath = path.join(pending ? pendingDir : blobsDir, relativePath);
+    const localPath = path.join(blobsDir, relativePath);
     const stats = statOrNull(localPath);
     if (!stats) continue;
     const gcsPath = `customers/${slug}/${relativePath}`;
@@ -492,23 +376,12 @@ async function runUploads({
       await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
       recordUpload(recorded, relativePath, slug, stats.size);
       count++;
-      if (pending) uploadedPendingPaths.push(relativePath);
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: failed to upload ${relativePath}: ${err}`);
       failures.push(`upload ${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { count, pendingPaths: uploadedPendingPaths, failures, recorded };
-}
-
-function promotePendingUploads(pendingDir: string, blobsDir: string, paths: string[]): void {
-  for (const relativePath of paths) {
-    const pendingPath = path.join(pendingDir, relativePath);
-    if (!pathExists(pendingPath)) continue;
-    const destination = path.join(blobsDir, relativePath);
-    mkdirP(path.dirname(destination));
-    fs.renameSync(pendingPath, destination);
-  }
+  return { count, failures, recorded };
 }
 
 function runCleanup(blobsDir: string, toDelete: string[]): number {

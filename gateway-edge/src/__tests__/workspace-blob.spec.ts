@@ -1,7 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileTarget } from "../lib/fileTarget.js";
 
 const h = vi.hoisted(() => ({
@@ -53,14 +50,8 @@ vi.mock("../middleware/logging.js", () => ({
   logger: { warn: h.warn, error: vi.fn(), info: vi.fn() },
 }));
 
-import {
-  removeWorkspaceBlob,
-  storeWorkspaceBlob,
-  WorkspaceBlobBusyError,
-} from "../lib/workspace-blob.js";
+import { removeWorkspaceBlob, storeWorkspaceBlob } from "../lib/workspace-blob.js";
 
-const customersDir = `/tmp/octogee-workspace-blob-${process.pid}/customers`;
-const originalCustomersDir = process.env.CUSTOMERS_DIR;
 const target: FileTarget = {
   slug: "alice",
   projectSlug: "site",
@@ -72,11 +63,6 @@ const target: FileTarget = {
 };
 
 beforeEach(() => {
-  process.env.CUSTOMERS_DIR = customersDir;
-  fs.rmSync(path.dirname(customersDir), { recursive: true, force: true });
-  fs.mkdirSync(path.join(path.dirname(customersDir), "git-metadata", "alice", "workspace.git"), {
-    recursive: true,
-  });
   vi.clearAllMocks();
   h.file.mockReturnValue({
     save: h.save,
@@ -120,12 +106,6 @@ beforeEach(() => {
   h.finalizeWorkspaceStorageReservation.mockResolvedValue(undefined);
   h.rollbackWorkspaceStorageReservation.mockResolvedValue(undefined);
   h.releaseWorkspaceStorage.mockResolvedValue(undefined);
-});
-
-afterEach(() => {
-  fs.rmSync(path.dirname(customersDir), { recursive: true, force: true });
-  if (originalCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-  else process.env.CUSTOMERS_DIR = originalCustomersDir;
 });
 
 describe("storeWorkspaceBlob", () => {
@@ -217,44 +197,6 @@ describe("storeWorkspaceBlob", () => {
 
     expect(h.rollbackWorkspaceStorageReservation).toHaveBeenCalledOnce();
     expect(h.finalizeWorkspaceStorageReservation).not.toHaveBeenCalled();
-  });
-
-  it("serializes a direct replacement with a staged autosave and supersedes the staged bytes", async () => {
-    const workspaceTarget = {
-      ...target,
-      projectSlug: null,
-      gcsPrefix: "customers/alice",
-    };
-    const workspaceDir = path.join(customersDir, "alice");
-    const gitDir = path.join(path.dirname(customersDir), "git-metadata", "alice", "workspace.git");
-    const pendingPath = path.join(workspaceDir, ".blobs", ".pending", "cover.png");
-    fs.mkdirSync(path.dirname(pendingPath), { recursive: true });
-    fs.writeFileSync(pendingPath, Buffer.from([0x00, 0x41]));
-
-    const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir, gitDir });
-    expect(lease).not.toBeNull();
-    await expect(storeWorkspaceBlob(
-      workspaceTarget,
-      "cover.png",
-      Buffer.from([0x00, 0x42]),
-      "image/png",
-      { maxStorageBytes: 10 },
-    )).rejects.toBeInstanceOf(WorkspaceBlobBusyError);
-    expect(fs.existsSync(pendingPath)).toBe(true);
-
-    lease!.release();
-    await storeWorkspaceBlob(
-      workspaceTarget,
-      "cover.png",
-      Buffer.from([0x00, 0x42]),
-      "image/png",
-      { maxStorageBytes: 10 },
-    );
-
-    expect(fs.existsSync(pendingPath)).toBe(false);
-    expect(h.save).toHaveBeenCalledWith(Buffer.from([0x00, 0x42]), {
-      metadata: { contentType: "image/png" },
-    });
   });
 });
 

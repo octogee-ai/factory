@@ -27,12 +27,10 @@ import {
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
-import { stageBlobUpload } from "./blob-sync.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import {
   isDivertableWorkspacePath,
   looksLikeWorkspaceBinary,
-  MAX_WORKSPACE_BINARY_BYTES,
   WORKSPACE_BINARY_SNIFF_BYTES,
 } from "@octogee/core/workspace-binary";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
@@ -1616,38 +1614,6 @@ function changedWorktreePaths(status: string): Array<{ path: string; deleted: bo
   return paths;
 }
 
-function divertWorkspaceBinariesForAutosave(repoDir: string, status: string): void {
-  for (const entry of changedWorktreePaths(status)) {
-    if (entry.deleted || !isDivertableWorkspacePath(entry.path)) continue;
-    const source = path.join(repoDir, entry.path);
-    let initial: fs.Stats;
-    try {
-      initial = fs.lstatSync(source);
-    } catch (error) {
-      throw new Error(`${entry.path}: ${errMessage(error)}`);
-    }
-    if (initial.isSymbolicLink()) continue;
-    const descriptor = fs.openSync(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    try {
-      const stats = fs.fstatSync(descriptor);
-      if (!stats.isFile()) continue;
-      if (stats.size > MAX_WORKSPACE_BINARY_BYTES) {
-        throw new Error(`${entry.path}: ${stats.size} bytes exceeds the blob limit`);
-      }
-      const sample = Buffer.alloc(Math.min(WORKSPACE_BINARY_SNIFF_BYTES, stats.size));
-      fs.readSync(descriptor, sample, 0, sample.length, 0);
-      if (!looksLikeWorkspaceBinary(sample)) continue;
-      const current = fs.lstatSync(source);
-      if (!current.isFile() || current.dev !== stats.dev || current.ino !== stats.ino) {
-        throw new Error(`${entry.path}: file changed before cache move`);
-      }
-      stageBlobUpload(repoDir, entry.path);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-  }
-}
-
 function rejectAutosaveBinaries(repoDir: string, status: string, label: string): void {
   const binaryPaths: string[] = [];
   for (const entry of changedWorktreePaths(status)) {
@@ -1676,14 +1642,11 @@ function rejectAutosaveBinaries(repoDir: string, status: string, label: string):
   }
 }
 
-type AutosaveBinaryHandling = "divert" | "block";
-
 function commitLocalChanges(
   repoDir: string,
   label: string,
   strict: boolean,
   runGit: GitRunner,
-  binaryHandling: AutosaveBinaryHandling,
 ): boolean {
   const status = runGit(repoDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   if (status === null) {
@@ -1691,21 +1654,8 @@ function commitLocalChanges(
     return false;
   }
   if (status === "") return false;
-  if (binaryHandling === "divert") divertWorkspaceBinariesForAutosave(repoDir, status);
-  if (binaryHandling === "block") rejectAutosaveBinaries(repoDir, status, label);
-  let stagePaths = ["."];
-  if (binaryHandling === "divert") {
-    const stagingStatus = runGit(repoDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-    if (stagingStatus === null) {
-      if (strict) throw new Error(`${label}: git status failed after blob diversion`);
-      return false;
-    }
-    stagePaths = changedWorktreePaths(stagingStatus)
-      .map((entry) => entry.path)
-      .filter(isDivertableWorkspacePath);
-  }
-  if (stagePaths.length === 0) return false;
-  if (runGit(repoDir, ["add", "-A", "--", ...stagePaths]) === null) {
+  rejectAutosaveBinaries(repoDir, status, label);
+  if (runGit(repoDir, ["add", "-A", "--", "."]) === null) {
     if (strict) throw new Error(`${label}: git add failed`);
     return false;
   }
@@ -1902,9 +1852,8 @@ function syncOneRepository(
       }
     }
 
-    const binaryHandling: AutosaveBinaryHandling = target.kind === "workspace" ? "divert" : "block";
     const committed = commitPendingChanges
-      ? commitLocalChanges(target.dir, target.label, strict, runGit, binaryHandling)
+      ? commitLocalChanges(target.dir, target.label, strict, runGit)
       : false;
     const remoteState = classifyRemoteState(target.dir, keyArg, runGit, githubToken);
     observed = remoteState;

@@ -128,7 +128,7 @@ describe("strict durable sync", () => {
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
   });
 
-  it("uploads an autosaved replacement over an existing workspace blob", async () => {
+  it("refuses to autosave a workspace binary into a Gitea repository", async () => {
     const customer = path.join(paths.customers, "alice");
     const remote = path.join(paths.customers, "remotes", "workspace.git");
     initPushableRepo(customer, remote);
@@ -136,63 +136,14 @@ describe("strict durable sync", () => {
     const binary = Buffer.from([0x89, 0x50, 0x00, 0x47]);
     fs.writeFileSync(path.join(customer, "cover.png"), binary);
 
-    await syncCustomerRepositoriesForSlug("alice", {
+    await expect(syncCustomerRepositoriesForSlug("alice", {
       strict: true,
       gitExec: testGitExec,
       prepareRepository: prepareTestRepository,
-    });
+    })).rejects.toThrow(/alice: binary files require workspace_commit/u);
 
-    expect(fs.existsSync(path.join(customer, "cover.png"))).toBe(false);
-    expect(fs.readFileSync(path.join(customer, ".blobs", ".pending", "cover.png"))).toEqual(binary);
+    expect(fs.readFileSync(path.join(customer, "cover.png"))).toEqual(binary);
     expect(testGitExec(remote, ["show", "main:cover.png"])).toBeNull();
-
-    let manifestContents = JSON.stringify({
-      "cover.png": {
-        type: "blob",
-        gcsPath: "customers/alice/cover.png",
-        size: 3,
-        mimeType: "image/png",
-        uploadedAt: "2026-01-01T00:00:00.000Z",
-      },
-    });
-    const upload = vi.fn(async ({ localPath }: { localPath: string }) => {
-      expect(fs.readFileSync(localPath)).toEqual(binary);
-    });
-    await blobSyncForSlug("alice", {
-      strict: true,
-      store: {
-        manifestFor: () => ({
-          read: async () => ({ contents: manifestContents, generation: "1" }),
-          write: async (_path, contents: string) => { manifestContents = contents; },
-        }),
-        download: vi.fn(async () => {}),
-        upload,
-      },
-    });
-
-    expect(upload).toHaveBeenCalledWith(expect.objectContaining({
-      relativePath: "cover.png",
-      gcsPath: "customers/alice/cover.png",
-      size: binary.length,
-    }));
-    expect(JSON.parse(manifestContents)["cover.png"].size).toBe(binary.length);
-    expect(fs.readFileSync(path.join(customer, ".blobs", "cover.png"))).toEqual(binary);
-    expect(fs.existsSync(path.join(customer, ".blobs", ".pending", "cover.png"))).toBe(false);
-  });
-
-  it("defers blob sync while a workspace mutation holds its lease", async () => {
-    const upload = vi.fn();
-
-    await expect(blobSyncForSlug("alice", {
-      store: {
-        manifestFor: noopManifestStore,
-        download: vi.fn(),
-        upload,
-      },
-      acquireWorkspaceMutationLease: () => null,
-    })).rejects.toThrow(/alice: workspace mutation lease unavailable/u);
-
-    expect(upload).not.toHaveBeenCalled();
   });
 
   it("refuses to autosave a project binary into a Gitea repository", async () => {

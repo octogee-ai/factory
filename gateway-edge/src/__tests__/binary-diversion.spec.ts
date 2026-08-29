@@ -87,13 +87,7 @@ describe("divertWorktreeBinaries", () => {
     expect(result.diverted).toEqual([{ path: "notes/diagram.png", size: 6 }]);
     expect(result.failures).toEqual([]);
     expect(existsSync(binary)).toBe(false);
-    expect(store).toHaveBeenCalledWith(
-      target,
-      "notes/diagram.png",
-      expect.any(Buffer),
-      "image/png",
-      { mutationLeaseHeld: true },
-    );
+    expect(store).toHaveBeenCalledWith(target, "notes/diagram.png", expect.any(Buffer), "image/png");
   });
 
   it("leaves text files for git", async () => {
