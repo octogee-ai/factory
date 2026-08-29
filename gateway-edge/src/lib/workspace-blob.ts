@@ -1,3 +1,8 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { isDivertableWorkspacePath } from "@octogee/core/workspace-binary";
 import { db, storage } from "./db.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -6,6 +11,7 @@ import {
   removeFromManifest,
 } from "./manifest.js";
 import type { FileTarget } from "./fileTarget.js";
+import { workspaceMutationLeaseGitDir } from "./workspace-git.js";
 
 export interface WorkspaceBlobTarget {
   slug: string;
@@ -50,9 +56,17 @@ export interface StoredWorkspaceBlob {
 
 export interface WorkspaceBlobOptions {
   maxStorageBytes?: number;
+  mutationLeaseHeld?: boolean;
 }
 
 export const BLOB_SIGNED_URL_TTL_MS = 60 * 60 * 1000;
+
+export class WorkspaceBlobBusyError extends Error {
+  constructor() {
+    super("workspace is busy; retry shortly");
+    this.name = "WorkspaceBlobBusyError";
+  }
+}
 
 interface ThumbnailResult {
   hasThumbnail?: boolean;
@@ -149,6 +163,44 @@ async function rollbackReservation(
   throw error;
 }
 
+function targetCheckoutDir(target: WorkspaceBlobTarget): string {
+  const customersDir = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+  return target.projectSlug === null
+    ? path.join(customersDir, target.slug)
+    : path.join(customersDir, target.slug, "projects", target.projectSlug);
+}
+
+function stagedAutosavePath(target: WorkspaceBlobTarget, filePath: string): string | null {
+  if (!isDivertableWorkspacePath(filePath)) return null;
+  const pendingDir = path.join(targetCheckoutDir(target), ".blobs", ".pending");
+  const stagedPath = path.resolve(pendingDir, filePath);
+  return stagedPath.startsWith(`${pendingDir}${path.sep}`) ? stagedPath : null;
+}
+
+function clearStagedAutosaveBlob(target: WorkspaceBlobTarget, filePath: string): void {
+  const stagedPath = stagedAutosavePath(target, filePath);
+  if (stagedPath) fs.rmSync(stagedPath, { force: true });
+}
+
+async function withBlobMutation<T>(
+  target: WorkspaceBlobTarget,
+  options: WorkspaceBlobOptions,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (options.mutationLeaseHeld) return work();
+  const checkoutDir = targetCheckoutDir(target);
+  const lease = acquireWorkspaceMutationLeaseSync({
+    workspaceDir: checkoutDir,
+    gitDir: workspaceMutationLeaseGitDir(checkoutDir),
+  });
+  if (!lease) throw new WorkspaceBlobBusyError();
+  try {
+    return await work();
+  } finally {
+    lease.release();
+  }
+}
+
 /**
  * The single way a binary lands in a workspace: save to GCS, generate a 128²
  * thumbnail for images, and write the `.files/manifest.json` placeholder in
@@ -163,73 +215,79 @@ export async function storeWorkspaceBlob(
   mimeType?: string,
   options: WorkspaceBlobOptions = {},
 ): Promise<StoredWorkspaceBlob> {
-  const maxStorageBytes = options.maxStorageBytes ??
-    await configuredWorkspaceStorageLimitBytes(target);
-  const reservation = await reserveBlobStorage(
-    target,
-    filePath,
-    fileBuffer.length,
-    maxStorageBytes,
-  );
-  try {
-    const bucket = storage.bucket();
-    const gcsPath = `${target.gcsPrefix}/${filePath}`;
-    const ext = getExtension(filePath);
-    const contentType = mimeType || getMimeType(ext);
-
-    await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType } });
-
-    const { hasThumbnail, thumbnailUrl, thumbnailError } = await createBlobThumbnail(
+  return withBlobMutation(target, options, async () => {
+    const maxStorageBytes = options.maxStorageBytes ??
+      await configuredWorkspaceStorageLimitBytes(target);
+    const reservation = await reserveBlobStorage(
       target,
       filePath,
-      fileBuffer,
-      ext,
-      bucket,
+      fileBuffer.length,
+      maxStorageBytes,
     );
+    try {
+      const bucket = storage.bucket();
+      const gcsPath = `${target.gcsPrefix}/${filePath}`;
+      const ext = getExtension(filePath);
+      const contentType = mimeType || getMimeType(ext);
 
-    await updateManifest(target.gcsPrefix, {
-      [filePath]: {
-        type: "blob",
+      await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType } });
+      clearStagedAutosaveBlob(target, filePath);
+
+      const { hasThumbnail, thumbnailUrl, thumbnailError } = await createBlobThumbnail(
+        target,
+        filePath,
+        fileBuffer,
+        ext,
+        bucket,
+      );
+
+      await updateManifest(target.gcsPrefix, {
+        [filePath]: {
+          type: "blob",
+          gcsPath,
+          size: fileBuffer.length,
+          mimeType: contentType,
+          uploadedAt: new Date().toISOString(),
+          ...(hasThumbnail ? { hasThumbnail: true } : {}),
+        },
+      });
+      if (reservation) await finalizeWorkspaceStorageReservation(db, reservation);
+      invalidateListingCacheIfAddressable(target);
+
+      return {
         gcsPath,
         size: fileBuffer.length,
-        mimeType: contentType,
-        uploadedAt: new Date().toISOString(),
-        ...(hasThumbnail ? { hasThumbnail: true } : {}),
-      },
-    });
-    if (reservation) await finalizeWorkspaceStorageReservation(db, reservation);
-    invalidateListingCacheIfAddressable(target);
-
-    return {
-      gcsPath,
-      size: fileBuffer.length,
-      ...(thumbnailUrl ? { thumbnailUrl } : {}),
-      ...(thumbnailError ? { thumbnailError } : {}),
-    };
-  } catch (error) {
-    return rollbackReservation(reservation, error);
-  }
+        ...(thumbnailUrl ? { thumbnailUrl } : {}),
+        ...(thumbnailError ? { thumbnailError } : {}),
+      };
+    } catch (error) {
+      return rollbackReservation(reservation, error);
+    }
+  });
 }
 
 /** Remove a workspace blob, its thumbnail, and its manifest entry — no orphans. */
 export async function removeWorkspaceBlob(target: WorkspaceBlobTarget, filePath: string): Promise<void> {
-  const manifest = target.projectSlug === null
-    ? await getManifestForQuota(target.gcsPrefix)
-    : {};
-  const removedBytes = manifest[filePath]?.size ?? 0;
-  const bucket = storage.bucket();
-  const ext = getExtension(filePath);
-  await bucket.file(`${target.gcsPrefix}/${filePath}`).delete({ ignoreNotFound: true });
-  if (IMAGE_EXTENSIONS.has(ext)) {
-    await bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`).delete({ ignoreNotFound: true });
-  }
-  await removeFromManifest(target.gcsPrefix, filePath);
-  if (target.projectSlug === null && removedBytes > 0) {
-    await releaseWorkspaceStorage(db, {
-      slug: target.slug,
-      path: filePath,
-      removedBytes,
-    });
-  }
-  invalidateListingCacheIfAddressable(target);
+  await withBlobMutation(target, {}, async () => {
+    const manifest = target.projectSlug === null
+      ? await getManifestForQuota(target.gcsPrefix)
+      : {};
+    const removedBytes = manifest[filePath]?.size ?? 0;
+    const bucket = storage.bucket();
+    const ext = getExtension(filePath);
+    clearStagedAutosaveBlob(target, filePath);
+    await bucket.file(`${target.gcsPrefix}/${filePath}`).delete({ ignoreNotFound: true });
+    if (IMAGE_EXTENSIONS.has(ext)) {
+      await bucket.file(`${target.gcsPrefix}/.thumbs/${filePath}.png`).delete({ ignoreNotFound: true });
+    }
+    await removeFromManifest(target.gcsPrefix, filePath);
+    if (target.projectSlug === null && removedBytes > 0) {
+      await releaseWorkspaceStorage(db, {
+        slug: target.slug,
+        path: filePath,
+        removedBytes,
+      });
+    }
+    invalidateListingCacheIfAddressable(target);
+  });
 }

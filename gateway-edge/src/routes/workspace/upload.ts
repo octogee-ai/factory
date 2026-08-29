@@ -5,6 +5,7 @@ import { validateFilePath } from "../../lib/path-validation.js";
 import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
   storeWorkspaceBlob,
+  WorkspaceBlobBusyError,
   WorkspaceStorageQuotaError,
 } from "../../lib/workspace-blob.js";
 import { freeWorkspaceStorageLimitBytes } from "../../lib/free-storage.js";
@@ -223,6 +224,10 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
       manifestUpdated: true,
     });
   } catch (e) {
+    if (e instanceof WorkspaceBlobBusyError) {
+      res.status(409).json({ error: e.message, code: "WORKSPACE_BUSY" });
+      return;
+    }
     if (e instanceof WorkspaceStorageQuotaError) {
       res.status(413).json({
         error: "Free workspace storage allowance exceeded",

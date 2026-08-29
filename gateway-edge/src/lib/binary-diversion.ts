@@ -87,6 +87,7 @@ export async function divertWorktreeBinaries(
           entry.path,
           contents,
           getMimeType(getExtension(entry.path)),
+          { mutationLeaseHeld: true },
         );
         const current = await lstat(absolute);
         if (!current.isFile() || current.dev !== stats.dev || current.ino !== stats.ino) {
