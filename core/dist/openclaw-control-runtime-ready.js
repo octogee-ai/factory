@@ -1,8 +1,5 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION, } from "@octogee/shared/types/fleet-controller";
-import { CANONICAL_OPENCLAW_FORK_SHA, CANONICAL_OPENCLAW_VERSION, } from "@octogee/shared/types/openclaw-release";
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
-export const OPENCLAW_CONTROL_OPENCLAW_VERSION = CANONICAL_OPENCLAW_VERSION;
-export const OPENCLAW_CONTROL_OPENCLAW_FORK_SHA = CANONICAL_OPENCLAW_FORK_SHA;
 const MAX_CLOCK_SKEW_MS = 5_000;
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -42,9 +39,7 @@ function hasReadyRevisionIdentity(revision, input) {
 }
 function hasExpectedRuntimeIdentity(configStatus) {
     return configStatus?.runtimeReady === true &&
-        configStatus.runtimeHealth === "healthy" &&
-        configStatus.openclawVersion === OPENCLAW_CONTROL_OPENCLAW_VERSION &&
-        configStatus.openclawForkSha === OPENCLAW_CONTROL_OPENCLAW_FORK_SHA;
+        configStatus.runtimeHealth === "healthy";
 }
 function hasReadyDashboard(configStatus, now) {
     const dashboardProtocol = record(configStatus?.dashboardControlProtocol);

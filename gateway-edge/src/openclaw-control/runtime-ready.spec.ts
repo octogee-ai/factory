@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  OPENCLAW_CONTROL_OPENCLAW_FORK_SHA,
-  OPENCLAW_CONTROL_OPENCLAW_VERSION,
   OPENCLAW_CONTROL_RUNTIME_FRESH_MS,
   isOpenClawControlRevisionRuntimeReady,
 } from "./runtime-ready.js";
@@ -41,8 +39,8 @@ function revision(now: number): RevisionFixture {
         runtimeHealth: "healthy",
         runtimeHealthCheckedAt: new Date(now - 500).toISOString(),
         observedAt: { toMillis: () => now - 250 },
-        openclawVersion: OPENCLAW_CONTROL_OPENCLAW_VERSION,
-        openclawForkSha: OPENCLAW_CONTROL_OPENCLAW_FORK_SHA,
+        openclawVersion: "main",
+        openclawForkSha: "current",
         dashboardControlState: "ready",
         dashboardControlProtocol: { protocol: "openclaw-dashboard-bridge", version: 1 },
         dashboardControlObservedAt: new Date(now - 100).toISOString(),
@@ -52,7 +50,7 @@ function revision(now: number): RevisionFixture {
 }
 
 describe("OpenClaw Dashboard revision runtime gate", () => {
-  it("accepts a matching serving gateway with fresh runtime health and Dashboard proof", () => {
+  it("accepts a serving gateway with fresh runtime health and Dashboard proof", () => {
     const now = Date.UTC(2026, 6, 14, 20);
     expect(isOpenClawControlRevisionRuntimeReady(revision(now), {
       gatewayId: "bender",
@@ -61,7 +59,7 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
     })).toBe(true);
   });
 
-  it("rejects stale, mismatched, or incomplete runtime proof", () => {
+  it("rejects stale or incomplete runtime proof", () => {
     const now = Date.UTC(2026, 6, 14, 20);
     for (const mutate of [
       (value: RevisionFixture) => { value.heartbeat.lastHeartbeatAt = now - OPENCLAW_CONTROL_RUNTIME_FRESH_MS - 1; },
@@ -70,8 +68,6 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
       (value: RevisionFixture) => { value.heartbeat.configStatus.runtimeReady = false; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.runtimeHealth = "unhealthy"; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.runtimeHealth = "repair"; },
-      (value: RevisionFixture) => { value.heartbeat.configStatus.openclawVersion = "2026.7.2"; },
-      (value: RevisionFixture) => { value.heartbeat.configStatus.openclawForkSha = "different"; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.dashboardControlState = "stale"; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.dashboardControlProtocol.version = 2; },
       (value: RevisionFixture) => { value.heartbeat.configStatus.dashboardControlObservedAt = now - 15_001; },

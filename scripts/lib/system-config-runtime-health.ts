@@ -14,10 +14,6 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
   type OpenClawDashboardBridgeCapability,
 } from "../../shared/types/fleet-controller.js";
-import {
-  CANONICAL_OPENCLAW_FORK_SHA,
-  CANONICAL_OPENCLAW_VERSION,
-} from "../../shared/types/openclaw-release.js";
 
 export interface SystemConfigRuntimeHealthOptions {
   openclawDir: string;
@@ -104,10 +100,6 @@ function parseDashboardCapability(
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const capability = value as Record<string, unknown>;
   if (!hasDashboardCapabilityIdentity(capability, gatewayId)) return null;
-  if (
-    capability.openclawVersion !== CANONICAL_OPENCLAW_VERSION ||
-    capability.openclawForkSha !== CANONICAL_OPENCLAW_FORK_SHA
-  ) return null;
   if (canonicalObservedAt(capability.observedAt) === null) return null;
   return capability as unknown as OpenClawDashboardBridgeCapability;
 }

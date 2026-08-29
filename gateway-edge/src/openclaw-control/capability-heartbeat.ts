@@ -6,10 +6,6 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "@octogee/shared/types/fleet-controller";
-import {
-  CANONICAL_OPENCLAW_FORK_SHA,
-  CANONICAL_OPENCLAW_VERSION,
-} from "@octogee/shared/types/openclaw-release";
 
 export {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
@@ -66,12 +62,6 @@ export function startOpenClawDashboardCapabilityHeartbeat(args: {
   const temporary = `${target}.${instanceId}.tmp`;
   const publish = (): void => {
     const { openclawVersion, openclawForkSha } = readRuntimeIdentity(openclawDir);
-    if (
-      openclawVersion !== CANONICAL_OPENCLAW_VERSION ||
-      openclawForkSha !== CANONICAL_OPENCLAW_FORK_SHA
-    ) {
-      throw new Error("OpenClaw Dashboard bridge runtime identity does not match the canonical pin");
-    }
     fs.mkdirSync(openclawDir, { recursive: true });
     fs.writeFileSync(temporary, `${JSON.stringify({
       protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,

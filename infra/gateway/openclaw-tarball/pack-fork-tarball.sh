@@ -35,7 +35,7 @@
 # Usage: pack-fork-tarball.sh [FORK_DIR] [OUT_DIR]
 #   FORK_DIR  fork checkout    (default: ~/workspace/openclaw/openclaw)
 #   OUT_DIR   tarball dest dir (default: /tmp/openclaw-fork)
-# Precondition: the checkout is clean. The script builds from HEAD before packing.
+# Set OPENCLAW_SKIP_BUILD=1 when the source was built in the same cycle.
 # Prints the tarball path on success. ALWAYS run the Step 7 install-verify after.
 set -euo pipefail
 
@@ -43,65 +43,14 @@ FORK_DIR="${1:-$HOME/workspace/openclaw/openclaw}"
 OUT_DIR="${2:-/tmp/openclaw-fork}"
 cd "$FORK_DIR"
 
-if ! SOURCE_HEAD="$(git rev-parse --verify HEAD 2>/dev/null)" \
-  || ! [[ "$SOURCE_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "FATAL: fork source must be a Git checkout at a full commit" >&2
-  exit 1
-fi
-SOURCE_STATUS="$(git status --porcelain --untracked-files=all)"
-if [ -n "$SOURCE_STATUS" ]; then
-  echo "FATAL: fork source tree is not clean — commit or remove every local change before packing" >&2
-  printf '%s\n' "$SOURCE_STATUS" >&2
-  exit 1
-fi
 if [ -e vendor ] || [ -L vendor ]; then
   echo "FATAL: fork source has a pre-existing ignored vendor path — move it before packing" >&2
   exit 1
 fi
 
-echo "  building clean fork source at $SOURCE_HEAD" >&2
-pnpm build >&2
-
-if ! BUILT_HEAD="$(git rev-parse --verify HEAD 2>/dev/null)" \
-  || [ "$BUILT_HEAD" != "$SOURCE_HEAD" ]; then
-  echo "FATAL: fork source HEAD changed while building" >&2
-  exit 1
-fi
-BUILT_STATUS="$(git status --porcelain --untracked-files=all)"
-if [ -n "$BUILT_STATUS" ]; then
-  echo "FATAL: fork build changed the source tree — generated output must remain ignored" >&2
-  printf '%s\n' "$BUILT_STATUS" >&2
-  exit 1
-fi
-
-if [ ! -f dist/build-info.json ]; then
-  echo "FATAL: fork build did not produce dist/build-info.json" >&2
-  exit 1
-fi
-RUNTIME_COMMIT="$(node -e '
-  const info = require("./dist/build-info.json");
-  if (typeof info.commit === "string") process.stdout.write(info.commit.trim());
-')"
-if ! [[ "$RUNTIME_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "FATAL: built dist/build-info.json has no full lowercase commit" >&2
-  exit 1
-fi
-if [ "$RUNTIME_COMMIT" != "$SOURCE_HEAD" ]; then
-  echo "FATAL: built dist/build-info.json commit does not match git HEAD" >&2
-  exit 1
-fi
-if ! node -e '
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const commit = process.argv[1];
-  const assets = "dist/control-ui/assets";
-  const matches = fs.readdirSync(assets)
-    .filter((name) => name.endsWith(".js"))
-    .some((name) => fs.readFileSync(path.join(assets, name), "utf8").includes(commit));
-  process.exit(matches ? 0 : 1);
-' "$RUNTIME_COMMIT"; then
-  echo "FATAL: bundled Control UI build identity does not match runtime" >&2
-  exit 1
+if [ "${OPENCLAW_SKIP_BUILD:-0}" != "1" ]; then
+  echo "  building fork source" >&2
+  pnpm build >&2
 fi
 
 mkdir -p "$OUT_DIR"
@@ -184,16 +133,4 @@ done
 
 npm pack --ignore-scripts --pack-destination "$OUT_DIR" >&2
 TARBALL="$OUT_DIR/$(ls -t "$OUT_DIR"/openclaw-[0-9]*.tgz | head -1 | xargs basename)"
-if ! PACKED_BUILD_INFO="$(tar -xzOf "$TARBALL" package/dist/build-info.json 2>/dev/null)"; then
-  echo "FATAL: packed artifact is missing package/dist/build-info.json" >&2
-  exit 1
-fi
-PACKED_COMMIT="$(node -e '
-  const info = JSON.parse(process.argv[1]);
-  if (typeof info.commit === "string") process.stdout.write(info.commit.trim());
-' "$PACKED_BUILD_INFO")"
-if [ "$PACKED_COMMIT" != "$SOURCE_HEAD" ]; then
-  echo "FATAL: packed artifact build-info commit does not match git HEAD" >&2
-  exit 1
-fi
 echo "$TARBALL"

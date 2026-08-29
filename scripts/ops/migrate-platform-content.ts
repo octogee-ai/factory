@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createPlatformContentMigrationPlan, parsePlatformContentMigrationArguments } from "../lib/platform-content-migration.js";
@@ -113,27 +112,6 @@ function quiesce(settings: DeploymentEnvironmentSettings, target: Workload): voi
   const active = status.replicas;
   const ready = status.readyReplicas;
   if (replicas !== 0 || (active !== undefined && active !== 0) || (ready !== undefined && ready !== 0)) throw new Error(`${target.name} is not quiesced`);
-}
-
-export function readCanonicalOpenclawVersion(repoRoot: string): string {
-  const configuration = fs.readFileSync(path.join(repoRoot, "cloudbuild.yaml"), "utf8");
-  const key = "_OPENCLAW_VERSION:";
-  const declarations = configuration
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(key));
-  if (declarations.length !== 1) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  const serialized = declarations[0]!.slice(key.length).trim();
-  if (!serialized.startsWith('"') || !serialized.endsWith('"')) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  const version = serialized.slice(1, -1);
-  if (!/^\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(version)) {
-    throw new Error("could not resolve the canonical OpenClaw version from cloudbuild.yaml");
-  }
-  return version;
 }
 
 function passwordEnvironment(target: Workload, service: "mattermost" | "gitea"): unknown {
@@ -417,7 +395,6 @@ function main(): void {
     artifactRegistryProjectId: target.artifactRegistryProjectId,
     artifactRegistryRepository: target.artifactRegistryRepository,
     releaseCommit: revision,
-    canonicalOpenclawVersion: readCanonicalOpenclawVersion(fileURLToPath(new URL("../..", import.meta.url))),
     run,
   });
   const states = (["mattermost", "gitea"] as const).map((service) => { const sourceWorkload = workload(source, service); const targetWorkload = workload(target, service); return { service, sourceWorkload, targetWorkload, sourceDisk: disk(source, sourceWorkload), targetDisk: disk(target, targetWorkload) }; });

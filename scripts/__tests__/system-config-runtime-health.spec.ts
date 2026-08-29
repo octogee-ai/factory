@@ -17,10 +17,6 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "../../shared/types/fleet-controller.js";
-import {
-  CANONICAL_OPENCLAW_FORK_SHA,
-  CANONICAL_OPENCLAW_VERSION,
-} from "../../shared/types/openclaw-release.js";
 
 const dirs: string[] = [];
 
@@ -38,8 +34,8 @@ afterEach(() => {
 function env(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     GATEWAY_ID: "g1",
-    OPENCLAW_VERSION: CANONICAL_OPENCLAW_VERSION,
-    OPENCLAW_FORK_SHA: CANONICAL_OPENCLAW_FORK_SHA,
+    OPENCLAW_VERSION: "main",
+    OPENCLAW_FORK_SHA: "current",
     ...overrides,
   };
 }
@@ -52,8 +48,8 @@ function writeDashboardCapability(openclawDir: string, observedAt: Date): void {
       protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
       version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
       revisionId: "g1",
-      openclawVersion: CANONICAL_OPENCLAW_VERSION,
-      openclawForkSha: CANONICAL_OPENCLAW_FORK_SHA,
+      openclawVersion: "main",
+      openclawForkSha: "current",
       instanceId: "instance-1",
       observedAt: observedAt.toISOString(),
     })}\n`,
@@ -76,8 +72,8 @@ describe("refreshSystemConfigRuntimeHealth", () => {
       state: "clean",
       runtimeReady: true,
       runtimeHealth: "healthy",
-      openclawVersion: CANONICAL_OPENCLAW_VERSION,
-      openclawForkSha: CANONICAL_OPENCLAW_FORK_SHA,
+      openclawVersion: "main",
+      openclawForkSha: "current",
       dashboardControlState: "missing",
     });
     expect(readSystemConfigStatus(openclawDir).runtimeHealth).toBe("healthy");
