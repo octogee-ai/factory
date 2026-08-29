@@ -526,8 +526,6 @@ export function reconcileCustomerAgentEntry(agentId, entry) {
 }
 export function reconcileBuilderAgentEntry(agentId, entry) {
     const agent = structuredClone(entry);
-    if (parseAgentId(agentId).kind !== "coach")
-        return agent;
     const sharedCoachTools = {
         profile: "coding",
         alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
@@ -535,7 +533,8 @@ export function reconcileBuilderAgentEntry(agentId, entry) {
         fs: { workspaceOnly: true },
         toolsBySender: {},
     };
-    if (equal(asObject(agent.tools), sharedCoachTools))
+    if (parseAgentId(agentId).kind === "coach" &&
+        equal(asObject(agent.tools), sharedCoachTools))
         delete agent.tools;
     return agent;
 }
