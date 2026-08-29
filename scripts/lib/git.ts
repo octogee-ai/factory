@@ -27,7 +27,7 @@ import {
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
-import { markBlobUploadPending } from "./blob-sync.js";
+import { stageBlobUpload } from "./blob-sync.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import {
   isDivertableWorkspacePath,
@@ -1641,23 +1641,49 @@ function divertWorkspaceBinariesForAutosave(repoDir: string, status: string): vo
       if (!current.isFile() || current.dev !== stats.dev || current.ino !== stats.ino) {
         throw new Error(`${entry.path}: file changed before cache move`);
       }
-      const blobsDir = path.join(repoDir, ".blobs");
-      markBlobUploadPending(blobsDir, entry.path);
-      const destination = path.join(blobsDir, entry.path);
-      fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
-      fs.renameSync(source, destination);
+      stageBlobUpload(repoDir, entry.path);
     } finally {
       fs.closeSync(descriptor);
     }
   }
 }
 
+function rejectAutosaveBinaries(repoDir: string, status: string, label: string): void {
+  const binaryPaths: string[] = [];
+  for (const entry of changedWorktreePaths(status)) {
+    if (entry.deleted || !isDivertableWorkspacePath(entry.path)) continue;
+    const source = path.join(repoDir, entry.path);
+    let initial: fs.Stats;
+    try {
+      initial = fs.lstatSync(source);
+    } catch (error) {
+      throw new Error(`${entry.path}: ${errMessage(error)}`);
+    }
+    if (initial.isSymbolicLink()) continue;
+    const descriptor = fs.openSync(source, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile()) continue;
+      const sample = Buffer.alloc(Math.min(WORKSPACE_BINARY_SNIFF_BYTES, stats.size));
+      fs.readSync(descriptor, sample, 0, sample.length, 0);
+      if (looksLikeWorkspaceBinary(sample)) binaryPaths.push(entry.path);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+  if (binaryPaths.length > 0) {
+    throw new Error(`${label}: binary files require workspace_commit: ${binaryPaths.join(", ")}`);
+  }
+}
+
+type AutosaveBinaryHandling = "divert" | "block";
+
 function commitLocalChanges(
   repoDir: string,
   label: string,
   strict: boolean,
   runGit: GitRunner,
-  divertBinaries: boolean,
+  binaryHandling: AutosaveBinaryHandling,
 ): boolean {
   const status = runGit(repoDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   if (status === null) {
@@ -1665,9 +1691,10 @@ function commitLocalChanges(
     return false;
   }
   if (status === "") return false;
-  if (divertBinaries) divertWorkspaceBinariesForAutosave(repoDir, status);
+  if (binaryHandling === "divert") divertWorkspaceBinariesForAutosave(repoDir, status);
+  if (binaryHandling === "block") rejectAutosaveBinaries(repoDir, status, label);
   let stagePaths = ["."];
-  if (divertBinaries) {
+  if (binaryHandling === "divert") {
     const stagingStatus = runGit(repoDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
     if (stagingStatus === null) {
       if (strict) throw new Error(`${label}: git status failed after blob diversion`);
@@ -1875,8 +1902,9 @@ function syncOneRepository(
       }
     }
 
+    const binaryHandling: AutosaveBinaryHandling = target.kind === "workspace" ? "divert" : "block";
     const committed = commitPendingChanges
-      ? commitLocalChanges(target.dir, target.label, strict, runGit, target.kind === "workspace")
+      ? commitLocalChanges(target.dir, target.label, strict, runGit, binaryHandling)
       : false;
     const remoteState = classifyRemoteState(target.dir, keyArg, runGit, githubToken);
     observed = remoteState;

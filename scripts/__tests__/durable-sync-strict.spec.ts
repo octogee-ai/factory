@@ -143,7 +143,7 @@ describe("strict durable sync", () => {
     });
 
     expect(fs.existsSync(path.join(customer, "cover.png"))).toBe(false);
-    expect(fs.readFileSync(path.join(customer, ".blobs", "cover.png"))).toEqual(binary);
+    expect(fs.readFileSync(path.join(customer, ".blobs", ".pending", "cover.png"))).toEqual(binary);
     expect(testGitExec(remote, ["show", "main:cover.png"])).toBeNull();
 
     let manifestContents = JSON.stringify({
@@ -176,7 +176,42 @@ describe("strict durable sync", () => {
       size: binary.length,
     }));
     expect(JSON.parse(manifestContents)["cover.png"].size).toBe(binary.length);
-    expect(fs.readFileSync(path.join(customer, ".blobs", ".pending-uploads.json"), "utf8")).toBe("[]");
+    expect(fs.readFileSync(path.join(customer, ".blobs", "cover.png"))).toEqual(binary);
+    expect(fs.existsSync(path.join(customer, ".blobs", ".pending", "cover.png"))).toBe(false);
+  });
+
+  it("defers blob sync while a workspace mutation holds its lease", async () => {
+    const upload = vi.fn();
+
+    await expect(blobSyncForSlug("alice", {
+      store: {
+        manifestFor: noopManifestStore,
+        download: vi.fn(),
+        upload,
+      },
+      acquireWorkspaceMutationLease: () => null,
+    })).rejects.toThrow(/alice: workspace mutation lease unavailable/u);
+
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("refuses to autosave a project binary into a Gitea repository", async () => {
+    const customer = path.join(paths.customers, "alice");
+    const project = path.join(customer, "projects", "launch");
+    const remotes = path.join(paths.customers, "remotes");
+    initPushableRepo(customer, path.join(remotes, "workspace.git"));
+    initPushableRepo(project, path.join(remotes, "project.git"));
+    fs.writeFileSync(path.join(customer, ".gitignore"), "projects/\n");
+    fs.writeFileSync(path.join(project, "cover.png"), Buffer.from([0x89, 0x50, 0x00]));
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(/alice\/projects\/launch: binary files require workspace_commit/u);
+
+    expect(fs.existsSync(path.join(project, "cover.png"))).toBe(true);
+    expect(testGitExec(path.join(remotes, "project.git"), ["show", "main:cover.png"])).toBeNull();
   });
 
   it("rejects a strict durable flush when a project checkout is behind canonical origin", async () => {

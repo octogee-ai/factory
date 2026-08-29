@@ -261,6 +261,26 @@ describe("workspace autosync remote migration", () => {
       ]));
   });
 
+  it("refuses to autosave a project binary into a GitHub repository", async () => {
+    const project = path.join(paths.customers, SLUG, "projects", "demo");
+    initRepoWithOrigin(project, GITHUB_REMOTE);
+    rebuildTransferredGithubMetadata(project, SLUG, {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    });
+    fs.writeFileSync(path.join(project, "cover.png"), Buffer.from([0x89, 0x50, 0x00]));
+
+    await expect(syncCustomerRepositoriesForSlug(SLUG, {
+      strict: true,
+      gitExec: localGitExec,
+      prepareRepository,
+      acquireWorkspaceMutationLease,
+      resolveGithubToken: async () => MATERIALIZED_TOKEN,
+    })).rejects.toThrow(/alice\/projects\/demo: binary files require workspace_commit/u);
+
+    expect(fs.existsSync(path.join(project, "cover.png"))).toBe(true);
+    expect(localGitExec(canonicalOrigin, ["show", "main:cover.png"])).toBeNull();
+  });
+
   it("still flushes Gitea repositories when the GitHub token broker is unavailable", async () => {
     const workspace = path.join(paths.customers, SLUG);
     execFileSync("git", ["clone", "-q", canonicalOrigin, workspace]);
