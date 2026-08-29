@@ -8,7 +8,6 @@ export interface ManifestEntry {
 }
 export type Manifest = Record<string, ManifestEntry>;
 export declare const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";
-/** Only-if-absent, in the generation-precondition vocabulary. */
 export declare const GENERATION_ABSENT = "0";
 export declare function manifestObjectPath(gcsPrefix: string): string;
 export declare class ManifestGenerationConflict extends Error {
@@ -21,11 +20,6 @@ export interface ManifestReadResult {
     contents: string;
     generation: string;
 }
-/**
- * A conditional object store. The generation is what keeps two writers from
- * clobbering each other, so `write` must fail rather than overwrite when the
- * precondition does not hold.
- */
 export interface ManifestStore {
     read(objectPath: string): Promise<ManifestReadResult | null>;
     write(objectPath: string, contents: string, ifGenerationMatch: string): Promise<void>;

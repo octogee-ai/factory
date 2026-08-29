@@ -1,5 +1,4 @@
 export const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";
-/** Only-if-absent, in the generation-precondition vocabulary. */
 export const GENERATION_ABSENT = "0";
 function trimTrailingSlashes(value) {
     let out = value;

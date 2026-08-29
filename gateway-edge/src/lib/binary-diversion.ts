@@ -5,10 +5,8 @@ import { gitStatus } from "./workspace-git.js";
 import { storeWorkspaceBlob, type WorkspaceBlobTarget } from "./workspace-blob.js";
 import { getMimeType, getExtension } from "../routes/workspace/helpers.js";
 
-/** git's own heuristic: a NUL byte anywhere in the first 8000 bytes. */
 export const BINARY_SNIFF_BYTES = 8000;
 
-/** Above this a blob is left alone and reported rather than read into memory. */
 export const MAX_DIVERTED_BLOB_BYTES = 100 * 1024 * 1024;
 
 const NEVER_DIVERT_PREFIXES = [".blobs/", ".files/", ".git/"];

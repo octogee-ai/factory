@@ -25,7 +25,6 @@ function entry(gcsPath: string, size = 10): Manifest[string] {
   };
 }
 
-/** A conditional store with a real generation counter — the precondition is the point. */
 function fakeStore(initial?: { contents: string; generation: string }) {
   const state = { current: initial ?? null as { contents: string; generation: string } | null };
   const writes: Array<{ contents: string; ifGenerationMatch: string }> = [];
@@ -102,7 +101,6 @@ describe("mutateManifest", () => {
     store.read = async (objectPath) => {
       const result = await read(objectPath);
       if (!raced) {
-        // The other writer lands between our read and our write.
         raced = true;
         state.current = {
           contents: JSON.stringify({ "theirs.png": entry("customers/aug29/theirs.png") }),

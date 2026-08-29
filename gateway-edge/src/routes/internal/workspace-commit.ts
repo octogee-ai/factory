@@ -174,6 +174,14 @@ router.post("/commit", async (req: Request, res: Response) => {
   if (githubToken === null) return;
 
   const diverted = await divertBinaries(dir, slug, project);
+  if (diverted.failures.length > 0) {
+    res.status(503).json({
+      error: "Binary files could not be stored; no commit was created.",
+      code: "BLOB_DIVERSION_FAILED",
+      paths: diverted.failedPaths,
+    });
+    return;
+  }
 
   const r = await commitAndPushWorkspace(dir, {
     message,
@@ -211,7 +219,6 @@ router.post("/commit", async (req: Request, res: Response) => {
     pushed: r.result.pushed,
     nothingToCommit: r.result.nothingToCommit,
     divertedBlobs: diverted.diverted.length,
-    ...(diverted.failedPaths.length > 0 ? { blobsNotDiverted: diverted.failedPaths } : {}),
   });
 });
 

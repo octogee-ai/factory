@@ -135,7 +135,37 @@ describe("workspace file list helpers", () => {
         size: 100,
         source: "blob",
       },
+      {
+        name: "nested",
+        path: "assets/nested",
+        type: "dir",
+        size: 0,
+        source: "blob",
+      },
     ]);
+  });
+
+  it("makes a blob-only nested directory browsable when Gitea has no corresponding path", async () => {
+    const manifest: Manifest = {
+      "assets/logo.png": {
+        type: "blob",
+        gcsPath: "customers/alice/assets/logo.png",
+        size: 100,
+        mimeType: "image/png",
+        uploadedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    vi.mocked(repoContentsApi).mockRejectedValue(new Error("Gitea API 404"));
+    vi.mocked(getManifest).mockResolvedValue(manifest);
+
+    await expect(workspaceFilesResponse(giteaTarget, "", false)).resolves.toEqual({
+      files: [{ name: "assets", path: "assets", type: "dir", size: 0, source: "blob" }],
+      readOnly: false,
+    });
+    await expect(workspaceFilesResponse(giteaTarget, "assets", false)).resolves.toEqual({
+      files: [{ name: "logo.png", path: "assets/logo.png", type: "file", size: 100, source: "blob" }],
+      readOnly: false,
+    });
   });
 
   it("sorts directories before files and then by name", () => {
@@ -154,6 +184,7 @@ describe("workspace file list helpers", () => {
 
   it("preserves the legacy repo-404 response shape without readOnly", async () => {
     vi.mocked(repoContentsApi).mockRejectedValueOnce(new Error("Gitea API 404"));
+    vi.mocked(getManifest).mockResolvedValue({});
 
     await expect(workspaceFilesResponse(giteaTarget, "", false)).resolves.toEqual({ files: [] });
   });

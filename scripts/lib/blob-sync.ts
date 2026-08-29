@@ -19,7 +19,6 @@ export interface LocalFile {
 }
 
 export interface BlobStore {
-  /** The manifest lives in GCS beside the blobs; how it is reached differs by store. */
   manifestFor(slug: string): ManifestStore;
   download(input: {
     slug: string;
@@ -268,9 +267,6 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
   const paths = pathsForSlug(slug);
   const store = opts.store ?? await firebaseAdminBlobStore();
   const manifestStore = store.manifestFor(slug);
-  // The manifest is server-side state now, so an absent one is an empty one —
-  // never a reason to skip the sync. Reading it from the worktree is what left
-  // a workspace whose clone never received the file with no blob sync at all.
   const manifest = await readManifest(manifestStore, gcsPrefixForSlug(slug));
 
   mkdirP(paths.blobsDir);

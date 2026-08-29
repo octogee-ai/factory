@@ -166,15 +166,27 @@ export function blobFileEntries(
 ): WorkspaceFileEntry[] {
   const prefix = path ? `${path}/` : "";
   const entries: WorkspaceFileEntry[] = [];
+  const emittedPaths = new Set(gitPaths);
 
   for (const [manifestPath, entry] of Object.entries(manifest)) {
     if (!manifestPath.startsWith(prefix) || gitPaths.has(manifestPath)) continue;
 
     const relative = manifestPath.slice(prefix.length);
-    if (relative.includes("/")) continue;
+    if (!relative) continue;
+
+    const [name, ...remainder] = relative.split("/");
+    const entryPath = `${prefix}${name}`;
+    if (remainder.length > 0) {
+      if (emittedPaths.has(entryPath)) continue;
+      if (!target || (isTargetPathReadable(target, manifestPath) && isTargetDirectoryEntryReadable(target, entryPath, "dir"))) {
+        entries.push({ name, path: entryPath, type: "dir", size: 0, source: "blob" });
+        emittedPaths.add(entryPath);
+      }
+      continue;
+    }
 
     const file: WorkspaceFileEntry = {
-      name: relative,
+      name,
       path: manifestPath,
       type: "file",
       size: entry.size ?? 0,
@@ -220,14 +232,13 @@ async function loadWorkspaceFileEntries(
   ref?: string,
 ): Promise<WorkspaceFileEntry[] | null> {
   const contents = await repoContentEntries(target, path, ref);
-  if (!contents) return null;
-
-  const gitFiles = repoFileEntries(contents, target);
-  if (target.provider === "github") return sortWorkspaceFiles(gitFiles);
+  const gitFiles = contents ? repoFileEntries(contents, target) : [];
+  if (target.provider === "github") return contents ? sortWorkspaceFiles(gitFiles) : null;
 
   const manifest = await getManifest(target.gcsPrefix, bustCache);
   const gitPaths = new Set(gitFiles.map((file) => file.path));
   const blobs = await signThumbnailUrls(target, manifest, blobFileEntries(manifest, path, gitPaths, target));
+  if (!contents && blobs.length === 0) return null;
   return sortWorkspaceFiles([...gitFiles, ...blobs]);
 }
 

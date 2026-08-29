@@ -577,8 +577,6 @@ describe("blob sync without a manifest", () => {
 
     expect(upload).toHaveBeenCalledTimes(1);
     expect(written).toHaveLength(1);
-    // Only-if-absent: the manifest did not exist, so this must not clobber one
-    // that appeared in the meantime.
     expect(written[0].ifGenerationMatch).toBe("0");
     expect(JSON.parse(written[0].contents)["avatar.png"]).toMatchObject({
       type: "blob",

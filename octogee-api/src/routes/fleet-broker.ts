@@ -108,7 +108,6 @@ type CreateBlobSignedUrl = (input: {
   gcsPath: string;
   action: "read" | "write";
   contentType?: string;
-  /** 0 means only-if-absent; any other generation makes the write a compare-and-set. */
   ifGenerationMatch?: number | string;
 }) => Promise<FleetBrokerBlobSignedUrl>;
 

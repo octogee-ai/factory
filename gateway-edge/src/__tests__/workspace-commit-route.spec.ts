@@ -394,21 +394,25 @@ describe("binary diversion on the commit path", () => {
     expect(h.divertWorktreeBinaries).not.toHaveBeenCalled();
   });
 
-  it("warns but still commits when a blob could not be rehomed", async () => {
+  it("aborts without committing when a binary cannot be rehomed", async () => {
     h.divertWorktreeBinaries.mockResolvedValue({
       diverted: [],
       failures: ["big.zip: 200000000 bytes exceeds the blob limit"],
       failedPaths: ["big.zip"],
     });
 
-    const res = await request(app())
+    await request(app())
       .post("/internal/workspace/commit")
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
-      .expect(200);
+      .expect(503, {
+        error: "Binary files could not be stored; no commit was created.",
+        code: "BLOB_DIVERSION_FAILED",
+        paths: ["big.zip"],
+      });
 
     expect(h.warn).toHaveBeenCalledWith(
       expect.stringContaining("blob diversion incomplete slug=acme"),
     );
-    expect(res.body).toMatchObject({ blobsNotDiverted: ["big.zip"] });
+    expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
   });
 });

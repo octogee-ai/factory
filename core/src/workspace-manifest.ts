@@ -11,7 +11,6 @@ export type Manifest = Record<string, ManifestEntry>;
 
 export const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";
 
-/** Only-if-absent, in the generation-precondition vocabulary. */
 export const GENERATION_ABSENT = "0";
 
 function trimTrailingSlashes(value: string): string {
@@ -43,11 +42,6 @@ export interface ManifestReadResult {
   generation: string;
 }
 
-/**
- * A conditional object store. The generation is what keeps two writers from
- * clobbering each other, so `write` must fail rather than overwrite when the
- * precondition does not hold.
- */
 export interface ManifestStore {
   read(objectPath: string): Promise<ManifestReadResult | null>;
   write(objectPath: string, contents: string, ifGenerationMatch: string): Promise<void>;
