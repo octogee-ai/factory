@@ -27,6 +27,7 @@ import {
 } from "./gitea-naming.js";
 import * as giteaBroker from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
+import { markBlobUploadPending } from "./blob-sync.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import {
   isDivertableWorkspacePath,
@@ -1640,7 +1641,9 @@ function divertWorkspaceBinariesForAutosave(repoDir: string, status: string): vo
       if (!current.isFile() || current.dev !== stats.dev || current.ino !== stats.ino) {
         throw new Error(`${entry.path}: file changed before cache move`);
       }
-      const destination = path.join(repoDir, ".blobs", entry.path);
+      const blobsDir = path.join(repoDir, ".blobs");
+      markBlobUploadPending(blobsDir, entry.path);
+      const destination = path.join(blobsDir, entry.path);
       fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
       fs.renameSync(source, destination);
     } finally {

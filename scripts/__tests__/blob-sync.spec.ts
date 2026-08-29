@@ -170,6 +170,17 @@ test.describe("computeBlobSyncActions — upload decisions", () => {
     expect(actions.toUpload).toHaveLength(0);
   });
 
+  test("pending local replacement of a manifest blob → upload without downloading the old bytes", () => {
+    const actions = computeBlobSyncActions({
+      manifest: { "assets/logo.png": manifestEntry({ uploadedAt: "2026-03-14T10:00:00Z" }) },
+      localFiles: [localFile({ path: "assets/logo.png", mtimeMs: new Date("2026-03-14T09:00:00Z").getTime() })],
+      prevSyncedPaths: ["assets/logo.png"],
+      pendingUploadPaths: ["assets/logo.png"],
+    });
+    expect(actions.toUpload).toEqual(["assets/logo.png"]);
+    expect(actions.toDownload).toEqual([]);
+  });
+
   test("previously synced file not in manifest → do not re-upload, schedule delete", () => {
     const actions = computeBlobSyncActions({
       manifest: {},

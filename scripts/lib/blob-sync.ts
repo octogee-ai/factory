@@ -12,6 +12,8 @@ import { MIME_TYPES } from "./helpers.js";
 
 export type { Manifest, ManifestEntry };
 
+export const PENDING_BLOB_UPLOADS_FILE = ".pending-uploads.json";
+
 export interface LocalFile {
   path: string;
   mtimeMs: number;
@@ -60,11 +62,31 @@ export interface BlobSyncInputs {
   manifest: Manifest;
   localFiles: LocalFile[];
   prevSyncedPaths: string[];
+  pendingUploadPaths?: string[];
   maxSize?: number;
 }
 
+type ManifestBlobAction = "download" | "upload" | "skip-download" | "skip-upload" | "skip";
+
+function manifestBlobAction(
+  entry: ManifestEntry,
+  local: LocalFile | undefined,
+  pending: boolean,
+  maxSize: number,
+): ManifestBlobAction {
+  if (pending && local) return local.size > maxSize ? "skip-upload" : "upload";
+  if (entry.size > maxSize) return "skip-download";
+  return !local || new Date(entry.uploadedAt).getTime() > local.mtimeMs ? "download" : "skip";
+}
+
 export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions {
-  const { manifest, localFiles, prevSyncedPaths, maxSize = BLOB_SYNC_MAX_SIZE } = inputs;
+  const {
+    manifest,
+    localFiles,
+    prevSyncedPaths,
+    pendingUploadPaths = [],
+    maxSize = BLOB_SYNC_MAX_SIZE,
+  } = inputs;
 
   const toDownload: BlobSyncActions["toDownload"] = [];
   const toUpload: string[] = [];
@@ -75,15 +97,19 @@ export function computeBlobSyncActions(inputs: BlobSyncInputs): BlobSyncActions 
 const blobEntries = Object.entries(manifest).filter(([, e]) => e.type === "blob");
   const manifestBlobPaths = new Set(blobEntries.map(([p]) => p));
   const prevSet = new Set(prevSyncedPaths);
+  const pendingSet = new Set(pendingUploadPaths);
   const localByPath = new Map(localFiles.map(f => [f.path, f] as const));
 
   for (const [blobPath, entry] of blobEntries) {
-    if (entry.size > maxSize) {
-      skippedDownload.push({ path: blobPath, size: entry.size });
-      continue;
-    }
     const local = localByPath.get(blobPath);
-    if (!local || new Date(entry.uploadedAt).getTime() > local.mtimeMs) {
+    const action = manifestBlobAction(entry, local, pendingSet.has(blobPath), maxSize);
+    if (action === "upload") {
+      toUpload.push(blobPath);
+    } else if (action === "skip-upload") {
+      skippedUpload.push({ path: blobPath, size: local!.size });
+    } else if (action === "skip-download") {
+      skippedDownload.push({ path: blobPath, size: entry.size });
+    } else if (action === "download") {
       toDownload.push({ path: blobPath, entry });
     }
   }
@@ -125,6 +151,46 @@ function mkdirP(dir: string): void {
 
 function writeFile(filePath: string, contents: string): void {
   fs.writeFileSync(filePath, contents, "utf-8");
+}
+
+function isPendingBlobPath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
+    return false;
+  }
+  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("."));
+}
+
+function pendingUploadsPath(blobsDir: string): string {
+  return path.join(blobsDir, PENDING_BLOB_UPLOADS_FILE);
+}
+
+function loadPendingUploadPaths(blobsDir: string): string[] {
+  const filePath = pendingUploadsPath(blobsDir);
+  if (!pathExists(filePath)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch (error) {
+    throw new Error(`pending blob uploads unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every(isPendingBlobPath)) {
+    throw new Error("pending blob uploads are invalid");
+  }
+  return [...new Set(parsed)];
+}
+
+function writePendingUploadPaths(blobsDir: string, paths: string[]): void {
+  const filePath = pendingUploadsPath(blobsDir);
+  const tempPath = `${filePath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(paths), "utf-8");
+  fs.renameSync(tempPath, filePath);
+}
+
+export function markBlobUploadPending(blobsDir: string, relativePath: string): void {
+  if (!isPendingBlobPath(relativePath)) throw new Error(`invalid blob path: ${relativePath}`);
+  mkdirP(blobsDir);
+  const pending = loadPendingUploadPaths(blobsDir);
+  if (!pending.includes(relativePath)) writePendingUploadPaths(blobsDir, [...pending, relativePath]);
 }
 
 function unlinkIfExists(filePath: string): boolean {
@@ -272,8 +338,9 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
   mkdirP(paths.blobsDir);
 
   const prevSyncedPaths = loadPrevSyncState(paths.syncStatePath);
+  const pendingUploadPaths = loadPendingUploadPaths(paths.blobsDir);
   const localFiles = discoverLocalFiles(paths.blobsDir);
-  const actions = computeBlobSyncActions({ manifest, localFiles, prevSyncedPaths });
+  const actions = computeBlobSyncActions({ manifest, localFiles, prevSyncedPaths, pendingUploadPaths });
 
   for (const { path: p, size } of actions.skippedDownload) {
     log(`⚠ [blob-sync] ${slug}: skipping ${p} (${mb(size)}MB > ${mb(BLOB_SYNC_MAX_SIZE)}MB)`);
@@ -293,6 +360,10 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
   if (uploads.count > 0) {
     await putManifestEntries(manifestStore, gcsPrefixForSlug(slug), uploads.recorded);
     Object.assign(manifest, uploads.recorded);
+  }
+  if (uploads.paths.length > 0) {
+    const uploaded = new Set(uploads.paths);
+    writePendingUploadPaths(paths.blobsDir, pendingUploadPaths.filter((blobPath) => !uploaded.has(blobPath)));
   }
   writeFile(paths.syncStatePath, JSON.stringify(Object.keys(manifest)));
 
@@ -342,8 +413,9 @@ async function runUploads(
   blobsDir: string,
   queue: string[],
   store: BlobStore,
-): Promise<{ count: number; failures: string[]; recorded: Manifest }> {
+): Promise<{ count: number; paths: string[]; failures: string[]; recorded: Manifest }> {
   let count = 0;
+  const paths: string[] = [];
   const failures: string[] = [];
   const recorded: Manifest = {};
   for (const relativePath of queue) {
@@ -356,12 +428,13 @@ async function runUploads(
       await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
       recordUpload(recorded, relativePath, slug, stats.size);
       count++;
+      paths.push(relativePath);
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: failed to upload ${relativePath}: ${err}`);
       failures.push(`upload ${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { count, failures, recorded };
+  return { count, paths, failures, recorded };
 }
 
 function runCleanup(blobsDir: string, toDelete: string[]): number {

@@ -128,7 +128,7 @@ describe("strict durable sync", () => {
     expect(execFileSync("git", ["show", "main:README.md"], { cwd: projectRemote, encoding: "utf8" })).toBe("project checkpoint\n");
   });
 
-  it("moves workspace binaries to the blob cache before autosave and pre-stop staging", async () => {
+  it("uploads an autosaved replacement over an existing workspace blob", async () => {
     const customer = path.join(paths.customers, "alice");
     const remote = path.join(paths.customers, "remotes", "workspace.git");
     initPushableRepo(customer, remote);
@@ -145,6 +145,38 @@ describe("strict durable sync", () => {
     expect(fs.existsSync(path.join(customer, "cover.png"))).toBe(false);
     expect(fs.readFileSync(path.join(customer, ".blobs", "cover.png"))).toEqual(binary);
     expect(testGitExec(remote, ["show", "main:cover.png"])).toBeNull();
+
+    let manifestContents = JSON.stringify({
+      "cover.png": {
+        type: "blob",
+        gcsPath: "customers/alice/cover.png",
+        size: 3,
+        mimeType: "image/png",
+        uploadedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const upload = vi.fn(async ({ localPath }: { localPath: string }) => {
+      expect(fs.readFileSync(localPath)).toEqual(binary);
+    });
+    await blobSyncForSlug("alice", {
+      strict: true,
+      store: {
+        manifestFor: () => ({
+          read: async () => ({ contents: manifestContents, generation: "1" }),
+          write: async (_path, contents: string) => { manifestContents = contents; },
+        }),
+        download: vi.fn(async () => {}),
+        upload,
+      },
+    });
+
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({
+      relativePath: "cover.png",
+      gcsPath: "customers/alice/cover.png",
+      size: binary.length,
+    }));
+    expect(JSON.parse(manifestContents)["cover.png"].size).toBe(binary.length);
+    expect(fs.readFileSync(path.join(customer, ".blobs", ".pending-uploads.json"), "utf8")).toBe("[]");
   });
 
   it("rejects a strict durable flush when a project checkout is behind canonical origin", async () => {

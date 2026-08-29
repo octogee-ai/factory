@@ -72,7 +72,6 @@ async function divertBinaries(
   slug: string,
   project: string | null,
 ): Promise<{ diverted: unknown[]; failures: string[]; failedPaths: string[] }> {
-  if (isTrustedGithubCustomerCheckout(dir)) return { diverted: [], failures: [], failedPaths: [] };
   const result = await divertWorktreeBinaries(dir, blobTarget(slug, project));
   if (result.failures.length > 0) {
     logger.warn(

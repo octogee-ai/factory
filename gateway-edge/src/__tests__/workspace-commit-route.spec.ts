@@ -385,7 +385,7 @@ describe("binary diversion on the commit path", () => {
     });
   });
 
-  it("leaves a GitHub-backed checkout's binaries where the customer put them", async () => {
+  it("stores GitHub-backed checkout binaries with the rest of the workspace blobs", async () => {
     h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
 
     await request(app())
@@ -393,7 +393,11 @@ describe("binary diversion on the commit path", () => {
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
       .expect(200);
 
-    expect(h.divertWorktreeBinaries).not.toHaveBeenCalled();
+    expect(h.divertWorktreeBinaries).toHaveBeenCalledWith("/customers/acme", {
+      slug: "acme",
+      projectSlug: null,
+      gcsPrefix: "customers/acme",
+    });
   });
 
   it("aborts without committing when a binary cannot be rehomed", async () => {
