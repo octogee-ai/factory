@@ -50,7 +50,6 @@ import {
   releasePayloadHash,
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
-  upgradeReleasePayloadSchema,
   type AssignmentDoc,
   type AssignmentState,
   type GatewayDoc,
@@ -116,9 +115,7 @@ import {
 } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
 import {
-  FleetMutationFrozenError,
   FleetMutationIdempotencyError,
-  FleetMutationMaintenanceUnavailableError,
   runNormalFleetMutation,
   type NormalFleetMutationDb,
   type NormalFleetMutationResult,
@@ -2965,57 +2962,6 @@ function artifactFromRelease(release: ReleaseDoc): GatewayArtifact | null {
   return gatewayArtifactFromReleasePayload(release.payload);
 }
 
-class ReleaseArtifactSchemaUnsupportedError extends Error {
-  readonly code = "release-artifact-schema-unsupported";
-
-  constructor(
-    readonly gatewayId: string,
-    readonly release: number,
-    readonly reason: "payload-hash-mismatch" | "unsupported-payload-schema",
-  ) {
-    super(`gateway ${gatewayId} release ${release} artifact schema is unsupported`);
-    this.name = "ReleaseArtifactSchemaUnsupportedError";
-  }
-}
-
-async function readAndUpgradeReleaseArtifact(
-  db: Firestore,
-  gatewayId: string,
-  release: number,
-): Promise<GatewayArtifact> {
-  const releaseRef = db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(gatewayId)
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc(String(release));
-  return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(releaseRef);
-    const data = snapshot.exists ? snapshot.data() as Record<string, unknown> | undefined : undefined;
-    const upgrade = upgradeReleasePayloadSchema(data?.payload, data?.payloadHash);
-    if (upgrade.status === "unsupported") {
-      throw new ReleaseArtifactSchemaUnsupportedError(gatewayId, release, upgrade.reason);
-    }
-    if (upgrade.status === "upgraded") {
-      transaction.update(releaseRef, {
-        payload: upgrade.payload,
-        payloadHash: upgrade.payloadHash,
-      });
-    }
-    return gatewayArtifactFromReleasePayload(upgrade.payload);
-  });
-}
-
-function currentArtifactPatch(
-  artifact: GatewayArtifact,
-  patch: ArtifactPatchInput,
-): GatewayArtifact {
-  return {
-    ...artifact,
-    imageRepository: patch.imageRepository ?? artifact.imageRepository,
-    imageTag: patch.imageTag ?? artifact.imageTag,
-  };
-}
-
 function sameArtifact(left: GatewayArtifact, right: GatewayArtifact): boolean {
   return (
     left.imageRepository === right.imageRepository &&
@@ -3234,73 +3180,12 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "modelBrokerLimits",
 ] as const satisfies ReadonlyArray<keyof Omit<GatewayMutableConfig, "configSchemaVersion">>;
 
-type ArtifactPatchInput = Partial<Pick<GatewayArtifact, "imageRepository" | "imageTag">>;
-
 function mutableConfigPatchFromBody(body: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const field of GATEWAY_MUTABLE_CONFIG_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(body, field)) patch[field] = body[field];
   }
   return patch;
-}
-
-function artifactPatchFromBody(
-  body: Record<string, unknown>,
-): { error: RolloutBodyError } | { ok: ArtifactPatchInput } {
-  const configFields = GATEWAY_MUTABLE_CONFIG_FIELDS.filter((field) =>
-    Object.prototype.hasOwnProperty.call(body, field),
-  );
-  if (configFields.length > 0) {
-    return {
-      error: {
-        status: 400,
-        body: {
-          error: "gateway configuration is mutable; update it with PATCH /api/admin/gateways/:id",
-          fields: configFields,
-        },
-      },
-    };
-  }
-  if (Object.prototype.hasOwnProperty.call(body, "byosub")) {
-    return {
-      error: {
-        status: 400,
-        body: {
-          error: "byosub credentials are user-scoped and cannot be stored in a release",
-          fields: ["byosub"],
-        },
-      },
-    };
-  }
-  const unsupportedFields = Object.keys(body).filter(
-    (field) => field !== "imageRepository" && field !== "imageTag",
-  );
-  if (unsupportedFields.length > 0) {
-    return {
-      error: {
-        status: 400,
-        body: {
-          error: "release accepts only imageRepository and imageTag",
-          fields: unsupportedFields,
-        },
-      },
-    };
-  }
-  if (body.imageRepository === undefined && body.imageTag === undefined) {
-    return { error: { status: 400, body: { error: "release requires imageRepository or imageTag" } } };
-  }
-  if (body.imageRepository !== undefined && typeof body.imageRepository !== "string") {
-    return { error: { status: 400, body: { error: "imageRepository must be a string" } } };
-  }
-  if (body.imageTag !== undefined && typeof body.imageTag !== "string") {
-    return { error: { status: 400, body: { error: "imageTag must be a string" } } };
-  }
-  return {
-    ok: {
-      ...(typeof body.imageRepository === "string" ? { imageRepository: body.imageRepository } : {}),
-      ...(typeof body.imageTag === "string" ? { imageTag: body.imageTag } : {}),
-    },
-  };
 }
 
 function validateArtifact(artifact: GatewayArtifact): RolloutBodyError | null {
@@ -3357,42 +3242,6 @@ function buildCreateArtifact(body: AddGatewayCreate): GatewayArtifact {
   };
 }
 
-async function readRolloutCurrentConfig(
-  db: Firestore,
-  gatewayId: string,
-): Promise<{
-  gateway: DurableGatewayRoot;
-  artifact: GatewayArtifact;
-} | null> {
-  const gateway = await readGatewayDoc(db, gatewayId);
-  if (!gateway) return null;
-  const artifact = await readAndUpgradeReleaseArtifact(db, gatewayId, gateway.latestRelease);
-  return { gateway, artifact };
-}
-
-async function readRolloutCurrentConfigOrRespond(
-  db: Firestore,
-  gatewayId: string,
-  res: Response,
-): Promise<NonNullable<Awaited<ReturnType<typeof readRolloutCurrentConfig>>> | null> {
-  try {
-    const current = await readRolloutCurrentConfig(db, gatewayId);
-    if (current) return current;
-    res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
-    return null;
-  } catch (error) {
-    if (!(error instanceof ReleaseArtifactSchemaUnsupportedError)) throw error;
-    res.status(409).json({
-      error: "release artifact schema is unsupported",
-      code: error.code,
-      gatewayId: error.gatewayId,
-      release: error.release,
-      reason: error.reason,
-    });
-    return null;
-  }
-}
-
 function buildDurableGatewayPatch(args: {
   gatewayId: string;
   current: GatewayMutableConfig;
@@ -3408,7 +3257,7 @@ function buildDurableGatewayPatch(args: {
       error: {
         status: 409,
         body: {
-          error: "image artifacts deploy from immutable manifests; use POST /api/admin/gateways/:id/deploy",
+          error: "image artifacts deploy from immutable releases; use POST /api/admin/gateways/:id/deploy",
           fields: artifactFields,
         },
       },
@@ -6951,14 +6800,6 @@ router.get(
   );
 
   router.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
-    if (error instanceof FleetMutationFrozenError) {
-      res.status(409).json({ error: error.message });
-      return;
-    }
-    if (error instanceof FleetMutationMaintenanceUnavailableError) {
-      res.status(503).json({ error: error.message });
-      return;
-    }
     if (error instanceof FleetMutationIdempotencyError) {
       res.status(409).json({
         error: error.message,

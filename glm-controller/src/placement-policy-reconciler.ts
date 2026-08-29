@@ -307,7 +307,6 @@ export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
   allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
-  maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
@@ -2292,7 +2291,6 @@ export async function reconcilePlacementPolicyOnce(
     swept: 0,
     blocked: 0,
   };
-  if (await placementMaintenanceFrozen(deps)) return result;
   const state = await deps.readSnapshot();
   const pool = parseSharedGatewayPoolConfig({
     defaultGatewayId: state.defaultGatewayId,
@@ -2409,23 +2407,6 @@ async function reconcileDisposableTombstones(
   }
 }
 
-async function placementMaintenanceFrozen(
-  deps: PlacementPolicyReconcilerDeps,
-): Promise<boolean> {
-  if (!deps.maintenanceGate) return false;
-  try {
-    const gate = await deps.maintenanceGate.state();
-    if (!gate.frozen) return false;
-    const reason = gate.reason ? `: ${gate.reason}` : "";
-    deps.log(`[placement-policy] maintenance freeze blocks reconciliation${reason}`);
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    deps.log(`[placement-policy] maintenance gate unreadable; blocking reconciliation: ${message}`);
-    return true;
-  }
-}
-
 function docsById(docs: QueryDocumentSnapshot[]): Map<string, Record<string, unknown>> {
   return new Map(docs.map((doc) => [doc.id, doc.data() as Record<string, unknown>]));
 }
@@ -2491,7 +2472,6 @@ interface FirestorePlacementPolicyInput {
   now(): number;
   log(message: string): void;
   allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
-  maintenanceGate?: { state(): Promise<{ frozen: boolean; reason: string | null }> };
   ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
   readGatewayPodDiagnostics(input: {
     namespace: string;
@@ -4247,7 +4227,6 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     log: input.log,
     allowLegacyBuilderReturnCompatibilityRecovery:
       input.allowLegacyBuilderReturnCompatibilityRecovery === true,
-    maintenanceGate: input.maintenanceGate,
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),

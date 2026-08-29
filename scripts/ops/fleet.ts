@@ -29,8 +29,6 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
-  assertNormalFleetMutationSnapshotOpen,
-  GLM_MAINTENANCE_DOC_PATH,
   runNormalFleetMutation,
   type NormalFleetMutationDb,
   type NormalFleetMutationInput,
@@ -176,7 +174,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Add a gateway through the Admin API.",
     args: "--gateway-id=<id> --image-tag=<tag> [--image-repository=<repo>] [--gateway-class=<class>] [--apply]",
     description:
-      "Uses POST /api/admin/gateways so maintenance and the operations journal match the Admin UI. imageRepository defaults to the selected environment's canonical /octogee-gateway image. Dry-run by default; pass --apply to send the request.",
+      "Uses POST /api/admin/gateways so the operations journal matches the Admin UI. imageRepository defaults to the selected environment's canonical /octogee-gateway image. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234",
       "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234 --apply",
@@ -209,7 +207,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Retire an empty gateway through the Admin API.",
     args: "<gw-id> [--apply]",
     description:
-      "Uses DELETE /api/admin/gateways/:id. The Admin API enforces retirement preconditions, maintenance, and journaling. Dry-run by default; pass --apply to send the request.",
+      "Uses DELETE /api/admin/gateways/:id. The Admin API enforces retirement preconditions and journaling. Dry-run by default; pass --apply to send the request.",
     examples: ["fleet --env=test gw retire canary", "fleet --env=test gw retire canary --apply"],
     writes: true,
   },
@@ -218,7 +216,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Restart a gateway through the Admin API, or force-delete its exact pod.",
     args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
     description:
-      "Normally uses POST /api/admin/gateways/:id/restart so maintenance and the operations journal match the Admin UI. With --force --apply, it journals a break-glass operation, hands the gateway to the operator lane, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting. Dry-run by default.",
+      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. With --force --apply, it journals a break-glass operation, hands the gateway to the operator lane, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting. Dry-run by default.",
     examples: [
       "fleet --env=test gw restart canary",
       "fleet --env=test gw restart canary --apply",
@@ -906,11 +904,7 @@ async function markForcedGatewayRestartOperatorManaged(
 ): Promise<void> {
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
   await db.runTransaction(async (transaction) => {
-    const [maintenance, gateway] = await Promise.all([
-      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
-      transaction.get(gatewayRef),
-    ]);
-    assertNormalFleetMutationSnapshotOpen(maintenance as never);
+    const gateway = await transaction.get(gatewayRef);
     const durableGateway = projectGatewayDesiredRootForGateway(
       gateway.exists ? gateway.data() : undefined,
       gatewayId,
@@ -969,12 +963,10 @@ async function assertForcedGatewayRestartDeleteFence(
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
   const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
   await db.runTransaction(async (transaction) => {
-    const [maintenance, gateway, audit] = await Promise.all([
-      transaction.get(db.doc(GLM_MAINTENANCE_DOC_PATH)),
+    const [gateway, audit] = await Promise.all([
       transaction.get(gatewayRef),
       transaction.get(auditRef),
     ]);
-    assertNormalFleetMutationSnapshotOpen(maintenance as never);
     const durableGateway = projectGatewayDesiredRootForGateway(
       gateway.exists ? gateway.data() : undefined,
       gatewayId,

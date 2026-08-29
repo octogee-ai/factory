@@ -198,7 +198,6 @@ describe("deployment target consumers", () => {
   it("does not embed the active cluster context in fleet operations", () => {
     for (const script of [
       "scripts/ops/fleet.ts",
-      "scripts/ops/set-glm-maintenance.ts",
     ]) {
       expect(source(script), script).not.toContain(
         "gke_octogee_us-central1_octogee-gateway",

@@ -42,7 +42,7 @@ const RECEIPT_PREFIX = "platform-migration-writer-quiescence";
 const CONTENT_RECEIPT_PREFIX = "platform-content-migration";
 const FIREBASE_RECEIPT_PREFIX = "platform-firestore-auth-west-migration";
 const ACTIVATION_RECEIPT_PREFIX = "platform-migration-activation";
-const MAINTENANCE_DOCUMENT = "config/glmMaintenance";
+const QUIESCENCE_DOCUMENT = "config/platformMigrationWriterQuiescence";
 const QUIESCE_TIMEOUT_MILLISECONDS = 120_000;
 const QUIESCE_POLL_MILLISECONDS = 1_000;
 const FROZEN_MAINTENANCE_MODE = "frozen";
@@ -475,8 +475,8 @@ export async function assertTargetWriterQuiesced(receipt: PlatformMigrationWrite
 async function dependenciesForPairedMaintenance(
   settings: DeploymentEnvironmentSettings,
 ): Promise<JsonRecord | null> {
-  const snapshot = await firestore(settings).doc(MAINTENANCE_DOCUMENT).get();
-  return snapshot.exists ? record(snapshot.data(), "paired CENTRAL GLM maintenance document") : null;
+  const snapshot = await firestore(settings).doc(QUIESCENCE_DOCUMENT).get();
+  return snapshot.exists ? record(snapshot.data(), "paired CENTRAL writer quiescence document") : null;
 }
 
 function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDependencies {
@@ -485,11 +485,11 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     assertExactMergedMain: async () => assertExactMergedMain(repoRoot),
     readWorkloads: async (settings) => workloads(settings),
     readMaintenance: async (settings) => {
-      const snapshot = await firestore(settings).doc(MAINTENANCE_DOCUMENT).get();
-      return snapshot.exists ? record(snapshot.data(), "GLM maintenance document") : null;
+      const snapshot = await firestore(settings).doc(QUIESCENCE_DOCUMENT).get();
+      return snapshot.exists ? record(snapshot.data(), "writer quiescence document") : null;
     },
     writeMaintenance: async (settings, maintenance) => {
-      const reference = firestore(settings).doc(MAINTENANCE_DOCUMENT);
+      const reference = firestore(settings).doc(QUIESCENCE_DOCUMENT);
       if (maintenance === null) {
         await reference.delete();
       } else {

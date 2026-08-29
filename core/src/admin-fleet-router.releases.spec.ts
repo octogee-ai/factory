@@ -342,37 +342,7 @@ function seedNewSchemaGateway(
   };
 }
 
-function seedNonSharedGateway(
-  id: string,
-  payload: ReleasePayload,
-  gatewayOverrides: Record<string, unknown> = {},
-): Record<string, Record<string, unknown>> {
-  return seedNewSchemaGateway(id, payload, {
-    profile: "builder",
-    gatewayClass: "builder",
-    imageProfile: "builder",
-    ownerUid: `owner-${id}`,
-    builderSlug: id,
-    ...gatewayOverrides,
-  });
-}
-
 describe("normal fleet mutation admission", () => {
-  it("rejects a frozen gateway restart before it creates an audit or operation", async () => {
-    const seed = {
-      ...seedNewSchemaGateway("beta", sharedPayload()),
-      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
-    };
-    const { app, store } = mkApp(seed);
-
-    await request(app).post("/gateways/beta/restart").expect(409).expect({
-      error: "maintenance freeze blocks fleet mutation: incident",
-    });
-
-    expect(auditsIn(store)).toHaveLength(0);
-    expect(opsIn(store, "restart-gateway")).toHaveLength(0);
-  });
-
   it("journals a gateway restart with its pre-action state", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
 
@@ -469,19 +439,6 @@ function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<str
   };
 }
 
-function builderUserWithLease(gatewayId: string): Record<string, unknown> {
-  const user = builderUser(gatewayId);
-  const provisioning = user.provisioning as Record<string, unknown>;
-  const openclaw = provisioning.openclaw as Record<string, unknown>;
-  openclaw.activationLease = {
-    leaseId: "historical-lease",
-    generation: 1,
-    status: "active",
-    targetGatewayId: "retired-disposable",
-  };
-  return user;
-}
-
 function immutableBuild(sourceSha = "a".repeat(40)): ReleaseDigestManifest {
   return {
     sourceSha,
@@ -548,8 +505,13 @@ describe("POST /gateways/:id/deploy", () => {
       releaseAuthority: buildAuthority(immutableBuild()),
     });
 
-    await request(app).post("/gateways/shared-a/deploy").send({ sourceSha: "deadbeef" }).expect(400);
-    await request(app).post("/gateways/shared-a/deploy").send({}).expect(400);
+    const abbreviated = await request(app)
+      .post("/gateways/shared-a/deploy")
+      .send({ sourceSha: "deadbeef" });
+    const missing = await request(app).post("/gateways/shared-a/deploy").send({});
+
+    expect(abbreviated.status).toBe(400);
+    expect(missing.status).toBe(400);
   });
 });
 
@@ -970,23 +932,6 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(res.body.error).toMatch(/disposable lifecycle/);
     expect(res.body.fields).toEqual(["gatewayClass", "ownerUid", "builderSlug"]);
     expect(store.get("gateways/bench")).toMatchObject({ gatewayClass: "shared" });
-  });
-
-  it("does not mutate or journal managedBy while maintenance is frozen", async () => {
-    const seed = {
-      ...seedNewSchemaGateway("zeta", sharedPayload()),
-      "config/glmMaintenance": { mode: "frozen", reason: "incident" },
-    };
-    const { app, store } = mkApp(seed);
-
-    await request(app)
-      .patch("/gateways/zeta")
-      .send({ managedBy: "operator" })
-      .expect(409)
-      .expect({ error: "maintenance freeze blocks fleet mutation: incident" });
-
-    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
-    expect(auditsIn(store)).toHaveLength(0);
   });
 
   it("refuses a malformed durable root rather than mutating it", async () => {

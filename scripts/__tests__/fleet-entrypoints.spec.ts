@@ -637,14 +637,12 @@ describe("fleet force gateway restart", () => {
   }
 
   function forceRestartHarness(overrides: {
-    maintenance?: Record<string, unknown>;
     selector?: unknown;
     reread?: unknown;
     afterExactPodRead?: (documents: Map<string, Record<string, unknown>>) => void;
     deleteResult?: { status: number | null; stdout: string; stderr: string };
   } = {}) {
     const documents = new Map<string, Record<string, unknown>>([
-      ["config/glmMaintenance", overrides.maintenance ?? { mode: "open" }],
       ["gateways/canary", durableGatewayRoot()],
       ["glmOperations/audit-force-restart", {
         status: "in-progress",
@@ -877,29 +875,7 @@ describe("fleet force gateway restart", () => {
     expect(kubectl).toHaveBeenCalledTimes(2);
   });
 
-  it("rechecks the maintenance gate in the forced lifecycle transaction", async () => {
-    const { db, documents, kubectl, runMutation } = forceRestartHarness({
-      maintenance: { mode: "frozen", reason: "operator freeze" },
-    });
-
-    await expect(runForcedGatewayRestart({
-      db: db as never,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
-      gatewayId: "canary",
-      now: () => 1234,
-      runKubectl: kubectl,
-      runMutation,
-    })).rejects.toThrow("maintenance freeze blocks fleet mutation: operator freeze");
-
-    expect(kubectl).not.toHaveBeenCalled();
-    expect(documents.get("gateways/canary")?.managedBy).toBeUndefined();
-  });
-
   it.each([
-    ["maintenance freeze", (documents: Map<string, Record<string, unknown>>) => {
-      documents.set("config/glmMaintenance", { mode: "frozen", reason: "late freeze" });
-    }, "maintenance freeze blocks fleet mutation: late freeze"],
     ["gateway retirement", (documents: Map<string, Record<string, unknown>>) => {
       documents.set("gateways/canary", {
         ...documents.get("gateways/canary")!,

@@ -898,14 +898,14 @@ function receiptSafeMaintenance(
   if (maintenance === null) return null;
   for (const [key, value] of Object.entries(maintenance)) {
     if (!MAINTENANCE_FIELDS.has(key)) {
-      throw new Error(`GLM maintenance document has unsupported field: ${key}`);
+      throw new Error(`writer quiescence document has unsupported field: ${key}`);
     }
     if (typeof value !== "string" && (typeof value !== "number" || !Number.isFinite(value))) {
-      throw new Error(`GLM maintenance document has non-metadata field: ${key}`);
+      throw new Error(`writer quiescence document has non-metadata field: ${key}`);
     }
   }
   if (typeof maintenance.mode !== "string" || maintenance.mode.length === 0) {
-    throw new Error("GLM maintenance document has no mode");
+    throw new Error("writer quiescence document has no mode");
   }
   return Object.fromEntries(Object.entries(maintenance).sort(([left], [right]) => left.localeCompare(right)));
 }

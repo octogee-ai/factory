@@ -1,5 +1,6 @@
 import { constants, type Stats } from "node:fs";
-import { lstat, open, unlink, type FileHandle } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { link, mkdtemp, open, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
 
 import {
   isDivertableWorkspacePath,
@@ -47,6 +48,11 @@ interface ConfinedFile {
   close: () => Promise<void>;
 }
 
+interface ConfinedEntry {
+  entryPath: string;
+  close: () => Promise<void>;
+}
+
 function descriptorChildPath(directory: FileHandle, name: string): string {
   const descriptorRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
   return `${descriptorRoot}/${directory.fd}/${name}`;
@@ -80,7 +86,7 @@ function confinedOpenError(error: unknown): never {
   throw error;
 }
 
-async function openConfinedFile(customerDir: string, relativePath: string): Promise<ConfinedFile> {
+async function openConfinedEntry(customerDir: string, relativePath: string): Promise<ConfinedEntry> {
   if (!constants.O_NOFOLLOW || !constants.O_DIRECTORY) {
     throw new Error("confined file opens are unavailable on this platform");
   }
@@ -100,15 +106,30 @@ async function openConfinedFile(customerDir: string, relativePath: string): Prom
       handles.push(directory);
     }
     const entryPath = descriptorChildPath(directory, segments.at(-1)!);
-    const handle = await open(entryPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    handles.push(handle);
     return {
-      handle,
       entryPath,
       close: () => closeHandles(handles),
     };
   } catch (error) {
     await closeHandles(handles);
+    return confinedOpenError(error);
+  }
+}
+
+async function openConfinedFile(customerDir: string, relativePath: string): Promise<ConfinedFile> {
+  const entry = await openConfinedEntry(customerDir, relativePath);
+  try {
+    const handle = await open(entry.entryPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    return {
+      handle,
+      entryPath: entry.entryPath,
+      close: async () => {
+        await handle.close();
+        await entry.close();
+      },
+    };
+  } catch (error) {
+    await entry.close();
     return confinedOpenError(error);
   }
 }
@@ -124,6 +145,24 @@ function sameFileSnapshot(
     left.ctimeMs === right.ctimeMs;
 }
 
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs;
+}
+
+async function restoreStagedEntry(stagedPath: string, entryPath: string): Promise<void> {
+  try {
+    await link(stagedPath, entryPath);
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) {
+      throw error;
+    }
+  }
+  await unlink(stagedPath);
+}
+
 async function divertBinaryEntry(
   customerDir: string,
   relativePath: string,
@@ -131,6 +170,8 @@ async function divertBinaryEntry(
   deps: DivertBinariesDeps,
 ): Promise<DivertedBlob | null> {
   const confined = await openConfinedFile(customerDir, relativePath);
+  let stagedPath: string | null = null;
+  let stagingDir: string | null = null;
   try {
     const stats = await confined.handle.stat();
     if (!stats.isFile()) return null;
@@ -144,15 +185,46 @@ async function divertBinaryEntry(
     }
     if (!looksBinary(contents.subarray(0, BINARY_SNIFF_BYTES))) return null;
 
-    await deps.storeWorkspaceBlob(target, relativePath, contents, getMimeType(getExtension(relativePath)));
-    const current = await lstat(confined.entryPath);
-    if (!current.isFile() || !sameFileSnapshot(afterRead, current)) {
-      throw new Error("file changed before removal");
+    stagingDir = await mkdtemp(join(dirname(customerDir), ".octogee-diversion-"));
+    stagedPath = join(stagingDir, "payload");
+    await rename(confined.entryPath, stagedPath);
+    const staged = await open(stagedPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stagedStats = await staged.stat();
+      if (!stagedStats.isFile() || !sameFileIdentity(afterRead, stagedStats)) {
+        await restoreStagedEntry(stagedPath, confined.entryPath);
+        stagedPath = null;
+        throw new Error("file changed before diversion");
+      }
+    } finally {
+      await staged.close();
     }
-    await unlink(confined.entryPath);
+
+    await deps.storeWorkspaceBlob(target, relativePath, contents, getMimeType(getExtension(relativePath)));
+    await unlink(stagedPath);
+    stagedPath = null;
+    await rmdir(stagingDir);
+    stagingDir = null;
     return { path: relativePath, size: stats.size };
+  } catch (error) {
+    if (stagedPath) {
+      try {
+        await restoreStagedEntry(stagedPath, confined.entryPath);
+        stagedPath = null;
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          "binary diversion failed and its staged file could not be restored",
+        );
+      }
+    }
+    throw error;
   } finally {
-    await confined.close();
+    try {
+      if (stagingDir) await rmdir(stagingDir);
+    } finally {
+      await confined.close();
+    }
   }
 }
 

@@ -475,23 +475,6 @@ function seedDurableGateway(
   if (options.heartbeat) markGatewayServing(gatewayId, options.heartbeat);
 }
 
-function seedNonSharedDurableGateway(
-  gatewayId: string,
-  options: Parameters<typeof seedDurableGateway>[1] = {},
-) {
-  seedDurableGateway(gatewayId, {
-    ...options,
-    root: {
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      ownerUid: `owner-${gatewayId}`,
-      builderSlug: gatewayId,
-      ...options.root,
-    },
-  });
-}
-
 function markGatewayServing(
   gatewayId: string,
   heartbeat: Record<string, unknown>,
@@ -1454,133 +1437,6 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
 
 });
 
-describe("POST /api/admin/gateways/:id/rollout — bump gateway image", () => {
-  it("creates a rollout op with the new imageTag (and inherited repo)", async () => {
-    seedNonSharedDurableGateway("default", { imageTag: "abcdef0" });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "abcdef1" });
-    expect(res.status).toBe(202);
-    const op = commandOperationCall();
-    expect(op?.data).toMatchObject({
-      kind: "rollout",
-      input: { gatewayId: "default", targetRelease: 2, imageTag: "abcdef1" },
-      createdBy: "admin-user",
-    });
-    expect(gatewaysDocs.default).toMatchObject({ latestRelease: 2, desiredRelease: 1 });
-    expect(gatewayReleasesDocs["default/2"]?.payload).toMatchObject({ imageTag: "abcdef1" });
-  });
-
-  it("rejects profile updates on rollout because configuration belongs on PATCH", async () => {
-    seedDurableGateway("bender", { imageTag: "abcdef1" });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/bender/rollout")
-      .send({ imageTag: "abcdef1", profile: "builder" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/configuration is mutable/i);
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
-  });
-
-  it("rejects a profile rollout before checking the image no-op boundary", async () => {
-    seedDurableGateway("bender", {
-      imageTag: "abcdef1",
-      root: { profile: "builder", gatewayClass: "builder", ownerUid: "uid-bender" },
-    });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/bender/rollout")
-      .send({ imageTag: "abcdef1", profile: "builder" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/configuration is mutable/i);
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
-  });
-
-  it("rejects an unknown profile with 400 (no op written)", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "abcdef1", profile: "root" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/profile/);
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
-  });
-
-  it("returns 400 when imageTag is not a SHA-style hex string (e.g. 'latest', 'v1.2.3')", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
-    const app = buildApp();
-    for (const bad of ["latest", "v1.2.3", "ABC123def", "abc"]) {
-      const res = await request(app)
-        .post("/api/admin/gateways/default/rollout")
-        .send({ imageTag: bad });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/SHA/);
-    }
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
-  });
-
-  it("returns 409 when another op is already pending or running for this gateway", async () => {
-    seedNonSharedDurableGateway("default", { imageTag: "abcdef0" });
-    glmOperationsDocs.push({
-      id: "op-running-1",
-      data: {
-        kind: "migrate-customer",
-        status: "running",
-        input: { gatewayId: "default", uid: "u1" },
-      },
-    });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "abcdef2" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/already pending or running/);
-    expect(res.body.operationId).toBe("op-running-1");
-    expect(res.body.kind).toBe("migrate-customer");
-  });
-
-  it("returns 400 when imageTag is missing", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
-    const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways/default/rollout").send({});
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/imageTag/);
-  });
-
-  it("returns 400 when imageRepository is not the canonical Octogee AR repo", async () => {
-    seedDurableGateway("default", { imageTag: "abcdef0" });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "abcdef1", imageRepository: "evil.example.com/payload" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/imageRepository/);
-  });
-
-  it("returns 404 when the gateway is not registered", async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/gw-missing/rollout")
-      .send({ imageTag: "abcdef1" });
-    expect(res.status).toBe(404);
-  });
-
-  it("returns 409 when the gateway is already on the requested image (no-op)", async () => {
-    seedNonSharedDurableGateway("default", { imageTag: "1234567" });
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/admin/gateways/default/rollout")
-      .send({ imageTag: "1234567" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/no-op|already on/i);
-    const op = commandOperationCall();
-    expect(op).toBeUndefined();
-  });
-
-});
-
 describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
   it("creates a restart-gateway operation (kind carried in input)", async () => {
     seedDurableGateway("bender", { imageTag: "abcdef1" });
@@ -1799,19 +1655,6 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
 });
 
 describe("POST /api/admin/rollouts — composite operation", () => {
-  it("rejects a frozen request before it records an audit or creates a rollout", async () => {
-    configDocs.glmMaintenance = { mode: "frozen", reason: "incident" };
-
-    const res = await request(buildApp()).post("/api/admin/rollouts").send({
-      gatewayId: "default",
-      targetRelease: 2,
-      imageTag: "def5678",
-    });
-
-    expect(res.status).toBe(409);
-    expect(glmOperationsDocs).toEqual([]);
-  });
-
   it("creates a rollout operation with the gateway + target image", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/rollouts").send({

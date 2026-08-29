@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile, mkdir } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, truncate, writeFile, mkdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -222,7 +222,7 @@ describe("divertWorktreeBinaries", () => {
     expect(await readFile(path.join(outside, "secret.bin"))).toEqual(secret);
   });
 
-  it("does not remove a path replaced after its binary bytes are read", async () => {
+  it("does not remove a path replaced while the staged binary uploads", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "logo.bin");
     const original = Buffer.from([0x00, 0x01, 0x02]);
@@ -232,7 +232,6 @@ describe("divertWorktreeBinaries", () => {
     dirs.push(outside);
 
     const store = vi.fn(async () => {
-      await unlink(binary);
       await symlink(outside, binary);
       return { gcsPath: "g", size: 3 };
     });
@@ -243,13 +242,13 @@ describe("divertWorktreeBinaries", () => {
     );
 
     expect(store.mock.calls[0]?.[2]).toEqual(original);
-    expect(result.diverted).toEqual([]);
-    expect(result.failures[0]).toContain("file changed before removal");
+    expect(result.diverted).toEqual([{ path: "logo.bin", size: original.length }]);
+    expect(result.failures).toEqual([]);
     expect((await lstat(binary)).isSymbolicLink()).toBe(true);
     expect(await readFile(outside)).toEqual(Buffer.from([0x00, 0x03]));
   });
 
-  it("does not remove a regular file replacement created during upload", async () => {
+  it("leaves a regular file replacement created during upload", async () => {
     const dir = await workspace();
     const binary = path.join(dir, "logo.bin");
     const original = Buffer.from([0x00, 0x01, 0x02]);
@@ -257,7 +256,6 @@ describe("divertWorktreeBinaries", () => {
     await writeFile(binary, original);
 
     const store = vi.fn(async () => {
-      await unlink(binary);
       await writeFile(binary, replacement);
       return { gcsPath: "g", size: original.length };
     });
@@ -268,8 +266,8 @@ describe("divertWorktreeBinaries", () => {
     );
 
     expect(store.mock.calls[0]?.[2]).toEqual(original);
-    expect(result.diverted).toEqual([]);
-    expect(result.failures[0]).toContain("file changed before removal");
+    expect(result.diverted).toEqual([{ path: "logo.bin", size: original.length }]);
+    expect(result.failures).toEqual([]);
     expect(await readFile(binary)).toEqual(replacement);
   });
 

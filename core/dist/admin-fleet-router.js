@@ -3,7 +3,7 @@ import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRec
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
 import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
@@ -19,7 +19,7 @@ import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from ".
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
-import { FleetMutationFrozenError, FleetMutationIdempotencyError, FleetMutationMaintenanceUnavailableError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
+import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -1910,48 +1910,6 @@ function artifactFromRelease(release) {
         return null;
     return gatewayArtifactFromReleasePayload(release.payload);
 }
-class ReleaseArtifactSchemaUnsupportedError extends Error {
-    gatewayId;
-    release;
-    reason;
-    code = "release-artifact-schema-unsupported";
-    constructor(gatewayId, release, reason) {
-        super(`gateway ${gatewayId} release ${release} artifact schema is unsupported`);
-        this.gatewayId = gatewayId;
-        this.release = release;
-        this.reason = reason;
-        this.name = "ReleaseArtifactSchemaUnsupportedError";
-    }
-}
-async function readAndUpgradeReleaseArtifact(db, gatewayId, release) {
-    const releaseRef = db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-        .doc(String(release));
-    return db.runTransaction(async (transaction) => {
-        const snapshot = await transaction.get(releaseRef);
-        const data = snapshot.exists ? snapshot.data() : undefined;
-        const upgrade = upgradeReleasePayloadSchema(data?.payload, data?.payloadHash);
-        if (upgrade.status === "unsupported") {
-            throw new ReleaseArtifactSchemaUnsupportedError(gatewayId, release, upgrade.reason);
-        }
-        if (upgrade.status === "upgraded") {
-            transaction.update(releaseRef, {
-                payload: upgrade.payload,
-                payloadHash: upgrade.payloadHash,
-            });
-        }
-        return gatewayArtifactFromReleasePayload(upgrade.payload);
-    });
-}
-function currentArtifactPatch(artifact, patch) {
-    return {
-        ...artifact,
-        imageRepository: patch.imageRepository ?? artifact.imageRepository,
-        imageTag: patch.imageTag ?? artifact.imageTag,
-    };
-}
 function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
         left.imageTag === right.imageTag);
@@ -2123,58 +2081,6 @@ function mutableConfigPatchFromBody(body) {
     }
     return patch;
 }
-function artifactPatchFromBody(body) {
-    const configFields = GATEWAY_MUTABLE_CONFIG_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
-    if (configFields.length > 0) {
-        return {
-            error: {
-                status: 400,
-                body: {
-                    error: "gateway configuration is mutable; update it with PATCH /api/admin/gateways/:id",
-                    fields: configFields,
-                },
-            },
-        };
-    }
-    if (Object.prototype.hasOwnProperty.call(body, "byosub")) {
-        return {
-            error: {
-                status: 400,
-                body: {
-                    error: "byosub credentials are user-scoped and cannot be stored in a release",
-                    fields: ["byosub"],
-                },
-            },
-        };
-    }
-    const unsupportedFields = Object.keys(body).filter((field) => field !== "imageRepository" && field !== "imageTag");
-    if (unsupportedFields.length > 0) {
-        return {
-            error: {
-                status: 400,
-                body: {
-                    error: "release accepts only imageRepository and imageTag",
-                    fields: unsupportedFields,
-                },
-            },
-        };
-    }
-    if (body.imageRepository === undefined && body.imageTag === undefined) {
-        return { error: { status: 400, body: { error: "release requires imageRepository or imageTag" } } };
-    }
-    if (body.imageRepository !== undefined && typeof body.imageRepository !== "string") {
-        return { error: { status: 400, body: { error: "imageRepository must be a string" } } };
-    }
-    if (body.imageTag !== undefined && typeof body.imageTag !== "string") {
-        return { error: { status: 400, body: { error: "imageTag must be a string" } } };
-    }
-    return {
-        ok: {
-            ...(typeof body.imageRepository === "string" ? { imageRepository: body.imageRepository } : {}),
-            ...(typeof body.imageTag === "string" ? { imageTag: body.imageTag } : {}),
-        },
-    };
-}
 function validateArtifact(artifact) {
     if (!isValidGatewayImageRepository(artifact.imageRepository)) {
         return {
@@ -2221,34 +2127,6 @@ function buildCreateArtifact(body) {
         imageTag: body.imageTag,
     };
 }
-async function readRolloutCurrentConfig(db, gatewayId) {
-    const gateway = await readGatewayDoc(db, gatewayId);
-    if (!gateway)
-        return null;
-    const artifact = await readAndUpgradeReleaseArtifact(db, gatewayId, gateway.latestRelease);
-    return { gateway, artifact };
-}
-async function readRolloutCurrentConfigOrRespond(db, gatewayId, res) {
-    try {
-        const current = await readRolloutCurrentConfig(db, gatewayId);
-        if (current)
-            return current;
-        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
-        return null;
-    }
-    catch (error) {
-        if (!(error instanceof ReleaseArtifactSchemaUnsupportedError))
-            throw error;
-        res.status(409).json({
-            error: "release artifact schema is unsupported",
-            code: error.code,
-            gatewayId: error.gatewayId,
-            release: error.release,
-            reason: error.reason,
-        });
-        return null;
-    }
-}
 function buildDurableGatewayPatch(args) {
     const artifactFields = ["imageRepository", "imageTag"].filter((field) => Object.prototype.hasOwnProperty.call(args.body, field));
     if (artifactFields.length > 0) {
@@ -2256,7 +2134,7 @@ function buildDurableGatewayPatch(args) {
             error: {
                 status: 409,
                 body: {
-                    error: "image artifacts deploy from immutable manifests; use POST /api/admin/gateways/:id/deploy",
+                    error: "image artifacts deploy from immutable releases; use POST /api/admin/gateways/:id/deploy",
                     fields: artifactFields,
                 },
             },
@@ -5237,14 +5115,6 @@ export function addAdminFleetRoutes(router, deps) {
         }
     });
     router.use((error, _req, res, next) => {
-        if (error instanceof FleetMutationFrozenError) {
-            res.status(409).json({ error: error.message });
-            return;
-        }
-        if (error instanceof FleetMutationMaintenanceUnavailableError) {
-            res.status(503).json({ error: error.message });
-            return;
-        }
         if (error instanceof FleetMutationIdempotencyError) {
             res.status(409).json({
                 error: error.message,
