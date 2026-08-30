@@ -16,7 +16,7 @@
 # services (`gateway-edge` on GKE, `functions` on Firebase) stay on
 # Node 22 — they're separate deploy surfaces with their own runtime
 # constraints (Firebase Functions Node 24 support lags the runtime).
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim AS gateway-system
 ARG NPM_VERSION=12.0.1
 ARG FD_VERSION=10.3.0
 
@@ -60,6 +60,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── OpenClaw from private fork tarball ──────────────────────────────────────
+FROM gateway-system AS openclaw-installer
+
+ENV HOME=/home/node
+
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
 RUN set -e; \
@@ -69,38 +73,23 @@ RUN set -e; \
     test -n "$OPENCLAW_CORE_VERSION"; \
     openclaw --version; \
     rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
-      || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
-RUN rm /tmp/openclaw-fork.tgz
+      || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }; \
+    npm cache clean --force
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
 # Not in Debian repos — installed from GitHub's own apt source.
 # Used heavily by the github skill for PRs, issues, CI logs, and code review.
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
 
 # ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
 # Pre-installed so they're available for ACP runtime sessions without
 # per-boot npm install delays or network dependency.
 # Refresh stamp: bump this to force a standard-base refresh of unpinned
 # ACP CLIs without adding new packages to cattle gateways.
-ARG ACP_TOOLCHAIN_REFRESH=2026-05-28
-RUN echo "ACP toolchain refresh=${ACP_TOOLCHAIN_REFRESH}" \
-    && npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50
 
 # ── Python essentials ────────────────────────────────────────────────────────
 # Common packages for data work, scraping, and config parsing.
-RUN pip3 install --break-system-packages \
-    pyyaml beautifulsoup4 pandas matplotlib
 
 # ── Non-root user ────────────────────────────────────────────────────────────
-RUN groupadd -r node 2>/dev/null || true && \
-    useradd -r -g node -d /home/node -m node 2>/dev/null || true
-
-ENV HOME=/home/node
 
 # ── OpenClaw Mattermost plugin (EXTERNALIZED in 6.11 — install required) ──────
 # Through 6.10, `@openclaw/mattermost` shipped as a *bundled* dist extension
@@ -188,11 +177,55 @@ RUN set -e; \
         || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
     fi
 
+# Only runtime outputs cross the stage boundary. In particular, neither source
+# tarball, the npm cache, nor /home/node/.openclaw can contribute pull bytes.
+FROM gateway-system AS gateway-runtime
+
+ARG NPM_VERSION=12.0.1
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+COPY --from=openclaw-installer /usr/local/bin/openclaw /usr/local/bin/openclaw
+COPY --from=openclaw-installer --chown=node:node /opt/openclaw-codex-deps /opt/openclaw-codex-deps
+
+# ── GitHub CLI ───────────────────────────────────────────────
+# Not in Debian repos — installed from GitHub's own apt source.
+# Used heavily by the github skill for PRs, issues, CI logs, and code review.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
+# Pre-installed so they're available for ACP runtime sessions without
+# per-boot npm install delays or network dependency.
+# Refresh stamp: bump this to force a standard-base refresh of unpinned
+# ACP CLIs without adding new packages to cattle gateways.
+ARG ACP_TOOLCHAIN_REFRESH=2026-05-28
+RUN echo "ACP toolchain refresh=${ACP_TOOLCHAIN_REFRESH}" \
+    && npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50 \
+    && npm cache clean --force
+
+# ── Python essentials ───────────────────────────────────────────────
+# Common packages for data work, scraping, and config parsing.
+RUN pip3 install --break-system-packages --no-cache-dir \
+    pyyaml beautifulsoup4 pandas matplotlib
+
+# ── Non-root user ───────────────────────────────────────────────
+RUN groupadd -r node 2>/dev/null || true && \
+    useradd -r -g node -d /home/node -m node 2>/dev/null || true
+
+ENV HOME=/home/node
+
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
     && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
-    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
+    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion" \
+    && npm cache clean --force
 
 # ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
-RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
+RUN install -d -o node -g node /home/node/.npm

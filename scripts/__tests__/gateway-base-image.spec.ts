@@ -56,6 +56,14 @@ function advertisedGatewayBasePackages(): string[] {
     .filter((packageName) => packageName !== "etc.");
 }
 
+function runInstructionContaining(dockerfile: string, needle: string): string {
+  const instruction = dockerfile
+    .split(/\n(?=[A-Z]+\s)/u)
+    .find((block) => block.startsWith("RUN ") && block.includes(needle));
+  if (!instruction) throw new Error(`missing RUN instruction containing ${needle}`);
+  return instruction;
+}
+
 describe("gateway base image", () => {
   it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
     const dockerfile = readRepoFile("gateway-edge/Dockerfile");
@@ -105,6 +113,33 @@ describe("gateway base image", () => {
 
     expect(pluginInstall).toBeGreaterThan(-1);
     expect(npmUpgrade).toBeGreaterThan(pluginInstall);
+  });
+
+  it("copies only staged OpenClaw runtime outputs into the shipped stage", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+    const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-system AS gateway-runtime"));
+
+    expect(dockerfile).toContain("FROM gateway-system AS openclaw-installer");
+    expect(runtimeStage).toContain(
+      "COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw",
+    );
+    expect(runtimeStage).toContain(
+      "COPY --from=openclaw-installer --chown=node:node /opt/openclaw-codex-deps",
+    );
+    expect(runtimeStage).not.toContain("openclaw-tarball/");
+    expect(runtimeStage).not.toContain("/home/node/.openclaw");
+  });
+
+  it("does not retain package-manager caches in runtime install layers", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+
+    expect(
+      runInstructionContaining(dockerfile, "@anthropic-ai/claude-code"),
+    ).toContain("npm cache clean --force");
+    expect(
+      runInstructionContaining(dockerfile, "npm@${NPM_VERSION}"),
+    ).toContain("npm cache clean --force");
+    expect(runInstructionContaining(dockerfile, "pip3 install")).toContain("--no-cache-dir");
   });
 
   it("uses the installed OpenClaw core version when staging Codex", () => {
