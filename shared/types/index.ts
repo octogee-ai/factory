@@ -145,6 +145,18 @@ export {
 } from './display-names.js';
 
 export type {
+  DeveloperToolchainStatus,
+  DeveloperToolchainStatusArtifact,
+} from './developer-toolchain.js';
+export {
+  DEVELOPER_TOOLCHAIN_STATUS_FILE_RELATIVE_PATH,
+  DEVELOPER_TOOLCHAIN_STATUS_SCHEMA_VERSION,
+  DEVELOPER_TOOLCHAIN_STATUSES,
+  isDeveloperToolchainStatus,
+  parseDeveloperToolchainStatusArtifact,
+} from './developer-toolchain.js';
+
+export type {
   Channel,
   ChannelKind,
   ChannelMattermost,
