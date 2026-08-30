@@ -58,6 +58,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/builder-runtime-state/snapshot-urls",
   "/internal/fleet/builder-runtime-state/prune",
   "/internal/fleet/uid-for-slug",
+  "/internal/fleet/user-snapshot",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw/activity/session-context",
