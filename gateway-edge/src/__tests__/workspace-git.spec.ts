@@ -413,6 +413,76 @@ describe("platform-owned customer Git metadata", () => {
     }
   });
 
+  it("accepts only the canonical main upstream in platform-owned project metadata", async () => {
+    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-canonical-upstream-"));
+    const customersRoot = path.join(root, "customers");
+    const repo = path.join(customersRoot, "alice", "projects", "orbit");
+    const trustedGitDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
+    const configPath = path.join(trustedGitDir, "config");
+    process.env.CUSTOMERS_DIR = customersRoot;
+    try {
+      await fs.mkdir(repo, { recursive: true });
+      git(repo, ["init", "--initial-branch=main"]);
+      git(repo, ["config", "user.email", "test@example.com"]);
+      git(repo, ["config", "user.name", "test"]);
+      await fs.writeFile(path.join(repo, "README.md"), "hello\n");
+      git(repo, ["add", "."]);
+      git(repo, ["commit", "-m", "initial"]);
+      git(repo, ["remote", "add", "origin", "git@gitea:alice/orbit.git"]);
+      git(repo, ["config", "branch.main.remote", "origin"]);
+      git(repo, ["config", "branch.main.merge", "refs/heads/main"]);
+      await fs.mkdir(path.dirname(trustedGitDir), { recursive: true });
+      await fs.rename(path.join(repo, ".git"), trustedGitDir);
+      await fs.writeFile(
+        `${trustedGitDir}.octogee-trusted-v3`,
+        "octogee-customer-git-v3\ngitea:orbit\n",
+      );
+      await fs.writeFile(path.join(repo, ".git"), `gitdir: ${trustedGitDir}\n`);
+
+      await expect(gitStatus(repo)).resolves.toEqual({ ok: true, entries: [] });
+
+      git(repo, ["config", "--file", configPath, "branch.main.remote", "elsewhere"]);
+      await expect(gitStatus(repo)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INTERNAL",
+          message: expect.stringContaining("branch.main.remote"),
+        },
+      });
+
+      git(repo, ["config", "--file", configPath, "branch.main.remote", "origin"]);
+      git(repo, ["config", "--file", configPath, "--unset-all", "branch.main.merge"]);
+      await expect(gitStatus(repo)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INTERNAL",
+          message: expect.stringContaining("branch.main"),
+        },
+      });
+
+      git(repo, [
+        "config",
+        "--file",
+        configPath,
+        "branch.main.merge",
+        "refs/heads/main",
+      ]);
+      git(repo, ["config", "--file", configPath, "branch.preview.remote", "origin"]);
+      await expect(gitStatus(repo)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INTERNAL",
+          message: expect.stringContaining("branch.preview.remote"),
+        },
+      });
+    } finally {
+      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not prepare a commit while the workspace mutation lease is held", async () => {
     const customerDir = await makeRepo();
     const beforeCommit = vi.fn(async () => ({ ok: true as const }));

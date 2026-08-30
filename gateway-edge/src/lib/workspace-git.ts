@@ -849,6 +849,8 @@ function expectedCustomerRemoteUrl(
 
 const ORIGIN_URL = "remote.origin.url";
 const ORIGIN_FETCH = "remote.origin.fetch";
+const MAIN_REMOTE = "branch.main.remote";
+const MAIN_MERGE = "branch.main.merge";
 const MALFORMED_REPOSITORY = "<malformed>";
 
 async function validateTrustedMetadata(
@@ -904,24 +906,48 @@ function validRemoteConfigEntry(key: string, value: string, expectedRemote: stri
   return key === ORIGIN_FETCH && value === "+refs/heads/*:refs/remotes/origin/*";
 }
 
+function validMainBranchConfigEntry(key: string, value: string): boolean {
+  if (key === MAIN_REMOTE) return value === "origin";
+  return key === MAIN_MERGE && value === "refs/heads/main";
+}
+
+function unsafeMainBranchConfigEntry(
+  entries: readonly { key: string; value: string }[],
+): string | null {
+  let mainRemoteCount = 0;
+  let mainMergeCount = 0;
+  for (const { key, value } of entries) {
+    if (!validMainBranchConfigEntry(key, value)) return key;
+    if (key === MAIN_REMOTE) mainRemoteCount++;
+    else mainMergeCount++;
+  }
+  const hasNoMainUpstream = mainRemoteCount === 0 && mainMergeCount === 0;
+  const hasCanonicalMainUpstream = mainRemoteCount === 1 && mainMergeCount === 1;
+  return hasNoMainUpstream || hasCanonicalMainUpstream ? null : "branch.main";
+}
+
 function unsafeConfigEntry(entries: readonly string[], expectedRemote: string | null): string | null {
   let originUrlCount = 0;
   let originFetchCount = 0;
+  const mainBranchEntries: Array<{ key: string; value: string }> = [];
   for (const entry of entries) {
     const parsed = configEntryParts(entry);
     if (!parsed) return MALFORMED_REPOSITORY;
     const { key, value } = parsed;
     if (isUnsafeLocalConfigKey(key)) return key;
-    if (expectedRemote && key.startsWith("branch.")) return key;
+    if (expectedRemote && key.startsWith("branch.")) {
+      mainBranchEntries.push(parsed);
+      continue;
+    }
     if (!expectedRemote) continue;
     if (!key.startsWith("remote.")) continue;
     if (!validRemoteConfigEntry(key, value, expectedRemote)) return key;
     if (key === ORIGIN_URL) originUrlCount++;
     else originFetchCount++;
   }
-  return expectedRemote && (originUrlCount !== 1 || originFetchCount !== 1)
-    ? "remote.origin"
-    : null;
+  if (!expectedRemote) return null;
+  if (originUrlCount !== 1 || originFetchCount !== 1) return "remote.origin";
+  return unsafeMainBranchConfigEntry(mainBranchEntries);
 }
 
 async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | null> {
