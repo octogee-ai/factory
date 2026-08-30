@@ -1459,6 +1459,40 @@ async function findUidBySlug(
   return slugFromAssignedUser(user) === slug ? uid : null;
 }
 
+async function userSnapshotAdmission(
+  db: Firestore,
+  gatewayId: string,
+  podName: string | undefined,
+  uid: string,
+): Promise<{
+  data: Record<string, unknown>;
+  gatewayData: Record<string, unknown> | undefined;
+} | null> {
+  const [userSnap, gatewaySnap] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
+  ]);
+  const data = userSnap.data() as Record<string, unknown> | undefined;
+  const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
+  if (!data) return null;
+  if (stringAt(data, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId) {
+    return { data, gatewayData };
+  }
+  const slug = slugFromAssignedUser(data);
+  if (
+    !slug ||
+    !configuredBuilderCredentialBootstrapAllowed(gatewayData, {
+      gatewayId,
+      podName,
+      slug,
+      uid,
+    })
+  ) {
+    return null;
+  }
+  return { data, gatewayData };
+}
+
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
   resolveFreeTierModel: FreeTierModelResolver;
@@ -1671,19 +1705,17 @@ function installSnapshotRoutes(
       res.status(400).json({ error: "uid_required" });
       return;
     }
-    const data = await isAssignedToGateway(db, bound.gatewayId, uid);
-    if (!data) {
+    const admission = await userSnapshotAdmission(db, bound.gatewayId, bound.podName, uid);
+    if (!admission) {
       res.status(403).json(FORBIDDEN);
       return;
     }
+    const { data, gatewayData } = admission;
     const slug = slugFromAssignedUser(data);
     if (!slug) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const gatewayData = (
-      await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get()
-    ).data();
     const snapshot = await loadSnapshot(
       db,
       uid,
