@@ -38,6 +38,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
 import { BUILDER_RUNTIME_STATE_RECOVERY_TIERS } from "@octogee/shared/types/fleet-broker";
+import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-toolchain";
 import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
@@ -1948,6 +1949,23 @@ function installProvisioningRoutes(
       await db.collection("users").doc(assigned.uid).update({
         "provisioning.openclaw.status": status,
         "provisioning.status": status === "complete" ? "complete" : "in_progress",
+      });
+      res.status(204).end();
+    });
+  });
+
+  router.post("/set-toolchain-status", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const status = objectBody(req).status;
+    if (!isDeveloperToolchainStatus(status)) {
+      res.status(400).json({ error: "invalid_status" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      await db.collection("users").doc(assigned.uid).update({
+        "provisioning.openclaw.toolchain.status": status,
+        "provisioning.openclaw.toolchain.updatedAt": FieldValue.serverTimestamp(),
       });
       res.status(204).end();
     });
