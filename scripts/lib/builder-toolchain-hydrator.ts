@@ -69,6 +69,7 @@ export interface HydrateBuilderToolchainOptions {
   log?: (message: string) => void;
   now?: () => Date;
   lockStaleMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface RunBuilderToolchainHydrationLoopOptions {
@@ -79,6 +80,7 @@ export interface RunBuilderToolchainHydrationLoopOptions {
   waitAfterReady?: () => Promise<void>;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
+  shouldStop?: () => boolean;
 }
 
 const STATUS_FILE = "status.json";
@@ -281,24 +283,35 @@ async function acquireHydrationLock(
   staleMs: number,
 ): Promise<{ acquired: boolean; release: () => Promise<void> }> {
   const lockPath = path.join(root, ".hydrate.lock");
+  const ownerPath = path.join(lockPath, "owner.json");
+  const ownerToken = randomUUID();
   const attempt = async (): Promise<boolean> => {
     try {
       await fs.mkdir(lockPath, { mode: 0o700 });
-      await fs.writeFile(path.join(lockPath, "owner.json"), JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+      await fs.writeFile(ownerPath, JSON.stringify({ pid: process.pid, ownerToken }), { mode: 0o600 });
       return true;
     } catch (error) {
       if (isNodeError(error, "EEXIST")) return false;
       throw error;
     }
   };
+  const release = async (): Promise<void> => {
+    const owner = await fs.readFile(ownerPath, "utf8").then(
+      (raw) => JSON.parse(raw) as { ownerToken?: unknown },
+      () => null,
+    );
+    if (owner?.ownerToken === ownerToken) {
+      await fs.rm(lockPath, { recursive: true, force: true });
+    }
+  };
   if (await attempt()) {
-    return { acquired: true, release: () => fs.rm(lockPath, { recursive: true, force: true }) };
+    return { acquired: true, release };
   }
   const stat = await fs.stat(lockPath).catch(() => null);
   if (stat && Date.now() - stat.mtimeMs > staleMs) {
     await fs.rm(lockPath, { recursive: true, force: true });
     if (await attempt()) {
-      return { acquired: true, release: () => fs.rm(lockPath, { recursive: true, force: true }) };
+      return { acquired: true, release };
     }
   }
   return { acquired: false, release: async () => {} };
@@ -310,12 +323,15 @@ async function downloadArtifact(input: {
   expectedSha256: string;
   expectedSizeBytes: number;
   fetchArtifact: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<void> {
   let response: Response;
   try {
     response = await input.fetchArtifact(input.url, {
       redirect: "follow",
-      signal: AbortSignal.timeout(30 * 60 * 1_000),
+      signal: input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(30 * 60 * 1_000)])
+        : AbortSignal.timeout(30 * 60 * 1_000),
     });
   } catch {
     throw hydrationError("download-failed");
@@ -371,6 +387,7 @@ export async function extractToolchainArchive(
       cwd: input.destination,
       file: input.archivePath,
       gzip: true,
+      noChmod: true,
       preservePaths: false,
       strict: true,
       filter: (entryPath, entry) => {
@@ -444,7 +461,7 @@ async function validateInstalledObject(
       installed.artifact.sha256 !== expected.artifact.sha256 ||
       JSON.stringify(installed.commands) !== JSON.stringify(expected.commands)
     ) return false;
-    await validateCommandFiles(objectPath, installed, false);
+    await validateCommandFiles(objectPath, installed, true);
     return true;
   } catch {
     return false;
@@ -507,6 +524,9 @@ export async function hydrateBuilderToolchain(
         attempt: options.attempt,
       }));
     }
+    if (await fs.lstat(objectPath).catch(() => null)) {
+      await fs.rm(objectPath, { recursive: true, force: true });
+    }
 
     await persist(statusFor("downloading", now()), detailFor("downloading", {
       toolchainId: manifest.id,
@@ -521,6 +541,7 @@ export async function hydrateBuilderToolchain(
       expectedSha256: manifest.artifact.sha256,
       expectedSizeBytes: manifest.artifact.sizeBytes,
       fetchArtifact: options.fetchArtifact ?? fetch,
+      signal: options.signal,
     });
     await persist(statusFor("verifying", now()), detailFor("verifying", {
       toolchainId: manifest.id,
@@ -581,13 +602,19 @@ export async function runBuilderToolchainHydrationLoop(
   const sleep = options.sleep ?? defaultSleep;
   const initialBackoffMs = options.initialBackoffMs ?? 5_000;
   const maxBackoffMs = options.maxBackoffMs ?? 5 * 60_000;
+  const shouldStop = options.shouldStop ?? (() => false);
   let attempt = 0;
-  while (!(await options.probeInteractiveReadiness())) {
-    await options.writeStatus("pending");
+  let pendingWritten = false;
+  while (!shouldStop() && !(await options.probeInteractiveReadiness())) {
+    if (!pendingWritten) {
+      await options.writeStatus("pending");
+      pendingWritten = true;
+    }
     await sleep(1_000);
   }
+  if (shouldStop()) return;
   let backoffMs = initialBackoffMs;
-  for (;;) {
+  while (!shouldStop()) {
     attempt += 1;
     try {
       const status = await options.hydrate(attempt);
@@ -596,7 +623,7 @@ export async function runBuilderToolchainHydrationLoop(
         return;
       }
     } catch {
-      await options.writeStatus("failed");
+      if (shouldStop()) return;
     }
     await sleep(backoffMs);
     backoffMs = Math.min(backoffMs * 2, maxBackoffMs);

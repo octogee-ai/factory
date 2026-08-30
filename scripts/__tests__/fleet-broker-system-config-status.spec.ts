@@ -38,6 +38,23 @@ describe("fleet broker system config status", () => {
     );
   });
 
+  it("publishes only the assigned Builder toolchain state", async () => {
+    await createFleetBrokerClient("bender", "bender-r9")
+      .setToolchainStatus("uid-alice", "verifying");
+
+    expect(internalFetch).toHaveBeenCalledWith(
+      "http://broker/internal/fleet/set-toolchain-status",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          gatewayId: "bender",
+          uid: "uid-alice",
+          status: "verifying",
+        }),
+      }),
+    );
+  });
+
   it("requests the narrow configured-builder bootstrap against the immutable revision", async () => {
     const bootstrap = {
       uid: "uid-alice",

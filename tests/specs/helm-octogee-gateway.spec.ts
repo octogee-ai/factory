@@ -101,6 +101,25 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("renders the configured toolpack URL only into Builder gateways", () => {
+    const builder = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "builder",
+      "env.builderToolchainArtifactUrl": "https://artifacts.example/toolpack",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    const shared = findDoc(helmTemplate("octogee-gw-shared", {
+      gatewayId: "shared",
+      "env.builderToolchainArtifactUrl": "https://artifacts.example/toolpack",
+    }), "Deployment", "octogee-gateway-shared") ?? "";
+
+    expect(containerBlock(builder, "gateway")).toMatch(
+      /name:\s*OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL[\s\S]*?value:\s*"https:\/\/artifacts\.example\/toolpack"/,
+    );
+    expect(containerBlock(shared, "gateway")).not.toContain(
+      "OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL",
+    );
+  });
+
   it("provides the durable agent and workspace roots required by OpenClaw config", () => {
     const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gateway = containerBlock(deployment, "gateway");

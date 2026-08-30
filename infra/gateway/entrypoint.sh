@@ -371,6 +371,9 @@ fi
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  supervise_runner builder-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
+fi
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts

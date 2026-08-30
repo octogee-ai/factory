@@ -141,6 +141,10 @@ env:
   openclawLogLevel: "info"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
+  # Stable HTTPS broker/object URL for the optional Builder CLI toolpack.
+  # Never place a short-lived signed URL here. The image supplies and pins the
+  # separate manifest; an empty URL leaves the optional tools unavailable.
+  builderToolchainArtifactUrl: ""
 
 # Gateway storage is emptyDir for every class. Shared Barn gateways use stable
 # identities and on-demand capacity; disposable Builder gateways are Spot-first with

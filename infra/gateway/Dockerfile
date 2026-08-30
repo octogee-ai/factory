@@ -154,7 +154,11 @@ COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/inf
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/octogee /usr/local/bin/octogee
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee
+COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/libexec/octogee-builder-toolchain \
+    && rm -f /usr/local/bin/claude /usr/local/bin/codex \
+    && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
+    && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc
@@ -168,6 +172,7 @@ ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation
 ENV OPENCLAW_OFFLINE=1
+ENV CLAUDE_BIN=/usr/local/bin/claude
 
 # Build SHA — injected by Cloud Build via --build-arg
 ARG BUILD_SHA=unknown

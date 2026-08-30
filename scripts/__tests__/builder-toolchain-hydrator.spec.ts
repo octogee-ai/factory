@@ -13,6 +13,7 @@ import {
   type BuilderToolchainManifest,
 } from "../lib/builder-toolchain-hydrator.js";
 import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
+import { runBuilderToolchainCommand } from "../entrypoints/builder-toolchain-command.js";
 
 const tempRoots: string[] = [];
 
@@ -108,6 +109,28 @@ describe("Builder toolchain hydration", () => {
     })).resolves.toMatchObject({ status: "ready" });
   });
 
+  it("keeps local activation successful when remote status publication fails", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const archive = new TextEncoder().encode("immutable-toolchain");
+    const manifest = manifestFor(archive);
+    const pin = await writePinnedManifest(home, manifest);
+    const log = vi.fn();
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      artifactUrl: "https://artifacts.example.test/acp.tar.gz",
+      fetchArtifact: async () => new Response(archive),
+      extractArchive: fakeExtract,
+      publishStatus: async () => { throw new Error("broker unavailable"); },
+      log,
+    })).resolves.toMatchObject({ status: "ready" });
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/status publication failed/));
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "ready" });
+  });
+
   it("fails closed without activation when the archive digest does not match", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
@@ -174,6 +197,26 @@ describe("Builder toolchain hydration", () => {
     })).resolves.toMatchObject({ status: "pending" });
   });
 
+  it("replaces a corrupt object for the pinned digest instead of getting stuck across retries", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const archive = new TextEncoder().encode("archive");
+    const manifest = manifestFor(archive);
+    const pin = await writePinnedManifest(home, manifest);
+    const objectPath = path.join(root, "objects", `sha256-${manifest.artifact.sha256}`);
+    await fs.mkdir(objectPath, { recursive: true });
+    await fs.writeFile(path.join(objectPath, "partial"), "interrupted");
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      artifactUrl: "https://artifacts.example.test/acp.tar.gz",
+      fetchArtifact: async () => new Response(archive),
+      extractArchive: fakeExtract,
+    })).resolves.toMatchObject({ status: "ready" });
+    await expect(fs.lstat(path.join(objectPath, "partial"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("waits for interactive readiness, retries with backoff, and never turns hydration into readiness", async () => {
     const states: string[] = [];
     const probes = [false, false, true];
@@ -197,7 +240,7 @@ describe("Builder toolchain hydration", () => {
     });
 
     expect(hydrate).toHaveBeenCalledTimes(2);
-    expect(states).toEqual(["pending", "pending", "failed"]);
+    expect(states).toEqual(["pending"]);
     expect(sleeps).toEqual([1_000, 1_000, 1_000]);
   });
 });
@@ -251,5 +294,31 @@ describe("Builder toolchain stable wrappers", () => {
       exitCode: 69,
       message: expect.stringMatching(/unavailable.*download-failed/i),
     });
+  });
+
+  it("executes the active payload and preserves its exit status", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const digest = "a".repeat(64);
+    const objectPath = path.join(root, "objects", `sha256-${digest}`);
+    const manifest = manifestFor(new TextEncoder().encode("irrelevant"));
+    manifest.artifact.sha256 = digest;
+    await fs.mkdir(path.join(objectPath, "bin"), { recursive: true });
+    await fs.writeFile(path.join(objectPath, "bin", "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.writeFile(path.join(objectPath, "bin", "codex"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+    await fs.writeFile(path.join(objectPath, ".toolchain-manifest.json"), JSON.stringify(manifest));
+    await fs.symlink(`objects/sha256-${digest}`, path.join(root, "active"));
+    await fs.writeFile(path.join(root, "status.json"), JSON.stringify({
+      schemaVersion: 1,
+      status: "ready",
+      updatedAt: "2026-08-30T00:00:00.000Z",
+    }));
+    await fs.writeFile(path.join(root, "detail.json"), JSON.stringify({
+      schemaVersion: 1,
+      status: "ready",
+      artifactSha256: digest,
+    }));
+
+    await expect(runBuilderToolchainCommand(["codex"], { HOME: home })).resolves.toBe(7);
   });
 });

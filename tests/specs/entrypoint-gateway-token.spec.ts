@@ -199,7 +199,14 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).toContain("byosub-syncback");
     expect(result.runners).toContain("system-config-watch");
+    expect(result.runners).toContain("builder-toolchain-hydrator");
     expect(result.stderr).toMatch(/site-build-api disabled/);
+  });
+
+  it("does not start optional Builder tool hydration on shared gateways", () => {
+    const result = runRunnerBlock("standard", { gatewayClass: "shared" });
+    expect(result.status).toBe(0);
+    expect(result.runners).not.toContain("builder-toolchain-hydrator");
   });
 
   it("starts the db-less fleet controller and cattle side runners on standard gateways", () => {

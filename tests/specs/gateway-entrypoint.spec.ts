@@ -239,6 +239,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     const runners: Record<string, string> = {
       "fleet-controller": "5000",
       "byosub-syncback": "30000",
+      "builder-toolchain-hydrator": "30000",
     };
     for (const [runner, restartDelayMs] of Object.entries(runners)) {
       expect(entrypoint).toMatch(

@@ -14,6 +14,7 @@ import type {
 import { internalFetch } from "./internal-fetch.js";
 import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
 import type { SystemConfigObservedStatus } from "./system-config-status.js";
+import type { DeveloperToolchainStatus } from "../../shared/types/developer-toolchain.js";
 
 function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
@@ -61,6 +62,7 @@ export interface FleetBrokerClient {
     uid: string,
     status: Exclude<FleetBrokerProvisioningStatus, "">,
   ): Promise<void>;
+  setToolchainStatus(uid: string, status: DeveloperToolchainStatus): Promise<void>;
   setRepoUrl(uid: string, repoUrl: string): Promise<void>;
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
@@ -203,6 +205,13 @@ export function createFleetBrokerClient(
     },
     setProvisioningStatus(uid, status) {
       return postNoContent("/internal/fleet/set-provisioning-status", {
+        gatewayId,
+        uid,
+        status,
+      });
+    },
+    setToolchainStatus(uid, status) {
+      return postNoContent("/internal/fleet/set-toolchain-status", {
         gatewayId,
         uid,
         status,

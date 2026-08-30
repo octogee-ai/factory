@@ -104,6 +104,9 @@ describe("gateway base image", () => {
       'echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c -',
     );
     expect(dockerfile).toContain("ENV OPENCLAW_OFFLINE=1");
+    expect(dockerfile).toContain("/usr/local/libexec/octogee-builder-toolchain");
+    expect(dockerfile).toContain("ENV CLAUDE_BIN=/usr/local/bin/claude");
+    expect(dockerfile).not.toMatch(/npm install[^\n]*@anthropic-ai\/claude-code/);
   });
 
   it("upgrades the shipped npm only after OpenClaw stages its plugins", () => {
