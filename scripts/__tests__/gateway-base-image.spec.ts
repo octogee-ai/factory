@@ -265,4 +265,14 @@ describe("gateway base image", () => {
       expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
     }
   });
+
+  it("validates the extra Builder candidate against the current Mattermost schema", () => {
+    const cloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
+
+    expect(cloudbuild).toContain(
+      String.raw`\"replyToModeByChatType\":{\"direct\":\"all\"}`,
+    );
+    expect(cloudbuild).not.toContain("threadSessionScope");
+    expect(cloudbuild).toContain("openclaw config validate");
+  });
 });
