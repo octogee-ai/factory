@@ -132,6 +132,7 @@ spec:
         - podSelector:
             matchLabels:
               app: octogee-gateway
+              gateway-class: builder
       ports:
         - protocol: TCP
           port: {{ .Values.npmCacheProxy.port }}
