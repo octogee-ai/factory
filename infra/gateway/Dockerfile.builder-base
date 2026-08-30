@@ -1,4 +1,36 @@
 ARG GATEWAY_CORE_IMAGE
+FROM ${GATEWAY_CORE_IMAGE} AS builder-toolchain-validation
+
+ARG BUILDER_TOOLCHAIN_LOCK_SHA256
+
+USER root
+RUN mkdir -p /tmp/builder-toolchain-validation \
+    && chown node:node /tmp/builder-toolchain-validation
+COPY --chown=node:node infra/gateway/builder-toolchain/package.json /tmp/builder-toolchain-validation/package.json
+COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /tmp/builder-toolchain-validation/package-lock.json
+
+USER node
+WORKDIR /tmp/builder-toolchain-validation
+RUN set -eu; \
+    echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  package-lock.json" | sha256sum -c -; \
+    npm ci --omit=dev --include=optional --no-audit --no-fund --prefer-offline; \
+    CLAUDE_VERSION="$(node -p "require('./package.json').dependencies['@anthropic-ai/claude-code']")"; \
+    CODEX_VERSION="$(node -p "require('./package.json').dependencies['@openai/codex']")"; \
+    node_modules/.bin/claude --version | grep -F "$CLAUDE_VERSION"; \
+    node_modules/.bin/codex --version | grep -F "$CODEX_VERSION"; \
+    case "$(uname -m)" in x86_64) NATIVE_ARCH=x64 ;; aarch64) NATIVE_ARCH=arm64 ;; *) exit 1 ;; esac; \
+    test -x "node_modules/@anthropic-ai/claude-code-linux-$NATIVE_ARCH/claude"; \
+    test -d "node_modules/@openai/codex-linux-$NATIVE_ARCH"; \
+    if find node_modules/@anthropic-ai -mindepth 1 -maxdepth 1 -type d \
+      ! -name claude-code ! -name "claude-code-linux-$NATIVE_ARCH" | grep -q .; then \
+      echo "unexpected Anthropic platform payload" >&2; exit 1; \
+    fi; \
+    if find node_modules/@openai -mindepth 1 -maxdepth 1 -type d \
+      ! -name codex ! -name "codex-linux-$NATIVE_ARCH" | grep -q .; then \
+      echo "unexpected OpenAI platform payload" >&2; exit 1; \
+    fi; \
+    printf '%s\n' "$BUILDER_TOOLCHAIN_LOCK_SHA256" > /tmp/builder-toolchain-verified
+
 FROM ${GATEWAY_CORE_IMAGE}
 
 ARG BUILDER_TOOLCHAIN_LOCK_SHA256
@@ -8,6 +40,7 @@ USER root
 COPY --chown=node:node infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json
 COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json
 COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
+COPY --from=builder-toolchain-validation --chown=node:node /tmp/builder-toolchain-verified /octogee/toolchain/.install-verified
 
 RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
     && echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  /octogee/toolchain/package-lock.json" | sha256sum -c -

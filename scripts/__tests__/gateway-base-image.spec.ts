@@ -84,7 +84,10 @@ describe("gateway base image", () => {
   it("pins the post-readiness Builder CLIs and their npm integrity", () => {
     const packageJson = JSON.parse(
       readRepoFile("infra/gateway/builder-toolchain/package.json"),
-    ) as { dependencies: Record<string, string> };
+    ) as {
+      dependencies: Record<string, string>;
+      allowScripts: Record<string, boolean>;
+    };
     const packageLock = JSON.parse(
       readRepoFile("infra/gateway/builder-toolchain/package-lock.json"),
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
@@ -92,6 +95,9 @@ describe("gateway base image", () => {
     expect(packageJson.dependencies).toEqual({
       "@anthropic-ai/claude-code": "2.1.251",
       "@openai/codex": "0.151.0",
+    });
+    expect(packageJson.allowScripts).toEqual({
+      "@anthropic-ai/claude-code@2.1.251": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
       version: "2.1.251",
@@ -101,6 +107,13 @@ describe("gateway base image", () => {
       version: "0.151.0",
       integrity: expect.stringMatching(/^sha512-/),
     });
+
+    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
+    expect(builderBase).toContain("npm ci --omit=dev --include=optional");
+    expect(builderBase).toContain("node_modules/.bin/claude --version");
+    expect(builderBase).toContain("node_modules/.bin/codex --version");
+    expect(builderBase).toContain("unexpected Anthropic platform payload");
+    expect(builderBase).toContain("unexpected OpenAI platform payload");
   });
 
   it("keeps the OpenClaw launcher rooted beside its imported package files", () => {

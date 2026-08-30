@@ -174,7 +174,13 @@ export function parseBuilderToolchainLock(value: unknown): BuilderToolchainLock 
 function parsePackageJson(value: unknown, expected: BuilderToolchainLock): void {
   const packageJson = objectRecord(value);
   const dependencies = objectRecord(packageJson?.dependencies);
-  if (!packageJson || packageJson.private !== true || !dependencies) {
+  const allowScripts = objectRecord(packageJson?.allowScripts);
+  const claudePackage = DEPENDENCY_PACKAGES.claude;
+  const claudeApproval = `${claudePackage}@${expected.versions.claude}`;
+  if (
+    !packageJson || packageJson.private !== true || !dependencies || !allowScripts ||
+    !exactKeys(allowScripts, [claudeApproval]) || allowScripts[claudeApproval] !== true
+  ) {
     throw hydrationError("invalid-toolchain-package");
   }
   const expectedPackages = Object.values(DEPENDENCY_PACKAGES);
@@ -379,6 +385,7 @@ export async function installBuilderToolchainDependencies(
       const child = spawn(options.npmExecutable ?? NPM_EXECUTABLE, [
         "ci",
         "--omit=dev",
+        "--include=optional",
         "--no-audit",
         "--no-fund",
         "--prefer-offline",
@@ -442,11 +449,52 @@ async function validateCommandFiles(objectPath: string): Promise<void> {
   }
 }
 
+async function validateCommandVersions(
+  objectPath: string,
+  descriptor: BuilderToolchainLock,
+  signal?: AbortSignal,
+): Promise<void> {
+  await validateCommandFiles(objectPath);
+  for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
+    const commandPath = path.join(objectPath, COMMAND_PATHS[command]);
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn(commandPath, ["--version"], {
+        cwd: objectPath,
+        env: { ...process.env, NO_COLOR: "1" },
+        signal,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.once("error", reject);
+      child.once("exit", (code, exitSignal) => {
+        if (code === 0) resolve(`${stdout}\n${stderr}`);
+        else reject(new Error(`${command} --version exited ${code ?? exitSignal ?? "unknown"}`));
+      });
+    }).catch(() => {
+      throw hydrationError("invalid-command-version");
+    });
+    const escapedVersion = descriptor.versions[command].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    if (!new RegExp(`(?:^|[^0-9])${escapedVersion}(?:$|[^0-9])`, "u").test(output)) {
+      throw hydrationError("invalid-command-version");
+    }
+  }
+}
+
 function installedDescriptor(lockSha256: string): InstalledBuilderToolchainLock {
   return { schemaVersion: 1, lockSha256, commands: { ...COMMAND_PATHS } };
 }
 
-async function validateInstalledObject(objectPath: string, lockSha256: string): Promise<boolean> {
+async function validateInstalledObject(
+  objectPath: string,
+  lockSha256: string,
+  descriptor: BuilderToolchainLock,
+  signal?: AbortSignal,
+): Promise<boolean> {
   try {
     const installed = JSON.parse(
       await fs.readFile(path.join(objectPath, INSTALLED_LOCK_FILE), "utf8"),
@@ -455,7 +503,7 @@ async function validateInstalledObject(objectPath: string, lockSha256: string): 
       installed.schemaVersion !== 1 || installed.lockSha256 !== lockSha256 ||
       JSON.stringify(installed.commands) !== JSON.stringify(COMMAND_PATHS)
     ) return false;
-    await validateCommandFiles(objectPath);
+    await validateCommandVersions(objectPath, descriptor, signal);
     return true;
   } catch {
     return false;
@@ -581,7 +629,7 @@ export async function hydrateBuilderToolchain(
     lockSha256 = options.packageLockSha256;
     toolchainId = `npm-lock-${lockSha256}`;
     const objectPath = path.join(options.root, "objects", `sha256-${lockSha256}`);
-    if (await validateInstalledObject(objectPath, lockSha256)) {
+    if (await validateInstalledObject(objectPath, lockSha256, pinned.descriptor, options.signal)) {
       await activateObject(options.root, objectPath);
       return persist(statusFor("ready", runtime.now()), detailFor("ready", {
         toolchainId,
@@ -617,7 +665,7 @@ export async function hydrateBuilderToolchain(
       lockSha256,
       attempt: options.attempt,
     }));
-    await validateCommandFiles(stagingPath);
+    await validateCommandVersions(stagingPath, pinned.descriptor, options.signal);
     await fs.writeFile(
       path.join(stagingPath, INSTALLED_LOCK_FILE),
       `${JSON.stringify(installedDescriptor(lockSha256))}\n`,
@@ -625,7 +673,12 @@ export async function hydrateBuilderToolchain(
     );
     await fs.mkdir(path.dirname(objectPath), { recursive: true, mode: 0o700 });
     if (await fs.lstat(objectPath).catch(() => null)) {
-      if (!(await validateInstalledObject(objectPath, lockSha256))) {
+      if (!(await validateInstalledObject(
+        objectPath,
+        lockSha256,
+        pinned.descriptor,
+        options.signal,
+      ))) {
         throw hydrationError("invalid-existing-object");
       }
       await fs.rm(stagingPath, { recursive: true, force: true });

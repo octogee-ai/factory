@@ -82,6 +82,9 @@ async function writePinnedInputs(home: string): Promise<{
       "@anthropic-ai/claude-code": "2.1.251",
       "@openai/codex": "0.151.0",
     },
+    allowScripts: {
+      "@anthropic-ai/claude-code@2.1.251": true,
+    },
   };
   const rawLock = `${JSON.stringify(lockFixture())}\n`;
   await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson)}\n`);
@@ -92,8 +95,8 @@ async function writePinnedInputs(home: string): Promise<{
 async function fakeInstall(destination: string): Promise<void> {
   const bin = path.join(destination, "node_modules", ".bin");
   await fs.mkdir(bin, { recursive: true });
-  await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\necho '2.1.251 (Claude Code)'\n", { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.151.0'\n", { mode: 0o755 });
 }
 
 describe("Builder npm toolchain lock", () => {
@@ -164,6 +167,53 @@ describe("Builder npm toolchain lock", () => {
     expect(installDependencies).not.toHaveBeenCalled();
   });
 
+  it("requires the exact pinned Claude postinstall approval before invoking npm", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const packageJson = JSON.parse(await fs.readFile(pin.packageJsonPath, "utf8")) as {
+      allowScripts?: Record<string, boolean>;
+    };
+    packageJson.allowScripts = { "@anthropic-ai/claude-code": true };
+    await fs.writeFile(pin.packageJsonPath, `${JSON.stringify(packageJson)}\n`);
+    const installDependencies = vi.fn(fakeInstall);
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies,
+    })).rejects.toMatchObject({ reasonCode: "invalid-toolchain-package" });
+    expect(installDependencies).not.toHaveBeenCalled();
+  });
+
+  it("rejects an installed Claude placeholder instead of publishing a false ready state", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async (destination) => {
+        const bin = path.join(destination, "node_modules", ".bin");
+        await fs.mkdir(bin, { recursive: true });
+        await fs.writeFile(
+          path.join(bin, "claude"),
+          "#!/bin/sh\necho 'Error: claude native binary not installed.' >&2\nexit 1\n",
+          { mode: 0o755 },
+        );
+        await fs.writeFile(
+          path.join(bin, "codex"),
+          "#!/bin/sh\necho 'codex-cli 0.151.0'\n",
+          { mode: 0o755 },
+        );
+      },
+    })).rejects.toMatchObject({ reasonCode: "invalid-command-version" });
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
+  });
+
   it("logs proxy failure timing and falls back directly without a token", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
@@ -221,7 +271,7 @@ describe("Builder npm toolchain lock", () => {
     const witness = path.join(destination, "witness.json");
     await fs.mkdir(fakeBin);
     await fs.writeFile(path.join(fakeBin, "npm"), `#!/bin/sh
-node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON.stringify({token:process.env.NODE_AUTH_TOKEN,npmrc:fs.readFileSync(process.env.NPM_CONFIG_USERCONFIG,"utf8"),npmrcPath:process.env.NPM_CONFIG_USERCONFIG}))'
+node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON.stringify({token:process.env.NODE_AUTH_TOKEN,npmrc:fs.readFileSync(process.env.NPM_CONFIG_USERCONFIG,"utf8"),npmrcPath:process.env.NPM_CONFIG_USERCONFIG,args:process.argv.slice(1)}))' "$@"
 `, { mode: 0o755 });
     const previousPath = process.env.PATH;
     const previousWitness = process.env.WITNESS;
@@ -243,10 +293,12 @@ node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON
       token: string;
       npmrc: string;
       npmrcPath: string;
+      args: string[];
     };
     expect(observed.token).toBe("secret-token");
     expect(observed.npmrc).toContain("_authToken=${NODE_AUTH_TOKEN}");
     expect(observed.npmrc).not.toContain("secret-token");
+    expect(observed.args).toContain("--include=optional");
     await expect(fs.lstat(observed.npmrcPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
