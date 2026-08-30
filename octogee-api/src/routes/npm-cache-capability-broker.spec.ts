@@ -17,10 +17,9 @@ const POD_UID = "pod-uid-alice";
 const SA_NAME = "octogee-gw-builder-alice";
 const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const TOKEN = "n".repeat(43);
-const SOURCE_GATEWAY_ID = "shared-a";
 const LEASE_ID = "lease-alice";
 const LEASE_GENERATION = 2;
-const SOURCE_ASSIGNMENT_EPOCH = 7;
+const NOW_MS = Date.parse("2026-08-30T12:00:00.000Z");
 
 function gatewayDoc() {
   return {
@@ -101,7 +100,6 @@ function preCutoverUserDoc(input: {
     builderSubscription: { tier: "hobby", status: "active" },
     provisioning: {
       openclaw: {
-        gatewayId: SOURCE_GATEWAY_ID,
         slug: "alice",
         activationLease: {
           leaseId: LEASE_ID,
@@ -109,8 +107,6 @@ function preCutoverUserDoc(input: {
           status: "provisioning",
           targetGatewayId: GATEWAY_ID,
           builderSlug: "alice",
-          sourceGatewayId: SOURCE_GATEWAY_ID,
-          sourceAssignmentEpoch: SOURCE_ASSIGNMENT_EPOCH,
           provisionedAt: Date.parse("2026-08-30T11:55:00.000Z"),
           ...input.lease,
         },
@@ -121,56 +117,12 @@ function preCutoverUserDoc(input: {
   };
 }
 
-function sourceAssignmentDoc(overrides: Record<string, unknown> = {}) {
-  return {
-    uid: "uid-alice",
-    slug: "alice",
-    gatewayId: SOURCE_GATEWAY_ID,
-    source: "onboarding",
-    state: "serving",
-    epoch: SOURCE_ASSIGNMENT_EPOCH,
-    updatedAt: 1,
-    updatedByOperationId: null,
-    ...overrides,
-  };
-}
-
-function activationOperation(
-  status: string = "running",
-  inputOverrides: Record<string, unknown> = {},
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    kind: "migrate-customer",
-    status,
-    origin: "automatic",
-    createdBy: "glm-controller-placement-policy",
-    gatewayId: GATEWAY_ID,
-    inputUid: "uid-alice",
-    input: {
-      uid: "uid-alice",
-      builderSlug: "alice",
-      fromGatewayId: SOURCE_GATEWAY_ID,
-      toGatewayId: GATEWAY_ID,
-      source: "builder-activation-lease",
-      ...inputOverrides,
-    },
-    ...overrides,
-  };
-}
-
 function preCutoverDatabase(input: {
   gateway?: Record<string, unknown>;
   user?: Record<string, unknown>;
-  sourceAssignment?: Record<string, unknown> | null;
-  operation?: Record<string, unknown> | null;
 } = {}) {
   const targetGateway = input.gateway ?? preCutoverGatewayDoc();
   const user = input.user ?? preCutoverUserDoc();
-  const sourceAssignment = input.sourceAssignment === undefined
-    ? sourceAssignmentDoc()
-    : input.sourceAssignment;
-  const operation = input.operation === undefined ? null : input.operation;
   const snapshot = (data: Record<string, unknown> | null | undefined) => ({
     exists: data != null,
     data: () => data ?? undefined,
@@ -181,9 +133,6 @@ function preCutoverDatabase(input: {
         if (name === "users") {
           return { get: vi.fn(async () => snapshot(id === "uid-alice" ? user : null)) };
         }
-        if (name === "glmOperations") {
-          return { get: vi.fn(async () => snapshot(operation)) };
-        }
         if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
         return {
           get: vi.fn(async () => snapshot(id === GATEWAY_ID ? targetGateway : null)),
@@ -193,11 +142,6 @@ function preCutoverDatabase(input: {
             }
             return {
               get: vi.fn(async () => ({ docs: [] })),
-              doc: vi.fn((uid: string) => ({
-                get: vi.fn(async () => snapshot(
-                  id === SOURCE_GATEWAY_ID && uid === "uid-alice" ? sourceAssignment : null,
-                )),
-              })),
             };
           }),
         };
@@ -214,7 +158,7 @@ function brokerOptions(
     db: database() as never,
     npmCacheCapabilities: store,
     npmCacheRegistryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",
-    now: () => Date.parse("2026-08-30T12:00:00.000Z"),
+    now: () => NOW_MS,
     ...extra,
   };
 }
@@ -308,28 +252,17 @@ describe("npm cache capability broker", () => {
     });
   });
 
-  it("continues issuance while the exact activation migration is live", async () => {
+  it("continues issuance while the exact activation lease is live", async () => {
     const response = await requestBuilderCapability(preCutoverDatabase({
       user: preCutoverUserDoc({
-        lease: {
-          status: "activating",
-          activationOperationId: `builder-activate-${GATEWAY_ID}`,
-        },
+        lease: { status: "activating" },
       }),
-      sourceAssignment: sourceAssignmentDoc({ state: "quiescing" }),
-      operation: activationOperation(),
     }));
 
     expect(response.status).toBe(200);
   });
 
   it.each([
-    {
-      name: "stale source assignment epoch",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { sourceAssignmentEpoch: 6 } }),
-      }),
-    },
     {
       name: "failed activation lease",
       db: () => preCutoverDatabase({
@@ -361,30 +294,15 @@ describe("npm cache capability broker", () => {
       }),
     },
     {
-      name: "wrong source mirror",
+      name: "expired activation lease",
       db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ openclaw: { gatewayId: "shared-b" } }),
+        user: preCutoverUserDoc({ lease: { provisionedAt: NOW_MS - 20 * 60_000 } }),
       }),
     },
     {
-      name: "invalid source gateway identity",
+      name: "terminal active lease before assignment cutover",
       db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({
-          lease: { sourceGatewayId: "shared/a" },
-          openclaw: { gatewayId: "shared/a" },
-        }),
-      }),
-    },
-    {
-      name: "wrong source assignment owner",
-      db: () => preCutoverDatabase({
-        sourceAssignment: sourceAssignmentDoc({ uid: "uid-mallory" }),
-      }),
-    },
-    {
-      name: "non-serving source before migration",
-      db: () => preCutoverDatabase({
-        sourceAssignment: sourceAssignmentDoc({ state: "quiescing" }),
+        user: preCutoverUserDoc({ lease: { status: "active" } }),
       }),
     },
     {
@@ -418,53 +336,6 @@ describe("npm cache capability broker", () => {
       name: "retired target",
       db: () => preCutoverDatabase({
         gateway: preCutoverGatewayDoc({ desiredStatus: "retired" }),
-      }),
-    },
-    {
-      name: "activating lease without its operation",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({
-          lease: {
-            status: "activating",
-            activationOperationId: `builder-activate-${GATEWAY_ID}`,
-          },
-        }),
-      }),
-    },
-    {
-      name: "failed activation operation",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({
-          lease: {
-            status: "activating",
-            activationOperationId: `builder-activate-${GATEWAY_ID}`,
-          },
-        }),
-        operation: activationOperation("failed"),
-      }),
-    },
-    {
-      name: "succeeded activation operation before canonical cutover",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({
-          lease: {
-            status: "activating",
-            activationOperationId: `builder-activate-${GATEWAY_ID}`,
-          },
-        }),
-        operation: activationOperation("succeeded"),
-      }),
-    },
-    {
-      name: "activation operation for another source",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({
-          lease: {
-            status: "activating",
-            activationOperationId: `builder-activate-${GATEWAY_ID}`,
-          },
-        }),
-        operation: activationOperation("running", { fromGatewayId: "shared-b" }),
       }),
     },
   ])("rejects a pre-cutover capability for $name", async ({ db }) => {

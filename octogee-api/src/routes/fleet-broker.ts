@@ -65,7 +65,6 @@ import {
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
-import { GLM_OPERATIONS_COLLECTION, isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   configuredBuilderCredentialBootstrapAllowed,
   projectGatewayMutableConfigForGateway,
@@ -1310,15 +1309,7 @@ async function readAssignmentRosterForGateway(
   return assignments;
 }
 
-type PreCutoverNpmLeaseStatus = "provisioning" | "activating";
-
-interface PreCutoverNpmActivation {
-  sourceGatewayId: string;
-  sourceAssignmentEpoch: number;
-  leaseStatus: PreCutoverNpmLeaseStatus;
-  operationId: string;
-  activationOperationId: string | null;
-}
+const PRE_CUTOVER_NPM_LEASE_MAX_AGE_MS = 20 * 60_000;
 
 function npmRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -1326,23 +1317,11 @@ function npmRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function preCutoverNpmLeaseStatus(value: unknown): PreCutoverNpmLeaseStatus | null {
-  return value === "provisioning" || value === "activating" ? value : null;
-}
-
-function nonNegativeNpmInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
-}
-
-function nonNegativeNpmNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-function authorizedPreCutoverNpmUser(input: {
+function livePreCutoverNpmLease(input: {
   userData: Record<string, unknown> | undefined;
   slug: string;
   nowMs: number;
-}): { openclaw: Record<string, unknown>; lease: Record<string, unknown> } | null {
+}): Record<string, unknown> | null {
   if (!input.userData) return null;
   if (!accountAllowsInteractiveAccess(input.userData)) return null;
   if (resolveBuilderTier(input.userData, new Date(input.nowMs)) === null) return null;
@@ -1350,10 +1329,14 @@ function authorizedPreCutoverNpmUser(input: {
   const provisioning = npmRecord(input.userData.provisioning);
   const openclaw = npmRecord(provisioning?.openclaw);
   const lease = npmRecord(openclaw?.activationLease);
-  return openclaw && lease ? { openclaw, lease } : null;
+  if (!lease || (lease.status !== "provisioning" && lease.status !== "activating")) return null;
+  const provisionedAt = lease.provisionedAt;
+  if (typeof provisionedAt !== "number" || !Number.isFinite(provisionedAt)) return null;
+  const ageMs = input.nowMs - provisionedAt;
+  return ageMs >= 0 && ageMs < PRE_CUTOVER_NPM_LEASE_MAX_AGE_MS ? lease : null;
 }
 
-function preCutoverNpmLeaseIdentityMatches(input: {
+function preCutoverNpmLeaseMatches(input: {
   lease: Record<string, unknown>;
   allocation: { leaseId: string; generation: number; claimedByUid: string };
   gatewayId: string;
@@ -1367,130 +1350,6 @@ function preCutoverNpmLeaseIdentityMatches(input: {
     input.lease.builderSlug === input.slug,
     input.lease.targetGatewayId === input.gatewayId,
   ].every(Boolean);
-}
-
-function preCutoverNpmActivation(input: {
-  gatewayId: string;
-  slug: string;
-  ownerUid: string;
-  allocation: { leaseId: string; generation: number; claimedByUid: string };
-  userData: Record<string, unknown> | undefined;
-  nowMs: number;
-}): PreCutoverNpmActivation | null {
-  const user = authorizedPreCutoverNpmUser(input);
-  if (!user) return null;
-  const leaseStatus = preCutoverNpmLeaseStatus(user.lease.status);
-  const sourceGatewayId = isValidGatewayId(user.lease.sourceGatewayId)
-    ? user.lease.sourceGatewayId
-    : null;
-  const sourceAssignmentEpoch = nonNegativeNpmInteger(user.lease.sourceAssignmentEpoch);
-  const provisionedAt = nonNegativeNpmNumber(user.lease.provisionedAt);
-  const identityMatches = [
-    preCutoverNpmLeaseIdentityMatches({ ...input, lease: user.lease }),
-    leaseStatus !== null,
-    sourceGatewayId !== null,
-    sourceGatewayId !== input.gatewayId,
-    user.openclaw.gatewayId === sourceGatewayId,
-    sourceAssignmentEpoch !== null,
-    provisionedAt !== null,
-  ].every(Boolean);
-  if (!identityMatches) return null;
-  const operationId = `builder-activate-${input.gatewayId}`;
-  const activationOperationId = typeof user.lease.activationOperationId === "string"
-    ? user.lease.activationOperationId
-    : null;
-  return {
-    sourceGatewayId: sourceGatewayId!,
-    sourceAssignmentEpoch: sourceAssignmentEpoch!,
-    leaseStatus: leaseStatus!,
-    operationId,
-    activationOperationId,
-  };
-}
-
-function preCutoverNpmSourceAssignmentMatches(input: {
-  sourceAssignment: Record<string, unknown> | undefined;
-  ownerUid: string;
-  slug: string;
-  sourceGatewayId: string;
-  sourceAssignmentEpoch: number;
-  leaseStatus: PreCutoverNpmLeaseStatus;
-}): boolean {
-  const assignment = parseAssignmentDoc(input.ownerUid, input.sourceAssignment);
-  if (
-    !assignment ||
-    input.sourceAssignment?.uid !== input.ownerUid ||
-    assignment.slug !== input.slug ||
-    assignment.gatewayId !== input.sourceGatewayId ||
-    assignment.epoch !== input.sourceAssignmentEpoch
-  ) return false;
-  return input.leaseStatus === "provisioning"
-    ? assignment.state === "serving"
-    : assignment.state === "serving" ||
-      assignment.state === "quiescing" ||
-      assignment.state === "migrating";
-}
-
-function preCutoverNpmOperationMetadataMatches(input: {
-  operation: Record<string, unknown>;
-  ownerUid: string;
-  targetGatewayId: string;
-}): boolean {
-  return [
-    input.operation.kind === "migrate-customer",
-    input.operation.origin === "automatic",
-    input.operation.createdBy === "glm-controller-placement-policy",
-    input.operation.gatewayId === input.targetGatewayId,
-    input.operation.inputUid === input.ownerUid,
-  ].every(Boolean);
-}
-
-function preCutoverNpmOperationInputMatches(input: {
-  operationInput: Record<string, unknown> | null;
-  ownerUid: string;
-  slug: string;
-  sourceGatewayId: string;
-  targetGatewayId: string;
-}): boolean {
-  return [
-    input.operationInput?.uid === input.ownerUid,
-    input.operationInput?.builderSlug === input.slug,
-    input.operationInput?.fromGatewayId === input.sourceGatewayId,
-    input.operationInput?.toGatewayId === input.targetGatewayId,
-    input.operationInput?.source === "builder-activation-lease",
-  ].every(Boolean);
-}
-
-function preCutoverNpmOperationMatches(input: {
-  operationExists: boolean;
-  operation: Record<string, unknown> | undefined;
-  operationId: string;
-  ownerUid: string;
-  slug: string;
-  sourceGatewayId: string;
-  targetGatewayId: string;
-  leaseStatus: PreCutoverNpmLeaseStatus;
-  activationOperationId: string | null;
-}): boolean {
-  if (!input.operationExists) {
-    return input.leaseStatus === "provisioning" && input.activationOperationId === null;
-  }
-  const operationInput = npmRecord(input.operation?.input);
-  const liveOperation = input.operation?.status === "pending" ||
-    input.operation?.status === "running";
-  const exactOperation = [
-    input.operation !== undefined,
-    preCutoverNpmOperationMetadataMatches({
-      operation: input.operation ?? {},
-      ownerUid: input.ownerUid,
-      targetGatewayId: input.targetGatewayId,
-    }),
-    preCutoverNpmOperationInputMatches({ ...input, operationInput }),
-  ].every(Boolean);
-  if (!liveOperation || !exactOperation) return false;
-  return input.leaseStatus === "provisioning"
-    ? input.activationOperationId === null
-    : input.activationOperationId === input.operationId;
 }
 
 interface ConfiguredBuilderNpmIdentity {
@@ -1542,49 +1401,16 @@ async function preCutoverBuilderNpmSubject(input: {
   const { db, bound, slug, ownerUid } = input;
   const userSnap = await db.collection("users").doc(ownerUid).get();
   const userData = userSnap.data() as Record<string, unknown> | undefined;
-  const activation = preCutoverNpmActivation({
+  if (!userSnap.exists) return null;
+  const lease = livePreCutoverNpmLease({ userData, slug, nowMs: input.nowMs });
+  if (!lease) return null;
+  return preCutoverNpmLeaseMatches({
+    lease,
+    allocation: input.allocation,
     gatewayId: bound.gatewayId,
     slug,
     ownerUid,
-    allocation: input.allocation,
-    userData,
-    nowMs: input.nowMs,
-  });
-  if (!userSnap.exists || !userData || !activation) return null;
-  const [sourceAssignmentSnap, operationSnap] = await Promise.all([
-    db
-      .collection(GATEWAYS_COLLECTION)
-      .doc(activation.sourceGatewayId)
-      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-      .doc(ownerUid)
-      .get(),
-    db.collection(GLM_OPERATIONS_COLLECTION).doc(activation.operationId).get(),
-  ]);
-  const sourceAssignment = sourceAssignmentSnap.data() as Record<string, unknown> | undefined;
-  const operation = operationSnap.data() as Record<string, unknown> | undefined;
-  const admitted = [
-    sourceAssignmentSnap.exists,
-    preCutoverNpmSourceAssignmentMatches({
-      sourceAssignment,
-      ownerUid,
-      slug,
-      sourceGatewayId: activation.sourceGatewayId,
-      sourceAssignmentEpoch: activation.sourceAssignmentEpoch,
-      leaseStatus: activation.leaseStatus,
-    }),
-    preCutoverNpmOperationMatches({
-      operationExists: operationSnap.exists,
-      operation,
-      operationId: activation.operationId,
-      ownerUid,
-      slug,
-      sourceGatewayId: activation.sourceGatewayId,
-      targetGatewayId: bound.gatewayId,
-      leaseStatus: activation.leaseStatus,
-      activationOperationId: activation.activationOperationId,
-    }),
-  ].every(Boolean);
-  return admitted ? { uid: ownerUid } : null;
+  }) ? { uid: ownerUid } : null;
 }
 
 async function configuredBuilderNpmSubject(
