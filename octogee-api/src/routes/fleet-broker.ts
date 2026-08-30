@@ -220,7 +220,7 @@ interface FleetBrokerRouteDeps {
   npmCacheRegistryUrl?: string;
   reportNpmCacheCapabilityFailure?: (input: {
     gatewayId: string;
-    reason: "rate-limited" | "unexpected-error";
+    reason: "capacity-exhausted" | "rate-limited" | "unexpected-error";
   }) => void;
   now?: () => number;
 }

@@ -66,7 +66,8 @@ describe("npm cache proxy", () => {
       }));
     const response = await request(proxy({ authorizeCapability, fetchImpl }))
       .get("/@scope%2fpkg?write=false")
-      .set("authorization", `Bearer ${CAPABILITY}`);
+      .set("authorization", `Bearer ${CAPABILITY}`)
+      .set("if-none-match", "remote-cache");
 
     expect(response.status).toBe(200);
     expect(response.headers.etag).toBe("remote-cache");
@@ -75,7 +76,8 @@ describe("npm cache proxy", () => {
     expect(String(target)).toBe(
       "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/@scope%2fpkg?write=false",
     );
-    expect(init?.headers).toMatchObject({ authorization: `Bearer ${GOOGLE_TOKEN}` });
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${GOOGLE_TOKEN}`);
+    expect(new Headers(init?.headers).get("if-none-match")).toBe("remote-cache");
     expect(JSON.stringify(init)).not.toContain(CAPABILITY);
   });
 
@@ -96,16 +98,18 @@ describe("npm cache proxy", () => {
   });
 
   it("rejects an expired or wrong-audience authorization", async () => {
-    await request(proxy({
+    const expired = await request(proxy({
       authorizeCapability: vi.fn(async () => authorization({ expiresAt: new Date(NOW).toISOString() })),
-    })).get("/pkg").set("authorization", `Bearer ${CAPABILITY}`).expect(403);
+    })).get("/pkg").set("authorization", `Bearer ${CAPABILITY}`);
 
-    await request(proxy({
+    const wrongAudience = await request(proxy({
       authorizeCapability: vi.fn(async () => ({
         ...authorization(),
         audience: "another-service" as never,
       })),
-    })).get("/pkg").set("authorization", `Bearer ${CAPABILITY}`).expect(403);
+    })).get("/pkg").set("authorization", `Bearer ${CAPABILITY}`);
+
+    expect([expired.status, wrongAudience.status]).toEqual([403, 403]);
   });
 
   it("returns a generic upstream failure without logging either credential", async () => {
@@ -138,5 +142,13 @@ describe("npm cache proxy", () => {
       "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
     )).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send its Google credential to any other upstream", () => {
+    expect(() => createNpmCacheProxyApp({
+      authorizeCapability: vi.fn(async () => authorization()),
+      artifactRegistryAccessToken: vi.fn(async () => GOOGLE_TOKEN),
+      upstreamRegistryUrl: "https://attacker.example/npm/",
+    })).toThrow("invalid npm cache upstream registry");
   });
 });

@@ -373,6 +373,8 @@ export async function installBuilderToolchainDependencies(
   ].join("\n");
   await fs.writeFile(npmrcPath, npmrc, { mode: 0o600 });
   try {
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_AUTH_TOKEN;
     await new Promise<void>((resolve, reject) => {
       const child = spawn(options.npmExecutable ?? NPM_EXECUTABLE, [
         "ci",
@@ -383,7 +385,7 @@ export async function installBuilderToolchainDependencies(
       ], {
         cwd: destination,
         env: {
-          ...process.env,
+          ...childEnv,
           NPM_CONFIG_CACHE: options.cachePath,
           NPM_CONFIG_USERCONFIG: npmrcPath,
           ...(options.authToken ? { NODE_AUTH_TOKEN: options.authToken } : {}),

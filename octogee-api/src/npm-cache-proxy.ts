@@ -12,12 +12,15 @@ const PORT = Number(process.env.PORT ?? "3005");
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
 const OCTOGEE_API_URL = process.env.OCTOGEE_API_URL ??
   `http://octogee-api.${NAMESPACE}.svc.cluster.local:3001`;
-const UPSTREAM_REGISTRY_URL = process.env.NPM_CACHE_UPSTREAM_REGISTRY_URL ??
-  "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/";
+const UPSTREAM_REGISTRY_URL = process.env.NPM_CACHE_UPSTREAM_REGISTRY_URL;
+if (!UPSTREAM_REGISTRY_URL) {
+  throw new Error("NPM_CACHE_UPSTREAM_REGISTRY_URL is required");
+}
 
-const authClient = new GoogleAuth({
+const auth = new GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-}).getClient();
+});
+let authClient: ReturnType<typeof auth.getClient> | undefined;
 
 async function authorizeCapability(token: string): Promise<NpmCacheCapabilityAuthorization | null> {
   const response = await internalFetch(
@@ -39,6 +42,10 @@ async function authorizeCapability(token: string): Promise<NpmCacheCapabilityAut
 }
 
 async function artifactRegistryAccessToken(): Promise<string> {
+  authClient ??= auth.getClient().catch((error) => {
+    authClient = undefined;
+    throw error;
+  });
   const client = await authClient;
   const result = await client.getAccessToken();
   const token = typeof result === "string" ? result : result.token;

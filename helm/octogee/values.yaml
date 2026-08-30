@@ -336,7 +336,7 @@ npmCacheProxy:
   port: 3005
   serviceAccountName: octogee-npm-cache-proxy
   gcpServiceAccount: octogee-npm-cache-proxy@octogee.iam.gserviceaccount.com
-  upstreamRegistryUrl: https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/
+  upstreamRegistryUrl: ""
   resources:
     requests:
       cpu: 25m

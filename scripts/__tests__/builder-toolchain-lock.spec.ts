@@ -249,4 +249,31 @@ node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON
     expect(observed.npmrc).not.toContain("secret-token");
     await expect(fs.lstat(observed.npmrcPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("removes an ambient npm token from the unauthenticated direct fallback child", async () => {
+    const destination = await tempRoot();
+    const fakeNpm = path.join(destination, "npm");
+    const witness = path.join(destination, "witness.json");
+    await fs.writeFile(fakeNpm, `#!/bin/sh
+node -e 'require("node:fs").writeFileSync(process.env.WITNESS, JSON.stringify({token:process.env.NODE_AUTH_TOKEN}))'
+`, { mode: 0o755 });
+    const previousToken = process.env.NODE_AUTH_TOKEN;
+    const previousWitness = process.env.WITNESS;
+    process.env.NODE_AUTH_TOKEN = "ambient-secret";
+    process.env.WITNESS = witness;
+    try {
+      await installBuilderToolchainDependencies(destination, {
+        cachePath: path.join(destination, "cache"),
+        registryUrl: "https://registry.npmjs.org/",
+        npmExecutable: fakeNpm,
+      });
+    } finally {
+      if (previousToken === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = previousToken;
+      if (previousWitness === undefined) delete process.env.WITNESS;
+      else process.env.WITNESS = previousWitness;
+    }
+
+    expect(JSON.parse(await fs.readFile(witness, "utf8"))).toEqual({});
+  });
 });

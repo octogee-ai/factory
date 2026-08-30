@@ -10,6 +10,9 @@ global:
   deploymentTargetId: "__TARGET_ID__"
   deploymentProjectId: "__FIREBASE_PROJECT__"
 
+npmCacheProxy:
+  enabled: false
+
 cloud-sql-proxy:
   connectionName: "__CLOUD_SQL_CONNECTION__"
   usePrivateIp: true

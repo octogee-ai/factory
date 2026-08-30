@@ -16,6 +16,9 @@ const MAX_REQUESTS_PER_CAPABILITY = 4_096;
 const MAX_CONCURRENT_REQUESTS_PER_CAPABILITY = 16;
 const MAX_GLOBAL_UPSTREAM_REQUESTS = 128;
 const MAX_REQUEST_TARGET_LENGTH = 4_096;
+const CACHE_CONTROL_HEADER = "Cache-Control";
+const NO_STORE = "no-store";
+const REQUEST_TARGET_BASE = "https://npm-cache-proxy.invalid";
 
 interface CachedAuthorization {
   authorization: NpmCacheCapabilityAuthorization;
@@ -169,12 +172,12 @@ export function safeRegistryTarget(
   }
   let requestTarget: URL;
   try {
-    requestTarget = new URL(rawTarget, "http://npm-cache-proxy.invalid");
+    requestTarget = new URL(rawTarget, REQUEST_TARGET_BASE);
   } catch {
     return null;
   }
   const upstream = new URL(upstreamRegistryUrl);
-  if (requestTarget.origin !== "http://npm-cache-proxy.invalid") return null;
+  if (requestTarget.origin !== REQUEST_TARGET_BASE) return null;
   if (requestTarget.username || requestTarget.password || requestTarget.hash) return null;
   const target = new URL(upstream);
   target.pathname = `${upstream.pathname.replace(/\/$/u, "")}${requestTarget.pathname}`;
@@ -182,13 +185,33 @@ export function safeRegistryTarget(
   return target;
 }
 
+function validatedUpstreamRegistryUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("invalid npm cache upstream registry");
+  }
+  if (
+    url.protocol !== "https:" || url.hostname !== "us-central1-npm.pkg.dev" ||
+    url.port || url.username || url.password || url.search || url.hash ||
+    url.pathname !== "/octogee/octogee-npm-cache/"
+  ) {
+    throw new Error("invalid npm cache upstream registry");
+  }
+  return url.toString();
+}
+
 const FORWARDED_RESPONSE_HEADERS = [
   "cache-control",
+  "accept-ranges",
   "content-disposition",
   "content-length",
+  "content-range",
   "content-type",
   "etag",
   "last-modified",
+  "vary",
 ] as const;
 
 function proxyStatusForFailure(failure: CapabilityLeaseFailure): number {
@@ -209,6 +232,206 @@ export interface NpmCacheProxyEvent {
   upstreamAgeSeconds?: number;
 }
 
+interface NpmCacheProxyRuntime {
+  artifactRegistryAccessToken: () => Promise<string>;
+  fetchImpl: typeof fetch;
+  now: () => number;
+  report: (event: NpmCacheProxyEvent) => void;
+  upstreamRegistryUrl: string;
+}
+
+class UpstreamCapacity {
+  #active = 0;
+
+  acquire(): boolean {
+    if (this.#active >= MAX_GLOBAL_UPSTREAM_REQUESTS) return false;
+    this.#active += 1;
+    return true;
+  }
+
+  release(): void {
+    this.#active -= 1;
+  }
+}
+
+function rejectRegistryRequest(
+  res: Response,
+  runtime: Pick<NpmCacheProxyRuntime, "now" | "report">,
+  input: {
+    startedAtMs: number;
+    status: number;
+    reason: string;
+    authorizationMs?: number;
+  },
+): void {
+  res.set(CACHE_CONTROL_HEADER, NO_STORE).status(input.status).end();
+  runtime.report({
+    outcome: "rejected",
+    status: input.status,
+    durationMs: runtime.now() - input.startedAtMs,
+    reason: input.reason,
+    ...(input.authorizationMs === undefined
+      ? {}
+      : { authorizationMs: input.authorizationMs }),
+  });
+}
+
+function registryTarget(req: Request, upstreamRegistryUrl: string): {
+  target: URL | null;
+  invalidStatus: number;
+} {
+  const readMethod = req.method === "GET" || req.method === "HEAD";
+  return {
+    target: readMethod ? safeRegistryTarget(req.originalUrl, upstreamRegistryUrl) : null,
+    invalidStatus: readMethod ? 404 : 405,
+  };
+}
+
+function upstreamRequestHeaders(req: Request, accessToken: string): Headers {
+  const headers = new Headers({
+    authorization: `Bearer ${accessToken}`,
+    accept: req.get("accept") ?? "application/json",
+    "accept-encoding": "identity",
+    "user-agent": "octogee-npm-cache-proxy/1",
+  });
+  for (const name of ["if-modified-since", "if-none-match", "range"] as const) {
+    const value = req.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
+}
+
+function upstreamAgeSeconds(response: globalThis.Response): number | undefined {
+  if (!response.headers.has("age")) return undefined;
+  const age = Number(response.headers.get("age"));
+  return Number.isFinite(age) ? age : undefined;
+}
+
+async function forwardRegistryRequest(input: {
+  req: Request;
+  res: Response;
+  target: URL;
+  lease: CapabilityLease;
+  authorizationMs: number;
+  startedAtMs: number;
+  capacity: UpstreamCapacity;
+  runtime: NpmCacheProxyRuntime;
+}): Promise<void> {
+  const { req, res, lease, runtime } = input;
+  try {
+    const credentialStartedAtMs = runtime.now();
+    const accessToken = await runtime.artifactRegistryAccessToken();
+    const artifactCredentialMs = runtime.now() - credentialStartedAtMs;
+    if (!accessToken) throw new Error("artifact registry access token unavailable");
+    const upstreamStartedAtMs = runtime.now();
+    const upstream = await runtime.fetchImpl(input.target, {
+      method: req.method,
+      headers: upstreamRequestHeaders(req, accessToken),
+      redirect: "follow",
+      signal: AbortSignal.timeout(60_000),
+    });
+    const upstreamHeadersMs = runtime.now() - upstreamStartedAtMs;
+    res.status(upstream.status);
+    for (const header of FORWARDED_RESPONSE_HEADERS) {
+      const value = upstream.headers.get(header);
+      if (value) res.set(header, value);
+    }
+    if (req.method === "HEAD" || !upstream.body) {
+      res.end();
+    } else {
+      await pipeline(
+        Readable.from(upstream.body as unknown as AsyncIterable<Uint8Array>),
+        res,
+      );
+    }
+    runtime.report({
+      outcome: "success",
+      status: upstream.status,
+      durationMs: runtime.now() - input.startedAtMs,
+      authorizationCache: lease.authorizationCache,
+      authorizationMs: input.authorizationMs,
+      artifactCredentialMs,
+      upstreamHeadersMs,
+      upstreamAgeSeconds: upstreamAgeSeconds(upstream),
+    });
+  } catch (error) {
+    if (!res.headersSent) {
+      res.set(CACHE_CONTROL_HEADER, NO_STORE)
+        .status(502)
+        .json({ error: "npm_cache_upstream_unavailable" });
+    } else {
+      res.destroy();
+    }
+    runtime.report({
+      outcome: "upstream-error",
+      status: 502,
+      durationMs: runtime.now() - input.startedAtMs,
+      authorizationCache: lease.authorizationCache,
+      authorizationMs: input.authorizationMs,
+      reason: error instanceof Error ? error.name : "Error",
+    });
+  } finally {
+    input.capacity.release();
+    lease.release();
+  }
+}
+
+function registryRequestHandler(input: {
+  gate: CapabilityGate;
+  capacity: UpstreamCapacity;
+  runtime: NpmCacheProxyRuntime;
+}): (req: Request, res: Response) => Promise<void> {
+  return async (req, res) => {
+    const startedAtMs = input.runtime.now();
+    const { target, invalidStatus } = registryTarget(req, input.runtime.upstreamRegistryUrl);
+    if (!target) {
+      rejectRegistryRequest(res, input.runtime, {
+        startedAtMs,
+        status: invalidStatus,
+        reason: "target",
+      });
+      return;
+    }
+    const token = bearerToken(req);
+    if (!token) {
+      rejectRegistryRequest(res, input.runtime, { startedAtMs, status: 403, reason: "auth" });
+      return;
+    }
+    const authorizationStartedAtMs = input.runtime.now();
+    const lease = await input.gate.acquire(token);
+    const authorizationMs = input.runtime.now() - authorizationStartedAtMs;
+    if (typeof lease === "string") {
+      rejectRegistryRequest(res, input.runtime, {
+        startedAtMs,
+        status: proxyStatusForFailure(lease),
+        reason: lease,
+        authorizationMs,
+      });
+      return;
+    }
+    if (!input.capacity.acquire()) {
+      lease.release();
+      rejectRegistryRequest(res, input.runtime, {
+        startedAtMs,
+        status: 429,
+        reason: "capacity",
+        authorizationMs,
+      });
+      return;
+    }
+    await forwardRegistryRequest({
+      req,
+      res,
+      target,
+      lease,
+      authorizationMs,
+      startedAtMs,
+      capacity: input.capacity,
+      runtime: input.runtime,
+    });
+  };
+}
+
 export function createNpmCacheProxyApp(options: {
   authorizeCapability: (token: string) => Promise<NpmCacheCapabilityAuthorization | null>;
   artifactRegistryAccessToken: () => Promise<string>;
@@ -218,117 +441,22 @@ export function createNpmCacheProxyApp(options: {
   reportEvent?: (event: NpmCacheProxyEvent) => void;
 }): express.Express {
   const now = options.now ?? Date.now;
-  const upstreamRegistryUrl = new URL(options.upstreamRegistryUrl).toString();
+  const upstreamRegistryUrl = validatedUpstreamRegistryUrl(options.upstreamRegistryUrl);
   const gate = new CapabilityGate({ authorize: options.authorizeCapability, now });
-  let activeUpstreamRequests = 0;
-  const report = options.reportEvent ?? (() => undefined);
+  const runtime: NpmCacheProxyRuntime = {
+    artifactRegistryAccessToken: options.artifactRegistryAccessToken,
+    fetchImpl: options.fetchImpl ?? fetch,
+    now,
+    report: options.reportEvent ?? (() => undefined),
+    upstreamRegistryUrl,
+  };
   const app = express();
   app.disable("x-powered-by");
 
   app.get("/healthz", (_req, res) => {
-    res.set("Cache-Control", "no-store").status(200).json({ status: "ok" });
+    res.set(CACHE_CONTROL_HEADER, NO_STORE).status(200).json({ status: "ok" });
   });
-
-  app.use(async (req: Request, res: Response) => {
-    const startedAtMs = now();
-    const target = req.method === "GET" || req.method === "HEAD"
-      ? safeRegistryTarget(req.originalUrl, upstreamRegistryUrl)
-      : null;
-    if (!target) {
-      const status = req.method === "GET" || req.method === "HEAD" ? 404 : 405;
-      res.set("Cache-Control", "no-store").status(status).end();
-      report({ outcome: "rejected", status, durationMs: now() - startedAtMs, reason: "target" });
-      return;
-    }
-    const token = bearerToken(req);
-    if (!token) {
-      res.set("Cache-Control", "no-store").status(403).end();
-      report({ outcome: "rejected", status: 403, durationMs: now() - startedAtMs, reason: "auth" });
-      return;
-    }
-    const authorizationStartedAtMs = now();
-    const lease = await gate.acquire(token);
-    const authorizationMs = now() - authorizationStartedAtMs;
-    if (typeof lease === "string") {
-      const status = proxyStatusForFailure(lease);
-      res.set("Cache-Control", "no-store").status(status).end();
-      report({
-        outcome: "rejected",
-        status,
-        durationMs: now() - startedAtMs,
-        authorizationMs,
-        reason: lease,
-      });
-      return;
-    }
-    if (activeUpstreamRequests >= MAX_GLOBAL_UPSTREAM_REQUESTS) {
-      lease.release();
-      res.set("Cache-Control", "no-store").status(429).end();
-      report({ outcome: "rejected", status: 429, durationMs: now() - startedAtMs, reason: "capacity" });
-      return;
-    }
-
-    activeUpstreamRequests += 1;
-    try {
-      const credentialStartedAtMs = now();
-      const accessToken = await options.artifactRegistryAccessToken();
-      const artifactCredentialMs = now() - credentialStartedAtMs;
-      if (!accessToken) throw new Error("artifact registry access token unavailable");
-      const upstreamStartedAtMs = now();
-      const upstream = await (options.fetchImpl ?? fetch)(target, {
-        method: req.method,
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          accept: req.get("accept") ?? "application/json",
-          "accept-encoding": "identity",
-          "user-agent": "octogee-npm-cache-proxy/1",
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(60_000),
-      });
-      const upstreamHeadersMs = now() - upstreamStartedAtMs;
-      res.status(upstream.status);
-      for (const header of FORWARDED_RESPONSE_HEADERS) {
-        const value = upstream.headers.get(header);
-        if (value) res.set(header, value);
-      }
-      if (req.method === "HEAD" || !upstream.body) {
-        res.end();
-      } else {
-        await pipeline(
-          Readable.from(upstream.body as unknown as AsyncIterable<Uint8Array>),
-          res,
-        );
-      }
-      report({
-        outcome: "success",
-        status: upstream.status,
-        durationMs: now() - startedAtMs,
-        authorizationCache: lease.authorizationCache,
-        authorizationMs,
-        artifactCredentialMs,
-        upstreamHeadersMs,
-        upstreamAgeSeconds: Number(upstream.headers.get("age")) || undefined,
-      });
-    } catch (error) {
-      if (!res.headersSent) {
-        res.set("Cache-Control", "no-store").status(502).json({ error: "npm_cache_upstream_unavailable" });
-      } else {
-        res.destroy();
-      }
-      report({
-        outcome: "upstream-error",
-        status: 502,
-        durationMs: now() - startedAtMs,
-        authorizationCache: lease.authorizationCache,
-        authorizationMs,
-        reason: error instanceof Error ? error.name : "Error",
-      });
-    } finally {
-      activeUpstreamRequests -= 1;
-      lease.release();
-    }
-  });
+  app.use(registryRequestHandler({ gate, capacity: new UpstreamCapacity(), runtime }));
 
   return app;
 }

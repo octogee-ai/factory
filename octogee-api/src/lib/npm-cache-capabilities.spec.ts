@@ -77,4 +77,30 @@ describe("npm cache capabilities", () => {
     expect(store.authorize({ token: TOKEN_B, nowMs: NOW + NPM_CACHE_CAPABILITY_ISSUE_INTERVAL_MS }))
       .not.toBeNull();
   });
+
+  it("bounds live capabilities and reclaims expired entries", () => {
+    const tokens = [TOKEN_A, TOKEN_B];
+    const store = new InMemoryNpmCacheCapabilityStore(() => tokens.shift()!, 1);
+    const first = store.issue({
+      subject,
+      registryUrl: npmCacheProxyRegistryUrl(),
+      nowMs: NOW,
+    });
+    const bob = { ...subject, uid: "uid-bob", slug: "bob", podUid: "pod-bob" };
+
+    expect(() => store.issue({
+      subject: bob,
+      registryUrl: npmCacheProxyRegistryUrl(),
+      nowMs: NOW + NPM_CACHE_CAPABILITY_ISSUE_INTERVAL_MS,
+    })).toThrowError(expect.objectContaining({ reasonCode: "capacity-exhausted" }));
+
+    const second = store.issue({
+      subject: bob,
+      registryUrl: npmCacheProxyRegistryUrl(),
+      nowMs: NOW + NPM_CACHE_CAPABILITY_TTL_MS,
+    });
+    expect(second.token).toBe(TOKEN_B);
+    expect(store.authorize({ token: first.token, nowMs: NOW + NPM_CACHE_CAPABILITY_TTL_MS }))
+      .toBeNull();
+  });
 });

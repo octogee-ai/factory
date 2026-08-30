@@ -6,6 +6,7 @@ export const NPM_CACHE_CAPABILITY_AUDIENCE = "octogee-npm-cache-proxy";
 export const NPM_CACHE_CAPABILITY_TTL_MS = 10 * 60_000;
 export const NPM_CACHE_CAPABILITY_MAX_REQUESTS = 4_096;
 export const NPM_CACHE_CAPABILITY_ISSUE_INTERVAL_MS = 5_000;
+export const NPM_CACHE_CAPABILITY_MAX_STORED = 4_096;
 
 export interface NpmCacheCapabilitySubject {
   gatewayId: string;
@@ -28,7 +29,7 @@ interface StoredCapability {
 }
 
 export class NpmCacheCapabilityIssueError extends Error {
-  readonly reasonCode: "rate-limited";
+  readonly reasonCode: "capacity-exhausted" | "rate-limited";
 
   constructor(reasonCode: NpmCacheCapabilityIssueError["reasonCode"]) {
     super(`npm cache capability issue failed: ${reasonCode}`);
@@ -61,9 +62,27 @@ export class InMemoryNpmCacheCapabilityStore implements NpmCacheCapabilityStore 
   readonly #capabilities = new Map<string, StoredCapability>();
   readonly #activeBySubject = new Map<string, string>();
   readonly #randomToken: () => string;
+  readonly #maxStored: number;
 
-  constructor(randomToken: () => string = () => randomBytes(32).toString("base64url")) {
+  constructor(
+    randomToken: () => string = () => randomBytes(32).toString("base64url"),
+    maxStored = NPM_CACHE_CAPABILITY_MAX_STORED,
+  ) {
     this.#randomToken = randomToken;
+    this.#maxStored = maxStored;
+  }
+
+  #delete(digest: string, stored: StoredCapability): void {
+    this.#capabilities.delete(digest);
+    if (this.#activeBySubject.get(subjectKey(stored.subject)) === digest) {
+      this.#activeBySubject.delete(subjectKey(stored.subject));
+    }
+  }
+
+  #pruneExpired(nowMs: number): void {
+    for (const [digest, stored] of this.#capabilities) {
+      if (stored.expiresAtMs <= nowMs) this.#delete(digest, stored);
+    }
   }
 
   issue(input: {
@@ -72,6 +91,7 @@ export class InMemoryNpmCacheCapabilityStore implements NpmCacheCapabilityStore 
     nowMs?: number;
   }): FleetBrokerNpmRegistryCredentials {
     const nowMs = input.nowMs ?? Date.now();
+    this.#pruneExpired(nowMs);
     const key = subjectKey(input.subject);
     const previousDigest = this.#activeBySubject.get(key);
     const previous = previousDigest ? this.#capabilities.get(previousDigest) : undefined;
@@ -79,12 +99,16 @@ export class InMemoryNpmCacheCapabilityStore implements NpmCacheCapabilityStore 
       throw new NpmCacheCapabilityIssueError("rate-limited");
     }
     if (previousDigest) this.#capabilities.delete(previousDigest);
+    if (this.#capabilities.size >= this.#maxStored) {
+      throw new NpmCacheCapabilityIssueError("capacity-exhausted");
+    }
 
     const token = this.#randomToken();
     if (!/^[A-Za-z0-9_-]{43,128}$/u.test(token)) {
       throw new Error("invalid npm cache capability entropy");
     }
     const digest = npmCacheCapabilityDigest(token);
+    if (this.#capabilities.has(digest)) throw new Error("npm cache capability collision");
     const expiresAtMs = nowMs + NPM_CACHE_CAPABILITY_TTL_MS;
     this.#capabilities.set(digest, {
       subject: { ...input.subject },
@@ -110,8 +134,7 @@ export class InMemoryNpmCacheCapabilityStore implements NpmCacheCapabilityStore 
     if (!stored) return null;
     const nowMs = input.nowMs ?? Date.now();
     if (stored.expiresAtMs <= nowMs) {
-      this.#capabilities.delete(digest);
-      this.#activeBySubject.delete(subjectKey(stored.subject));
+      this.#delete(digest, stored);
       return null;
     }
     return {

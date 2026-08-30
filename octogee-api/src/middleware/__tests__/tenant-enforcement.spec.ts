@@ -146,6 +146,7 @@ function app(opts: {
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
   a.post("/internal/product-analytics/events", enforcement, handler);
+  a.post("/internal/fleet/npm-cache-authorize", enforcement, handler);
   a.post("/internal/notifications/social", enforcement, handler);
   a.post("/api/notifications/ingest", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
@@ -264,6 +265,25 @@ describe("tenant enforcement middleware", () => {
     expect(productEvent.status).toBe(200);
     expect(billing.status).toBe(403);
     expect(cronProductEvent.status).toBe(403);
+  });
+
+  it("allows the npm cache proxy only on capability authorization", async () => {
+    const proxy = { kind: "platform", actor: "npm-cache-proxy" } as const;
+    const authorize = await request(app({ boundTenant: proxy }))
+      .post("/internal/fleet/npm-cache-authorize")
+      .send({ token: "opaque" });
+    const productEvent = await request(app({ boundTenant: proxy }))
+      .post("/internal/product-analytics/events")
+      .send({ uid: "uid-alice" });
+    const cronAuthorize = await request(app({
+      boundTenant: { kind: "platform", actor: "cron" },
+    }))
+      .post("/internal/fleet/npm-cache-authorize")
+      .send({ token: "opaque" });
+
+    expect(authorize.status).toBe(200);
+    expect(productEvent.status).toBe(403);
+    expect(cronAuthorize.status).toBe(403);
   });
 
   it("does not honor a legacy X-Internal-Service-Key", async () => {
