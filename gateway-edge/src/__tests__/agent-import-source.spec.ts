@@ -76,7 +76,16 @@ async function localArchive(repo: string): Promise<Buffer> {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const absolute = path.join(dir, entry.name);
         if (entry.isDirectory()) visit(absolute);
-        else zip.file(`git/${path.relative(path.join(repo, ".git"), absolute).split(path.sep).join("/")}`, fs.readFileSync(absolute));
+        else {
+          const relative = path.relative(path.join(repo, ".git"), absolute).split(path.sep).join("/");
+          try {
+            const contents = fs.readFileSync(absolute);
+            if (!entry.name.endsWith(".lock")) zip.file(`git/${relative}`, contents);
+          } catch (error) {
+            if (entry.name.endsWith(".lock") && (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+          }
+        }
       }
     };
     visit(root);
@@ -167,6 +176,16 @@ describe("local agent import archive", () => {
       preview.cleanup();
       apply.cleanup();
     }
+  });
+
+  it("omits transient Git lock files from the local archive", async () => {
+    const source = sourceRepo();
+    fs.writeFileSync(path.join(source, ".git", "objects", "maintenance.lock"), "temporary maintenance state");
+
+    const archive = await localArchive(source);
+    const zip = await JSZip.loadAsync(archive);
+
+    expect(zip.file("git/objects/maintenance.lock")).toBeNull();
   });
 
   it("drops forbidden archive entries while retaining safe workspace files", async () => {
