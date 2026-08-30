@@ -31,12 +31,14 @@ function proxy(overrides: {
   fetchImpl?: typeof fetch;
   reportEvent?: (event: NpmCacheProxyEvent) => void;
   now?: () => number;
+  upstreamRegistryUrl?: string;
 } = {}) {
   return createNpmCacheProxyApp({
     authorizeCapability: overrides.authorizeCapability ?? vi.fn(async () => authorization()),
     artifactRegistryAccessToken: overrides.artifactRegistryAccessToken ??
       vi.fn(async () => GOOGLE_TOKEN),
-    upstreamRegistryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+    upstreamRegistryUrl: overrides.upstreamRegistryUrl ??
+      "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
     fetchImpl: overrides.fetchImpl ?? vi.fn(async () => new Response("ok", {
       headers: { "content-type": "text/plain", etag: "cache-hit" },
     })),
@@ -149,6 +151,23 @@ describe("npm cache proxy", () => {
       authorizeCapability: vi.fn(async () => authorization()),
       artifactRegistryAccessToken: vi.fn(async () => GOOGLE_TOKEN),
       upstreamRegistryUrl: "https://attacker.example/npm/",
+    })).toThrow("invalid npm cache upstream registry");
+  });
+
+  it("accepts only the named TEST validation repository outside Central", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("ok"));
+    const upstreamRegistryUrl =
+      "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/";
+
+    await request(proxy({ fetchImpl, upstreamRegistryUrl }))
+      .get("/@scope%2fpkg")
+      .set("authorization", `Bearer ${CAPABILITY}`)
+      .expect(200);
+
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${upstreamRegistryUrl}@scope%2fpkg`);
+    expect(() => proxy({
+      upstreamRegistryUrl:
+        "https://us-central1-npm.pkg.dev/octogee-test/another-repository/",
     })).toThrow("invalid npm cache upstream registry");
   });
 });

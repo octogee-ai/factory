@@ -19,6 +19,10 @@ const MAX_REQUEST_TARGET_LENGTH = 4_096;
 const CACHE_CONTROL_HEADER = "Cache-Control";
 const NO_STORE = "no-store";
 const REQUEST_TARGET_BASE = "https://npm-cache-proxy.invalid";
+const ALLOWED_UPSTREAM_REGISTRY_URLS = new Set([
+  "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+  "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/",
+]);
 
 interface CachedAuthorization {
   authorization: NpmCacheCapabilityAuthorization;
@@ -193,9 +197,9 @@ function validatedUpstreamRegistryUrl(raw: string): string {
     throw new Error("invalid npm cache upstream registry");
   }
   if (
-    url.protocol !== "https:" || url.hostname !== "us-central1-npm.pkg.dev" ||
+    !ALLOWED_UPSTREAM_REGISTRY_URLS.has(url.toString()) ||
     url.port || url.username || url.password || url.search || url.hash ||
-    url.pathname !== "/octogee/octogee-npm-cache/"
+    !url.pathname.endsWith("/")
   ) {
     throw new Error("invalid npm cache upstream registry");
   }
