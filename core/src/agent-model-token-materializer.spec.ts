@@ -417,6 +417,30 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
+  it("hands a large roster to openclaw in one bounded plan with one target per credential identity", async () => {
+    const agentIds = Array.from({ length: 40 }, (_, index) => `octogee-user${index}-coach`);
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
+
+    const result = await materializeBrokerProfilesForAgents(agentIds, {
+      agentsDir,
+      openRouter,
+      openAi,
+      secretsApply,
+    });
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(plans).toHaveLength(1);
+    const targets = (plans[0] as {
+      targets: Array<{ agentId: string; ref: { id: string } }>;
+    }).targets;
+    expect(targets).toHaveLength(agentIds.length * 3);
+    expect(new Set(targets.map((target) => `${target.agentId}:${target.ref.id}`))).toHaveLength(
+      targets.length,
+    );
+    expect(result).toEqual({ materialized: agentIds.length, deferred: [] });
+  });
+
   it("never writes the auth-profile store itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
     const secretsApply = {
