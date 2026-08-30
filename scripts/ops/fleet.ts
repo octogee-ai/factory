@@ -48,6 +48,7 @@ import { readReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-st
 import {
   createAdminFleetClient,
   exchangeAdminFleetCustomToken,
+  resolveFirebaseWebApiKey,
   type AdminFleetClient,
   type AdminFleetRequest,
 } from "../lib/admin-fleet-client.js";
@@ -297,8 +298,6 @@ const VERBS: readonly VerbHelp[] = [
 
 const verbsByName = new Map<string, VerbHelp>(VERBS.map((v) => [v.verb, v]));
 
-export type FleetCredentialMode = "service-account-key" | "application-default";
-
 export function fleetServiceAccountCredential(
   value: unknown,
   projectId: string,
@@ -317,6 +316,10 @@ export function fleetServiceAccountCredential(
     clientEmail: credential.client_email,
     privateKey: credential.private_key,
   };
+}
+
+export function fleetFirebaseSignerServiceAccountId(projectId: string): string {
+  return `firebase-deployer@${projectId}.iam.gserviceaccount.com`;
 }
 
 function applicationDefaultServiceAccountCredential(
@@ -353,18 +356,6 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
 export function resolveFleetVerb(args: ParsedFleetArgs): VerbHelp | null {
   const [verb, sub] = args.positional;
   return verbsByName.get(`${verb ?? ""} ${sub ?? ""}`.trim()) ?? verbsByName.get(verb ?? "") ?? null;
-}
-
-export function resolveFleetCredentialMode(
-  args: ParsedFleetArgs,
-  env: { GOOGLE_APPLICATION_CREDENTIALS?: string } = process.env,
-): FleetCredentialMode {
-  if (env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) return "application-default";
-  const verb = resolveFleetVerb(args);
-  if (verb?.writes !== true || args.flags.apply !== true) return "service-account-key";
-  return args.positional[0] === "gw" || args.positional[0] === "builder" || args.positional[0] === "release"
-    ? "service-account-key"
-    : "application-default";
 }
 
 function renderTopHelp(): string {
@@ -1087,6 +1078,7 @@ export async function runForcedGatewayRestart(
 let args: ParsedFleetArgs = parseFleetArgs([]);
 let db: ReturnType<typeof getFirestore>;
 let resolvedOperatorUid: Promise<string> | null = null;
+let resolvedFirebaseWebApiKey: Promise<string> | null = null;
 
 function initializeFleetCli(argv: string[]): void {
   args = parseFleetArgs(argv);
@@ -1132,50 +1124,28 @@ function initializeFleetCli(argv: string[]): void {
     resolveFleetGatewayRestart(args);
   }
 
-  const credentialMode = resolveFleetCredentialMode(args);
   const target = resolveFleetDeploymentTarget(args.env);
   const projectId = target.projectId;
-  const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
-  const saPath = path.join(
-    process.env.HOME ?? "",
-    `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
+  const applicationDefaultServiceAccount = applicationDefaultServiceAccountCredential(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    projectId,
   );
-  const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || saPath;
-  if (credentialMode === "service-account-key" && !fs.existsSync(credentialPath)) {
-    console.error(red(`${CROSS} SA key not found at ${saPath}`));
-    console.error(dim(`  Set GOOGLE_APPLICATION_CREDENTIALS or provide the local key used to authenticate against the ${args.env.toUpperCase()} Firestore database.`));
-    process.exit(1);
-  }
-  const applicationDefaultServiceAccount = credentialMode === "application-default"
-    ? applicationDefaultServiceAccountCredential(
-      process.env.GOOGLE_APPLICATION_CREDENTIALS,
-      projectId,
-    )
-    : null;
+  const signerServiceAccountId = fleetFirebaseSignerServiceAccountId(projectId);
   initializeApp({
     credential: applicationDefaultServiceAccount
       ? cert(applicationDefaultServiceAccount)
-      : credentialMode === "application-default"
-        ? applicationDefault()
-        : cert(JSON.parse(fs.readFileSync(credentialPath, "utf-8"))),
+      : applicationDefault(),
     projectId,
+    ...(applicationDefaultServiceAccount ? {} : { serviceAccountId: signerServiceAccountId }),
   });
-  if (credentialMode === "application-default") {
-    console.error(dim(
-      applicationDefaultServiceAccount
-        ? `  fleet writes use the service-account key supplied through GOOGLE_APPLICATION_CREDENTIALS for ${projectId}.`
-        : `  fleet writes use Application Default Credentials for ${projectId}.`,
-    ));
-  }
+  console.error(dim(
+    applicationDefaultServiceAccount
+      ? `  fleet uses the service-account key supplied through GOOGLE_APPLICATION_CREDENTIALS for ${projectId}.`
+      : `  fleet uses keyless ADC/WIF for ${projectId}; Firebase tokens are signed by ${signerServiceAccountId}.`,
+  ));
   db = getFirestore();
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
-}
-
-function fleetAdminEnvironment(name: "OPERATOR_UID" | "FIREBASE_WEB_API_KEY"): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required for fleet Admin API mutations`);
-  return value;
 }
 
 export function resolveFleetOperatorUidFromUserConfigs(
@@ -1234,12 +1204,17 @@ async function fleetOperatorUid(): Promise<string> {
 
 function fleetAdminClient(): AdminFleetClient {
   if (!args.env) throw new Error("fleet environment must be selected before creating an Admin API client");
-  const webApiKey = fleetAdminEnvironment("FIREBASE_WEB_API_KEY");
+  const settings = deploymentEnvironmentSettings(args.env);
+  resolvedFirebaseWebApiKey ??= resolveFirebaseWebApiKey({
+    appOrigin: settings.appOrigin,
+    configuredKey: process.env.FIREBASE_WEB_API_KEY,
+  });
+  const webApiKey = resolvedFirebaseWebApiKey;
   return createAdminFleetClient({
-    apiOrigin: deploymentEnvironmentSettings(args.env).apiOrigin,
+    apiOrigin: settings.apiOrigin,
     getIdToken: async () => exchangeAdminFleetCustomToken({
       operatorUid: await fleetOperatorUid(),
-      webApiKey,
+      webApiKey: await webApiKey,
       createCustomToken: (uid) => getAuth().createCustomToken(uid),
     }),
   });

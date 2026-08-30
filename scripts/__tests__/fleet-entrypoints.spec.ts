@@ -33,10 +33,10 @@ import {
   resolveFleetBuilderMutation,
   runForcedGatewayRestart,
   fleetServiceAccountCredential,
+  fleetFirebaseSignerServiceAccountId,
   resolveFleetGatewayMutation,
   resolveFleetGatewayRestart,
   resolveFleetVerb,
-  resolveFleetCredentialMode,
   resolveFleetDeploymentTarget,
   resolveExplicitFleetOperatorUid,
   resolveFleetOperatorUidFromUserConfigs,
@@ -1012,12 +1012,6 @@ describe("fleet CLI args", () => {
       verb: "release status",
       writes: false,
     });
-    expect(resolveFleetCredentialMode(statusArgs)).toBe("service-account-key");
-    expect(
-      resolveFleetCredentialMode(statusArgs, {
-        GOOGLE_APPLICATION_CREDENTIALS: "/tmp/wif-credentials.json",
-      }),
-    ).toBe("application-default");
   });
 
   it("uses a service-account credential supplied through application-default configuration as a local signer", () => {
@@ -1031,6 +1025,12 @@ describe("fleet CLI args", () => {
       privateKey: "private-key",
     });
     expect(fleetServiceAccountCredential({ type: "external_account" }, "octogee-test")).toBeNull();
+  });
+
+  it("uses the environment Firebase deployer as the keyless custom-token signer", () => {
+    expect(fleetFirebaseSignerServiceAccountId("octogee-test")).toBe(
+      "firebase-deployer@octogee-test.iam.gserviceaccount.com",
+    );
   });
 
   it("uses the sole enabled Firestore admin only as the unspecified-actor fallback", () => {
@@ -1113,61 +1113,6 @@ describe("fleet CLI args", () => {
       version: "abc1234-oc2026.7.1",
       status: "rolling",
     }]);
-  });
-
-  it("uses application-default credentials for committed fleet write verbs", () => {
-    expect(
-      resolveFleetCredentialMode(
-        parseFleetArgs([
-          "--env=prod",
-          "migrate-customer",
-          "alice",
-          "--to=canary",
-          "--apply",
-        ]),
-      ),
-    ).toBe("application-default");
-
-    expect(
-      resolveFleetCredentialMode(
-        parseFleetArgs([
-          "--env=prod",
-          "builder",
-          "evict",
-          "alice",
-          "--to=canary",
-          "--apply",
-        ]),
-      ),
-    ).toBe("service-account-key");
-
-    expect(
-      resolveFleetCredentialMode(
-        parseFleetArgs(["--env=prod", "migrate-customer", "alice", "--to=canary"]),
-      ),
-    ).toBe("service-account-key");
-
-    expect(
-      resolveFleetCredentialMode(
-        parseFleetArgs([
-          "--env=test",
-          "release",
-          "cut",
-          "v0.6.8",
-          `--sha=${"a".repeat(40)}`,
-          "--apply",
-        ]),
-        { GOOGLE_APPLICATION_CREDENTIALS: "/tmp/wif-credentials.json" },
-      ),
-    ).toBe("application-default");
-  });
-
-  it("uses the environment service-account key to sign Admin API tokens", () => {
-    expect(
-      resolveFleetCredentialMode(
-        parseFleetArgs(["--env=prod", "gw", "park", "canary", "--apply"]),
-      ),
-    ).toBe("service-account-key");
   });
 
   it("parses normal gateway mutations through the gw command family", () => {
