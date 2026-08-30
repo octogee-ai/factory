@@ -478,8 +478,7 @@ async function validateCommandVersions(
     }).catch(() => {
       throw hydrationError("invalid-command-version");
     });
-    const escapedVersion = descriptor.versions[command].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    if (!new RegExp(`(?:^|[^0-9])${escapedVersion}(?:$|[^0-9])`, "u").test(output)) {
+    if (!output.split(/[^0-9A-Za-z.-]+/u).includes(descriptor.versions[command])) {
       throw hydrationError("invalid-command-version");
     }
   }
