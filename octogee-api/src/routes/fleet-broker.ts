@@ -9,7 +9,8 @@ import {
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { pickPlanInputs, resolveBuilderTier } from "@octogee/shared/types/billing";
+import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
@@ -64,6 +65,7 @@ import {
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
+import { GLM_OPERATIONS_COLLECTION, isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   configuredBuilderCredentialBootstrapAllowed,
   projectGatewayMutableConfigForGateway,
@@ -1308,10 +1310,288 @@ async function readAssignmentRosterForGateway(
   return assignments;
 }
 
+type PreCutoverNpmLeaseStatus = "provisioning" | "activating";
+
+interface PreCutoverNpmActivation {
+  sourceGatewayId: string;
+  sourceAssignmentEpoch: number;
+  leaseStatus: PreCutoverNpmLeaseStatus;
+  operationId: string;
+  activationOperationId: string | null;
+}
+
+function npmRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function preCutoverNpmLeaseStatus(value: unknown): PreCutoverNpmLeaseStatus | null {
+  return value === "provisioning" || value === "activating" ? value : null;
+}
+
+function nonNegativeNpmInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
+}
+
+function nonNegativeNpmNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function authorizedPreCutoverNpmUser(input: {
+  userData: Record<string, unknown> | undefined;
+  slug: string;
+  nowMs: number;
+}): { openclaw: Record<string, unknown>; lease: Record<string, unknown> } | null {
+  if (!input.userData) return null;
+  if (!accountAllowsInteractiveAccess(input.userData)) return null;
+  if (resolveBuilderTier(input.userData, new Date(input.nowMs)) === null) return null;
+  if (slugFromAssignedUser(input.userData) !== input.slug) return null;
+  const provisioning = npmRecord(input.userData.provisioning);
+  const openclaw = npmRecord(provisioning?.openclaw);
+  const lease = npmRecord(openclaw?.activationLease);
+  return openclaw && lease ? { openclaw, lease } : null;
+}
+
+function preCutoverNpmLeaseIdentityMatches(input: {
+  lease: Record<string, unknown>;
+  allocation: { leaseId: string; generation: number; claimedByUid: string };
+  gatewayId: string;
+  slug: string;
+  ownerUid: string;
+}): boolean {
+  return [
+    input.allocation.claimedByUid === input.ownerUid,
+    input.lease.leaseId === input.allocation.leaseId,
+    input.lease.generation === input.allocation.generation,
+    input.lease.builderSlug === input.slug,
+    input.lease.targetGatewayId === input.gatewayId,
+  ].every(Boolean);
+}
+
+function preCutoverNpmActivation(input: {
+  gatewayId: string;
+  slug: string;
+  ownerUid: string;
+  allocation: { leaseId: string; generation: number; claimedByUid: string };
+  userData: Record<string, unknown> | undefined;
+  nowMs: number;
+}): PreCutoverNpmActivation | null {
+  const user = authorizedPreCutoverNpmUser(input);
+  if (!user) return null;
+  const leaseStatus = preCutoverNpmLeaseStatus(user.lease.status);
+  const sourceGatewayId = isValidGatewayId(user.lease.sourceGatewayId)
+    ? user.lease.sourceGatewayId
+    : null;
+  const sourceAssignmentEpoch = nonNegativeNpmInteger(user.lease.sourceAssignmentEpoch);
+  const provisionedAt = nonNegativeNpmNumber(user.lease.provisionedAt);
+  const identityMatches = [
+    preCutoverNpmLeaseIdentityMatches({ ...input, lease: user.lease }),
+    leaseStatus !== null,
+    sourceGatewayId !== null,
+    sourceGatewayId !== input.gatewayId,
+    user.openclaw.gatewayId === sourceGatewayId,
+    sourceAssignmentEpoch !== null,
+    provisionedAt !== null,
+  ].every(Boolean);
+  if (!identityMatches) return null;
+  const operationId = `builder-activate-${input.gatewayId}`;
+  const activationOperationId = typeof user.lease.activationOperationId === "string"
+    ? user.lease.activationOperationId
+    : null;
+  return {
+    sourceGatewayId: sourceGatewayId!,
+    sourceAssignmentEpoch: sourceAssignmentEpoch!,
+    leaseStatus: leaseStatus!,
+    operationId,
+    activationOperationId,
+  };
+}
+
+function preCutoverNpmSourceAssignmentMatches(input: {
+  sourceAssignment: Record<string, unknown> | undefined;
+  ownerUid: string;
+  slug: string;
+  sourceGatewayId: string;
+  sourceAssignmentEpoch: number;
+  leaseStatus: PreCutoverNpmLeaseStatus;
+}): boolean {
+  const assignment = parseAssignmentDoc(input.ownerUid, input.sourceAssignment);
+  if (
+    !assignment ||
+    input.sourceAssignment?.uid !== input.ownerUid ||
+    assignment.slug !== input.slug ||
+    assignment.gatewayId !== input.sourceGatewayId ||
+    assignment.epoch !== input.sourceAssignmentEpoch
+  ) return false;
+  return input.leaseStatus === "provisioning"
+    ? assignment.state === "serving"
+    : assignment.state === "serving" ||
+      assignment.state === "quiescing" ||
+      assignment.state === "migrating";
+}
+
+function preCutoverNpmOperationMetadataMatches(input: {
+  operation: Record<string, unknown>;
+  ownerUid: string;
+  targetGatewayId: string;
+}): boolean {
+  return [
+    input.operation.kind === "migrate-customer",
+    input.operation.origin === "automatic",
+    input.operation.createdBy === "glm-controller-placement-policy",
+    input.operation.gatewayId === input.targetGatewayId,
+    input.operation.inputUid === input.ownerUid,
+  ].every(Boolean);
+}
+
+function preCutoverNpmOperationInputMatches(input: {
+  operationInput: Record<string, unknown> | null;
+  ownerUid: string;
+  slug: string;
+  sourceGatewayId: string;
+  targetGatewayId: string;
+}): boolean {
+  return [
+    input.operationInput?.uid === input.ownerUid,
+    input.operationInput?.builderSlug === input.slug,
+    input.operationInput?.fromGatewayId === input.sourceGatewayId,
+    input.operationInput?.toGatewayId === input.targetGatewayId,
+    input.operationInput?.source === "builder-activation-lease",
+  ].every(Boolean);
+}
+
+function preCutoverNpmOperationMatches(input: {
+  operationExists: boolean;
+  operation: Record<string, unknown> | undefined;
+  operationId: string;
+  ownerUid: string;
+  slug: string;
+  sourceGatewayId: string;
+  targetGatewayId: string;
+  leaseStatus: PreCutoverNpmLeaseStatus;
+  activationOperationId: string | null;
+}): boolean {
+  if (!input.operationExists) {
+    return input.leaseStatus === "provisioning" && input.activationOperationId === null;
+  }
+  const operationInput = npmRecord(input.operation?.input);
+  const liveOperation = input.operation?.status === "pending" ||
+    input.operation?.status === "running";
+  const exactOperation = [
+    input.operation !== undefined,
+    preCutoverNpmOperationMetadataMatches({
+      operation: input.operation ?? {},
+      ownerUid: input.ownerUid,
+      targetGatewayId: input.targetGatewayId,
+    }),
+    preCutoverNpmOperationInputMatches({ ...input, operationInput }),
+  ].every(Boolean);
+  if (!liveOperation || !exactOperation) return false;
+  return input.leaseStatus === "provisioning"
+    ? input.activationOperationId === null
+    : input.activationOperationId === input.operationId;
+}
+
+interface ConfiguredBuilderNpmIdentity {
+  ownerUid: string;
+  allocation: { leaseId: string; generation: number; claimedByUid: string } | null;
+}
+
+function configuredBuilderNpmIdentity(input: {
+  gatewayData: Record<string, unknown> | undefined;
+  bound: GatewayBinding;
+  slug: string;
+}): ConfiguredBuilderNpmIdentity | null {
+  const gateway = projectGatewayDesiredRootForGateway(
+    input.gatewayData,
+    input.bound.gatewayId,
+  );
+  const ownerUid = gateway?.ownerUid;
+  if (typeof ownerUid !== "string") return null;
+  if (!configuredBuilderCredentialBootstrapAllowed(input.gatewayData, {
+    gatewayId: input.bound.gatewayId,
+    podName: input.bound.podName,
+    slug: input.slug,
+    uid: ownerUid,
+  })) return null;
+  return { ownerUid, allocation: gateway?.allocation ?? null };
+}
+
+function assignedBuilderNpmUid(input: {
+  docs: Array<{ id: string; data(): unknown }>;
+  gatewayId: string;
+  slug: string;
+}): string | null {
+  const matches = input.docs
+    .map((doc) => parseAssignmentDoc(doc.id, doc.data() as Record<string, unknown>))
+    .filter((assignment) =>
+      assignment?.gatewayId === input.gatewayId && assignment.slug === input.slug,
+    );
+  return matches.length === 1 ? matches[0]!.uid : null;
+}
+
+async function preCutoverBuilderNpmSubject(input: {
+  db: Firestore;
+  bound: GatewayBinding;
+  slug: string;
+  ownerUid: string;
+  allocation: { leaseId: string; generation: number; claimedByUid: string };
+  nowMs: number;
+}): Promise<{ uid: string } | null> {
+  const { db, bound, slug, ownerUid } = input;
+  const userSnap = await db.collection("users").doc(ownerUid).get();
+  const userData = userSnap.data() as Record<string, unknown> | undefined;
+  const activation = preCutoverNpmActivation({
+    gatewayId: bound.gatewayId,
+    slug,
+    ownerUid,
+    allocation: input.allocation,
+    userData,
+    nowMs: input.nowMs,
+  });
+  if (!userSnap.exists || !userData || !activation) return null;
+  const [sourceAssignmentSnap, operationSnap] = await Promise.all([
+    db
+      .collection(GATEWAYS_COLLECTION)
+      .doc(activation.sourceGatewayId)
+      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+      .doc(ownerUid)
+      .get(),
+    db.collection(GLM_OPERATIONS_COLLECTION).doc(activation.operationId).get(),
+  ]);
+  const sourceAssignment = sourceAssignmentSnap.data() as Record<string, unknown> | undefined;
+  const operation = operationSnap.data() as Record<string, unknown> | undefined;
+  const admitted = [
+    sourceAssignmentSnap.exists,
+    preCutoverNpmSourceAssignmentMatches({
+      sourceAssignment,
+      ownerUid,
+      slug,
+      sourceGatewayId: activation.sourceGatewayId,
+      sourceAssignmentEpoch: activation.sourceAssignmentEpoch,
+      leaseStatus: activation.leaseStatus,
+    }),
+    preCutoverNpmOperationMatches({
+      operationExists: operationSnap.exists,
+      operation,
+      operationId: activation.operationId,
+      ownerUid,
+      slug,
+      sourceGatewayId: activation.sourceGatewayId,
+      targetGatewayId: bound.gatewayId,
+      leaseStatus: activation.leaseStatus,
+      activationOperationId: activation.activationOperationId,
+    }),
+  ].every(Boolean);
+  return admitted ? { uid: ownerUid } : null;
+}
+
 async function configuredBuilderNpmSubject(
   db: Firestore,
   bound: GatewayBinding,
   slug: string,
+  nowMs: number,
 ): Promise<{ uid: string } | null> {
   if (!bound.podUid) return null;
   const [gatewaySnap, assignmentsSnap] = await Promise.all([
@@ -1323,21 +1603,23 @@ async function configuredBuilderNpmSubject(
       .get(),
   ]);
   const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
-  if (gatewayData?.gatewayClass !== "builder") return null;
-  const matches = assignmentsSnap.docs
-    .map((doc) => parseAssignmentDoc(doc.id, doc.data() as Record<string, unknown>))
-    .filter((assignment) =>
-      assignment?.gatewayId === bound.gatewayId && assignment.slug === slug,
-    );
-  if (matches.length !== 1) return null;
-  const assignment = matches[0]!;
-  if (!configuredBuilderCredentialBootstrapAllowed(gatewayData, {
+  const identity = configuredBuilderNpmIdentity({ gatewayData, bound, slug });
+  if (!identity) return null;
+  const assignedUid = assignedBuilderNpmUid({
+    docs: assignmentsSnap.docs,
     gatewayId: bound.gatewayId,
-    podName: bound.podName,
     slug,
-    uid: assignment.uid,
-  })) return null;
-  return { uid: assignment.uid };
+  });
+  if (assignedUid === identity.ownerUid) return { uid: identity.ownerUid };
+  if (assignmentsSnap.docs.length > 0 || !identity.allocation) return null;
+  return preCutoverBuilderNpmSubject({
+    db,
+    bound,
+    slug,
+    ownerUid: identity.ownerUid,
+    allocation: identity.allocation,
+    nowMs,
+  });
 }
 
 function installNpmCacheCapabilityRoutes(
@@ -1353,7 +1635,7 @@ function installNpmCacheCapabilityRoutes(
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    const subject = await configuredBuilderNpmSubject(db, bound, slug);
+    const subject = await configuredBuilderNpmSubject(db, bound, slug, deps.now());
     if (!subject || !bound.podUid) {
       res.status(403).json(FORBIDDEN);
       return;

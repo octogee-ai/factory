@@ -17,6 +17,10 @@ const POD_UID = "pod-uid-alice";
 const SA_NAME = "octogee-gw-builder-alice";
 const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const TOKEN = "n".repeat(43);
+const SOURCE_GATEWAY_ID = "shared-a";
+const LEASE_ID = "lease-alice";
+const LEASE_GENERATION = 2;
+const SOURCE_ASSIGNMENT_EPOCH = 7;
 
 function gatewayDoc() {
   return {
@@ -70,6 +74,135 @@ function database(assignedSlug = "alice") {
         })),
       };
     }),
+  };
+}
+
+function preCutoverGatewayDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    ...gatewayDoc(),
+    allocation: {
+      kind: "disposable-builder",
+      schemaVersion: 1,
+      leaseId: LEASE_ID,
+      generation: LEASE_GENERATION,
+      claimedByUid: "uid-alice",
+    },
+    ...overrides,
+  };
+}
+
+function preCutoverUserDoc(input: {
+  lease?: Record<string, unknown>;
+  openclaw?: Record<string, unknown>;
+  user?: Record<string, unknown>;
+} = {}) {
+  return {
+    username: "alice",
+    builderSubscription: { tier: "hobby", status: "active" },
+    provisioning: {
+      openclaw: {
+        gatewayId: SOURCE_GATEWAY_ID,
+        slug: "alice",
+        activationLease: {
+          leaseId: LEASE_ID,
+          generation: LEASE_GENERATION,
+          status: "provisioning",
+          targetGatewayId: GATEWAY_ID,
+          builderSlug: "alice",
+          sourceGatewayId: SOURCE_GATEWAY_ID,
+          sourceAssignmentEpoch: SOURCE_ASSIGNMENT_EPOCH,
+          provisionedAt: Date.parse("2026-08-30T11:55:00.000Z"),
+          ...input.lease,
+        },
+        ...input.openclaw,
+      },
+    },
+    ...input.user,
+  };
+}
+
+function sourceAssignmentDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    uid: "uid-alice",
+    slug: "alice",
+    gatewayId: SOURCE_GATEWAY_ID,
+    source: "onboarding",
+    state: "serving",
+    epoch: SOURCE_ASSIGNMENT_EPOCH,
+    updatedAt: 1,
+    updatedByOperationId: null,
+    ...overrides,
+  };
+}
+
+function activationOperation(
+  status: string = "running",
+  inputOverrides: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    kind: "migrate-customer",
+    status,
+    origin: "automatic",
+    createdBy: "glm-controller-placement-policy",
+    gatewayId: GATEWAY_ID,
+    inputUid: "uid-alice",
+    input: {
+      uid: "uid-alice",
+      builderSlug: "alice",
+      fromGatewayId: SOURCE_GATEWAY_ID,
+      toGatewayId: GATEWAY_ID,
+      source: "builder-activation-lease",
+      ...inputOverrides,
+    },
+    ...overrides,
+  };
+}
+
+function preCutoverDatabase(input: {
+  gateway?: Record<string, unknown>;
+  user?: Record<string, unknown>;
+  sourceAssignment?: Record<string, unknown> | null;
+  operation?: Record<string, unknown> | null;
+} = {}) {
+  const targetGateway = input.gateway ?? preCutoverGatewayDoc();
+  const user = input.user ?? preCutoverUserDoc();
+  const sourceAssignment = input.sourceAssignment === undefined
+    ? sourceAssignmentDoc()
+    : input.sourceAssignment;
+  const operation = input.operation === undefined ? null : input.operation;
+  const snapshot = (data: Record<string, unknown> | null | undefined) => ({
+    exists: data != null,
+    data: () => data ?? undefined,
+  });
+  return {
+    collection: vi.fn((name: string) => ({
+      doc: vi.fn((id: string) => {
+        if (name === "users") {
+          return { get: vi.fn(async () => snapshot(id === "uid-alice" ? user : null)) };
+        }
+        if (name === "glmOperations") {
+          return { get: vi.fn(async () => snapshot(operation)) };
+        }
+        if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
+        return {
+          get: vi.fn(async () => snapshot(id === GATEWAY_ID ? targetGateway : null)),
+          collection: vi.fn((subcollection: string) => {
+            if (subcollection !== "assignments") {
+              throw new Error(`unexpected subcollection ${subcollection}`);
+            }
+            return {
+              get: vi.fn(async () => ({ docs: [] })),
+              doc: vi.fn((uid: string) => ({
+                get: vi.fn(async () => snapshot(
+                  id === SOURCE_GATEWAY_ID && uid === "uid-alice" ? sourceAssignment : null,
+                )),
+              })),
+            };
+          }),
+        };
+      }),
+    })),
   };
 }
 
@@ -128,6 +261,15 @@ function proxyApp(options: ReturnType<typeof brokerOptions>) {
   return app;
 }
 
+async function requestBuilderCapability(db: ReturnType<typeof preCutoverDatabase>) {
+  const options = brokerOptions();
+  options.db = db as never;
+  return request(builderApp(options))
+    .post("/internal/fleet/npm-registry-credentials")
+    .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
+    .send({ gatewayId: GATEWAY_ID, slug: "alice" });
+}
+
 describe("npm cache capability broker", () => {
   it("requires the second purpose-audience KSA credential", async () => {
     expect(GATEWAY_CREDENTIAL_ROUTES.has("/internal/fleet/npm-registry-credentials"))
@@ -152,6 +294,182 @@ describe("npm cache capability broker", () => {
       token: TOKEN,
       expiresAt: "2026-08-30T12:10:00.000Z",
     });
+  });
+
+  it("issues to the exact disposable Builder during its fenced pre-cutover activation", async () => {
+    const response = await requestBuilderCapability(preCutoverDatabase());
+
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body).toEqual({
+      registryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",
+      token: TOKEN,
+      expiresAt: "2026-08-30T12:10:00.000Z",
+    });
+  });
+
+  it("continues issuance while the exact activation migration is live", async () => {
+    const response = await requestBuilderCapability(preCutoverDatabase({
+      user: preCutoverUserDoc({
+        lease: {
+          status: "activating",
+          activationOperationId: `builder-activate-${GATEWAY_ID}`,
+        },
+      }),
+      sourceAssignment: sourceAssignmentDoc({ state: "quiescing" }),
+      operation: activationOperation(),
+    }));
+
+    expect(response.status).toBe(200);
+  });
+
+  it.each([
+    {
+      name: "stale source assignment epoch",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ lease: { sourceAssignmentEpoch: 6 } }),
+      }),
+    },
+    {
+      name: "failed activation lease",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ lease: { status: "failed" } }),
+      }),
+    },
+    {
+      name: "wrong Builder slug",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ openclaw: { slug: "mallory" } }),
+      }),
+    },
+    {
+      name: "wrong target gateway",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ lease: { targetGatewayId: "builder-mallory" } }),
+      }),
+    },
+    {
+      name: "wrong allocation generation",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ lease: { generation: LEASE_GENERATION + 1 } }),
+      }),
+    },
+    {
+      name: "wrong allocation lease",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ lease: { leaseId: "stale-lease" } }),
+      }),
+    },
+    {
+      name: "wrong source mirror",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ openclaw: { gatewayId: "shared-b" } }),
+      }),
+    },
+    {
+      name: "invalid source gateway identity",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({
+          lease: { sourceGatewayId: "shared/a" },
+          openclaw: { gatewayId: "shared/a" },
+        }),
+      }),
+    },
+    {
+      name: "wrong source assignment owner",
+      db: () => preCutoverDatabase({
+        sourceAssignment: sourceAssignmentDoc({ uid: "uid-mallory" }),
+      }),
+    },
+    {
+      name: "non-serving source before migration",
+      db: () => preCutoverDatabase({
+        sourceAssignment: sourceAssignmentDoc({ state: "quiescing" }),
+      }),
+    },
+    {
+      name: "suspended Builder",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ user: { accountLifecycle: { status: "suspended" } } }),
+      }),
+    },
+    {
+      name: "Builder entitlement ended",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({ user: { builderSubscription: null } }),
+      }),
+    },
+    {
+      name: "wrong configured owner",
+      db: () => preCutoverDatabase({
+        gateway: preCutoverGatewayDoc({
+          ownerUid: "uid-mallory",
+          allocation: {
+            kind: "disposable-builder",
+            schemaVersion: 1,
+            leaseId: LEASE_ID,
+            generation: LEASE_GENERATION,
+            claimedByUid: "uid-mallory",
+          },
+        }),
+      }),
+    },
+    {
+      name: "retired target",
+      db: () => preCutoverDatabase({
+        gateway: preCutoverGatewayDoc({ desiredStatus: "retired" }),
+      }),
+    },
+    {
+      name: "activating lease without its operation",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({
+          lease: {
+            status: "activating",
+            activationOperationId: `builder-activate-${GATEWAY_ID}`,
+          },
+        }),
+      }),
+    },
+    {
+      name: "failed activation operation",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({
+          lease: {
+            status: "activating",
+            activationOperationId: `builder-activate-${GATEWAY_ID}`,
+          },
+        }),
+        operation: activationOperation("failed"),
+      }),
+    },
+    {
+      name: "succeeded activation operation before canonical cutover",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({
+          lease: {
+            status: "activating",
+            activationOperationId: `builder-activate-${GATEWAY_ID}`,
+          },
+        }),
+        operation: activationOperation("succeeded"),
+      }),
+    },
+    {
+      name: "activation operation for another source",
+      db: () => preCutoverDatabase({
+        user: preCutoverUserDoc({
+          lease: {
+            status: "activating",
+            activationOperationId: `builder-activate-${GATEWAY_ID}`,
+          },
+        }),
+        operation: activationOperation("running", { fromGatewayId: "shared-b" }),
+      }),
+    },
+  ])("rejects a pre-cutover capability for $name", async ({ db }) => {
+    const response = await requestBuilderCapability(db());
+    expect(response.status).toBe(403);
   });
 
   it("rejects a slug that is not the gateway assignment", async () => {
