@@ -1710,9 +1710,8 @@ function installSnapshotRoutes(
   deps: ResolvedFleetBrokerRouteDeps,
   platformAdminMmUserId: string | null,
 ): void {
-  installNpmCacheCapabilityRoutes(router, db, deps);
-
   const { db } = deps;
+  installNpmCacheCapabilityRoutes(router, db, deps);
 
   router.post("/assignment-roster", async (req, res) => {
     const bound = boundGateway(req, res);
