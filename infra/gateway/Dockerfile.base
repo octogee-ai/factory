@@ -99,7 +99,9 @@ RUN set -e; \
 FROM gateway-core-system AS gateway-core-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
-COPY --from=openclaw-installer /usr/local/bin/openclaw /usr/local/bin/openclaw
+RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
+    && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
+    && openclaw --version
 COPY --from=openclaw-core-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
 
 FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer
@@ -137,5 +139,7 @@ RUN set -e; \
 FROM gateway-system AS gateway-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
-COPY --from=openclaw-installer /usr/local/bin/openclaw /usr/local/bin/openclaw
+RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
+    && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
+    && openclaw --version
 COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps

@@ -103,6 +103,18 @@ describe("gateway base image", () => {
     });
   });
 
+  it("keeps the OpenClaw launcher rooted beside its imported package files", () => {
+    const base = readRepoFile("infra/gateway/Dockerfile.base");
+
+    expect(base).not.toContain(
+      "COPY --from=openclaw-installer /usr/local/bin/openclaw /usr/local/bin/openclaw",
+    );
+    expect(base.match(/ln -s \.\.\/lib\/node_modules\/openclaw\/openclaw\.mjs \/usr\/local\/bin\/openclaw/g))
+      .toHaveLength(2);
+    expect(base.match(/require\('\/usr\/local\/lib\/node_modules\/openclaw\/package\.json'\)\.bin\.openclaw/g))
+      .toHaveLength(2);
+  });
+
   it("keys the immutable Builder base on the exact npm lock", () => {
     const workflow = readRepoFile(".github/workflows/gateway-build-operator-base.yml");
     const cloudbuild = readRepoFile("cloudbuild-builder-base.yaml");
