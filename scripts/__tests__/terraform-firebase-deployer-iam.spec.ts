@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "../..");
 const iamModule = path.join(repoRoot, "terraform/modules/iam/main.tf");
 const centralPlatform = path.join(repoRoot, "terraform/environments/prod/main.tf");
+const prodVariables = path.join(repoRoot, "terraform/environments/prod/variables.tf");
+const prodTfvars = path.join(repoRoot, "terraform/environments/prod/terraform.tfvars");
 const testEnvironment = path.join(repoRoot, "terraform/environments/test/main.tf");
 const testVariables = path.join(repoRoot, "terraform/environments/test/variables.tf");
 const testTfvars = path.join(repoRoot, "terraform/environments/test/terraform.tfvars");
@@ -73,24 +75,32 @@ describe("firebase deployer Terraform IAM", () => {
     expect(moduleSource).not.toContain("octogeeFirebaseCustomTokenSigner");
   });
 
-  it("grants configured TEST operators only the custom-token signing permission", () => {
-    const source = readFileSync(testEnvironment, "utf-8");
-    const variables = readFileSync(testVariables, "utf-8");
-    const tfvars = readFileSync(testTfvars, "utf-8");
-    const binding = source.match(
-      /resource "google_service_account_iam_member" "firebase_deployer_operator_custom_token_signer" \{([\s\S]*?)^\}/m,
-    )?.[1];
+  it("grants configured environment operators only the custom-token signing permission", () => {
+    for (const paths of [
+      { environment: centralPlatform, variables: prodVariables, tfvars: prodTfvars },
+      { environment: testEnvironment, variables: testVariables, tfvars: testTfvars },
+    ]) {
+      const source = readFileSync(paths.environment, "utf-8");
+      const variables = readFileSync(paths.variables, "utf-8");
+      const tfvars = readFileSync(paths.tfvars, "utf-8");
+      const binding = source.match(
+        /resource "google_service_account_iam_member" "firebase_deployer_operator_custom_token_signer" \{([\s\S]*?)^\}/m,
+      )?.[1];
 
-    expect(variables).toContain('variable "firebase_custom_token_operator_members"');
-    expect(binding).toContain("for_each           = var.firebase_custom_token_operator_members");
-    expect(binding).toContain(
-      "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
-    );
-    expect(binding).toContain("member             = each.value");
-    expect(tfvars).toContain(
-      'firebase_custom_token_operator_members = ["user:christopher.k.eckert@squarepointconsulting.com"]',
-    );
-    expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
+      expect(variables).toContain('variable "firebase_custom_token_operator_members"');
+      expect(binding).toContain("for_each           = var.firebase_custom_token_operator_members");
+      expect(binding).toContain(
+        'service_account_id = "projects/${var.project_id}/serviceAccounts/${module.iam.firebase_deployer_sa_email}"',
+      );
+      expect(binding).toContain(
+        "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
+      );
+      expect(binding).toContain("member             = each.value");
+      expect(tfvars).toContain(
+        'firebase_custom_token_operator_members = ["user:christopher.k.eckert@squarepointconsulting.com"]',
+      );
+      expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
+    }
   });
 
   it("grants every Central release Firebase deployer reader access to the Central Artifact Registry", () => {
