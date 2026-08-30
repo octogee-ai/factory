@@ -116,10 +116,10 @@ against upstream `main` and remove anything OpenClaw has adopted.
 
 | Patch area | Latest assessment | Why Octogee carries it |
 | --- | --- | --- |
-| Sandbox-backed file discovery | Upstream still has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open and is narrowed to proven Linux confined-host support plus sandbox/remote bridges. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
-| Secret handling | Upstream has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids re-running secret providers for unrelated config writes and supports Octogee's configuration flow. |
-| Mattermost admission and activity | Upstream requester-receipt work does not provide durable Mattermost ingress admission, live run control, delivery observation, or gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
-| No-archive session deletion | Upstream has the internal purge primitive for lifecycle-owned cleanup, but its public `sessions.delete` schema cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and gateway event-loop starvation. |
+| Sandbox-backed file discovery | Current main still has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open and rebases cleanly as proven Linux confined-host support plus sandbox/remote bridges. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
+| Secret handling | Current main still has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. Its focused auxiliary-handler parity test now covers the generic registration assertion, so the overlay's duplicate test hunk is gone. | Avoids re-running secret providers for unrelated config writes and supports Octogee's configuration flow. |
+| Mattermost admission and activity | Current main's requester-receipt work still does not provide durable Mattermost ingress admission, live run control, delivery observation, or gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
+| No-archive session deletion | Current main has the internal purge primitive for lifecycle-owned cleanup, but its public `sessions.delete` schema still cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and gateway event-loop starvation. |
 
 The gateway base still verifies actual runtime contracts such as the expected
 configuration behavior and tool-policy shape. Those are product checks, not
