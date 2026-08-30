@@ -1710,6 +1710,23 @@ function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null
     : null;
 }
 
+export function createConfiguredBuilderAssignmentMatcher(
+  opts: Pick<
+    StartFleetOptions,
+    "readDesiredFingerprints" | "readDesiredSlugs"
+  >,
+): (slug: string) => Promise<boolean> {
+  const readDesiredFingerprints = opts.readDesiredFingerprints;
+  if (readDesiredFingerprints) {
+    return async (slug) => (await readDesiredFingerprints()).has(slug);
+  }
+  const readDesiredSlugs = opts.readDesiredSlugs;
+  if (readDesiredSlugs) {
+    return async (slug) => (await readDesiredSlugs()).includes(slug);
+  }
+  return async () => false;
+}
+
 export function createConfiguredBuilderReconcileAdmission(input: {
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null;
   log: (message: string) => void;
@@ -2031,6 +2048,7 @@ async function unreserveConfiguredBuilderTarget(input: {
 async function selfReleaseConfiguredBuilder(input: {
   adapter: CustomerLifecycleAdapter;
   attachConfigured: ConfiguredBuilderAttach;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
   log: (message: string) => void;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   provisioning: ProvisioningCounter;
@@ -2042,6 +2060,7 @@ async function selfReleaseConfiguredBuilder(input: {
   const {
     adapter,
     attachConfigured,
+    configuredBuilderAssigned,
     log,
     processGate,
     provisioning,
@@ -2064,6 +2083,12 @@ async function selfReleaseConfiguredBuilder(input: {
       "refusing self-release until its controller completes or rolls back",
     );
   }
+  const slug = configuredBuilderSlug(adapter);
+  if (!slug || !(await configuredBuilderAssigned(slug))) {
+    throw new Error(
+      `configured Builder assignment does not match this gateway: ${slug ?? "unknown"}`,
+    );
+  }
   await waitForActiveProvisioningDrain();
   try {
     await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
@@ -2080,6 +2105,18 @@ async function selfReleaseConfiguredBuilder(input: {
   }
 }
 
+async function configuredBuilderSelfReleaseReserved(input: {
+  adapter: CustomerLifecycleAdapter;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+}): Promise<boolean> {
+  if (!input.processGate) return false;
+  const state = await input.processGate.status();
+  if (state.role !== "normal") return true;
+  const slug = configuredBuilderSlug(input.adapter);
+  return !slug || !(await input.configuredBuilderAssigned(slug));
+}
+
 export function createBuilderSurgeGateWiring(input: {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
@@ -2090,6 +2127,7 @@ export function createBuilderSurgeGateWiring(input: {
   waitForActiveProvisioningDrain?: () => Promise<void>;
   reconcileImportedWorkspace?: (slug: string) => void;
   attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
+  configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
 }): BuilderSurgeGateWiring {
   const {
     adapter,
@@ -2101,6 +2139,7 @@ export function createBuilderSurgeGateWiring(input: {
     waitForActiveProvisioningDrain = async () => undefined,
     reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
+    configuredBuilderAssigned = async () => false,
   } = input;
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
   const reholdAfterReleaseFailure = async (
@@ -2258,6 +2297,7 @@ export function createBuilderSurgeGateWiring(input: {
       return selfReleaseConfiguredBuilder({
         adapter,
         attachConfigured,
+        configuredBuilderAssigned,
         log,
         processGate,
         provisioning,
@@ -2272,10 +2312,9 @@ export function createBuilderSurgeGateWiring(input: {
       if (!processGate) return true;
       return (await processGate.status()).mode === "permitted";
     },
-    async selfReleaseReserved() {
-      if (!processGate) return false;
-      return (await processGate.status()).role !== "normal";
-    },
+    selfReleaseReserved: () => configuredBuilderSelfReleaseReserved({
+      adapter, configuredBuilderAssigned, processGate,
+    }),
   };
 }
 
@@ -2496,6 +2535,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     log: opts.log,
     provisioning: runtime,
     waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
+    configuredBuilderAssigned: createConfiguredBuilderAssignmentMatcher(opts),
   });
   const migrationDeps = {
     publicKey: opts.publicKey,

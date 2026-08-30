@@ -14,6 +14,7 @@ import {
   consumeRecoveredCustomerRuntimeReset,
   dashboardBridgeReady,
   cancelRemovedEviction,
+  createConfiguredBuilderAssignmentMatcher,
   createConfiguredBuilderReconcileAdmission,
   createBuilderSurgeGateWiring,
   desiredEnsureLaneFingerprint,
@@ -688,6 +689,93 @@ function configuredBuilderLifecycleAdapter(input: {
 }
 
 describe("configured Builder surge release", () => {
+  it("matches normal self-release against the authoritative desired roster", async () => {
+    const readDesiredFingerprints = vi.fn(async () => new Map([
+      ["ceckert-test", "fingerprint"],
+    ]));
+    const matches = createConfiguredBuilderAssignmentMatcher({
+      readDesiredFingerprints,
+    });
+
+    await expect(matches("ceckert-test")).resolves.toBe(true);
+    await expect(matches("other-builder")).resolves.toBe(false);
+    expect(readDesiredFingerprints).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds normal prelaunch attach until the authoritative assignment matches", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      let assigned = false;
+      let mounted = false;
+      const events: string[] = [];
+      const adapter = {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+        configuredBuilderOverlayPresent: () => true,
+        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
+        customerMountMarked: () => mounted,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+      } as unknown as CustomerLifecycleAdapter;
+      const processGate = {
+        status: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "normal" as const,
+          mode: "held" as const,
+          phase: "held" as const,
+        })),
+        permitNormal: vi.fn(async () => {
+          events.push("permit");
+          return {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "starting" as const,
+          };
+        }),
+        holdNormal: vi.fn(),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+        events.push("attach");
+        mounted = true;
+        return "ceckert-test";
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => {
+          events.push("ready");
+        },
+        log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        configuredBuilderAssigned: async () => assigned,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+
+      await expect(wiring.selfReleaseReserved()).resolves.toBe(true);
+      await expect(wiring.selfRelease("target-pod")).rejects.toThrow(/assignment/u);
+      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.permitNormal)).not.toHaveBeenCalled();
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+
+      assigned = true;
+      await expect(wiring.selfReleaseReserved()).resolves.toBe(false);
+      await expect(wiring.selfRelease("target-pod")).resolves.toBeUndefined();
+      expect(events).toEqual(["attach", "permit", "ready", "release"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
@@ -768,6 +856,7 @@ describe("configured Builder surge release", () => {
         mounted = true;
         return "ceckert-test";
       });
+      const configuredBuilderAssigned = vi.fn(async () => false);
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate,
@@ -778,6 +867,7 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         reconcileImportedWorkspace,
+        configuredBuilderAssigned,
         attachConfiguredBuilderBeforeOpenClaw,
       });
 
@@ -807,6 +897,7 @@ describe("configured Builder surge release", () => {
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
+      expect(configuredBuilderAssigned).not.toHaveBeenCalled();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();
