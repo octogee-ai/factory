@@ -107,13 +107,14 @@ describe("deployment target consumers", () => {
     expect(platform.match(/_REGION=\$\{\{ steps\.target\.outputs\.artifact_registry_location \}\}/g))
       .toHaveLength(5);
     expect(gateway.match(/_REGION=\$\{\{ needs\.matrix-setup\.outputs\.ar_location \}\}/g))
-      .toHaveLength(4);
+      .toHaveLength(3);
     expect(gateway).not.toContain("build-gateway-extra-oc");
     expect(gateway).not.toContain("build-operator-extra-oc");
 
     for (const config of [
       "artifact-worker/cloudbuild.yaml",
       "cloudbuild-base.yaml",
+      "cloudbuild-builder-base.yaml",
       "cloudbuild-operator-base-extra.yaml",
       "cloudbuild-operator-base.yaml",
       "cloudbuild-operator-final-extra.yaml",

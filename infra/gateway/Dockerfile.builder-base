@@ -1,0 +1,14 @@
+# Octogee Builder boot base.
+#
+# Builder pods inherit the OpenClaw runtime directly. Optional developer tools
+# arrive through the post-readiness toolchain hydrator; operator-only cluster,
+# cloud, database, and diagnostic clients do not belong in this image.
+
+ARG GATEWAY_BASE_IMAGE
+FROM ${GATEWAY_BASE_IMAGE}
+
+USER root
+
+COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
+
+USER node
