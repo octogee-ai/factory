@@ -269,40 +269,87 @@ function catalogState(configured, wrote) {
         return "unconfigured";
     return wrote ? "written" : "ok";
 }
-async function applyMissingPlatformBrokerProfiles(agentHome, agentId, opts) {
-    const missing = missingPlatformBrokerProfileTargets(agentHome, agentId, {
-        openRouter: opts.openRouter !== undefined,
-        openAi: opts.openAi !== undefined,
-    });
-    if (missing.length === 0)
-        return { wrote: false };
-    try {
-        await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(missing), opts.secretsApply ?? {});
-        return { wrote: true };
-    }
-    catch (error) {
-        if (!(error instanceof OpenClawSecretsApplyError))
-            throw error;
-        return { wrote: false, deferralReason: error.message };
-    }
-}
-async function materializeOneAgent(agentId, agentsDir, opts) {
+function prepareAgentMaterialization(agentId, agentsDir, opts) {
     const agentHome = path.join(agentsDir, agentId, "agent");
-    const catalog = opts.openRouter
+    const catalogWrote = opts.openRouter
         ? upsertOpenRouterBrokerCatalog(agentHome, opts.openRouter)
         : false;
-    const openAi = opts.openAi
+    const openAiWrote = opts.openAi
         ? upsertOpenAiBrokerCatalog(agentHome, opts.openAi)
         : false;
-    const profiles = await applyMissingPlatformBrokerProfiles(agentHome, agentId, opts);
-    const wrote = profiles.wrote || catalog || openAi;
-    if (wrote) {
-        opts.logFn?.(`[agent-model-token] model-ready: ${agentId}` +
-            ` (profiles ${profiles.wrote ? "applied" : "ok"},` +
-            ` openrouter ${catalogState(opts.openRouter, catalog)},` +
-            ` openai ${catalogState(opts.openAi, openAi)})`);
+    return {
+        agentId,
+        catalogWrote,
+        openAiWrote,
+        missingProfiles: missingPlatformBrokerProfileTargets(agentHome, agentId, {
+            openRouter: opts.openRouter !== undefined,
+            openAi: opts.openAi !== undefined,
+        }),
+    };
+}
+function prepareAgentMaterializations(agentIds, agentsDir, opts) {
+    const agents = [];
+    const deferred = [];
+    let deferralReason;
+    for (const agentId of new Set(agentIds)) {
+        if (!isBrokerResolvableAgentId(agentId)) {
+            if (!QUIET_NON_BROKER_AGENT_IDS.has(agentId)) {
+                opts.logFn?.(`[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`);
+            }
+            continue;
+        }
+        try {
+            agents.push(prepareAgentMaterialization(agentId, agentsDir, { ...opts, agentsDir }));
+        }
+        catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            opts.logFn?.(`⚠ [agent-model-token] model-ready materialize failed for ${agentId}: ${reason}`);
+            deferred.push(agentId);
+            deferralReason ??= reason;
+        }
     }
-    return { wrote, ...(profiles.deferralReason ? { deferralReason: profiles.deferralReason } : {}) };
+    return { agents, deferred, ...(deferralReason ? { deferralReason } : {}) };
+}
+async function applyAgentMaterializations(agents, opts) {
+    const targets = agents.flatMap((agent) => agent.missingProfiles);
+    if (targets.length === 0)
+        return { profilesApplied: false, deferred: [] };
+    try {
+        await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), opts.secretsApply ?? {});
+        return { profilesApplied: true, deferred: [] };
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (!(error instanceof OpenClawSecretsApplyError)) {
+            opts.logFn?.(`⚠ [agent-model-token] model-ready secrets apply failed: ${reason}`);
+        }
+        return {
+            profilesApplied: false,
+            deferred: agents
+                .filter((agent) => agent.missingProfiles.length > 0)
+                .map((agent) => agent.agentId),
+            deferralReason: reason,
+        };
+    }
+}
+function profileMaterializationState(agent, profilesApplied) {
+    if (agent.missingProfiles.length === 0)
+        return "ok";
+    return profilesApplied ? "applied" : "deferred";
+}
+function reportAgentMaterializations(agents, profilesApplied, opts) {
+    let materialized = 0;
+    for (const agent of agents) {
+        const profileWrote = profilesApplied && agent.missingProfiles.length > 0;
+        if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote)
+            continue;
+        materialized++;
+        opts.logFn?.(`[agent-model-token] model-ready: ${agent.agentId}` +
+            ` (profiles ${profileMaterializationState(agent, profilesApplied)},` +
+            ` openrouter ${catalogState(opts.openRouter, agent.catalogWrote)},` +
+            ` openai ${catalogState(opts.openAi, agent.openAiWrote)})`);
+    }
+    return materialized;
 }
 /**
  * Model-ready sweep: assert every broker provider surface per agent — the
@@ -313,28 +360,13 @@ async function materializeOneAgent(agentId, agentsDir, opts) {
  */
 export async function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-    let materialized = 0;
-    let deferralReason;
-    const deferred = [];
-    for (const agentId of agentIds) {
-        if (!isBrokerResolvableAgentId(agentId)) {
-            if (!QUIET_NON_BROKER_AGENT_IDS.has(agentId)) {
-                opts.logFn?.(`[agent-model-token] skipping ${agentId} — not a canonical workspace or project agent id`);
-            }
-            continue;
-        }
-        try {
-            const result = await materializeOneAgent(agentId, agentsDir, { ...opts, agentsDir });
-            if (result.wrote)
-                materialized++;
-            if (result.deferralReason) {
-                deferred.push(agentId);
-                deferralReason ??= result.deferralReason;
-            }
-        }
-        catch (e) {
-            opts.logFn?.(`⚠ [agent-model-token] model-ready materialize failed for ${agentId}: ${e.message}`);
-        }
-    }
-    return { materialized, deferred, ...(deferralReason ? { deferralReason } : {}) };
+    const prepared = prepareAgentMaterializations(agentIds, agentsDir, opts);
+    const applied = await applyAgentMaterializations(prepared.agents, opts);
+    const materialized = reportAgentMaterializations(prepared.agents, applied.profilesApplied, opts);
+    const deferralReason = prepared.deferralReason ?? applied.deferralReason;
+    return {
+        materialized,
+        deferred: [...prepared.deferred, ...applied.deferred],
+        ...(deferralReason ? { deferralReason } : {}),
+    };
 }

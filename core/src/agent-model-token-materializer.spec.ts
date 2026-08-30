@@ -422,12 +422,15 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
     const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
 
-    const result = await materializeBrokerProfilesForAgents(agentIds, {
-      agentsDir,
-      openRouter,
-      openAi,
-      secretsApply,
-    });
+    const result = await materializeBrokerProfilesForAgents(
+      [...agentIds, agentIds[0], agentIds[1]],
+      {
+        agentsDir,
+        openRouter,
+        openAi,
+        secretsApply,
+      },
+    );
 
     expect(apply).toHaveBeenCalledOnce();
     expect(plans).toHaveLength(1);
@@ -439,6 +442,35 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
       targets.length,
     );
     expect(result).toEqual({ materialized: agentIds.length, deferred: [] });
+  });
+
+  it("defers every affected agent when the batched apply fails unexpectedly", async () => {
+    const agentIds = ["octogee-alice-coach", "octogee-bob-coach"];
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const logs: string[] = [];
+    const secretsApply = {
+      rpc: {
+        secretsApply: vi.fn(async () => {
+          throw new Error("apply bug");
+        }),
+      },
+    };
+
+    const result = await materializeBrokerProfilesForAgents(agentIds, {
+      agentsDir,
+      openRouter,
+      secretsApply,
+      logFn: (message) => logs.push(message),
+    });
+
+    expect(result).toEqual({
+      materialized: agentIds.length,
+      deferred: agentIds,
+      deferralReason: "apply bug",
+    });
+    expect(logs).toContain(
+      "⚠ [agent-model-token] model-ready secrets apply failed: apply bug",
+    );
   });
 
   it("never writes the auth-profile store itself", async () => {
