@@ -1662,20 +1662,10 @@ async function verifyOwnerWorkspaceTurnFailClosed(
   }
 }
 
-function resolveFleetBrokerRouteDeps(
-  opts: { db: Firestore } & FleetBrokerRouteDeps,
-): ResolvedFleetBrokerRouteDeps {
+function resolveFleetBrokerRouteImplementations(
+  opts: FleetBrokerRouteDeps,
+) {
   return {
-    db: opts.db,
-    resolveFreeTierModel: createCachedFreeTierModelResolver({
-      db: opts.db,
-      onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
-    }),
-    resolveBuilderAgentDefault: createCachedBuilderAgentDefaultResolver({
-      db: opts.db,
-      onError: (err) =>
-        logger.error("fleet-broker builder-agent dial resolution failed", { err }),
-    }),
     provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
     markProvisioningComplete:
       opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
@@ -1690,6 +1680,24 @@ function resolveFleetBrokerRouteDeps(
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
+  };
+}
+
+function resolveFleetBrokerRouteDeps(
+  opts: { db: Firestore } & FleetBrokerRouteDeps,
+): ResolvedFleetBrokerRouteDeps {
+  return {
+    db: opts.db,
+    resolveFreeTierModel: createCachedFreeTierModelResolver({
+      db: opts.db,
+      onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
+    }),
+    resolveBuilderAgentDefault: createCachedBuilderAgentDefaultResolver({
+      db: opts.db,
+      onError: (err) =>
+        logger.error("fleet-broker builder-agent dial resolution failed", { err }),
+    }),
+    ...resolveFleetBrokerRouteImplementations(opts),
     verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
@@ -2049,6 +2057,25 @@ async function handleConfiguredBuilderBootstrap(
   res.json({ bootstrap });
 }
 
+function installToolchainStatusRoute(router: Router, db: Firestore): void {
+  router.post("/set-toolchain-status", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const status = objectBody(req).status;
+    if (!isDeveloperToolchainStatus(status)) {
+      res.status(400).json({ error: "invalid_status" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      await db.collection("users").doc(assigned.uid).update({
+        "provisioning.openclaw.toolchain.status": status,
+        "provisioning.openclaw.toolchain.updatedAt": FieldValue.serverTimestamp(),
+      });
+      res.status(204).end();
+    });
+  });
+}
+
 function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2058,6 +2085,7 @@ function installProvisioningRoutes(
   // to gateways/{id} costs the fleet a Firestore snapshot event. Repeats inside
   // the window are acknowledged without a write; anything new lands immediately.
   const reportedReconcileErrors = new Map<string, { report: string; at: number }>();
+  installToolchainStatusRoute(router, db);
 
   router.post("/set-provisioning-status", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);
@@ -2071,23 +2099,6 @@ function installProvisioningRoutes(
       await db.collection("users").doc(assigned.uid).update({
         "provisioning.openclaw.status": status,
         "provisioning.status": status === "complete" ? "complete" : "in_progress",
-      });
-      res.status(204).end();
-    });
-  });
-
-  router.post("/set-toolchain-status", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
-    if (!assigned) return;
-    const status = objectBody(req).status;
-    if (!isDeveloperToolchainStatus(status)) {
-      res.status(400).json({ error: "invalid_status" });
-      return;
-    }
-    await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.toolchain.status": status,
-        "provisioning.openclaw.toolchain.updatedAt": FieldValue.serverTimestamp(),
       });
       res.status(204).end();
     });

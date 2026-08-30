@@ -127,6 +127,22 @@ export interface FleetBrokerClientOptions {
   gatewayCredentialHeaders?: () => Promise<Record<string, string>>;
 }
 
+function npmRegistryCredentialClient(
+  gatewayId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<FleetBrokerClient, "npmRegistryCredentials"> {
+  return {
+    async npmRegistryCredentials(slug) {
+      return postJson<FleetBrokerNpmRegistryCredentials>(
+        "/internal/fleet/npm-registry-credentials",
+        { gatewayId, slug },
+        await gatewayCredentialHeaders(),
+        { redactErrorBody: true },
+      );
+    },
+  };
+}
+
 // The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
 // stable pod per gateway); the broker cross-checks it against the pod name it
 // authenticated (revisionIdFromGatewayPodName).
@@ -138,6 +154,7 @@ export function createFleetBrokerClient(
   const gatewayCredentialHeaders = opts.gatewayCredentialHeaders
     ?? defaultGatewayCredentialHeaders;
   return {
+    ...npmRegistryCredentialClient(gatewayId, gatewayCredentialHeaders),
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",
@@ -153,14 +170,6 @@ export function createFleetBrokerClient(
         await gatewayCredentialHeaders(),
       );
       return data.bootstrap;
-    },
-    async npmRegistryCredentials(slug) {
-      return postJson<FleetBrokerNpmRegistryCredentials>(
-        "/internal/fleet/npm-registry-credentials",
-        { gatewayId, slug },
-        await gatewayCredentialHeaders(),
-        { redactErrorBody: true },
-      );
     },
     async uidForSlug(slug) {
       try {
