@@ -10,6 +10,7 @@ import {
   type FleetLogger,
   type GatewayPodDiagnostics,
 } from "@octogee/core/admin-fleet-router";
+import type { CentralReleaseAuthority } from "@octogee/core/artifact-registry";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -67,6 +68,8 @@ export interface HttpServerDeps {
     service: string;
     limit: number;
   }) => Promise<unknown[]>;
+  releaseEnvironment?: "test" | "prod" | null;
+  releaseAuthority?: CentralReleaseAuthority;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   readGatewayPodDiagnosticsBatch?: (
     gatewayIds: readonly string[],
@@ -288,6 +291,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     workspaceSlugsForUser: deps.workspaceSlugsForUser,
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
     listGatewayBuilds: deps.listGatewayBuilds,
+    releaseEnvironment: deps.releaseEnvironment,
+    releaseAuthority: deps.releaseAuthority,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
     readGatewayPodDiagnosticsBatch: deps.readGatewayPodDiagnosticsBatch,
     suspendAuthUser: deps.suspendAuthUser,
