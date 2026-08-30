@@ -282,11 +282,23 @@ function scanDockerfiles(
 ): void {
   for (const file of files.filter((candidate) => path.basename(candidate).startsWith("Dockerfile"))) {
     const relativePath = posixPath(path.relative(root, file));
+    const localStages = new Set<string>();
     let index = 0;
     for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-      const match = line.match(/^\s*FROM(?:\s+--\S+)*\s+(\S+)/i);
+      const match = line.match(/^\s*FROM(?:\s+--\S+)*\s+(\S+)(?:\s+AS\s+(\S+))?/i);
       if (!match) continue;
-      pushImage({ references, exclusions }, "dockerfile", relativePath, `from:${index}`, match[1]);
+      if (localStages.has(match[1])) {
+        exclusions.push({
+          referenceKind: "dockerfile",
+          path: relativePath,
+          key: `from:${index}`,
+          rawValue: match[1],
+          reason: "local-reference",
+        });
+      } else {
+        pushImage({ references, exclusions }, "dockerfile", relativePath, `from:${index}`, match[1]);
+      }
+      if (match[2]) localStages.add(match[2]);
       index += 1;
     }
   }
