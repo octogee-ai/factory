@@ -77,7 +77,7 @@ describe("Builder compressed image budget", () => {
   });
 
   it("resolves the tag digest before reading list metadata", () => {
-    const result = runCheck("1875172316");
+    const result = runCheck("1875172316", "3100000000");
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("1875172316 / 3100000000 bytes");
