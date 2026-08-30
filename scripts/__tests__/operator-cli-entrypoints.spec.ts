@@ -199,6 +199,17 @@ describe("setup-stripe-plans catalog", () => {
       });
       expect(sub.metadata.builderTier).toBe(builderTier.name);
     }
+    for (const builder of builders) {
+      expect(builder.metadata).toMatchObject({
+        trialDays: "7",
+        trialEligibility: "first_builder_gateway",
+        trialPaymentMethodRequired: "true",
+      });
+      expect(builder.marketingFeatures.join(" ")).toMatch(/7-day free trial/i);
+      expect(builder.description).toMatch(/first self-serve Builder gateway/i);
+    }
+    expect(builders[0].metadata.instance).toBe("small");
+    expect(builders[0].description).toMatch(/Small isolated gateway/i);
   });
 
   it("sells one-time credit SKUs for every shared denomination", () => {
