@@ -14,6 +14,15 @@ import {
 import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
 
 const tempRoots: string[] = [];
+const PROXY_REGISTRY =
+  "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/";
+const CAPABILITY = "t".repeat(43);
+
+const registryCredentials = () => Promise.resolve({
+  registryUrl: PROXY_REGISTRY,
+  token: CAPABILITY,
+  expiresAt: "2099-01-01T00:00:00.000Z",
+});
 
 async function tempRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "octogee-toolchain-lock-"));
@@ -111,13 +120,12 @@ describe("Builder npm toolchain lock", () => {
     const root = path.join(home, ".octogee", "toolchains");
     const pin = await writePinnedInputs(home);
     const installDependencies = vi.fn(fakeInstall);
-    const registryTokenProvider = vi.fn(async () => "short-lived-token");
+    const registryCredentialsProvider = vi.fn(registryCredentials);
 
     await expect(hydrateBuilderToolchain({
       root,
       ...pin,
-      proxyRegistryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
-      registryTokenProvider,
+      registryCredentialsProvider,
       installDependencies,
     })).resolves.toMatchObject({ status: "ready" });
 
@@ -126,8 +134,8 @@ describe("Builder npm toolchain lock", () => {
       `${path.sep}staging${path.sep}`,
     ), {
       cachePath: path.join(root, "npm-cache"),
-      registryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
-      authToken: "short-lived-token",
+      registryUrl: PROXY_REGISTRY,
+      authToken: CAPABILITY,
       signal: undefined,
     });
     expect(await fs.readlink(path.join(root, "active"))).toBe(
@@ -150,8 +158,7 @@ describe("Builder npm toolchain lock", () => {
       root,
       ...pin,
       packageLockSha256: "0".repeat(64),
-      proxyRegistryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
-      registryTokenProvider: async () => "short-lived-token",
+      registryCredentialsProvider: registryCredentials,
       installDependencies,
     })).rejects.toMatchObject({ reasonCode: "toolchain-lock-digest-mismatch" });
     expect(installDependencies).not.toHaveBeenCalled();
@@ -168,7 +175,7 @@ describe("Builder npm toolchain lock", () => {
     await hydrateBuilderToolchain({
       root,
       ...pin,
-      registryTokenProvider: async () => { throw new Error("metadata unavailable"); },
+      registryCredentialsProvider: async () => { throw new Error("metadata unavailable"); },
       installDependencies,
       log,
       nowMs: () => ticks.shift() ?? 140,
@@ -178,10 +185,34 @@ describe("Builder npm toolchain lock", () => {
     expect(installDependencies.mock.calls[0]?.[1]).toMatchObject({
       registryUrl: "https://registry.npmjs.org/",
     });
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/token unavailable.*direct npm/));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/credentials unavailable.*direct npm/));
     expect(log).toHaveBeenCalledWith(
       "[builder-toolchain] npm install registry=direct outcome=ready durationMs=40",
     );
+  });
+
+  it("never sends the capability to a registry outside the in-cluster proxy", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const installDependencies = vi.fn(fakeInstall);
+
+    await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: async () => ({
+        registryUrl: "https://attacker.example/npm/",
+        token: CAPABILITY,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+      installDependencies,
+    });
+
+    expect(installDependencies).toHaveBeenCalledTimes(1);
+    expect(installDependencies.mock.calls[0]?.[1]).toMatchObject({
+      registryUrl: "https://registry.npmjs.org/",
+    });
+    expect(installDependencies.mock.calls[0]?.[1]).not.toHaveProperty("authToken");
   });
 
   it("passes proxy auth only through the npm child environment and removes its config", async () => {

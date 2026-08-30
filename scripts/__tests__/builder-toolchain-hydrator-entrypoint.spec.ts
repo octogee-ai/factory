@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  createBuilderNpmProxyTokenProvider,
+  createBuilderNpmProxyCredentialsProvider,
   createBuilderToolchainStatusPublisher,
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
@@ -17,7 +17,6 @@ describe("Builder toolchain hydrator entrypoint", () => {
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH: "/octogee/toolchain/package.json",
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH: "/octogee/toolchain/package-lock.json",
       OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256: "a".repeat(64),
-      OCTOGEE_BUILDER_NPM_PROXY_REGISTRY: "https://proxy.example/npm/",
     })).toEqual({
       root: "/home/builder/.octogee/toolchains",
       gatewayId: "bender",
@@ -26,17 +25,21 @@ describe("Builder toolchain hydrator entrypoint", () => {
       packageJsonPath: "/octogee/toolchain/package.json",
       packageLockPath: "/octogee/toolchain/package-lock.json",
       packageLockSha256: "a".repeat(64),
-      proxyRegistryUrl: "https://proxy.example/npm/",
       fallbackRegistryUrl: "https://registry.npmjs.org/",
     });
   });
 
-  it("uses a short-lived Google access token without exposing auth in config", async () => {
-    const getAccessToken = vi.fn(async () => "short-lived-token");
-    const provide = createBuilderNpmProxyTokenProvider({ getAccessToken });
+  it("gets an opaque short-lived capability from the assignment-bound broker", async () => {
+    const credentials = {
+      registryUrl: "http://octogee-npm-cache-proxy.octogee.svc.cluster.local:3005/",
+      token: "n".repeat(43),
+      expiresAt: "2026-08-30T00:10:00.000Z",
+    };
+    const client = { npmRegistryCredentials: vi.fn(async () => credentials) };
+    const provide = createBuilderNpmProxyCredentialsProvider({ client, builderSlug: "alice" });
 
-    await expect(provide()).resolves.toBe("short-lived-token");
-    expect(getAccessToken).toHaveBeenCalledTimes(1);
+    await expect(provide()).resolves.toEqual(credentials);
+    expect(client.npmRegistryCredentials).toHaveBeenCalledWith("alice");
   });
 
   it("projects exact states through the assigned-gateway broker and resolves the uid once", async () => {

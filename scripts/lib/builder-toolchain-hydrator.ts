@@ -11,10 +11,9 @@ import {
   type DeveloperToolchainStatus,
   type DeveloperToolchainStatusArtifact,
 } from "../../shared/types/developer-toolchain.js";
+import type { FleetBrokerNpmRegistryCredentials } from "../../shared/types/fleet-broker.js";
 
 export const BUILDER_TOOLCHAIN_COMMANDS = ["claude", "codex"] as const;
-export const DEFAULT_BUILDER_NPM_PROXY_REGISTRY =
-  "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/";
 export const DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY = "https://registry.npmjs.org/";
 
 export type BuilderToolchainCommand = typeof BUILDER_TOOLCHAIN_COMMANDS[number];
@@ -57,9 +56,8 @@ export interface HydrateBuilderToolchainOptions {
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
-  proxyRegistryUrl?: string;
   fallbackRegistryUrl?: string;
-  registryTokenProvider?: (registryUrl: string) => Promise<string>;
+  registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
   installDependencies?: (
     destination: string,
     options: InstallBuilderToolchainOptions,
@@ -190,14 +188,22 @@ function parsePackageJson(value: unknown, expected: BuilderToolchainLock): void 
   }
 }
 
-function validatedRegistryUrl(raw: string): string {
+function validatedRegistryUrl(raw: string, allowInternalProxy = false): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw hydrationError("invalid-registry-url");
   }
-  if (url.protocol !== "https:" || url.username || url.password) {
+  const internalProxy = allowInternalProxy && url.protocol === "http:" &&
+    /^octogee-npm-cache-proxy\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.svc\.cluster\.local$/u
+      .test(url.hostname) &&
+    url.port === "3005" && url.pathname === "/";
+  const allowedTarget = allowInternalProxy ? internalProxy : url.protocol === "https:";
+  if (
+    !allowedTarget || url.username || url.password ||
+    url.search || url.hash
+  ) {
     throw hydrationError("invalid-registry-url");
   }
   if (!url.pathname.endsWith("/")) url.pathname += "/";
@@ -403,7 +409,6 @@ interface HydrationRuntime {
   log: (message: string) => void;
   now: () => Date;
   nowMs: () => number;
-  proxyRegistryUrl: string;
 }
 
 function resolveHydrationRuntime(options: HydrateBuilderToolchainOptions): HydrationRuntime {
@@ -416,9 +421,6 @@ function resolveHydrationRuntime(options: HydrateBuilderToolchainOptions): Hydra
     log: options.log ?? console.error,
     now: options.now ?? (() => new Date()),
     nowMs: options.nowMs ?? Date.now,
-    proxyRegistryUrl: validatedRegistryUrl(
-      options.proxyRegistryUrl ?? DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
-    ),
   };
 }
 
@@ -475,9 +477,8 @@ async function activateObject(root: string, objectPath: string): Promise<void> {
 async function installWithRegistryFallback(input: {
   destination: string;
   cachePath: string;
-  proxyRegistryUrl: string;
   fallbackRegistryUrl: string;
-  registryTokenProvider?: (registryUrl: string) => Promise<string>;
+  registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
   installDependencies: (
     destination: string,
     options: InstallBuilderToolchainOptions,
@@ -506,21 +507,34 @@ async function installWithRegistryFallback(input: {
     }
   };
 
-  let token: string | undefined;
-  if (input.registryTokenProvider) {
+  let credentials: FleetBrokerNpmRegistryCredentials | undefined;
+  if (input.registryCredentialsProvider) {
     try {
-      token = await input.registryTokenProvider(input.proxyRegistryUrl);
-      if (!token) throw new Error("empty token");
+      const candidate = await input.registryCredentialsProvider();
+      const expiresAtMs = Date.parse(candidate.expiresAt);
+      if (
+        !/^[A-Za-z0-9_-]{43,128}$/u.test(candidate.token) ||
+        !Number.isFinite(expiresAtMs) || expiresAtMs <= input.nowMs()
+      ) {
+        throw new Error("invalid npm proxy capability");
+      }
+      credentials = {
+        registryUrl: validatedRegistryUrl(candidate.registryUrl, true),
+        token: candidate.token,
+        expiresAt: new Date(expiresAtMs).toISOString(),
+      };
     } catch {
-      input.log("[builder-toolchain] npm proxy token unavailable; falling back to direct npm");
+      input.log("[builder-toolchain] npm proxy credentials unavailable; falling back to direct npm");
     }
   } else {
-    input.log("[builder-toolchain] npm proxy token provider unavailable; falling back to direct npm");
+    input.log(
+      "[builder-toolchain] npm proxy credentials provider unavailable; falling back to direct npm",
+    );
   }
 
-  if (token) {
+  if (credentials) {
     try {
-      await run("proxy", input.proxyRegistryUrl, token);
+      await run("proxy", credentials.registryUrl, credentials.token);
       return;
     } catch {
       input.log("[builder-toolchain] npm proxy install failed; falling back to direct npm");
@@ -588,9 +602,8 @@ export async function hydrateBuilderToolchain(
     await installWithRegistryFallback({
       destination: stagingPath,
       cachePath: path.join(options.root, "npm-cache"),
-      proxyRegistryUrl: runtime.proxyRegistryUrl,
       fallbackRegistryUrl: runtime.fallbackRegistryUrl,
-      registryTokenProvider: options.registryTokenProvider,
+      registryCredentialsProvider: options.registryCredentialsProvider,
       installDependencies: runtime.installDependencies,
       signal: options.signal,
       log: runtime.log,

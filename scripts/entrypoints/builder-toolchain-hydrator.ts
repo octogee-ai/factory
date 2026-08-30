@@ -1,11 +1,10 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { GoogleAuth } from "google-auth-library";
 
 import type { DeveloperToolchainStatusArtifact } from "../../shared/types/developer-toolchain.js";
+import type { FleetBrokerNpmRegistryCredentials } from "../../shared/types/fleet-broker.js";
 import {
   DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
-  DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
   hydrateBuilderToolchain,
   runBuilderToolchainHydrationLoop,
   writeToolchainStatus,
@@ -17,7 +16,6 @@ export interface BuilderToolchainHydratorConfig {
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
-  proxyRegistryUrl: string;
   fallbackRegistryUrl: string;
   gatewayId: string;
   builderSlug: string;
@@ -46,11 +44,6 @@ export function resolveBuilderToolchainHydratorConfig(
       "/octogee/toolchain/package-lock.json",
     ),
     packageLockSha256: envValue(env, "OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256"),
-    proxyRegistryUrl: envValue(
-      env,
-      "OCTOGEE_BUILDER_NPM_PROXY_REGISTRY",
-      DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
-    ),
     fallbackRegistryUrl: envValue(
       env,
       "OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY",
@@ -62,16 +55,11 @@ export function resolveBuilderToolchainHydratorConfig(
   };
 }
 
-export function createBuilderNpmProxyTokenProvider(
-  auth: Pick<GoogleAuth, "getAccessToken"> = new GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-  }),
-): () => Promise<string> {
-  return async () => {
-    const token = await auth.getAccessToken();
-    if (!token) throw new Error("Artifact Registry access token unavailable");
-    return token;
-  };
+export function createBuilderNpmProxyCredentialsProvider(input: {
+  client: Pick<FleetBrokerClient, "npmRegistryCredentials">;
+  builderSlug: string;
+}): () => Promise<FleetBrokerNpmRegistryCredentials> {
+  return () => input.client.npmRegistryCredentials(input.builderSlug);
 }
 
 export function createBuilderToolchainStatusPublisher(input: {
@@ -129,10 +117,13 @@ const abortableSleep = (signal: AbortSignal) => (ms: number): Promise<void> =>
 
 export async function runBuilderToolchainHydrator(input: {
   config: BuilderToolchainHydratorConfig;
-  client?: Pick<FleetBrokerClient, "uidForSlug" | "setToolchainStatus">;
+  client?: Pick<
+    FleetBrokerClient,
+    "npmRegistryCredentials" | "uidForSlug" | "setToolchainStatus"
+  >;
   signal?: AbortSignal;
   log?: (message: string) => void;
-  registryTokenProvider?: (registryUrl: string) => Promise<string>;
+  registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
 }): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
   const log = input.log ?? console.error;
@@ -141,8 +132,11 @@ export async function runBuilderToolchainHydrator(input: {
     client,
     builderSlug: input.config.builderSlug,
   });
-  const registryTokenProvider = input.registryTokenProvider
-    ?? createBuilderNpmProxyTokenProvider();
+  const registryCredentialsProvider = input.registryCredentialsProvider
+    ?? createBuilderNpmProxyCredentialsProvider({
+      client,
+      builderSlug: input.config.builderSlug,
+    });
   const writeStatus = (status: DeveloperToolchainStatusArtifact["status"]): Promise<void> =>
     writeToolchainStatus(input.config.root, statusArtifact(status), { publishStatus, log });
 
@@ -153,9 +147,8 @@ export async function runBuilderToolchainHydrator(input: {
       packageJsonPath: input.config.packageJsonPath,
       packageLockPath: input.config.packageLockPath,
       packageLockSha256: input.config.packageLockSha256,
-      proxyRegistryUrl: input.config.proxyRegistryUrl,
       fallbackRegistryUrl: input.config.fallbackRegistryUrl,
-      registryTokenProvider,
+      registryCredentialsProvider,
       attempt,
       publishStatus,
       log,
