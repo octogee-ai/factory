@@ -342,7 +342,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
     const startedAt = Date.now();
     let routingActivationRequired = false;
     let restartExistingAccountIds = [];
-    await applyConfigPatch({
+    const configPatch = await applyConfigPatch({
         buildPatch: (current) => {
             const cfg = current;
             const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
@@ -411,5 +411,6 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
         elapsedMs: Date.now() - startedAt,
         routingActivationRequired,
         restartExistingAccountIds,
+        configNoop: configPatch.noop === true,
     };
 }

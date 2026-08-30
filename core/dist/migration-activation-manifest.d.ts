@@ -59,4 +59,5 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
     elapsedMs: number;
     routingActivationRequired: boolean;
     restartExistingAccountIds: string[];
+    configNoop: boolean;
 }>;

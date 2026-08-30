@@ -638,6 +638,7 @@ describe("migration activation manifest", () => {
     const applyWith = async (
       bindings: unknown[],
       accounts: Record<string, unknown> = {},
+      configNoop = false,
     ) => {
       const events: string[] = [];
       const onRoutingActivationRequired = vi.fn((accountIds: readonly string[]) => {
@@ -654,7 +655,7 @@ describe("migration activation manifest", () => {
         })),
         configPatch: vi.fn(async (patch: unknown) => {
           events.push("configPatch");
-          return { hash: "h2", config: patch };
+          return { hash: "h2", config: patch, ...(configNoop ? { noop: true } : {}) };
         }),
         close: vi.fn(async () => undefined),
       };
@@ -682,6 +683,11 @@ describe("migration activation manifest", () => {
     expect(present.events).toEqual(["configPatch"]);
     expect(present.onRoutingActivationRequired).not.toHaveBeenCalled();
     expect(present.result.routingActivationRequired).toBe(false);
+    expect(present.result.configNoop).toBe(false);
+
+    const noop = await applyWith([accountBinding], {}, true);
+    expect(noop.result.routingActivationRequired).toBe(false);
+    expect(noop.result.configNoop).toBe(true);
 
     const foreignPeer = {
       agentId: "octogee-bob-coach",
