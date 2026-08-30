@@ -13,6 +13,7 @@ import {
   type SurgeOpenClawProcessRequest,
   type SurgeOpenClawProcessSupervisorRequest,
 } from "../lib/surge-openclaw-process-gate.js";
+import { pruneMissingOpenClawAgentDatabaseRegistrations } from "../lib/openclaw-restored-state-recovery.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
@@ -34,6 +35,7 @@ export interface StartSurgeOpenClawSupervisorOptions {
   healthTimeoutMs?: number;
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
+  recoverRestoredState?: () => Promise<void>;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
   probeHealthz?: () => Promise<boolean>;
@@ -271,6 +273,7 @@ interface StartPermittedOpenClawChildOptions {
   prepareTarget: () => Promise<void>;
   probeHealthz: () => Promise<boolean>;
   reapOrphanedOpenClaw: () => Promise<void>;
+  recoverRestoredState: () => Promise<void>;
   recordChildPid: (pid: number | undefined) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   spawnOpenClaw: () => SpawnedOpenClaw;
@@ -289,6 +292,7 @@ async function startPermittedOpenClawChild(
       throw new Error("surge OpenClaw process was held during target preparation");
     }
     await opts.reapOrphanedOpenClaw();
+    await opts.recoverRestoredState();
     const spawned = opts.spawnOpenClaw();
     opts.child.set(spawned);
     let healthy = false;
@@ -458,6 +462,10 @@ export async function startSurgeOpenClawSupervisor(
   const sleep = opts.sleep ?? defaultSleep;
   const spawnOpenClaw = opts.spawnOpenClaw ?? defaultSpawnOpenClaw;
   const prepareTarget = opts.prepareTarget ?? defaultPrepareTarget;
+  const recoverRestoredState = opts.recoverRestoredState ?? (async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || opts.openclawDir;
+    pruneMissingOpenClawAgentDatabaseRegistrations({ stateDir, log: opts.log });
+  });
   const timeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const stopGraceMs = opts.stopGraceMs ?? DEFAULT_STOP_GRACE_MS;
   const pidPath = path.join(opts.openclawDir, SURGE_OPENCLAW_PID_FILE);
@@ -534,6 +542,7 @@ export async function startSurgeOpenClawSupervisor(
         prepareTarget,
         probeHealthz,
         reapOrphanedOpenClaw,
+        recoverRestoredState,
         recordChildPid,
         sleep,
         spawnOpenClaw,
