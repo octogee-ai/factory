@@ -137,6 +137,7 @@ function app(opts: {
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
+  a.post("/internal/fleet/user-snapshot", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/download-url", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/snapshot-urls", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/prune", enforcement, handler);
@@ -714,6 +715,23 @@ describe("tenant enforcement middleware", () => {
       .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
 
     expect(res.status).toBe(200);
+  });
+
+  it("passes configured builder owner snapshots to their stricter route-level authorization", async () => {
+    const target = app({
+      boundTenant: BENDER_R2,
+      gateways: { bender: configuredBender() },
+    });
+
+    const owner = await request(target)
+      .post("/internal/fleet/user-snapshot")
+      .send({ gatewayId: "bender", uid: "victim" });
+    const foreignGateway = await request(target)
+      .post("/internal/fleet/user-snapshot")
+      .send({ gatewayId: "other", uid: "victim" });
+
+    expect(owner.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
   });
 
   it("passes builder runtime state snapshot and prune routes to their allocation-bound authorization", async () => {
