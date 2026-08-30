@@ -6,6 +6,8 @@ const repoRoot = path.resolve(__dirname, "../..");
 const iamModule = path.join(repoRoot, "terraform/modules/iam/main.tf");
 const centralPlatform = path.join(repoRoot, "terraform/environments/prod/main.tf");
 const testEnvironment = path.join(repoRoot, "terraform/environments/test/main.tf");
+const testVariables = path.join(repoRoot, "terraform/environments/test/variables.tf");
+const testTfvars = path.join(repoRoot, "terraform/environments/test/terraform.tfvars");
 
 describe("firebase deployer Terraform IAM", () => {
   it("allows only the exact GitHub repository pool to federate as the deployer", () => {
@@ -69,6 +71,26 @@ describe("firebase deployer Terraform IAM", () => {
       expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
     }
     expect(moduleSource).not.toContain("octogeeFirebaseCustomTokenSigner");
+  });
+
+  it("grants configured TEST operators only the custom-token signing permission", () => {
+    const source = readFileSync(testEnvironment, "utf-8");
+    const variables = readFileSync(testVariables, "utf-8");
+    const tfvars = readFileSync(testTfvars, "utf-8");
+    const binding = source.match(
+      /resource "google_service_account_iam_member" "firebase_deployer_operator_custom_token_signer" \{([\s\S]*?)^\}/m,
+    )?.[1];
+
+    expect(variables).toContain('variable "firebase_custom_token_operator_members"');
+    expect(binding).toContain("for_each           = var.firebase_custom_token_operator_members");
+    expect(binding).toContain(
+      "role               = google_project_iam_custom_role.firebase_custom_token_signer.id",
+    );
+    expect(binding).toContain("member             = each.value");
+    expect(tfvars).toContain(
+      'firebase_custom_token_operator_members = ["user:christopher.k.eckert@squarepointconsulting.com"]',
+    );
+    expect(source).not.toContain("roles/iam.serviceAccountTokenCreator");
   });
 
   it("grants every Central release Firebase deployer reader access to the Central Artifact Registry", () => {

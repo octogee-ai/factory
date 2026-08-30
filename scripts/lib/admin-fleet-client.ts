@@ -39,6 +39,36 @@ function apiUrl(apiOrigin: string, path: string): string {
   return `${apiOrigin.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 }
 
+export async function resolveFirebaseWebApiKey(input: {
+  appOrigin: string;
+  configuredKey?: string;
+  fetchImpl?: FetchLike;
+}): Promise<string> {
+  const configuredKey = input.configuredKey?.trim();
+  if (configuredKey) return configuredKey;
+
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const configUrl = apiUrl(input.appOrigin, "/__/firebase/init.json");
+  const response = await fetchImpl(configUrl, {
+    headers: { Accept: "application/json" },
+  });
+  const text = await response.text();
+  const body = parseJson(text);
+  if (!response.ok) {
+    const statusSuffix = response.statusText ? ` ${response.statusText}` : "";
+    throw new Error(
+      `Firebase initialization metadata request failed: ${response.status}${statusSuffix}`,
+    );
+  }
+  const apiKey = typeof body === "object" && body !== null
+    ? (body as { apiKey?: unknown }).apiKey
+    : undefined;
+  if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
+    throw new Error("Firebase initialization metadata returned no apiKey");
+  }
+  return apiKey.trim();
+}
+
 export function createAdminFleetClient(input: {
   apiOrigin: string;
   getIdToken: () => Promise<string>;

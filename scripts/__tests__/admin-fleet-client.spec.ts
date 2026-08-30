@@ -3,6 +3,7 @@ import {
   AdminFleetHttpError,
   createAdminFleetClient,
   exchangeAdminFleetCustomToken,
+  resolveFirebaseWebApiKey,
 } from "../lib/admin-fleet-client.js";
 
 function response(input: {
@@ -19,6 +20,42 @@ function response(input: {
 }
 
 describe("admin fleet client", () => {
+  it("discovers the Firebase web API key from the environment app origin", async () => {
+    const fetchImpl = vi.fn(async () => response({
+      status: 200,
+      body: JSON.stringify({ apiKey: "public-web-key", projectId: "octogee-test" }),
+    }));
+
+    await expect(resolveFirebaseWebApiKey({
+      appOrigin: "https://app-test.octogee.com/",
+      fetchImpl,
+    })).resolves.toBe("public-web-key");
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://app-test.octogee.com/__/firebase/init.json",
+      { headers: { Accept: "application/json" } },
+    );
+  });
+
+  it("keeps an explicit Firebase web API key as a no-network override", async () => {
+    const fetchImpl = vi.fn();
+
+    await expect(resolveFirebaseWebApiKey({
+      appOrigin: "https://app-test.octogee.com",
+      configuredKey: "  explicit-key  ",
+      fetchImpl,
+    })).resolves.toBe("explicit-key");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails clearly when public Firebase initialization metadata has no API key", async () => {
+    await expect(resolveFirebaseWebApiKey({
+      appOrigin: "https://app-test.octogee.com",
+      fetchImpl: async () => response({ status: 200, body: "{}" }),
+    })).rejects.toThrow("Firebase initialization metadata returned no apiKey");
+  });
+
   it("sends bearer JSON with an optional idempotency key", async () => {
     const fetchImpl = vi.fn(async () => response({
       status: 202,
