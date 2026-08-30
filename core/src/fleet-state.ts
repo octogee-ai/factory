@@ -552,6 +552,7 @@ function recoveryAlreadyCommitted(input: {
     targetAssignmentExact,
     operationTimingExact,
     disposableLeaseExact,
+    runtimeResetMatches(openclaw, input.params, operationAt),
   ].every(Boolean);
 }
 
@@ -571,6 +572,36 @@ function returningLeaseMatches(
     lease.returnOperationId === params.operationId,
     lease.returningAt === operationAt,
   ].every(Boolean);
+}
+
+function disposableRuntimeReset(
+  params: UnavailableGatewayRecoveryParams,
+  requestedAt: number,
+): Record<string, unknown> | null {
+  if (params.kind !== "recover-disposable-customer" || !params.disposableLease) return null;
+  return {
+    status: "pending",
+    uid: params.uid,
+    slug: params.slug,
+    operationId: params.operationId,
+    sourceGatewayId: params.fromGatewayId,
+    targetGatewayId: params.toGatewayId,
+    generation: params.expectedSourceEpoch + 1,
+    disposableLeaseId: params.disposableLease.leaseId,
+    disposableLeaseGeneration: params.disposableLease.generation,
+    requestedAt,
+  };
+}
+
+function runtimeResetMatches(
+  openclaw: Record<string, unknown>,
+  params: UnavailableGatewayRecoveryParams,
+  operationAt: number | null,
+): boolean {
+  const expected = operationAt === null ? null : disposableRuntimeReset(params, operationAt);
+  if (expected === null) return openclaw.runtimeReset === undefined;
+  const actual = recordOrEmpty(openclaw.runtimeReset);
+  return Object.entries(expected).every(([key, value]) => actual[key] === value);
 }
 
 function recoveryTargetRootReady(
@@ -827,6 +858,9 @@ export async function commitUnavailableGatewayRecoveryAtomic(
       "provisioning.openclaw.gatewayAssignedAt": nowMs,
       "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
       "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
+      ...(disposableRuntimeReset(params, nowMs)
+        ? { "provisioning.openclaw.runtimeReset": disposableRuntimeReset(params, nowMs) }
+        : {}),
       ...(lease
         ? {
             "provisioning.openclaw.activationLease": {
