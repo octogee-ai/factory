@@ -113,6 +113,12 @@ export interface FleetBrokerBlobSignedUrl {
   requiredHeaders?: Record<string, string>;
 }
 
+export interface FleetBrokerNpmRegistryCredentials {
+  registryUrl: string;
+  token: string;
+  expiresAt: string;
+}
+
 export const BUILDER_RUNTIME_STATE_RECOVERY_TIERS = ["minute", "hour", "day"] as const;
 
 export type BuilderRuntimeStateRecoveryTier =

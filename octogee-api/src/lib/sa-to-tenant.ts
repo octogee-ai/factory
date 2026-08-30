@@ -16,7 +16,7 @@ export type BoundTenant =
     }
   | {
       kind: "platform";
-      actor: "glm-controller" | "octogee-api" | "artifact-worker" | "cron" | "llm-broker";
+      actor: "glm-controller" | "octogee-api" | "artifact-worker" | "cron" | "llm-broker" | "npm-cache-proxy";
     };
 type PlatformActor = Extract<BoundTenant, { kind: "platform" }>["actor"];
 
@@ -76,6 +76,7 @@ function platformActorFromSa(saName: string): PlatformActor | null {
   if (saName === "octogee-artifact-worker") return "artifact-worker";
   if (saName === "octogee-cron") return "cron";
   if (saName === "llm-broker") return "llm-broker";
+  if (saName === "octogee-npm-cache-proxy") return "npm-cache-proxy";
   return null;
 }
 

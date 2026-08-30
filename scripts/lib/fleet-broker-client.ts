@@ -6,6 +6,7 @@ import type {
   FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
+  FleetBrokerNpmRegistryCredentials,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
@@ -26,6 +27,7 @@ async function postJson<T>(
   path: string,
   body: unknown,
   headers: Record<string, string> = {},
+  options: { redactErrorBody?: boolean } = {},
 ): Promise<T> {
   const resp = await internalFetch(`${baseUrl()}${path}`, {
     method: "POST",
@@ -33,6 +35,9 @@ async function postJson<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
+    if (options.redactErrorBody) {
+      throw new Error(`fleet-broker POST ${path} → ${resp.status}`);
+    }
     const text = (await resp.text().catch(() => "")).slice(0, 300);
     throw new Error(`fleet-broker POST ${path} → ${resp.status} ${text}`);
   }
@@ -54,6 +59,7 @@ async function postNoContent(path: string, body: unknown): Promise<void> {
 export interface FleetBrokerClient {
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
+  npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
   uidForSlug(slug: string): Promise<string | null>;
   githubTokenForSync(uid: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
@@ -147,6 +153,14 @@ export function createFleetBrokerClient(
         await gatewayCredentialHeaders(),
       );
       return data.bootstrap;
+    },
+    async npmRegistryCredentials(slug) {
+      return postJson<FleetBrokerNpmRegistryCredentials>(
+        "/internal/fleet/npm-registry-credentials",
+        { gatewayId, slug },
+        await gatewayCredentialHeaders(),
+        { redactErrorBody: true },
+      );
     },
     async uidForSlug(slug) {
       try {

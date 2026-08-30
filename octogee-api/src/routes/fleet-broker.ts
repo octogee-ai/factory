@@ -28,6 +28,7 @@ import type {
   FleetBrokerConfiguredBuilderProjectCredential,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
+  FleetBrokerNpmRegistryCredentials,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerPreStopFlushStep,
   FleetBrokerProjectCheckoutScope,
@@ -89,6 +90,13 @@ import {
   reconcileCoachProjectMembership,
   type ProjectCoachMembershipInput,
 } from "../lib/project-coach-membership.js";
+import {
+  InMemoryNpmCacheCapabilityStore,
+  NPM_CACHE_CAPABILITY_AUDIENCE,
+  NpmCacheCapabilityIssueError,
+  npmCacheProxyRegistryUrl,
+  type NpmCacheCapabilityStore,
+} from "../lib/npm-cache-capabilities.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -208,6 +216,12 @@ interface FleetBrokerRouteDeps {
     uid: string;
     reason: "waiting_for_unlock" | "hard_cap_exhausted";
   }) => void | Promise<void>;
+  npmCacheCapabilities?: NpmCacheCapabilityStore;
+  npmCacheRegistryUrl?: string;
+  reportNpmCacheCapabilityFailure?: (input: {
+    gatewayId: string;
+    reason: "rate-limited" | "unexpected-error";
+  }) => void;
   now?: () => number;
 }
 
@@ -1294,6 +1308,103 @@ async function readAssignmentRosterForGateway(
   return assignments;
 }
 
+async function configuredBuilderNpmSubject(
+  db: Firestore,
+  bound: GatewayBinding,
+  slug: string,
+): Promise<{ uid: string } | null> {
+  if (!bound.podUid) return null;
+  const [gatewaySnap, assignmentsSnap] = await Promise.all([
+    db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get(),
+    db
+      .collection(GATEWAYS_COLLECTION)
+      .doc(bound.gatewayId)
+      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+      .get(),
+  ]);
+  const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
+  if (gatewayData?.gatewayClass !== "builder") return null;
+  const matches = assignmentsSnap.docs
+    .map((doc) => parseAssignmentDoc(doc.id, doc.data() as Record<string, unknown>))
+    .filter((assignment) =>
+      assignment?.gatewayId === bound.gatewayId && assignment.slug === slug,
+    );
+  if (matches.length !== 1) return null;
+  const assignment = matches[0]!;
+  if (!configuredBuilderCredentialBootstrapAllowed(gatewayData, {
+    gatewayId: bound.gatewayId,
+    podName: bound.podName,
+    slug,
+    uid: assignment.uid,
+  })) return null;
+  return { uid: assignment.uid };
+}
+
+function installNpmCacheCapabilityRoutes(
+  router: Router,
+  db: Firestore,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  router.post("/npm-registry-credentials", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const slug = typeof req.body?.slug === "string" ? req.body.slug : "";
+    if (!isValidUsername(slug)) {
+      res.status(400).json({ error: "invalid_slug" });
+      return;
+    }
+    const subject = await configuredBuilderNpmSubject(db, bound, slug);
+    if (!subject || !bound.podUid) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    try {
+      const credentials: FleetBrokerNpmRegistryCredentials = deps.npmCacheCapabilities.issue({
+        subject: {
+          gatewayId: bound.gatewayId,
+          uid: subject.uid,
+          slug,
+          podUid: bound.podUid,
+        },
+        registryUrl: deps.npmCacheRegistryUrl,
+        nowMs: deps.now(),
+      });
+      res.set("Cache-Control", "no-store");
+      res.set("Pragma", "no-cache");
+      res.json(credentials);
+    } catch (error) {
+      const reason = error instanceof NpmCacheCapabilityIssueError
+        ? error.reasonCode
+        : "unexpected-error";
+      deps.reportNpmCacheCapabilityFailure({ gatewayId: bound.gatewayId, reason });
+      res.status(reason === "rate-limited" ? 429 : 503).json({
+        error: reason === "rate-limited"
+          ? "npm_registry_capability_rate_limited"
+          : "npm_registry_unavailable",
+      });
+    }
+  });
+
+  router.post("/npm-cache-authorize", (req, res) => {
+    const bound = req.boundTenant;
+    if (bound?.kind !== "platform" || bound.actor !== "npm-cache-proxy") {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const token = typeof req.body?.token === "string" ? req.body.token : "";
+    const authorization = deps.npmCacheCapabilities.authorize({
+      token,
+      nowMs: deps.now(),
+    });
+    if (!authorization || authorization.audience !== NPM_CACHE_CAPABILITY_AUDIENCE) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ authorization });
+  });
+}
+
 function snapshotProvisioningStatus(data: Record<string, unknown>): FleetBrokerProvisioningStatus {
   const status = stringAt(data, "provisioning.openclaw.status");
   return status === "provisioning" || status === "complete" ? status : "";
@@ -1514,6 +1625,11 @@ type ResolvedFleetBrokerRouteDeps = {
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   now: () => number;
   reconcileCoachProjectMembership: (input: ProjectCoachMembershipInput) => Promise<void>;
+  npmCacheCapabilities: NpmCacheCapabilityStore;
+  npmCacheRegistryUrl: string;
+  reportNpmCacheCapabilityFailure: NonNullable<
+    FleetBrokerRouteDeps["reportNpmCacheCapabilityFailure"]
+  >;
 };
 
 function ownerWorkspaceTurnVerifier(
@@ -1581,6 +1697,11 @@ function resolveFleetBrokerRouteDeps(
     ),
     now: opts.now ?? Date.now,
     reconcileCoachProjectMembership: projectCoachMembershipReconciler(opts),
+    npmCacheCapabilities: opts.npmCacheCapabilities ?? new InMemoryNpmCacheCapabilityStore(),
+    npmCacheRegistryUrl: opts.npmCacheRegistryUrl ?? npmCacheProxyRegistryUrl(),
+    reportNpmCacheCapabilityFailure: opts.reportNpmCacheCapabilityFailure ?? ((input) => {
+      logger.error("[fleet-broker] npm cache capability issue failed", input);
+    }),
   };
 }
 
@@ -1589,6 +1710,8 @@ function installSnapshotRoutes(
   deps: ResolvedFleetBrokerRouteDeps,
   platformAdminMmUserId: string | null,
 ): void {
+  installNpmCacheCapabilityRoutes(router, db, deps);
+
   const { db } = deps;
 
   router.post("/assignment-roster", async (req, res) => {
