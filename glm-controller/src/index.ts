@@ -232,7 +232,10 @@ import {
   readSecretWithLabels,
   writeSecret,
 } from "@octogee/core/secret-manager";
-import { listGatewayBuilds } from "@octogee/core/artifact-registry";
+import {
+  createCentralReleaseAuthority,
+  listGatewayBuilds,
+} from "@octogee/core/artifact-registry";
 import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
@@ -339,6 +342,20 @@ const ENVIRONMENT_SETTINGS = deploymentSettingsForRuntime({
   namespace: NAMESPACE,
   targetId: process.env.DEPLOYMENT_TARGET_ID,
 });
+const RELEASE_ENVIRONMENT =
+  ENVIRONMENT_SETTINGS.name === "test" || ENVIRONMENT_SETTINGS.name === "prod"
+    ? ENVIRONMENT_SETTINGS.name
+    : null;
+const CENTRAL_RELEASE_ROUTE_DEPS = RELEASE_ENVIRONMENT
+  ? {
+      releaseEnvironment: RELEASE_ENVIRONMENT,
+      releaseAuthority: createCentralReleaseAuthority({
+        project: ENVIRONMENT_SETTINGS.artifactRegistryProjectId,
+        location: ENVIRONMENT_SETTINGS.artifactRegistryLocation,
+        repository: ENVIRONMENT_SETTINGS.artifactRegistryName,
+      }),
+    }
+  : { releaseEnvironment: null };
 
 const GATEWAY_VALUES_FILE = (function () {
   const explicit = process.env.GATEWAY_VALUES_FILE;
@@ -2218,6 +2235,7 @@ function startControllerBackgroundTasks({
     workspaceSlugsForUser,
     provisionGatewayAuthSecret,
     listGatewayBuilds,
+    ...CENTRAL_RELEASE_ROUTE_DEPS,
     ...(httpKubeOps
       ? {
           readGatewayPodDiagnostics: (gatewayId: string) =>

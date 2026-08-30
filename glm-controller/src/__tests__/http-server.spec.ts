@@ -634,6 +634,39 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
+  it("makes the immutable release authority available to gateway deployments", async () => {
+    const requestedSourceSha = "a".repeat(40);
+    const manifestSourceSha = "b".repeat(40);
+    const resolveManifest = vi.fn(async () => ({
+      sourceSha: manifestSourceSha,
+      manifestDigest: `sha256:${"c".repeat(64)}`,
+      openclawVersion: "1.2.3",
+      repository: "us-central1-docker.pkg.dev/octogee/octogee",
+      surfaces: { gateway: {}, platform: {} },
+    }));
+    store.gateways["shared-a"] = durableSharedGateway("shared-a");
+    const app = createHttpServer(buildDeps(store, {
+      releaseEnvironment: "test",
+      releaseAuthority: {
+        resolveManifest,
+        aliasesFor: vi.fn(() => []),
+        keepTagsFor: vi.fn(() => []),
+        ensureAliases: vi.fn(async () => []),
+      },
+    }));
+
+    const res = await request(app)
+      .post("/api/admin/gateways/shared-a/deploy")
+      .set("Authorization", "Bearer admin-token")
+      .send({ sourceSha: requestedSourceSha });
+
+    expect(resolveManifest).toHaveBeenCalledWith(requestedSourceSha);
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "release manifest sourceSha does not match the requested SHA",
+    });
+  });
+
   it("streams server-driven fleet invalidation events after admin auth", async () => {
     const app = createHttpServer(buildDeps(store));
 
