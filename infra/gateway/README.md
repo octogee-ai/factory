@@ -23,11 +23,9 @@ gcloud builds submit --config cloudbuild.yaml \
   --substitutions=_IMAGE_TAG=$(git rev-parse --short HEAD) \
   --project=octogee
 
-# Rebuild the current OpenClaw base.
-# See infra/gateway/openclaw-tarball/README.md for the update routine.
-gcloud builds submit --config cloudbuild-base.yaml \
-  --substitutions=_REGION=us-central1,_BASE_TAG=main \
-  --project=octogee
+# Ensure the current OpenClaw base exists in the shared registry.
+# This reuses the immutable input-keyed image when the artifacts are unchanged.
+gh workflow run gateway-base-rebuild.yml --ref main -f environment=test
 ```
 
 ## Deploy

@@ -70,10 +70,13 @@ gcloud storage cp "$MATTERMOST_TGZ" \
   gs://octogee-openclaw-fork/openclaw-mattermost-main.tgz
 ```
 
-Those object names are moving inputs by design. The base build reads them,
-publishes the current `octogee-gateway-base:main`, and the gateway build uses
-that base. The build workflow always makes a fresh base before it builds the
-gateway bundle.
+Those object names are moving inputs by design. The build resolves each
+object's generation and content digests, combines them with the base Dockerfile
+and Cloud Build recipe hash, and uses that key as an immutable
+`octogee-gateway-base:inputs-…` tag. An unchanged key reuses the existing image;
+a new key builds from the exact resolved generations and then updates the
+`octogee-gateway-base:main` compatibility alias. Gateway and Builder builds use
+the immutable tag directly.
 
 Publish the rebased overlay for review and traceability:
 

@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # octogee-gateway-base — OpenClaw runtime + all heavy/stable deps
 #
-# Rebuilt from the current OpenClaw main artifact on every gateway build.
+# Rebuilt only when the current OpenClaw artifacts or this build recipe change.
 #
 # What lives here (changes rarely → cached across gateway builds):
 #   - OpenClaw npm install
