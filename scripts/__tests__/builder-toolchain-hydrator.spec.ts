@@ -4,7 +4,10 @@ import * as path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runBuilderToolchainHydrationLoop } from "../lib/builder-toolchain-hydrator.js";
+import {
+  BuilderToolchainHydrationError,
+  runBuilderToolchainHydrationLoop,
+} from "../lib/builder-toolchain-hydrator.js";
 import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
 import { runBuilderToolchainCommand } from "../entrypoints/builder-toolchain-command.js";
 
@@ -46,6 +49,35 @@ describe("Builder toolchain hydration loop", () => {
     expect(hydrate).toHaveBeenCalledTimes(2);
     expect(states).toEqual(["pending"]);
     expect(sleeps).toEqual([1_000, 1_000, 1_000]);
+  });
+
+  it("keeps assignment-gated credential retries on the initial cadence", async () => {
+    const hydrate = vi.fn()
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError(
+        "npm-proxy-credentials-unavailable",
+      ))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError(
+        "npm-proxy-credentials-unavailable",
+      ))
+      .mockResolvedValue({
+        schemaVersion: 1,
+        status: "ready",
+        updatedAt: "2026-08-30T00:00:00.000Z",
+      });
+    const sleeps: number[] = [];
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      writeStatus: async () => {},
+      sleep: async (ms) => { sleeps.push(ms); },
+      waitAfterReady: async () => {},
+      initialBackoffMs: 5_000,
+      maxBackoffMs: 40_000,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(3);
+    expect(sleeps).toEqual([5_000, 5_000]);
   });
 });
 

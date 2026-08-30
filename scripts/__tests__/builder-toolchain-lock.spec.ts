@@ -214,40 +214,70 @@ describe("Builder npm toolchain lock", () => {
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
   });
 
-  it("logs proxy failure timing and falls back directly without a token", async () => {
+  it("waits for assignment-scoped proxy credentials without invoking direct npm", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
     const pin = await writePinnedInputs(home);
     const log = vi.fn();
     const installDependencies = vi.fn(fakeInstall);
-    const ticks = [100, 140];
 
-    await hydrateBuilderToolchain({
+    await expect(hydrateBuilderToolchain({
       root,
       ...pin,
       registryCredentialsProvider: async () => { throw new Error("metadata unavailable"); },
       installDependencies,
       log,
-      nowMs: () => ticks.shift() ?? 140,
+    })).rejects.toMatchObject({ reasonCode: "npm-proxy-credentials-unavailable" });
+
+    expect(installDependencies).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "[builder-toolchain] npm proxy credentials unavailable; waiting for assignment",
+    );
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "pending" });
+  });
+
+  it("falls back directly only after an authenticated proxy install fails", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const log = vi.fn();
+    const installDependencies = vi.fn(async (
+      destination: string,
+      options: { registryUrl: string },
+    ) => {
+      if (options.registryUrl === PROXY_REGISTRY) throw new Error("proxy unavailable");
+      await fakeInstall(destination);
     });
 
-    expect(installDependencies).toHaveBeenCalledTimes(1);
+    await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies,
+      log,
+    });
+
+    expect(installDependencies).toHaveBeenCalledTimes(2);
     expect(installDependencies.mock.calls[0]?.[1]).toMatchObject({
+      registryUrl: PROXY_REGISTRY,
+      authToken: CAPABILITY,
+    });
+    expect(installDependencies.mock.calls[1]?.[1]).toMatchObject({
       registryUrl: "https://registry.npmjs.org/",
     });
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/credentials unavailable.*direct npm/));
+    expect(installDependencies.mock.calls[1]?.[1]).not.toHaveProperty("authToken");
     expect(log).toHaveBeenCalledWith(
-      "[builder-toolchain] npm install registry=direct outcome=ready durationMs=40",
+      "[builder-toolchain] npm proxy install failed; falling back to direct npm",
     );
   });
 
-  it("never sends the capability to a registry outside the in-cluster proxy", async () => {
+  it("rejects an invalid proxy capability without bypassing to direct npm", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
     const pin = await writePinnedInputs(home);
     const installDependencies = vi.fn(fakeInstall);
 
-    await hydrateBuilderToolchain({
+    await expect(hydrateBuilderToolchain({
       root,
       ...pin,
       registryCredentialsProvider: async () => ({
@@ -256,13 +286,9 @@ describe("Builder npm toolchain lock", () => {
         expiresAt: "2099-01-01T00:00:00.000Z",
       }),
       installDependencies,
-    });
+    })).rejects.toMatchObject({ reasonCode: "npm-proxy-credentials-unavailable" });
 
-    expect(installDependencies).toHaveBeenCalledTimes(1);
-    expect(installDependencies.mock.calls[0]?.[1]).toMatchObject({
-      registryUrl: "https://registry.npmjs.org/",
-    });
-    expect(installDependencies.mock.calls[0]?.[1]).not.toHaveProperty("authToken");
+    expect(installDependencies).not.toHaveBeenCalled();
   });
 
   it("passes proxy auth only through the npm child environment and removes its config", async () => {

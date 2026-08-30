@@ -556,38 +556,36 @@ async function installWithRegistryFallback(input: {
     }
   };
 
-  let credentials: FleetBrokerNpmRegistryCredentials | undefined;
-  if (input.registryCredentialsProvider) {
-    try {
-      const candidate = await input.registryCredentialsProvider();
-      const expiresAtMs = Date.parse(candidate.expiresAt);
-      if (
-        !/^[A-Za-z0-9_-]{43,128}$/u.test(candidate.token) ||
-        !Number.isFinite(expiresAtMs) || expiresAtMs <= input.nowMs()
-      ) {
-        throw new Error("invalid npm proxy capability");
-      }
-      credentials = {
-        registryUrl: validatedRegistryUrl(candidate.registryUrl, true),
-        token: candidate.token,
-        expiresAt: new Date(expiresAtMs).toISOString(),
-      };
-    } catch {
-      input.log("[builder-toolchain] npm proxy credentials unavailable; falling back to direct npm");
-    }
-  } else {
-    input.log(
-      "[builder-toolchain] npm proxy credentials provider unavailable; falling back to direct npm",
-    );
+  if (!input.registryCredentialsProvider) {
+    input.log("[builder-toolchain] npm proxy credentials provider unavailable; waiting for assignment");
+    throw hydrationError("npm-proxy-credentials-unavailable");
   }
 
-  if (credentials) {
-    try {
-      await run("proxy", credentials.registryUrl, credentials.token);
-      return;
-    } catch {
-      input.log("[builder-toolchain] npm proxy install failed; falling back to direct npm");
+  let credentials: FleetBrokerNpmRegistryCredentials;
+  try {
+    const candidate = await input.registryCredentialsProvider();
+    const expiresAtMs = Date.parse(candidate.expiresAt);
+    if (
+      !/^[A-Za-z0-9_-]{43,128}$/u.test(candidate.token) ||
+      !Number.isFinite(expiresAtMs) || expiresAtMs <= input.nowMs()
+    ) {
+      throw new Error("invalid npm proxy capability");
     }
+    credentials = {
+      registryUrl: validatedRegistryUrl(candidate.registryUrl, true),
+      token: candidate.token,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    };
+  } catch {
+    input.log("[builder-toolchain] npm proxy credentials unavailable; waiting for assignment");
+    throw hydrationError("npm-proxy-credentials-unavailable");
+  }
+
+  try {
+    await run("proxy", credentials.registryUrl, credentials.token);
+    return;
+  } catch {
+    input.log("[builder-toolchain] npm proxy install failed; falling back to direct npm");
   }
   try {
     await run("direct", input.fallbackRegistryUrl);
@@ -694,7 +692,9 @@ export async function hydrateBuilderToolchain(
     const reasonCode = error instanceof BuilderToolchainHydrationError
       ? error.reasonCode
       : "internal-error";
-    await persist(statusFor("failed", runtime.now()), detailFor("failed", {
+    const retryingForAssignment = reasonCode === "npm-proxy-credentials-unavailable";
+    const failureStatus = retryingForAssignment ? "pending" : "failed";
+    await persist(statusFor(failureStatus, runtime.now()), detailFor(failureStatus, {
       ...(toolchainId ? { toolchainId } : {}),
       ...(lockSha256 ? { lockSha256 } : {}),
       attempt: options.attempt,
@@ -730,16 +730,21 @@ export async function runBuilderToolchainHydrationLoop(
   let backoffMs = initialBackoffMs;
   while (!shouldStop()) {
     attempt += 1;
+    let waitingForAssignment = false;
     try {
       const status = await options.hydrate(attempt);
       if (status.status === "ready") {
         await (options.waitAfterReady ?? waitForever)();
         return;
       }
-    } catch {
+    } catch (error) {
       if (shouldStop()) return;
+      waitingForAssignment = error instanceof BuilderToolchainHydrationError &&
+        error.reasonCode === "npm-proxy-credentials-unavailable";
     }
-    await sleep(backoffMs);
-    backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+    await sleep(waitingForAssignment ? initialBackoffMs : backoffMs);
+    backoffMs = waitingForAssignment
+      ? initialBackoffMs
+      : Math.min(backoffMs * 2, maxBackoffMs);
   }
 }
