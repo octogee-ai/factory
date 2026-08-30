@@ -142,6 +142,23 @@ describe("gateway base image", () => {
     expect(runInstructionContaining(dockerfile, "pip3 install")).toContain("--no-cache-dir");
   });
 
+  it("copies pruned gateway runtime trees out of the build stage", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+    const runtimeStageMarker = "FROM ${OPENCLAW_BASE_IMAGE} AS gateway-runtime";
+    const runtimeStage = dockerfile.slice(dockerfile.indexOf(runtimeStageMarker));
+    const runtimeInstructions = runtimeStage
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+
+    expect(dockerfile).toContain("FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build");
+    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/scripts");
+    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/shared");
+    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/extensions");
+    expect(runtimeInstructions).not.toMatch(/npm (?:ci|install|prune)/u);
+    expect(runtimeStage).not.toContain("chown -R node:node /octogee/extensions");
+  });
+
   it("uses the installed OpenClaw core version when staging Codex", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
 
