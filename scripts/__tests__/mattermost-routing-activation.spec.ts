@@ -101,12 +101,66 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
-  it("fails closed when a present account has no valid lastStartAt baseline", async () => {
+  it("treats a configured account with no prior start as baseline zero and waits for a newer numeric start", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const snapshots = [
+      {
+        channelAccounts: { mattermost: [
+          { accountId: "ceckert-coach", running: false, connected: false, lastStartAt: null },
+        ] },
+      },
+      {
+        channelAccounts: { mattermost: [
+          { accountId: "ceckert-coach", running: true, connected: true, lastStartAt: null },
+        ] },
+      },
+      {
+        channelAccounts: { mattermost: [
+          { accountId: "ceckert-coach", running: true, connected: true, lastStartAt: 0 },
+        ] },
+      },
+      {
+        channelAccounts: { mattermost: [
+          { accountId: "ceckert-coach", running: true, connected: true, lastStartAt: 1 },
+        ] },
+      },
+    ];
+    const rpc = channelOperationRpc(
+      ["ceckert-coach"],
+      vi.fn(async () => snapshots.shift() ?? snapshots.at(-1)),
+    );
+
+    const baseline = await captureMattermostRoutingActivationBaseline(rpc, ["ceckert-coach"]);
+    expect(baseline).toEqual({ "ceckert-coach": 0 });
+    markMattermostRoutingActivationPending(
+      openclawDir,
+      "configured account has not started",
+      ["ceckert-coach"],
+      baseline,
+    );
+
+    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
+      restartAccountIds: ["ceckert-coach"],
+      sleep: async () => undefined,
+    });
+
+    expect(rpc.channelsStop).toHaveBeenCalledOnce();
+    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(rpc.channelsStatus).toHaveBeenCalledTimes(4);
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["string", "0"],
+    ["NaN", Number.NaN],
+    ["negative", -1],
+  ])("fails closed when a present account has a %s lastStartAt baseline", async (_label, lastStartAt) => {
     const rpc = channelOperationRpc(
       ["ceckert-coach"],
       vi.fn(async () => ({
         channelAccounts: { mattermost: [
-          { accountId: "ceckert-coach", running: true, connected: true },
+          { accountId: "ceckert-coach", running: true, connected: true, lastStartAt },
         ] },
       })),
     );

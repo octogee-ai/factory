@@ -210,7 +210,7 @@ function clearPendingActivation(openclawDir: string, batch: PendingActivationBat
 
 interface MattermostAccountStatus {
   accountId?: string;
-  lastStartAt?: number;
+  lastStartAt?: number | null;
   running?: boolean;
   connected?: boolean;
 }
@@ -239,6 +239,7 @@ export async function captureMattermostRoutingActivationBaseline(
       const account = statuses.get(accountId);
       if (!account) return [accountId, 0];
       const lastStartAt = account.lastStartAt;
+      if (lastStartAt === null) return [accountId, 0];
       if (typeof lastStartAt !== "number" || !Number.isFinite(lastStartAt) || lastStartAt < 0) {
         throw new Error(`Mattermost account ${accountId} has an invalid lastStartAt`);
       }
