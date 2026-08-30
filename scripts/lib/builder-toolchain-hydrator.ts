@@ -1,7 +1,8 @@
+import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { x as extractTar } from "tar";
 
 import {
   DEVELOPER_TOOLCHAIN_STATUS_SCHEMA_VERSION,
@@ -12,18 +13,22 @@ import {
 } from "../../shared/types/developer-toolchain.js";
 
 export const BUILDER_TOOLCHAIN_COMMANDS = ["claude", "codex"] as const;
+export const DEFAULT_BUILDER_NPM_PROXY_REGISTRY =
+  "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/";
+export const DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY = "https://registry.npmjs.org/";
 
 export type BuilderToolchainCommand = typeof BUILDER_TOOLCHAIN_COMMANDS[number];
 
-export interface BuilderToolchainManifest {
+export interface BuilderToolchainLock {
   schemaVersion: 1;
-  id: string;
-  artifact: {
-    format: "tar.gz";
-    sha256: string;
-    sizeBytes: number;
-    unpackedSizeBytes: number;
-  };
+  id: "npm-lock-sha256";
+  commands: Record<BuilderToolchainCommand, string>;
+  versions: Record<BuilderToolchainCommand, string>;
+}
+
+export interface InstalledBuilderToolchainLock {
+  schemaVersion: 1;
+  lockSha256: string;
   commands: Record<BuilderToolchainCommand, string>;
 }
 
@@ -33,41 +38,36 @@ export interface BuilderToolchainDetail {
   schemaVersion: 1;
   status: DeveloperToolchainStatus;
   toolchainId?: string;
-  artifactSha256?: string;
+  lockSha256?: string;
   attempt?: number;
   reasonCode?: string;
   nextRetryAt?: string;
 }
 
-export class BuilderToolchainHydrationError extends Error {
-  readonly reasonCode: string;
-
-  constructor(reasonCode: string) {
-    super(`Builder toolchain hydration failed: ${reasonCode}`);
-    this.name = "BuilderToolchainHydrationError";
-    this.reasonCode = reasonCode;
-  }
-}
-
-export interface ExtractToolchainArchiveInput {
-  archivePath: string;
-  destination: string;
-  expectedUnpackedSizeBytes: number;
+export interface InstallBuilderToolchainOptions {
+  cachePath: string;
+  registryUrl: string;
+  authToken?: string;
+  signal?: AbortSignal;
 }
 
 export interface HydrateBuilderToolchainOptions {
   root: string;
-  manifestPath: string;
-  manifestSha256: string;
-  artifactUrl: string;
+  packageJsonPath: string;
+  packageLockPath: string;
+  packageLockSha256: string;
+  proxyRegistryUrl?: string;
+  fallbackRegistryUrl?: string;
+  registryTokenProvider?: (registryUrl: string) => Promise<string>;
+  installDependencies?: (
+    destination: string,
+    options: InstallBuilderToolchainOptions,
+  ) => Promise<void>;
   attempt?: number;
-  fetchArtifact?: typeof fetch;
-  extractArchive?: (
-    input: ExtractToolchainArchiveInput,
-  ) => Promise<{ unpackedSizeBytes: number }>;
   publishStatus?: (status: BuilderToolchainStatus) => Promise<void>;
   log?: (message: string) => void;
   now?: () => Date;
+  nowMs?: () => number;
   lockStaleMs?: number;
   signal?: AbortSignal;
 }
@@ -83,14 +83,29 @@ export interface RunBuilderToolchainHydrationLoopOptions {
   shouldStop?: () => boolean;
 }
 
+export class BuilderToolchainHydrationError extends Error {
+  readonly reasonCode: string;
+
+  constructor(reasonCode: string) {
+    super(`Builder toolchain hydration failed: ${reasonCode}`);
+    this.name = "BuilderToolchainHydrationError";
+    this.reasonCode = reasonCode;
+  }
+}
+
 const STATUS_FILE = "status.json";
 const DETAIL_FILE = "detail.json";
-const INSTALLED_MANIFEST_FILE = ".toolchain-manifest.json";
+const INSTALLED_LOCK_FILE = ".toolchain-lock.json";
 const DEFAULT_LOCK_STALE_MS = 60 * 60 * 1_000;
-const MAX_MANIFEST_BYTES = 64 * 1_024;
-const MAX_ARTIFACT_BYTES = 2 * 1_024 * 1_024 * 1_024;
-const MAX_UNPACKED_BYTES = 4 * 1_024 * 1_024 * 1_024;
-const MAX_ARCHIVE_ENTRIES = 100_000;
+const MAX_LOCK_BYTES = 8 * 1_024 * 1_024;
+const COMMAND_PATHS: Record<BuilderToolchainCommand, string> = {
+  claude: "node_modules/.bin/claude",
+  codex: "node_modules/.bin/codex",
+};
+const DEPENDENCY_PACKAGES: Record<BuilderToolchainCommand, string> = {
+  claude: "@anthropic-ai/claude-code",
+  codex: "@openai/codex",
+};
 
 function hydrationError(reasonCode: string): BuilderToolchainHydrationError {
   return new BuilderToolchainHydrationError(reasonCode);
@@ -100,112 +115,130 @@ function isNodeError(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException)?.code === code;
 }
 
-function digestBytes(value: string | Uint8Array): Buffer {
-  return createHash("sha256").update(value).digest();
-}
-
 function isSha256(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
-function safeRelativePath(value: unknown): value is string {
-  if (typeof value !== "string" || !value || value.includes("\\") || value.includes("\0")) {
-    return false;
-  }
-  if (value.startsWith("/") || value.endsWith("/")) return false;
-  const normalized = path.posix.normalize(value);
-  return normalized === value && normalized !== "." && !normalized.startsWith("../");
+function isExactVersion(value: unknown): value is string {
+  return typeof value === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
 }
 
-function positiveInteger(value: unknown, max: number): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= max;
+function isIntegrity(value: unknown): value is string {
+  return typeof value === "string" && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
-function nonNegativeInteger(value: unknown, max: number): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+function exactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  return Object.keys(value).sort().join("\0") === [...expected].sort().join("\0");
 }
 
-export function parseBuilderToolchainManifest(value: unknown): BuilderToolchainManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw hydrationError("invalid-manifest");
-  }
-  const candidate = value as Record<string, unknown>;
-  const artifact = candidate.artifact;
-  const commands = candidate.commands;
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export function parseBuilderToolchainLock(value: unknown): BuilderToolchainLock {
+  const lock = objectRecord(value);
+  const packages = objectRecord(lock?.packages);
+  const root = objectRecord(packages?.[""]);
+  const dependencies = objectRecord(root?.dependencies);
   if (
-    candidate.schemaVersion !== 1 ||
-    typeof candidate.id !== "string" ||
-    !/^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/.test(candidate.id) ||
-    !artifact || typeof artifact !== "object" || Array.isArray(artifact) ||
-    !commands || typeof commands !== "object" || Array.isArray(commands)
+    !lock || lock.lockfileVersion !== 3 || !packages || !root || !dependencies ||
+    !exactKeys(dependencies, Object.values(DEPENDENCY_PACKAGES))
   ) {
-    throw hydrationError("invalid-manifest");
+    throw hydrationError("invalid-toolchain-lock");
   }
-  const artifactRecord = artifact as Record<string, unknown>;
-  const commandRecord = commands as Record<string, unknown>;
-  if (
-    artifactRecord.format !== "tar.gz" ||
-    !isSha256(artifactRecord.sha256) ||
-    !positiveInteger(artifactRecord.sizeBytes, MAX_ARTIFACT_BYTES) ||
-    !nonNegativeInteger(artifactRecord.unpackedSizeBytes, MAX_UNPACKED_BYTES) ||
-    Object.keys(commandRecord).sort().join(",") !== [...BUILDER_TOOLCHAIN_COMMANDS].sort().join(",") ||
-    !BUILDER_TOOLCHAIN_COMMANDS.every((command) => safeRelativePath(commandRecord[command]))
-  ) {
-    throw hydrationError("invalid-manifest");
+
+  const versions = {} as Record<BuilderToolchainCommand, string>;
+  for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
+    const packageName = DEPENDENCY_PACKAGES[command];
+    const requested = dependencies[packageName];
+    const installed = objectRecord(packages[`node_modules/${packageName}`]);
+    if (
+      !isExactVersion(requested) || !installed || installed.version !== requested ||
+      !isIntegrity(installed.integrity)
+    ) {
+      throw hydrationError("invalid-toolchain-lock");
+    }
+    versions[command] = requested;
   }
+
   return {
     schemaVersion: 1,
-    id: candidate.id,
-    artifact: {
-      format: "tar.gz",
-      sha256: artifactRecord.sha256,
-      sizeBytes: artifactRecord.sizeBytes,
-      unpackedSizeBytes: artifactRecord.unpackedSizeBytes,
-    },
-    commands: {
-      claude: commandRecord.claude as string,
-      codex: commandRecord.codex as string,
-    },
+    id: "npm-lock-sha256",
+    commands: { ...COMMAND_PATHS },
+    versions,
   };
 }
 
-async function readPinnedManifest(
-  manifestPath: string,
-  expectedSha256: string,
-): Promise<BuilderToolchainManifest> {
-  if (!isSha256(expectedSha256)) throw hydrationError("invalid-manifest-pin");
-  const file = await fs.readFile(manifestPath).catch(() => {
-    throw hydrationError("manifest-unavailable");
-  });
-  if (file.byteLength > MAX_MANIFEST_BYTES) throw hydrationError("invalid-manifest");
-  const actual = digestBytes(file);
-  const expected = Buffer.from(expectedSha256, "hex");
-  if (!timingSafeEqual(actual, expected)) throw hydrationError("manifest-digest-mismatch");
-  try {
-    return parseBuilderToolchainManifest(JSON.parse(file.toString("utf8")));
-  } catch (error) {
-    if (error instanceof BuilderToolchainHydrationError) throw error;
-    throw hydrationError("invalid-manifest");
+function parsePackageJson(value: unknown, expected: BuilderToolchainLock): void {
+  const packageJson = objectRecord(value);
+  const dependencies = objectRecord(packageJson?.dependencies);
+  if (!packageJson || packageJson.private !== true || !dependencies) {
+    throw hydrationError("invalid-toolchain-package");
+  }
+  const expectedPackages = Object.values(DEPENDENCY_PACKAGES);
+  if (!exactKeys(dependencies, expectedPackages)) {
+    throw hydrationError("invalid-toolchain-package");
+  }
+  for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
+    if (dependencies[DEPENDENCY_PACKAGES[command]] !== expected.versions[command]) {
+      throw hydrationError("invalid-toolchain-package");
+    }
   }
 }
 
-function validatedArtifactUrl(raw: string): URL {
+function validatedRegistryUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw hydrationError("invalid-artifact-url");
+    throw hydrationError("invalid-registry-url");
   }
   if (url.protocol !== "https:" || url.username || url.password) {
-    throw hydrationError("invalid-artifact-url");
+    throw hydrationError("invalid-registry-url");
   }
-  return url;
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url.toString();
 }
 
-function statusFor(
-  status: DeveloperToolchainStatus,
-  now: Date,
-): BuilderToolchainStatus {
+function digestBytes(value: Uint8Array): Buffer {
+  return createHash("sha256").update(value).digest();
+}
+
+async function readPinnedToolchain(options: HydrateBuilderToolchainOptions): Promise<{
+  descriptor: BuilderToolchainLock;
+  lockBytes: Buffer;
+}> {
+  if (!isSha256(options.packageLockSha256)) {
+    throw hydrationError("invalid-toolchain-lock-pin");
+  }
+  const [lockBytes, packageBytes] = await Promise.all([
+    fs.readFile(options.packageLockPath).catch(() => {
+      throw hydrationError("toolchain-lock-unavailable");
+    }),
+    fs.readFile(options.packageJsonPath).catch(() => {
+      throw hydrationError("toolchain-package-unavailable");
+    }),
+  ]);
+  if (lockBytes.byteLength > MAX_LOCK_BYTES) throw hydrationError("invalid-toolchain-lock");
+  if (!timingSafeEqual(digestBytes(lockBytes), Buffer.from(options.packageLockSha256, "hex"))) {
+    throw hydrationError("toolchain-lock-digest-mismatch");
+  }
+  let lockValue: unknown;
+  let packageValue: unknown;
+  try {
+    lockValue = JSON.parse(lockBytes.toString("utf8"));
+    packageValue = JSON.parse(packageBytes.toString("utf8"));
+  } catch {
+    throw hydrationError("invalid-toolchain-lock");
+  }
+  const descriptor = parseBuilderToolchainLock(lockValue);
+  parsePackageJson(packageValue, descriptor);
+  return { descriptor, lockBytes };
+}
+
+function statusFor(status: DeveloperToolchainStatus, now: Date): BuilderToolchainStatus {
   return {
     schemaVersion: DEVELOPER_TOOLCHAIN_STATUS_SCHEMA_VERSION,
     status,
@@ -268,9 +301,8 @@ async function writeToolchainDetail(root: string, detail: BuilderToolchainDetail
 export async function readToolchainDetail(root: string): Promise<BuilderToolchainDetail | null> {
   try {
     const value = JSON.parse(await fs.readFile(path.join(root, DETAIL_FILE), "utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const detail = value as BuilderToolchainDetail;
-    if (detail.schemaVersion !== 1 || !isDeveloperToolchainStatus(detail.status)) return null;
+    const detail = objectRecord(value) as unknown as BuilderToolchainDetail | null;
+    if (!detail || detail.schemaVersion !== 1 || !isDeveloperToolchainStatus(detail.status)) return null;
     return detail;
   } catch (error) {
     if (isNodeError(error, "ENOENT") || error instanceof SyntaxError) return null;
@@ -304,164 +336,94 @@ async function acquireHydrationLock(
       await fs.rm(lockPath, { recursive: true, force: true });
     }
   };
-  if (await attempt()) {
-    return { acquired: true, release };
-  }
+  if (await attempt()) return { acquired: true, release };
   const stat = await fs.stat(lockPath).catch(() => null);
   if (stat && Date.now() - stat.mtimeMs > staleMs) {
     await fs.rm(lockPath, { recursive: true, force: true });
-    if (await attempt()) {
-      return { acquired: true, release };
-    }
+    if (await attempt()) return { acquired: true, release };
   }
   return { acquired: false, release: async () => {} };
 }
 
-async function downloadArtifact(input: {
-  url: URL;
-  destination: string;
-  expectedSha256: string;
-  expectedSizeBytes: number;
-  fetchArtifact: typeof fetch;
-  signal?: AbortSignal;
-}): Promise<void> {
-  let response: Response;
-  try {
-    response = await input.fetchArtifact(input.url, {
-      redirect: "follow",
-      signal: input.signal
-        ? AbortSignal.any([input.signal, AbortSignal.timeout(30 * 60 * 1_000)])
-        : AbortSignal.timeout(30 * 60 * 1_000),
-    });
-  } catch {
-    throw hydrationError("download-failed");
-  }
-  if (!response.ok || !response.body) throw hydrationError("download-failed");
-  if (response.url) validatedArtifactUrl(response.url);
-  const encoding = response.headers.get("content-encoding");
-  if (encoding && encoding !== "identity") throw hydrationError("unexpected-content-encoding");
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && Number(contentLength) !== input.expectedSizeBytes) {
-    throw hydrationError("artifact-size-mismatch");
-  }
-  const handle = await fs.open(input.destination, "wx", 0o600);
-  const hash = createHash("sha256");
-  let size = 0;
-  try {
-    const reader = response.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > input.expectedSizeBytes) {
-        await reader.cancel();
-        throw hydrationError("artifact-size-mismatch");
-      }
-      hash.update(value);
-      await handle.write(value);
-    }
-  } catch (error) {
-    if (error instanceof BuilderToolchainHydrationError) throw error;
-    throw hydrationError("download-failed");
-  } finally {
-    await handle.close();
-  }
-  if (size !== input.expectedSizeBytes) throw hydrationError("artifact-size-mismatch");
-  const expected = Buffer.from(input.expectedSha256, "hex");
-  if (!timingSafeEqual(hash.digest(), expected)) throw hydrationError("artifact-digest-mismatch");
+function npmAuthKey(registryUrl: string): string {
+  const url = new URL(registryUrl);
+  return `//${url.host}${url.pathname}:_authToken`;
 }
 
-function validateArchivePath(entryPath: string): void {
-  if (!safeRelativePath(entryPath.replace(/\/$/, ""))) throw hydrationError("unsafe-archive");
-}
-
-export async function extractToolchainArchive(
-  input: ExtractToolchainArchiveInput,
-): Promise<{ unpackedSizeBytes: number }> {
-  await fs.mkdir(input.destination, { recursive: true, mode: 0o700 });
-  let unpackedSizeBytes = 0;
-  let entryCount = 0;
-  let rejectionReason: string | null = null;
-  try {
-    await extractTar({
-      cwd: input.destination,
-      file: input.archivePath,
-      gzip: true,
-      noChmod: true,
-      preservePaths: false,
-      strict: true,
-      filter: (entryPath, entry) => {
-        if (rejectionReason) return false;
-        entryCount += 1;
-        try {
-          if (entryCount > MAX_ARCHIVE_ENTRIES) throw hydrationError("unsafe-archive");
-          validateArchivePath(entryPath);
-          const entryType = "type" in entry
-            ? entry.type
-            : entry.isFile()
-              ? "File"
-              : entry.isDirectory()
-                ? "Directory"
-                : "Unsupported";
-          if (entryType !== "File" && entryType !== "Directory") {
-            throw hydrationError("unsafe-archive");
-          }
-          if (entryType === "File") {
-            unpackedSizeBytes += entry.size;
-            if (unpackedSizeBytes > input.expectedUnpackedSizeBytes) {
-              throw hydrationError("unpacked-size-mismatch");
-            }
-          }
-          return true;
-        } catch (error) {
-          rejectionReason = error instanceof BuilderToolchainHydrationError
-            ? error.reasonCode
-            : "unsafe-archive";
-          return false;
-        }
-      },
-    });
-  } catch (error) {
-    if (error instanceof BuilderToolchainHydrationError) throw error;
-    throw hydrationError("archive-extraction-failed");
-  }
-  if (rejectionReason) throw hydrationError(rejectionReason);
-  if (unpackedSizeBytes !== input.expectedUnpackedSizeBytes) {
-    throw hydrationError("unpacked-size-mismatch");
-  }
-  return { unpackedSizeBytes };
-}
-
-async function validateCommandFiles(
-  objectPath: string,
-  manifest: BuilderToolchainManifest,
-  makeExecutable: boolean,
+export async function installBuilderToolchainDependencies(
+  destination: string,
+  options: InstallBuilderToolchainOptions,
 ): Promise<void> {
+  const npmrcPath = path.join(destination, ".npmrc.hydration");
+  const npmrc = [
+    `registry=${options.registryUrl}`,
+    "replace-registry-host=always",
+    "audit=false",
+    "fund=false",
+    ...(options.authToken ? [`${npmAuthKey(options.registryUrl)}=\${NODE_AUTH_TOKEN}`] : []),
+    "",
+  ].join("\n");
+  await fs.writeFile(npmrcPath, npmrc, { mode: 0o600 });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("npm", [
+        "ci",
+        "--omit=dev",
+        "--no-audit",
+        "--no-fund",
+        "--prefer-offline",
+      ], {
+        cwd: destination,
+        env: {
+          ...process.env,
+          NPM_CONFIG_CACHE: options.cachePath,
+          NPM_CONFIG_USERCONFIG: npmrcPath,
+          ...(options.authToken ? { NODE_AUTH_TOKEN: options.authToken } : {}),
+        },
+        signal: options.signal,
+        stdio: "inherit",
+      });
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        if (code === 0) resolve();
+        else reject(new Error(`npm ci exited ${code ?? signal ?? "unknown"}`));
+      });
+    });
+  } finally {
+    await fs.rm(npmrcPath, { force: true });
+  }
+}
+
+async function validateCommandFiles(objectPath: string): Promise<void> {
   const realRoot = await fs.realpath(objectPath);
   for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    const commandPath = path.join(objectPath, manifest.commands[command]);
+    const commandPath = path.join(objectPath, COMMAND_PATHS[command]);
     const stat = await fs.lstat(commandPath).catch(() => null);
-    if (!stat?.isFile()) throw hydrationError("missing-command");
+    if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
+      throw hydrationError("missing-command");
+    }
     const realCommand = await fs.realpath(commandPath);
-    if (!realCommand.startsWith(`${realRoot}${path.sep}`)) throw hydrationError("unsafe-command-path");
-    if (makeExecutable) await fs.chmod(commandPath, 0o755);
+    if (!realCommand.startsWith(`${realRoot}${path.sep}`)) {
+      throw hydrationError("unsafe-command-path");
+    }
+    await fs.access(realCommand, fsConstants.X_OK);
   }
 }
 
-async function validateInstalledObject(
-  objectPath: string,
-  expected: BuilderToolchainManifest,
-): Promise<boolean> {
+function installedDescriptor(lockSha256: string): InstalledBuilderToolchainLock {
+  return { schemaVersion: 1, lockSha256, commands: { ...COMMAND_PATHS } };
+}
+
+async function validateInstalledObject(objectPath: string, lockSha256: string): Promise<boolean> {
   try {
-    const installed = parseBuilderToolchainManifest(JSON.parse(
-      await fs.readFile(path.join(objectPath, INSTALLED_MANIFEST_FILE), "utf8"),
-    ));
+    const installed = JSON.parse(
+      await fs.readFile(path.join(objectPath, INSTALLED_LOCK_FILE), "utf8"),
+    ) as InstalledBuilderToolchainLock;
     if (
-      installed.id !== expected.id ||
-      installed.artifact.sha256 !== expected.artifact.sha256 ||
-      JSON.stringify(installed.commands) !== JSON.stringify(expected.commands)
+      installed.schemaVersion !== 1 || installed.lockSha256 !== lockSha256 ||
+      JSON.stringify(installed.commands) !== JSON.stringify(COMMAND_PATHS)
     ) return false;
-    await validateCommandFiles(objectPath, installed, true);
+    await validateCommandFiles(objectPath);
     return true;
   } catch {
     return false;
@@ -482,11 +444,79 @@ async function activateObject(root: string, objectPath: string): Promise<void> {
   }
 }
 
+async function installWithRegistryFallback(input: {
+  destination: string;
+  cachePath: string;
+  proxyRegistryUrl: string;
+  fallbackRegistryUrl: string;
+  registryTokenProvider?: (registryUrl: string) => Promise<string>;
+  installDependencies: (
+    destination: string,
+    options: InstallBuilderToolchainOptions,
+  ) => Promise<void>;
+  signal?: AbortSignal;
+  log: (message: string) => void;
+  nowMs: () => number;
+}): Promise<void> {
+  const run = async (kind: "proxy" | "direct", registryUrl: string, authToken?: string) => {
+    const startedAt = input.nowMs();
+    try {
+      await input.installDependencies(input.destination, {
+        cachePath: input.cachePath,
+        registryUrl,
+        ...(authToken ? { authToken } : {}),
+        signal: input.signal,
+      });
+      input.log(
+        `[builder-toolchain] npm install registry=${kind} outcome=ready durationMs=${input.nowMs() - startedAt}`,
+      );
+    } catch (error) {
+      input.log(
+        `[builder-toolchain] npm install registry=${kind} outcome=failed durationMs=${input.nowMs() - startedAt}`,
+      );
+      throw error;
+    }
+  };
+
+  let token: string | undefined;
+  if (input.registryTokenProvider) {
+    try {
+      token = await input.registryTokenProvider(input.proxyRegistryUrl);
+      if (!token) throw new Error("empty token");
+    } catch {
+      input.log("[builder-toolchain] npm proxy token unavailable; falling back to direct npm");
+    }
+  } else {
+    input.log("[builder-toolchain] npm proxy token provider unavailable; falling back to direct npm");
+  }
+
+  if (token) {
+    try {
+      await run("proxy", input.proxyRegistryUrl, token);
+      return;
+    } catch {
+      input.log("[builder-toolchain] npm proxy install failed; falling back to direct npm");
+    }
+  }
+  try {
+    await run("direct", input.fallbackRegistryUrl);
+  } catch {
+    throw hydrationError("npm-install-failed");
+  }
+}
+
 export async function hydrateBuilderToolchain(
   options: HydrateBuilderToolchainOptions,
 ): Promise<BuilderToolchainStatus> {
   const now = options.now ?? (() => new Date());
+  const nowMs = options.nowMs ?? Date.now;
   const log = options.log ?? console.error;
+  const proxyRegistryUrl = validatedRegistryUrl(
+    options.proxyRegistryUrl ?? DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
+  );
+  const fallbackRegistryUrl = validatedRegistryUrl(
+    options.fallbackRegistryUrl ?? DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
+  );
   await fs.mkdir(options.root, { recursive: true, mode: 0o700 });
   const lock = await acquireHydrationLock(
     options.root,
@@ -510,68 +540,70 @@ export async function hydrateBuilderToolchain(
     }));
   }
 
-  let manifest: BuilderToolchainManifest | undefined;
+  let lockSha256: string | undefined;
+  let toolchainId: string | undefined;
   const stagingPath = path.join(options.root, "staging", `${process.pid}-${randomUUID()}`);
   try {
-    manifest = await readPinnedManifest(options.manifestPath, options.manifestSha256);
-    const artifactUrl = validatedArtifactUrl(options.artifactUrl);
-    const objectPath = path.join(options.root, "objects", `sha256-${manifest.artifact.sha256}`);
-    if (await validateInstalledObject(objectPath, manifest)) {
+    const pinned = await readPinnedToolchain(options);
+    lockSha256 = options.packageLockSha256;
+    toolchainId = `npm-lock-${lockSha256}`;
+    const objectPath = path.join(options.root, "objects", `sha256-${lockSha256}`);
+    if (await validateInstalledObject(objectPath, lockSha256)) {
       await activateObject(options.root, objectPath);
       return persist(statusFor("ready", now()), detailFor("ready", {
-        toolchainId: manifest.id,
-        artifactSha256: manifest.artifact.sha256,
+        toolchainId,
+        lockSha256,
         attempt: options.attempt,
       }));
     }
-    if (await fs.lstat(objectPath).catch(() => null)) {
-      await fs.rm(objectPath, { recursive: true, force: true });
-    }
+    await fs.rm(objectPath, { recursive: true, force: true });
 
     await persist(statusFor("downloading", now()), detailFor("downloading", {
-      toolchainId: manifest.id,
-      artifactSha256: manifest.artifact.sha256,
+      toolchainId,
+      lockSha256,
       attempt: options.attempt,
     }));
     await fs.mkdir(stagingPath, { recursive: true, mode: 0o700 });
-    const archivePath = path.join(stagingPath, "payload.tar.gz");
-    await downloadArtifact({
-      url: artifactUrl,
-      destination: archivePath,
-      expectedSha256: manifest.artifact.sha256,
-      expectedSizeBytes: manifest.artifact.sizeBytes,
-      fetchArtifact: options.fetchArtifact ?? fetch,
+    await Promise.all([
+      fs.copyFile(options.packageJsonPath, path.join(stagingPath, "package.json")),
+      fs.writeFile(path.join(stagingPath, "package-lock.json"), pinned.lockBytes, { mode: 0o600 }),
+    ]);
+    await installWithRegistryFallback({
+      destination: stagingPath,
+      cachePath: path.join(options.root, "npm-cache"),
+      proxyRegistryUrl,
+      fallbackRegistryUrl,
+      registryTokenProvider: options.registryTokenProvider,
+      installDependencies: options.installDependencies ?? installBuilderToolchainDependencies,
       signal: options.signal,
+      log,
+      nowMs,
     });
+
     await persist(statusFor("verifying", now()), detailFor("verifying", {
-      toolchainId: manifest.id,
-      artifactSha256: manifest.artifact.sha256,
+      toolchainId,
+      lockSha256,
       attempt: options.attempt,
     }));
-    const contentPath = path.join(stagingPath, "content");
-    await (options.extractArchive ?? extractToolchainArchive)({
-      archivePath,
-      destination: contentPath,
-      expectedUnpackedSizeBytes: manifest.artifact.unpackedSizeBytes,
-    });
-    await validateCommandFiles(contentPath, manifest, true);
+    await validateCommandFiles(stagingPath);
     await fs.writeFile(
-      path.join(contentPath, INSTALLED_MANIFEST_FILE),
-      `${JSON.stringify(manifest)}\n`,
+      path.join(stagingPath, INSTALLED_LOCK_FILE),
+      `${JSON.stringify(installedDescriptor(lockSha256))}\n`,
       { mode: 0o600 },
     );
     await fs.mkdir(path.dirname(objectPath), { recursive: true, mode: 0o700 });
     if (await fs.lstat(objectPath).catch(() => null)) {
-      if (!(await validateInstalledObject(objectPath, manifest))) {
+      if (!(await validateInstalledObject(objectPath, lockSha256))) {
         throw hydrationError("invalid-existing-object");
       }
+      await fs.rm(stagingPath, { recursive: true, force: true });
     } else {
-      await fs.rename(contentPath, objectPath);
+      await fs.rename(stagingPath, objectPath);
     }
     await activateObject(options.root, objectPath);
     return persist(statusFor("ready", now()), detailFor("ready", {
-      toolchainId: manifest.id,
-      artifactSha256: manifest.artifact.sha256,
+      toolchainId,
+      lockSha256,
       attempt: options.attempt,
     }));
   } catch (error) {
@@ -579,10 +611,8 @@ export async function hydrateBuilderToolchain(
       ? error.reasonCode
       : "internal-error";
     await persist(statusFor("failed", now()), detailFor("failed", {
-      ...(manifest ? {
-        toolchainId: manifest.id,
-        artifactSha256: manifest.artifact.sha256,
-      } : {}),
+      ...(toolchainId ? { toolchainId } : {}),
+      ...(lockSha256 ? { lockSha256 } : {}),
       attempt: options.attempt,
       reasonCode,
     }));

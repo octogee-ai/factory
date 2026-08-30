@@ -1,14 +1,21 @@
-# Octogee Builder boot base.
-#
-# Builder pods inherit the OpenClaw runtime directly. Optional developer tools
-# arrive through the post-readiness toolchain hydrator; operator-only cluster,
-# cloud, database, and diagnostic clients do not belong in this image.
+ARG GATEWAY_CORE_IMAGE
+FROM ${GATEWAY_CORE_IMAGE}
 
-ARG GATEWAY_BASE_IMAGE
-FROM ${GATEWAY_BASE_IMAGE}
+ARG BUILDER_TOOLCHAIN_LOCK_SHA256
 
 USER root
 
+COPY --chown=node:node infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json
+COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json
 COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
+
+RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
+    && echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  /octogee/toolchain/package-lock.json" | sha256sum -c -
+
+ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH=/octogee/toolchain/package.json
+ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH=/octogee/toolchain/package-lock.json
+ENV OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256=${BUILDER_TOOLCHAIN_LOCK_SHA256}
+ENV OCTOGEE_BUILDER_NPM_PROXY_REGISTRY=https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/
+ENV OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY=https://registry.npmjs.org/
 
 USER node

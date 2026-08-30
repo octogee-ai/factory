@@ -295,9 +295,11 @@ spec:
               value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
             - name: FLEET_CONTROLLER_PORT
               value: {{ .Values.env.fleetControllerPort | default "3003" | quote }}
-            {{- if and (eq $gatewayClass "builder") .Values.env.builderToolchainArtifactUrl }}
-            - name: OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL
-              value: {{ .Values.env.builderToolchainArtifactUrl | quote }}
+            {{- if eq $gatewayClass "builder" }}
+            - name: OCTOGEE_BUILDER_NPM_PROXY_REGISTRY
+              value: {{ .Values.env.builderNpmProxyRegistry | quote }}
+            - name: OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY
+              value: {{ .Values.env.builderNpmFallbackRegistry | quote }}
             {{- end }}
             - name: MIGRATION_RSYNC_PORT
               value: {{ .Values.env.migrationRsyncPort | default "30873" | quote }}

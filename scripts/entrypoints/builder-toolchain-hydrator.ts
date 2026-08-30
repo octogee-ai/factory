@@ -1,8 +1,11 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { GoogleAuth } from "google-auth-library";
 
 import type { DeveloperToolchainStatusArtifact } from "../../shared/types/developer-toolchain.js";
 import {
+  DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
+  DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
   hydrateBuilderToolchain,
   runBuilderToolchainHydrationLoop,
   writeToolchainStatus,
@@ -11,9 +14,11 @@ import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-br
 
 export interface BuilderToolchainHydratorConfig {
   root: string;
-  manifestPath: string;
-  manifestSha256: string;
-  artifactUrl: string;
+  packageJsonPath: string;
+  packageLockPath: string;
+  packageLockSha256: string;
+  proxyRegistryUrl: string;
+  fallbackRegistryUrl: string;
   gatewayId: string;
   builderSlug: string;
   readinessUrl: string;
@@ -26,12 +31,30 @@ export function resolveBuilderToolchainHydratorConfig(
   const fleetControllerPort = env.FLEET_CONTROLLER_PORT?.trim() || "3003";
   return {
     root: path.join(home, ".octogee", "toolchains"),
-    manifestPath: env.OCTOGEE_BUILDER_TOOLCHAIN_MANIFEST_PATH?.trim() || "",
-    manifestSha256: env.OCTOGEE_BUILDER_TOOLCHAIN_MANIFEST_SHA256?.trim() || "",
-    artifactUrl: env.OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL?.trim() || "",
+    packageJsonPath: env.OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH?.trim()
+      || "/octogee/toolchain/package.json",
+    packageLockPath: env.OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH?.trim()
+      || "/octogee/toolchain/package-lock.json",
+    packageLockSha256: env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim() || "",
+    proxyRegistryUrl: env.OCTOGEE_BUILDER_NPM_PROXY_REGISTRY?.trim()
+      || DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
+    fallbackRegistryUrl: env.OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY?.trim()
+      || DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
     gatewayId: env.GATEWAY_ID?.trim() || "",
     builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() || "",
     readinessUrl: `http://127.0.0.1:${fleetControllerPort}/surge-ready`,
+  };
+}
+
+export function createBuilderNpmProxyTokenProvider(
+  auth: Pick<GoogleAuth, "getAccessToken"> = new GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  }),
+): () => Promise<string> {
+  return async () => {
+    const token = await auth.getAccessToken();
+    if (!token) throw new Error("Artifact Registry access token unavailable");
+    return token;
   };
 }
 
@@ -93,6 +116,7 @@ export async function runBuilderToolchainHydrator(input: {
   client?: Pick<FleetBrokerClient, "uidForSlug" | "setToolchainStatus">;
   signal?: AbortSignal;
   log?: (message: string) => void;
+  registryTokenProvider?: (registryUrl: string) => Promise<string>;
 }): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
   const log = input.log ?? console.error;
@@ -101,6 +125,8 @@ export async function runBuilderToolchainHydrator(input: {
     client,
     builderSlug: input.config.builderSlug,
   });
+  const registryTokenProvider = input.registryTokenProvider
+    ?? createBuilderNpmProxyTokenProvider();
   const writeStatus = (status: DeveloperToolchainStatusArtifact["status"]): Promise<void> =>
     writeToolchainStatus(input.config.root, statusArtifact(status), { publishStatus, log });
 
@@ -108,9 +134,12 @@ export async function runBuilderToolchainHydrator(input: {
     probeInteractiveReadiness: () => probeBuilderInteractiveReadiness(input.config.readinessUrl),
     hydrate: (attempt) => hydrateBuilderToolchain({
       root: input.config.root,
-      manifestPath: input.config.manifestPath,
-      manifestSha256: input.config.manifestSha256,
-      artifactUrl: input.config.artifactUrl,
+      packageJsonPath: input.config.packageJsonPath,
+      packageLockPath: input.config.packageLockPath,
+      packageLockSha256: input.config.packageLockSha256,
+      proxyRegistryUrl: input.config.proxyRegistryUrl,
+      fallbackRegistryUrl: input.config.fallbackRegistryUrl,
+      registryTokenProvider,
       attempt,
       publishStatus,
       log,

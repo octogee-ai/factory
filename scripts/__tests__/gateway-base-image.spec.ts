@@ -65,6 +65,57 @@ function runInstructionContaining(dockerfile: string, needle: string): string {
 }
 
 describe("gateway base image", () => {
+  it("keeps the Builder boot base on the core target without workstation or ACP payloads", () => {
+    const base = readRepoFile("infra/gateway/Dockerfile.base");
+    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
+    const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
+
+    expect(base).toContain("FROM node:24-bookworm-slim AS gateway-core-system");
+    expect(base).toContain("FROM gateway-core-system AS gateway-core-runtime");
+    expect(builderBase).toContain("ARG GATEWAY_CORE_IMAGE");
+    expect(builderBase).toContain("FROM ${GATEWAY_CORE_IMAGE}");
+    expect(builderBase).toContain("infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json");
+    expect(builderBase).toContain("infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json");
+    expect(builderBase).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+    expect(builderConfig).not.toContain('"codex": {');
+    expect(builderConfig).not.toContain('"browser": {\n    "enabled": true');
+  });
+
+  it("pins the post-readiness Builder CLIs and their npm integrity", () => {
+    const packageJson = JSON.parse(
+      readRepoFile("infra/gateway/builder-toolchain/package.json"),
+    ) as { dependencies: Record<string, string> };
+    const packageLock = JSON.parse(
+      readRepoFile("infra/gateway/builder-toolchain/package-lock.json"),
+    ) as { packages: Record<string, { version?: string; integrity?: string }> };
+
+    expect(packageJson.dependencies).toEqual({
+      "@anthropic-ai/claude-code": "2.1.251",
+      "@openai/codex": "0.151.0",
+    });
+    expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
+      version: "2.1.251",
+      integrity: expect.stringMatching(/^sha512-/),
+    });
+    expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({
+      version: "0.151.0",
+      integrity: expect.stringMatching(/^sha512-/),
+    });
+  });
+
+  it("keys the immutable Builder base on the exact npm lock", () => {
+    const workflow = readRepoFile(".github/workflows/gateway-build-operator-base.yml");
+    const cloudbuild = readRepoFile("cloudbuild-builder-base.yaml");
+
+    expect(workflow.match(/infra\/gateway\/builder-toolchain\/package-lock\.json/g))
+      .toHaveLength(2);
+    expect(workflow).toContain("BUILDER_BASE_INPUT_HASH=$(sha256sum");
+    expect(cloudbuild).toContain(
+      "TOOLCHAIN_LOCK_SHA256=\"$$(sha256sum infra/gateway/builder-toolchain/package-lock.json",
+    );
+    expect(cloudbuild).toContain("--build-arg=BUILDER_TOOLCHAIN_LOCK_SHA256=$$TOOLCHAIN_LOCK_SHA256");
+  });
+
   it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
     const dockerfile = readRepoFile("gateway-edge/Dockerfile");
     expect(dockerfile).toContain("ARG GITLEAKS_VERSION=8.30.1");
@@ -109,25 +160,26 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toMatch(/npm install[^\n]*@anthropic-ai\/claude-code/);
   });
 
-  it("upgrades the shipped npm only after OpenClaw stages its plugins", () => {
+  it("pins the npm runtime shared by core boot and post-readiness hydration", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
-    const pluginInstall = dockerfile.indexOf("openclaw plugins install");
     const npmUpgrade = dockerfile.indexOf("npm install --global npm@${NPM_VERSION}");
 
-    expect(pluginInstall).toBeGreaterThan(-1);
-    expect(npmUpgrade).toBeGreaterThan(pluginInstall);
+    expect(npmUpgrade).toBeGreaterThan(dockerfile.indexOf("AS gateway-core-system"));
+    expect(npmUpgrade).toBeLessThan(dockerfile.indexOf("AS gateway-system"));
+    expect(runInstructionContaining(dockerfile, "npm@${NPM_VERSION}"))
+      .toContain("npm cache clean --force");
   });
 
   it("copies only staged OpenClaw runtime outputs into the shipped stage", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
     const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-system AS gateway-runtime"));
 
-    expect(dockerfile).toContain("FROM gateway-system AS openclaw-installer");
+    expect(dockerfile).toContain("FROM gateway-core-system AS openclaw-installer");
     expect(runtimeStage).toContain(
       "COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw",
     );
     expect(runtimeStage).toContain(
-      "COPY --from=openclaw-installer --chown=node:node /opt/openclaw-codex-deps",
+      "COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps",
     );
     expect(runtimeStage).not.toContain("openclaw-tarball/");
     expect(runtimeStage).not.toContain("/home/node/.openclaw");
@@ -186,7 +238,7 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 
-  it("proves the final Builder image keeps Codex bound to its installed core", () => {
+  it("proves the final Builder image excludes pre-hydration Codex payloads", () => {
     for (const filePath of [
       "cloudbuild-operator-final.yaml",
       "cloudbuild-operator-final-extra.yaml",
@@ -194,14 +246,11 @@ describe("gateway base image", () => {
       const cloudbuild = readRepoFile(filePath);
 
       expect(cloudbuild).toContain(
-        'OPENCLAW_CORE_PACKAGE="$$(npm root -g)/openclaw/package.json"',
+        '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
       );
-      expect(cloudbuild).toContain(
-        'CODEX_PACKAGE="$$(find /opt/openclaw-codex-deps/npm -type f -path "*/node_modules/@openclaw/codex/package.json" -print -quit)"',
-      );
-      expect(cloudbuild).toContain(
-        'test "$$INSTALLED_CODEX" = "$$INSTALLED_OPENCLAW_CORE"',
-      );
+      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@anthropic-ai/claude-code"');
+      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@openai/codex"');
+      expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
     }
   });
 });

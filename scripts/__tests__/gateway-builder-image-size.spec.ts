@@ -11,7 +11,7 @@ const buildConfig = readFileSync(
 );
 const temporaryDirectories: string[] = [];
 
-function runCheck(imageSize: string, maximumBytes = "3100000000") {
+function runCheck(imageSize: string, maximumBytes = "1250000000") {
   const directory = mkdtempSync(join(tmpdir(), "builder-image-size-"));
   temporaryDirectories.push(directory);
   const gcloud = join(directory, "gcloud");
@@ -50,18 +50,18 @@ afterEach(() => {
 
 describe("Builder compressed image budget", () => {
   it("accepts an image at the byte budget", () => {
-    const result = runCheck("3100000000");
+    const result = runCheck("1250000000");
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("3100000000 / 3100000000 bytes");
+    expect(result.stdout).toContain("1250000000 / 1250000000 bytes");
   });
 
   it("fails when the compressed image exceeds the budget", () => {
-    const result = runCheck("3100000001");
+    const result = runCheck("1250000001");
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("exceeds compressed size budget");
-    expect(result.stderr).toContain("3100000001 > 3100000000");
+    expect(result.stderr).toContain("1250000001 > 1250000000");
   });
 
   it.each(["", "unknown", "123\\n456"])("rejects invalid registry size %j", (size) => {
@@ -72,7 +72,7 @@ describe("Builder compressed image budget", () => {
   });
 
   it("runs the budget against the pushed Builder image", () => {
-    expect(buildConfig).toContain('_MAX_COMPRESSED_IMAGE_BYTES: "3100000000"');
+    expect(buildConfig).toContain('_MAX_COMPRESSED_IMAGE_BYTES: "1250000000"');
     expect(buildConfig).toContain('_PROFILE_IMAGE: "octogee-gateway-builder"');
     expect(buildConfig).toContain("scripts/lib/assert-artifact-image-size.sh");
     expect(buildConfig).toContain('${_PROFILE_IMAGE}:${_IMAGE_TAG}');

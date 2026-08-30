@@ -3,10 +3,10 @@ import * as path from "node:path";
 
 import {
   BUILDER_TOOLCHAIN_COMMANDS,
-  parseBuilderToolchainManifest,
   readToolchainDetail,
   readToolchainStatus,
   type BuilderToolchainCommand,
+  type InstalledBuilderToolchainLock,
 } from "./builder-toolchain-hydrator.js";
 
 export interface ResolvedToolchainCommand {
@@ -55,17 +55,21 @@ export async function resolveToolchainCommand(input: {
     const activePath = await fs.realpath(path.join(input.root, "active"));
     const objectsPath = await fs.realpath(path.join(input.root, "objects"));
     if (!activePath.startsWith(`${objectsPath}${path.sep}`)) throw new Error("active object escaped root");
-    const manifest = parseBuilderToolchainManifest(JSON.parse(
-      await fs.readFile(path.join(activePath, ".toolchain-manifest.json"), "utf8"),
-    ));
+    const installed = JSON.parse(
+      await fs.readFile(path.join(activePath, ".toolchain-lock.json"), "utf8"),
+    ) as InstalledBuilderToolchainLock;
     const detail = await readToolchainDetail(input.root);
-    if (manifest.artifact.sha256 !== detail?.artifactSha256) throw new Error("active digest differs");
-    const executable = path.join(activePath, manifest.commands[command]);
+    if (
+      installed.schemaVersion !== 1 || installed.lockSha256 !== detail?.lockSha256 ||
+      !BUILDER_TOOLCHAIN_COMMANDS.every((name) =>
+        installed.commands?.[name] === `node_modules/.bin/${name}`)
+    ) throw new Error("active lock differs");
+    const executable = path.join(activePath, installed.commands[command]);
     const stat = await fs.lstat(executable);
-    if (!stat.isFile()) throw new Error("command is not a file");
+    if (!stat.isFile() && !stat.isSymbolicLink()) throw new Error("command is not executable");
     const realExecutable = await fs.realpath(executable);
     if (!realExecutable.startsWith(`${activePath}${path.sep}`)) throw new Error("command escaped object");
-    return { kind: "ready", exitCode: 0, executable: realExecutable };
+    return { kind: "ready", exitCode: 0, executable };
   } catch {
     return {
       kind: "unavailable",

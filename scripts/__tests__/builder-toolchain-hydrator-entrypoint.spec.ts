@@ -1,30 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createBuilderNpmProxyTokenProvider,
   createBuilderToolchainStatusPublisher,
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
 } from "../entrypoints/builder-toolchain-hydrator.js";
 
 describe("Builder toolchain hydrator entrypoint", () => {
-  it("resolves only the pinned image contract and configured HTTPS artifact input", () => {
+  it("resolves the image-pinned npm lock and managed proxy contract", () => {
     expect(resolveBuilderToolchainHydratorConfig({
       HOME: "/home/builder",
       GATEWAY_ID: "bender",
       GATEWAY_BUILDER_SLUG: "alice",
       FLEET_CONTROLLER_PORT: "4111",
-      OCTOGEE_BUILDER_TOOLCHAIN_MANIFEST_PATH: "/octogee/toolchain/manifest.json",
-      OCTOGEE_BUILDER_TOOLCHAIN_MANIFEST_SHA256: "a".repeat(64),
-      OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL: "https://broker.example/toolchain",
+      OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH: "/octogee/toolchain/package.json",
+      OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH: "/octogee/toolchain/package-lock.json",
+      OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256: "a".repeat(64),
+      OCTOGEE_BUILDER_NPM_PROXY_REGISTRY: "https://proxy.example/npm/",
     })).toEqual({
       root: "/home/builder/.octogee/toolchains",
       gatewayId: "bender",
       builderSlug: "alice",
       readinessUrl: "http://127.0.0.1:4111/surge-ready",
-      manifestPath: "/octogee/toolchain/manifest.json",
-      manifestSha256: "a".repeat(64),
-      artifactUrl: "https://broker.example/toolchain",
+      packageJsonPath: "/octogee/toolchain/package.json",
+      packageLockPath: "/octogee/toolchain/package-lock.json",
+      packageLockSha256: "a".repeat(64),
+      proxyRegistryUrl: "https://proxy.example/npm/",
+      fallbackRegistryUrl: "https://registry.npmjs.org/",
     });
+  });
+
+  it("uses a short-lived Google access token without exposing auth in config", async () => {
+    const getAccessToken = vi.fn(async () => "short-lived-token");
+    const provide = createBuilderNpmProxyTokenProvider({ getAccessToken });
+
+    await expect(provide()).resolves.toBe("short-lived-token");
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
   });
 
   it("projects exact states through the assigned-gateway broker and resolves the uid once", async () => {

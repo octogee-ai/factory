@@ -105,18 +105,20 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const builder = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       profile: "builder",
-      "env.builderToolchainArtifactUrl": "https://artifacts.example/toolpack",
+      "env.builderNpmProxyRegistry": "https://proxy.example/npm/",
+      "env.builderNpmFallbackRegistry": "https://registry.npmjs.org/",
     }), "Deployment", "octogee-gateway-bender") ?? "";
     const shared = findDoc(helmTemplate("octogee-gw-shared", {
       gatewayId: "shared",
-      "env.builderToolchainArtifactUrl": "https://artifacts.example/toolpack",
+      "env.builderNpmProxyRegistry": "https://proxy.example/npm/",
+      "env.builderNpmFallbackRegistry": "https://registry.npmjs.org/",
     }), "Deployment", "octogee-gateway-shared") ?? "";
 
     expect(containerBlock(builder, "gateway")).toMatch(
-      /name:\s*OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL[\s\S]*?value:\s*"https:\/\/artifacts\.example\/toolpack"/,
+      /name:\s*OCTOGEE_BUILDER_NPM_PROXY_REGISTRY[\s\S]*?value:\s*"https:\/\/proxy\.example\/npm\/"/,
     );
     expect(containerBlock(shared, "gateway")).not.toContain(
-      "OCTOGEE_BUILDER_TOOLCHAIN_ARTIFACT_URL",
+      "OCTOGEE_BUILDER_NPM_PROXY_REGISTRY",
     );
   });
 

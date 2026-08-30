@@ -87,7 +87,7 @@
     "list": []
   },
   "browser": {
-    "enabled": true,
+    "enabled": false,
     "defaultProfile": "openclaw",
     "headless": true,
     "noSandbox": true,
@@ -239,8 +239,7 @@
       "octogee-activity-tools",
       "parallel",
       "openai",
-      "browser",
-      "codex"
+      "browser"
     ],
     "entries": {
       "mattermost": {
@@ -250,10 +249,7 @@
         "enabled": true
       },
       "browser": {
-        "enabled": true
-      },
-      "codex": {
-        "enabled": true
+        "enabled": false
       },
       "octogee-chat-tools": {
         "enabled": true,

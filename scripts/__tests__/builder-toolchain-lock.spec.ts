@@ -1,0 +1,185 @@
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  hydrateBuilderToolchain,
+  parseBuilderToolchainLock,
+  readToolchainStatus,
+} from "../lib/builder-toolchain-hydrator.js";
+import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
+
+const tempRoots: string[] = [];
+
+async function tempRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "octogee-toolchain-lock-"));
+  tempRoots.push(root);
+  return root;
+}
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function lockFixture(): Record<string, unknown> {
+  return {
+    name: "@octogee/builder-toolchain",
+    version: "1.0.0",
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      "": {
+        name: "@octogee/builder-toolchain",
+        version: "1.0.0",
+        dependencies: {
+          "@anthropic-ai/claude-code": "2.1.251",
+          "@openai/codex": "0.151.0",
+        },
+      },
+      "node_modules/@anthropic-ai/claude-code": {
+        version: "2.1.251",
+        resolved: "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.251.tgz",
+        integrity: "sha512-Y2xhdWRl",
+      },
+      "node_modules/@openai/codex": {
+        version: "0.151.0",
+        resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.151.0.tgz",
+        integrity: "sha512-Y29kZXg=",
+      },
+    },
+  };
+}
+
+async function writePinnedInputs(home: string): Promise<{
+  packageJsonPath: string;
+  packageLockPath: string;
+  packageLockSha256: string;
+}> {
+  const packageJsonPath = path.join(home, "package.json");
+  const packageLockPath = path.join(home, "package-lock.json");
+  const packageJson = {
+    name: "@octogee/builder-toolchain",
+    version: "1.0.0",
+    private: true,
+    dependencies: {
+      "@anthropic-ai/claude-code": "2.1.251",
+      "@openai/codex": "0.151.0",
+    },
+  };
+  const rawLock = `${JSON.stringify(lockFixture())}\n`;
+  await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson)}\n`);
+  await fs.writeFile(packageLockPath, rawLock);
+  return { packageJsonPath, packageLockPath, packageLockSha256: sha256(rawLock) };
+}
+
+async function fakeInstall(destination: string): Promise<void> {
+  const bin = path.join(destination, "node_modules", ".bin");
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+}
+
+describe("Builder npm toolchain lock", () => {
+  it("accepts only the two exact CLI dependencies with registry integrity", () => {
+    expect(parseBuilderToolchainLock(lockFixture())).toEqual({
+      schemaVersion: 1,
+      id: "npm-lock-sha256",
+      commands: {
+        claude: "node_modules/.bin/claude",
+        codex: "node_modules/.bin/codex",
+      },
+      versions: { claude: "2.1.251", codex: "0.151.0" },
+    });
+
+    const missingIntegrity = lockFixture();
+    delete (missingIntegrity.packages as Record<string, Record<string, unknown>>)[
+      "node_modules/@openai/codex"
+    ].integrity;
+    expect(() => parseBuilderToolchainLock(missingIntegrity)).toThrow(/invalid-toolchain-lock/);
+  });
+
+  it("installs after pin verification into a content-addressed HOME object and activates atomically", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const installDependencies = vi.fn(fakeInstall);
+    const registryTokenProvider = vi.fn(async () => "short-lived-token");
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      proxyRegistryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      registryTokenProvider,
+      installDependencies,
+    })).resolves.toMatchObject({ status: "ready" });
+
+    const objectPath = path.join(root, "objects", `sha256-${pin.packageLockSha256}`);
+    expect(installDependencies).toHaveBeenCalledWith(expect.stringContaining(
+      `${path.sep}staging${path.sep}`,
+    ), {
+      cachePath: path.join(root, "npm-cache"),
+      registryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      authToken: "short-lived-token",
+      signal: undefined,
+    });
+    expect(await fs.readlink(path.join(root, "active"))).toBe(
+      `objects/sha256-${pin.packageLockSha256}`,
+    );
+    await expect(resolveToolchainCommand({ root, command: "claude" })).resolves.toMatchObject({
+      kind: "ready",
+      executable: path.join(await fs.realpath(objectPath), "node_modules", ".bin", "claude"),
+    });
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("rejects lock drift before invoking npm", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const installDependencies = vi.fn(fakeInstall);
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      packageLockSha256: "0".repeat(64),
+      proxyRegistryUrl: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      registryTokenProvider: async () => "short-lived-token",
+      installDependencies,
+    })).rejects.toMatchObject({ reasonCode: "toolchain-lock-digest-mismatch" });
+    expect(installDependencies).not.toHaveBeenCalled();
+  });
+
+  it("logs proxy failure timing and falls back directly without a token", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const log = vi.fn();
+    const installDependencies = vi.fn(fakeInstall);
+    const ticks = [100, 140];
+
+    await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryTokenProvider: async () => { throw new Error("metadata unavailable"); },
+      installDependencies,
+      log,
+      nowMs: () => ticks.shift() ?? 140,
+    });
+
+    expect(installDependencies).toHaveBeenCalledTimes(1);
+    expect(installDependencies.mock.calls[0]?.[1]).toMatchObject({
+      registryUrl: "https://registry.npmjs.org/",
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/token unavailable.*direct npm/));
+    expect(log).toHaveBeenCalledWith(
+      "[builder-toolchain] npm install registry=direct outcome=ready durationMs=40",
+    );
+  });
+});
