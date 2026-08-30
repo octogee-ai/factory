@@ -331,6 +331,20 @@ llmBroker:
       cpu: 500m
       memory: 512Mi
 
+npmCacheProxy:
+  enabled: true
+  port: 3005
+  serviceAccountName: octogee-npm-cache-proxy
+  gcpServiceAccount: octogee-npm-cache-proxy@octogee.iam.gserviceaccount.com
+  upstreamRegistryUrl: https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 artifactWorker:
   enabled: true
   nodeLocalDnsCidr: 169.254.20.10/32

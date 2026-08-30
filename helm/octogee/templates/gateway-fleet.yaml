@@ -97,6 +97,13 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.llmBroker.port | default 3010 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-npm-cache-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.npmCacheProxy.port | default 3005 }}
     # Gateway-to-gateway migration control. The controller signs the
     # direct-transfer instructions; workspace bytes never transit the
     # controller process.
