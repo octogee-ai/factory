@@ -82,6 +82,9 @@ import {
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
+export const DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS = 10 * 60_000;
+export const DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS =
+  DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS + DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
 export const SHARED_GATEWAY_REBALANCE_STABILITY_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION =
   "gatewayRecoveryReceipts";
@@ -1075,6 +1078,25 @@ async function recoverAndRetireUnreachableTarget(
   return recovery.operationId;
 }
 
+function disposableGatewayProvisioningBudgetOpen(input: {
+  now: number;
+  provisionedAt: number;
+  runtimeStartedAt: unknown;
+}): boolean {
+  const provisionElapsedMs = input.now - input.provisionedAt;
+  if (provisionElapsedMs < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) return true;
+  const runtimeStartedAt = millis(input.runtimeStartedAt);
+  if (
+    runtimeStartedAt === null ||
+    runtimeStartedAt < input.provisionedAt ||
+    runtimeStartedAt > input.now
+  ) {
+    return false;
+  }
+  return input.now - runtimeStartedAt < DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS &&
+    provisionElapsedMs < DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS;
+}
+
 async function cleanupUnreachableProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<boolean> {
@@ -1101,7 +1123,11 @@ async function cleanupUnreachableProvisioningTarget(
       });
       return true;
     }
-    if (context.deps.now() - provisionedAt < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) {
+    if (disposableGatewayProvisioningBudgetOpen({
+      now: context.deps.now(),
+      provisionedAt,
+      runtimeStartedAt: target.runtimeStartedAt,
+    })) {
       return true;
     }
   }
