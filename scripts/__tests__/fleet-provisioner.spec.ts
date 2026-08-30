@@ -11,6 +11,7 @@ import {
   cloneRetryDelayMs,
   cloneRetryReady,
   customerEnsureRetryReady,
+  consumeRecoveredCustomerRuntimeReset,
   dashboardBridgeReady,
   cancelRemovedEviction,
   createConfiguredBuilderReconcileAdmission,
@@ -70,6 +71,106 @@ function mkDb(rows: Array<Record<string, unknown>>): Firestore {
     collection: vi.fn(() => query),
   } as unknown as Firestore;
 }
+
+function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    uid: "uid-alice",
+    slug: "alice",
+    gatewayId: "shared-a",
+    agentIds: ["octogee-alice-coach"],
+    runtimeReset: {
+      status: "pending",
+      uid: "uid-alice",
+      slug: "alice",
+      operationId: "recover-alice-7",
+      sourceGatewayId: "alice-builder",
+      targetGatewayId: "shared-a",
+      generation: 8,
+      disposableLeaseId: "lease-alice",
+      disposableLeaseGeneration: 2,
+      requestedAt: 1_000,
+    },
+    ...overrides,
+  } as never;
+}
+
+describe("recovered customer runtime reset — mount admission", () => {
+  it("resets before acknowledging the exact pending marker", async () => {
+    const events: string[] = [];
+    const reset = vi.fn(() => {
+      events.push("reset");
+      return {
+        removedAgentRegistrations: ["octogee-alice-coach"],
+        removedAgentStores: ["octogee-alice-coach"],
+        clearedWorkspaceAttestations: [],
+      };
+    });
+    const acknowledge = vi.fn(async () => {
+      events.push("ack");
+    });
+
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset,
+    })).resolves.toMatchObject({ removedAgentStores: ["octogee-alice-coach"] });
+
+    expect(events).toEqual(["reset", "ack"]);
+    expect(acknowledge).toHaveBeenCalledWith("uid-alice", "recover-alice-7", 8);
+  });
+
+  it("does nothing on an ordinary add without a recovery marker", async () => {
+    const reset = vi.fn();
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot({ runtimeReset: undefined }),
+      acknowledge,
+      reset,
+    })).resolves.toBeNull();
+    expect(reset).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and leaves acknowledgement pending when reset fails", async () => {
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset: () => {
+        throw new Error("sqlite reset failed");
+      },
+    })).rejects.toThrow(/sqlite reset failed/u);
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed target identity before touching local state", async () => {
+    const reset = vi.fn();
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-b",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset,
+    })).rejects.toThrow(/identity fence changed/u);
+    expect(reset).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+});
 
 describe("settleConvergence — the applied-fingerprint gate", () => {
   const hooks = () => ({

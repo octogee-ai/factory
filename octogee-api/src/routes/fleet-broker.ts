@@ -27,6 +27,7 @@ import type {
   FleetBrokerChannelBinding,
   FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerConfiguredBuilderProjectCredential,
+  FleetBrokerCustomerRuntimeReset,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerNpmRegistryCredentials,
@@ -1528,6 +1529,80 @@ function snapshotGreetingPosted(data: Record<string, unknown>): boolean {
   return Boolean((greeting as { ok?: unknown } | undefined)?.ok);
 }
 
+type StoredRuntimeReset = FleetBrokerCustomerRuntimeReset | (
+  Omit<FleetBrokerCustomerRuntimeReset, "status"> & {
+    status: "acknowledged";
+    acknowledgedAt: unknown;
+  }
+);
+
+function storedRuntimeReset(
+  data: Record<string, unknown>,
+): StoredRuntimeReset | undefined {
+  const raw = readPath(data, "provisioning.openclaw.runtimeReset");
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("invalid customer runtime reset marker");
+  }
+  const marker = raw as Record<string, unknown>;
+  const stringFields = [
+    "uid",
+    "slug",
+    "operationId",
+    "sourceGatewayId",
+    "targetGatewayId",
+    "disposableLeaseId",
+  ] as const;
+  const validStrings = stringFields.every(
+    (field) => typeof marker[field] === "string" && marker[field].length > 0,
+  );
+  const validIntegers = ["generation", "disposableLeaseGeneration", "requestedAt"].every(
+    (field) => Number.isSafeInteger(marker[field]) && (marker[field] as number) >= 0,
+  );
+  const validStatus = marker.status === "pending" ||
+    (marker.status === "acknowledged" && marker.acknowledgedAt !== undefined);
+  if (!validStatus || !validStrings || !validIntegers || !isValidUsername(marker.slug)) {
+    throw new Error("invalid customer runtime reset marker");
+  }
+  return marker as unknown as StoredRuntimeReset;
+}
+
+function snapshotRuntimeReset(
+  data: Record<string, unknown>,
+): FleetBrokerCustomerRuntimeReset | undefined {
+  const marker = storedRuntimeReset(data);
+  return marker?.status === "pending" ? marker : undefined;
+}
+
+async function admittedRuntimeReset(
+  db: Firestore,
+  uid: string,
+  data: Record<string, unknown>,
+): Promise<FleetBrokerCustomerRuntimeReset | undefined> {
+  const marker = snapshotRuntimeReset(data);
+  if (!marker) return undefined;
+  const assignmentSnapshot = await db
+    .collection(GATEWAYS_COLLECTION)
+    .doc(marker.targetGatewayId)
+    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+    .doc(uid)
+    .get();
+  const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+  const assignment = assignmentData ? parseAssignmentDoc(uid, assignmentData) : null;
+  const exact = [
+    marker.uid === uid,
+    marker.slug === slugFromAssignedUser(data),
+    marker.targetGatewayId === stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
+    assignment?.uid === uid,
+    assignment?.gatewayId === marker.targetGatewayId,
+    assignment?.epoch === marker.generation,
+    assignmentData?.source === "repair",
+    assignmentData?.updatedByOperationId === marker.operationId,
+  ].every(Boolean);
+  if (!exact) throw new Error("customer runtime reset assignment fence changed");
+  return marker;
+}
+
 function snapshotBaseFields(
   data: Record<string, unknown>,
   slug: string,
@@ -1598,7 +1673,7 @@ async function loadSnapshot(
   const { modelDials, projectCheckoutScope, platformAdminMmUserId } = options;
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
-  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig] = await Promise.all([
+  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig, runtimeReset] = await Promise.all([
     collectChannelBindings(db, slug),
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(db, slug)
@@ -1607,6 +1682,7 @@ async function loadSnapshot(
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
+    admittedRuntimeReset(db, uid, data),
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
@@ -1619,6 +1695,7 @@ async function loadSnapshot(
     uid,
     slug,
     ...baseFields,
+    ...(runtimeReset ? { runtimeReset } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     freeTierModelRef: modelDials.freeTierModelRef,
     builderAgentDefault: modelDials.builderAgentDefault,
@@ -2302,6 +2379,69 @@ function installProvisioningRoutes(
       await db.collection("users").doc(assigned.uid).update({
         "provisioning.openclaw.agentIds": agentIds,
       });
+      res.status(204).end();
+    });
+  });
+
+  router.post("/runtime-reset-ack", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const operationId = typeof body.operationId === "string" ? body.operationId : "";
+    const generation = body.generation;
+    if (!operationId || !Number.isSafeInteger(generation) || (generation as number) < 0) {
+      res.status(400).json({ error: "invalid_runtime_reset_ack" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const result = await db.runTransaction(async (txn) => {
+        const userRef = db.collection("users").doc(assigned.uid);
+        const assignmentRef = db
+          .collection(GATEWAYS_COLLECTION)
+          .doc(assigned.bound.gatewayId)
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(assigned.uid);
+        const [userSnapshot, assignmentSnapshot] = await Promise.all([
+          txn.get(userRef),
+          txn.get(assignmentRef),
+        ]);
+        const userData = userSnapshot.data() as Record<string, unknown> | undefined;
+        if (stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== assigned.bound.gatewayId) {
+          return "conflict" as const;
+        }
+        const marker = userData ? storedRuntimeReset(userData) : undefined;
+        if (!marker) return "missing" as const;
+        if (marker.status === "acknowledged") return "missing" as const;
+        const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+        const assignment = assignmentData
+          ? parseAssignmentDoc(assigned.uid, assignmentData)
+          : null;
+        const exact = [
+          marker.uid === assigned.uid,
+          marker.slug === slugFromAssignedUser(userData),
+          marker.targetGatewayId === assigned.bound.gatewayId,
+          marker.operationId === operationId,
+          marker.generation === generation,
+          assignment?.uid === assigned.uid,
+          assignment?.gatewayId === assigned.bound.gatewayId,
+          assignment?.epoch === marker.generation,
+          assignmentData?.source === "repair",
+          assignmentData?.updatedByOperationId === marker.operationId,
+        ].every(Boolean);
+        if (!exact) return "conflict" as const;
+        txn.update(userRef, {
+          "provisioning.openclaw.runtimeReset": {
+            ...marker,
+            status: "acknowledged",
+            acknowledgedAt: FieldValue.serverTimestamp(),
+          },
+        });
+        return "acked" as const;
+      });
+      if (result === "conflict") {
+        res.status(409).json({ error: "runtime_reset_fence_changed" });
+        return;
+      }
       res.status(204).end();
     });
   });

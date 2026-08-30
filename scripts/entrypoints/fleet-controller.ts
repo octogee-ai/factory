@@ -316,6 +316,9 @@ async function main(): Promise<void> {
       adapter.seedUserSnapshotForMigration,
     ),
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
+    readUserSnapshotForRuntimeReset: (uid) => brokerClient.userSnapshot(uid),
+    acknowledgeRuntimeReset: (uid, operationId, generation) =>
+      brokerClient.acknowledgeRuntimeReset(uid, operationId, generation),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
     flushLocalState: createFleetControllerRequestedFlush({

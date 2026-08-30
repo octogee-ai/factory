@@ -100,6 +100,19 @@ export interface UnavailableGatewayRecoveryTargetValidationContext {
 export declare function commitUnavailableGatewayRecoveryAtomic(deps: FleetStateDeps, params: UnavailableGatewayRecoveryParams): Promise<{
     operationId: string;
 }>;
+export interface RecoveredDisposableRuntimeResetParams {
+    operationId: string;
+    previousRecoveryOperationId: string;
+    uid: string;
+    slug: string;
+    targetGatewayId: string;
+    expectedAssignmentEpoch: number;
+    sharedGatewayIds: readonly string[];
+    targetHeartbeatMaxAgeMs: number;
+}
+export declare function commitRecoveredDisposableRuntimeResetAtomic(deps: FleetStateDeps, params: RecoveredDisposableRuntimeResetParams): Promise<{
+    operationId: string;
+}>;
 export interface MarkAssignmentStateParams {
     gatewayId: string;
     uid: string;

@@ -44,10 +44,14 @@ async function postJson<T>(
   return (await resp.json()) as T;
 }
 
-async function postNoContent(path: string, body: unknown): Promise<void> {
+async function postNoContent(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<void> {
   const resp = await internalFetch(`${baseUrl()}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -76,6 +80,7 @@ export interface FleetBrokerClient {
   setGreetingResult(uid: string, result: FleetBrokerGreetingResult): Promise<void>;
   setAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
+  acknowledgeRuntimeReset(uid: string, operationId: string, generation: number): Promise<void>;
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
@@ -273,6 +278,13 @@ export function createFleetBrokerClient(
     },
     setMounted(uid, mounted) {
       return postNoContent("/internal/fleet/mounted", { gatewayId, uid, mounted });
+    },
+    async acknowledgeRuntimeReset(uid, operationId, generation) {
+      return postNoContent(
+        "/internal/fleet/runtime-reset-ack",
+        { gatewayId, uid, operationId, generation },
+        await gatewayCredentialHeaders(),
+      );
     },
     recordReconcileError(slug, message) {
       return postNoContent("/internal/fleet/reconcile-error", { gatewayId, slug, message });

@@ -330,6 +330,7 @@ function recoveryAlreadyCommitted(input) {
         targetAssignmentExact,
         operationTimingExact,
         disposableLeaseExact,
+        runtimeResetMatches(openclaw, input.params, operationAt),
     ].every(Boolean);
 }
 function returningLeaseMatches(openclaw, params, operationAt) {
@@ -345,6 +346,29 @@ function returningLeaseMatches(openclaw, params, operationAt) {
         lease.returnOperationId === params.operationId,
         lease.returningAt === operationAt,
     ].every(Boolean);
+}
+function disposableRuntimeReset(params, requestedAt) {
+    if (params.kind !== "recover-disposable-customer" || !params.disposableLease)
+        return null;
+    return {
+        status: "pending",
+        uid: params.uid,
+        slug: params.slug,
+        operationId: params.operationId,
+        sourceGatewayId: params.fromGatewayId,
+        targetGatewayId: params.toGatewayId,
+        generation: params.expectedSourceEpoch + 1,
+        disposableLeaseId: params.disposableLease.leaseId,
+        disposableLeaseGeneration: params.disposableLease.generation,
+        requestedAt,
+    };
+}
+function runtimeResetMatches(openclaw, params, operationAt) {
+    const expected = operationAt === null ? null : disposableRuntimeReset(params, operationAt);
+    if (expected === null)
+        return openclaw.runtimeReset === undefined;
+    const actual = recordOrEmpty(openclaw.runtimeReset);
+    return Object.entries(expected).every(([key, value]) => actual[key] === value);
 }
 function recoveryTargetRootReady(root, params) {
     if (root === null)
@@ -539,6 +563,9 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
             "provisioning.openclaw.gatewayAssignedAt": nowMs,
             "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
             "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
+            ...(disposableRuntimeReset(params, nowMs)
+                ? { "provisioning.openclaw.runtimeReset": disposableRuntimeReset(params, nowMs) }
+                : {}),
             ...(lease
                 ? {
                     "provisioning.openclaw.activationLease": {
@@ -581,6 +608,172 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
             },
             steps: [],
             gatewayId: params.toGatewayId,
+            inputUid: params.uid,
+        });
+    });
+    return { operationId: params.operationId };
+}
+function priorDisposableRecovery(input) {
+    const { operation, params } = input;
+    const priorInput = recordOrEmpty(operation?.input);
+    const lease = recordOrEmpty(priorInput.disposableLease);
+    const sourceGatewayId = typeof priorInput.fromGatewayId === "string"
+        ? priorInput.fromGatewayId
+        : "";
+    const leaseId = typeof lease.leaseId === "string" ? lease.leaseId : "";
+    const leaseGeneration = lease.generation;
+    const exact = [
+        operation?.kind === "migrate-customer",
+        operation?.status === "succeeded",
+        operation?.origin === "automatic",
+        operation?.createdBy === "glm-controller-placement-policy",
+        operation?.gatewayId === params.targetGatewayId,
+        operation?.inputUid === params.uid,
+        priorInput.uid === params.uid,
+        priorInput.slug === params.slug,
+        priorInput.recoveryKind === "recover-disposable-customer",
+        priorInput.toGatewayId === params.targetGatewayId,
+        priorInput.sourceEpoch === params.expectedAssignmentEpoch - 1,
+        sourceGatewayId.length > 0,
+        leaseId.length > 0,
+        Number.isSafeInteger(leaseGeneration),
+        leaseGeneration >= 0,
+    ].every(Boolean);
+    return exact
+        ? { sourceGatewayId, leaseId, leaseGeneration: leaseGeneration }
+        : null;
+}
+function recoveredRuntimeResetMarker(input) {
+    return {
+        status: "pending",
+        uid: input.params.uid,
+        slug: input.params.slug,
+        operationId: input.params.operationId,
+        sourceGatewayId: input.prior.sourceGatewayId,
+        targetGatewayId: input.params.targetGatewayId,
+        generation: input.params.expectedAssignmentEpoch + 1,
+        disposableLeaseId: input.prior.leaseId,
+        disposableLeaseGeneration: input.prior.leaseGeneration,
+        requestedAt: input.requestedAt,
+    };
+}
+function storedResetMatches(value, expected) {
+    const actual = recordOrEmpty(value);
+    if (actual.status !== "pending" && actual.status !== "acknowledged")
+        return false;
+    return Object.entries(expected)
+        .filter(([key]) => key !== "status")
+        .every(([key, expectedValue]) => actual[key] === expectedValue);
+}
+export async function commitRecoveredDisposableRuntimeResetAtomic(deps, params) {
+    if (!params.operationId ||
+        !params.previousRecoveryOperationId ||
+        !params.sharedGatewayIds.includes(params.targetGatewayId) ||
+        !Number.isSafeInteger(params.expectedAssignmentEpoch) ||
+        params.expectedAssignmentEpoch < 1) {
+        throw new Error("recovered disposable runtime reset parameters are invalid");
+    }
+    const nowMs = deps.now ? deps.now().getTime() : Date.now();
+    const userRef = deps.db.collection("users").doc(params.uid);
+    const targetRootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(params.targetGatewayId);
+    const targetRuntimeRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.targetGatewayId);
+    const assignment = assignmentRef(deps.db, params.targetGatewayId, params.uid);
+    const previousOperation = deps.db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .doc(params.previousRecoveryOperationId);
+    const operation = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.operationId);
+    await deps.db.runTransaction(async (txn) => {
+        const [userSnapshot, targetRootSnapshot, targetRuntimeSnapshot, assignmentSnapshot, previousOperationSnapshot, operationSnapshot,] = await Promise.all([
+            txn.get(userRef),
+            txn.get(targetRootRef),
+            txn.get(targetRuntimeRef),
+            txn.get(assignment),
+            txn.get(previousOperation),
+            txn.get(operation),
+        ]);
+        const user = userSnapshot.data();
+        const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+        const targetRoot = projectGatewayDesiredRootForGateway(targetRootSnapshot.data(), params.targetGatewayId);
+        const targetRuntimeData = targetRuntimeSnapshot.data();
+        const targetRuntime = isGatewayRuntimeDoc(targetRuntimeData) ? targetRuntimeData : null;
+        const prior = priorDisposableRecovery({
+            operation: previousOperationSnapshot.data(),
+            params,
+        });
+        if (!prior)
+            throw new Error("previous disposable recovery fence changed");
+        const marker = recoveredRuntimeResetMarker({ params, prior, requestedAt: nowMs });
+        const assignmentData = assignmentSnapshot.data();
+        if (operationSnapshot.exists) {
+            const operationData = operationSnapshot.data();
+            const operationInput = recordOrEmpty(operationData?.input);
+            const replayExact = [
+                operationData?.kind === "migrate-customer",
+                operationData?.status === "succeeded",
+                operationInput.recoveryKind === "recover-disposable-customer-runtime-reset",
+                operationInput.previousRecoveryOperationId === params.previousRecoveryOperationId,
+                assignmentData?.epoch === params.expectedAssignmentEpoch + 1,
+                assignmentData?.updatedByOperationId === params.operationId,
+                storedResetMatches(openclaw.runtimeReset, marker),
+            ].every(Boolean);
+            if (replayExact)
+                return;
+            throw new Error(`recovered runtime reset ${params.operationId} conflicts with current state`);
+        }
+        const heartbeatAt = millisFromUnknown(targetRuntime?.heartbeat.lastHeartbeatAt);
+        const targetExact = [
+            targetRoot?.gatewayClass === "shared",
+            targetRoot?.desiredStatus === "running",
+            targetRoot?.liveRelease !== null,
+            targetRoot?.desiredRelease === targetRoot?.liveRelease,
+            !isOperatorManaged(targetRoot?.managedBy),
+            targetRuntime?.gatewayId === params.targetGatewayId,
+            targetRuntime?.release === targetRoot?.liveRelease,
+            targetRuntime?.lifecycle === "serving",
+            heartbeatAt !== null,
+            heartbeatAt !== null && nowMs - heartbeatAt <= params.targetHeartbeatMaxAgeMs,
+            !targetRuntime?.heartbeat.mountedCustomers.includes(params.slug),
+            openclaw.gatewayId === params.targetGatewayId,
+            openclaw.runtimeReset === undefined,
+            assignmentData?.uid === params.uid,
+            assignmentData?.slug === params.slug,
+            assignmentData?.gatewayId === params.targetGatewayId,
+            assignmentData?.source === "repair",
+            assignmentData?.state === "serving",
+            assignmentData?.epoch === params.expectedAssignmentEpoch,
+            assignmentData?.updatedByOperationId === params.previousRecoveryOperationId,
+        ].every(Boolean);
+        if (!targetExact)
+            throw new Error("recovered disposable runtime reset fence changed");
+        txn.update(userRef, { "provisioning.openclaw.runtimeReset": marker });
+        txn.set(assignment, {
+            ...assignmentData,
+            epoch: params.expectedAssignmentEpoch + 1,
+            updatedAt: nowMs,
+            updatedByOperationId: params.operationId,
+        });
+        txn.set(operation, {
+            kind: "migrate-customer",
+            status: "succeeded",
+            origin: "automatic",
+            createdBy: "glm-controller-placement-policy",
+            createdAt: nowMs,
+            startedAt: nowMs,
+            completedAt: nowMs,
+            input: {
+                uid: params.uid,
+                slug: params.slug,
+                recoveryKind: "recover-disposable-customer-runtime-reset",
+                previousRecoveryOperationId: params.previousRecoveryOperationId,
+                targetGatewayId: params.targetGatewayId,
+                sourceEpoch: params.expectedAssignmentEpoch,
+                disposableLease: {
+                    leaseId: prior.leaseId,
+                    generation: prior.leaseGeneration,
+                },
+            },
+            steps: [],
+            gatewayId: params.targetGatewayId,
             inputUid: params.uid,
         });
     });

@@ -48,8 +48,10 @@ import {
   type SharedGatewayPoolCandidate,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
+  commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
   type FleetStateFirestore,
+  type RecoveredDisposableRuntimeResetParams,
   type UnavailableGatewayRecoveryParams,
   type UnavailableGatewayRecoveryTargetValidationContext,
 } from "@octogee/core/fleet-state";
@@ -186,6 +188,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   liveRelease?: number | null;
   rollActive?: boolean;
   recoveryGraceUntil?: number;
+  mountedCustomers?: readonly string[];
 }
 
 export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
@@ -196,6 +199,8 @@ export interface PlacementPolicyAssignment {
   gatewayId: string;
   state: string;
   epoch: number | null;
+  source?: string;
+  updatedByOperationId?: string;
 }
 
 export interface PlacementPolicySnapshot {
@@ -317,6 +322,9 @@ export interface PlacementPolicyReconcilerDeps {
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
   failActivationLease(input: FailActivationLeaseInput): Promise<void>;
   recoverUnavailableGateway(input: RecoverUnavailableGatewayInput): Promise<{ operationId: string }>;
+  recoverDisposableRuntimeReset(
+    input: RecoveredDisposableRuntimeResetParams,
+  ): Promise<{ operationId: string }>;
   supersedeRollingSharedGateway(input: SupersedeRollingSharedGatewayInput): Promise<{
     kind: "scheduled" | "already-scheduled" | "not-eligible";
     release?: number;
@@ -901,6 +909,82 @@ function disposableTargetMatchesLease(
 ): boolean {
   return gateway.desiredStatus === "running" &&
     disposableTargetIdentityMatchesLease(gateway, user, lease);
+}
+
+function recoveredRuntimeResetState(user: PlacementPolicyUser): Record<string, unknown> | null {
+  return record(record(record(user.data.provisioning)?.openclaw)?.runtimeReset);
+}
+
+async function reconcileRecoveredDisposableRuntimeReset(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  currentGatewayId: string | null,
+): Promise<boolean> {
+  if (!currentGatewayId || !isSharedPoolGateway(context, currentGatewayId)) return false;
+  const target = context.gateways.get(currentGatewayId);
+  const assignment = context.assignments.get(
+    placementAssignmentKey(currentGatewayId, user.uid),
+  );
+  if (
+    !target ||
+    target.gatewayClass !== "shared" ||
+    !assignment ||
+    assignment.state !== "serving" ||
+    assignment.epoch === null
+  ) return false;
+
+  const marker = recoveredRuntimeResetState(user);
+  if (marker) {
+    const exact = [
+      marker.uid === user.uid,
+      marker.slug === builderSlug,
+      marker.targetGatewayId === currentGatewayId,
+      marker.generation === assignment.epoch,
+      marker.operationId === assignment.updatedByOperationId,
+      assignment.source === "repair",
+    ].every(Boolean);
+    if (!exact || (marker.status !== "pending" && marker.status !== "acknowledged")) {
+      blockPlacement(context, {
+        uid: user.uid,
+        code: "recovered-runtime-reset-fence",
+        reason: `runtime reset marker does not match ${currentGatewayId}/${assignment.epoch}`,
+      });
+      return true;
+    }
+    return marker.status === "pending";
+  }
+
+  if (
+    assignment.source !== "repair" ||
+    !assignment.updatedByOperationId?.startsWith("recover-disposable-") ||
+    assignment.updatedByOperationId.startsWith("recover-disposable-reset-") ||
+    target.mountedCustomers?.includes(builderSlug)
+  ) return false;
+  if (
+    !gatewayRuntimeServing(target) ||
+    !gatewayHeartbeatFresh(target) ||
+    !gatewayLiveReleaseReady(target)
+  ) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "recovered-runtime-reset-target-unavailable",
+      reason: `shared repair target ${currentGatewayId} is not a fresh serving runtime`,
+    });
+    return true;
+  }
+  const operationId = `recover-disposable-reset-${user.uid}-${currentGatewayId}-${assignment.epoch}`;
+  await context.deps.recoverDisposableRuntimeReset({
+    operationId,
+    previousRecoveryOperationId: assignment.updatedByOperationId,
+    uid: user.uid,
+    slug: builderSlug,
+    targetGatewayId: currentGatewayId,
+    expectedAssignmentEpoch: assignment.epoch,
+    sharedGatewayIds: context.state.sharedGatewayIds,
+    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
+  });
+  return true;
 }
 
 async function reconcileUnavailableServingGateway(
@@ -2038,6 +2122,14 @@ async function reconcileEligibleBuilder(
     });
     return;
   }
+  if (
+    await reconcileRecoveredDisposableRuntimeReset(
+      context,
+      user,
+      builderSlug,
+      current,
+    )
+  ) return;
   if (await reconcileUnavailableServingGateway(context, user, builderSlug, current)) return;
   if (await reconcileActivationLease(context, user, builderSlug, current)) return;
   const entitledOwned = resolveLiveActivationTargetGatewayId({
@@ -2826,7 +2918,17 @@ function placementAssignmentFromDocument(
     ? rawEpoch
     : null;
   if (!gatewayId || !uid || !slug || !state) return null;
-  return { uid, slug, gatewayId, state, epoch };
+  return {
+    uid,
+    slug,
+    gatewayId,
+    state,
+    epoch,
+    ...(nonEmptyString(data.source) ? { source: nonEmptyString(data.source)! } : {}),
+    ...(nonEmptyString(data.updatedByOperationId)
+      ? { updatedByOperationId: nonEmptyString(data.updatedByOperationId)! }
+      : {}),
+  };
 }
 
 function gatewayRuntimeStartedAt(value: unknown): number | null {
@@ -2887,6 +2989,7 @@ function placementGatewayFromDocument(input: {
     liveRelease: root.liveRelease,
     rollActive: root.desiredRelease !== root.liveRelease,
     recoveryGraceUntil: root.updatedAt + SHARED_GATEWAY_RECOVERY_GRACE_MS,
+    mountedCustomers: [...mounted],
   };
 }
 
@@ -4267,6 +4370,12 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       ...request,
       validateTarget: unavailableRecoveryTargetFence(input, request),
     }),
+    recoverDisposableRuntimeReset: (request) =>
+      commitRecoveredDisposableRuntimeResetAtomic({
+        db: input.db as unknown as FleetStateFirestore,
+        now: () => new Date(input.now()),
+        serverTimestamp: () => FieldValue.serverTimestamp(),
+      }, request),
     supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({
       db: input.db,
       now: input.now,
