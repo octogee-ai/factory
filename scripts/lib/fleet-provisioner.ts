@@ -705,6 +705,7 @@ const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
 let lastDeferredSignature: string | null = null;
 let brokerProfileSnapshotReloadPending = false;
 let lastBrokerProfileSnapshotReloadError: string | null = null;
+let brokerProfileSweepInFlight: Promise<BrokerProfileReadiness> | null = null;
 
 /** Test seam only — the memo above is module state, so a spec exercising the
  *  quiet-once-settled behaviour must be able to start from a known point. */
@@ -712,6 +713,7 @@ export function _resetBrokerProfileLogStateForTests(): void {
   lastDeferredSignature = null;
   brokerProfileSnapshotReloadPending = false;
   lastBrokerProfileSnapshotReloadError = null;
+  brokerProfileSweepInFlight = null;
 }
 
 type BrokerProfileSweep = Awaited<ReturnType<typeof materializeBrokerProfilesForAgents>>;
@@ -798,7 +800,7 @@ function reportBrokerProfileSweep(log: (msg: string) => void, sweep: BrokerProfi
 
 /** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
  *  — a profile already applied spawns nothing, so this is safe on every tick. */
-export async function materializeDeferredBrokerProfiles(
+async function runDeferredBrokerProfileSweep(
   log: (msg: string) => void,
   deps: {
     agentsDir?: string;
@@ -830,6 +832,23 @@ export async function materializeDeferredBrokerProfiles(
     deferred: sweep.deferred,
     ...(reason ? { reason } : {}),
   };
+}
+
+export function materializeDeferredBrokerProfiles(
+  log: (msg: string) => void,
+  deps: {
+    agentsDir?: string;
+    readConfig?: () => unknown;
+    secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+    secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
+  } = {},
+): Promise<BrokerProfileReadiness> {
+  if (brokerProfileSweepInFlight) return brokerProfileSweepInFlight;
+  const shared = runDeferredBrokerProfileSweep(log, deps).finally(() => {
+    if (brokerProfileSweepInFlight === shared) brokerProfileSweepInFlight = null;
+  });
+  brokerProfileSweepInFlight = shared;
+  return shared;
 }
 
 export async function waitForBrokerProfilesSettled(input: {
