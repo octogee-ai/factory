@@ -239,6 +239,31 @@ describe("gateway base image", () => {
     expect(runtimeStage).not.toContain("chown -R node:node /octogee/extensions");
   });
 
+  it("gates each final image on its required OpenClaw runtime plugin set", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+    const standardBuild = readRepoFile("cloudbuild.yaml");
+    const builderBuild = readRepoFile("cloudbuild-operator-final.yaml");
+    const extraBuilderBuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
+
+    expect(dockerfile).toContain(
+      "COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps",
+    );
+    expect(dockerfile).toContain(
+      '/usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS"',
+    );
+    expect(standardBuild).toContain(
+      "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex",
+    );
+    for (const build of [builderBuild, extraBuilderBuild]) {
+      expect(build).toContain(
+        "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin",
+      );
+      expect(build).not.toContain(
+        "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex",
+      );
+    }
+  });
+
   it("uses the installed OpenClaw core version when staging Codex", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
 

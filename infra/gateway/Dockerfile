@@ -155,7 +155,10 @@ COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/libexec/octogee-builder-toolchain \
+COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
+ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
+    && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && rm -f /usr/local/bin/claude /usr/local/bin/codex \
     && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
     && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex
