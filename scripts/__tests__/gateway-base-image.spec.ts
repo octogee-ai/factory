@@ -197,6 +197,7 @@ describe("gateway base image", () => {
 
   it("copies only staged OpenClaw runtime outputs into the shipped stage", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+    const cloudbuild = readRepoFile("cloudbuild-base.yaml");
     const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-system AS gateway-runtime"));
 
     expect(dockerfile).toContain("FROM gateway-core-system AS openclaw-installer");
@@ -208,6 +209,10 @@ describe("gateway base image", () => {
     );
     expect(runtimeStage).not.toContain("openclaw-tarball/");
     expect(runtimeStage).not.toContain("/home/node/.openclaw");
+    expect(cloudbuild).toContain('test -d /opt/openclaw-runtime-deps/npm');
+    expect(cloudbuild).toContain('node_modules/@openclaw/mattermost');
+    expect(cloudbuild).toContain('node_modules/@openclaw/parallel-plugin');
+    expect(cloudbuild).toContain('node_modules/@openclaw/codex');
   });
 
   it("does not retain package-manager caches in runtime install layers", () => {
