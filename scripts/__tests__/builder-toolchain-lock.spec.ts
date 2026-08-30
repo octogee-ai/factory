@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   hydrateBuilderToolchain,
+  installBuilderToolchainDependencies,
   parseBuilderToolchainLock,
   readToolchainStatus,
 } from "../lib/builder-toolchain-hydrator.js";
@@ -181,5 +182,39 @@ describe("Builder npm toolchain lock", () => {
     expect(log).toHaveBeenCalledWith(
       "[builder-toolchain] npm install registry=direct outcome=ready durationMs=40",
     );
+  });
+
+  it("passes proxy auth only through the npm child environment and removes its config", async () => {
+    const destination = await tempRoot();
+    const fakeBin = path.join(destination, "fake-bin");
+    const witness = path.join(destination, "witness.json");
+    await fs.mkdir(fakeBin);
+    await fs.writeFile(path.join(fakeBin, "npm"), `#!/bin/sh
+node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON.stringify({token:process.env.NODE_AUTH_TOKEN,npmrc:fs.readFileSync(process.env.NPM_CONFIG_USERCONFIG,"utf8"),npmrcPath:process.env.NPM_CONFIG_USERCONFIG}))'
+`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    const previousWitness = process.env.WITNESS;
+    process.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    process.env.WITNESS = witness;
+    try {
+      await installBuilderToolchainDependencies(destination, {
+        cachePath: path.join(destination, "cache"),
+        registryUrl: "https://proxy.example/npm/",
+        authToken: "secret-token",
+      });
+    } finally {
+      process.env.PATH = previousPath;
+      if (previousWitness === undefined) delete process.env.WITNESS;
+      else process.env.WITNESS = previousWitness;
+    }
+    const observed = JSON.parse(await fs.readFile(witness, "utf8")) as {
+      token: string;
+      npmrc: string;
+      npmrcPath: string;
+    };
+    expect(observed.token).toBe("secret-token");
+    expect(observed.npmrc).toContain("_authToken=${NODE_AUTH_TOKEN}");
+    expect(observed.npmrc).not.toContain("secret-token");
+    await expect(fs.lstat(observed.npmrcPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
