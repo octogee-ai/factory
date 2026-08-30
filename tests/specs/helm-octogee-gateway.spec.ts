@@ -101,6 +101,18 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("keeps the shared npm proxy default regional-neutral and supplies it per target", () => {
+    const values = (file: string): { env?: { builderNpmProxyRegistry?: string } } =>
+      parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf8")).toJS();
+
+    expect(values("values.yaml").env?.builderNpmProxyRegistry).toBe("");
+    for (const file of ["values.prod.yaml", "values.test.yaml", "values.build-week.yaml"]) {
+      expect(values(file).env?.builderNpmProxyRegistry).toBe(
+        "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
+      );
+    }
+  });
+
   it("renders the configured toolpack URL only into Builder gateways", () => {
     const builder = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",

@@ -24,24 +24,40 @@ export interface BuilderToolchainHydratorConfig {
   readinessUrl: string;
 }
 
+function envValue(env: NodeJS.ProcessEnv, key: string, fallback = ""): string {
+  return env[key]?.trim() || fallback;
+}
+
 export function resolveBuilderToolchainHydratorConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): BuilderToolchainHydratorConfig {
-  const home = env.HOME?.trim() || "/home/node";
-  const fleetControllerPort = env.FLEET_CONTROLLER_PORT?.trim() || "3003";
+  const home = envValue(env, "HOME", "/home/node");
+  const fleetControllerPort = envValue(env, "FLEET_CONTROLLER_PORT", "3003");
   return {
     root: path.join(home, ".octogee", "toolchains"),
-    packageJsonPath: env.OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH?.trim()
-      || "/octogee/toolchain/package.json",
-    packageLockPath: env.OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH?.trim()
-      || "/octogee/toolchain/package-lock.json",
-    packageLockSha256: env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim() || "",
-    proxyRegistryUrl: env.OCTOGEE_BUILDER_NPM_PROXY_REGISTRY?.trim()
-      || DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
-    fallbackRegistryUrl: env.OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY?.trim()
-      || DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
-    gatewayId: env.GATEWAY_ID?.trim() || "",
-    builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() || "",
+    packageJsonPath: envValue(
+      env,
+      "OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH",
+      "/octogee/toolchain/package.json",
+    ),
+    packageLockPath: envValue(
+      env,
+      "OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH",
+      "/octogee/toolchain/package-lock.json",
+    ),
+    packageLockSha256: envValue(env, "OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256"),
+    proxyRegistryUrl: envValue(
+      env,
+      "OCTOGEE_BUILDER_NPM_PROXY_REGISTRY",
+      DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
+    ),
+    fallbackRegistryUrl: envValue(
+      env,
+      "OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY",
+      DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
+    ),
+    gatewayId: envValue(env, "GATEWAY_ID"),
+    builderSlug: envValue(env, "GATEWAY_BUILDER_SLUG"),
     readinessUrl: `http://127.0.0.1:${fleetControllerPort}/surge-ready`,
   };
 }

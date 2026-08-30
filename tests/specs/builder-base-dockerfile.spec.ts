@@ -9,9 +9,9 @@ const read = (relativePath: string) =>
 describe("Builder boot base", () => {
   const dockerfile = read("infra/gateway/Dockerfile.builder-base");
 
-  it("inherits the OpenClaw gateway base without the operator toolkit", () => {
-    expect(dockerfile).toContain("ARG GATEWAY_BASE_IMAGE");
-    expect(dockerfile).toContain("FROM ${GATEWAY_BASE_IMAGE}");
+  it("inherits the core-only OpenClaw base without the operator toolkit", () => {
+    expect(dockerfile).toContain("ARG GATEWAY_CORE_IMAGE");
+    expect(dockerfile).toContain("FROM ${GATEWAY_CORE_IMAGE}");
     expect(dockerfile).not.toContain("TOOLKIT_IMAGE");
     expect(dockerfile).not.toContain("Dockerfile.operator-toolkit");
 

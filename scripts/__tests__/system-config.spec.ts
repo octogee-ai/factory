@@ -260,7 +260,7 @@ describe("system_config restore", () => {
     expect(seeded.gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
   });
 
-  it("seeds a Builder gateway from the full-power Builder template by default", async () => {
+  it("seeds a Builder gateway from the slim boot template by default", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
@@ -293,12 +293,12 @@ describe("system_config restore", () => {
     expect(seeded.gateway.terminal).toEqual({ enabled: true });
     expect(seeded.commands).not.toHaveProperty("bash");
     expect(seeded).not.toHaveProperty("cron");
-    expect(seeded.plugins.allow).toContain("codex");
     expect(seeded.plugins.allow).toContain("browser");
-    expect(seeded.plugins.entries.browser).toEqual({ enabled: true });
-    expect(seeded.plugins.entries.codex).toEqual({ enabled: true });
+    expect(seeded.plugins.allow).not.toContain("codex");
+    expect(seeded.plugins.entries.browser).toEqual({ enabled: false });
+    expect(seeded.plugins.entries).not.toHaveProperty("codex");
     expect(seeded.browser).toEqual({
-      enabled: true,
+      enabled: false,
       defaultProfile: "openclaw",
       headless: true,
       noSandbox: true,

@@ -201,6 +201,7 @@ node -e 'const fs=require("node:fs"); fs.writeFileSync(process.env.WITNESS, JSON
         cachePath: path.join(destination, "cache"),
         registryUrl: "https://proxy.example/npm/",
         authToken: "secret-token",
+        npmExecutable: path.join(fakeBin, "npm"),
       });
     } finally {
       process.env.PATH = previousPath;

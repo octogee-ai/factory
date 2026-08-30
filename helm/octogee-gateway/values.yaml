@@ -141,10 +141,9 @@ env:
   openclawLogLevel: "info"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
-  # Stable HTTPS broker/object URL for the optional Builder CLI toolpack.
-  # Never place a short-lived signed URL here. The image supplies and pins the
-  # separate manifest; an empty URL leaves the optional tools unavailable.
-  builderNpmProxyRegistry: "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/"
+  # Target-scoped Artifact Registry npm proxy. Environment overlays supply the
+  # location; shared chart defaults must not bind gateways to one region.
+  builderNpmProxyRegistry: ""
   builderNpmFallbackRegistry: "https://registry.npmjs.org/"
 
 # Gateway storage is emptyDir for every class. Shared Barn gateways use stable

@@ -48,6 +48,7 @@ export interface InstallBuilderToolchainOptions {
   cachePath: string;
   registryUrl: string;
   authToken?: string;
+  npmExecutable?: string;
   signal?: AbortSignal;
 }
 
@@ -98,6 +99,7 @@ const DETAIL_FILE = "detail.json";
 const INSTALLED_LOCK_FILE = ".toolchain-lock.json";
 const DEFAULT_LOCK_STALE_MS = 60 * 60 * 1_000;
 const MAX_LOCK_BYTES = 8 * 1_024 * 1_024;
+const NPM_EXECUTABLE = "/usr/local/bin/npm";
 const COMMAND_PATHS: Record<BuilderToolchainCommand, string> = {
   claude: "node_modules/.bin/claude",
   codex: "node_modules/.bin/codex",
@@ -366,7 +368,7 @@ export async function installBuilderToolchainDependencies(
   await fs.writeFile(npmrcPath, npmrc, { mode: 0o600 });
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn("npm", [
+      const child = spawn(options.npmExecutable ?? NPM_EXECUTABLE, [
         "ci",
         "--omit=dev",
         "--no-audit",
@@ -392,6 +394,32 @@ export async function installBuilderToolchainDependencies(
   } finally {
     await fs.rm(npmrcPath, { force: true });
   }
+}
+
+interface HydrationRuntime {
+  fallbackRegistryUrl: string;
+  installDependencies: NonNullable<HydrateBuilderToolchainOptions["installDependencies"]>;
+  lockStaleMs: number;
+  log: (message: string) => void;
+  now: () => Date;
+  nowMs: () => number;
+  proxyRegistryUrl: string;
+}
+
+function resolveHydrationRuntime(options: HydrateBuilderToolchainOptions): HydrationRuntime {
+  return {
+    fallbackRegistryUrl: validatedRegistryUrl(
+      options.fallbackRegistryUrl ?? DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
+    ),
+    installDependencies: options.installDependencies ?? installBuilderToolchainDependencies,
+    lockStaleMs: options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS,
+    log: options.log ?? console.error,
+    now: options.now ?? (() => new Date()),
+    nowMs: options.nowMs ?? Date.now,
+    proxyRegistryUrl: validatedRegistryUrl(
+      options.proxyRegistryUrl ?? DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
+    ),
+  };
 }
 
 async function validateCommandFiles(objectPath: string): Promise<void> {
@@ -508,20 +536,9 @@ async function installWithRegistryFallback(input: {
 export async function hydrateBuilderToolchain(
   options: HydrateBuilderToolchainOptions,
 ): Promise<BuilderToolchainStatus> {
-  const now = options.now ?? (() => new Date());
-  const nowMs = options.nowMs ?? Date.now;
-  const log = options.log ?? console.error;
-  const proxyRegistryUrl = validatedRegistryUrl(
-    options.proxyRegistryUrl ?? DEFAULT_BUILDER_NPM_PROXY_REGISTRY,
-  );
-  const fallbackRegistryUrl = validatedRegistryUrl(
-    options.fallbackRegistryUrl ?? DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
-  );
+  const runtime = resolveHydrationRuntime(options);
   await fs.mkdir(options.root, { recursive: true, mode: 0o700 });
-  const lock = await acquireHydrationLock(
-    options.root,
-    options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS,
-  );
+  const lock = await acquireHydrationLock(options.root, runtime.lockStaleMs);
   const persist = async (
     status: BuilderToolchainStatus,
     detail: BuilderToolchainDetail,
@@ -529,12 +546,12 @@ export async function hydrateBuilderToolchain(
     await writeToolchainDetail(options.root, detail);
     await writeToolchainStatus(options.root, status, {
       publishStatus: options.publishStatus,
-      log,
+      log: runtime.log,
     });
     return status;
   };
   if (!lock.acquired) {
-    return persist(statusFor("pending", now()), detailFor("pending", {
+    return persist(statusFor("pending", runtime.now()), detailFor("pending", {
       attempt: options.attempt,
       reasonCode: "hydration-in-progress",
     }));
@@ -550,7 +567,7 @@ export async function hydrateBuilderToolchain(
     const objectPath = path.join(options.root, "objects", `sha256-${lockSha256}`);
     if (await validateInstalledObject(objectPath, lockSha256)) {
       await activateObject(options.root, objectPath);
-      return persist(statusFor("ready", now()), detailFor("ready", {
+      return persist(statusFor("ready", runtime.now()), detailFor("ready", {
         toolchainId,
         lockSha256,
         attempt: options.attempt,
@@ -558,7 +575,7 @@ export async function hydrateBuilderToolchain(
     }
     await fs.rm(objectPath, { recursive: true, force: true });
 
-    await persist(statusFor("downloading", now()), detailFor("downloading", {
+    await persist(statusFor("downloading", runtime.now()), detailFor("downloading", {
       toolchainId,
       lockSha256,
       attempt: options.attempt,
@@ -571,16 +588,16 @@ export async function hydrateBuilderToolchain(
     await installWithRegistryFallback({
       destination: stagingPath,
       cachePath: path.join(options.root, "npm-cache"),
-      proxyRegistryUrl,
-      fallbackRegistryUrl,
+      proxyRegistryUrl: runtime.proxyRegistryUrl,
+      fallbackRegistryUrl: runtime.fallbackRegistryUrl,
       registryTokenProvider: options.registryTokenProvider,
-      installDependencies: options.installDependencies ?? installBuilderToolchainDependencies,
+      installDependencies: runtime.installDependencies,
       signal: options.signal,
-      log,
-      nowMs,
+      log: runtime.log,
+      nowMs: runtime.nowMs,
     });
 
-    await persist(statusFor("verifying", now()), detailFor("verifying", {
+    await persist(statusFor("verifying", runtime.now()), detailFor("verifying", {
       toolchainId,
       lockSha256,
       attempt: options.attempt,
@@ -601,7 +618,7 @@ export async function hydrateBuilderToolchain(
       await fs.rename(stagingPath, objectPath);
     }
     await activateObject(options.root, objectPath);
-    return persist(statusFor("ready", now()), detailFor("ready", {
+    return persist(statusFor("ready", runtime.now()), detailFor("ready", {
       toolchainId,
       lockSha256,
       attempt: options.attempt,
@@ -610,7 +627,7 @@ export async function hydrateBuilderToolchain(
     const reasonCode = error instanceof BuilderToolchainHydrationError
       ? error.reasonCode
       : "internal-error";
-    await persist(statusFor("failed", now()), detailFor("failed", {
+    await persist(statusFor("failed", runtime.now()), detailFor("failed", {
       ...(toolchainId ? { toolchainId } : {}),
       ...(lockSha256 ? { lockSha256 } : {}),
       attempt: options.attempt,
