@@ -19,7 +19,11 @@ function runCheck(imageSize: string, maximumBytes = "1250000000") {
     gcloud,
     `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$FAKE_IMAGE_SIZE"
+case " $* " in
+  *" docker images describe "*) printf '%s\\n' "$FAKE_IMAGE_DIGEST" ;;
+  *" docker images list "*) printf '%s\\n' "$FAKE_IMAGE_SIZE" ;;
+  *) exit 64 ;;
+esac
 `,
   );
   chmodSync(gcloud, 0o755);
@@ -35,6 +39,7 @@ printf '%s\\n' "$FAKE_IMAGE_SIZE"
       encoding: "utf8",
       env: {
         ...process.env,
+        FAKE_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
         FAKE_IMAGE_SIZE: imageSize,
         PATH: `${directory}:${process.env.PATH ?? ""}`,
       },
@@ -69,6 +74,13 @@ describe("Builder compressed image budget", () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("invalid Artifact Registry imageSizeBytes");
+  });
+
+  it("resolves the tag digest before reading list metadata", () => {
+    const result = runCheck("1875172316");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("1875172316 / 3100000000 bytes");
   });
 
   it("runs the budget against the pushed Builder image", () => {
