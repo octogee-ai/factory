@@ -154,20 +154,10 @@ describe("npm cache proxy", () => {
     })).toThrow("invalid npm cache upstream registry");
   });
 
-  it("accepts only the named TEST validation repository outside Central", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("ok"));
-    const upstreamRegistryUrl =
-      "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/";
-
-    await request(proxy({ fetchImpl, upstreamRegistryUrl }))
-      .get("/@scope%2fpkg")
-      .set("authorization", `Bearer ${CAPABILITY}`)
-      .expect(200);
-
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${upstreamRegistryUrl}@scope%2fpkg`);
+  it("refuses a TEST-local repository instead of sending it the central proxy credential", () => {
     expect(() => proxy({
       upstreamRegistryUrl:
-        "https://us-central1-npm.pkg.dev/octogee-test/another-repository/",
+        "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/",
     })).toThrow("invalid npm cache upstream registry");
   });
 });

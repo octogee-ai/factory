@@ -21,7 +21,6 @@ const NO_STORE = "no-store";
 const REQUEST_TARGET_BASE = "https://npm-cache-proxy.invalid";
 const ALLOWED_UPSTREAM_REGISTRY_URLS = new Set([
   "https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/",
-  "https://us-central1-npm.pkg.dev/octogee-test/octogee-npm-cache-phase-c-20260830/",
 ]);
 
 interface CachedAuthorization {

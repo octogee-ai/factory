@@ -17,8 +17,6 @@ const POD_UID = "pod-uid-alice";
 const SA_NAME = "octogee-gw-builder-alice";
 const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const TOKEN = "n".repeat(43);
-const LEASE_ID = "lease-alice";
-const LEASE_GENERATION = 2;
 const NOW_MS = Date.parse("2026-08-30T12:00:00.000Z");
 
 function gatewayDoc() {
@@ -50,19 +48,21 @@ function gatewayDoc() {
   };
 }
 
-function database(assignedSlug = "alice") {
-  const assignments = [{
-    id: "uid-alice",
-    data: () => ({
-      slug: assignedSlug,
-      gatewayId: GATEWAY_ID,
-      source: "onboarding",
-      state: "serving",
-      epoch: 1,
-      updatedAt: 1,
-      updatedByOperationId: null,
-    }),
-  }];
+function database(assignedSlug: string | null = "alice") {
+  const assignments = assignedSlug === null
+    ? []
+    : [{
+        id: "uid-alice",
+        data: () => ({
+          slug: assignedSlug,
+          gatewayId: GATEWAY_ID,
+          source: "onboarding",
+          state: "serving",
+          epoch: 1,
+          updatedAt: 1,
+          updatedByOperationId: null,
+        }),
+      }];
   return {
     collection: vi.fn((name: string) => {
       if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
@@ -73,80 +73,6 @@ function database(assignedSlug = "alice") {
         })),
       };
     }),
-  };
-}
-
-function preCutoverGatewayDoc(overrides: Record<string, unknown> = {}) {
-  return {
-    ...gatewayDoc(),
-    allocation: {
-      kind: "disposable-builder",
-      schemaVersion: 1,
-      leaseId: LEASE_ID,
-      generation: LEASE_GENERATION,
-      claimedByUid: "uid-alice",
-    },
-    ...overrides,
-  };
-}
-
-function preCutoverUserDoc(input: {
-  lease?: Record<string, unknown>;
-  openclaw?: Record<string, unknown>;
-  user?: Record<string, unknown>;
-} = {}) {
-  return {
-    username: "alice",
-    builderSubscription: { tier: "hobby", status: "active" },
-    provisioning: {
-      openclaw: {
-        slug: "alice",
-        activationLease: {
-          leaseId: LEASE_ID,
-          generation: LEASE_GENERATION,
-          status: "provisioning",
-          targetGatewayId: GATEWAY_ID,
-          builderSlug: "alice",
-          provisionedAt: Date.parse("2026-08-30T11:55:00.000Z"),
-          ...input.lease,
-        },
-        ...input.openclaw,
-      },
-    },
-    ...input.user,
-  };
-}
-
-function preCutoverDatabase(input: {
-  gateway?: Record<string, unknown>;
-  user?: Record<string, unknown>;
-} = {}) {
-  const targetGateway = input.gateway ?? preCutoverGatewayDoc();
-  const user = input.user ?? preCutoverUserDoc();
-  const snapshot = (data: Record<string, unknown> | null | undefined) => ({
-    exists: data != null,
-    data: () => data ?? undefined,
-  });
-  return {
-    collection: vi.fn((name: string) => ({
-      doc: vi.fn((id: string) => {
-        if (name === "users") {
-          return { get: vi.fn(async () => snapshot(id === "uid-alice" ? user : null)) };
-        }
-        if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
-        return {
-          get: vi.fn(async () => snapshot(id === GATEWAY_ID ? targetGateway : null)),
-          collection: vi.fn((subcollection: string) => {
-            if (subcollection !== "assignments") {
-              throw new Error(`unexpected subcollection ${subcollection}`);
-            }
-            return {
-              get: vi.fn(async () => ({ docs: [] })),
-            };
-          }),
-        };
-      }),
-    })),
   };
 }
 
@@ -205,15 +131,6 @@ function proxyApp(options: ReturnType<typeof brokerOptions>) {
   return app;
 }
 
-async function requestBuilderCapability(db: ReturnType<typeof preCutoverDatabase>) {
-  const options = brokerOptions();
-  options.db = db as never;
-  return request(builderApp(options))
-    .post("/internal/fleet/npm-registry-credentials")
-    .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
-    .send({ gatewayId: GATEWAY_ID, slug: "alice" });
-}
-
 describe("npm cache capability broker", () => {
   it("requires the second purpose-audience KSA credential", async () => {
     expect(GATEWAY_CREDENTIAL_ROUTES.has("/internal/fleet/npm-registry-credentials"))
@@ -240,106 +157,14 @@ describe("npm cache capability broker", () => {
     });
   });
 
-  it("issues to the exact disposable Builder during its fenced pre-cutover activation", async () => {
-    const response = await requestBuilderCapability(preCutoverDatabase());
+  it("rejects a configured Builder before its assignment exists", async () => {
+    const options = brokerOptions();
+    options.db = database(null) as never;
+    const response = await request(builderApp(options))
+      .post("/internal/fleet/npm-registry-credentials")
+      .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
+      .send({ gatewayId: GATEWAY_ID, slug: "alice" });
 
-    expect(response.status).toBe(200);
-    expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.body).toEqual({
-      registryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",
-      token: TOKEN,
-      expiresAt: "2026-08-30T12:10:00.000Z",
-    });
-  });
-
-  it("continues issuance while the exact activation lease is live", async () => {
-    const response = await requestBuilderCapability(preCutoverDatabase({
-      user: preCutoverUserDoc({
-        lease: { status: "activating" },
-      }),
-    }));
-
-    expect(response.status).toBe(200);
-  });
-
-  it.each([
-    {
-      name: "failed activation lease",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { status: "failed" } }),
-      }),
-    },
-    {
-      name: "wrong Builder slug",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ openclaw: { slug: "mallory" } }),
-      }),
-    },
-    {
-      name: "wrong target gateway",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { targetGatewayId: "builder-mallory" } }),
-      }),
-    },
-    {
-      name: "wrong allocation generation",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { generation: LEASE_GENERATION + 1 } }),
-      }),
-    },
-    {
-      name: "wrong allocation lease",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { leaseId: "stale-lease" } }),
-      }),
-    },
-    {
-      name: "expired activation lease",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { provisionedAt: NOW_MS - 20 * 60_000 } }),
-      }),
-    },
-    {
-      name: "terminal active lease before assignment cutover",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ lease: { status: "active" } }),
-      }),
-    },
-    {
-      name: "suspended Builder",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ user: { accountLifecycle: { status: "suspended" } } }),
-      }),
-    },
-    {
-      name: "Builder entitlement ended",
-      db: () => preCutoverDatabase({
-        user: preCutoverUserDoc({ user: { builderSubscription: null } }),
-      }),
-    },
-    {
-      name: "wrong configured owner",
-      db: () => preCutoverDatabase({
-        gateway: preCutoverGatewayDoc({
-          ownerUid: "uid-mallory",
-          allocation: {
-            kind: "disposable-builder",
-            schemaVersion: 1,
-            leaseId: LEASE_ID,
-            generation: LEASE_GENERATION,
-            claimedByUid: "uid-mallory",
-          },
-        }),
-      }),
-    },
-    {
-      name: "retired target",
-      db: () => preCutoverDatabase({
-        gateway: preCutoverGatewayDoc({ desiredStatus: "retired" }),
-      }),
-    },
-  ])("rejects a pre-cutover capability for $name", async ({ db }) => {
-    const response = await requestBuilderCapability(db());
     expect(response.status).toBe(403);
   });
 

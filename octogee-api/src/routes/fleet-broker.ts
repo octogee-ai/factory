@@ -9,8 +9,7 @@ import {
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
-import { pickPlanInputs, resolveBuilderTier } from "@octogee/shared/types/billing";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
@@ -1310,59 +1309,11 @@ async function readAssignmentRosterForGateway(
   return assignments;
 }
 
-const PRE_CUTOVER_NPM_LEASE_MAX_AGE_MS = 20 * 60_000;
-
-function npmRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function livePreCutoverNpmLease(input: {
-  userData: Record<string, unknown> | undefined;
-  slug: string;
-  nowMs: number;
-}): Record<string, unknown> | null {
-  if (!input.userData) return null;
-  if (!accountAllowsInteractiveAccess(input.userData)) return null;
-  if (resolveBuilderTier(input.userData, new Date(input.nowMs)) === null) return null;
-  if (slugFromAssignedUser(input.userData) !== input.slug) return null;
-  const provisioning = npmRecord(input.userData.provisioning);
-  const openclaw = npmRecord(provisioning?.openclaw);
-  const lease = npmRecord(openclaw?.activationLease);
-  if (!lease || (lease.status !== "provisioning" && lease.status !== "activating")) return null;
-  const provisionedAt = lease.provisionedAt;
-  if (typeof provisionedAt !== "number" || !Number.isFinite(provisionedAt)) return null;
-  const ageMs = input.nowMs - provisionedAt;
-  return ageMs >= 0 && ageMs < PRE_CUTOVER_NPM_LEASE_MAX_AGE_MS ? lease : null;
-}
-
-function preCutoverNpmLeaseMatches(input: {
-  lease: Record<string, unknown>;
-  allocation: { leaseId: string; generation: number; claimedByUid: string };
-  gatewayId: string;
-  slug: string;
-  ownerUid: string;
-}): boolean {
-  return [
-    input.allocation.claimedByUid === input.ownerUid,
-    input.lease.leaseId === input.allocation.leaseId,
-    input.lease.generation === input.allocation.generation,
-    input.lease.builderSlug === input.slug,
-    input.lease.targetGatewayId === input.gatewayId,
-  ].every(Boolean);
-}
-
-interface ConfiguredBuilderNpmIdentity {
-  ownerUid: string;
-  allocation: { leaseId: string; generation: number; claimedByUid: string } | null;
-}
-
-function configuredBuilderNpmIdentity(input: {
+function configuredBuilderNpmOwnerUid(input: {
   gatewayData: Record<string, unknown> | undefined;
   bound: GatewayBinding;
   slug: string;
-}): ConfiguredBuilderNpmIdentity | null {
+}): string | null {
   const gateway = projectGatewayDesiredRootForGateway(
     input.gatewayData,
     input.bound.gatewayId,
@@ -1375,7 +1326,7 @@ function configuredBuilderNpmIdentity(input: {
     slug: input.slug,
     uid: ownerUid,
   })) return null;
-  return { ownerUid, allocation: gateway?.allocation ?? null };
+  return ownerUid;
 }
 
 function assignedBuilderNpmUid(input: {
@@ -1391,34 +1342,10 @@ function assignedBuilderNpmUid(input: {
   return matches.length === 1 ? matches[0]!.uid : null;
 }
 
-async function preCutoverBuilderNpmSubject(input: {
-  db: Firestore;
-  bound: GatewayBinding;
-  slug: string;
-  ownerUid: string;
-  allocation: { leaseId: string; generation: number; claimedByUid: string };
-  nowMs: number;
-}): Promise<{ uid: string } | null> {
-  const { db, bound, slug, ownerUid } = input;
-  const userSnap = await db.collection("users").doc(ownerUid).get();
-  const userData = userSnap.data() as Record<string, unknown> | undefined;
-  if (!userSnap.exists) return null;
-  const lease = livePreCutoverNpmLease({ userData, slug, nowMs: input.nowMs });
-  if (!lease) return null;
-  return preCutoverNpmLeaseMatches({
-    lease,
-    allocation: input.allocation,
-    gatewayId: bound.gatewayId,
-    slug,
-    ownerUid,
-  }) ? { uid: ownerUid } : null;
-}
-
 async function configuredBuilderNpmSubject(
   db: Firestore,
   bound: GatewayBinding,
   slug: string,
-  nowMs: number,
 ): Promise<{ uid: string } | null> {
   if (!bound.podUid) return null;
   const [gatewaySnap, assignmentsSnap] = await Promise.all([
@@ -1430,23 +1357,14 @@ async function configuredBuilderNpmSubject(
       .get(),
   ]);
   const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
-  const identity = configuredBuilderNpmIdentity({ gatewayData, bound, slug });
-  if (!identity) return null;
+  const ownerUid = configuredBuilderNpmOwnerUid({ gatewayData, bound, slug });
+  if (!ownerUid) return null;
   const assignedUid = assignedBuilderNpmUid({
     docs: assignmentsSnap.docs,
     gatewayId: bound.gatewayId,
     slug,
   });
-  if (assignedUid === identity.ownerUid) return { uid: identity.ownerUid };
-  if (assignmentsSnap.docs.length > 0 || !identity.allocation) return null;
-  return preCutoverBuilderNpmSubject({
-    db,
-    bound,
-    slug,
-    ownerUid: identity.ownerUid,
-    allocation: identity.allocation,
-    nowMs,
-  });
+  return assignedUid === ownerUid ? { uid: ownerUid } : null;
 }
 
 function installNpmCacheCapabilityRoutes(
@@ -1462,7 +1380,7 @@ function installNpmCacheCapabilityRoutes(
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    const subject = await configuredBuilderNpmSubject(db, bound, slug, deps.now());
+    const subject = await configuredBuilderNpmSubject(db, bound, slug);
     if (!subject || !bound.podUid) {
       res.status(403).json(FORBIDDEN);
       return;
