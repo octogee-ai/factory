@@ -292,6 +292,52 @@ describe("gateway convergence surge wiring", () => {
     }));
   });
 
+  it("marks an initial held Builder live after Cowboy directly verifies prelaunch", async () => {
+    const builderImageTag = `def5678-oc2026.7.1@sha256:${"c".repeat(64)}`;
+    const builderGateway = {
+      ...gateway(),
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      gatewayClass: "builder" as const,
+      profile: "builder" as const,
+      imageProfile: "builder" as const,
+      ownerUid: "uid-bender",
+      builderSlug: "bender",
+      allocation: {
+        kind: "disposable-builder" as const,
+        schemaVersion: 1 as const,
+        leaseId: "lease-bender",
+        generation: 1,
+        claimedByUid: "uid-bender",
+      },
+    };
+    const builderArtifact: ReleasePayload = {
+      ...artifact,
+      profileImages: {
+        builder: {
+          imageRepository: builderRepository,
+          imageTag: builderImageTag,
+        },
+      },
+    };
+
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(vi.fn(async () => ({ ready: true })), builderGateway),
+      gateway: builderGateway,
+      artifact: builderArtifact,
+      runtime: runtime("unknown"),
+      helmObserved: {
+        imageRepository: builderRepository,
+        imageTag: builderImageTag,
+        replicas: 1,
+        ownerUid: "uid-bender",
+        builderSlug: "bender",
+      },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+  });
+
   it("skips state migration when the release changes the openclaw version", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
     const upgrade: ReleasePayload = { ...artifact, imageTag: "8886d40-oc2026.7.2-beta.7" };

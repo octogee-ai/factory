@@ -898,6 +898,19 @@ function runtimeReportsDesiredBuild(
   );
 }
 
+function reportsDesiredBuildOrVerifiedInitialPrelaunch(input: {
+  runtime: GatewayRuntimeDoc | undefined;
+  desiredImageTag: string;
+  gateway: DurableGateway;
+  handoffReady: boolean;
+}): boolean {
+  const { runtime, desiredImageTag, gateway, handoffReady } = input;
+  const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
+  return runtimeReportsDesiredBuild(runtime, desiredImageTag, initialDisposablePrelaunch) || (
+    initialDisposablePrelaunch && handoffReady
+  );
+}
+
 function reconcileGatewaySurgeHandoff(input: {
   passDeps: Pick<GatewayConvergencePassDeps, "reconcileSurgeHandoff">;
   gateway: DurableGateway;
@@ -982,11 +995,12 @@ export async function refineGatewayConvergenceAction(input: {
     pendingArtifact,
     helmObserved,
   });
-  const desiredBuildReported = runtimeReportsDesiredBuild(
+  const desiredBuildReported = reportsDesiredBuildOrVerifiedInitialPrelaunch({
     runtime,
-    desiredImage.imageTag,
-    isInitialDisposableBuilderPrelaunch(gateway),
-  );
+    desiredImageTag: desiredImage.imageTag,
+    gateway,
+    handoffReady: handoff.ready,
+  });
   if (
     handoff.ready &&
     desiredBuildReported &&
@@ -1117,7 +1131,8 @@ async function convergeOneGateway(
       });
       return;
     case "mark-live":
-      await markGatewayLive(passDeps, gateway);
+      if (!artifact) throw new Error(`gateway ${gateway.gatewayId} cannot mark a missing release live`);
+      await markGatewayLive(passDeps, gateway, artifact);
       return;
   }
 }
@@ -1171,8 +1186,12 @@ async function upsertGateway(
 async function markGatewayLive(
   passDeps: GatewayConvergencePassDeps,
   gateway: DurableGateway,
+  artifact: ReleasePayload,
 ): Promise<void> {
   const { db, log } = passDeps;
+  const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
+  const imageTag = gatewayImageFor(gateway, artifact).imageTag;
+  const now = Date.now();
   log(`[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`);
   await db.runTransaction(async (txn) => {
     const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
@@ -1185,11 +1204,28 @@ async function markGatewayLive(
     if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return;
     txn.set(
       rootRef,
-      { liveRelease: gateway.desiredRelease, updatedAt: Date.now(), updatedBy: "converge-gateway" },
+      { liveRelease: gateway.desiredRelease, updatedAt: now, updatedBy: "converge-gateway" },
       { merge: true },
     );
     const runtimePatch = markLiveRuntimePatch(gateway);
-    if (runtimePatch) txn.set(glmRef, runtimePatch, { merge: true });
+    if (runtimePatch) {
+      txn.set(glmRef, {
+        ...runtimePatch,
+        ...(initialDisposablePrelaunch
+          ? {
+              heartbeat: {
+                status: "booting",
+                version: versionFromImageTag(imageTag),
+                internalUrl: gatewayServiceInternalUrl(gateway.gatewayId),
+                startedAt: now,
+                lastHeartbeatAt: now,
+                mountedCustomers: [],
+                lastError: null,
+              },
+            }
+          : {}),
+      }, { merge: true });
+    }
   });
 }
 
