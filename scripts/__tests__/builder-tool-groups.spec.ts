@@ -43,7 +43,7 @@ describe("Builder tool groups", () => {
       "npm-check-updates": "23.1.0",
       "pnpm": "11.24.0",
       "tsx": "4.23.13",
-      "typescript": "5.9.3",
+      "typescript": "7.0.2",
     });
 
     const debianPackages = new Set(
