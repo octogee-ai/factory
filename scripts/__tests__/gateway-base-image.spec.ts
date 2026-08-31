@@ -185,6 +185,50 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toMatch(/npm install[^\n]*@anthropic-ai\/claude-code/);
   });
 
+  it("leaves preinstalled Claude and Codex binaries intact for the standard image", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+    const standardBuild = readRepoFile("cloudbuild.yaml");
+    const wrapperInstruction = runInstructionContaining(
+      dockerfile,
+      "ENABLE_BUILDER_TOOLCHAIN_WRAPPER",
+    );
+    const disabledArm = wrapperInstruction.match(/false\)([\s\S]*?);;/u)?.[1];
+
+    expect(dockerfile).toContain("ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false");
+    expect(standardBuild).not.toContain(
+      "--build-arg=ENABLE_BUILDER_TOOLCHAIN_WRAPPER=true",
+    );
+    expect(disabledArm).toContain("test -x /usr/local/bin/claude");
+    expect(disabledArm).toContain("test -x /usr/local/bin/codex");
+    expect(disabledArm).not.toContain("rm -f");
+    expect(disabledArm).not.toContain("ln -s");
+  });
+
+  it("enables lazy Claude and Codex wrappers only in Builder final builds", () => {
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+    const wrapperInstruction = runInstructionContaining(
+      dockerfile,
+      "ENABLE_BUILDER_TOOLCHAIN_WRAPPER",
+    );
+    const enabledArm = wrapperInstruction.match(/true\)([\s\S]*?);;/u)?.[1];
+
+    for (const filePath of [
+      "cloudbuild-operator-final.yaml",
+      "cloudbuild-operator-final-extra.yaml",
+    ]) {
+      expect(readRepoFile(filePath)).toContain(
+        "--build-arg=ENABLE_BUILDER_TOOLCHAIN_WRAPPER=true",
+      );
+    }
+    expect(enabledArm).toContain("rm -f /usr/local/bin/claude /usr/local/bin/codex");
+    expect(enabledArm).toContain(
+      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude",
+    );
+    expect(enabledArm).toContain(
+      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex",
+    );
+  });
+
   it("pins the npm runtime shared by core boot and post-readiness hydration", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
     const npmUpgrade = dockerfile.indexOf("npm install --global npm@${NPM_VERSION}");

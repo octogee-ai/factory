@@ -157,11 +157,24 @@ COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
+ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
 RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
-    && rm -f /usr/local/bin/claude /usr/local/bin/codex \
-    && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
-    && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex
+    && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
+      false) \
+        test -x /usr/local/bin/claude \
+        && test -x /usr/local/bin/codex \
+        ;; \
+      true) \
+        rm -f /usr/local/bin/claude /usr/local/bin/codex \
+        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
+        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex \
+        ;; \
+      *) \
+        echo "ENABLE_BUILDER_TOOLCHAIN_WRAPPER must be true or false" >&2 \
+        && exit 2 \
+        ;; \
+    esac
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc
