@@ -74,6 +74,7 @@ export interface HydrateBuilderToolchainOptions {
 export interface RunBuilderToolchainHydrationLoopOptions {
   probeInteractiveReadiness: () => Promise<boolean>;
   hydrate: (attempt: number) => Promise<BuilderToolchainStatus>;
+  ensureReadyPublished?: (status: BuilderToolchainStatus) => Promise<void>;
   writeStatus: (status: DeveloperToolchainStatus) => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   waitAfterReady?: () => Promise<void>;
@@ -734,6 +735,16 @@ export async function runBuilderToolchainHydrationLoop(
     try {
       const status = await options.hydrate(attempt);
       if (status.status === "ready") {
+        while (!shouldStop() && options.ensureReadyPublished) {
+          try {
+            await options.ensureReadyPublished(status);
+            break;
+          } catch {
+            if (shouldStop()) return;
+            await sleep(initialBackoffMs);
+          }
+        }
+        if (shouldStop()) return;
         await (options.waitAfterReady ?? waitForever)();
         return;
       }

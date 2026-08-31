@@ -85,6 +85,30 @@ export function createBuilderToolchainStatusPublisher(input: {
   };
 }
 
+export function createRetriableBuilderToolchainStatusPublication(input: {
+  client: Pick<FleetBrokerClient, "uidForSlug" | "setToolchainStatus">;
+  builderSlug: string;
+}): {
+  publishStatus: (artifact: DeveloperToolchainStatusArtifact) => Promise<void>;
+  ensureReadyPublished: (artifact: DeveloperToolchainStatusArtifact) => Promise<void>;
+} {
+  const publishAssigned = createBuilderToolchainStatusPublisher(input);
+  let publishedArtifactKey: string | null = null;
+  const artifactKey = (artifact: DeveloperToolchainStatusArtifact): string =>
+    `${artifact.schemaVersion}\0${artifact.status}\0${artifact.updatedAt}`;
+  const publishStatus = async (artifact: DeveloperToolchainStatusArtifact): Promise<void> => {
+    await publishAssigned(artifact);
+    publishedArtifactKey = artifactKey(artifact);
+  };
+  return {
+    publishStatus,
+    async ensureReadyPublished(artifact) {
+      if (publishedArtifactKey === artifactKey(artifact)) return;
+      await publishStatus(artifact);
+    },
+  };
+}
+
 export async function probeBuilderInteractiveReadiness(
   url: string,
   fetchImpl: typeof fetch = fetch,
@@ -128,10 +152,11 @@ export async function runBuilderToolchainHydrator(input: {
   const signal = input.signal ?? new AbortController().signal;
   const log = input.log ?? console.error;
   const client = input.client ?? createFleetBrokerClient(input.config.gatewayId);
-  const publishStatus = createBuilderToolchainStatusPublisher({
+  const publication = createRetriableBuilderToolchainStatusPublication({
     client,
     builderSlug: input.config.builderSlug,
   });
+  const publishStatus = publication.publishStatus;
   const registryCredentialsProvider = input.registryCredentialsProvider
     ?? createBuilderNpmProxyCredentialsProvider({
       client,
@@ -154,6 +179,14 @@ export async function runBuilderToolchainHydrator(input: {
       log,
       signal,
     }),
+    ensureReadyPublished: async (artifact) => {
+      try {
+        await publication.ensureReadyPublished(artifact);
+      } catch (error) {
+        log("[builder-toolchain] ready status publication unavailable; retrying");
+        throw error;
+      }
+    },
     writeStatus,
     sleep: abortableSleep(signal),
     waitAfterReady: () => new Promise((resolve) => {

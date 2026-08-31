@@ -79,6 +79,34 @@ describe("Builder toolchain hydration loop", () => {
     expect(hydrate).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([5_000, 5_000]);
   });
+
+  it("retries immutable ready publication without hydrating the toolchain again", async () => {
+    const ready = {
+      schemaVersion: 1 as const,
+      status: "ready" as const,
+      updatedAt: "2026-08-30T00:00:00.000Z",
+    };
+    const hydrate = vi.fn(async () => ready);
+    const ensureReadyPublished = vi.fn()
+      .mockRejectedValueOnce(new Error("assignment not cut over"))
+      .mockResolvedValueOnce(undefined);
+    const sleeps: number[] = [];
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      ensureReadyPublished,
+      writeStatus: async () => {},
+      sleep: async (ms) => { sleeps.push(ms); },
+      waitAfterReady: async () => {},
+      initialBackoffMs: 5_000,
+      maxBackoffMs: 40_000,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(ensureReadyPublished.mock.calls).toEqual([[ready], [ready]]);
+    expect(sleeps).toEqual([5_000]);
+  });
 });
 
 describe("Builder toolchain stable wrappers", () => {

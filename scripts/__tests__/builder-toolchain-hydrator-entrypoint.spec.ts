@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createBuilderNpmProxyCredentialsProvider,
+  createRetriableBuilderToolchainStatusPublication,
   createBuilderToolchainStatusPublisher,
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
@@ -77,6 +78,33 @@ describe("Builder toolchain hydrator entrypoint", () => {
     await expect(publish(artifact)).resolves.toBeUndefined();
     expect(client.uidForSlug).toHaveBeenCalledTimes(2);
     expect(client.setToolchainStatus).toHaveBeenCalledWith("uid-alice", "ready");
+  });
+
+  it("republishes an immutable ready artifact after canonical assignment cutover", async () => {
+    const client = {
+      uidForSlug: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce("uid-alice"),
+      setToolchainStatus: vi.fn(async () => undefined),
+    };
+    const publication = createRetriableBuilderToolchainStatusPublication({
+      client,
+      builderSlug: "alice",
+    });
+    const ready = {
+      schemaVersion: 1 as const,
+      status: "ready" as const,
+      updatedAt: "2026-08-30T00:00:00.000Z",
+    };
+
+    await expect(publication.publishStatus(ready)).rejects.toThrow(
+      "configured Builder is not assigned to this gateway",
+    );
+    await expect(publication.ensureReadyPublished(ready)).resolves.toBeUndefined();
+    await expect(publication.ensureReadyPublished(ready)).resolves.toBeUndefined();
+
+    expect(client.uidForSlug).toHaveBeenCalledTimes(2);
+    expect(client.setToolchainStatus.mock.calls).toEqual([["uid-alice", "ready"]]);
   });
 
   it("treats only a successful surge-readiness response as interactive readiness", async () => {
