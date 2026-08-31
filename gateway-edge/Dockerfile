@@ -5,7 +5,7 @@
 # mirror each source file's location relative to rootDir ("..", the container
 # root /) — produce dist/gateway-edge/src/index.js, matching package.json
 # main + CMD.
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS builder
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS builder
 WORKDIR /gateway-edge
 # Packed directories must be present before npm ci resolves their type interfaces.
 COPY core/package.json /core/package.json
@@ -32,7 +32,7 @@ RUN GODEBUG=http2client=0 CGO_ENABLED=0 go install \
       github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION} \
     && test "$(/go/bin/gitleaks version)" = "${GITLEAKS_VERSION}"
 
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146
 WORKDIR /gateway-edge
 ARG NPM_VERSION=12.0.1
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
