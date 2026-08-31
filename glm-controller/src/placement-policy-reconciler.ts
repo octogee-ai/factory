@@ -913,6 +913,7 @@ function disposableTargetMatchesLease(
 }
 
 function disposableTargetActivationReady(gateway: PlacementPolicyGateway): boolean {
+  if (gateway.assignmentCount !== 0) return false;
   if (!Array.isArray(gateway.mountedCustomers) || gateway.mountedCustomers.length !== 0) {
     return false;
   }
