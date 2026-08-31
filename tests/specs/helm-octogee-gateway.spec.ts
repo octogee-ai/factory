@@ -101,6 +101,33 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it("does not configure an Artifact Registry URL in Builder pods", () => {
+    const values = (file: string): { env?: { builderNpmProxyRegistry?: string } } =>
+      parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf8")).toJS();
+
+    for (const file of ["values.yaml", "values.prod.yaml", "values.test.yaml", "values.build-week.yaml"]) {
+      expect(values(file).env?.builderNpmProxyRegistry).toBeUndefined();
+    }
+  });
+
+  it("renders only the explicit direct fallback into Builder gateways", () => {
+    const builder = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      profile: "builder",
+      "env.builderNpmFallbackRegistry": "https://registry.npmjs.org/",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    const shared = findDoc(helmTemplate("octogee-gw-shared", {
+      gatewayId: "shared",
+      "env.builderNpmFallbackRegistry": "https://registry.npmjs.org/",
+    }), "Deployment", "octogee-gateway-shared") ?? "";
+
+    expect(containerBlock(builder, "gateway")).toContain("OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY");
+    expect(containerBlock(builder, "gateway")).not.toContain("OCTOGEE_BUILDER_NPM_PROXY_REGISTRY");
+    expect(containerBlock(shared, "gateway")).not.toContain(
+      "OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY",
+    );
+  });
+
   it("provides the durable agent and workspace roots required by OpenClaw config", () => {
     const deployment = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gateway = containerBlock(deployment, "gateway");

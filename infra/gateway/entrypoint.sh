@@ -280,24 +280,25 @@ if [ -d /octogee/extensions ]; then
   log "Plugin extensions projected from image"
 fi
 
-# ── Restore staged @openclaw/codex into the emptyDir ────────────────────────
+# ── Restore staged OpenClaw runtime plugins into the emptyDir ───────────────
 # `openclaw plugins install` writes under ~/.openclaw/npm, which is an emptyDir
 # at runtime (no PVC) — so the build-time install is shadowed every boot.
-# The plugin tree is staged in the base image at /opt/openclaw-codex-deps;
-# symlink the whole `npm` dir into place so the `codex` harness loads. Same
+# The plugin tree is staged in the base image at /opt/openclaw-runtime-deps;
+# symlink the whole `npm` dir into place so externalized plugins load. Same
 # /opt→emptyDir pattern as the extension node_modules symlinks above.
 #
 # We symlink the whole `npm` tree regardless of layout; loading is driven by
-# openclaw.json (plugins.entries.codex.enabled) resolving the package from the
-# managed npm root, not by the plugins/installs.json cache.
-if [ -d /opt/openclaw-codex-deps/npm ]; then
+# openclaw.json resolving packages from the managed npm root, not by the
+# plugins/installs.json cache.
+if [ -d /opt/openclaw-runtime-deps/npm ]; then
   if [ -e "$OPENCLAW_DIR/npm" ] || [ -L "$OPENCLAW_DIR/npm" ]; then
     rm -rf "$OPENCLAW_DIR/npm"
   fi
-  ln -s /opt/openclaw-codex-deps/npm "$OPENCLAW_DIR/npm"
-  log "Codex plugin: symlinked ~/.openclaw/npm → /opt/openclaw-codex-deps/npm"
+  ln -s /opt/openclaw-runtime-deps/npm "$OPENCLAW_DIR/npm"
+  log "OpenClaw runtime plugins projected from /opt/openclaw-runtime-deps/npm"
 else
-  log "⚠ Codex plugin: /opt/openclaw-codex-deps absent — codex harness unavailable"
+  log "FATAL: /opt/openclaw-runtime-deps absent — required runtime plugins unavailable"
+  exit 1
 fi
 
 # ── Pre-boot: sync env/runtime config into openclaw.json ─────────────────
@@ -371,6 +372,9 @@ fi
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  supervise_runner builder-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
+fi
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts

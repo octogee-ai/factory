@@ -113,6 +113,25 @@ export interface FleetBrokerBlobSignedUrl {
   requiredHeaders?: Record<string, string>;
 }
 
+export interface FleetBrokerNpmRegistryCredentials {
+  registryUrl: string;
+  token: string;
+  expiresAt: string;
+}
+
+export interface FleetBrokerCustomerRuntimeReset {
+  status: "pending";
+  uid: string;
+  slug: string;
+  operationId: string;
+  sourceGatewayId: string;
+  targetGatewayId: string;
+  generation: number;
+  disposableLeaseId: string;
+  disposableLeaseGeneration: number;
+  requestedAt: number;
+}
+
 export const BUILDER_RUNTIME_STATE_RECOVERY_TIERS = ["minute", "hour", "day"] as const;
 
 export type BuilderRuntimeStateRecoveryTier =
@@ -154,6 +173,7 @@ export interface FleetBrokerUserSnapshot {
   gatewayId: string;
   status: FleetBrokerProvisioningStatus;
   agentIds: string[];
+  runtimeReset?: FleetBrokerCustomerRuntimeReset;
   repoUrl: string;
   mattermostUserId: string | null;
   customerMmUserId: string | null;

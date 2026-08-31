@@ -326,6 +326,72 @@ describe("surge OpenClaw process gate", () => {
 });
 
 describe("surge OpenClaw process supervisor", () => {
+  it("prunes restored missing agent database registrations before one bounded OpenClaw start", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const stateDatabaseDir = path.join(openclawDir, "state");
+    const stateDatabasePath = path.join(stateDatabaseDir, "openclaw.sqlite");
+    await fs.mkdir(stateDatabaseDir, { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const stateDatabase = new DatabaseSync(stateDatabasePath);
+    stateDatabase.exec(`
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER,
+        PRIMARY KEY (agent_id, path)
+      ) STRICT;
+    `);
+    const insert = stateDatabase.prepare(
+      "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at,size_bytes) VALUES(?,?,?,?,?)",
+    );
+    for (const agentId of ["retired-a", "retired-b", "retired-c", "retired-d", "retired-e"]) {
+      insert.run(agentId, `agents/${agentId}/agent/openclaw-agent.sqlite`, 17, 1, null);
+    }
+    const livePath = path.join(openclawDir, "agents", "live", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(livePath), { recursive: true });
+    await fs.writeFile(livePath, "live");
+    insert.run("live", "agents/live/agent/openclaw-agent.sqlite", 17, 1, null);
+    stateDatabase.close();
+
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget: async () => undefined,
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      probeHealthz: healthzOf(children),
+      healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = {
+      migrationId: "surge-gateway-target",
+      slug: "ceckert-test",
+      targetPodUid: "target-pod",
+    };
+
+    await client.hydrate(request);
+    await client.claimTargetCompletion(request);
+    await expect(client.permit(request)).resolves.toMatchObject({ phase: "running" });
+    expect(children).toHaveLength(1);
+
+    const recoveredDatabase = new DatabaseSync(stateDatabasePath, { readOnly: true });
+    expect(
+      recoveredDatabase.prepare("SELECT agent_id FROM agent_databases ORDER BY agent_id").all(),
+    ).toEqual([{ agent_id: "live" }]);
+    recoveredDatabase.close();
+    await supervisor.stop();
+  });
+
   it("owns a target child only after permit, prepares it after transfer, and returns it held on abort", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);

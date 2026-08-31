@@ -1,53 +1,35 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# octogee-gateway-base — OpenClaw runtime + all heavy/stable deps
-#
-# Rebuilt only when the current OpenClaw artifacts or this build recipe change.
-#
-# What lives here (changes rarely → cached across gateway builds):
-#   - OpenClaw npm install
-#   - All apt packages (curl, jq, python3, git, ripgrep, ffmpeg, gh, etc.)
-# ─────────────────────────────────────────────────────────────────────────────
-# Node 24 matches OpenClaw upstream's publishing + Docker target image
-# (node:24-bookworm-slim, per their Dockerfile) and tracks the newest patch on
-# the current supported LTS line. OpenClaw 2026.8.1 excludes Node 26; its root
-# range admits Node 25, but a production dependency does not. Staying in
-# lockstep with their ship target avoids "works on their CI, not on our pod"
-# surprises without dropping to the Node 22 compatibility floor. Unrelated
-# services (`gateway-edge` on GKE, `functions` on Firebase) stay on
-# Node 22 — they're separate deploy surfaces with their own runtime
-# constraints (Firebase Functions Node 24 support lags the runtime).
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim AS gateway-core-system
+
 ARG NPM_VERSION=12.0.1
-ARG FD_VERSION=10.3.0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# ── All system packages in one layer ────────────────────────────────────────
-# Combining apt runs avoids duplicate update overhead and saves ~30s per build.
-# "Storage is cheap" — ship everything the agent needs to be productive.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Runtime essentials
-    curl jq python3 python3-pip python3-venv \
-    sqlite3 xxd rsync \
-    ca-certificates openssh-client \
-    # Developer experience (available in running pod).
-    bash-completion git vim less \
-    # Code search & analysis
-    ripgrep tree cloc \
-    # Build tools
-    make build-essential \
-    # Archive & file utilities
-    wget unzip zip file bc \
-    # Media processing
-    ffmpeg imagemagick \
-    # Publish screenshots (headless Chromium; fonts so rendered pages aren't tofu)
-    chromium fonts-liberation fonts-noto-color-emoji \
-    # Document conversion
-    pandoc \
-    # Debugging & diagnostics
-    htop strace dnsutils net-tools \
-    # Fuzzy finder
-    fzf \
+    ca-certificates curl git jq openssh-client rsync tar \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
+    && npm_root="$(npm root --global)" \
+    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
+    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion" \
+    && npm cache clean --force \
+    && install -d -o node -g node /home/node/.npm
+
+ENV HOME=/home/node
+
+FROM gateway-core-system AS gateway-system
+
+ARG FD_VERSION=10.3.0
+ARG CLAUDE_CODE_VERSION=2.1.251
+ARG CODEX_VERSION=0.151.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv sqlite3 xxd \
+    bash-completion vim less ripgrep tree cloc \
+    make build-essential wget unzip zip file bc \
+    ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
+    pandoc htop strace dnsutils net-tools fzf \
     && case "$(dpkg --print-architecture)" in \
       amd64) FD_SHA256=f4be8742f936e4ef0e10016b661e4c1cd49e482e388080aa28c05d02f0559509 ;; \
       arm64) FD_SHA256=35659891c839f9db2a6a5f082342b43961db36cfb08ea3b72a09f19543766a4f ;; \
@@ -59,22 +41,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/fd.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# ── OpenClaw from private fork tarball ──────────────────────────────────────
-COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
-COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
-RUN set -e; \
-    npm install -g /tmp/openclaw-fork.tgz; \
-    OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
-    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
-    test -n "$OPENCLAW_CORE_VERSION"; \
-    openclaw --version; \
-    rg -l -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
-      || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }
-RUN rm /tmp/openclaw-fork.tgz
-
-# ── GitHub CLI ───────────────────────────────────────────────────────────────
-# Not in Debian repos — installed from GitHub's own apt source.
-# Used heavily by the github skill for PRs, issues, CI logs, and code review.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -82,117 +48,98 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# ── ACP coding agents (Claude Code + Codex) ──────────────────────────────────
-# Pre-installed so they're available for ACP runtime sessions without
-# per-boot npm install delays or network dependency.
-# Refresh stamp: bump this to force a standard-base refresh of unpinned
-# ACP CLIs without adding new packages to cattle gateways.
-ARG ACP_TOOLCHAIN_REFRESH=2026-05-28
-RUN echo "ACP toolchain refresh=${ACP_TOOLCHAIN_REFRESH}" \
-    && npm install -g @anthropic-ai/claude-code @openai/codex 2>&1 | tail -50
-
-# ── Python essentials ────────────────────────────────────────────────────────
-# Common packages for data work, scraping, and config parsing.
-RUN pip3 install --break-system-packages \
+RUN pip3 install --break-system-packages --no-cache-dir \
     pyyaml beautifulsoup4 pandas matplotlib
 
-# ── Non-root user ────────────────────────────────────────────────────────────
-RUN groupadd -r node 2>/dev/null || true && \
-    useradd -r -g node -d /home/node -m node 2>/dev/null || true
+RUN npm install --global --ignore-scripts --no-audit --no-fund \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force \
+    && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
+    && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
-ENV HOME=/home/node
+FROM gateway-core-system AS openclaw-installer
 
-# ── OpenClaw Mattermost plugin (EXTERNALIZED in 6.11 — install required) ──────
-# Through 6.10, `@openclaw/mattermost` shipped as a *bundled* dist extension
-# (dist/extensions/mattermost/index.js) — no build-time install needed. OpenClaw
-# 6.11 EXTERNALIZED it (#95683 "externalize additional official plugins";
-# package.json `openclaw.build.bundledDist: false`): the bundled dist is GONE and
-# the channel is served only by the now-properly-published @openclaw/mattermost
-# npm package (compat `pluginApi >=2026.6.11`; #82425 repaired the old source-only
-# install rejection in 5.16+). Without a build-time install the gateway boots
-# `plugins.entries.mattermost: plugin not installed` and the coach MM account
-# never connects (restore then waits 120s and fails). So we install + stage it
-# alongside codex below — see the combined block.
-
-# ── OpenClaw externalized plugins: codex + mattermost + parallel ─────────────
-# codex registers the BYO-subscription (ChatGPT OAuth) agent harness for coaches
-# running openai/gpt-5.5; mattermost is the channel plugin upstream externalized
-# in 6.11 (see the block above). `openclaw plugins install` writes under
-# $HOME/.openclaw/npm — but /home/node/.openclaw is an emptyDir at runtime (no
-# PVC) that shadows the image copy on every boot. So install at build, then STAGE
-# the whole npm tree to /opt/openclaw-codex-deps (non-shadowed); entrypoint.sh
-# symlinks it back into the emptyDir at boot. Fail-loud on every install + staging
-# assertion (no `| tail`: sh has no pipefail).
-#
-# A package's location WITHIN ~/.openclaw/npm is an upstream impl detail that
-# moves between releases (flat `npm/node_modules/@openclaw/<x>` vs the 5.28
-# per-plugin `npm/projects/openclaw-<x>-<hash>/node_modules/@openclaw/<x>`), so we
-# stage the WHOLE `npm` tree and assert presence with a layout-agnostic find —
-# robust to the next reshuffle. Loading at runtime is driven by openclaw.json
-# (plugins.entries.<x>.enabled) resolving each package from the managed npm root,
-# NOT the plugins/installs.json cache, so only that tree must survive the emptyDir.
-#
-# The current-main packer vendors Codex and Parallel only when their companion
-# packages are not yet published. Mattermost is always installed from the
-# locally packed artifact because it contains the Octogee channel overlay.
+COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 RUN set -e; \
+    npm install -g /tmp/openclaw-fork.tgz; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     test -n "$OPENCLAW_CORE_VERSION"; \
+    openclaw --version; \
+    grep -RIl -F '"config.changed"' "$OPENCLAW_ROOT/dist" >/dev/null \
+      || { echo "FATAL: installed OpenClaw runtime does not publish config.changed"; exit 1; }; \
+    rm -f /tmp/openclaw-fork.tgz; \
+    npm cache clean --force
+
+FROM openclaw-installer AS openclaw-core-plugin-installer
+
+COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
+RUN set -e; \
+    OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
+    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
-    if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
-      echo "codex: installing vendored fork tarball for core $OPENCLAW_CORE_VERSION"; \
-      CODEX_REPACK="$(mktemp -d)"; \
-      tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
-      node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package: " + pkg.name); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
-      (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1) \
-        || { echo "FATAL: vendored @openclaw/codex repack failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-      VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
-      test -n "$VENDORED_CODEX" || { echo "FATAL: vendored @openclaw/codex repack produced no tarball"; exit 1; }; \
-      openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-        || { echo "FATAL: vendored @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-      rm -rf "$CODEX_REPACK"; \
-    else \
-      openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-        || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    fi; \
-    tail -n 3 /tmp/oc-plugin.log; \
     if [ -f "$OC_VENDOR/openclaw-parallel-plugin.tgz" ]; then \
-      echo "parallel: installing vendored fork tarball"; \
-      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-        || { echo "FATAL: vendored @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
     else \
-      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-        || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    fi; \
-    tail -n 3 /tmp/oc-plugin.log; \
-    test -s /tmp/openclaw-mattermost-fork.tgz; \
+      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
+    fi \
+      || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: local @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    tail -n 3 /tmp/oc-plugin.log; MM_STAGED=1; \
     rm -f /tmp/oc-plugin.log /tmp/openclaw-mattermost-fork.tgz; \
-    mkdir -p /opt/openclaw-codex-deps; \
-    cp -a /home/node/.openclaw/npm /opt/openclaw-codex-deps/npm; \
-    chown -R node:node /opt/openclaw-codex-deps; \
-    find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/codex' 2>/dev/null | grep -q . \
-      || { echo "FATAL: @openclaw/codex missing from staged /opt tree"; exit 1; }; \
-    CODEX_PACKAGE="$(find /opt/openclaw-codex-deps/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)"; \
+    find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
+    mkdir -p /opt/openclaw-runtime-deps; \
+    cp -a /home/node/.openclaw/npm /opt/openclaw-runtime-deps/npm; \
+    chown -R node:node /opt/openclaw-runtime-deps; \
+    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
+    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .; \
+    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .
+
+FROM gateway-core-system AS gateway-core-runtime
+
+COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
+    && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
+    && openclaw --version
+COPY --from=openclaw-core-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
+
+FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer
+
+RUN set -e; \
+    OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
+    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
+    OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
+    if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
+      CODEX_REPACK="$(mktemp -d)"; \
+      tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
+      node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package"); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
+      (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1); \
+      VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
+      test -n "$VENDORED_CODEX"; \
+      openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
+      rm -rf "$CODEX_REPACK"; \
+    else \
+      openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
+    fi \
+      || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    rm -f /tmp/oc-plugin.log; \
+    find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
+    rm -rf /opt/openclaw-runtime-deps; \
+    mkdir -p /opt/openclaw-runtime-deps; \
+    cp -a /home/node/.openclaw/npm /opt/openclaw-runtime-deps/npm; \
+    chown -R node:node /opt/openclaw-runtime-deps; \
+    CODEX_PACKAGE="$(find /opt/openclaw-runtime-deps/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)"; \
     test -n "$CODEX_PACKAGE"; \
-    INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "@openclaw/codex") process.exit(1); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
-    test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION" \
-      || { echo "FATAL: @openclaw/codex version $INSTALLED_CODEX does not match installed OpenClaw core $OPENCLAW_CORE_VERSION"; exit 1; }; \
-    find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' 2>/dev/null | grep -q . \
-      || { echo "FATAL: @openclaw/parallel-plugin missing from staged /opt tree"; exit 1; }; \
-    if [ "$MM_STAGED" = "1" ]; then \
-      find /opt/openclaw-codex-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' 2>/dev/null | grep -q . \
-        || { echo "FATAL: @openclaw/mattermost missing from staged /opt tree"; exit 1; }; \
-    fi
+    INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
+    test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"; \
+    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
+    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .
 
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
-    && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
-    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
-    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
+FROM gateway-system AS gateway-runtime
 
-# ── npm cache ownership (prevent EACCES in agent exec calls) ─────────────────
-RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
+COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
+    && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
+    && openclaw --version
+COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps

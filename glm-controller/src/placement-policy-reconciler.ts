@@ -48,8 +48,10 @@ import {
   type SharedGatewayPoolCandidate,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
+  commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
   type FleetStateFirestore,
+  type RecoveredDisposableRuntimeResetParams,
   type UnavailableGatewayRecoveryParams,
   type UnavailableGatewayRecoveryTargetValidationContext,
 } from "@octogee/core/fleet-state";
@@ -82,6 +84,9 @@ import {
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
+export const DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS = 10 * 60_000;
+export const DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS =
+  DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS + DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
 export const SHARED_GATEWAY_REBALANCE_STABILITY_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION =
   "gatewayRecoveryReceipts";
@@ -173,6 +178,7 @@ export function placementKubernetesStatus(
 export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway {
   kubernetesStatus?: PlacementPolicyKubernetesStatus;
   serving?: boolean;
+  runtimeStatus?: string;
   heartbeatFresh?: boolean;
   runtimeStartedAt?: number | null;
   liveReleaseReady?: boolean;
@@ -183,6 +189,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   liveRelease?: number | null;
   rollActive?: boolean;
   recoveryGraceUntil?: number;
+  mountedCustomers?: readonly string[];
 }
 
 export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
@@ -193,6 +200,8 @@ export interface PlacementPolicyAssignment {
   gatewayId: string;
   state: string;
   epoch: number | null;
+  source?: string;
+  updatedByOperationId?: string;
 }
 
 export interface PlacementPolicySnapshot {
@@ -314,6 +323,9 @@ export interface PlacementPolicyReconcilerDeps {
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
   failActivationLease(input: FailActivationLeaseInput): Promise<void>;
   recoverUnavailableGateway(input: RecoverUnavailableGatewayInput): Promise<{ operationId: string }>;
+  recoverDisposableRuntimeReset(
+    input: RecoveredDisposableRuntimeResetParams,
+  ): Promise<{ operationId: string }>;
   supersedeRollingSharedGateway(input: SupersedeRollingSharedGatewayInput): Promise<{
     kind: "scheduled" | "already-scheduled" | "not-eligible";
     release?: number;
@@ -900,6 +912,143 @@ function disposableTargetMatchesLease(
     disposableTargetIdentityMatchesLease(gateway, user, lease);
 }
 
+function disposableTargetActivationReady(gateway: PlacementPolicyGateway): boolean {
+  if (gateway.assignmentCount !== 0) return false;
+  if (!Array.isArray(gateway.mountedCustomers) || gateway.mountedCustomers.length !== 0) {
+    return false;
+  }
+  if (gateway.ready) return true;
+  return gateway.kubernetesStatus === "not-ready" &&
+    gateway.serving === true &&
+    gateway.runtimeStatus === "booting" &&
+    gateway.heartbeatFresh === true &&
+    gateway.liveReleaseReady === true;
+}
+
+function recoveredRuntimeResetState(user: PlacementPolicyUser): Record<string, unknown> | null {
+  return record(record(record(user.data.provisioning)?.openclaw)?.runtimeReset);
+}
+
+function recoveredRuntimeResetTarget(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  currentGatewayId: string | null,
+): {
+  target: PlacementPolicyGateway;
+  assignment: PlacementPolicyAssignment;
+  epoch: number;
+} | null {
+  if (!currentGatewayId || !isSharedPoolGateway(context, currentGatewayId)) return null;
+  const target = context.gateways.get(currentGatewayId);
+  const assignment = context.assignments.get(
+    placementAssignmentKey(currentGatewayId, user.uid),
+  );
+  if (
+    !target ||
+    target.gatewayClass !== "shared" ||
+    !assignment ||
+    assignment.state !== "serving" ||
+    assignment.epoch === null
+  ) return null;
+  return { target, assignment, epoch: assignment.epoch };
+}
+
+function reconcileRecoveredRuntimeResetMarker(input: {
+  context: PlacementPolicyReconcileContext;
+  user: PlacementPolicyUser;
+  builderSlug: string;
+  gatewayId: string;
+  assignment: PlacementPolicyAssignment;
+}): boolean | null {
+  const marker = recoveredRuntimeResetState(input.user);
+  if (!marker) return null;
+  const exact = [
+    marker.uid === input.user.uid,
+    marker.slug === input.builderSlug,
+    marker.targetGatewayId === input.gatewayId,
+    marker.generation === input.assignment.epoch,
+    marker.operationId === input.assignment.updatedByOperationId,
+    input.assignment.source === "repair",
+  ].every(Boolean);
+  if (!exact || (marker.status !== "pending" && marker.status !== "acknowledged")) {
+    blockPlacement(input.context, {
+      uid: input.user.uid,
+      code: "recovered-runtime-reset-fence",
+      reason: `runtime reset marker does not match ${input.gatewayId}/${input.assignment.epoch}`,
+    });
+    return true;
+  }
+  return marker.status === "pending";
+}
+
+function recoveredRuntimeResetPreviousOperationId(
+  assignment: PlacementPolicyAssignment,
+  target: PlacementPolicyGateway,
+  builderSlug: string,
+): string | null {
+  const operationId = assignment.updatedByOperationId;
+  if (
+    assignment.source !== "repair" ||
+    typeof operationId !== "string" ||
+    !operationId.startsWith("recover-disposable-") ||
+    operationId.startsWith("recover-disposable-reset-") ||
+    target.mountedCustomers?.includes(builderSlug)
+  ) return null;
+  return operationId;
+}
+
+function recoveredRuntimeResetTargetIsReady(target: PlacementPolicyGateway): boolean {
+  return [
+    gatewayRuntimeServing(target),
+    gatewayHeartbeatFresh(target),
+    gatewayLiveReleaseReady(target),
+  ].every(Boolean);
+}
+
+async function reconcileRecoveredDisposableRuntimeReset(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  currentGatewayId: string | null,
+): Promise<boolean> {
+  const recovery = recoveredRuntimeResetTarget(context, user, currentGatewayId);
+  if (!recovery || !currentGatewayId) return false;
+  const markerResult = reconcileRecoveredRuntimeResetMarker({
+    context,
+    user,
+    builderSlug,
+    gatewayId: currentGatewayId,
+    assignment: recovery.assignment,
+  });
+  if (markerResult !== null) return markerResult;
+  const previousRecoveryOperationId = recoveredRuntimeResetPreviousOperationId(
+    recovery.assignment,
+    recovery.target,
+    builderSlug,
+  );
+  if (!previousRecoveryOperationId) return false;
+  if (!recoveredRuntimeResetTargetIsReady(recovery.target)) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "recovered-runtime-reset-target-unavailable",
+      reason: `shared repair target ${currentGatewayId} is not a fresh serving runtime`,
+    });
+    return true;
+  }
+  const operationId = `recover-disposable-reset-${user.uid}-${currentGatewayId}-${recovery.epoch}`;
+  await context.deps.recoverDisposableRuntimeReset({
+    operationId,
+    previousRecoveryOperationId,
+    uid: user.uid,
+    slug: builderSlug,
+    targetGatewayId: currentGatewayId,
+    expectedAssignmentEpoch: recovery.epoch,
+    sharedGatewayIds: context.state.sharedGatewayIds,
+    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
+  });
+  return true;
+}
+
 async function reconcileUnavailableServingGateway(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
@@ -1075,11 +1224,30 @@ async function recoverAndRetireUnreachableTarget(
   return recovery.operationId;
 }
 
+function disposableGatewayProvisioningBudgetOpen(input: {
+  now: number;
+  provisionedAt: number;
+  runtimeStartedAt: unknown;
+}): boolean {
+  const provisionElapsedMs = input.now - input.provisionedAt;
+  if (provisionElapsedMs < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) return true;
+  const runtimeStartedAt = millis(input.runtimeStartedAt);
+  if (
+    runtimeStartedAt === null ||
+    runtimeStartedAt < input.provisionedAt ||
+    runtimeStartedAt > input.now
+  ) {
+    return false;
+  }
+  return input.now - runtimeStartedAt < DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS &&
+    provisionElapsedMs < DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS;
+}
+
 async function cleanupUnreachableProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<boolean> {
   const { context, user, builderSlug, current, lease, target } = input;
-  if (target.desiredStatus === "running" && target.ready) return false;
+  if (target.desiredStatus === "running" && disposableTargetActivationReady(target)) return false;
   if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
   if (!isSharedPoolGateway(context, current)) {
     blockPlacement(context, {
@@ -1101,7 +1269,11 @@ async function cleanupUnreachableProvisioningTarget(
       });
       return true;
     }
-    if (context.deps.now() - provisionedAt < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) {
+    if (disposableGatewayProvisioningBudgetOpen({
+      now: context.deps.now(),
+      provisionedAt,
+      runtimeStartedAt: target.runtimeStartedAt,
+    })) {
       return true;
     }
   }
@@ -1332,7 +1504,7 @@ async function reconcileProvisioningActivation(
     });
     return;
   }
-  if (!target.ready) return;
+  if (!disposableTargetActivationReady(target)) return;
   await advanceReadyProvisioningTarget(targetInput);
 }
 
@@ -2012,6 +2184,14 @@ async function reconcileEligibleBuilder(
     });
     return;
   }
+  if (
+    await reconcileRecoveredDisposableRuntimeReset(
+      context,
+      user,
+      builderSlug,
+      current,
+    )
+  ) return;
   if (await reconcileUnavailableServingGateway(context, user, builderSlug, current)) return;
   if (await reconcileActivationLease(context, user, builderSlug, current)) return;
   const entitledOwned = resolveLiveActivationTargetGatewayId({
@@ -2800,11 +2980,25 @@ function placementAssignmentFromDocument(
     ? rawEpoch
     : null;
   if (!gatewayId || !uid || !slug || !state) return null;
-  return { uid, slug, gatewayId, state, epoch };
+  return {
+    uid,
+    slug,
+    gatewayId,
+    state,
+    epoch,
+    ...(nonEmptyString(data.source) ? { source: nonEmptyString(data.source)! } : {}),
+    ...(nonEmptyString(data.updatedByOperationId)
+      ? { updatedByOperationId: nonEmptyString(data.updatedByOperationId)! }
+      : {}),
+  };
 }
 
 function gatewayRuntimeStartedAt(value: unknown): number | null {
   return isGatewayRuntimeDoc(value) ? millis(value.heartbeat.startedAt) : null;
+}
+
+function gatewayRuntimeStatus(value: unknown): string | undefined {
+  return isGatewayRuntimeDoc(value) ? value.heartbeat.status : undefined;
 }
 
 function placementGatewayFromDocument(input: {
@@ -2846,6 +3040,7 @@ function placementGatewayFromDocument(input: {
     ready: runtimeReady,
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
+    runtimeStatus: gatewayRuntimeStatus(runtimeData),
     heartbeatFresh,
     runtimeStartedAt: gatewayRuntimeStartedAt(runtime),
     liveReleaseReady: [
@@ -2861,6 +3056,7 @@ function placementGatewayFromDocument(input: {
     liveRelease: root.liveRelease,
     rollActive: root.desiredRelease !== root.liveRelease,
     recoveryGraceUntil: root.updatedAt + SHARED_GATEWAY_RECOVERY_GRACE_MS,
+    mountedCustomers: [...mounted],
   };
 }
 
@@ -4241,6 +4437,12 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       ...request,
       validateTarget: unavailableRecoveryTargetFence(input, request),
     }),
+    recoverDisposableRuntimeReset: (request) =>
+      commitRecoveredDisposableRuntimeResetAtomic({
+        db: input.db as unknown as FleetStateFirestore,
+        now: () => new Date(input.now()),
+        serverTimestamp: () => FieldValue.serverTimestamp(),
+      }, request),
     supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({
       db: input.db,
       now: input.now,

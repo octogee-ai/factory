@@ -755,6 +755,175 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
+  it("restarts only the configured Builder manifest accounts after a retained-overlay no-op", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      const desiredAccountIds = ["tester10-coach", "tester10-proj-orbit"];
+      mocks.readActivationManifest.mockResolvedValueOnce({
+        slug: "tester10",
+        appliedFingerprint: "fp-tester10",
+        agentId: "octogee-tester10-coach",
+        accountId: "tester10-coach",
+        agent: { id: "octogee-tester10-coach" },
+        mattermostAccount: { botToken: "coach-pat" },
+        bindings: [],
+        projectAgents: [{
+          agentId: "octogee-tester10-proj-orbit-coach",
+          accountId: "tester10-proj-orbit",
+          agent: { id: "octogee-tester10-proj-orbit-coach" },
+          mattermostAccount: { botToken: "orbit-pat" },
+          bindings: [],
+        }],
+      });
+      mocks.applyOpenClawActivationManifest.mockResolvedValueOnce({
+        elapsedMs: 42,
+        routingActivationRequired: false,
+        restartExistingAccountIds: [],
+        configNoop: true,
+      });
+      let accountsRestarted = false;
+      routingActivationMocks.activate.mockImplementationOnce(async () => {
+        accountsRestarted = true;
+      });
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({
+          channelAccounts: {
+            mattermost: [
+              {
+                accountId: "tester10-coach",
+                running: true,
+                connected: true,
+              },
+              {
+                accountId: "tester10-proj-orbit",
+                running: true,
+                connected: true,
+              },
+              {
+                accountId: "unrelated-coach",
+                running: true,
+                connected: true,
+              },
+            ],
+          },
+        })),
+        configGet: vi.fn(async () => configSnapshot({
+          agents: {
+            list: [
+              { id: "octogee-tester10-coach", model: "house" },
+              { id: "octogee-tester10-proj-orbit-coach", model: "house" },
+            ],
+          },
+        })),
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(),
+        rpc,
+        log: vi.fn(),
+        isBuilderGateway: () => true,
+      });
+
+      await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+        appliedFingerprint: "fp-tester10",
+      });
+      expect(accountsRestarted).toBe(true);
+      expect(routingActivationMocks.stopStale).toHaveBeenCalledWith(
+        rpc,
+        {
+          currentSlug: "tester10",
+          desiredAccountIds,
+          evictionSlugs: [],
+        },
+        expect.any(Function),
+      );
+      expect(routingActivationMocks.activateAfterPatch).toHaveBeenCalledWith(
+        rpc,
+        expect.stringContaining(".openclaw"),
+        expect.any(Function),
+        {
+          accountIds: desiredAccountIds,
+          baseline: {
+            "tester10-coach": 0,
+            "tester10-proj-orbit": 0,
+          },
+          configNoop: true,
+          required: false,
+          reason: "[import:tester10] account-level Mattermost binding changed",
+          currentSlug: "tester10",
+          evictionSlugs: [],
+        },
+      );
+      expect(routingActivationMocks.activate).toHaveBeenCalledWith(
+        rpc,
+        expect.stringContaining(".openclaw"),
+        expect.any(Function),
+        { restartAccountIds: desiredAccountIds },
+      );
+      expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
+        routingActivationMocks.activate.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it("keeps a configured Builder no-op activation pending when its account restart fails", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      mocks.readActivationManifest.mockResolvedValueOnce({
+        slug: "tester10",
+        appliedFingerprint: "fp-tester10",
+        agentId: "octogee-tester10-coach",
+        accountId: "tester10-coach",
+        agent: { id: "octogee-tester10-coach" },
+        mattermostAccount: { botToken: "coach-pat" },
+        bindings: [],
+        projectAgents: [],
+      });
+      mocks.applyOpenClawActivationManifest.mockResolvedValueOnce({
+        elapsedMs: 42,
+        routingActivationRequired: false,
+        restartExistingAccountIds: [],
+        configNoop: true,
+      });
+      routingActivationMocks.activate.mockRejectedValueOnce(
+        new Error("Mattermost account restart failed"),
+      );
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+        configGet: vi.fn(async () => configSnapshot({})),
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(),
+        rpc,
+        log: vi.fn(),
+        isBuilderGateway: () => true,
+      });
+
+      await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
+        appliedFingerprint: "fp-tester10",
+        verificationPending: "Mattermost account restart failed",
+      });
+
+      expect(routingActivationMocks.mark).toHaveBeenCalledWith(
+        expect.stringContaining(".openclaw"),
+        "[import:tester10] account-level Mattermost binding changed",
+        ["tester10-coach"],
+        { "tester10-coach": 0 },
+      );
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect(rpc.channelsStatus).not.toHaveBeenCalled();
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
   it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-tester10",

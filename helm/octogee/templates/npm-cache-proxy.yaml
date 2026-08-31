@@ -1,0 +1,214 @@
+{{- if .Values.npmCacheProxy.enabled }}
+{{- $api := index .Values "octogee-api" -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.npmCacheProxy.serviceAccountName }}
+  labels:
+    app: octogee-npm-cache-proxy
+    {{- include "octogee.labels" . | nindent 4 }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ required "npmCacheProxy.gcpServiceAccount is required" .Values.npmCacheProxy.gcpServiceAccount | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-npm-cache-proxy
+  labels:
+    app: octogee-npm-cache-proxy
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: octogee-npm-cache-proxy
+  template:
+    metadata:
+      labels:
+        app: octogee-npm-cache-proxy
+    spec:
+      serviceAccountName: {{ .Values.npmCacheProxy.serviceAccountName }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: npm-cache-proxy
+          image: "{{ required "octogee-api.image.repository is required" $api.image.repository }}:{{ required "octogee-api.image.tag is required" $api.image.tag }}@{{ required "octogee-api.image.digest is required" $api.image.digest }}"
+          imagePullPolicy: Always
+          command: [node, dist/octogee-api/src/npm-cache-proxy.js]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.npmCacheProxy.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.npmCacheProxy.port | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OCTOGEE_API_URL
+              value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
+            - name: OCTOGEE_API_SA_TOKEN_PATH
+              value: /var/run/secrets/octogee-api/token
+            - name: NPM_CACHE_UPSTREAM_REGISTRY_URL
+              value: {{ .Values.npmCacheProxy.upstreamRegistryUrl | quote }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.npmCacheProxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: octogee-api-sa-token
+              mountPath: /var/run/secrets/octogee-api
+              readOnly: true
+      volumes:
+        - name: octogee-api-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: octogee-api
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-npm-cache-proxy
+  labels:
+    app: octogee-npm-cache-proxy
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: octogee-npm-cache-proxy
+  ports:
+    - name: http
+      port: {{ .Values.npmCacheProxy.port }}
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-npm-cache-proxy-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-npm-cache-proxy
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-gateway
+              gateway-class: builder
+      ports:
+        - protocol: TCP
+          port: {{ .Values.npmCacheProxy.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-npm-cache-proxy-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-npm-cache-proxy
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ required "networkPolicy.nodeLocalDnsCidr is required" .Values.networkPolicy.nodeLocalDnsCidr }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - protocol: TCP
+          port: 3001
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - protocol: TCP
+          port: 987
+        - protocol: TCP
+          port: 988
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 8080
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
+{{- if .Values.networkPolicy.enforceDefaultDeny }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-api-from-npm-cache-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-api
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-npm-cache-proxy
+      ports:
+        - protocol: TCP
+          port: 3001
+{{- end }}
+{{- end }}

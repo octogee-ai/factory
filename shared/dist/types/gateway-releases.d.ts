@@ -89,7 +89,7 @@ export interface AssignmentDoc {
     updatedByOperationId: string | null;
 }
 export type GatewayRuntimeLifecycle = "provisioning" | "serving" | "failed";
-export type GatewayHeartbeatStatus = "unknown" | "ready" | "unreachable" | "error";
+export type GatewayHeartbeatStatus = "unknown" | "booting" | "ready" | "unreachable" | "error";
 export interface GatewayHelmObservation {
     releaseName: string;
     deploymentName: string;

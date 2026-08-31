@@ -38,6 +38,11 @@ import {
   resolveOwnerModelBrokerGrant,
 } from "../lib/model-broker-limits.js";
 import {
+  agentModelTokenIssueKey,
+  createAgentModelTokenIssueCoordinator,
+} from "../lib/agent-model-token-issue-coordinator.js";
+import { findRunningOutboundMigrationUserByAgentId } from "../lib/agent-model-token-migration-admission.js";
+import {
   configuredBuilderSlugCredentialBootstrapAllowed,
   findAssignedOrInboundMigratingOrConfiguredUserByAgentId,
   findAssignedUserByAgentId,
@@ -556,7 +561,15 @@ function registerByosubUserRoute(router: Router, db: Firestore): void {
   });
 }
 
-function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
+class AgentModelTokenForbiddenError extends Error {}
+
+function registerAgentModelTokenRoute(
+  router: Router,
+  db: Firestore,
+  now: () => number,
+): void {
+  const coordinator = createAgentModelTokenIssueCoordinator({ now });
+  const tokenStore = createFirestoreModelBrokerTokenStore(db);
   router.post("/agent-model-token", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -581,59 +594,87 @@ function registerAgentModelTokenRoute(router: Router, db: Firestore): void {
       return;
     }
 
-    const assigned =
-      await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
-        db,
-        bound.gatewayId,
-        bound.podName,
-        agentId,
-      );
-    if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-    const grant =
-      purpose === "embeddings"
-        ? {
-            limits: {
-              spendWindowUsd: null,
-              spendWeekUsd: null,
-              requestsPerMinute: AGENT_EMBEDDING_REQUESTS_PER_MINUTE,
-            },
-            policy: { freeTier: false, houseFallback: true },
-          }
-        : await resolveOwnerModelBrokerGrant({
-            db,
-            gatewayId: bound.gatewayId,
-            ownerUid: assigned.uid,
-            now: Date.now(),
-            defaults: envDefaultModelBrokerLimits(),
-          });
-    const issued = await createFirestoreModelBrokerTokenStore(db).issueToken({
+    const issueKey = agentModelTokenIssueKey({
       gatewayId: bound.gatewayId,
-      ownerUid: assigned.uid,
+      podName: bound.podName,
+      agentId,
       provider,
       purpose,
-      secretName: agentModelTokenSecretName({
-        gatewayId: bound.gatewayId,
-        ownerUid: assigned.uid,
-        provider,
-        purpose,
-      }),
-      skipPointer: true,
-      ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
-      limits: grant.limits,
-      policy: grant.policy,
-      trace: {
-        source: "shared_agent_model_token",
-        ownerSlug: assignedOwnerSlug(assigned.data),
-        agentId,
-      },
     });
-    if (typeof issued.record.expiresAt !== "number") {
-      throw new Error("agent model token was issued without an expiry");
+    try {
+      const response = await coordinator.issue(issueKey, async () => {
+        const assigned =
+          (await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
+            db,
+            bound.gatewayId,
+            bound.podName,
+            agentId,
+          )) ??
+          (await findRunningOutboundMigrationUserByAgentId(
+            db,
+            bound.gatewayId,
+            agentId,
+          ));
+        if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
+          throw new AgentModelTokenForbiddenError();
+        }
+        const grant =
+          purpose === "embeddings"
+            ? {
+                limits: {
+                  spendWindowUsd: null,
+                  spendWeekUsd: null,
+                  requestsPerMinute: AGENT_EMBEDDING_REQUESTS_PER_MINUTE,
+                },
+                policy: { freeTier: false, houseFallback: true },
+              }
+            : await resolveOwnerModelBrokerGrant({
+                db,
+                gatewayId: bound.gatewayId,
+                ownerUid: assigned.uid,
+                now: now(),
+                defaults: envDefaultModelBrokerLimits(),
+              });
+        const issued = await tokenStore.issueToken({
+          gatewayId: bound.gatewayId,
+          ownerUid: assigned.uid,
+          provider,
+          purpose,
+          secretName: agentModelTokenSecretName({
+            gatewayId: bound.gatewayId,
+            ownerUid: assigned.uid,
+            provider,
+            purpose,
+          }),
+          skipPointer: true,
+          ttlSeconds: AGENT_MODEL_TOKEN_TTL_SECONDS,
+          now: now(),
+          limits: grant.limits,
+          policy: grant.policy,
+          trace: {
+            source: "shared_agent_model_token",
+            ownerSlug: assignedOwnerSlug(assigned.data),
+            agentId,
+          },
+        });
+        if (typeof issued.record.expiresAt !== "number") {
+          throw new Error("agent model token was issued without an expiry");
+        }
+        return {
+          value: issued.token,
+          expiresAt: issued.record.expiresAt,
+          provider,
+          purpose,
+        };
+      });
+      res.json(response);
+    } catch (error) {
+      if (error instanceof AgentModelTokenForbiddenError) {
+        res.status(403).json(FORBIDDEN);
+        return;
+      }
+      throw error;
     }
-    res.json({ value: issued.token, expiresAt: issued.record.expiresAt, provider, purpose });
   });
 }
 
@@ -649,7 +690,7 @@ export function createByokBrokerRoutes(opts: {
   const readCredentialSecret = opts.readSecret ?? readSecret;
 
   registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
-  registerAgentModelTokenRoute(router, db);
+  registerAgentModelTokenRoute(router, db, now);
 
   registerAgentUsageStatusRoute(
     router,

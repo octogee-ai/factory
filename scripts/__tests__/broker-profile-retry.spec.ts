@@ -135,6 +135,59 @@ describe("broker profile retry (level-triggered)", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it("shares one in-flight sweep across overlapping startup and retry callers", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    let releaseApply!: () => void;
+    const applyBlocked = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    apply = vi.fn(async ({ plan }: Parameters<typeof writeAppliedProfiles>[1] extends infer P
+      ? { plan: P }
+      : never) => {
+      await applyBlocked;
+      writeAppliedProfiles(agentsDir, plan);
+      return { mode: "write", changed: true };
+    });
+
+    const startup = sweep();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+    const retryTimer = sweep();
+
+    expect(retryTimer).toBe(startup);
+    expect(apply).toHaveBeenCalledOnce();
+
+    releaseApply();
+    const [startupResult, retryResult] = await Promise.all([startup, retryTimer]);
+
+    expect(startupResult).toBe(retryResult);
+    expect(startupResult).toEqual({ settled: true, deferred: [] });
+    expect(apply).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+
+    const afterSettlement = sweep();
+    expect(afterSettlement).not.toBe(startup);
+    await expect(afterSettlement).resolves.toEqual({ settled: true, deferred: [] });
+  });
+
+  it("clears a failed in-flight sweep so a later caller can retry", async () => {
+    const failed = materializeDeferredBrokerProfiles(() => {
+      throw new Error("log sink unavailable");
+    }, {
+      agentsDir,
+      readConfig: () => {
+        throw new Error("config unavailable");
+      },
+    });
+
+    await expect(failed).rejects.toThrow("log sink unavailable");
+
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    await expect(sweep()).resolves.toEqual({ settled: true, deferred: [] });
+    expect(apply).toHaveBeenCalledOnce();
+  });
+
   it("retries a failed snapshot reload after the profile store has settled", async () => {
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";

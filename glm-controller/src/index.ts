@@ -881,17 +881,19 @@ function isDisposableBuilderGateway(gateway: DurableGateway): boolean {
     gateway.allocation?.kind === "disposable-builder";
 }
 
-// The pod's own self-reported build (heartbeat.version, written by the
-// heartbeat plumbing) is the readiness proof: mark-live only once the runtime
-// is heartbeating the desired release's build. Deployment availability alone
-// would count the old pod during a surge overlap.
+function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
+  return isDisposableBuilderGateway(gateway) && gateway.liveRelease === null;
+}
+
 function runtimeReportsDesiredBuild(
   runtime: GatewayRuntimeDoc | undefined,
   desiredImageTag: string,
+  allowBooting = false,
 ): boolean {
   if (!runtime) return false;
   return (
-    runtime.heartbeat.status === "ready" &&
+    (runtime.heartbeat.status === "ready" ||
+      (allowBooting && runtime.heartbeat.status === "booting")) &&
     gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, desiredImageTag)
   );
 }
@@ -980,9 +982,14 @@ export async function refineGatewayConvergenceAction(input: {
     pendingArtifact,
     helmObserved,
   });
+  const desiredBuildReported = runtimeReportsDesiredBuild(
+    runtime,
+    desiredImage.imageTag,
+    isInitialDisposableBuilderPrelaunch(gateway),
+  );
   if (
     handoff.ready &&
-    runtimeReportsDesiredBuild(runtime, desiredImage.imageTag) &&
+    desiredBuildReported &&
     runtime?.lifecycle !== "serving"
   ) {
     return { kind: "mark-live" };
@@ -993,7 +1000,7 @@ export async function refineGatewayConvergenceAction(input: {
     helm: helmObserved,
     desiredChartFingerprint,
     desiredDeploymentIntentFingerprint,
-    deploymentReady: handoff.ready && runtimeReportsDesiredBuild(runtime, desiredImage.imageTag),
+    deploymentReady: handoff.ready && desiredBuildReported,
   });
 }
 

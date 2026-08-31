@@ -1,0 +1,14 @@
+{
+  "name": "@octogee/builder-toolchain",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Pinned post-readiness developer CLI payload for Builder gateways",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.251",
+    "@openai/codex": "0.151.0"
+  },
+  "allowScripts": {
+    "@anthropic-ai/claude-code@2.1.251": true
+  }
+}

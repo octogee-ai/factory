@@ -29,7 +29,7 @@ const BUILDER_OWNED_TOP_LEVEL = new Set([
   "gateway",
 ]);
 
-describe("infra/gateway/openclaw.builder.template.json — the Builder seed is the shared seed at full power", () => {
+describe("infra/gateway/openclaw.builder.template.json — the Builder seed boots on the slim runtime", () => {
   const shared = read("openclaw.template.json");
   const builder = read("openclaw.builder.template.json");
 
@@ -46,7 +46,7 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed is t
     );
   });
 
-  it("drops host-code fences while enabling the managed browser and terminal", () => {
+  it("drops host-code fences while keeping the unavailable managed browser disabled", () => {
     expect(builder.tools).toEqual({
       profile: shared.tools.profile,
       alsoAllow: [...shared.tools.alsoAllow as string[], "browser"],
@@ -56,7 +56,7 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed is t
       expect(JSON.stringify(builder.tools)).not.toContain(`"${tool}"`);
     }
     expect(builder.browser).toEqual({
-      enabled: true,
+      enabled: false,
       defaultProfile: "openclaw",
       headless: true,
       noSandbox: true,
@@ -71,10 +71,10 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed is t
     expect(builder).not.toHaveProperty("skills");
   });
 
-  it("ships the browser and codex plugins on top of the shared plugin surface", () => {
-    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "browser", "codex"]);
-    expect(builder.plugins.entries.browser).toEqual({ enabled: true });
-    expect(builder.plugins.entries.codex).toEqual({ enabled: true });
+  it("keeps the core plugin surface while leaving browser and Codex payloads out of boot", () => {
+    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "browser"]);
+    expect(builder.plugins.entries.browser).toEqual({ enabled: false });
+    expect(builder.plugins.entries).not.toHaveProperty("codex");
     const { codex: _sharedCodex, browser: _sharedBrowser, ...sharedEntries } = shared.plugins.entries;
     const { codex: _builderCodex, browser: _builderBrowser, ...builderEntries } = builder.plugins.entries;
     expect(builderEntries).toEqual(sharedEntries);

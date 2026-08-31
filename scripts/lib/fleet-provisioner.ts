@@ -95,6 +95,11 @@ import {
   observeDashboardControl,
   probeOpenClawHealth,
 } from "./system-config-runtime-health.js";
+import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import {
+  resetRecoveredCustomerRuntime,
+  type RecoveredCustomerRuntimeResetResult,
+} from "./recovered-customer-runtime-reset.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
 const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
@@ -368,6 +373,14 @@ export interface StartFleetOptions {
   readDesiredFingerprints?: () => Promise<Map<string, string>>;
   /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
   stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
+  readUserSnapshotForRuntimeReset?: (
+    uid: string,
+  ) => Promise<FleetBrokerUserSnapshot | null>;
+  acknowledgeRuntimeReset?: (
+    uid: string,
+    operationId: string,
+    generation: number,
+  ) => Promise<void>;
   /** Trusted-side reconcile error mirror used when the pod has no Firestore. */
   recordReconcileError?: (slug: string, message: string) => Promise<void>;
   clearReconcileError?: (slug: string) => Promise<void>;
@@ -381,6 +394,43 @@ export interface StartFleetOptions {
     reason: string;
     expectedSystemConfigCommit?: string;
   }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+}
+
+export async function consumeRecoveredCustomerRuntimeReset(input: {
+  gatewayId: string;
+  uid: string;
+  slug: string;
+  openclawDir: string;
+  readSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
+  acknowledge: (uid: string, operationId: string, generation: number) => Promise<void>;
+  reset?: typeof resetRecoveredCustomerRuntime;
+  log?: (message: string) => void;
+}): Promise<RecoveredCustomerRuntimeResetResult | null> {
+  const snapshot = await input.readSnapshot(input.uid);
+  if (!snapshot) throw new Error(`[runtime-reset:${input.slug}] assigned user snapshot unavailable`);
+  const marker = snapshot.runtimeReset;
+  if (!marker) return null;
+  const exact = [
+    snapshot.uid === input.uid,
+    snapshot.slug === input.slug,
+    snapshot.gatewayId === input.gatewayId,
+    marker.uid === input.uid,
+    marker.slug === input.slug,
+    marker.targetGatewayId === input.gatewayId,
+  ].every(Boolean);
+  if (!exact) throw new Error(`[runtime-reset:${input.slug}] recovery marker identity fence changed`);
+  const result = (input.reset ?? resetRecoveredCustomerRuntime)({
+    openclawDir: input.openclawDir,
+    uid: input.uid,
+    slug: input.slug,
+    agentIds: snapshot.agentIds,
+    log: input.log,
+  });
+  await input.acknowledge(input.uid, marker.operationId, marker.generation);
+  input.log?.(
+    `[runtime-reset:${input.slug}] acknowledged ${marker.operationId} generation ${marker.generation}`,
+  );
+  return result;
 }
 
 export function registerAgentImportDoctor(
@@ -705,6 +755,7 @@ const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
 let lastDeferredSignature: string | null = null;
 let brokerProfileSnapshotReloadPending = false;
 let lastBrokerProfileSnapshotReloadError: string | null = null;
+let brokerProfileSweepInFlight: Promise<BrokerProfileReadiness> | null = null;
 
 /** Test seam only — the memo above is module state, so a spec exercising the
  *  quiet-once-settled behaviour must be able to start from a known point. */
@@ -712,6 +763,7 @@ export function _resetBrokerProfileLogStateForTests(): void {
   lastDeferredSignature = null;
   brokerProfileSnapshotReloadPending = false;
   lastBrokerProfileSnapshotReloadError = null;
+  brokerProfileSweepInFlight = null;
 }
 
 type BrokerProfileSweep = Awaited<ReturnType<typeof materializeBrokerProfilesForAgents>>;
@@ -798,7 +850,7 @@ function reportBrokerProfileSweep(log: (msg: string) => void, sweep: BrokerProfi
 
 /** Hand openclaw the broker profiles earlier passes could only defer. Idempotent
  *  — a profile already applied spawns nothing, so this is safe on every tick. */
-export async function materializeDeferredBrokerProfiles(
+async function runDeferredBrokerProfileSweep(
   log: (msg: string) => void,
   deps: {
     agentsDir?: string;
@@ -830,6 +882,23 @@ export async function materializeDeferredBrokerProfiles(
     deferred: sweep.deferred,
     ...(reason ? { reason } : {}),
   };
+}
+
+export function materializeDeferredBrokerProfiles(
+  log: (msg: string) => void,
+  deps: {
+    agentsDir?: string;
+    readConfig?: () => unknown;
+    secretsApply?: BrokerProfileSweepOptions["secretsApply"];
+    secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
+  } = {},
+): Promise<BrokerProfileReadiness> {
+  if (brokerProfileSweepInFlight) return brokerProfileSweepInFlight;
+  const shared = runDeferredBrokerProfileSweep(log, deps).finally(() => {
+    if (brokerProfileSweepInFlight === shared) brokerProfileSweepInFlight = null;
+  });
+  brokerProfileSweepInFlight = shared;
+  return shared;
 }
 
 export async function waitForBrokerProfilesSettled(input: {
@@ -1337,6 +1406,41 @@ function createReconcileConvergenceHooks(input: {
   return { recordApplied, rememberRetry, forgetRetry };
 }
 
+function createDesiredRosterReader(input: {
+  opts: StartFleetOptions;
+  fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
+  desiredFingerprints: Map<string, string>;
+  setEnsureFingerprint: (fingerprint: string) => void;
+}): (() => Promise<string[]>) | null {
+  const fingerprintSource = input.fingerprintSource;
+  if (fingerprintSource) {
+    return async () => {
+      const next = await fingerprintSource();
+      input.desiredFingerprints.clear();
+      for (const [slug, fingerprint] of next) {
+        input.desiredFingerprints.set(slug, fingerprint);
+      }
+      input.setEnsureFingerprint(desiredEnsureLaneFingerprint(next));
+      return [...next.keys()];
+    };
+  }
+  const readDesiredSlugs = input.opts.readDesiredSlugs;
+  if (readDesiredSlugs) {
+    return async () => {
+      const slugs = await readDesiredSlugs();
+      input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
+      return slugs;
+    };
+  }
+  const db = input.opts.db;
+  if (!db) return null;
+  return async () => {
+    const slugs = await readAssignedSlugsForGateway(db, input.opts.gatewayId);
+    input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
+    return slugs;
+  };
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -1408,28 +1512,14 @@ function startMaybeReconcileLoop(params: {
     };
   }
 
-  let readDesired: (() => Promise<string[]>) | null = null;
-  if (fingerprintSource) {
-    readDesired = async () => {
-      const next = await fingerprintSource();
-      desiredFp.clear();
-      for (const [slug, fp] of next) desiredFp.set(slug, fp);
-      desiredEnsureFingerprint = desiredEnsureLaneFingerprint(next);
-      return [...next.keys()];
-    };
-  } else if (opts.readDesiredSlugs) {
-    readDesired = async () => {
-      const slugs = await opts.readDesiredSlugs!();
-      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
-      return slugs;
-    };
-  } else if (opts.db) {
-    readDesired = async () => {
-      const slugs = await readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
-      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
-      return slugs;
-    };
-  }
+  const readDesired = createDesiredRosterReader({
+    opts,
+    fingerprintSource,
+    desiredFingerprints: desiredFp,
+    setEnsureFingerprint: (fingerprint) => {
+      desiredEnsureFingerprint = fingerprint;
+    },
+  });
   if (!provision || !readDesired) return () => undefined;
 
   const getContentStale = fingerprintSource
@@ -1487,6 +1577,22 @@ function startMaybeReconcileLoop(params: {
       work: async (onWorkSettled) => {
         if (canReconcile && !(await canReconcile())) return "noop";
         wrappedAdapter.cancelPendingEviction?.(slug);
+        const uid = await wrappedAdapter.uidForSlug(slug);
+        if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
+        if (opts.readUserSnapshotForRuntimeReset || opts.acknowledgeRuntimeReset) {
+          if (!opts.readUserSnapshotForRuntimeReset || !opts.acknowledgeRuntimeReset) {
+            throw new Error("recovered runtime reset requires both snapshot read and acknowledgement");
+          }
+          await consumeRecoveredCustomerRuntimeReset({
+            gatewayId: opts.gatewayId,
+            uid,
+            slug,
+            openclawDir: opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw"),
+            readSnapshot: opts.readUserSnapshotForRuntimeReset,
+            acknowledge: opts.acknowledgeRuntimeReset,
+            log: opts.log,
+          });
+        }
         if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
           return ensureCustomerCheckoutsOnly(
             wrappedAdapter,
@@ -1499,8 +1605,6 @@ function startMaybeReconcileLoop(params: {
             convergenceHooks,
           );
         }
-        const uid = await wrappedAdapter.uidForSlug(slug);
-        if (!uid) throw new Error(`no user doc for assigned slug ${slug}`);
         const readCurrentEvictionBatch = createCurrentEvictionBatchReader({
           readDesired,
           pendingEvictions,
@@ -1625,6 +1729,23 @@ function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null
       adapter.configuredBuilderOverlayPresent?.(slug) === true
     ? slug
     : null;
+}
+
+export function createConfiguredBuilderAssignmentMatcher(
+  opts: Pick<
+    StartFleetOptions,
+    "readDesiredFingerprints" | "readDesiredSlugs"
+  >,
+): (slug: string) => Promise<boolean> {
+  const readDesiredFingerprints = opts.readDesiredFingerprints;
+  if (readDesiredFingerprints) {
+    return async (slug) => (await readDesiredFingerprints()).has(slug);
+  }
+  const readDesiredSlugs = opts.readDesiredSlugs;
+  if (readDesiredSlugs) {
+    return async (slug) => (await readDesiredSlugs()).includes(slug);
+  }
+  return async () => false;
 }
 
 export function createConfiguredBuilderReconcileAdmission(input: {
@@ -1948,6 +2069,7 @@ async function unreserveConfiguredBuilderTarget(input: {
 async function selfReleaseConfiguredBuilder(input: {
   adapter: CustomerLifecycleAdapter;
   attachConfigured: ConfiguredBuilderAttach;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
   log: (message: string) => void;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   provisioning: ProvisioningCounter;
@@ -1959,6 +2081,7 @@ async function selfReleaseConfiguredBuilder(input: {
   const {
     adapter,
     attachConfigured,
+    configuredBuilderAssigned,
     log,
     processGate,
     provisioning,
@@ -1981,6 +2104,12 @@ async function selfReleaseConfiguredBuilder(input: {
       "refusing self-release until its controller completes or rolls back",
     );
   }
+  const slug = configuredBuilderSlug(adapter);
+  if (!slug || !(await configuredBuilderAssigned(slug))) {
+    throw new Error(
+      `configured Builder assignment does not match this gateway: ${slug ?? "unknown"}`,
+    );
+  }
   await waitForActiveProvisioningDrain();
   try {
     await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
@@ -1997,6 +2126,18 @@ async function selfReleaseConfiguredBuilder(input: {
   }
 }
 
+async function configuredBuilderSelfReleaseReserved(input: {
+  adapter: CustomerLifecycleAdapter;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+}): Promise<boolean> {
+  if (!input.processGate) return false;
+  const state = await input.processGate.status();
+  if (state.role !== "normal") return true;
+  const slug = configuredBuilderSlug(input.adapter);
+  return !slug || !(await input.configuredBuilderAssigned(slug));
+}
+
 export function createBuilderSurgeGateWiring(input: {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
@@ -2007,6 +2148,7 @@ export function createBuilderSurgeGateWiring(input: {
   waitForActiveProvisioningDrain?: () => Promise<void>;
   reconcileImportedWorkspace?: (slug: string) => void;
   attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
+  configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
 }): BuilderSurgeGateWiring {
   const {
     adapter,
@@ -2018,6 +2160,7 @@ export function createBuilderSurgeGateWiring(input: {
     waitForActiveProvisioningDrain = async () => undefined,
     reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
+    configuredBuilderAssigned = async () => false,
   } = input;
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
   const reholdAfterReleaseFailure = async (
@@ -2175,6 +2318,7 @@ export function createBuilderSurgeGateWiring(input: {
       return selfReleaseConfiguredBuilder({
         adapter,
         attachConfigured,
+        configuredBuilderAssigned,
         log,
         processGate,
         provisioning,
@@ -2189,10 +2333,9 @@ export function createBuilderSurgeGateWiring(input: {
       if (!processGate) return true;
       return (await processGate.status()).mode === "permitted";
     },
-    async selfReleaseReserved() {
-      if (!processGate) return false;
-      return (await processGate.status()).role !== "normal";
-    },
+    selfReleaseReserved: () => configuredBuilderSelfReleaseReserved({
+      adapter, configuredBuilderAssigned, processGate,
+    }),
   };
 }
 
@@ -2413,6 +2556,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     log: opts.log,
     provisioning: runtime,
     waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
+    configuredBuilderAssigned: createConfiguredBuilderAssignmentMatcher(opts),
   });
   const migrationDeps = {
     publicKey: opts.publicKey,

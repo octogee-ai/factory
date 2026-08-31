@@ -35,6 +35,9 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string): boolea
   if (bound.actor === "llm-broker") {
     return path === "/internal/product-analytics/events";
   }
+  if (bound.actor === "npm-cache-proxy") {
+    return path === "/internal/fleet/npm-cache-authorize";
+  }
   return PLATFORM_INTERNAL_ROUTES.has(path);
 }
 

@@ -1169,6 +1169,9 @@ async function settleOrGateTarget(
   if (target.ready) {
     return settleReleasedTarget(deps, input, { source, targetHealth, ownedBy, observedPodUids });
   }
+  if (await disposableBuilderPrelaunchReserved(deps, input, source, targetHealth)) {
+    return { ready: true };
+  }
   // A released marker beside a held prelaunch gate is rollback residue: the
   // release landed while the controller rolled the handoff back. The gate owns
   // process start, so the retry simply runs the handoff again.
@@ -1191,6 +1194,27 @@ function hasLegacyFleetSignatureCapability(
 ): boolean {
   return targetHealth.fleetSignatureCapability === "legacy" ||
     sourceHealth?.fleetSignatureCapability === "legacy";
+}
+
+async function disposableBuilderPrelaunchReserved(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  source: SurgeSourceSelection,
+  targetHealth: SurgePodHealth,
+): Promise<boolean> {
+  if (
+    input.disposableBuilderGateway !== true ||
+    input.requiresCustomerMigration ||
+    input.supersedingImageTag !== undefined ||
+    source.kind !== "missing" ||
+    targetHealth.status !== "booting" ||
+    targetHealth.handoffReleased ||
+    targetHealth.prelaunchState !== "held" ||
+    targetHealth.mountedCustomers.length !== 0
+  ) {
+    return false;
+  }
+  return (await deps.readAssignments(input.gatewayId)).length === 0;
 }
 
 // Handing customers onto pods a queued rollout is about to replace buys nothing.

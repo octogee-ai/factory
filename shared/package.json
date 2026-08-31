@@ -86,6 +86,10 @@
       "types": "./dist/types/device-identity.d.ts",
       "default": "./dist/types/device-identity.js"
     },
+    "./types/developer-toolchain": {
+      "types": "./dist/types/developer-toolchain.d.ts",
+      "default": "./dist/types/developer-toolchain.js"
+    },
     "./types/display-names": {
       "types": "./dist/types/display-names.d.ts",
       "default": "./dist/types/display-names.js"

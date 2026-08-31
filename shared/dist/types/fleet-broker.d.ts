@@ -96,6 +96,23 @@ export interface FleetBrokerBlobSignedUrl {
     expiresAt: string;
     requiredHeaders?: Record<string, string>;
 }
+export interface FleetBrokerNpmRegistryCredentials {
+    registryUrl: string;
+    token: string;
+    expiresAt: string;
+}
+export interface FleetBrokerCustomerRuntimeReset {
+    status: "pending";
+    uid: string;
+    slug: string;
+    operationId: string;
+    sourceGatewayId: string;
+    targetGatewayId: string;
+    generation: number;
+    disposableLeaseId: string;
+    disposableLeaseGeneration: number;
+    requestedAt: number;
+}
 export declare const BUILDER_RUNTIME_STATE_RECOVERY_TIERS: readonly ["minute", "hour", "day"];
 export type BuilderRuntimeStateRecoveryTier = (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];
 export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
@@ -129,6 +146,7 @@ export interface FleetBrokerUserSnapshot {
     gatewayId: string;
     status: FleetBrokerProvisioningStatus;
     agentIds: string[];
+    runtimeReset?: FleetBrokerCustomerRuntimeReset;
     repoUrl: string;
     mattermostUserId: string | null;
     customerMmUserId: string | null;

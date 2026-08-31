@@ -1231,9 +1231,13 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
+  const accountIds = [
+    safeManifest.accountId,
+    ...safeManifest.projectAgents.map((agent) => agent.accountId),
+  ];
   const routingActivationBaseline = await captureMattermostRoutingActivationBaseline(
     ctx.rpc,
-    [safeManifest.accountId, ...safeManifest.projectAgents.map((agent) => agent.accountId)],
+    accountIds,
   );
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
@@ -1263,6 +1267,9 @@ async function activateImportedCustomer(
     slug,
     patch,
     signal: opts?.signal,
+    configuredBuilderRouting: isConfiguredGatewayBuilder(slug)
+      ? { accountIds, baseline: routingActivationBaseline }
+      : undefined,
   });
   return { appliedFingerprint: manifest.appliedFingerprint, verificationPending };
 }
@@ -1275,15 +1282,40 @@ async function settleActivatedImport(
   ctx: BrokerCtx,
   input: {
     slug: string;
-    patch: { routingActivationRequired: boolean; restartExistingAccountIds?: string[] };
+    patch: {
+      routingActivationRequired: boolean;
+      restartExistingAccountIds?: string[];
+      configNoop?: boolean;
+    };
     signal?: AbortSignal;
+    configuredBuilderRouting?: {
+      accountIds: readonly string[];
+      baseline: Readonly<Record<string, number>>;
+    };
   },
 ): Promise<string | undefined> {
-  const { slug, patch, signal } = input;
+  const { slug, patch, signal, configuredBuilderRouting } = input;
   try {
     await waitForAppliedConfigRevision(ctx.rpc, slug, { signal });
     await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
-    if (patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)) {
+    if (configuredBuilderRouting && patch.configNoop === true) {
+      await activateMattermostRoutingAfterConfigPatch(
+        ctx.rpc,
+        OPENCLAW_DIR,
+        ctx.log,
+        {
+          accountIds: configuredBuilderRouting.accountIds,
+          baseline: configuredBuilderRouting.baseline,
+          configNoop: true,
+          required: patch.routingActivationRequired,
+          reason: `[import:${slug}] account-level Mattermost binding changed`,
+          currentSlug: slug,
+          evictionSlugs: [],
+        },
+      );
+    } else if (
+      patch.routingActivationRequired || mattermostRoutingActivationPending(OPENCLAW_DIR)
+    ) {
       await activatePendingMattermostRouting(
         ctx.rpc,
         OPENCLAW_DIR,

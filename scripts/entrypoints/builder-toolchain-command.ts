@@ -1,0 +1,52 @@
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
+
+function waitForChild(child: ChildProcess, command: string): Promise<number> {
+  return new Promise((resolve) => {
+    child.once("error", () => {
+      console.error(`${command} is unavailable on this Builder (toolchain-command-start-failed).`);
+      resolve(69);
+    });
+    child.once("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
+}
+
+export async function runBuilderToolchainCommand(
+  argv: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  const [command, ...args] = argv;
+  const home = env.HOME?.trim() || "/home/node";
+  const resolved = await resolveToolchainCommand({
+    root: path.join(home, ".octogee", "toolchains"),
+    command: command ?? "",
+  });
+  if (resolved.kind !== "ready" || !resolved.executable) {
+    console.error(resolved.message);
+    return resolved.exitCode;
+  }
+  if (command === "claude") {
+    const stamper = env.OCTOGEE_CLAUDE_FIRST_RUN_STAMPER
+      ?? "/octogee/infra/gateway/stamp-claude-first-run.mjs";
+    spawnSync(process.execPath, [stamper], {
+      stdio: "ignore",
+      env: { ...env, CLAUDE_BIN: resolved.executable },
+    });
+  }
+  const child = spawn(resolved.executable, args, { stdio: "inherit", env });
+  const forwardTerm = (): void => { child.kill("SIGTERM"); };
+  const forwardInt = (): void => { child.kill("SIGINT"); };
+  process.once("SIGTERM", forwardTerm);
+  process.once("SIGINT", forwardInt);
+  const code = await waitForChild(child, command ?? "tool");
+  process.removeListener("SIGTERM", forwardTerm);
+  process.removeListener("SIGINT", forwardInt);
+  return code;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = await runBuilderToolchainCommand();
+}

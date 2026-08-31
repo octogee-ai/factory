@@ -478,6 +478,7 @@ export async function applyOpenClawActivationManifest(
   elapsedMs: number;
   routingActivationRequired: boolean;
   restartExistingAccountIds: string[];
+  configNoop: boolean;
 }> {
   const authInheritanceAnchor = opts.authInheritanceAnchor;
   const reconcileAgent = opts.gatewayClass === "builder"
@@ -499,7 +500,7 @@ export async function applyOpenClawActivationManifest(
   const startedAt = Date.now();
   let routingActivationRequired = false;
   let restartExistingAccountIds: string[] = [];
-  await applyConfigPatch(
+  const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
         const cfg = current as {
@@ -602,5 +603,6 @@ export async function applyOpenClawActivationManifest(
     elapsedMs: Date.now() - startedAt,
     routingActivationRequired,
     restartExistingAccountIds,
+    configNoop: configPatch.noop === true,
   };
 }

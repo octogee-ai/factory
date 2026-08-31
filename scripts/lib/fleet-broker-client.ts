@@ -6,6 +6,7 @@ import type {
   FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
+  FleetBrokerNpmRegistryCredentials,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
@@ -14,6 +15,7 @@ import type {
 import { internalFetch } from "./internal-fetch.js";
 import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
 import type { SystemConfigObservedStatus } from "./system-config-status.js";
+import type { DeveloperToolchainStatus } from "../../shared/types/developer-toolchain.js";
 
 function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
@@ -25,6 +27,7 @@ async function postJson<T>(
   path: string,
   body: unknown,
   headers: Record<string, string> = {},
+  options: { redactErrorBody?: boolean } = {},
 ): Promise<T> {
   const resp = await internalFetch(`${baseUrl()}${path}`, {
     method: "POST",
@@ -32,16 +35,23 @@ async function postJson<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
+    if (options.redactErrorBody) {
+      throw new Error(`fleet-broker POST ${path} → ${resp.status}`);
+    }
     const text = (await resp.text().catch(() => "")).slice(0, 300);
     throw new Error(`fleet-broker POST ${path} → ${resp.status} ${text}`);
   }
   return (await resp.json()) as T;
 }
 
-async function postNoContent(path: string, body: unknown): Promise<void> {
+async function postNoContent(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<void> {
   const resp = await internalFetch(`${baseUrl()}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -53,6 +63,7 @@ async function postNoContent(path: string, body: unknown): Promise<void> {
 export interface FleetBrokerClient {
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
+  npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
   uidForSlug(slug: string): Promise<string | null>;
   githubTokenForSync(uid: string): Promise<string | null>;
   userSnapshot(uid: string): Promise<FleetBrokerUserSnapshot | null>;
@@ -61,6 +72,7 @@ export interface FleetBrokerClient {
     uid: string,
     status: Exclude<FleetBrokerProvisioningStatus, "">,
   ): Promise<void>;
+  setToolchainStatus(uid: string, status: DeveloperToolchainStatus): Promise<void>;
   setRepoUrl(uid: string, repoUrl: string): Promise<void>;
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
@@ -68,6 +80,7 @@ export interface FleetBrokerClient {
   setGreetingResult(uid: string, result: FleetBrokerGreetingResult): Promise<void>;
   setAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
+  acknowledgeRuntimeReset(uid: string, operationId: string, generation: number): Promise<void>;
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
   notifySignup(uid: string): Promise<void>;
@@ -119,6 +132,57 @@ export interface FleetBrokerClientOptions {
   gatewayCredentialHeaders?: () => Promise<Record<string, string>>;
 }
 
+function npmRegistryCredentialClient(
+  gatewayId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<FleetBrokerClient, "npmRegistryCredentials"> {
+  return {
+    async npmRegistryCredentials(slug) {
+      return postJson<FleetBrokerNpmRegistryCredentials>(
+        "/internal/fleet/npm-registry-credentials",
+        { gatewayId, slug },
+        await gatewayCredentialHeaders(),
+        { redactErrorBody: true },
+      );
+    },
+  };
+}
+
+function builderRuntimeStateClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<
+  FleetBrokerClient,
+  | "builderRuntimeStateDownloadUrl"
+  | "builderRuntimeStateSnapshotUrls"
+  | "builderRuntimeStatePrune"
+> {
+  return {
+    async builderRuntimeStateDownloadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/builder-runtime-state/download-url",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStateSnapshotUrls(input) {
+      return postJson<FleetBrokerBuilderRuntimeStateSnapshotUrls>(
+        "/internal/fleet/builder-runtime-state/snapshot-urls",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStatePrune(input) {
+      return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
+        "/internal/fleet/builder-runtime-state/prune",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+  };
+}
+
 // The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
 // stable pod per gateway); the broker cross-checks it against the pod name it
 // authenticated (revisionIdFromGatewayPodName).
@@ -130,6 +194,7 @@ export function createFleetBrokerClient(
   const gatewayCredentialHeaders = opts.gatewayCredentialHeaders
     ?? defaultGatewayCredentialHeaders;
   return {
+    ...npmRegistryCredentialClient(gatewayId, gatewayCredentialHeaders),
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",
@@ -208,6 +273,13 @@ export function createFleetBrokerClient(
         status,
       });
     },
+    setToolchainStatus(uid, status) {
+      return postNoContent("/internal/fleet/set-toolchain-status", {
+        gatewayId,
+        uid,
+        status,
+      });
+    },
     setRepoUrl(uid, repoUrl) {
       return postNoContent("/internal/fleet/set-repo-url", { gatewayId, uid, repoUrl });
     },
@@ -241,6 +313,13 @@ export function createFleetBrokerClient(
     },
     setMounted(uid, mounted) {
       return postNoContent("/internal/fleet/mounted", { gatewayId, uid, mounted });
+    },
+    async acknowledgeRuntimeReset(uid, operationId, generation) {
+      return postNoContent(
+        "/internal/fleet/runtime-reset-ack",
+        { gatewayId, uid, operationId, generation },
+        await gatewayCredentialHeaders(),
+      );
     },
     recordReconcileError(slug, message) {
       return postNoContent("/internal/fleet/reconcile-error", { gatewayId, slug, message });
@@ -288,26 +367,6 @@ export function createFleetBrokerClient(
         { gatewayId, ...input },
       );
     },
-    async builderRuntimeStateDownloadUrl(input) {
-      return postJson<FleetBrokerBlobSignedUrl>(
-        "/internal/fleet/builder-runtime-state/download-url",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
-    async builderRuntimeStateSnapshotUrls(input) {
-      return postJson<FleetBrokerBuilderRuntimeStateSnapshotUrls>(
-        "/internal/fleet/builder-runtime-state/snapshot-urls",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
-    async builderRuntimeStatePrune(input) {
-      return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
-        "/internal/fleet/builder-runtime-state/prune",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
+    ...builderRuntimeStateClient(gatewayId, revisionId, gatewayCredentialHeaders),
   };
 }

@@ -417,6 +417,62 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID].models[0].id).toBe("gpt-5.4-mini");
   });
 
+  it("hands a large roster to openclaw in one bounded plan with one target per credential identity", async () => {
+    const agentIds = Array.from({ length: 40 }, (_, index) => `octogee-user${index}-coach`);
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
+
+    const result = await materializeBrokerProfilesForAgents(
+      [...agentIds, agentIds[0], agentIds[1]],
+      {
+        agentsDir,
+        openRouter,
+        openAi,
+        secretsApply,
+      },
+    );
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(plans).toHaveLength(1);
+    const targets = (plans[0] as {
+      targets: Array<{ agentId: string; ref: { id: string } }>;
+    }).targets;
+    expect(targets).toHaveLength(agentIds.length * 3);
+    expect(new Set(targets.map((target) => `${target.agentId}:${target.ref.id}`))).toHaveLength(
+      targets.length,
+    );
+    expect(result).toEqual({ materialized: agentIds.length, deferred: [] });
+  });
+
+  it("defers every affected agent when the batched apply fails unexpectedly", async () => {
+    const agentIds = ["octogee-alice-coach", "octogee-bob-coach"];
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const logs: string[] = [];
+    const secretsApply = {
+      rpc: {
+        secretsApply: vi.fn(async () => {
+          throw new Error("apply bug");
+        }),
+      },
+    };
+
+    const result = await materializeBrokerProfilesForAgents(agentIds, {
+      agentsDir,
+      openRouter,
+      secretsApply,
+      logFn: (message) => logs.push(message),
+    });
+
+    expect(result).toEqual({
+      materialized: agentIds.length,
+      deferred: agentIds,
+      deferralReason: "apply bug",
+    });
+    expect(logs).toContain(
+      "⚠ [agent-model-token] model-ready secrets apply failed: apply bug",
+    );
+  });
+
   it("never writes the auth-profile store itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
     const secretsApply = {

@@ -1,5 +1,5 @@
 ARG OPENCLAW_BASE_IMAGE=openclaw:local
-FROM ${OPENCLAW_BASE_IMAGE}
+FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -90,8 +90,6 @@ RUN npx tsc -p tsconfig.json --noEmit 2>&1; \
 RUN node ops/verify-native-modules.mjs
 
 # ── Workspace templates ─────────────────────────────────────────────────────
-COPY --chown=node:node templates/ /octogee/templates/
-
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ and projected into ~/.openclaw/extensions/.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
@@ -110,8 +108,7 @@ RUN node /octogee/infra/gateway/build-extensions.mjs \
 # node_modules: esbuild bundles with `--packages=external`, so `typebox`
 # resolves at load time or not at all.
 WORKDIR /octogee/extensions
-RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions \
-    && chown -R node:node /octogee/extensions
+RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions
 
 # ── Extension dependency gate ───────────────────────────────────────────────
 # A plugin whose imports do not resolve is skipped at boot — the gateway comes
@@ -119,6 +116,26 @@ RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions \
 # names the missing module. Load each declared dependency from its extension
 # directory here, where a failure can still stop the image from being pushed.
 RUN node /octogee/infra/gateway/verify-extension-deps.mjs /octogee/extensions
+
+# Keep full devDependency installs, compiler inputs, npm caches, and deleted
+# extension TypeScript sources out of the deliverable image. COPY transfers the
+# verified post-prune filesystem state without the builder stage's lower layers.
+FROM ${OPENCLAW_BASE_IMAGE} AS gateway-runtime
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+USER root
+
+COPY --from=gateway-build --chown=node:node /octogee/core /octogee/core
+COPY --from=gateway-build --chown=node:node /octogee/scripts /octogee/scripts
+COPY --from=gateway-build --chown=node:node /octogee/shared /octogee/shared
+COPY --from=gateway-build --chown=node:node /octogee/extensions /octogee/extensions
+RUN chown root:root /octogee/scripts \
+    && chmod 755 /octogee/scripts \
+    && chmod 500 /octogee/scripts/secret-resolver.mjs
+
+# Workspace templates are runtime data and bypass the build stage.
+COPY --chown=node:node templates/ /octogee/templates/
 
 # ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes
@@ -137,7 +154,27 @@ COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/inf
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/octogee /usr/local/bin/octogee
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee
+COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
+COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
+ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
+ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
+    && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
+    && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
+      false) \
+        test -x /usr/local/bin/claude \
+        && test -x /usr/local/bin/codex \
+        ;; \
+      true) \
+        rm -f /usr/local/bin/claude /usr/local/bin/codex \
+        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
+        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex \
+        ;; \
+      *) \
+        echo "ENABLE_BUILDER_TOOLCHAIN_WRAPPER must be true or false" >&2 \
+        && exit 2 \
+        ;; \
+    esac
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc
@@ -151,6 +188,7 @@ ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation
 ENV OPENCLAW_OFFLINE=1
+ENV CLAUDE_BIN=/usr/local/bin/claude
 
 # Build SHA — injected by Cloud Build via --build-arg
 ARG BUILD_SHA=unknown

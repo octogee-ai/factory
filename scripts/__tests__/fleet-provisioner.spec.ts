@@ -11,8 +11,10 @@ import {
   cloneRetryDelayMs,
   cloneRetryReady,
   customerEnsureRetryReady,
+  consumeRecoveredCustomerRuntimeReset,
   dashboardBridgeReady,
   cancelRemovedEviction,
+  createConfiguredBuilderAssignmentMatcher,
   createConfiguredBuilderReconcileAdmission,
   createBuilderSurgeGateWiring,
   desiredEnsureLaneFingerprint,
@@ -42,7 +44,11 @@ import {
   addCustomerToGateway,
   type CustomerLifecycleAdapter,
 } from "../lib/customer-lifecycle.js";
-import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
+import type {
+  SurgeOpenClawProcessGateState,
+  SurgeOpenClawProcessRequest,
+  SurgeOpenClawProcessSupervisorClient,
+} from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
 import { startReconcileLoop } from "../lib/reconcile-loop.js";
 import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
@@ -70,6 +76,106 @@ function mkDb(rows: Array<Record<string, unknown>>): Firestore {
     collection: vi.fn(() => query),
   } as unknown as Firestore;
 }
+
+function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    uid: "uid-alice",
+    slug: "alice",
+    gatewayId: "shared-a",
+    agentIds: ["octogee-alice-coach"],
+    runtimeReset: {
+      status: "pending",
+      uid: "uid-alice",
+      slug: "alice",
+      operationId: "recover-alice-7",
+      sourceGatewayId: "alice-builder",
+      targetGatewayId: "shared-a",
+      generation: 8,
+      disposableLeaseId: "lease-alice",
+      disposableLeaseGeneration: 2,
+      requestedAt: 1_000,
+    },
+    ...overrides,
+  } as never;
+}
+
+describe("recovered customer runtime reset — mount admission", () => {
+  it("resets before acknowledging the exact pending marker", async () => {
+    const events: string[] = [];
+    const reset = vi.fn(() => {
+      events.push("reset");
+      return {
+        removedAgentRegistrations: ["octogee-alice-coach"],
+        removedAgentStores: ["octogee-alice-coach"],
+        clearedWorkspaceAttestations: [],
+      };
+    });
+    const acknowledge = vi.fn(async () => {
+      events.push("ack");
+    });
+
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset,
+    })).resolves.toMatchObject({ removedAgentStores: ["octogee-alice-coach"] });
+
+    expect(events).toEqual(["reset", "ack"]);
+    expect(acknowledge).toHaveBeenCalledWith("uid-alice", "recover-alice-7", 8);
+  });
+
+  it("does nothing on an ordinary add without a recovery marker", async () => {
+    const reset = vi.fn();
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot({ runtimeReset: undefined }),
+      acknowledge,
+      reset,
+    })).resolves.toBeNull();
+    expect(reset).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and leaves acknowledgement pending when reset fails", async () => {
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-a",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset: () => {
+        throw new Error("sqlite reset failed");
+      },
+    })).rejects.toThrow(/sqlite reset failed/u);
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed target identity before touching local state", async () => {
+    const reset = vi.fn();
+    const acknowledge = vi.fn();
+    await expect(consumeRecoveredCustomerRuntimeReset({
+      gatewayId: "shared-b",
+      uid: "uid-alice",
+      slug: "alice",
+      openclawDir: "/tmp/openclaw-test",
+      readSnapshot: async () => recoveredSnapshot(),
+      acknowledge,
+      reset,
+    })).rejects.toThrow(/identity fence changed/u);
+    expect(reset).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+});
 
 describe("settleConvergence — the applied-fingerprint gate", () => {
   const hooks = () => ({
@@ -587,6 +693,143 @@ function configuredBuilderLifecycleAdapter(input: {
 }
 
 describe("configured Builder surge release", () => {
+  it("matches normal self-release against the authoritative desired roster", async () => {
+    const readDesiredFingerprints = vi.fn(async () => new Map([
+      ["ceckert-test", "fingerprint"],
+    ]));
+    const matches = createConfiguredBuilderAssignmentMatcher({
+      readDesiredFingerprints,
+    });
+
+    await expect(matches("ceckert-test")).resolves.toBe(true);
+    await expect(matches("other-builder")).resolves.toBe(false);
+    expect(readDesiredFingerprints).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an unassigned prelaunch empty until canonical migration reserves it", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      let mounted = false;
+      const events: string[] = [];
+      const adapter = {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+        configuredBuilderOverlayPresent: () => true,
+        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
+        customerMountMarked: () => mounted,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+      } as unknown as CustomerLifecycleAdapter;
+      let gateState: SurgeOpenClawProcessGateState = {
+        version: 1,
+        podUid: "target-pod",
+        role: "normal",
+        mode: "held",
+        phase: "held",
+      };
+      const processGate = {
+        status: vi.fn(async () => gateState),
+        hydrate: vi.fn(async (request: SurgeOpenClawProcessRequest) => {
+          events.push("reserve");
+          gateState = {
+            version: 1,
+            podUid: "target-pod",
+            role: "target",
+            mode: "held",
+            phase: "held",
+            ...request,
+          };
+          return gateState;
+        }),
+        claimTargetCompletion: vi.fn(async () => {
+          events.push("claim");
+          gateState = { ...gateState, phase: "completing" } as SurgeOpenClawProcessGateState;
+          return gateState;
+        }),
+        permit: vi.fn(async () => {
+          events.push("permit");
+          gateState = {
+            ...gateState,
+            mode: "permitted",
+            phase: "running",
+          } as SurgeOpenClawProcessGateState;
+          return gateState;
+        }),
+        releaseTarget: vi.fn(async () => {
+          events.push("release-target");
+          gateState = {
+            version: 1 as const,
+            podUid: "target-pod",
+            role: "normal" as const,
+            mode: "permitted" as const,
+            phase: "running" as const,
+          };
+          return gateState;
+        }),
+        permitNormal: vi.fn(),
+        holdNormal: vi.fn(),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+        events.push("attach");
+        mounted = true;
+        return "ceckert-test";
+      });
+      const surgeReadiness = {
+        release: vi.fn(async () => {
+          events.push("release");
+        }),
+      } as unknown as SurgeReadinessGate;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness,
+        waitForGatewayReady: async () => {
+          events.push("ready");
+        },
+        log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        configuredBuilderAssigned: async () => false,
+        attachConfiguredBuilderBeforeOpenClaw,
+      });
+      const reconcileAdmission = createConfiguredBuilderReconcileAdmission({
+        processGate,
+        log: () => undefined,
+      });
+
+      await expect(wiring.selfReleaseReserved()).resolves.toBe(true);
+      await expect(wiring.selfRelease("target-pod")).rejects.toThrow(/assignment/u);
+      await expect(reconcileAdmission()).resolves.toBe(false);
+      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(vi.mocked(processGate.permitNormal)).not.toHaveBeenCalled();
+      expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+
+      await wiring.reserveSurgeTarget({
+        migrationId: "mig-builder",
+        slug: "ceckert-test",
+      });
+      await wiring.releaseSurgeReadiness({
+        migrationId: "mig-builder",
+        targetPodUid: "target-pod",
+      });
+
+      expect(events).toEqual([
+        "reserve",
+        "claim",
+        "claim",
+        "claim",
+        "attach",
+        "permit",
+        "ready",
+        "release-target",
+      ]);
+      expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledTimes(1);
+      await expect(reconcileAdmission()).resolves.toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
@@ -667,6 +910,7 @@ describe("configured Builder surge release", () => {
         mounted = true;
         return "ceckert-test";
       });
+      const configuredBuilderAssigned = vi.fn(async () => false);
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate,
@@ -677,6 +921,7 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         reconcileImportedWorkspace,
+        configuredBuilderAssigned,
         attachConfiguredBuilderBeforeOpenClaw,
       });
 
@@ -706,6 +951,7 @@ describe("configured Builder surge release", () => {
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
+      expect(configuredBuilderAssigned).not.toHaveBeenCalled();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();

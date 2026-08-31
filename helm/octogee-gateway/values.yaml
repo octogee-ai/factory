@@ -141,6 +141,7 @@ env:
   openclawLogLevel: "info"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
+  builderNpmFallbackRegistry: "https://registry.npmjs.org/"
 
 # Gateway storage is emptyDir for every class. Shared Barn gateways use stable
 # identities and on-demand capacity; disposable Builder gateways are Spot-first with

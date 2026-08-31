@@ -25,6 +25,30 @@ spec:
 {{- if not (hasSuffix "/32" $cidr) }}{{ fail (printf "projectRunner.apiServerEgressCidrs must contain /32 endpoint CIDRs only (got %q)" $cidr) }}{{ end -}}
 {{- if hasPrefix "169.254." $cidr }}{{ fail (printf "projectRunner.apiServerEgressCidrs must not contain link-local CIDRs (got %q)" $cidr) }}{{ end -}}
 {{- end }}
+{{- if .Values.npmCacheProxy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: builder-gateway-npm-cache-proxy-egress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-gateway
+      gateway-class: builder
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-npm-cache-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.npmCacheProxy.port | default 3005 }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
