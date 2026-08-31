@@ -79,19 +79,10 @@ function seedCacheFromFetch(cache: ConfigCache | undefined, config: unknown, has
 
 function updateCacheAfterPatch(
   cache: ConfigCache | undefined,
-  patchResult: { hash?: unknown; config?: unknown; noop?: unknown },
+  patchResult: { noop?: unknown },
 ): void {
   if (!cache) return;
   if (patchResult.noop === true) return;
-  if (
-    typeof patchResult.hash === "string" &&
-    patchResult.hash.length > 0 &&
-    patchResult.config !== undefined
-  ) {
-    cache.hash = patchResult.hash;
-    cache.current = patchResult.config;
-    return;
-  }
   cache.hash = "";
   cache.current = undefined;
 }

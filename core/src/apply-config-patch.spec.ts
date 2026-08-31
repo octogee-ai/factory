@@ -714,7 +714,7 @@ describe("applyConfigPatch — config cache", () => {
     expect(configPatch.mock.calls[0][1]).toBe("cached-hash");
   });
 
-  it("updates cache with hash + config from successful configPatch response", async () => {
+  it("invalidates source-shaped configPatch responses so the next write refetches normalized config", async () => {
     const cache = { current: { v: 1 }, hash: "h1" };
     const configPatch = vi.fn(async () => ({
       ok: true as const,
@@ -727,8 +727,7 @@ describe("applyConfigPatch — config cache", () => {
       { ...baseOpts({ cache }), rpc: makeFakeRpc({ configPatch }) },
     );
 
-    expect(cache.hash).toBe("h2");
-    expect(cache.current).toEqual({ v: 2 });
+    expect(cache).toEqual({ current: undefined, hash: "" });
   });
 
   it("invalidates the cache when configPatch returns only a new hash", async () => {
@@ -774,11 +773,10 @@ describe("applyConfigPatch — config cache", () => {
     );
 
     expect(configGet).toHaveBeenCalledOnce();
-    expect(cache.hash).toBe("after");
-    expect(cache.current).toEqual({ v: 2 });
+    expect(cache).toEqual({ current: undefined, hash: "" });
   });
 
-  it("on hash-mismatch with cache, refetches via configGet and retries (cache then refreshed)", async () => {
+  it("on hash-mismatch with cache, refetches via configGet and invalidates the write response", async () => {
     const cache = { current: { v: 0 }, hash: "stale" };
     const configGet = vi.fn(async () => ({ config: { v: 1 }, hash: "fresh" }));
     const configPatch = vi
@@ -794,8 +792,58 @@ describe("applyConfigPatch — config cache", () => {
     expect(configPatch.mock.calls[0][1]).toBe("stale");
     expect(configPatch.mock.calls[1][1]).toBe("fresh");
     expect(configGet).toHaveBeenCalledOnce();
-    expect(cache.hash).toBe("after");
-    expect(cache.current).toEqual({ v: 2 });
+    expect(cache).toEqual({ current: undefined, hash: "" });
+  });
+
+  it("refetches normalized plugin defaults before deriving follow-up replacement paths", async () => {
+    const cache = {
+      current: { plugins: { entries: { codex: { config: { appServer: true } } } } },
+      hash: "h1",
+    };
+    const normalized = {
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              appServer: true,
+              codexDynamicToolsExclude: [],
+            },
+          },
+        },
+      },
+    };
+    const configGet = vi.fn(async () => ({ config: normalized, hash: "h2" }));
+    const configPatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        hash: "h2",
+        config: { plugins: { entries: { codex: { config: { appServer: false } } } } },
+      })
+      .mockResolvedValueOnce({ ok: true as const, hash: "h3", config: {} });
+    const rpc = makeFakeRpc({ configGet, configPatch });
+
+    await applyConfigPatch(
+      { buildPatch: () => ({ plugins: { entries: { codex: { config: { appServer: false } } } } }) },
+      { ...baseOpts({ cache }), rpc },
+    );
+    await applyConfigPatch(
+      {
+        buildPatch: () => ({ plugins: { entries: { codex: null } } }),
+        buildReplacePaths: (current) => {
+          const config = current as typeof normalized;
+          return Array.isArray(config.plugins.entries.codex.config.codexDynamicToolsExclude)
+            ? ["plugins.entries.codex.config.codexDynamicToolsExclude"]
+            : [];
+        },
+      },
+      { ...baseOpts({ cache }), rpc },
+    );
+
+    expect(configGet).toHaveBeenCalledOnce();
+    expect(configPatch.mock.calls[1][2]).toEqual({
+      replacePaths: ["plugins.entries.codex.config.codexDynamicToolsExclude"],
+    });
   });
 
   it("clears cache hash when configPatch response omits hash (server pre-fork-patch)", async () => {

@@ -12,7 +12,10 @@ function executable(file: string, source: string): void {
   chmodSync(file, 0o755);
 }
 
-function run(functionCall: string) {
+function run(
+  functionCall: string,
+  options: { issueStatus?: number; recordingFail?: boolean } = {},
+) {
   const temp = mkdtempSync(path.join(tmpdir(), "gitea-token-convergence-"));
   const log = path.join(temp, "kubectl.log");
   executable(path.join(temp, "kubectl"), `#!/usr/bin/env bash
@@ -49,7 +52,7 @@ if [[ "$*" == *"exec "* ]]; then
       break
     fi
   done
-  mock_fetch='globalThis.fetch=async(url)=>{if(String(url)!==process.env.EXPECTED_GITEA_URL)throw new Error("unexpected URL "+url);return {ok:true,status:200,json:async()=>({login:"octogee-admin"})}};'
+  mock_fetch='globalThis.fetch=async(url)=>{const actual=String(url);if(actual===process.env.EXPECTED_GITEA_IDENTITY_URL)return {ok:true,status:200,json:async()=>({login:"octogee-admin"})};if(actual===process.env.EXPECTED_GITEA_ISSUE_URL){const status=Number(process.env.GITEA_ISSUE_STATUS);return {ok:status===200,status,json:async()=>({})}}throw new Error("unexpected URL "+url)};'
   env "\${env_args[@]}" node --input-type=module -e "$mock_fetch$script"
   exit 0
 fi
@@ -58,7 +61,7 @@ exit 0
 `);
 
   const result = spawnSync("bash", ["-euo", "pipefail", "-c", [
-    "fail() { printf '%s\\n' \"$1\" >&2; return 1; }",
+    "fail() { printf '%s\\n' \"$1\" >&2; [[ \"${FAKE_RECORDING_FAIL:-false}\" == \"true\" ]] && return 0; return 1; }",
     "info() { :; }",
     "ok() { :; }",
     `source ${JSON.stringify(helper)}`,
@@ -77,8 +80,12 @@ exit 0
       GIT_API_TOKEN: "controller-token",
       GIT_API_URL: "http://octogee-gitea-http.octogee-test-west.svc.cluster.local:3000/api/v1",
       K8S_NAMESPACE: "octogee-test-west",
-      EXPECTED_GITEA_URL:
+      EXPECTED_GITEA_IDENTITY_URL:
         "http://octogee-gitea-http.octogee-test-west.svc.cluster.local:3000/api/v1/user",
+      EXPECTED_GITEA_ISSUE_URL:
+        "http://octogee-gitea-http.octogee-test-west.svc.cluster.local:3000/api/v1/repos/issues/search?limit=1",
+      GITEA_ISSUE_STATUS: String(options.issueStatus ?? 200),
+      FAKE_RECORDING_FAIL: String(options.recordingFail ?? false),
     },
   });
   const calls = existsSync(log)
@@ -113,6 +120,17 @@ describe("Gitea platform-token convergence", () => {
     ]);
     expect(result.calls.join("\n")).not.toContain("octogee-api-old");
     expect(result.calls.join("\n")).not.toContain("octogee-api-unready");
+  });
+
+  it("rejects an authenticated consumer whose token cannot access issue routes", () => {
+    const result = run(
+      'validate_gitea_token_consumer octogee-api GITEA_TOKEN GITEA_URL "api/v1/user"',
+      { issueStatus: 403, recordingFail: true },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Gitea issue access returned HTTP 403");
+    expect(result.stderr).toContain("Gitea token consumer validation failed");
   });
 
   it("restarts, waits for, and authenticates each real platform-token consumer serially", () => {
