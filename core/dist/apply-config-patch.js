@@ -33,13 +33,6 @@ function updateCacheAfterPatch(cache, patchResult) {
         return;
     if (patchResult.noop === true)
         return;
-    if (typeof patchResult.hash === "string" &&
-        patchResult.hash.length > 0 &&
-        patchResult.config !== undefined) {
-        cache.hash = patchResult.hash;
-        cache.current = patchResult.config;
-        return;
-    }
     cache.hash = "";
     cache.current = undefined;
 }

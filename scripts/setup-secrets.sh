@@ -38,6 +38,8 @@ source "$SCRIPT_DIR/lib/shell-env.sh"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 # shellcheck source=scripts/lib/github-oauth-redirect.sh
 source "$SCRIPT_DIR/lib/github-oauth-redirect.sh"
+# shellcheck source=scripts/lib/openai-key-validation.sh
+source "$SCRIPT_DIR/lib/openai-key-validation.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -542,17 +544,15 @@ OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 OPENAI_EMBEDDINGS_API_KEY="${OPENAI_EMBEDDINGS_API_KEY:-}"
 set -u
 [[ -z "$OPENAI_API_KEY" && -n "$OPENAI_EMBEDDINGS_API_KEY" ]] && OPENAI_API_KEY="$OPENAI_EMBEDDINGS_API_KEY"
-OPENAI_API_KEY_SOURCE="env"
-if [[ -z "$OPENAI_API_KEY" ]]; then
-  OPENAI_API_KEY=$(sm_get OPENAI_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-  OPENAI_API_KEY_SOURCE="secret-manager"
-fi
+OPENAI_API_KEY="$(resolve_environment_secret_value \
+  "$OPENAI_API_KEY" OPENAI_API_KEY octogee-openai api_key configured_secret_value)" \
+  || fail "Could not resolve OPENAI_API_KEY from its environment source of truth"
 if [[ -n "$OPENAI_API_KEY" ]]; then
-  if [[ "$OPENAI_API_KEY_SOURCE" == "env" ]]; then
-    secret_manager_persist_value OPENAI_API_KEY "$OPENAI_API_KEY" "$FIREBASE_PROJECT" \
-      || fail "Could not persist OPENAI_API_KEY to Secret Manager ($FIREBASE_PROJECT)"
+  validate_openai_api_key "$OPENAI_API_KEY" \
+    || fail "OPENAI_API_KEY cannot authenticate to the OpenAI models endpoint"
+  if [[ "$ENV" != "custom" ]]; then
+    sync_secret_manager_value OPENAI_API_KEY "$OPENAI_API_KEY" "$FIREBASE_PROJECT"
   fi
-  ok "Secret Manager: OPENAI_API_KEY"
   # The llm-broker's platform-openai provider rides the same key (gpt-5.4-mini
   # via the free-tier dial); optional in helm, so absence only 503s openai traffic.
   ksecret octogee-openai --from-literal=api_key="$OPENAI_API_KEY"

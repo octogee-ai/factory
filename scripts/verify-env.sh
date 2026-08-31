@@ -30,6 +30,8 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 # shellcheck source=scripts/lib/ready-assigned-gateway-probe.sh
 source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
+# shellcheck source=scripts/lib/gitea-token-convergence.sh
+source "$SCRIPT_DIR/lib/gitea-token-convergence.sh"
 # shellcheck source=scripts/lib/default-gateway-deployment.sh
 source "$SCRIPT_DIR/lib/default-gateway-deployment.sh"
 # shellcheck source=scripts/lib/iap-endpoint-health.sh
@@ -381,6 +383,12 @@ if [[ "${GITEA_READY:-0}" -ge 1 ]]; then
       pass "Authenticated Gitea admin broker read passed from assigned gateway tenant ($GITEA_BROKER_DEPLOYMENT)"
     else
       fail "Gitea admin broker contract failed; see the preceding Ready assigned-gateway probe error"
+    fi
+    K8S_NAMESPACE="$NAMESPACE"
+    if validate_gitea_token_consumers; then
+      pass "Gitea platform consumers authenticated with issue-route access"
+    elif $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} ./scripts/setup-gitea.sh ${FIX_SUFFIX}"
     fi
     set_section infra
   else
