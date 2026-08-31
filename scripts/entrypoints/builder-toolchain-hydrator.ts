@@ -16,6 +16,8 @@ export interface BuilderToolchainHydratorConfig {
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
+  groupsPath: string;
+  groupsSha256: string;
   fallbackRegistryUrl: string;
   gatewayId: string;
   builderSlug: string;
@@ -44,6 +46,12 @@ export function resolveBuilderToolchainHydratorConfig(
       "/octogee/toolchain/package-lock.json",
     ),
     packageLockSha256: envValue(env, "OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256"),
+    groupsPath: envValue(
+      env,
+      "OCTOGEE_BUILDER_TOOL_GROUPS_PATH",
+      "/octogee/toolchain/groups.json",
+    ),
+    groupsSha256: envValue(env, "OCTOGEE_BUILDER_TOOL_GROUPS_SHA256"),
     fallbackRegistryUrl: envValue(
       env,
       "OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY",
@@ -172,6 +180,8 @@ export async function runBuilderToolchainHydrator(input: {
       packageJsonPath: input.config.packageJsonPath,
       packageLockPath: input.config.packageLockPath,
       packageLockSha256: input.config.packageLockSha256,
+      groupsPath: input.config.groupsPath,
+      groupsSha256: input.config.groupsSha256,
       fallbackRegistryUrl: input.config.fallbackRegistryUrl,
       registryCredentialsProvider,
       attempt,

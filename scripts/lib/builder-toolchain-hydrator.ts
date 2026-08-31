@@ -12,8 +12,14 @@ import {
   type DeveloperToolchainStatusArtifact,
 } from "../../shared/types/developer-toolchain.js";
 import type { FleetBrokerNpmRegistryCredentials } from "../../shared/types/fleet-broker.js";
+import {
+  enabledNpmPackages,
+  parseBuilderToolGroups,
+  type BuilderToolGroups,
+} from "./builder-tool-groups.js";
+import { resolveBuilderChromiumExecutable } from "./builder-toolchain-chromium.js";
 
-export const BUILDER_TOOLCHAIN_COMMANDS = ["claude", "codex"] as const;
+export const BUILDER_TOOLCHAIN_COMMANDS = ["claude", "codex", "chromium"] as const;
 export const DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY = "https://registry.npmjs.org/";
 
 export type BuilderToolchainCommand = typeof BUILDER_TOOLCHAIN_COMMANDS[number];
@@ -23,11 +29,14 @@ export interface BuilderToolchainLock {
   id: "npm-lock-sha256";
   commands: Record<BuilderToolchainCommand, string>;
   versions: Record<BuilderToolchainCommand, string>;
+  packages: Record<string, string>;
 }
 
 export interface InstalledBuilderToolchainLock {
   schemaVersion: 1;
   lockSha256: string;
+  groupsSha256: string;
+  bundleSha256: string;
   commands: Record<BuilderToolchainCommand, string>;
 }
 
@@ -38,6 +47,8 @@ export interface BuilderToolchainDetail {
   status: DeveloperToolchainStatus;
   toolchainId?: string;
   lockSha256?: string;
+  groupsSha256?: string;
+  bundleSha256?: string;
   attempt?: number;
   reasonCode?: string;
   nextRetryAt?: string;
@@ -56,6 +67,8 @@ export interface HydrateBuilderToolchainOptions {
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
+  groupsPath: string;
+  groupsSha256: string;
   fallbackRegistryUrl?: string;
   registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
   installDependencies?: (
@@ -98,14 +111,24 @@ const DETAIL_FILE = "detail.json";
 const INSTALLED_LOCK_FILE = ".toolchain-lock.json";
 const DEFAULT_LOCK_STALE_MS = 60 * 60 * 1_000;
 const MAX_LOCK_BYTES = 8 * 1_024 * 1_024;
+const MAX_GROUPS_BYTES = 256 * 1_024;
 const NPM_EXECUTABLE = "/usr/local/bin/npm";
-const COMMAND_PATHS: Record<BuilderToolchainCommand, string> = {
+const INVALID_TOOLCHAIN_LOCK = "invalid-toolchain-lock";
+export const BUILDER_TOOLCHAIN_COMMAND_PATHS: Record<BuilderToolchainCommand, string> = {
   claude: "node_modules/.bin/claude",
   codex: "node_modules/.bin/codex",
+  chromium: "node_modules/@sparticuz/chromium/build/index.js",
 };
 const DEPENDENCY_PACKAGES: Record<BuilderToolchainCommand, string> = {
   claude: "@anthropic-ai/claude-code",
   codex: "@openai/codex",
+  chromium: "@sparticuz/chromium",
+};
+const ALLOWED_INSTALL_SCRIPTS = {
+  "@anthropic-ai/claude-code@2.1.251": true,
+  "esbuild@0.28.2": true,
+  "protobufjs@7.6.6": true,
+  "re2@1.26.1": true,
 };
 
 function hydrationError(reasonCode: string): BuilderToolchainHydrationError {
@@ -138,37 +161,104 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export function parseBuilderToolchainLock(value: unknown): BuilderToolchainLock {
+function packageNameFromLockPath(lockPath: string): string | null {
+  const marker = "node_modules/";
+  const index = lockPath.lastIndexOf(marker);
+  if (index < 0) return null;
+  const packageName = lockPath.slice(index + marker.length);
+  return packageName && !packageName.includes("node_modules/") ? packageName : null;
+}
+
+function platformListAllows(value: unknown, target: string): boolean {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return true;
+  const entries = value as string[];
+  if (entries.includes(`!${target}`)) return false;
+  const positive = entries.filter((entry) => !entry.startsWith("!"));
+  return positive.length === 0 || positive.includes(target);
+}
+
+function parseLockPackages(
+  value: unknown,
+  manifest: BuilderToolGroups,
+): {
+  packages: Record<string, unknown>;
+  dependencies: Record<string, unknown>;
+  packagesByVersion: Record<string, string>;
+} {
   const lock = objectRecord(value);
   const packages = objectRecord(lock?.packages);
   const root = objectRecord(packages?.[""]);
   const dependencies = objectRecord(root?.dependencies);
-  if (
-    !lock || lock.lockfileVersion !== 3 || !packages || !root || !dependencies ||
-    !exactKeys(dependencies, Object.values(DEPENDENCY_PACKAGES))
-  ) {
-    throw hydrationError("invalid-toolchain-lock");
+  const packagesByVersion = enabledNpmPackages(manifest);
+  if (!lock || lock.lockfileVersion !== 3 || !packages || !root || !dependencies) {
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
   }
+  if (!exactKeys(dependencies, Object.keys(packagesByVersion))) {
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
+  }
+  return { packages, dependencies, packagesByVersion };
+}
 
-  const versions = {} as Record<BuilderToolchainCommand, string>;
-  for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    const packageName = DEPENDENCY_PACKAGES[command];
+function validateLockedPackages(
+  packages: Record<string, unknown>,
+  dependencies: Record<string, unknown>,
+  packagesByVersion: Record<string, string>,
+): void {
+  for (const [packageName, requestedVersion] of Object.entries(packagesByVersion)) {
     const requested = dependencies[packageName];
     const installed = objectRecord(packages[`node_modules/${packageName}`]);
-    if (
-      !isExactVersion(requested) || !installed || installed.version !== requested ||
-      !isIntegrity(installed.integrity)
-    ) {
-      throw hydrationError("invalid-toolchain-lock");
-    }
-    versions[command] = requested;
+    const valid = requested === requestedVersion && isExactVersion(requested) &&
+      installed?.version === requested && isIntegrity(installed.integrity);
+    if (!valid) throw hydrationError(INVALID_TOOLCHAIN_LOCK);
+  }
+}
+
+function lockedInstallScripts(packages: Record<string, unknown>): string[] {
+  return Object.entries(packages).flatMap(([lockPath, value]) => {
+    const installed = objectRecord(value);
+    const packageName = packageNameFromLockPath(lockPath);
+    const supportsBuilder = platformListAllows(installed?.os, "linux") &&
+      platformListAllows(installed?.cpu, "x64");
+    return installed?.hasInstallScript === true && supportsBuilder && packageName &&
+      isExactVersion(installed.version)
+      ? [`${packageName}@${installed.version}`]
+      : [];
+  });
+}
+
+function lockedCommandVersions(
+  packagesByVersion: Record<string, string>,
+): Record<BuilderToolchainCommand, string> {
+  const versions = Object.fromEntries(BUILDER_TOOLCHAIN_COMMANDS.map((command) => [
+    command,
+    packagesByVersion[DEPENDENCY_PACKAGES[command]],
+  ])) as Record<BuilderToolchainCommand, string>;
+  if (Object.values(versions).some((version) => !version)) {
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
+  }
+  return versions;
+}
+
+export function parseBuilderToolchainLock(
+  value: unknown,
+  manifest: BuilderToolGroups,
+): BuilderToolchainLock {
+  const { packages, dependencies, packagesByVersion } = parseLockPackages(value, manifest);
+  validateLockedPackages(packages, dependencies, packagesByVersion);
+  const scriptedPackages = lockedInstallScripts(packages);
+  if (!exactKeys(
+    Object.fromEntries(scriptedPackages.map((approval) => [approval, true])),
+    Object.keys(ALLOWED_INSTALL_SCRIPTS),
+  )) {
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
   }
 
   return {
     schemaVersion: 1,
     id: "npm-lock-sha256",
-    commands: { ...COMMAND_PATHS },
-    versions,
+    commands: { ...BUILDER_TOOLCHAIN_COMMAND_PATHS },
+    versions: lockedCommandVersions(packagesByVersion),
+    packages: packagesByVersion,
   };
 }
 
@@ -176,20 +266,19 @@ function parsePackageJson(value: unknown, expected: BuilderToolchainLock): void 
   const packageJson = objectRecord(value);
   const dependencies = objectRecord(packageJson?.dependencies);
   const allowScripts = objectRecord(packageJson?.allowScripts);
-  const claudePackage = DEPENDENCY_PACKAGES.claude;
-  const claudeApproval = `${claudePackage}@${expected.versions.claude}`;
   if (
     !packageJson || packageJson.private !== true || !dependencies || !allowScripts ||
-    !exactKeys(allowScripts, [claudeApproval]) || allowScripts[claudeApproval] !== true
+    !exactKeys(allowScripts, Object.keys(ALLOWED_INSTALL_SCRIPTS)) ||
+    Object.keys(ALLOWED_INSTALL_SCRIPTS).some((approval) => allowScripts[approval] !== true)
   ) {
     throw hydrationError("invalid-toolchain-package");
   }
-  const expectedPackages = Object.values(DEPENDENCY_PACKAGES);
+  const expectedPackages = Object.keys(expected.packages);
   if (!exactKeys(dependencies, expectedPackages)) {
     throw hydrationError("invalid-toolchain-package");
   }
-  for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    if (dependencies[DEPENDENCY_PACKAGES[command]] !== expected.versions[command]) {
+  for (const [packageName, version] of Object.entries(expected.packages)) {
+    if (dependencies[packageName] !== version) {
       throw hydrationError("invalid-toolchain-package");
     }
   }
@@ -224,33 +313,53 @@ function digestBytes(value: Uint8Array): Buffer {
 async function readPinnedToolchain(options: HydrateBuilderToolchainOptions): Promise<{
   descriptor: BuilderToolchainLock;
   lockBytes: Buffer;
+  groupsBytes: Buffer;
+  manifest: BuilderToolGroups;
+  bundleSha256: string;
 }> {
-  if (!isSha256(options.packageLockSha256)) {
+  if (!isSha256(options.packageLockSha256) || !isSha256(options.groupsSha256)) {
     throw hydrationError("invalid-toolchain-lock-pin");
   }
-  const [lockBytes, packageBytes] = await Promise.all([
+  const [lockBytes, packageBytes, groupsBytes] = await Promise.all([
     fs.readFile(options.packageLockPath).catch(() => {
       throw hydrationError("toolchain-lock-unavailable");
     }),
     fs.readFile(options.packageJsonPath).catch(() => {
       throw hydrationError("toolchain-package-unavailable");
     }),
+    fs.readFile(options.groupsPath).catch(() => {
+      throw hydrationError("toolchain-groups-unavailable");
+    }),
   ]);
-  if (lockBytes.byteLength > MAX_LOCK_BYTES) throw hydrationError("invalid-toolchain-lock");
+  if (lockBytes.byteLength > MAX_LOCK_BYTES || groupsBytes.byteLength > MAX_GROUPS_BYTES) {
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
+  }
   if (!timingSafeEqual(digestBytes(lockBytes), Buffer.from(options.packageLockSha256, "hex"))) {
     throw hydrationError("toolchain-lock-digest-mismatch");
   }
+  if (!timingSafeEqual(digestBytes(groupsBytes), Buffer.from(options.groupsSha256, "hex"))) {
+    throw hydrationError("toolchain-groups-digest-mismatch");
+  }
   let lockValue: unknown;
   let packageValue: unknown;
+  let groupsValue: unknown;
   try {
     lockValue = JSON.parse(lockBytes.toString("utf8"));
     packageValue = JSON.parse(packageBytes.toString("utf8"));
+    groupsValue = JSON.parse(groupsBytes.toString("utf8"));
   } catch {
-    throw hydrationError("invalid-toolchain-lock");
+    throw hydrationError(INVALID_TOOLCHAIN_LOCK);
   }
-  const descriptor = parseBuilderToolchainLock(lockValue);
+  let manifest: BuilderToolGroups;
+  try {
+    manifest = parseBuilderToolGroups(groupsValue);
+  } catch {
+    throw hydrationError("invalid-toolchain-groups");
+  }
+  const descriptor = parseBuilderToolchainLock(lockValue, manifest);
   parsePackageJson(packageValue, descriptor);
-  return { descriptor, lockBytes };
+  const bundleSha256 = createHash("sha256").update(lockBytes).update(groupsBytes).digest("hex");
+  return { descriptor, lockBytes, groupsBytes, manifest, bundleSha256 };
 }
 
 function statusFor(status: DeveloperToolchainStatus, now: Date): BuilderToolchainStatus {
@@ -437,7 +546,7 @@ function resolveHydrationRuntime(options: HydrateBuilderToolchainOptions): Hydra
 async function validateCommandFiles(objectPath: string): Promise<void> {
   const realRoot = await fs.realpath(objectPath);
   for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    const commandPath = path.join(objectPath, COMMAND_PATHS[command]);
+    const commandPath = path.join(objectPath, BUILDER_TOOLCHAIN_COMMAND_PATHS[command]);
     const stat = await fs.lstat(commandPath).catch(() => null);
     if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
       throw hydrationError("missing-command");
@@ -446,8 +555,24 @@ async function validateCommandFiles(objectPath: string): Promise<void> {
     if (!realCommand.startsWith(`${realRoot}${path.sep}`)) {
       throw hydrationError("unsafe-command-path");
     }
-    await fs.access(realCommand, fsConstants.X_OK);
+    await fs.access(
+      realCommand,
+      command === "chromium" ? fsConstants.R_OK : fsConstants.X_OK,
+    );
   }
+}
+
+function commandReportsPinnedVersion(
+  command: BuilderToolchainCommand,
+  output: string,
+  version: string,
+): boolean {
+  if (command !== "chromium") {
+    return output.split(/[^0-9A-Za-z.-]+/u).includes(version);
+  }
+  const major = version.split(".")[0];
+  const reportedMajor = output.match(/\b(?:Chromium|HeadlessChrome)\s+(\d+)\./u)?.[1];
+  return major !== undefined && reportedMajor === major;
 }
 
 async function validateCommandVersions(
@@ -457,9 +582,14 @@ async function validateCommandVersions(
 ): Promise<void> {
   await validateCommandFiles(objectPath);
   for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    const commandPath = path.join(objectPath, COMMAND_PATHS[command]);
+    const commandPath = path.join(objectPath, BUILDER_TOOLCHAIN_COMMAND_PATHS[command]);
+    const executable = command === "chromium"
+      ? await resolveBuilderChromiumExecutable(commandPath).catch(() => {
+        throw hydrationError("invalid-command-version");
+      })
+      : commandPath;
     const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(commandPath, ["--version"], {
+      const child = spawn(executable, ["--version"], {
         cwd: objectPath,
         env: { ...process.env, NO_COLOR: "1" },
         signal,
@@ -479,31 +609,86 @@ async function validateCommandVersions(
     }).catch(() => {
       throw hydrationError("invalid-command-version");
     });
-    if (!output.split(/[^0-9A-Za-z.-]+/u).includes(descriptor.versions[command])) {
+    if (!commandReportsPinnedVersion(command, output, descriptor.versions[command])) {
       throw hydrationError("invalid-command-version");
     }
   }
 }
 
-function installedDescriptor(lockSha256: string): InstalledBuilderToolchainLock {
-  return { schemaVersion: 1, lockSha256, commands: { ...COMMAND_PATHS } };
+function npmGroupCommands(manifest: BuilderToolGroups): string[] {
+  return manifest.groups
+    .filter((group) => group.enabled && group.delivery === "npm")
+    .flatMap((group) => group.commands ?? [])
+    .filter((command) => command !== "chromium");
 }
 
-async function validateInstalledObject(
+async function activateNpmCommands(
   objectPath: string,
+  manifest: BuilderToolGroups,
+): Promise<void> {
+  const source = path.join(objectPath, "node_modules", ".bin");
+  const destination = path.join(objectPath, "bin");
+  await fs.mkdir(destination, { recursive: true, mode: 0o700 });
+  for (const command of npmGroupCommands(manifest)) {
+    const executable = path.join(source, command);
+    const stat = await fs.lstat(executable).catch(() => null);
+    if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
+      throw hydrationError("missing-command");
+    }
+    const link = path.join(destination, command);
+    await fs.rm(link, { force: true });
+    await fs.symlink(path.relative(destination, executable), link);
+  }
+}
+
+async function validateNpmCommands(
+  objectPath: string,
+  manifest: BuilderToolGroups,
+): Promise<void> {
+  const realRoot = await fs.realpath(objectPath);
+  for (const command of npmGroupCommands(manifest)) {
+    const executable = await fs.realpath(path.join(objectPath, "bin", command)).catch(() => "");
+    if (!executable.startsWith(`${realRoot}${path.sep}`)) throw hydrationError("unsafe-command-path");
+    await fs.access(executable, fsConstants.X_OK);
+  }
+}
+
+function installedDescriptor(
   lockSha256: string,
-  descriptor: BuilderToolchainLock,
-  signal?: AbortSignal,
-): Promise<boolean> {
+  groupsSha256: string,
+  bundleSha256: string,
+): InstalledBuilderToolchainLock {
+  return {
+    schemaVersion: 1,
+    lockSha256,
+    groupsSha256,
+    bundleSha256,
+    commands: { ...BUILDER_TOOLCHAIN_COMMAND_PATHS },
+  };
+}
+
+interface InstalledObjectValidation {
+  objectPath: string;
+  expected: InstalledBuilderToolchainLock;
+  descriptor: BuilderToolchainLock;
+  manifest: BuilderToolGroups;
+  signal?: AbortSignal;
+}
+
+async function validateInstalledObject(input: InstalledObjectValidation): Promise<boolean> {
   try {
     const installed = JSON.parse(
-      await fs.readFile(path.join(objectPath, INSTALLED_LOCK_FILE), "utf8"),
+      await fs.readFile(path.join(input.objectPath, INSTALLED_LOCK_FILE), "utf8"),
     ) as InstalledBuilderToolchainLock;
     if (
-      installed.schemaVersion !== 1 || installed.lockSha256 !== lockSha256 ||
-      JSON.stringify(installed.commands) !== JSON.stringify(COMMAND_PATHS)
+      installed.schemaVersion !== input.expected.schemaVersion ||
+      installed.lockSha256 !== input.expected.lockSha256 ||
+      installed.groupsSha256 !== input.expected.groupsSha256 ||
+      installed.bundleSha256 !== input.expected.bundleSha256 ||
+      JSON.stringify(installed.commands) !== JSON.stringify(BUILDER_TOOLCHAIN_COMMAND_PATHS)
     ) return false;
-    await validateCommandVersions(objectPath, descriptor, signal);
+    await validateCommandVersions(input.objectPath, input.descriptor, input.signal);
+    await validateNpmCommands(input.objectPath, input.manifest);
     return true;
   } catch {
     return false;
@@ -595,6 +780,37 @@ async function installWithRegistryFallback(input: {
   }
 }
 
+type ToolchainStatusPersister = (
+  status: BuilderToolchainStatus,
+  detail: BuilderToolchainDetail,
+) => Promise<BuilderToolchainStatus>;
+
+async function persistHydrationFailure(input: {
+  error: unknown;
+  toolchainId?: string;
+  lockSha256?: string;
+  groupsSha256?: string;
+  bundleSha256?: string;
+  attempt?: number;
+  now: () => Date;
+  persist: ToolchainStatusPersister;
+}): Promise<never> {
+  const error = input.error;
+  const knownError = error instanceof BuilderToolchainHydrationError;
+  const reasonCode = knownError ? error.reasonCode : "internal-error";
+  const failureStatus = reasonCode === "npm-proxy-credentials-unavailable" ? "pending" : "failed";
+  await input.persist(statusFor(failureStatus, input.now()), detailFor(failureStatus, {
+    ...(input.toolchainId ? { toolchainId: input.toolchainId } : {}),
+    ...(input.lockSha256 ? { lockSha256: input.lockSha256 } : {}),
+    ...(input.groupsSha256 ? { groupsSha256: input.groupsSha256 } : {}),
+    ...(input.bundleSha256 ? { bundleSha256: input.bundleSha256 } : {}),
+    attempt: input.attempt,
+    reasonCode,
+  }));
+  if (knownError) throw error;
+  throw hydrationError(reasonCode);
+}
+
 export async function hydrateBuilderToolchain(
   options: HydrateBuilderToolchainOptions,
 ): Promise<BuilderToolchainStatus> {
@@ -620,18 +836,31 @@ export async function hydrateBuilderToolchain(
   }
 
   let lockSha256: string | undefined;
+  let groupsSha256: string | undefined;
+  let bundleSha256: string | undefined;
   let toolchainId: string | undefined;
   const stagingPath = path.join(options.root, "staging", `${process.pid}-${randomUUID()}`);
   try {
     const pinned = await readPinnedToolchain(options);
     lockSha256 = options.packageLockSha256;
-    toolchainId = `npm-lock-${lockSha256}`;
-    const objectPath = path.join(options.root, "objects", `sha256-${lockSha256}`);
-    if (await validateInstalledObject(objectPath, lockSha256, pinned.descriptor, options.signal)) {
+    groupsSha256 = options.groupsSha256;
+    bundleSha256 = pinned.bundleSha256;
+    toolchainId = `builder-tools-${bundleSha256}`;
+    const objectPath = path.join(options.root, "objects", `sha256-${bundleSha256}`);
+    const expectedInstalled = installedDescriptor(lockSha256, groupsSha256, bundleSha256);
+    if (await validateInstalledObject({
+      objectPath,
+      expected: expectedInstalled,
+      descriptor: pinned.descriptor,
+      manifest: pinned.manifest,
+      signal: options.signal,
+    })) {
       await activateObject(options.root, objectPath);
       return persist(statusFor("ready", runtime.now()), detailFor("ready", {
         toolchainId,
         lockSha256,
+        groupsSha256,
+        bundleSha256,
         attempt: options.attempt,
       }));
     }
@@ -640,12 +869,15 @@ export async function hydrateBuilderToolchain(
     await persist(statusFor("downloading", runtime.now()), detailFor("downloading", {
       toolchainId,
       lockSha256,
+      groupsSha256,
+      bundleSha256,
       attempt: options.attempt,
     }));
     await fs.mkdir(stagingPath, { recursive: true, mode: 0o700 });
     await Promise.all([
       fs.copyFile(options.packageJsonPath, path.join(stagingPath, "package.json")),
       fs.writeFile(path.join(stagingPath, "package-lock.json"), pinned.lockBytes, { mode: 0o600 }),
+      fs.writeFile(path.join(stagingPath, "groups.json"), pinned.groupsBytes, { mode: 0o600 }),
     ]);
     await installWithRegistryFallback({
       destination: stagingPath,
@@ -657,26 +889,31 @@ export async function hydrateBuilderToolchain(
       log: runtime.log,
       nowMs: runtime.nowMs,
     });
+    await activateNpmCommands(stagingPath, pinned.manifest);
 
     await persist(statusFor("verifying", runtime.now()), detailFor("verifying", {
       toolchainId,
       lockSha256,
+      groupsSha256,
+      bundleSha256,
       attempt: options.attempt,
     }));
     await validateCommandVersions(stagingPath, pinned.descriptor, options.signal);
+    await validateNpmCommands(stagingPath, pinned.manifest);
     await fs.writeFile(
       path.join(stagingPath, INSTALLED_LOCK_FILE),
-      `${JSON.stringify(installedDescriptor(lockSha256))}\n`,
+      `${JSON.stringify(expectedInstalled)}\n`,
       { mode: 0o600 },
     );
     await fs.mkdir(path.dirname(objectPath), { recursive: true, mode: 0o700 });
     if (await fs.lstat(objectPath).catch(() => null)) {
-      if (!(await validateInstalledObject(
+      if (!(await validateInstalledObject({
         objectPath,
-        lockSha256,
-        pinned.descriptor,
-        options.signal,
-      ))) {
+        expected: expectedInstalled,
+        descriptor: pinned.descriptor,
+        manifest: pinned.manifest,
+        signal: options.signal,
+      }))) {
         throw hydrationError("invalid-existing-object");
       }
       await fs.rm(stagingPath, { recursive: true, force: true });
@@ -687,21 +924,21 @@ export async function hydrateBuilderToolchain(
     return persist(statusFor("ready", runtime.now()), detailFor("ready", {
       toolchainId,
       lockSha256,
+      groupsSha256,
+      bundleSha256,
       attempt: options.attempt,
     }));
   } catch (error) {
-    const reasonCode = error instanceof BuilderToolchainHydrationError
-      ? error.reasonCode
-      : "internal-error";
-    const retryingForAssignment = reasonCode === "npm-proxy-credentials-unavailable";
-    const failureStatus = retryingForAssignment ? "pending" : "failed";
-    await persist(statusFor(failureStatus, runtime.now()), detailFor(failureStatus, {
-      ...(toolchainId ? { toolchainId } : {}),
-      ...(lockSha256 ? { lockSha256 } : {}),
+    return await persistHydrationFailure({
+      error,
+      toolchainId,
+      lockSha256,
+      groupsSha256,
+      bundleSha256,
       attempt: options.attempt,
-      reasonCode,
-    }));
-    throw error instanceof BuilderToolchainHydrationError ? error : hydrationError(reasonCode);
+      now: runtime.now,
+      persist,
+    });
   } finally {
     await fs.rm(stagingPath, { recursive: true, force: true });
     await lock.release();

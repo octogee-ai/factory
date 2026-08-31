@@ -2,13 +2,26 @@
   "name": "@octogee/builder-toolchain",
   "version": "1.0.1",
   "private": true,
-  "description": "Pinned post-readiness developer CLI payload for Builder gateways",
+  "description": "Pinned post-readiness developer tool payload for Builder gateways",
   "license": "UNLICENSED",
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.251",
-    "@openai/codex": "0.151.0"
+    "@openai/codex": "0.151.0",
+    "@sparticuz/chromium": "149.0.0",
+    "firebase-tools": "15.28.2",
+    "npm-check-updates": "23.1.0",
+    "pnpm": "11.24.0",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
   },
   "allowScripts": {
-    "@anthropic-ai/claude-code@2.1.251": true
+    "@anthropic-ai/claude-code@2.1.251": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "re2@1.26.1": true
+  },
+  "overrides": {
+    "@opentelemetry/core": "^2.8.0",
+    "uuid": "^11.1.1"
   }
 }

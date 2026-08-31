@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { resolveBuilderChromiumExecutable } from "../lib/builder-toolchain-chromium.js";
 import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
 
 function waitForChild(child: ChildProcess, command: string): Promise<number> {
@@ -28,15 +29,23 @@ export async function runBuilderToolchainCommand(
     console.error(resolved.message);
     return resolved.exitCode;
   }
-  if (command === "claude") {
+  let executable = resolved.executable;
+  if (command === "chromium") {
+    try {
+      executable = await resolveBuilderChromiumExecutable(executable);
+    } catch {
+      console.error("chromium is unavailable on this Builder (browser-start-failed).");
+      return 69;
+    }
+  } else if (command === "claude") {
     const stamper = env.OCTOGEE_CLAUDE_FIRST_RUN_STAMPER
       ?? "/octogee/infra/gateway/stamp-claude-first-run.mjs";
     spawnSync(process.execPath, [stamper], {
       stdio: "ignore",
-      env: { ...env, CLAUDE_BIN: resolved.executable },
+      env: { ...env, CLAUDE_BIN: executable },
     });
   }
-  const child = spawn(resolved.executable, args, { stdio: "inherit", env });
+  const child = spawn(executable, args, { stdio: "inherit", env });
   const forwardTerm = (): void => { child.kill("SIGTERM"); };
   const forwardInt = (): void => { child.kill("SIGINT"); };
   process.once("SIGTERM", forwardTerm);

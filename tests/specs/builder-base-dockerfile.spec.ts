@@ -9,32 +9,28 @@ const read = (relativePath: string) =>
 describe("Builder boot base", () => {
   const dockerfile = read("infra/gateway/Dockerfile.builder-base");
 
-  it("inherits the core-only OpenClaw base without the operator toolkit", () => {
-    expect(dockerfile).toContain("ARG GATEWAY_CORE_IMAGE");
-    expect(dockerfile).toContain("FROM ${GATEWAY_CORE_IMAGE}");
+  it("inherits the full OpenClaw base and installs controlled groups without the operator image", () => {
+    expect(dockerfile).toContain("ARG GATEWAY_BASE_IMAGE");
+    expect(dockerfile).toContain("FROM ${GATEWAY_BASE_IMAGE}");
     expect(dockerfile).not.toContain("TOOLKIT_IMAGE");
     expect(dockerfile).not.toContain("Dockerfile.operator-toolkit");
 
-    for (const operatorPayload of [
-      "/usr/lib/google-cloud-sdk",
-      "firebase-tools",
-      "/usr/bin/kubectl",
-      "/usr/bin/terraform",
-      "/usr/local/bin/helm",
-      "/usr/local/bin/yq",
-      "operator-tools.versions",
-    ]) {
-      expect(dockerfile).not.toContain(operatorPayload);
-    }
+    expect(dockerfile).toContain("DEBIAN_PACKAGES=");
+    expect(dockerfile).toContain("standaloneTools.gcloud.version");
+    expect(dockerfile).toContain("/usr/lib/google-cloud-sdk");
+    expect(dockerfile).toContain("/usr/local/bin/terraform");
+    expect(dockerfile).not.toContain("operator-tools.versions");
   });
 
-  it("adds only the pre-hydration Builder launch contract", () => {
+  it("bakes non-npm workstation groups while leaving npm payloads for hydration", () => {
     expect(dockerfile).toMatch(
       /COPY[^\n]*stamp-claude-first-run\.mjs[^\n]*\/octogee\/infra\/gateway\/stamp-claude-first-run\.mjs/,
     );
     expect(dockerfile).not.toContain("claude-wrapper.sh");
     expect(dockerfile).not.toContain("claude-real");
-    expect(dockerfile).not.toContain("apt-get");
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends $DEBIAN_PACKAGES");
+    expect(dockerfile).toContain("pip3 install --break-system-packages --no-cache-dir");
+    expect(dockerfile).not.toContain("COPY --from=builder-toolchain-validation /tmp/builder-toolchain-validation/node_modules");
     expect(dockerfile).not.toContain("apply-gateway-class-policy.mjs");
     expect(dockerfile).toMatch(/USER\s+node\s*$/m);
   });
@@ -63,6 +59,9 @@ describe("Builder base build authority", () => {
     for (const input of [
       "infra/gateway/Dockerfile.builder-base",
       "cloudbuild-builder-base.yaml",
+      "infra/gateway/builder-toolchain/package.json",
+      "infra/gateway/builder-toolchain/package-lock.json",
+      "infra/gateway/builder-toolchain/groups.json",
       "infra/gateway/stamp-claude-first-run.mjs",
     ]) {
       expect(workflow).toContain(input);
@@ -74,6 +73,9 @@ describe("Builder base build authority", () => {
       '"$$BUILDER_BASE_TAG" == "$${GATEWAY_BASE_TAG}-builder-$${BUILDER_INPUT_HASH}"',
     );
     expect(buildConfig).not.toContain(":latest");
+    expect(buildConfig).toContain('_GATEWAY_BASE_IMAGE: "octogee-gateway-base"');
+    expect(buildConfig).not.toContain("GATEWAY_CORE_IMAGE");
+    expect(workflow).toContain('SENTINEL="${AR_REPO}/octogee-gateway-base:${GATEWAY_BASE_TAG}"');
   });
 
   it("builds Builder images without scheduling the operator toolkit or base", () => {

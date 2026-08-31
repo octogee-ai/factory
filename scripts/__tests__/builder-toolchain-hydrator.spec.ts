@@ -149,12 +149,25 @@ describe("Builder toolchain stable wrappers", () => {
     await fs.mkdir(path.join(objectPath, "node_modules", ".bin"), { recursive: true });
     await fs.writeFile(path.join(objectPath, "node_modules", ".bin", "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await fs.writeFile(path.join(objectPath, "node_modules", ".bin", "codex"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+    const chromiumPackage = path.join(objectPath, "node_modules", "@sparticuz", "chromium");
+    const chromiumExecutable = path.join(home, "chromium");
+    await fs.mkdir(path.join(chromiumPackage, "build"), { recursive: true });
+    await fs.writeFile(
+      path.join(chromiumPackage, "package.json"),
+      `${JSON.stringify({ type: "module" })}\n`,
+    );
+    await fs.writeFile(
+      path.join(chromiumPackage, "build", "index.js"),
+      `export default { executablePath: async () => ${JSON.stringify(chromiumExecutable)} };\n`,
+    );
+    await fs.writeFile(chromiumExecutable, "#!/bin/sh\nexit 9\n", { mode: 0o755 });
     await fs.writeFile(path.join(objectPath, ".toolchain-lock.json"), JSON.stringify({
       schemaVersion: 1,
       lockSha256: digest,
       commands: {
         claude: "node_modules/.bin/claude",
         codex: "node_modules/.bin/codex",
+        chromium: "node_modules/@sparticuz/chromium/build/index.js",
       },
     }));
     await fs.symlink(`objects/sha256-${digest}`, path.join(root, "active"));
@@ -170,5 +183,6 @@ describe("Builder toolchain stable wrappers", () => {
     }));
 
     await expect(runBuilderToolchainCommand(["codex"], { HOME: home })).resolves.toBe(7);
+    await expect(runBuilderToolchainCommand(["chromium"], { HOME: home })).resolves.toBe(9);
   });
 });

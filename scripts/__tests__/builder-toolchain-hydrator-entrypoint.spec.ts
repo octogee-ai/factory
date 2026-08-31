@@ -19,6 +19,8 @@ describe("Builder toolchain hydrator entrypoint", () => {
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH: "/octogee/toolchain/package.json",
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH: "/octogee/toolchain/package-lock.json",
       OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256: "a".repeat(64),
+      OCTOGEE_BUILDER_TOOL_GROUPS_PATH: "/octogee/toolchain/groups.json",
+      OCTOGEE_BUILDER_TOOL_GROUPS_SHA256: "b".repeat(64),
     })).toEqual({
       root: "/home/builder/.octogee/toolchains",
       gatewayId: "bender",
@@ -27,6 +29,8 @@ describe("Builder toolchain hydrator entrypoint", () => {
       packageJsonPath: "/octogee/toolchain/package.json",
       packageLockPath: "/octogee/toolchain/package-lock.json",
       packageLockSha256: "a".repeat(64),
+      groupsPath: "/octogee/toolchain/groups.json",
+      groupsSha256: "b".repeat(64),
       fallbackRegistryUrl: "https://registry.npmjs.org/",
     });
   });

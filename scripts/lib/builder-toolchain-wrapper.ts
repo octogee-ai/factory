@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import {
   BUILDER_TOOLCHAIN_COMMANDS,
+  BUILDER_TOOLCHAIN_COMMAND_PATHS,
   readToolchainDetail,
   readToolchainStatus,
   type BuilderToolchainCommand,
@@ -31,7 +32,7 @@ async function resolveReadyToolchainCommand(
     if (
       installed.schemaVersion !== 1 || installed.lockSha256 !== detail?.lockSha256 ||
       !BUILDER_TOOLCHAIN_COMMANDS.every((name) =>
-        installed.commands?.[name] === `node_modules/.bin/${name}`)
+        installed.commands?.[name] === BUILDER_TOOLCHAIN_COMMAND_PATHS[name])
     ) throw new Error("active lock differs");
     const executable = path.join(activePath, installed.commands[command]);
     const stat = await fs.lstat(executable);

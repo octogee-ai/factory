@@ -65,23 +65,41 @@ function runInstructionContaining(dockerfile: string, needle: string): string {
 }
 
 describe("gateway base image", () => {
-  it("keeps the Builder boot base on the core target without workstation or ACP payloads", () => {
+  it("layers the controlled workstation over the full bootable gateway base", () => {
     const base = readRepoFile("infra/gateway/Dockerfile.base");
     const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
     const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
 
     expect(base).toContain("FROM node:24-bookworm-slim AS gateway-core-system");
     expect(base).toContain("FROM gateway-core-system AS gateway-core-runtime");
-    expect(builderBase).toContain("ARG GATEWAY_CORE_IMAGE");
-    expect(builderBase).toContain("FROM ${GATEWAY_CORE_IMAGE}");
+    expect(builderBase).toContain("ARG GATEWAY_BASE_IMAGE");
+    expect(builderBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
     expect(builderBase).toContain("infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json");
     expect(builderBase).toContain("infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json");
+    expect(builderBase).toContain("infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json");
     expect(builderBase).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+    expect(builderBase).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
+    expect(builderBase).toContain("DEBIAN_PACKAGES=");
+    expect(builderBase).toContain("standaloneTools.gcloud.version");
+    expect(builderBase).toContain("pip3 install --break-system-packages --no-cache-dir");
     expect(builderConfig).not.toContain('"codex": {');
     expect(builderConfig).not.toContain('"browser": {\n    "enabled": true');
   });
 
-  it("pins the post-readiness Builder CLIs and their npm integrity", () => {
+  it("keeps post-readiness hydration npm-only", () => {
+    const hydrator = readRepoFile("scripts/lib/builder-toolchain-hydrator.ts");
+    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
+
+    expect(hydrator).toContain('"ci",');
+    expect(hydrator).toContain("--prefer-offline");
+    expect(hydrator).not.toContain("apt-get");
+    expect(hydrator).not.toContain("dpkg-deb");
+    expect(hydrator).not.toContain("/usr/bin/curl");
+    expect(builderBase).toContain("apt-get install -y --no-install-recommends $DEBIAN_PACKAGES");
+    expect(builderBase).toContain("google-cloud-cli-${GCLOUD_VERSION}-linux-x86_64.tar.gz");
+  });
+
+  it("pins the post-readiness Builder tools and their npm integrity", () => {
     const packageJson = JSON.parse(
       readRepoFile("infra/gateway/builder-toolchain/package.json"),
     ) as {
@@ -95,9 +113,18 @@ describe("gateway base image", () => {
     expect(packageJson.dependencies).toEqual({
       "@anthropic-ai/claude-code": "2.1.251",
       "@openai/codex": "0.151.0",
+      "@sparticuz/chromium": "149.0.0",
+      "firebase-tools": "15.28.2",
+      "npm-check-updates": "23.1.0",
+      "pnpm": "11.24.0",
+      "tsx": "4.23.13",
+      "typescript": "5.9.3",
     });
     expect(packageJson.allowScripts).toEqual({
       "@anthropic-ai/claude-code@2.1.251": true,
+      "esbuild@0.28.2": true,
+      "protobufjs@7.6.6": true,
+      "re2@1.26.1": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
       version: "2.1.251",
@@ -107,11 +134,26 @@ describe("gateway base image", () => {
       version: "0.151.0",
       integrity: expect.stringMatching(/^sha512-/),
     });
+    expect(packageLock.packages["node_modules/@sparticuz/chromium"]).toMatchObject({
+      version: "149.0.0",
+      integrity: expect.stringMatching(/^sha512-/),
+    });
+    for (const packageName of [
+      "firebase-tools", "npm-check-updates", "pnpm", "tsx", "typescript",
+    ]) {
+      expect(packageLock.packages[`node_modules/${packageName}`]).toMatchObject({
+        version: packageJson.dependencies[packageName],
+        integrity: expect.stringMatching(/^sha512-/),
+      });
+    }
 
     const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
     expect(builderBase).toContain("npm ci --omit=dev --include=optional");
     expect(builderBase).toContain("node_modules/.bin/claude --version");
     expect(builderBase).toContain("node_modules/.bin/codex --version");
+    expect(builderBase).toContain("node_modules/@sparticuz/chromium/bin/chromium.br");
+    expect(builderBase).toContain("node_modules/.bin/firebase --version");
+    expect(builderBase).toContain("node_modules/.bin/pnpm --version");
     expect(builderBase).toContain("unexpected Anthropic platform payload");
     expect(builderBase).toContain("unexpected OpenAI platform payload");
   });
@@ -134,11 +176,14 @@ describe("gateway base image", () => {
 
     expect(workflow.match(/infra\/gateway\/builder-toolchain\/package-lock\.json/g))
       .toHaveLength(2);
+    expect(workflow.match(/infra\/gateway\/builder-toolchain\/groups\.json/g))
+      .toHaveLength(2);
     expect(workflow).toContain("BUILDER_BASE_INPUT_HASH=$(sha256sum");
     expect(cloudbuild).toContain(
       "TOOLCHAIN_LOCK_SHA256=\"$$(sha256sum infra/gateway/builder-toolchain/package-lock.json",
     );
     expect(cloudbuild).toContain("--build-arg=BUILDER_TOOLCHAIN_LOCK_SHA256=$$TOOLCHAIN_LOCK_SHA256");
+    expect(cloudbuild).toContain("--build-arg=BUILDER_TOOL_GROUPS_SHA256=$$TOOL_GROUPS_SHA256");
   });
 
   it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
@@ -204,7 +249,7 @@ describe("gateway base image", () => {
     expect(disabledArm).not.toContain("ln -s");
   });
 
-  it("enables lazy Claude and Codex wrappers only in Builder final builds", () => {
+  it("keeps boot-critical tools preinstalled in Builder final builds", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
     const wrapperInstruction = runInstructionContaining(
       dockerfile,
@@ -216,16 +261,21 @@ describe("gateway base image", () => {
       "cloudbuild-operator-final.yaml",
       "cloudbuild-operator-final-extra.yaml",
     ]) {
-      expect(readRepoFile(filePath)).toContain(
+      expect(readRepoFile(filePath)).not.toContain(
         "--build-arg=ENABLE_BUILDER_TOOLCHAIN_WRAPPER=true",
       );
     }
-    expect(enabledArm).toContain("rm -f /usr/local/bin/claude /usr/local/bin/codex");
+    expect(enabledArm).toContain(
+      "rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium",
+    );
     expect(enabledArm).toContain(
       "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude",
     );
     expect(enabledArm).toContain(
       "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex",
+    );
+    expect(enabledArm).toContain(
+      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/bin/chromium",
     );
   });
 
@@ -305,9 +355,6 @@ describe("gateway base image", () => {
     );
     for (const build of [builderBuild, extraBuilderBuild]) {
       expect(build).toContain(
-        "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin",
-      );
-      expect(build).not.toContain(
         "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex",
       );
     }
@@ -337,7 +384,7 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 
-  it("proves the final Builder image excludes pre-hydration Codex payloads", () => {
+  it("proves the final Builder image retains its boot-critical payloads", () => {
     for (const filePath of [
       "cloudbuild-operator-final.yaml",
       "cloudbuild-operator-final-extra.yaml",
@@ -345,11 +392,19 @@ describe("gateway base image", () => {
       const cloudbuild = readRepoFile(filePath);
 
       expect(cloudbuild).toContain(
+        'find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
+      );
+      expect(cloudbuild).not.toContain(
         '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
       );
-      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@anthropic-ai/claude-code"');
-      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@openai/codex"');
+      expect(cloudbuild).toContain('test -e "$$(npm root -g)/@anthropic-ai/claude-code"');
+      expect(cloudbuild).toContain('test -e "$$(npm root -g)/@openai/codex"');
+      expect(cloudbuild).toContain("test -x /usr/local/bin/claude");
+      expect(cloudbuild).toContain("test -x /usr/local/bin/codex");
+      expect(cloudbuild).toContain("test -x /usr/bin/chromium");
+      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@sparticuz/chromium"');
       expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+      expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
     }
   });
 

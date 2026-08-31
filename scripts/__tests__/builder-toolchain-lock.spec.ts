@@ -11,6 +11,7 @@ import {
   parseBuilderToolchainLock,
   readToolchainStatus,
 } from "../lib/builder-toolchain-hydrator.js";
+import { parseBuilderToolGroups, type BuilderToolGroups } from "../lib/builder-tool-groups.js";
 import { resolveToolchainCommand } from "../lib/builder-toolchain-wrapper.js";
 
 const tempRoots: string[] = [];
@@ -38,6 +39,57 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+const NPM_PACKAGES = {
+  "@anthropic-ai/claude-code": "2.1.251",
+  "@openai/codex": "0.151.0",
+  "@sparticuz/chromium": "149.0.0",
+  "firebase-tools": "15.28.2",
+  "npm-check-updates": "23.1.0",
+  "pnpm": "11.24.0",
+  "tsx": "4.23.13",
+  "typescript": "5.9.3",
+};
+
+function groupsFixture(): BuilderToolGroups {
+  return parseBuilderToolGroups({
+    schemaVersion: 1,
+    groups: [
+      {
+        id: "agent-clis",
+        enabled: true,
+        delivery: "npm",
+        npmPackages: {
+          "@anthropic-ai/claude-code": "2.1.251",
+          "@openai/codex": "0.151.0",
+        },
+        commands: ["claude", "codex"],
+      },
+      {
+        id: "browser",
+        enabled: true,
+        delivery: "npm",
+        npmPackages: { "@sparticuz/chromium": "149.0.0" },
+        commands: ["chromium"],
+      },
+      {
+        id: "web-development",
+        enabled: true,
+        delivery: "npm",
+        npmPackages: {
+          "firebase-tools": "15.28.2",
+          "npm-check-updates": "23.1.0",
+          "pnpm": "11.24.0",
+          "tsx": "4.23.13",
+          "typescript": "5.9.3",
+        },
+        commands: ["firebase", "ncu", "pnpm", "tsx", "tsc"],
+      },
+    ],
+    pythonPackages: [],
+    standaloneTools: {},
+  });
+}
+
 function lockFixture(): Record<string, unknown> {
   return {
     name: "@octogee/builder-toolchain",
@@ -48,20 +100,45 @@ function lockFixture(): Record<string, unknown> {
       "": {
         name: "@octogee/builder-toolchain",
         version: "1.0.0",
-        dependencies: {
-          "@anthropic-ai/claude-code": "2.1.251",
-          "@openai/codex": "0.151.0",
-        },
+        dependencies: NPM_PACKAGES,
       },
       "node_modules/@anthropic-ai/claude-code": {
         version: "2.1.251",
         resolved: "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.251.tgz",
         integrity: "sha512-Y2xhdWRl",
+        hasInstallScript: true,
       },
       "node_modules/@openai/codex": {
         version: "0.151.0",
         resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.151.0.tgz",
         integrity: "sha512-Y29kZXg=",
+      },
+      "node_modules/@sparticuz/chromium": {
+        version: "149.0.0",
+        resolved: "https://registry.npmjs.org/@sparticuz/chromium/-/chromium-149.0.0.tgz",
+        integrity: "sha512-Y2hyb21pdW0=",
+      },
+      ...Object.fromEntries(Object.entries(NPM_PACKAGES)
+        .filter(([name]) => !name.startsWith("@"))
+        .map(([name, version]) => [`node_modules/${name}`, {
+          version,
+          resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
+          integrity: "sha512-Y2FjaGVk",
+        }])),
+      "node_modules/esbuild": {
+        version: "0.28.2",
+        integrity: "sha512-ZXNi",
+        hasInstallScript: true,
+      },
+      "node_modules/protobufjs": {
+        version: "7.6.6",
+        integrity: "sha512-cHJvdG8=",
+        hasInstallScript: true,
+      },
+      "node_modules/re2": {
+        version: "1.26.1",
+        integrity: "sha512-cmUy",
+        hasInstallScript: true,
       },
     },
   };
@@ -71,6 +148,9 @@ async function writePinnedInputs(home: string): Promise<{
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
+  groupsPath: string;
+  groupsSha256: string;
+  bundleSha256: string;
 }> {
   const packageJsonPath = path.join(home, "package.json");
   const packageLockPath = path.join(home, "package-lock.json");
@@ -78,18 +158,28 @@ async function writePinnedInputs(home: string): Promise<{
     name: "@octogee/builder-toolchain",
     version: "1.0.0",
     private: true,
-    dependencies: {
-      "@anthropic-ai/claude-code": "2.1.251",
-      "@openai/codex": "0.151.0",
-    },
+    dependencies: NPM_PACKAGES,
     allowScripts: {
       "@anthropic-ai/claude-code@2.1.251": true,
+      "esbuild@0.28.2": true,
+      "protobufjs@7.6.6": true,
+      "re2@1.26.1": true,
     },
   };
   const rawLock = `${JSON.stringify(lockFixture())}\n`;
+  const groupsPath = path.join(home, "groups.json");
+  const rawGroups = `${JSON.stringify(groupsFixture())}\n`;
   await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson)}\n`);
   await fs.writeFile(packageLockPath, rawLock);
-  return { packageJsonPath, packageLockPath, packageLockSha256: sha256(rawLock) };
+  await fs.writeFile(groupsPath, rawGroups);
+  return {
+    packageJsonPath,
+    packageLockPath,
+    packageLockSha256: sha256(rawLock),
+    groupsPath,
+    groupsSha256: sha256(rawGroups),
+    bundleSha256: createHash("sha256").update(rawLock).update(rawGroups).digest("hex"),
+  };
 }
 
 async function fakeInstall(destination: string): Promise<void> {
@@ -97,25 +187,59 @@ async function fakeInstall(destination: string): Promise<void> {
   await fs.mkdir(bin, { recursive: true });
   await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\necho '2.1.251 (Claude Code)'\n", { mode: 0o755 });
   await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.151.0'\n", { mode: 0o755 });
+  for (const command of ["firebase", "ncu", "pnpm", "tsc", "tsx"]) {
+    await fs.writeFile(path.join(bin, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  const chromiumPackage = path.join(destination, "node_modules", "@sparticuz", "chromium");
+  const chromiumExecutable = path.join(destination, "chromium");
+  await fs.mkdir(path.join(chromiumPackage, "build"), { recursive: true });
+  await fs.writeFile(
+    path.join(chromiumPackage, "package.json"),
+    `${JSON.stringify({ type: "module" })}\n`,
+  );
+  await fs.writeFile(
+    path.join(chromiumPackage, "build", "index.js"),
+    `export default { executablePath: async () => ${JSON.stringify(chromiumExecutable)} };\n`,
+  );
+  await fs.writeFile(
+    chromiumExecutable,
+    "#!/bin/sh\necho 'Chromium 149.0.7827.22'\n",
+    { mode: 0o755 },
+  );
 }
 
 describe("Builder npm toolchain lock", () => {
-  it("accepts only the two exact CLI dependencies with registry integrity", () => {
-    expect(parseBuilderToolchainLock(lockFixture())).toEqual({
+  it("keeps the checked-in npm lock aligned with the enabled npm groups", async () => {
+    const [lock, groups] = await Promise.all([
+      fs.readFile(path.resolve("..", "infra/gateway/builder-toolchain/package-lock.json"), "utf8"),
+      fs.readFile(path.resolve("..", "infra/gateway/builder-toolchain/groups.json"), "utf8"),
+    ]);
+
+    expect(() => parseBuilderToolchainLock(
+      JSON.parse(lock) as unknown,
+      parseBuilderToolGroups(JSON.parse(groups) as unknown),
+    )).not.toThrow();
+  });
+
+  it("accepts only the exact Builder tool dependencies with registry integrity", () => {
+    expect(parseBuilderToolchainLock(lockFixture(), groupsFixture())).toEqual({
       schemaVersion: 1,
       id: "npm-lock-sha256",
       commands: {
         claude: "node_modules/.bin/claude",
         codex: "node_modules/.bin/codex",
+        chromium: "node_modules/@sparticuz/chromium/build/index.js",
       },
-      versions: { claude: "2.1.251", codex: "0.151.0" },
+      versions: { claude: "2.1.251", codex: "0.151.0", chromium: "149.0.0" },
+      packages: NPM_PACKAGES,
     });
 
     const missingIntegrity = lockFixture();
     delete (missingIntegrity.packages as Record<string, Record<string, unknown>>)[
       "node_modules/@openai/codex"
     ].integrity;
-    expect(() => parseBuilderToolchainLock(missingIntegrity)).toThrow(/invalid-toolchain-lock/);
+    expect(() => parseBuilderToolchainLock(missingIntegrity, groupsFixture()))
+      .toThrow(/invalid-toolchain-lock/);
   });
 
   it("installs after pin verification into a content-addressed HOME object and activates atomically", async () => {
@@ -132,7 +256,7 @@ describe("Builder npm toolchain lock", () => {
       installDependencies,
     })).resolves.toMatchObject({ status: "ready" });
 
-    const objectPath = path.join(root, "objects", `sha256-${pin.packageLockSha256}`);
+    const objectPath = path.join(root, "objects", `sha256-${pin.bundleSha256}`);
     expect(installDependencies).toHaveBeenCalledWith(expect.stringContaining(
       `${path.sep}staging${path.sep}`,
     ), {
@@ -142,13 +266,44 @@ describe("Builder npm toolchain lock", () => {
       signal: undefined,
     });
     expect(await fs.readlink(path.join(root, "active"))).toBe(
-      `objects/sha256-${pin.packageLockSha256}`,
+      `objects/sha256-${pin.bundleSha256}`,
     );
     await expect(resolveToolchainCommand({ root, command: "claude" })).resolves.toMatchObject({
       kind: "ready",
       executable: path.join(await fs.realpath(objectPath), "node_modules", ".bin", "claude"),
     });
+    await expect(resolveToolchainCommand({ root, command: "chromium" })).resolves.toMatchObject({
+      kind: "ready",
+      executable: path.join(
+        await fs.realpath(objectPath),
+        "node_modules",
+        "@sparticuz",
+        "chromium",
+        "build",
+        "index.js",
+      ),
+    });
+    await expect(fs.realpath(path.join(objectPath, "bin", "firebase"))).resolves.toBe(
+      path.join(objectPath, "node_modules", ".bin", "firebase"),
+    );
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("fails hydration when an enabled npm group does not expose its declared command", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async (destination) => {
+        await fakeInstall(destination);
+        await fs.rm(path.join(destination, "node_modules", ".bin", "firebase"));
+      },
+    })).rejects.toMatchObject({ reasonCode: "missing-command" });
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
   });
 
   it("rejects lock drift before invoking npm", async () => {
@@ -197,16 +352,11 @@ describe("Builder npm toolchain lock", () => {
       ...pin,
       registryCredentialsProvider: registryCredentials,
       installDependencies: async (destination) => {
+        await fakeInstall(destination);
         const bin = path.join(destination, "node_modules", ".bin");
-        await fs.mkdir(bin, { recursive: true });
         await fs.writeFile(
           path.join(bin, "claude"),
           "#!/bin/sh\necho 'Error: claude native binary not installed.' >&2\nexit 1\n",
-          { mode: 0o755 },
-        );
-        await fs.writeFile(
-          path.join(bin, "codex"),
-          "#!/bin/sh\necho 'codex-cli 0.151.0'\n",
           { mode: 0o755 },
         );
       },

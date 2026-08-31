@@ -164,11 +164,13 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/bin
       false) \
         test -x /usr/local/bin/claude \
         && test -x /usr/local/bin/codex \
+        && test -x /usr/bin/chromium \
         ;; \
       true) \
-        rm -f /usr/local/bin/claude /usr/local/bin/codex \
+        rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium \
         && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
         && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex \
+        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/bin/chromium \
         ;; \
       *) \
         echo "ENABLE_BUILDER_TOOLCHAIN_WRAPPER must be true or false" >&2 \
@@ -184,6 +186,7 @@ WORKDIR /home/node
 USER node
 
 ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
+ENV PATH=/home/node/.octogee/toolchains/active/bin:${PATH}
 
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation
