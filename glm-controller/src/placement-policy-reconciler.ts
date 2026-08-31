@@ -533,7 +533,31 @@ function knownKubernetesUnavailable(gateway: PlacementPolicyGateway | undefined)
   return gateway?.kubernetesStatus === "missing" || gateway?.kubernetesStatus === "not-ready";
 }
 
-function transientRecoveryFence(
+function bootingDisposableBuilderStartupFence(
+  gateway: PlacementPolicyGateway,
+  now: number,
+): string | null {
+  const runtimeStartedAt = typeof gateway.runtimeStartedAt === "number" &&
+    Number.isFinite(gateway.runtimeStartedAt)
+    ? gateway.runtimeStartedAt
+    : null;
+  const runtimeAge = runtimeStartedAt === null ? null : now - runtimeStartedAt;
+  const bootingDisposableBuilder = [
+    gateway.gatewayClass === "builder",
+    gateway.disposable,
+    gateway.kubernetesStatus === "not-ready",
+    gateway.serving === true,
+    gateway.runtimeStatus === "booting",
+    gateway.heartbeatFresh === true,
+    gateway.liveReleaseReady === true,
+  ].every(Boolean) && runtimeAge !== null &&
+    runtimeAge >= 0 && runtimeAge < DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
+  return bootingDisposableBuilder
+    ? `disposable Builder source ${gateway.gatewayId} is still booting OpenClaw`
+    : null;
+}
+
+function transientSharedRecoveryFence(
   context: PlacementPolicyReconcileContext,
   gateway: PlacementPolicyGateway,
 ): string | null {
@@ -559,6 +583,14 @@ function transientRecoveryFence(
     return `shared source ${gateway.gatewayId} is inside its post-change recovery grace`;
   }
   return null;
+}
+
+function transientRecoveryFence(
+  context: PlacementPolicyReconcileContext,
+  gateway: PlacementPolicyGateway,
+): string | null {
+  return bootingDisposableBuilderStartupFence(gateway, context.deps.now()) ??
+    transientSharedRecoveryFence(context, gateway);
 }
 
 function gatewayRuntimeServing(gateway: PlacementPolicyGateway): boolean {
