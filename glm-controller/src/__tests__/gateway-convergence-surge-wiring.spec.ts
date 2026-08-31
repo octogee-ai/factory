@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayRuntimeDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
-import { refineGatewayConvergenceAction } from "../index.js";
+import {
+  refineGatewayConvergenceAction,
+  shouldReconcileInitialDisposablePrelaunch,
+} from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
 import { decideRollStateMigration } from "../roll-state-migration.js";
 
@@ -72,6 +75,20 @@ function passDeps(
 }
 
 describe("gateway convergence surge wiring", () => {
+  it("rechecks only an initial disposable Builder prelaunch after an unavailable poll", () => {
+    const prelaunch = {
+      ...gateway(),
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      liveRelease: null,
+      allocation: { kind: "disposable-builder" },
+    } as DurableGateway;
+
+    expect(shouldReconcileInitialDisposablePrelaunch(prelaunch)).toBe(true);
+    expect(shouldReconcileInitialDisposablePrelaunch(gateway())).toBe(false);
+    expect(shouldReconcileInitialDisposablePrelaunch({ ...prelaunch, liveRelease: 2 })).toBe(false);
+  });
+
   it("marks a release live only after handoff and the desired-build heartbeat agree", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
 

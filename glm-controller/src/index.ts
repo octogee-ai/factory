@@ -885,6 +885,12 @@ function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
   return isDisposableBuilderGateway(gateway) && gateway.liveRelease === null;
 }
 
+export function shouldReconcileInitialDisposablePrelaunch(
+  gateway: DurableGateway | null,
+): boolean {
+  return gateway !== null && isInitialDisposableBuilderPrelaunch(gateway);
+}
+
 function runtimeReportsDesiredBuild(
   runtime: GatewayRuntimeDoc | undefined,
   desiredImageTag: string,
@@ -2162,6 +2168,16 @@ export function buildGatewayHeartbeatPollerDeps(
         log,
         tag: "evict",
       });
+    },
+    onUnreachable: async (gatewayId: string) => {
+      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      const gateway = projectGatewayDesiredRootForGateway(
+        snapshot.exists ? snapshot.data() : undefined,
+        gatewayId,
+      );
+      if (shouldReconcileInitialDisposablePrelaunch(gateway)) {
+        requestReconcileTickRef.fire?.(gatewayId);
+      }
     },
   };
 }

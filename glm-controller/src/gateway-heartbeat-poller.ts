@@ -53,6 +53,8 @@ export interface GatewayHeartbeatPollerDeps {
   readAssignedSlugs: (gatewayId: string) => Promise<string[]>;
   /** Persist live telemetry; the impl stamps lastHeartbeatAt. */
   writeHeartbeat: (gatewayId: string, record: GatewayHeartbeatRecord) => Promise<void>;
+  /** Reconcile a gateway whose signed fleet-state endpoint is not reachable yet. */
+  onUnreachable?: (gatewayId: string) => Promise<void> | void;
   ownsEviction?: (gatewayId: string) => Promise<boolean>;
   /** Tear down a departed customer's local footprint on the gateway (pod /unmount).
    *  Omit to disable Cowboy-driven eviction (e.g. no fleet secret configured). */
@@ -206,7 +208,10 @@ export async function pollGatewayHeartbeatsOnce(
   for (const gatewayId of gatewayIds) {
     try {
       const state = await deps.fetchFleetState(gatewayId);
-      if (!state) continue;
+      if (!state) {
+        await deps.onUnreachable?.(gatewayId);
+        continue;
+      }
       const assigned = await deps.readAssignedSlugs(gatewayId);
       const record: GatewayHeartbeatRecord = {
         status: state.status,

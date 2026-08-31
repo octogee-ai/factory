@@ -169,9 +169,14 @@ describe("pollGatewayHeartbeatsOnce", () => {
   });
 
   it("skips a gateway it cannot reach (does NOT clobber the doc to empty)", async () => {
-    const deps = makeDeps({ fetchFleetState: vi.fn(async () => null) });
+    const onUnreachable = vi.fn(async () => {});
+    const deps = makeDeps({
+      fetchFleetState: vi.fn(async () => null),
+      onUnreachable,
+    });
     await pollGatewayHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).not.toHaveBeenCalled();
+    expect(onUnreachable).toHaveBeenCalledWith("bender");
   });
 
   it("isolates per-gateway failures so one bad gateway does not block the rest", async () => {
