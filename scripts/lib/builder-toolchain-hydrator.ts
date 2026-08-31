@@ -711,6 +711,70 @@ export async function hydrateBuilderToolchain(
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const waitForever = (): Promise<void> => new Promise(() => {});
 
+type HydrationLoopSleep = (ms: number) => Promise<void>;
+
+interface HydrationAttemptResult {
+  status?: BuilderToolchainStatus;
+  stopped: boolean;
+  waitingForAssignment: boolean;
+}
+
+async function waitForInteractiveReadiness(
+  options: RunBuilderToolchainHydrationLoopOptions,
+  sleep: HydrationLoopSleep,
+  shouldStop: () => boolean,
+): Promise<boolean> {
+  let pendingWritten = false;
+  while (!shouldStop()) {
+    if (await options.probeInteractiveReadiness()) return true;
+    if (!pendingWritten) {
+      await options.writeStatus("pending");
+      pendingWritten = true;
+    }
+    await sleep(1_000);
+  }
+  return false;
+}
+
+async function runHydrationAttempt(
+  hydrate: RunBuilderToolchainHydrationLoopOptions["hydrate"],
+  attempt: number,
+  shouldStop: () => boolean,
+): Promise<HydrationAttemptResult> {
+  try {
+    return {
+      status: await hydrate(attempt),
+      stopped: false,
+      waitingForAssignment: false,
+    };
+  } catch (error) {
+    return {
+      stopped: shouldStop(),
+      waitingForAssignment: error instanceof BuilderToolchainHydrationError &&
+        error.reasonCode === "npm-proxy-credentials-unavailable",
+    };
+  }
+}
+
+async function publishReadyUntilAccepted(
+  status: BuilderToolchainStatus,
+  publish: RunBuilderToolchainHydrationLoopOptions["ensureReadyPublished"],
+  sleep: HydrationLoopSleep,
+  retryMs: number,
+  shouldStop: () => boolean,
+): Promise<boolean> {
+  while (!shouldStop() && publish) {
+    try {
+      await publish(status);
+      break;
+    } catch {
+      if (shouldStop()) return false;
+      await sleep(retryMs);
+    }
+  }
+  return !shouldStop();
+}
+
 export async function runBuilderToolchainHydrationLoop(
   options: RunBuilderToolchainHydrationLoopOptions,
 ): Promise<void> {
@@ -718,43 +782,29 @@ export async function runBuilderToolchainHydrationLoop(
   const initialBackoffMs = options.initialBackoffMs ?? 5_000;
   const maxBackoffMs = options.maxBackoffMs ?? 5 * 60_000;
   const shouldStop = options.shouldStop ?? (() => false);
+  if (!(await waitForInteractiveReadiness(options, sleep, shouldStop)) || shouldStop()) return;
+
   let attempt = 0;
-  let pendingWritten = false;
-  while (!shouldStop() && !(await options.probeInteractiveReadiness())) {
-    if (!pendingWritten) {
-      await options.writeStatus("pending");
-      pendingWritten = true;
-    }
-    await sleep(1_000);
-  }
-  if (shouldStop()) return;
   let backoffMs = initialBackoffMs;
   while (!shouldStop()) {
     attempt += 1;
-    let waitingForAssignment = false;
-    try {
-      const status = await options.hydrate(attempt);
-      if (status.status === "ready") {
-        while (!shouldStop() && options.ensureReadyPublished) {
-          try {
-            await options.ensureReadyPublished(status);
-            break;
-          } catch {
-            if (shouldStop()) return;
-            await sleep(initialBackoffMs);
-          }
-        }
-        if (shouldStop()) return;
-        await (options.waitAfterReady ?? waitForever)();
-        return;
-      }
-    } catch (error) {
-      if (shouldStop()) return;
-      waitingForAssignment = error instanceof BuilderToolchainHydrationError &&
-        error.reasonCode === "npm-proxy-credentials-unavailable";
+    const result = await runHydrationAttempt(options.hydrate, attempt, shouldStop);
+    if (result.stopped) return;
+    if (result.status?.status === "ready") {
+      const published = await publishReadyUntilAccepted(
+        result.status,
+        options.ensureReadyPublished,
+        sleep,
+        initialBackoffMs,
+        shouldStop,
+      );
+      if (!published) return;
+      await (options.waitAfterReady ?? waitForever)();
+      return;
     }
-    await sleep(waitingForAssignment ? initialBackoffMs : backoffMs);
-    backoffMs = waitingForAssignment
+
+    await sleep(result.waitingForAssignment ? initialBackoffMs : backoffMs);
+    backoffMs = result.waitingForAssignment
       ? initialBackoffMs
       : Math.min(backoffMs * 2, maxBackoffMs);
   }
