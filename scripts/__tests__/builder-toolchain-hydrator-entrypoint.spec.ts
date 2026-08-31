@@ -7,6 +7,7 @@ import {
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
 } from "../entrypoints/builder-toolchain-hydrator.js";
+import { runBuilderToolchainHydrationLoop } from "../lib/builder-toolchain-hydrator.js";
 
 describe("Builder toolchain hydrator entrypoint", () => {
   it("resolves the image-pinned npm lock and managed proxy contract", () => {
@@ -105,6 +106,45 @@ describe("Builder toolchain hydrator entrypoint", () => {
 
     expect(client.uidForSlug).toHaveBeenCalledTimes(2);
     expect(client.setToolchainStatus.mock.calls).toEqual([["uid-alice", "ready"]]);
+  });
+
+  it("retries ready after a pre-cutover status rejection without rehydrating", async () => {
+    const client = {
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      setToolchainStatus: vi.fn()
+        .mockRejectedValueOnce(new Error("fleet-broker set-toolchain-status → 403"))
+        .mockResolvedValueOnce(undefined),
+    };
+    const publication = createRetriableBuilderToolchainStatusPublication({
+      client,
+      builderSlug: "alice",
+    });
+    const ready = {
+      schemaVersion: 1 as const,
+      status: "ready" as const,
+      updatedAt: "2026-08-30T00:00:00.000Z",
+    };
+    const hydrate = vi.fn(async () => {
+      await publication.publishStatus(ready).catch(() => undefined);
+      return ready;
+    });
+    const ensureReadyPublished = vi.fn(publication.ensureReadyPublished);
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      ensureReadyPublished,
+      writeStatus: async () => {},
+      waitAfterReady: async () => {},
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(ensureReadyPublished).toHaveBeenCalledWith(ready);
+    expect(client.uidForSlug).toHaveBeenCalledTimes(1);
+    expect(client.setToolchainStatus.mock.calls).toEqual([
+      ["uid-alice", "ready"],
+      ["uid-alice", "ready"],
+    ]);
   });
 
   it("treats only a successful surge-readiness response as interactive readiness", async () => {
