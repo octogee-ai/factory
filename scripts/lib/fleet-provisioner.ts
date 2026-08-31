@@ -1406,6 +1406,41 @@ function createReconcileConvergenceHooks(input: {
   return { recordApplied, rememberRetry, forgetRetry };
 }
 
+function createDesiredRosterReader(input: {
+  opts: StartFleetOptions;
+  fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
+  desiredFingerprints: Map<string, string>;
+  setEnsureFingerprint: (fingerprint: string) => void;
+}): (() => Promise<string[]>) | null {
+  const fingerprintSource = input.fingerprintSource;
+  if (fingerprintSource) {
+    return async () => {
+      const next = await fingerprintSource();
+      input.desiredFingerprints.clear();
+      for (const [slug, fingerprint] of next) {
+        input.desiredFingerprints.set(slug, fingerprint);
+      }
+      input.setEnsureFingerprint(desiredEnsureLaneFingerprint(next));
+      return [...next.keys()];
+    };
+  }
+  const readDesiredSlugs = input.opts.readDesiredSlugs;
+  if (readDesiredSlugs) {
+    return async () => {
+      const slugs = await readDesiredSlugs();
+      input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
+      return slugs;
+    };
+  }
+  const db = input.opts.db;
+  if (!db) return null;
+  return async () => {
+    const slugs = await readAssignedSlugsForGateway(db, input.opts.gatewayId);
+    input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
+    return slugs;
+  };
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -1477,28 +1512,14 @@ function startMaybeReconcileLoop(params: {
     };
   }
 
-  let readDesired: (() => Promise<string[]>) | null = null;
-  if (fingerprintSource) {
-    readDesired = async () => {
-      const next = await fingerprintSource();
-      desiredFp.clear();
-      for (const [slug, fp] of next) desiredFp.set(slug, fp);
-      desiredEnsureFingerprint = desiredEnsureLaneFingerprint(next);
-      return [...next.keys()];
-    };
-  } else if (opts.readDesiredSlugs) {
-    readDesired = async () => {
-      const slugs = await opts.readDesiredSlugs!();
-      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
-      return slugs;
-    };
-  } else if (opts.db) {
-    readDesired = async () => {
-      const slugs = await readAssignedSlugsForGateway(opts.db!, opts.gatewayId);
-      desiredEnsureFingerprint = desiredEnsureLaneRosterFingerprint(slugs);
-      return slugs;
-    };
-  }
+  const readDesired = createDesiredRosterReader({
+    opts,
+    fingerprintSource,
+    desiredFingerprints: desiredFp,
+    setEnsureFingerprint: (fingerprint) => {
+      desiredEnsureFingerprint = fingerprint;
+    },
+  });
   if (!provision || !readDesired) return () => undefined;
 
   const getContentStale = fingerprintSource

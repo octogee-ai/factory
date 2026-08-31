@@ -148,6 +148,41 @@ function npmRegistryCredentialClient(
   };
 }
 
+function builderRuntimeStateClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<
+  FleetBrokerClient,
+  | "builderRuntimeStateDownloadUrl"
+  | "builderRuntimeStateSnapshotUrls"
+  | "builderRuntimeStatePrune"
+> {
+  return {
+    async builderRuntimeStateDownloadUrl(input) {
+      return postJson<FleetBrokerBlobSignedUrl>(
+        "/internal/fleet/builder-runtime-state/download-url",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStateSnapshotUrls(input) {
+      return postJson<FleetBrokerBuilderRuntimeStateSnapshotUrls>(
+        "/internal/fleet/builder-runtime-state/snapshot-urls",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async builderRuntimeStatePrune(input) {
+      return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
+        "/internal/fleet/builder-runtime-state/prune",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+  };
+}
+
 // The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
 // stable pod per gateway); the broker cross-checks it against the pod name it
 // authenticated (revisionIdFromGatewayPodName).
@@ -332,26 +367,6 @@ export function createFleetBrokerClient(
         { gatewayId, ...input },
       );
     },
-    async builderRuntimeStateDownloadUrl(input) {
-      return postJson<FleetBrokerBlobSignedUrl>(
-        "/internal/fleet/builder-runtime-state/download-url",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
-    async builderRuntimeStateSnapshotUrls(input) {
-      return postJson<FleetBrokerBuilderRuntimeStateSnapshotUrls>(
-        "/internal/fleet/builder-runtime-state/snapshot-urls",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
-    async builderRuntimeStatePrune(input) {
-      return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
-        "/internal/fleet/builder-runtime-state/prune",
-        { gatewayId, revisionId, ...input },
-        await gatewayCredentialHeaders(),
-      );
-    },
+    ...builderRuntimeStateClient(gatewayId, revisionId, gatewayCredentialHeaders),
   };
 }

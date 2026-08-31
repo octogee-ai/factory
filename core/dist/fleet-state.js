@@ -4,6 +4,7 @@ import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, hasFreshReadyKubernetesObservation, 
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
+const MIGRATE_CUSTOMER_OPERATION_KIND = "migrate-customer";
 export async function writeGatewayHeartbeat(deps, snapshot) {
     if (!snapshot.gatewayId) {
         throw new Error("gatewayId is required for a gateway heartbeat");
@@ -282,7 +283,7 @@ function recoveryOperationMatches(operation, params) {
             recordedLease.generation === params.disposableLease.generation
         : recordedLease === null;
     const operationMatches = [
-        operation?.kind === "migrate-customer",
+        operation?.kind === MIGRATE_CUSTOMER_OPERATION_KIND,
         operation?.status === "succeeded",
         operation?.origin === "automatic",
         operation?.createdBy === "glm-controller-placement-policy",
@@ -590,7 +591,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
         });
         txn.delete(sourceAssignmentRef);
         txn.set(operationRef, {
-            kind: "migrate-customer",
+            kind: MIGRATE_CUSTOMER_OPERATION_KIND,
             status: "succeeded",
             origin: "automatic",
             createdBy: "glm-controller-placement-policy",
@@ -623,7 +624,7 @@ function priorDisposableRecovery(input) {
     const leaseId = typeof lease.leaseId === "string" ? lease.leaseId : "";
     const leaseGeneration = lease.generation;
     const exact = [
-        operation?.kind === "migrate-customer",
+        operation?.kind === MIGRATE_CUSTOMER_OPERATION_KIND,
         operation?.status === "succeeded",
         operation?.origin === "automatic",
         operation?.createdBy === "glm-controller-placement-policy",
@@ -664,6 +665,47 @@ function storedResetMatches(value, expected) {
     return Object.entries(expected)
         .filter(([key]) => key !== "status")
         .every(([key, expectedValue]) => actual[key] === expectedValue);
+}
+function recoveredRuntimeResetReplayIsExact(input) {
+    const operationInput = recordOrEmpty(input.operation?.input);
+    return [
+        input.operation?.kind === MIGRATE_CUSTOMER_OPERATION_KIND,
+        input.operation?.status === "succeeded",
+        operationInput.recoveryKind === "recover-disposable-customer-runtime-reset",
+        operationInput.previousRecoveryOperationId === input.params.previousRecoveryOperationId,
+        input.assignment?.epoch === input.params.expectedAssignmentEpoch + 1,
+        input.assignment?.updatedByOperationId === input.params.operationId,
+        storedResetMatches(input.runtimeReset, input.marker),
+    ].every(Boolean);
+}
+function recoveredRuntimeResetTargetIsReady(input) {
+    const heartbeatAt = millisFromUnknown(input.targetRuntime?.heartbeat.lastHeartbeatAt);
+    return [
+        input.targetRoot?.gatewayClass === "shared",
+        input.targetRoot?.desiredStatus === "running",
+        input.targetRoot?.liveRelease !== null,
+        input.targetRoot?.desiredRelease === input.targetRoot?.liveRelease,
+        !isOperatorManaged(input.targetRoot?.managedBy),
+        input.targetRuntime?.gatewayId === input.params.targetGatewayId,
+        input.targetRuntime?.release === input.targetRoot?.liveRelease,
+        input.targetRuntime?.lifecycle === "serving",
+        heartbeatAt !== null,
+        heartbeatAt !== null && input.nowMs - heartbeatAt <= input.params.targetHeartbeatMaxAgeMs,
+        !input.targetRuntime?.heartbeat.mountedCustomers.includes(input.params.slug),
+    ].every(Boolean);
+}
+function recoveredRuntimeResetCustomerStateIsExact(input) {
+    return [
+        input.openclaw.gatewayId === input.params.targetGatewayId,
+        input.openclaw.runtimeReset === undefined,
+        input.assignment?.uid === input.params.uid,
+        input.assignment?.slug === input.params.slug,
+        input.assignment?.gatewayId === input.params.targetGatewayId,
+        input.assignment?.source === "repair",
+        input.assignment?.state === "serving",
+        input.assignment?.epoch === input.params.expectedAssignmentEpoch,
+        input.assignment?.updatedByOperationId === input.params.previousRecoveryOperationId,
+    ].every(Boolean);
 }
 export async function commitRecoveredDisposableRuntimeResetAtomic(deps, params) {
     if (!params.operationId ||
@@ -706,43 +748,26 @@ export async function commitRecoveredDisposableRuntimeResetAtomic(deps, params) 
         const assignmentData = assignmentSnapshot.data();
         if (operationSnapshot.exists) {
             const operationData = operationSnapshot.data();
-            const operationInput = recordOrEmpty(operationData?.input);
-            const replayExact = [
-                operationData?.kind === "migrate-customer",
-                operationData?.status === "succeeded",
-                operationInput.recoveryKind === "recover-disposable-customer-runtime-reset",
-                operationInput.previousRecoveryOperationId === params.previousRecoveryOperationId,
-                assignmentData?.epoch === params.expectedAssignmentEpoch + 1,
-                assignmentData?.updatedByOperationId === params.operationId,
-                storedResetMatches(openclaw.runtimeReset, marker),
-            ].every(Boolean);
-            if (replayExact)
+            if (recoveredRuntimeResetReplayIsExact({
+                params,
+                operation: operationData,
+                assignment: assignmentData,
+                runtimeReset: openclaw.runtimeReset,
+                marker,
+            }))
                 return;
             throw new Error(`recovered runtime reset ${params.operationId} conflicts with current state`);
         }
-        const heartbeatAt = millisFromUnknown(targetRuntime?.heartbeat.lastHeartbeatAt);
-        const targetExact = [
-            targetRoot?.gatewayClass === "shared",
-            targetRoot?.desiredStatus === "running",
-            targetRoot?.liveRelease !== null,
-            targetRoot?.desiredRelease === targetRoot?.liveRelease,
-            !isOperatorManaged(targetRoot?.managedBy),
-            targetRuntime?.gatewayId === params.targetGatewayId,
-            targetRuntime?.release === targetRoot?.liveRelease,
-            targetRuntime?.lifecycle === "serving",
-            heartbeatAt !== null,
-            heartbeatAt !== null && nowMs - heartbeatAt <= params.targetHeartbeatMaxAgeMs,
-            !targetRuntime?.heartbeat.mountedCustomers.includes(params.slug),
-            openclaw.gatewayId === params.targetGatewayId,
-            openclaw.runtimeReset === undefined,
-            assignmentData?.uid === params.uid,
-            assignmentData?.slug === params.slug,
-            assignmentData?.gatewayId === params.targetGatewayId,
-            assignmentData?.source === "repair",
-            assignmentData?.state === "serving",
-            assignmentData?.epoch === params.expectedAssignmentEpoch,
-            assignmentData?.updatedByOperationId === params.previousRecoveryOperationId,
-        ].every(Boolean);
+        const targetExact = recoveredRuntimeResetTargetIsReady({
+            params,
+            targetRoot,
+            targetRuntime,
+            nowMs,
+        }) && recoveredRuntimeResetCustomerStateIsExact({
+            params,
+            openclaw,
+            assignment: assignmentData,
+        });
         if (!targetExact)
             throw new Error("recovered disposable runtime reset fence changed");
         txn.update(userRef, { "provisioning.openclaw.runtimeReset": marker });
@@ -753,7 +778,7 @@ export async function commitRecoveredDisposableRuntimeResetAtomic(deps, params) 
             updatedByOperationId: params.operationId,
         });
         txn.set(operation, {
-            kind: "migrate-customer",
+            kind: MIGRATE_CUSTOMER_OPERATION_KIND,
             status: "succeeded",
             origin: "automatic",
             createdBy: "glm-controller-placement-policy",
@@ -844,7 +869,7 @@ function createMissingAssignment(txn, ref, deps, params) {
         uid: params.uid,
         slug: params.slug,
         gatewayId: params.gatewayId,
-        source: "migrate-customer",
+        source: MIGRATE_CUSTOMER_OPERATION_KIND,
         state: params.state,
         epoch: params.epoch,
         updatedAt: deps.now ? deps.now().getTime() : Date.now(),

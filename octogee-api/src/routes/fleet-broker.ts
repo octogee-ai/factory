@@ -2261,6 +2261,71 @@ function installToolchainStatusRoute(router: Router, db: Firestore): void {
   });
 }
 
+function installRuntimeResetAckRoute(router: Router, db: Firestore): void {
+  router.post("/runtime-reset-ack", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const operationId = typeof body.operationId === "string" ? body.operationId : "";
+    const generation = body.generation;
+    if (!operationId || !Number.isSafeInteger(generation) || (generation as number) < 0) {
+      res.status(400).json({ error: "invalid_runtime_reset_ack" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const result = await db.runTransaction(async (txn) => {
+        const userRef = db.collection("users").doc(assigned.uid);
+        const assignmentRef = db
+          .collection(GATEWAYS_COLLECTION)
+          .doc(assigned.bound.gatewayId)
+          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+          .doc(assigned.uid);
+        const [userSnapshot, assignmentSnapshot] = await Promise.all([
+          txn.get(userRef),
+          txn.get(assignmentRef),
+        ]);
+        const userData = userSnapshot.data() as Record<string, unknown> | undefined;
+        if (stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== assigned.bound.gatewayId) {
+          return "conflict" as const;
+        }
+        const marker = userData ? storedRuntimeReset(userData) : undefined;
+        if (!marker) return "missing" as const;
+        if (marker.status === "acknowledged") return "missing" as const;
+        const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
+        const assignment = assignmentData
+          ? parseAssignmentDoc(assigned.uid, assignmentData)
+          : null;
+        const exact = [
+          marker.uid === assigned.uid,
+          marker.slug === slugFromAssignedUser(userData),
+          marker.targetGatewayId === assigned.bound.gatewayId,
+          marker.operationId === operationId,
+          marker.generation === generation,
+          assignment?.uid === assigned.uid,
+          assignment?.gatewayId === assigned.bound.gatewayId,
+          assignment?.epoch === marker.generation,
+          assignmentData?.source === "repair",
+          assignmentData?.updatedByOperationId === marker.operationId,
+        ].every(Boolean);
+        if (!exact) return "conflict" as const;
+        txn.update(userRef, {
+          "provisioning.openclaw.runtimeReset": {
+            ...marker,
+            status: "acknowledged",
+            acknowledgedAt: FieldValue.serverTimestamp(),
+          },
+        });
+        return "acked" as const;
+      });
+      if (result === "conflict") {
+        res.status(409).json({ error: "runtime_reset_fence_changed" });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
+}
+
 function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2271,6 +2336,7 @@ function installProvisioningRoutes(
   // the window are acknowledged without a write; anything new lands immediately.
   const reportedReconcileErrors = new Map<string, { report: string; at: number }>();
   installToolchainStatusRoute(router, db);
+  installRuntimeResetAckRoute(router, db);
 
   router.post("/set-provisioning-status", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);
@@ -2379,69 +2445,6 @@ function installProvisioningRoutes(
       await db.collection("users").doc(assigned.uid).update({
         "provisioning.openclaw.agentIds": agentIds,
       });
-      res.status(204).end();
-    });
-  });
-
-  router.post("/runtime-reset-ack", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
-    if (!assigned) return;
-    const body = objectBody(req);
-    const operationId = typeof body.operationId === "string" ? body.operationId : "";
-    const generation = body.generation;
-    if (!operationId || !Number.isSafeInteger(generation) || (generation as number) < 0) {
-      res.status(400).json({ error: "invalid_runtime_reset_ack" });
-      return;
-    }
-    await runBrokered(res, async () => {
-      const result = await db.runTransaction(async (txn) => {
-        const userRef = db.collection("users").doc(assigned.uid);
-        const assignmentRef = db
-          .collection(GATEWAYS_COLLECTION)
-          .doc(assigned.bound.gatewayId)
-          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-          .doc(assigned.uid);
-        const [userSnapshot, assignmentSnapshot] = await Promise.all([
-          txn.get(userRef),
-          txn.get(assignmentRef),
-        ]);
-        const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-        if (stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== assigned.bound.gatewayId) {
-          return "conflict" as const;
-        }
-        const marker = userData ? storedRuntimeReset(userData) : undefined;
-        if (!marker) return "missing" as const;
-        if (marker.status === "acknowledged") return "missing" as const;
-        const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-        const assignment = assignmentData
-          ? parseAssignmentDoc(assigned.uid, assignmentData)
-          : null;
-        const exact = [
-          marker.uid === assigned.uid,
-          marker.slug === slugFromAssignedUser(userData),
-          marker.targetGatewayId === assigned.bound.gatewayId,
-          marker.operationId === operationId,
-          marker.generation === generation,
-          assignment?.uid === assigned.uid,
-          assignment?.gatewayId === assigned.bound.gatewayId,
-          assignment?.epoch === marker.generation,
-          assignmentData?.source === "repair",
-          assignmentData?.updatedByOperationId === marker.operationId,
-        ].every(Boolean);
-        if (!exact) return "conflict" as const;
-        txn.update(userRef, {
-          "provisioning.openclaw.runtimeReset": {
-            ...marker,
-            status: "acknowledged",
-            acknowledgedAt: FieldValue.serverTimestamp(),
-          },
-        });
-        return "acked" as const;
-      });
-      if (result === "conflict") {
-        res.status(409).json({ error: "runtime_reset_fence_changed" });
-        return;
-      }
       res.status(204).end();
     });
   });

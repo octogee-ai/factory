@@ -124,6 +124,140 @@ function storedDatabasePath(openclawDir: string, storedPath: string): string {
   return path.resolve(path.isAbsolute(storedPath) ? storedPath : path.join(openclawDir, storedPath));
 }
 
+interface RemovableAgentRegistration {
+  agentId: string;
+  storedPath: string;
+}
+
+interface StaleWorkspaceSetupRow {
+  workspaceKey: string;
+  workspacePath: string;
+}
+
+function removableAgentRegistrations(input: {
+  state: DatabaseSync;
+  resetAgentIds: ReadonlySet<string>;
+  databasePaths: ReadonlyMap<string, string>;
+  openclawDir: string;
+}): RemovableAgentRegistration[] {
+  const rows = input.state
+    .prepare("SELECT agent_id, path FROM agent_databases")
+    .all() as Array<{ agent_id?: unknown; path?: unknown }>;
+  const removable: RemovableAgentRegistration[] = [];
+  for (const row of rows) {
+    if (typeof row.agent_id !== "string" || !input.resetAgentIds.has(row.agent_id)) continue;
+    if (typeof row.path !== "string" || !row.path) {
+      throw new Error(`invalid agent database registration for ${row.agent_id}`);
+    }
+    const expectedPath = input.databasePaths.get(row.agent_id)!;
+    if (storedDatabasePath(input.openclawDir, row.path) !== expectedPath) {
+      throw new Error(`unexpected agent database path for ${row.agent_id}`);
+    }
+    removable.push({ agentId: row.agent_id, storedPath: row.path });
+  }
+  return removable;
+}
+
+function assertAgentStoresUnleased(state: DatabaseSync, resetAgentIds: readonly string[]): void {
+  const findLease = state.prepare(
+    "SELECT 1 FROM agent_database_leases WHERE agent_id = ? LIMIT 1",
+  );
+  for (const agentId of resetAgentIds) {
+    if (findLease.get(agentId)) {
+      throw new Error(`customer agent database is actively leased: ${agentId}`);
+    }
+  }
+}
+
+function staleWorkspaceSetupRows(
+  state: DatabaseSync,
+  staleWorkspaces: ReadonlySet<string>,
+): StaleWorkspaceSetupRow[] {
+  const rows = state
+    .prepare("SELECT workspace_key, workspace_path FROM workspace_setup_state")
+    .all() as Array<{ workspace_key?: unknown; workspace_path?: unknown }>;
+  return rows.flatMap((row) => {
+    if (typeof row.workspace_key !== "string" || typeof row.workspace_path !== "string") return [];
+    const resolvedPath = path.resolve(row.workspace_path);
+    return staleWorkspaces.has(resolvedPath)
+      ? [{ workspaceKey: row.workspace_key, workspacePath: resolvedPath }]
+      : [];
+  });
+}
+
+function deleteRecoveredRuntimeState(
+  state: DatabaseSync,
+  registrations: readonly RemovableAgentRegistration[],
+  setupRows: readonly StaleWorkspaceSetupRow[],
+): void {
+  state.exec("BEGIN IMMEDIATE");
+  try {
+    const removeRegistration = state.prepare(
+      "DELETE FROM agent_databases WHERE agent_id = ? AND path = ?",
+    );
+    for (const row of registrations) removeRegistration.run(row.agentId, row.storedPath);
+    const removeHashes = state.prepare(
+      "DELETE FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
+    );
+    const removeAliases = state.prepare(
+      "DELETE FROM workspace_path_aliases WHERE workspace_key = ? OR workspace_path = ?",
+    );
+    const removeSetup = state.prepare(
+      "DELETE FROM workspace_setup_state WHERE workspace_key = ? AND workspace_path = ?",
+    );
+    for (const row of setupRows) {
+      removeHashes.run(row.workspaceKey);
+      removeAliases.run(row.workspaceKey, row.workspacePath);
+      removeSetup.run(row.workspaceKey, row.workspacePath);
+    }
+    state.exec("COMMIT");
+  } catch (error) {
+    state.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function resetRuntimeStateDatabase(input: {
+  stateDatabasePath: string;
+  openclawDir: string;
+  resetAgentIds: readonly string[];
+  databasePaths: ReadonlyMap<string, string>;
+  staleWorkspaces: ReadonlySet<string>;
+}): Pick<
+  RecoveredCustomerRuntimeResetResult,
+  "removedAgentRegistrations" | "clearedWorkspaceAttestations"
+> {
+  if (!fs.existsSync(input.stateDatabasePath)) {
+    return { removedAgentRegistrations: [], clearedWorkspaceAttestations: [] };
+  }
+  const state = new DatabaseSync(input.stateDatabasePath);
+  try {
+    state.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON");
+    for (const table of [
+      "agent_databases",
+      "agent_database_leases",
+      "workspace_setup_state",
+      "workspace_path_aliases",
+      "workspace_generated_bootstrap_hashes",
+    ]) assertStateTable(state, table);
+    const registrations = removableAgentRegistrations({
+      state,
+      resetAgentIds: new Set(input.resetAgentIds),
+      databasePaths: input.databasePaths,
+      openclawDir: input.openclawDir,
+    });
+    assertAgentStoresUnleased(state, input.resetAgentIds);
+    const setupRows = staleWorkspaceSetupRows(state, input.staleWorkspaces);
+    deleteRecoveredRuntimeState(state, registrations, setupRows);
+    return {
+      removedAgentRegistrations: registrations.map((row) => row.agentId).sort(),
+      clearedWorkspaceAttestations: setupRows.map((row) => row.workspacePath).sort(),
+    };
+  } finally {
+    state.close();
+  }
+}
+
 export function resetRecoveredCustomerRuntime(options: {
   openclawDir: string;
   uid: string;
@@ -150,94 +284,18 @@ export function resetRecoveredCustomerRuntime(options: {
     [...workspacePaths.values()].filter(staleWorkspaceAttestation),
   );
   const stateDatabasePath = path.join(openclawDir, "state", "openclaw.sqlite");
+  const stateReset = resetRuntimeStateDatabase({
+    stateDatabasePath,
+    openclawDir,
+    resetAgentIds,
+    databasePaths,
+    staleWorkspaces,
+  });
   const result: RecoveredCustomerRuntimeResetResult = {
-    removedAgentRegistrations: [],
+    removedAgentRegistrations: stateReset.removedAgentRegistrations,
     removedAgentStores: [],
-    clearedWorkspaceAttestations: [],
+    clearedWorkspaceAttestations: stateReset.clearedWorkspaceAttestations,
   };
-
-  if (fs.existsSync(stateDatabasePath)) {
-    const state = new DatabaseSync(stateDatabasePath);
-    try {
-      state.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON");
-      for (const table of [
-        "agent_databases",
-        "agent_database_leases",
-        "workspace_setup_state",
-        "workspace_path_aliases",
-        "workspace_generated_bootstrap_hashes",
-      ]) assertStateTable(state, table);
-
-      const registryRows = state
-        .prepare("SELECT agent_id, path FROM agent_databases")
-        .all() as Array<{ agent_id?: unknown; path?: unknown }>;
-      const resetSet = new Set(resetAgentIds);
-      const removableRegistrations: Array<{ agentId: string; storedPath: string }> = [];
-      for (const row of registryRows) {
-        if (typeof row.agent_id !== "string" || !resetSet.has(row.agent_id)) continue;
-        if (typeof row.path !== "string" || !row.path) {
-          throw new Error(`invalid agent database registration for ${row.agent_id}`);
-        }
-        const expectedPath = databasePaths.get(row.agent_id)!;
-        if (storedDatabasePath(openclawDir, row.path) !== expectedPath) {
-          throw new Error(`unexpected agent database path for ${row.agent_id}`);
-        }
-        removableRegistrations.push({ agentId: row.agent_id, storedPath: row.path });
-      }
-
-      for (const agentId of resetAgentIds) {
-        const lease = state
-          .prepare("SELECT 1 FROM agent_database_leases WHERE agent_id = ? LIMIT 1")
-          .get(agentId);
-        if (lease) throw new Error(`customer agent database is actively leased: ${agentId}`);
-      }
-
-      const setupRows = state
-        .prepare("SELECT workspace_key, workspace_path FROM workspace_setup_state")
-        .all() as Array<{ workspace_key?: unknown; workspace_path?: unknown }>;
-      const staleSetupRows = setupRows.flatMap((row) => {
-        if (typeof row.workspace_key !== "string" || typeof row.workspace_path !== "string") return [];
-        const resolvedPath = path.resolve(row.workspace_path);
-        return staleWorkspaces.has(resolvedPath)
-          ? [{ workspaceKey: row.workspace_key, workspacePath: resolvedPath }]
-          : [];
-      });
-
-      state.exec("BEGIN IMMEDIATE");
-      try {
-        const removeRegistration = state.prepare(
-          "DELETE FROM agent_databases WHERE agent_id = ? AND path = ?",
-        );
-        for (const row of removableRegistrations) {
-          removeRegistration.run(row.agentId, row.storedPath);
-        }
-        const removeHashes = state.prepare(
-          "DELETE FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
-        );
-        const removeAliases = state.prepare(
-          "DELETE FROM workspace_path_aliases WHERE workspace_key = ? OR workspace_path = ?",
-        );
-        const removeSetup = state.prepare(
-          "DELETE FROM workspace_setup_state WHERE workspace_key = ? AND workspace_path = ?",
-        );
-        for (const row of staleSetupRows) {
-          removeHashes.run(row.workspaceKey);
-          removeAliases.run(row.workspaceKey, row.workspacePath);
-          removeSetup.run(row.workspaceKey, row.workspacePath);
-        }
-        state.exec("COMMIT");
-      } catch (error) {
-        state.exec("ROLLBACK");
-        throw error;
-      }
-      result.removedAgentRegistrations = removableRegistrations.map((row) => row.agentId).sort();
-      result.clearedWorkspaceAttestations = staleSetupRows
-        .map((row) => row.workspacePath)
-        .sort();
-    } finally {
-      state.close();
-    }
-  }
 
   for (const agentId of resetAgentIds) {
     const databasePath = databasePaths.get(agentId)!;
