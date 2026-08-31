@@ -281,6 +281,7 @@ export type GatewayRuntimeLifecycle =
 
 export type GatewayHeartbeatStatus =
   | "unknown"
+  | "booting"
   | "ready"
   | "unreachable"
   | "error";

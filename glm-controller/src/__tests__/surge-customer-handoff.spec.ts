@@ -255,6 +255,65 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
+  it("marks an empty held disposable Builder prelaunch live without releasing it", async () => {
+    const h = harness({
+      pods: [targetPod],
+      assignments: [],
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "builder-alice",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: true });
+
+    expect(h.events).toEqual([]);
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.unreserveTargetOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an assignment",
+      assignments: [assignment("u1", "alice")],
+      targetMountedCustomers: [] as string[],
+      expectedEvents: ["unreserve-target:target-uid:alice"],
+    },
+    {
+      name: "a tenant mount",
+      assignments: [] as SurgeAssignment[],
+      targetMountedCustomers: ["alice"],
+      expectedEvents: [] as string[],
+    },
+  ])("keeps held disposable prelaunch closed when it already has $name", async ({
+    assignments,
+    targetMountedCustomers,
+    expectedEvents,
+  }) => {
+    const h = harness({
+      pods: [targetPod],
+      assignments,
+      targetMountedCustomers,
+      bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" },
+    });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "builder-alice",
+      desiredImageTag: "new-sha",
+      requiresCustomerMigration: false,
+      disposableBuilderGateway: true,
+      stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+
+    expect(h.events).toEqual(expectedEvents);
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+  });
+
   it("finalizes a Builder source as quiesce, flush, reserve target, stop source, copy, verify", async () => {
     const h = harness({ assignments: [assignment("u1", "alice")] });
 

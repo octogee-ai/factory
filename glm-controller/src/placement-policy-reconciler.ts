@@ -178,6 +178,7 @@ export function placementKubernetesStatus(
 export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway {
   kubernetesStatus?: PlacementPolicyKubernetesStatus;
   serving?: boolean;
+  runtimeStatus?: string;
   heartbeatFresh?: boolean;
   runtimeStartedAt?: number | null;
   liveReleaseReady?: boolean;
@@ -911,6 +912,18 @@ function disposableTargetMatchesLease(
     disposableTargetIdentityMatchesLease(gateway, user, lease);
 }
 
+function disposableTargetActivationReady(gateway: PlacementPolicyGateway): boolean {
+  if (!Array.isArray(gateway.mountedCustomers) || gateway.mountedCustomers.length !== 0) {
+    return false;
+  }
+  if (gateway.ready) return true;
+  return gateway.kubernetesStatus === "not-ready" &&
+    gateway.serving === true &&
+    gateway.runtimeStatus === "booting" &&
+    gateway.heartbeatFresh === true &&
+    gateway.liveReleaseReady === true;
+}
+
 function recoveredRuntimeResetState(user: PlacementPolicyUser): Record<string, unknown> | null {
   return record(record(record(user.data.provisioning)?.openclaw)?.runtimeReset);
 }
@@ -1185,7 +1198,7 @@ async function cleanupUnreachableProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<boolean> {
   const { context, user, builderSlug, current, lease, target } = input;
-  if (target.desiredStatus === "running" && target.ready) return false;
+  if (target.desiredStatus === "running" && disposableTargetActivationReady(target)) return false;
   if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
   if (!isSharedPoolGateway(context, current)) {
     blockPlacement(context, {
@@ -1442,7 +1455,7 @@ async function reconcileProvisioningActivation(
     });
     return;
   }
-  if (!target.ready) return;
+  if (!disposableTargetActivationReady(target)) return;
   await advanceReadyProvisioningTarget(targetInput);
 }
 
@@ -2974,6 +2987,7 @@ function placementGatewayFromDocument(input: {
     ready: runtimeReady,
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
+    runtimeStatus: runtime?.heartbeat.status,
     heartbeatFresh,
     runtimeStartedAt: gatewayRuntimeStartedAt(runtime),
     liveReleaseReady: [
