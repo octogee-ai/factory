@@ -45,11 +45,48 @@ describe("same-channel Activity binding registry", () => {
   it("resolves a canonical Mattermost run against authoritative identity and channel data", async () => {
     const { registry } = harness();
 
-    await expect(registry.resolve(ref)).resolves.toMatchObject({
+    await expect(registry.resolve({
+      ...ref,
+      inputPostId: undefined,
+    })).resolves.toMatchObject({
       runId: "run-1",
       mainChannelId: "channel-1",
       coachToken: "pat-1",
     });
+  });
+
+  it("rejects an unthreaded Mattermost session even when an input post is supplied", async () => {
+    const candidate = harness();
+    await expect(candidate.registry.resolve({
+      ...ref,
+      sessionKey: "agent:octogee-alice-coach:mattermost:channel:channel-1",
+    })).resolves.toBeNull();
+    expect(candidate.resolveAgentIdentity).not.toHaveBeenCalled();
+  });
+
+  it("resolves a direct session peer to the exact authorized physical Mattermost channel", async () => {
+    const { registry, resolveConversationTarget } = harness();
+    await expect(registry.resolve({
+      ...ref,
+      inputPostId: undefined,
+      sessionKey: "agent:octogee-alice-coach:mattermost:direct:mm-user-1:thread:root-1",
+    })).resolves.toMatchObject({
+      runId: "run-1",
+      mainChannelId: "channel-1",
+      coachToken: "pat-1",
+    });
+    expect(resolveConversationTarget).toHaveBeenCalledWith(ref.agentId, "channel-1");
+  });
+
+  it("rejects a direct session mapped to a physical channel not authorized for the Agent account", async () => {
+    const candidate = harness();
+    await expect(candidate.registry.resolve({
+      ...ref,
+      conversationId: "foreign-channel",
+      mainChannelId: "foreign-channel",
+      inputPostId: undefined,
+      sessionKey: "agent:octogee-alice-coach:mattermost:direct:mm-user-1:thread:root-1",
+    })).resolves.toBeNull();
   });
 
   it("rejects a cross-channel session route", async () => {

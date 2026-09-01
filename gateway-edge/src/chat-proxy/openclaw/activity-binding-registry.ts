@@ -76,13 +76,14 @@ function validRoute(ref: AgentActivityIngressRef): boolean {
       parseMattermostSessionRoute(ref.sessionKey) === null;
   }
   const route = parseMattermostSessionRoute(ref.sessionKey);
-  return Boolean(
-    route &&
-    route.agentId === ref.agentId &&
-    route.primaryChannelId === ref.mainChannelId &&
-    nonBlank(ref.inputPostId) &&
-    (route.threadRootPostId ?? ref.inputPostId) === ref.mainRootPostId,
-  );
+  if (
+    !route ||
+    route.agentId !== ref.agentId ||
+    route.threadRootPostId !== ref.mainRootPostId
+  ) {
+    return false;
+  }
+  return route.peerKind === "direct" || route.primaryChannelId === ref.mainChannelId;
 }
 
 function authoritativeTarget(
