@@ -284,15 +284,9 @@ export interface MattermostAccountEntry {
   };
 }
 
-export interface MattermostAccountPolicy {
-  gatewayClass: "shared" | "builder";
-  platformAdminMmUserId?: string | null;
-}
-
 export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
-  _policy: MattermostAccountPolicy = { gatewayClass: "shared" },
   warn: (msg: string) => void = () => {},
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};

@@ -334,7 +334,6 @@ export interface BuildAdapterOptions {
   db: Firestore;
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
-  adminMmUserId: string | undefined;
 }
 
 export function buildProductionAdapter(opts: BuildAdapterOptions): CustomerLifecycleAdapter {
@@ -351,7 +350,6 @@ export interface StartFleetOptions {
   publicKey: string;
   version: string;
   openclawVersion: string;
-  adminMmUserId?: string;
   platformState?: boolean;
   // Read-only observability (seed + report mounted customers, write this
   // gateway's own liveness heartbeat) — independent of local reconcile.
@@ -1679,7 +1677,6 @@ function buildFleetAdapter(opts: StartFleetOptions): CustomerLifecycleAdapter {
     db: opts.db!,
     rpc: opts.rpc,
     log: opts.log,
-    adminMmUserId: opts.adminMmUserId,
   });
 }
 
