@@ -87,6 +87,7 @@ describe("OpenClaw runtime broker env", () => {
 
     await broker.resolveAgentIdentity("octogee-alice-coach");
     await broker.resolveConversationTarget("octogee-alice-coach", "channel-1");
+    await broker.resolveDirectConversationTarget("octogee-alice-coach", "direct-1", "owner-1");
 
     expect(calls).toEqual([
       {
@@ -94,6 +95,7 @@ describe("OpenClaw runtime broker env", () => {
         credential: "credential-jwt",
       },
       { path: "/internal/openclaw/activity/conversation-target", credential: null },
+      { path: "/internal/openclaw/activity/direct-conversation-target", credential: null },
     ]);
   });
 
@@ -125,6 +127,7 @@ describe("OpenClaw runtime broker env", () => {
         redeemOpenClawWs: expect.any(Function),
         getUserGatewayId: expect.any(Function),
         resolveConversationTarget: expect.any(Function),
+        resolveDirectConversationTarget: expect.any(Function),
         activityWriteReceiptsFor: expect.any(Function),
       }),
     );

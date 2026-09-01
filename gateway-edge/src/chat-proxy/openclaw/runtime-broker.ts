@@ -48,6 +48,11 @@ export interface OpenClawRuntimeBroker {
     agentId: string,
     conversationId: string,
   ): Promise<AuthorizedConversationTarget | null>;
+  resolveDirectConversationTarget(
+    agentId: string,
+    conversationId: string,
+    ownerUserId: string,
+  ): Promise<AuthorizedConversationTarget | null>;
   activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
@@ -336,6 +341,18 @@ export function createOpenClawRuntimeBroker(opts: {
       const body = await postJson(
         "/internal/openclaw/activity/conversation-target",
         { agentId, conversationId },
+        new Set([200, 404]),
+      );
+      return (body?.target as AuthorizedConversationTarget | undefined) ?? null;
+    },
+    async resolveDirectConversationTarget(
+      agentId: string,
+      conversationId: string,
+      ownerUserId: string,
+    ): Promise<AuthorizedConversationTarget | null> {
+      const body = await postJson(
+        "/internal/openclaw/activity/direct-conversation-target",
+        { agentId, conversationId, ownerUserId },
         new Set([200, 404]),
       );
       return (body?.target as AuthorizedConversationTarget | undefined) ?? null;

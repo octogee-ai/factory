@@ -48,7 +48,11 @@ import {
   OpenClawRuntimeBrokerError,
   type OpenClawRuntimeBroker,
 } from "./openclaw/runtime-broker.js";
-import { ACTIVITY_INTAKE_PATH, VOICE_EVENT_RELAY_PATH } from "./http-paths.js";
+import {
+  ACTIVITY_INTAKE_PATH,
+  DIRECT_ACTIVITY_TARGET_PATH,
+  VOICE_EVENT_RELAY_PATH,
+} from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 import { startMmFinalNotificationListeners } from "./openclaw/mm-final-notification-listener.js";
 import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
@@ -57,6 +61,7 @@ import {
   readMattermostChannelCreateAt,
 } from "./openclaw/activity-binding-registry.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
+import { createDirectActivityTargetHandler } from "./openclaw/direct-activity-target.js";
 import { makeCoachDmHandler } from "../notifications/chat-notifier.js";
 import {
   createBrokeredFanOutNotification,
@@ -179,6 +184,10 @@ let activityIntakeHandler:
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null = null;
 
+let directActivityTargetHandler:
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null = null;
+
 function getActivityIntakeHandler():
   | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
   | null {
@@ -190,13 +199,16 @@ function getActivityIntakeHandler():
     resolveAgentIdentity: (agentId) => broker.resolveAgentIdentity(agentId),
     resolveConversationTarget: (agentId, conversationId) =>
       broker.resolveConversationTarget(agentId, conversationId),
+    resolveDirectConversationTarget: (agentId, conversationId, ownerUserId) =>
+      broker.resolveDirectConversationTarget(agentId, conversationId, ownerUserId),
     verifyChannel: (identity, target) => readMattermostChannelCreateAt({
       baseUrl: MM_INTERNAL_URL,
       channelId: target.primaryChannelId,
       token: identity.coachToken,
-      expectedTeamId: target.expectedChannelTeamId,
-      expectedName: target.expectedChannelName,
+      ...(target.expectedChannelTeamId !== null ? { expectedTeamId: target.expectedChannelTeamId } : {}),
+      ...(target.expectedChannelName !== null ? { expectedName: target.expectedChannelName } : {}),
       expectedType: target.expectedChannelType,
+      ...(target.expectedMemberIds ? { expectedMemberIds: target.expectedMemberIds } : {}),
     }),
   });
   const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
@@ -209,6 +221,36 @@ function getActivityIntakeHandler():
     log: (event, meta) => logger.warn(`[activity-intake] ${event}`, meta),
   });
   return activityIntakeHandler;
+}
+
+function getDirectActivityTargetHandler():
+  | ((req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>)
+  | null {
+  if (directActivityTargetHandler) return directActivityTargetHandler;
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!gatewayToken) return null;
+  const broker = getOpenClawRuntimeBroker();
+  const mmClientFor = createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL });
+  directActivityTargetHandler = createDirectActivityTargetHandler({
+    gatewayToken,
+    deps: {
+      resolveAgentIdentity: (agentId) => broker.resolveAgentIdentity(agentId),
+      resolveDirectConversationTarget: (agentId, conversationId, ownerUserId) =>
+        broker.resolveDirectConversationTarget(agentId, conversationId, ownerUserId),
+      mmClientFor,
+      verifyChannel: (identity, target) => readMattermostChannelCreateAt({
+        baseUrl: MM_INTERNAL_URL,
+        channelId: target.primaryChannelId,
+        token: identity.coachToken,
+        ...(target.expectedChannelTeamId !== null ? { expectedTeamId: target.expectedChannelTeamId } : {}),
+        ...(target.expectedChannelName !== null ? { expectedName: target.expectedChannelName } : {}),
+        expectedType: target.expectedChannelType,
+        ...(target.expectedMemberIds ? { expectedMemberIds: target.expectedMemberIds } : {}),
+      }),
+    },
+    log: (message, fields) => logger.warn(`[activity-direct-target] ${message}`, fields),
+  });
+  return directActivityTargetHandler;
 }
 
 const voiceEventRelayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
@@ -362,11 +404,36 @@ export function setCors(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
+async function handleDirectActivityTargetRoute(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  try {
+    const handler = getDirectActivityTargetHandler();
+    if (!handler) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "direct_activity_target_unconfigured", retryable: true }));
+      return;
+    }
+    await handler(req, res);
+  } catch (error) {
+    logger.error("[activity-direct-target] initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "direct_activity_target_unavailable", retryable: true }));
+  }
+}
+
 async function handleLocalInternalRoute(
   path: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<boolean> {
+  if (path === DIRECT_ACTIVITY_TARGET_PATH) {
+    await handleDirectActivityTargetRoute(req, res);
+    return true;
+  }
   if (path === ACTIVITY_INTAKE_PATH) {
     try {
       const handler = getActivityIntakeHandler();

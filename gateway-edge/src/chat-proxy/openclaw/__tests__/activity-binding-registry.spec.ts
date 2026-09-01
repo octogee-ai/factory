@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentActivityIngressRef } from "@octogee/shared/types/agent-conversation";
-import { createActivityBindingRegistry } from "../activity-binding-registry.js";
+import {
+  createActivityBindingRegistry,
+  readMattermostChannelCreateAt,
+} from "../activity-binding-registry.js";
+
+const AGENT_MM_USER_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const OWNER_MM_USER_ID = "oooooooooooooooooooooooooo";
 
 const ref: AgentActivityIngressRef = {
   conversationId: "channel-1",
@@ -21,7 +27,7 @@ function harness() {
   const resolveAgentIdentity = vi.fn(async () => ({
     agentId: ref.agentId,
     uid: "uid-1",
-    coachMmUserId: "coach-1",
+    coachMmUserId: AGENT_MM_USER_ID,
     coachToken: "pat-1",
     workspaceSlug: "alice",
     projectSlug: "",
@@ -33,12 +39,21 @@ function harness() {
     expectedChannelName: "alice-coach",
     expectedChannelType: "P" as const,
   }));
+  const resolveDirectConversationTarget = vi.fn(async () => ({
+    primaryChannelId: "channel-1",
+    channelDocPath: "workspaces/alice/channels/coach-dm",
+    expectedChannelTeamId: null,
+    expectedChannelName: null,
+    expectedChannelType: "D" as const,
+    expectedMemberIds: [AGENT_MM_USER_ID, OWNER_MM_USER_ID],
+  }));
   const registry = createActivityBindingRegistry({
     resolveAgentIdentity,
     resolveConversationTarget,
+    resolveDirectConversationTarget,
     verifyChannel: vi.fn(async () => 123),
   });
-  return { registry, resolveAgentIdentity, resolveConversationTarget };
+  return { registry, resolveAgentIdentity, resolveConversationTarget, resolveDirectConversationTarget };
 }
 
 describe("same-channel Activity binding registry", () => {
@@ -65,17 +80,22 @@ describe("same-channel Activity binding registry", () => {
   });
 
   it("resolves a direct session peer to the exact authorized physical Mattermost channel", async () => {
-    const { registry, resolveConversationTarget } = harness();
+    const { registry, resolveConversationTarget, resolveDirectConversationTarget } = harness();
     await expect(registry.resolve({
       ...ref,
       inputPostId: undefined,
-      sessionKey: "agent:octogee-alice-coach:mattermost:direct:mm-user-1:thread:root-1",
+      sessionKey: `agent:octogee-alice-coach:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`,
     })).resolves.toMatchObject({
       runId: "run-1",
       mainChannelId: "channel-1",
       coachToken: "pat-1",
     });
-    expect(resolveConversationTarget).toHaveBeenCalledWith(ref.agentId, "channel-1");
+    expect(resolveConversationTarget).not.toHaveBeenCalled();
+    expect(resolveDirectConversationTarget).toHaveBeenCalledWith(
+      ref.agentId,
+      "channel-1",
+      OWNER_MM_USER_ID,
+    );
   });
 
   it("rejects a direct session mapped to a physical channel not authorized for the Agent account", async () => {
@@ -85,7 +105,7 @@ describe("same-channel Activity binding registry", () => {
       conversationId: "foreign-channel",
       mainChannelId: "foreign-channel",
       inputPostId: undefined,
-      sessionKey: "agent:octogee-alice-coach:mattermost:direct:mm-user-1:thread:root-1",
+      sessionKey: `agent:octogee-alice-coach:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`,
     })).resolves.toBeNull();
   });
 
@@ -106,5 +126,64 @@ describe("same-channel Activity binding registry", () => {
       origin: "subagent",
       sessionKey: "agent:octogee-alice-coach:subagent:child-1",
     })).resolves.toMatchObject({ runId: "child-1", origin: "subagent" });
+  });
+
+  it("verifies the exact Agent-owner roster for a direct Mattermost channel", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/members?per_page=200")) {
+        return new Response(JSON.stringify([
+          { user_id: OWNER_MM_USER_ID },
+          { user_id: AGENT_MM_USER_ID },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        id: "channel-1",
+        team_id: "",
+        name: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
+        type: "D",
+        create_at: 123,
+      }), { status: 200 });
+    });
+
+    await expect(readMattermostChannelCreateAt({
+      baseUrl: "https://mattermost.test",
+      channelId: "channel-1",
+      token: "coach-pat",
+      expectedTeamId: "",
+      expectedName: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
+      expectedType: "D",
+      expectedMemberIds: [AGENT_MM_USER_ID, OWNER_MM_USER_ID],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })).resolves.toBe(123);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an extra member in a direct Mattermost channel", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/members?per_page=200")
+      ? new Response(JSON.stringify([
+          { user_id: OWNER_MM_USER_ID },
+          { user_id: AGENT_MM_USER_ID },
+          { user_id: "xxxxxxxxxxxxxxxxxxxxxxxxxx" },
+        ]), { status: 200 })
+      : new Response(JSON.stringify({
+          id: "channel-1",
+          team_id: "",
+          name: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
+          type: "D",
+          create_at: 123,
+        }), { status: 200 }));
+
+    await expect(readMattermostChannelCreateAt({
+      baseUrl: "https://mattermost.test",
+      channelId: "channel-1",
+      token: "coach-pat",
+      expectedTeamId: "",
+      expectedName: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
+      expectedType: "D",
+      expectedMemberIds: [AGENT_MM_USER_ID, OWNER_MM_USER_ID],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })).rejects.toThrow("roster does not match Agent and owner");
   });
 });

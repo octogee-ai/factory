@@ -13,9 +13,10 @@ export interface ChannelTarget {
 }
 
 export interface AuthorizedConversationTarget extends ChannelTarget {
-  expectedChannelTeamId: string;
-  expectedChannelName: string;
-  expectedChannelType: "P";
+  expectedChannelTeamId: string | null;
+  expectedChannelName: string | null;
+  expectedChannelType: "P" | "D";
+  expectedMemberIds?: string[];
 }
 
 export interface MmPostInput {
