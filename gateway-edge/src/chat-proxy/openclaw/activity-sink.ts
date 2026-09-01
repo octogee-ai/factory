@@ -198,6 +198,45 @@ function projectedActivityKind(envelope: AgentActivityEnvelopeV1): string {
   throw new ActivitySinkIntegrityError("turn finalization cannot create Activity posts");
 }
 
+function activityPostHasExactProps(
+  props: Record<string, unknown>,
+  envelope: AgentActivityEnvelopeV1,
+  expectedEventKey: string,
+): boolean {
+  const expected: Record<string, unknown> = {
+    eventKey: expectedEventKey,
+    schemaVersion: 3,
+    projectionKind: "run",
+    conversationId: envelope.ref.conversationId,
+    turnId: envelope.ref.turnId,
+    runId: envelope.ref.runId,
+    agentId: envelope.ref.agentId,
+    sessionKey: envelope.ref.sessionKey,
+    origin: envelope.ref.origin,
+    status: projectedRunStatus(envelope),
+    mainChannelId: envelope.ref.mainChannelId,
+    mainRootPostId: envelope.ref.mainRootPostId,
+    inputPostId: envelope.ref.inputPostId,
+    itemId: envelope.ref.itemId,
+    ordinal: envelope.ref.ordinal,
+    semanticVersion: envelope.ref.semanticVersion,
+    kind: projectedActivityKind(envelope),
+  };
+  return Object.entries(expected).every(([key, value]) => props[key] === value);
+}
+
+function activityRootPostIdMatches(
+  post: ActivityMattermostPost,
+  props: Record<string, unknown>,
+  envelope: AgentActivityEnvelopeV1,
+  expectedActivityRootPostId: string,
+): boolean {
+  if (envelope.type === TURN_STARTED) {
+    return props.activityRootPostId === undefined || props.activityRootPostId === post.id;
+  }
+  return props.activityRootPostId === expectedActivityRootPostId;
+}
+
 function octogeeProps(
   envelope: AgentActivityEnvelopeV1,
   activityRootPostId: string | undefined,
@@ -477,30 +516,11 @@ class ActivitySinkWriter implements ActivitySink {
     const expectedActivityRootPostId = envelope.type === TURN_STARTED
       ? post.id
       : await this.rootPostId(envelope);
-    const activityRootPostId = props.activityRootPostId;
     if (
       post.channelId !== binding.mainChannelId ||
       post.rootId !== envelope.ref.mainRootPostId ||
-      props.eventKey !== expectedEventKey ||
-      props.schemaVersion !== 3 ||
-      props.projectionKind !== "run" ||
-      props.conversationId !== envelope.ref.conversationId ||
-      props.turnId !== envelope.ref.turnId ||
-      props.runId !== envelope.ref.runId ||
-      props.agentId !== envelope.ref.agentId ||
-      props.sessionKey !== envelope.ref.sessionKey ||
-      props.origin !== envelope.ref.origin ||
-      props.status !== projectedRunStatus(envelope) ||
-      props.mainChannelId !== envelope.ref.mainChannelId ||
-      props.mainRootPostId !== envelope.ref.mainRootPostId ||
-      props.inputPostId !== envelope.ref.inputPostId ||
-      props.itemId !== envelope.ref.itemId ||
-      props.ordinal !== envelope.ref.ordinal ||
-      props.semanticVersion !== envelope.ref.semanticVersion ||
-      props.kind !== projectedActivityKind(envelope) ||
-      (envelope.type === TURN_STARTED
-        ? activityRootPostId !== undefined && activityRootPostId !== post.id
-        : activityRootPostId !== expectedActivityRootPostId)
+      !activityPostHasExactProps(props, envelope, expectedEventKey) ||
+      !activityRootPostIdMatches(post, props, envelope, expectedActivityRootPostId)
     ) {
       throw new ActivitySinkIntegrityError("Activity post failed exact channel/run/item/root verification");
     }
