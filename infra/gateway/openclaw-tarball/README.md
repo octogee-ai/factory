@@ -76,7 +76,7 @@ select TEST or PROD later.
 
 The current build is [OpenClaw `v2026.8.2`](https://github.com/openclaw/openclaw/releases/tag/v2026.8.2),
 peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with overlay head
-`96147db36cc6dc00d70f538677847287b44a4707`. The Mattermost package is built
+`7552b8d7d62e78fc3ab7904f899988b6ce654642`. The Mattermost package is built
 from the tag without an Octogee patch; native threading, streaming, steering,
 and approvals supply the chat behavior.
 
