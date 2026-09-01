@@ -6,6 +6,7 @@ import type { OperationContext } from "../operation-router";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import { decideRollStateMigration } from "../roll-state-migration.js";
+import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 
@@ -109,9 +110,33 @@ interface HarnessOptions {
   durable?: boolean;
   sourceGatewayId?: string;
   openclawVersions?: Record<string, string | null>;
+  targetArtifact?: GatewayArtifact | null;
 }
 
 const SAME_OPENCLAW = "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)";
+const SAME_OPENCLAW_VERSION = "2026.7.2-beta.7";
+
+function targetArtifact(version = SAME_OPENCLAW_VERSION): GatewayArtifact {
+  return {
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+    imageTag: `deadbee-oc${version}@sha256:${"b".repeat(64)}`,
+    openclawSourceSha: "a".repeat(40),
+    profileImages: {
+      builder: {
+        imageRepository:
+          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+        imageTag: `deadbee-oc${version}@sha256:${"c".repeat(64)}`,
+      },
+    },
+  };
+}
+
+function configuredTargetArtifact(options: HarnessOptions): GatewayArtifact | null {
+  if (options.targetArtifact !== undefined) return options.targetArtifact;
+  const configured = options.openclawVersions?.["gw-green"];
+  if (configured === null || configured === "unknown") return null;
+  return targetArtifact(configured ?? SAME_OPENCLAW_VERSION);
+}
 
 function mkDeps(options: HarnessOptions = {}) {
   const client = options.client ?? happyClient();
@@ -127,6 +152,8 @@ function mkDeps(options: HarnessOptions = {}) {
       options.openclawVersions
         ? options.openclawVersions[gatewayId] ?? null
         : SAME_OPENCLAW),
+    readGatewayReleaseArtifact: vi.fn(async (_gatewayId: string, release: number) =>
+      release === 2 ? configuredTargetArtifact(options) : null),
     commitCutover: vi.fn(async (commit) => {
       events.push(`cutover:${commit.fromGatewayId}->${commit.toGatewayId}:mirror=${commit.flipMirror}`);
     }),
@@ -285,10 +312,16 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
 });
 
 describe("migrate-customer — openclaw version gate", () => {
-  const CROSS_VERSION = { "gw-blue": "2026.7.1", "gw-green": "2026.7.2-beta.7" };
+  const CROSS_VERSION = {
+    "gw-blue": "OpenClaw 2026.7.1 (aaaaaaaa)",
+    "gw-green": "2026.7.2-beta.7",
+  };
 
-  it("journals the migrate-state decision when both gateways run the same openclaw", async () => {
-    const { deps, ctx, client } = mkDeps();
+  it("uses the exact target release when its live heartbeat has not reported openclaw yet", async () => {
+    const { deps, ctx, client } = mkDeps({
+      openclawVersions: { "gw-blue": SAME_OPENCLAW, "gw-green": null },
+      targetArtifact: targetArtifact(),
+    });
     const handler = createMigrateCustomerHandler(deps);
 
     const result = await handler(mkOp({}), ctx);
@@ -296,12 +329,83 @@ describe("migrate-customer — openclaw version gate", () => {
     expect(result.output).toEqual({
       stateMigration: decideRollStateMigration({
         sourceOpenclawVersion: SAME_OPENCLAW,
-        targetOpenclawVersion: SAME_OPENCLAW,
+        targetOpenclawVersion: SAME_OPENCLAW_VERSION,
+        targetOpenclawSourceSha: "a".repeat(40),
       }),
     });
     expect(client.calls).toContain("transfer:final:gw-blue->gw-green");
     expect(deps.readGatewayOpenclawVersion).toHaveBeenCalledWith("gw-blue");
-    expect(deps.readGatewayOpenclawVersion).toHaveBeenCalledWith("gw-green");
+    expect(deps.readGatewayOpenclawVersion).not.toHaveBeenCalledWith("gw-green");
+    expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
+    expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["the target release is missing", null],
+    [
+      "the target release has no source SHA",
+      { ...targetArtifact(), openclawSourceSha: undefined },
+    ],
+    [
+      "the target release has no OpenClaw version",
+      {
+        ...targetArtifact(),
+        imageTag: `deadbee@sha256:${"b".repeat(64)}`,
+        profileImages: undefined,
+      },
+    ],
+  ] as const)("stops before quiescing when %s", async (_name, artifact) => {
+    const { deps, ctx, client, events, persisted } = mkDeps({
+      durable: true,
+      openclawVersions: { "gw-blue": SAME_OPENCLAW, "gw-green": SAME_OPENCLAW },
+      targetArtifact: artifact,
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/openclaw|release|identity/iu),
+    });
+    expect(events).toEqual([]);
+    expect(persisted).toEqual([]);
+    expect(client.calls).toEqual([]);
+    expect(client.flushGateway).not.toHaveBeenCalled();
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(client.verifyTarget).not.toHaveBeenCalled();
+    expect(client.unmount).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    expect(deps.commitV2Cutover).not.toHaveBeenCalled();
+    expect(deps.useDurableMigration).not.toHaveBeenCalled();
+    expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
+    expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledTimes(1);
+    expect(deps.readGatewayOpenclawVersion).not.toHaveBeenCalledWith("gw-green");
+  });
+
+  it.each([
+    ["the target release changes the version", targetArtifact("2026.7.3")],
+    [
+      "the target release changes the source SHA",
+      { ...targetArtifact(), openclawSourceSha: "b".repeat(40) },
+    ],
+  ] as const)("provisions fresh when %s", async (_name, artifact) => {
+    const { deps, ctx, client } = mkDeps({
+      openclawVersions: { "gw-blue": SAME_OPENCLAW, "gw-green": SAME_OPENCLAW },
+      targetArtifact: artifact,
+    });
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({}), ctx);
+
+    expect(result).toMatchObject({
+      success: true,
+      output: { stateMigration: { strategy: "provision-fresh" } },
+    });
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(client.verifyTarget).not.toHaveBeenCalled();
+    expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
+    expect(deps.readGatewayOpenclawVersion).not.toHaveBeenCalledWith("gw-green");
   });
 
   it("skips the state transfer across an openclaw version change and lets the destination re-provision", async () => {
@@ -313,8 +417,9 @@ describe("migrate-customer — openclaw version gate", () => {
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(result.output).toEqual({
       stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "2026.7.1",
+        sourceOpenclawVersion: CROSS_VERSION["gw-blue"],
         targetOpenclawVersion: "2026.7.2-beta.7",
+        targetOpenclawSourceSha: "a".repeat(40),
       }),
     });
     expect(client.calls).toEqual(["quiesce:gw-blue", "unmount:gw-blue"]);
@@ -364,6 +469,50 @@ describe("migrate-customer — openclaw version gate", () => {
       targetRelease: 2,
       targetRootFence: gatewayRootFence("gw-green", 2),
     }));
+  });
+
+  it.each([
+    "initialized",
+    "freshSourceQuiesced",
+    "freshCutoverReady",
+  ] as const)("aborts a pre-existing %s fresh migration when the fenced release is state-compatible", async (phase) => {
+    const { deps, ctx, client, persisted, events } = mkDeps({
+      durable: true,
+      openclawVersions: { "gw-blue": SAME_OPENCLAW, "gw-green": null },
+      targetArtifact: targetArtifact(),
+    });
+    const state: NonNullable<Operation["customerMigrationV2"]> = {
+      phase,
+      strategy: "provision-fresh",
+      operationId: "op-1",
+      migrationId: "mig-op-1",
+      uid: "uid-alice",
+      slug: "alice",
+      sourceGatewayId: "gw-blue",
+      sourceRelease: 1,
+      sourceEpoch: 4,
+      sourceAssignmentMode: "assigned",
+      sourceRootFence: gatewayRootFence("gw-blue"),
+      targetGatewayId: "gw-green",
+      targetRelease: 2,
+      targetRootFence: gatewayRootFence("gw-green", 2),
+    };
+    const handler = createMigrateCustomerHandler(deps);
+
+    const result = await handler(mkOp({ customerMigrationV2: state }), ctx);
+
+    expect(result).toMatchObject({
+      success: false,
+      rolledBack: true,
+      error: expect.stringMatching(/no longer authorizes.*provision-fresh/iu),
+    });
+    expect(events).toEqual(["assignment:gw-blue:serving"]);
+    expect(persisted.at(-1)).toMatchObject({
+      phase: "aborted",
+      abortFromPhase: phase,
+    });
+    expect(client.calls).toEqual([]);
+    expect(deps.commitV2Cutover).not.toHaveBeenCalled();
   });
 
   it("replays an ambiguous fresh durable cutover without reopening the source roster", async () => {
@@ -509,22 +658,31 @@ describe("migrate-customer — openclaw version gate", () => {
     expect(persisted.map((state) => state.phase)).toEqual(["initialized"]);
   });
 
-  it("provisions fresh when either gateway reports no openclaw version", async () => {
-    for (const openclawVersions of [
-      { "gw-blue": null, "gw-green": SAME_OPENCLAW },
-      { "gw-blue": SAME_OPENCLAW, "gw-green": null },
-      { "gw-blue": "unknown", "gw-green": "unknown" },
-    ]) {
-      const { deps, ctx, client } = mkDeps({ openclawVersions });
+  it("stops before quiescing when the source reports no complete openclaw identity", async () => {
+    for (const sourceOpenclawVersion of [null, "unknown", SAME_OPENCLAW_VERSION]) {
+      const { deps, ctx, client, events, persisted } = mkDeps({
+        durable: true,
+        openclawVersions: {
+          "gw-blue": sourceOpenclawVersion,
+          "gw-green": SAME_OPENCLAW,
+        },
+        targetArtifact: targetArtifact(),
+      });
       const handler = createMigrateCustomerHandler(deps);
 
       const result = await handler(mkOp({}), ctx);
 
       expect(result).toMatchObject({
-        success: true,
-        output: { stateMigration: { strategy: "provision-fresh" } },
+        success: false,
+        error: expect.stringMatching(/source.*openclaw.*identity/iu),
       });
+      expect(events).toEqual([]);
+      expect(persisted).toEqual([]);
+      expect(client.calls).toEqual([]);
+      expect(client.flushGateway).not.toHaveBeenCalled();
       expect(client.transferState).not.toHaveBeenCalled();
+      expect(client.unmount).not.toHaveBeenCalled();
+      expect(deps.useDurableMigration).not.toHaveBeenCalled();
     }
   });
 

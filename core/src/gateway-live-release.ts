@@ -98,6 +98,7 @@ export function configuredBuilderCredentialBootstrapAllowed(
 export interface GatewayArtifact {
   imageRepository: string;
   imageTag: string;
+  openclawSourceSha?: string;
   profileImages?: GatewayProfileImages;
   gatewayEdgeImage?: GatewayEdgeImage;
 }
@@ -198,6 +199,9 @@ export function gatewayArtifactFromReleasePayload(payload: ReleasePayload): Gate
   return {
     imageRepository: payload.imageRepository,
     imageTag: payload.imageTag,
+    ...(payload.openclawSourceSha === undefined
+      ? {}
+      : { openclawSourceSha: payload.openclawSourceSha }),
     ...(payload.profileImages === undefined
       ? {}
       : { profileImages: payload.profileImages }),

@@ -94,6 +94,9 @@ export function gatewayArtifactFromReleasePayload(payload) {
     return {
         imageRepository: payload.imageRepository,
         imageTag: payload.imageTag,
+        ...(payload.openclawSourceSha === undefined
+            ? {}
+            : { openclawSourceSha: payload.openclawSourceSha }),
         ...(payload.profileImages === undefined
             ? {}
             : { profileImages: payload.profileImages }),
