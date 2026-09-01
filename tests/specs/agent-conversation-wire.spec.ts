@@ -169,10 +169,10 @@ type EnvelopeFixture = {
 describe("agent activity envelope v1 fixtures", () => {
   const activity = fixture<EnvelopeFixture>("agent-activity-envelopes.json");
 
-  it("covers the complete envelope, activity-kind, item-status, transition, and outcome unions", () => {
+  it("covers the complete envelope, activity-kind, item-status, and outcome unions", () => {
     expect(AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION).toBe(1);
     expect(new Set(activity.envelopes.map(({ type }) => type))).toEqual(
-      new Set(["turn.started", "item.completed", "control.transition", "turn.finalized"]),
+      new Set(["turn.started", "item.completed", "turn.finalized"]),
     );
 
     const items = activity.envelopes.filter(
@@ -189,27 +189,11 @@ describe("agent activity envelope v1 fixtures", () => {
       new Set(["completed", "failed", "waiting"]),
     );
 
-    const transitions = activity.envelopes.filter(
-      (value): value is Extract<AgentActivityEnvelopeV1, { type: "control.transition" }> =>
-        value.type === "control.transition",
-    );
-    expect(new Set(transitions.map(({ control }) => control.to))).toEqual(
-      new Set(["approved", "denied", "expired"]),
-    );
     const approvalCreates = items.filter(({ item }) => item.kind === "approval");
-    const waitingApprovals = new Set(
-      approvalCreates.map(({ ref }) => `${ref.runId}:${ref.itemId}`),
-    );
     expect(approvalCreates).toHaveLength(3);
-    expect(new Set(transitions.map(({ ref }) => `${ref.runId}:${ref.itemId}`)).size).toBe(3);
     for (const create of approvalCreates) {
       expect(create.ref.semanticVersion).toBe(1);
       expect(create.item.status).toBe("waiting");
-    }
-    for (const transition of transitions) {
-      expect(transition.ref.semanticVersion).toBe(2);
-      expect(transition.control.from).toBe("waiting");
-      expect(waitingApprovals).toContain(`${transition.ref.runId}:${transition.ref.itemId}`);
     }
 
     const finalizations = activity.envelopes.filter(

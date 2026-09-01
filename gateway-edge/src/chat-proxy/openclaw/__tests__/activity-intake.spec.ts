@@ -89,7 +89,7 @@ describe("normalized Activity intake", () => {
       path.resolve(__dirname, "../../../../../tests/fixtures/agent-conversation/agent-activity-envelopes.json"),
       "utf8",
     )) as { envelopes: unknown[] };
-    expect(fixture.envelopes.map((value) => parseActivityEnvelope(value).type)).toHaveLength(18);
+    expect(fixture.envelopes.map((value) => parseActivityEnvelope(value).type)).toHaveLength(15);
   });
 
   it("accepts only loopback requests with an exact active runtime binding", async () => {
@@ -302,6 +302,17 @@ describe("normalized Activity intake", () => {
     } catch (error) {
       expect(error).toMatchObject({ status: 422, code: "event_key_mismatch" });
     }
+  });
+
+  it("rejects the retired custom approval transition envelope", () => {
+    const value = validEnvelope() as unknown as Record<string, unknown>;
+    delete value.item;
+    value.type = "control.transition";
+    value.control = { from: "waiting", to: "approved", actorId: "mm-user-1" };
+
+    expect(() => parseActivityEnvelope(value)).toThrowError(
+      expect.objectContaining({ status: 422, code: "invalid_event_type" }),
+    );
   });
 
   it.each([

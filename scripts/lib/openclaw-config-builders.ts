@@ -557,7 +557,6 @@ export function buildProjectAgentAccounts(
   slug: string,
   projectAgents: ReadonlyArray<ProjectAgentState>,
   ownerMmUserId?: string | null,
-  policy: MattermostAccountPolicy = { gatewayClass: "shared" },
 ): Record<string, MattermostAccountEntry> {
   if (typeof ownerMmUserId !== "string" || !MATTERMOST_ID_RE.test(ownerMmUserId)) return {};
   const active = activeAgentProjectIds(projectAgents);
@@ -568,7 +567,7 @@ export function buildProjectAgentAccounts(
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
       allowFrom: [ownerMmUserId],
-      ...(policy.gatewayClass === "shared" ? { dmPolicy: "disabled" as const } : {}),
+      dmPolicy: "disabled",
       groupPolicy: "open",
       commands: { native: false },
     };

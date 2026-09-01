@@ -781,7 +781,7 @@ describe("buildProjectAgentAccounts", () => {
       { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
       { projectId: "unminted", enabled: true, token: null, mmUserId: null },
       { projectId: "retired", enabled: false, token: "pat-2", mmUserId: "bot-2" },
-    ], CHRIS_MM_ID, { gatewayClass: "shared", platformAdminMmUserId: ADMIN_MM_ID });
+    ], CHRIS_MM_ID);
 
     expect(accounts).toEqual({
       "chris-proj-orbit": {
@@ -794,12 +794,12 @@ describe("buildProjectAgentAccounts", () => {
     });
   });
 
-  it("keeps the owner approval identity when Builder gateway DM policy is inherited", () => {
+  it("disables project-agent DMs on Builder gateways while keeping owner approval identity", () => {
     const accounts = buildProjectAgentAccounts("chris", [
       { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
-    ], CHRIS_MM_ID, { gatewayClass: "builder" });
+    ], CHRIS_MM_ID);
 
-    expect(accounts["chris-proj-orbit"]).not.toHaveProperty("dmPolicy");
+    expect(accounts["chris-proj-orbit"].dmPolicy).toBe("disabled");
     expect(accounts["chris-proj-orbit"].allowFrom).toEqual([CHRIS_MM_ID]);
   });
 

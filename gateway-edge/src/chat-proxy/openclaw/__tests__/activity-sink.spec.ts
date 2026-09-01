@@ -105,44 +105,16 @@ function journalProps(
 }
 
 describe("attention-aware Activity sink", () => {
-  it("registers an approval control before Mattermost create and attaches only the committed receipt", async () => {
-    const order: string[] = [];
+  it("writes waiting approvals as ordinary native Mattermost posts", async () => {
     const mm = mmClient();
-    const prepare = vi.fn(async (input: { envelope: AgentActivityEnvelopeV1; message: string }) => {
-      order.push("control-prepare");
-      return {
-        receipt: {
-          controlId: "approval-control-1",
-          eventKey: input.envelope.eventKey,
-          controlChannelId: "main-1",
-          resourceDigest: "b".repeat(64),
-          actionDigests: { ocapprove: "c".repeat(64), ocdeny: "d".repeat(64) },
-        },
-        post: {
-          channelId: "main-1",
-          message: input.message,
-          props: { octogee: { controlId: "approval-control-1" } },
-          attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
-        },
-      };
-    });
-    const attachReceipt = vi.fn(async (receipt: { postId: string }) => {
-      order.push("control-attach");
-      expect(receipt.postId).toBe("approval-post-1");
-    });
     const sink = createActivitySink({
       mm,
       receipts: new InMemoryActivityWriteReceiptStore(),
       leaseOwner: "worker-1",
       now: () => 1_000,
-      controls: { prepare, attachReceipt },
     });
     await sink.append({ envelope: envelope("turn.started"), binding });
-    vi.mocked(mm.createActivityPost).mockImplementationOnce(async () => {
-      order.push("mattermost-create");
-      return { id: "approval-post-1" };
-    });
-    order.length = 0;
+    vi.mocked(mm.createActivityPost).mockResolvedValueOnce({ id: "approval-post-1" });
     const approval = envelope("item.completed", {
       item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
     });
@@ -153,19 +125,22 @@ describe("attention-aware Activity sink", () => {
 
     const result = await sink.append({ envelope: approval, binding });
 
-    expect(order).toEqual(["control-prepare", "mattermost-create", "control-attach"]);
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
-      envelope: approval,
-      activityRootPostId: "turn-1",
-      message: "@builder Approve deployment?",
-    }));
     expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
-      props: expect.objectContaining({
-        attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
+      channelId: "main-1",
+      rootId: "turn-1",
+      message: "@builder Approve deployment?",
+      silent: false,
+      props: {
         octogee: expect.objectContaining({
-          controlId: "approval-control-1",
-          controlResourceDigest: "b".repeat(64),
+          kind: "activity.approval",
+          attention: "action-required",
+          eventKey: approval.eventKey,
         }),
+      },
+    }));
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.not.objectContaining({
+      props: expect.objectContaining({
+        attachments: expect.anything(),
       }),
     }));
     expect(result).toMatchObject({
@@ -497,100 +472,6 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).toHaveBeenLastCalledWith(expect.objectContaining({
       message: expect.not.stringContaining("secret-token"),
     }));
-  });
-
-  it("targets waiting approvals once and edits their first terminal decision", async () => {
-    const mm = mmClient();
-    const receipts = new InMemoryActivityWriteReceiptStore();
-    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
-    await sink.append({ envelope: envelope("turn.started"), binding });
-    const approval = envelope("item.completed", {
-      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
-    });
-    approval.ref.itemId = "octogee:approval:approval-1";
-    approval.eventKey = createHash("sha256")
-      .update(agentActivityCanonicalKey(approval.ref))
-      .digest("hex");
-    const created = await sink.append({ envelope: approval, binding });
-    const approvalPostId = created.postIds[0];
-    vi.mocked(mm.getPost).mockResolvedValue({
-      id: approvalPostId,
-      channelId: "main-1",
-      rootId: "turn-1",
-      props: journalProps(approval, "turn-1"),
-      fileIds: [],
-    });
-    const transitionRef = { ...approval.ref, semanticVersion: 2 };
-    const transition: AgentActivityEnvelopeV1 = {
-      schemaVersion: 1,
-      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
-      emittedAt: "2026-07-11T15:01:00.000Z",
-      ref: transitionRef,
-      redaction: { policy: "octogee-v1", appliedAt: "producer" },
-      type: "control.transition",
-      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
-    };
-
-    await sink.append({ envelope: transition, binding });
-    const replay = await sink.append({ envelope: transition, binding });
-
-    expect(mm.createActivityPost).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      message: "@builder Approve deployment?",
-      silent: false,
-    }));
-    expect(mm.editPost).toHaveBeenCalledTimes(1);
-    expect(replay).toMatchObject({ outcome: "duplicate", postIds: [approvalPostId] });
-  });
-
-  it.each([
-    ["id", "foreign-post"],
-    ["channelId", "foreign-channel"],
-    ["rootId", "foreign-root"],
-    ["eventKey", "f".repeat(64)],
-    ["runId", "foreign-run"],
-    ["itemId", "octogee:approval:foreign"],
-    ["activityRootPostId", "foreign-root"],
-  ])("never edits a control target with mismatched %s", async (field, value) => {
-    const mm = mmClient();
-    const receipts = new InMemoryActivityWriteReceiptStore();
-    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
-    await sink.append({ envelope: envelope("turn.started"), binding });
-    const approval = envelope("item.completed", {
-      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
-    });
-    approval.ref.itemId = "octogee:approval:approval-1";
-    approval.eventKey = createHash("sha256")
-      .update(agentActivityCanonicalKey(approval.ref))
-      .digest("hex");
-    const created = await sink.append({ envelope: approval, binding });
-    const post = {
-      id: created.postIds[0],
-      channelId: "main-1",
-      rootId: "turn-1",
-      props: journalProps(approval, "turn-1"),
-      fileIds: [],
-    };
-    if (field === "id" || field === "channelId" || field === "rootId") {
-      post[field] = value;
-    } else {
-      (post.props.octogee as Record<string, unknown>)[field] = value;
-    }
-    vi.mocked(mm.getPost).mockResolvedValue(post);
-    const transitionRef = { ...approval.ref, semanticVersion: 2 };
-    const transition: AgentActivityEnvelopeV1 = {
-      schemaVersion: 1,
-      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
-      emittedAt: "2026-07-11T15:01:00.000Z",
-      ref: transitionRef,
-      redaction: { policy: "octogee-v1", appliedAt: "producer" },
-      type: "control.transition",
-      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
-    };
-
-    await expect(sink.append({ envelope: transition, binding })).rejects.toBeInstanceOf(
-      ActivitySinkIntegrityError,
-    );
-    expect(mm.editPost).not.toHaveBeenCalled();
   });
 
   it.each(["session-created", "uploading"] as const)(

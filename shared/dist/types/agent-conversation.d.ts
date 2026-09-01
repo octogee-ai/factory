@@ -85,11 +85,6 @@ export interface AgentActivityCompletedItem {
     detail?: AgentActivityDetail;
     attachment?: AgentActivityAttachment;
 }
-export interface AgentActivityControlTransition {
-    from: "waiting";
-    to: "approved" | "denied" | "expired";
-    actorId: string;
-}
 export interface AgentActivityEnvelopeBaseV1 {
     schemaVersion: 1;
     eventKey: string;
@@ -105,9 +100,6 @@ export type AgentActivityEnvelopeV1 = (AgentActivityEnvelopeBaseV1 & {
 }) | (AgentActivityEnvelopeBaseV1 & {
     type: "item.completed";
     item: AgentActivityCompletedItem;
-}) | (AgentActivityEnvelopeBaseV1 & {
-    type: "control.transition";
-    control: AgentActivityControlTransition;
 }) | (AgentActivityEnvelopeBaseV1 & {
     type: "turn.finalized";
     outcome: "completed" | "failed" | "stopped";

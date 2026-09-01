@@ -537,7 +537,6 @@ export type {
   AgentActivityDetail,
   AgentActivityAttachment,
   AgentActivityCompletedItem,
-  AgentActivityControlTransition,
   AgentActivityEnvelopeBaseV1,
   AgentActivityEnvelopeV1,
 } from './agent-conversation.js';

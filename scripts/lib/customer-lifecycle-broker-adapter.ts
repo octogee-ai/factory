@@ -799,7 +799,6 @@ async function applyAddCustomerConfigPatch(
     snapshot.slug,
     projectAgents,
     brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
-    accountPolicy,
   );
   const bindings = buildCustomerBindings([
     {
