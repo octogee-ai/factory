@@ -20,6 +20,9 @@ interface RuntimeMock {
   applyConfigPatch: ReturnType<typeof vi.fn>;
 }
 
+const ALICE_MM_USER_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ALICE_COACH_MM_USER_ID = "cccccccccccccccccccccccccc";
+
 const userSnapshot: UserSnapshot = {
   uid: "uid-alice",
   slug: "alice",
@@ -28,7 +31,7 @@ const userSnapshot: UserSnapshot = {
   status: "complete",
   agentIds: [],
   repoUrl: "",
-  mattermostUserId: "mm-alice",
+  mattermostUserId: ALICE_MM_USER_ID,
   greetingPosted: false,
   channels: [],
   ownerName: "Alice",
@@ -36,9 +39,9 @@ const userSnapshot: UserSnapshot = {
 
 const brokerSnapshot: FleetBrokerUserSnapshot = {
   ...userSnapshot,
-  customerMmUserId: "mm-alice",
+  customerMmUserId: ALICE_MM_USER_ID,
   coachToken: "pat-1",
-  coachMmUserId: "mm-alice-coach",
+  coachMmUserId: ALICE_COACH_MM_USER_ID,
   projects: [],
 };
 
