@@ -598,15 +598,18 @@ function assertActivityAcknowledgement(
   envelope: AgentActivityEnvelopeV1,
   binding: Readonly<ActiveActivityRunBinding>,
 ): void {
+  const activityRootPostId = result.receipt.activityRootPostId;
   const receiptMatches =
     result.receipt.eventKey === envelope.eventKey &&
-    Boolean(result.receipt.activityRootPostId);
-  const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
-    result.postIds.length === 0 &&
-    result.receipt.postId === binding.mainRootPostId &&
-    result.receipt.activityRootPostId === binding.mainRootPostId
+    Boolean(activityRootPostId) &&
+    activityRootPostId !== binding.mainRootPostId;
+  const postMatches = envelope.type === "turn.finalized"
+    ? result.postIds.length === 0 && result.receipt.postId === undefined
+    : result.postIds.length === 1 && result.receipt.postId === result.postIds[0];
+  const rootMatches = envelope.type !== "turn.started" || (
+    result.receipt.postId === activityRootPostId
   );
-  if (!receiptMatches || !turnStartedReceiptMatches) {
+  if (!receiptMatches || !postMatches || !rootMatches) {
     throw new ActivitySinkIntegrityError(
       "Activity acknowledgement failed exact root/channel verification",
     );

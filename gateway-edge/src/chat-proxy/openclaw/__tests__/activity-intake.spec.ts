@@ -100,7 +100,7 @@ describe("normalized Activity intake", () => {
       receipt: {
         eventKey: validEnvelope().eventKey,
         postId: "post-1",
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     }));
     const envelope = validEnvelope();
@@ -118,27 +118,27 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "persisted",
         postIds: ["post-1"],
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
     expect(onPersisted).toHaveBeenCalledWith({
       envelope,
       binding,
-      activityRootPostId: "turn-1",
+      activityRootPostId: "activity-root-1",
       outcome: "persisted",
     });
   });
 
-  it("accepts a same-channel turn-start receipt that adopts the input root", async () => {
+  it("accepts a same-channel turn-start receipt for a structured Activity root", async () => {
     const envelope = startedEnvelope("human");
     const append = vi.fn(async () => ({
       outcome: "persisted" as const,
-      postIds: [],
+      postIds: ["activity-root-1"],
       receipt: {
         eventKey: envelope.eventKey,
-        postId: binding.mainRootPostId,
-        activityRootPostId: binding.mainRootPostId,
+        postId: "activity-root-1",
+        activityRootPostId: "activity-root-1",
       },
     }));
 
@@ -151,10 +151,32 @@ describe("normalized Activity intake", () => {
     )).resolves.toMatchObject({
       status: 201,
       body: {
-        postIds: [],
-        activityRootPostId: binding.mainRootPostId,
+        postIds: ["activity-root-1"],
+        activityRootPostId: "activity-root-1",
       },
     });
+  });
+
+  it("rejects a turn-start acknowledgement that adopts the human Mattermost root", async () => {
+    const envelope = startedEnvelope("human");
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+        sinkFor: vi.fn(() => ({
+          append: async () => ({
+            outcome: "persisted" as const,
+            postIds: [binding.mainRootPostId],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: binding.mainRootPostId,
+              activityRootPostId: binding.mainRootPostId,
+            },
+          }),
+        })),
+      },
+    )).rejects.toMatchObject({ status: 503, code: "activity_integrity_failure" });
   });
 
   it("keeps a durable append successful when its observer fails", async () => {
@@ -171,7 +193,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: envelope.eventKey,
               postId: "post-1",
-              activityRootPostId: "turn-1",
+              activityRootPostId: "activity-root-1",
             },
           }),
         })),
@@ -200,7 +222,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: validEnvelope().eventKey,
               postId: "post-1",
-              activityRootPostId: "turn-1",
+              activityRootPostId: "activity-root-1",
             },
           })),
         })),
@@ -212,7 +234,7 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "duplicate",
         postIds: ["post-1"],
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     });
   });

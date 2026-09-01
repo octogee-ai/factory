@@ -279,6 +279,14 @@ describe("identity and degraded-projection fixtures", () => {
     expect(scheduled.projections[0]).toMatchObject(scheduled.expected);
   });
 
+  it("keeps each structured Activity root distinct from its physical Mattermost thread root", () => {
+    for (const value of identity.cases) {
+      for (const projection of value.projections) {
+        expect(projection.activityRootPostId).not.toBe(projection.mainRootPostId);
+      }
+    }
+  });
+
   it("renders partial Mattermost history without timestamp joins", () => {
     expect(identity.degradationCases.map(({ name }) => name)).toEqual([
       "late-detail", "summary-only", "activity-only",
