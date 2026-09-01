@@ -112,6 +112,9 @@ function validLineage(ref: AgentActivityIngressRef): boolean {
   if (ref.origin === "retry") {
     return !ref.parentRunId && nonBlank(ref.retryOfRunId) && ref.retryOfRunId !== ref.runId;
   }
+  if (ref.origin === "subagent") {
+    return nonBlank(ref.parentRunId) && !ref.retryOfRunId && ref.parentRunId !== ref.runId;
+  }
   return !ref.parentRunId && !ref.retryOfRunId;
 }
 

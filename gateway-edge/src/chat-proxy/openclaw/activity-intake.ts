@@ -428,9 +428,7 @@ function assertCompletedIdentity(
     ref.itemId.length > AGENT_ACTIVITY_RESERVED_ITEM_IDS.approvalPrefix.length;
   if (
     item.kind === "approval" &&
-    (!approvalId ||
-      ref.semanticVersion !== 1 ||
-      item.status !== "waiting")
+    (!approvalId || ref.semanticVersion !== 1)
   ) {
     throw new ActivityIntakeError(422, "invalid_approval", false);
   }

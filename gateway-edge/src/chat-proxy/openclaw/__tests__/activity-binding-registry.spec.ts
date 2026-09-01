@@ -118,14 +118,40 @@ describe("same-channel Activity binding registry", () => {
     expect(crossed.resolveAgentIdentity).not.toHaveBeenCalled();
   });
 
-  it("accepts the canonical subagent route without inventing unavailable parent lineage", async () => {
+  it("accepts the canonical subagent route with exact native parent lineage", async () => {
     const { registry } = harness();
     await expect(registry.resolve({
       ...ref,
       runId: "child-1",
+      parentRunId: "parent-1",
       origin: "subagent",
       sessionKey: "agent:octogee-alice-coach:subagent:child-1",
-    })).resolves.toMatchObject({ runId: "child-1", origin: "subagent" });
+    })).resolves.toMatchObject({
+      runId: "child-1",
+      parentRunId: "parent-1",
+      origin: "subagent",
+    });
+  });
+
+  it("rejects subagent routes without a distinct exact parent run", async () => {
+    const missing = harness();
+    await expect(missing.registry.resolve({
+      ...ref,
+      runId: "child-1",
+      origin: "subagent",
+      sessionKey: "agent:octogee-alice-coach:subagent:child-1",
+    })).resolves.toBeNull();
+    expect(missing.resolveAgentIdentity).not.toHaveBeenCalled();
+
+    const self = harness();
+    await expect(self.registry.resolve({
+      ...ref,
+      runId: "child-1",
+      parentRunId: "child-1",
+      origin: "subagent",
+      sessionKey: "agent:octogee-alice-coach:subagent:child-1",
+    })).resolves.toBeNull();
+    expect(self.resolveAgentIdentity).not.toHaveBeenCalled();
   });
 
   it("resolves a DM-launched subagent through its exact native requester route", async () => {
@@ -135,6 +161,7 @@ describe("same-channel Activity binding registry", () => {
     const childRef = {
       ...ref,
       runId: "direct-child-1",
+      parentRunId: "direct-parent-1",
       origin: "subagent" as const,
       sessionKey: `agent:${ref.agentId}:subagent:child-1`,
       requesterSessionKey,

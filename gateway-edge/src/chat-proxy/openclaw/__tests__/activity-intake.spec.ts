@@ -338,7 +338,25 @@ describe("normalized Activity intake", () => {
   });
 
   it.each([
+    ["approved", "completed"],
+    ["denied", "failed"],
+  ] as const)("accepts immutable native approval %s rows", (decision, status) => {
+    const value = validEnvelope();
+    if (value.type !== "item.completed") throw new Error("expected item");
+    value.ref.itemId = `octogee:approval:tool-1:resolved-${decision}`;
+    value.item = { kind: "approval", status, summary: `Approval ${decision}` };
+    value.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(value.ref))
+      .digest("hex");
+
+    expect(parseActivityEnvelope(value)).toEqual(value);
+  });
+
+  it.each([
     ["octogee:approval:approval-1", "tool", "completed", 1, "invalid_approval"],
+    ["octogee:approval:approval-1", "approval", "completed", 2, "invalid_approval"],
+    ["octogee:approval:", "approval", "waiting", 1, "invalid_approval"],
+    ["approval-1", "approval", "waiting", 1, "invalid_approval"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "tool", "failed", 1, "invalid_terminal_error"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "error", "completed", 1, "invalid_terminal_error"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "error", "failed", 2, "invalid_terminal_error"],

@@ -210,6 +210,8 @@ function activityPostHasExactProps(
     conversationId: envelope.ref.conversationId,
     turnId: envelope.ref.turnId,
     runId: envelope.ref.runId,
+    parentRunId: envelope.ref.parentRunId,
+    retryOfRunId: envelope.ref.retryOfRunId,
     agentId: envelope.ref.agentId,
     sessionKey: envelope.ref.sessionKey,
     origin: envelope.ref.origin,

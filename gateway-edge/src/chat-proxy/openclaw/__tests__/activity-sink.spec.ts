@@ -142,6 +142,8 @@ function journalProps(
       turnId: value.ref.turnId,
       eventKey: value.eventKey,
       runId: value.ref.runId,
+      ...(value.ref.parentRunId ? { parentRunId: value.ref.parentRunId } : {}),
+      ...(value.ref.retryOfRunId ? { retryOfRunId: value.ref.retryOfRunId } : {}),
       agentId: value.ref.agentId,
       sessionKey: value.ref.sessionKey,
       origin: value.ref.origin,
@@ -259,6 +261,66 @@ describe("attention-aware Activity sink", () => {
       },
       silent: true,
     }));
+  });
+
+  it("marshals exact subagent lineage as structured Mattermost props", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    const started = envelope("turn.started");
+    started.ref.origin = "subagent";
+    started.ref.parentRunId = "parent-run";
+    started.ref.sessionKey = "agent:agent-1:subagent:child";
+    started.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(started.ref))
+      .digest("hex");
+
+    await sink.append({ envelope: started, binding });
+
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      message: "▶️ Agent run started",
+      props: {
+        octogee: expect.objectContaining({
+          runId: "run-1",
+          parentRunId: "parent-run",
+          origin: "subagent",
+        }),
+      },
+    }));
+    expect(vi.mocked(mm.createActivityPost).mock.calls[0]?.[0].message)
+      .not.toContain("subagent of");
+  });
+
+  it("rejects a replay whose Mattermost post has mismatched structured lineage", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    const started = envelope("turn.started");
+    started.ref.origin = "subagent";
+    started.ref.parentRunId = "parent-run";
+    started.ref.sessionKey = "agent:agent-1:subagent:child";
+    started.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(started.ref))
+      .digest("hex");
+    await sink.append({ envelope: started, binding });
+    const props = journalProps(started);
+    const octogee = props.octogee as Record<string, unknown>;
+    await mm.editPost("post-1", {
+      message: "▶️ Agent run started",
+      props: { octogee: { ...octogee, parentRunId: "foreign-parent" } },
+    });
+
+    await expect(sink.append({ envelope: started, binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
   });
 
   it("posts the terminal error once beneath the primary turn root without silencing it", async () => {
