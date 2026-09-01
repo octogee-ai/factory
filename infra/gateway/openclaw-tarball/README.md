@@ -1,133 +1,105 @@
-# OpenClaw main build
+# OpenClaw tagged build
 
-Octogee builds its gateway from the current OpenClaw `main` branch plus the
-small Octogee overlay. The normal cycle is intentionally short:
-
-1. refresh OpenClaw `main`;
-2. rebase the overlay and resolve only real source overlaps;
-3. build once and run focused behavior tests;
-4. package the root and Mattermost artifacts;
-5. replace the two moving `main` objects; and
-6. merge the Octogee PR so the normal build creates the gateway images.
-
-There are no checked-in OpenClaw versions, source commits, artifact digests,
-or matrix rows to update. A build uses whatever is current when the cycle is
-run. This guide produces source artifacts and images; it does not roll TEST or
+Octogee builds its gateway from a released OpenClaw tag plus the small Octogee
+overlay. `current.json` selects the two write-once GCS artifacts for the
+current tag; the build resolves their exact generations and derives a new
+immutable `octogee-gateway-base:inputs-…` tag. No step here deploys TEST or
 PROD.
 
-## Build a current-main update
+## Refresh a released tag
 
-Start from the OpenClaw checkout that has `origin` pointing at
-`openclaw/openclaw` and `ceckert` pointing at the Octogee fork.
+Start from a clean OpenClaw checkout with `origin` pointing at
+`openclaw/openclaw` and `ceckert` at the Octogee fork. Fetch the tag, verify
+its peeled commit, and cut the tag-specific overlay branch:
 
 ```bash
 cd /path/to/openclaw
-git fetch origin
-git switch octogee/gateway-scaling-patches-main
-git rebase origin/main
+git fetch --tags origin
+git rev-parse v2026.8.2^{}
+git switch -c octogee/gateway-scaling-patches-v2026.8.2 v2026.8.2
 ```
 
-Keep the overlay small. If upstream now supplies a behavior, drop the related
-patch rather than adapting it. When a rebase conflicts, retain both changes
-only when both behaviors are still needed, then run the affected tests.
-
-Build and test the changed behavior:
+Port the prior overlay oldest-first, then audit every patch against the
+released tag. Drop behavior OpenClaw now provides. When upstream has split a
+patched file, move only the required hook to its new owner; do not restore
+deleted upstream wiring. Build and test the affected behavior before packing:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-
-node scripts/run-vitest.mjs run \
-  --config test/vitest/vitest.gateway-server.config.ts \
-  src/gateway/server.sessions.delete-lifecycle.test.ts
-
-node scripts/run-vitest.mjs run \
-  --config test/vitest/vitest.extension-mattermost.config.ts \
-  extensions/mattermost/src/mattermost/admission.test.ts \
-  extensions/mattermost/src/mattermost/activity-gateway-runtime.test.ts \
-  extensions/mattermost/src/mattermost/gateway-methods.test.ts
+pnpm check
+pnpm config:channels:check
 ```
 
-Run a narrower command when the overlay changes a different area. Do not add a
-second release ceremony or source-identity test around this loop.
+The focused tests must cover every changed patch area. The root build embeds
+its source commit in `dist/build-info.json`; check it matches the final overlay
+head before packaging. Refresh any still-open upstream PR that carries an
+overlay patch, using `--force-with-lease` after its own build and focused tests.
 
 ## Package and publish
 
-From the Octogee checkout, package the built OpenClaw checkout into a fresh
-temporary directory:
+From a clean Octogee checkout, package the built overlay into a fresh
+directory. Validate the root package and the local Mattermost package in an
+isolated npm prefix before publication.
 
 ```bash
-ARTIFACT_DIR=$(mktemp -d -t openclaw-main-artifacts-XXXXXX)
+ARTIFACT_DIR=$(mktemp -d -t openclaw-v2026.8.2-artifacts-XXXXXX)
 ROOT_TGZ=$(OPENCLAW_SKIP_BUILD=1 \
   bash infra/gateway/openclaw-tarball/pack-fork-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
 MATTERMOST_TGZ=$(bash infra/gateway/openclaw-tarball/pack-mattermost-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
 
-gcloud storage cp "$ROOT_TGZ" \
-  gs://octogee-openclaw-fork/openclaw-fork-main.tgz
-gcloud storage cp "$MATTERMOST_TGZ" \
-  gs://octogee-openclaw-fork/openclaw-mattermost-main.tgz
+OVERLAY_SHA=$(git -C /path/to/openclaw rev-parse HEAD)
+ROOT_OBJECT="openclaw-fork-${OVERLAY_SHA:0:8}.tgz"
+MATTERMOST_SHA256=$(shasum -a 256 "$MATTERMOST_TGZ" | awk '{print $1}')
+MATTERMOST_OBJECT="openclaw-mattermost-${MATTERMOST_SHA256:0:8}.tgz"
+
+gcloud storage cp --if-generation-match=0 "$ROOT_TGZ" \
+  "gs://octogee-openclaw-fork/${ROOT_OBJECT}"
+gcloud storage cp --if-generation-match=0 "$MATTERMOST_TGZ" \
+  "gs://octogee-openclaw-fork/${MATTERMOST_OBJECT}"
 ```
 
-Those object names are moving inputs by design. The build resolves each
-object's generation and content digests, combines them with the base Dockerfile
-and Cloud Build recipe hash, and uses that key as an immutable
-`octogee-gateway-base:inputs-…` tag. An unchanged key reuses the existing image;
-a new key builds from the exact resolved generations and then updates the
-`octogee-gateway-base:main` compatibility alias. Gateway and Builder builds use
-the immutable tag directly.
+The write-once precondition is required. Never replace a release object or
+reuse the retired `*-main.tgz` objects. Set `upstreamTag`, `openclawObject`,
+and `mattermostObject` in `current.json`, and mirror the two object names in
+`cloudbuild-base.yaml`; the focused base-reuse test proves that mirror. Push
+the overlay branch with `--force-with-lease`.
 
-Publish the rebased overlay for review and traceability:
+An artifact refresh must still create an Octogee main build input. Update this
+current-overlay assessment in the same PR; its path is intentionally included
+in Build main scope. Build main produces images only. The operator alone can
+select TEST or PROD later.
 
-```bash
-git push --force-with-lease ceckert HEAD:octogee/gateway-scaling-patches-main
-```
+## Current overlay
 
-Then open the Octogee PR containing the runtime integration. An artifact-only
-refresh still needs a new Octogee main commit: update the current-overlay table
-with the keep/drop assessment, without recording a source commit, version,
-digest, or fingerprint. This README is a gateway build input specifically so
-that small review update starts Build main for the new commit. Merge that PR
-and use its Build main run; never retry an earlier main commit for a new
-OpenClaw artifact pair. The separate
-`build-current-openclaw-base` workflow is available for an explicit manual
-base rebuild.
+The current build is [OpenClaw `v2026.8.2`](https://github.com/openclaw/openclaw/releases/tag/v2026.8.2),
+peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with overlay head
+`b94b6b6109c51546d313a8d23dec6c0ff06d347c`.
+
+| Patch area | v2026.8.2 assessment | Why Octogee carries it |
+| --- | --- | --- |
+| Sandbox-backed file discovery | The tag has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open; its refreshed current-main head is `6c3ea1812a0`. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
+| Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. |
+| Run delivery facts | The tag does not expose the authoritative delivery facts Octogee consumes. | Keeps chat/run lifecycle observation grounded in the runtime result. |
+| Mattermost admission and activity | The tag lacks durable Mattermost ingress admission, live run control, delivery observation, and gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
+| No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and event-loop starvation. |
+| Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. | Prevents stale per-agent state after replacement. |
+
+The gateway base still verifies runtime contracts such as expected config
+behavior and tool-policy shape. Those are product checks, not a parallel
+release authority.
 
 ## What the packers do
 
 `pack-fork-tarball.sh` produces an installable root package. It vendors root
 `workspace:*` dependencies and unpublished Codex/Parallel companions when
-needed, so a main snapshot does not depend on those packages having reached
-npm.
+needed, so a tag does not depend on a companion publish race.
 
-`pack-mattermost-tarball.sh` runs OpenClaw's plugin packer and verifies that
-the package contains compiled runtime output. Mattermost stays separate because
-Octogee carries its channel integration there.
+`pack-mattermost-tarball.sh` runs OpenClaw's plugin packer and verifies compiled
+runtime output. Mattermost stays separate because Octogee carries its channel
+integration there.
 
 Use `pnpm build`, not `pnpm run build:docker`: the full build creates every
-compiled file needed by `npm pack`. The packers use `npm pack` because it is
-reliable on OpenClaw's large export map.
-
-## Current overlay
-
-The branch is authoritative. At the time of a refresh, re-check each patch
-against upstream `main` and remove anything OpenClaw has adopted.
-
-| Patch area | Latest assessment | Why Octogee carries it |
-| --- | --- | --- |
-| Sandbox-backed file discovery | `v2026.8.1` still has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open and rebases cleanly as proven Linux confined-host support plus sandbox/remote bridges. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
-| Secret handling | `v2026.8.1` still has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. Its focused auxiliary-handler parity test now covers the generic registration assertion, so the overlay's duplicate test hunk is gone. | Avoids re-running secret providers for unrelated config writes and supports Octogee's configuration flow. |
-| Mattermost admission and activity | `v2026.8.1` requester-receipt work still does not provide durable Mattermost ingress admission, live run control, delivery observation, or gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
-| No-archive session deletion | `v2026.8.1` has the internal purge primitive for lifecycle-owned cleanup, but its public `sessions.delete` schema still cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and gateway event-loop starvation. |
-
-The gateway base still verifies actual runtime contracts such as the expected
-configuration behavior and tool-policy shape. Those are product checks, not
-source or artifact identity gates.
-
-## When the fork can disappear
-
-Drop the fork when upstream covers every row above. At that point, remove the
-two packaging steps from `cloudbuild-base.yaml`, install upstream OpenClaw in
-`Dockerfile.base`, and delete this directory. Until then, prefer upstreaming or
-deleting patches over growing the overlay.
+compiled file needed by `npm pack`.
