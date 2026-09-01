@@ -75,10 +75,10 @@ select TEST or PROD later.
 ## Current overlay
 
 The current build is [OpenClaw `v2026.8.2`](https://github.com/openclaw/openclaw/releases/tag/v2026.8.2),
-peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with operational overlay head
-`f30bb5ee48c0f6b96cea385736b28b7f6d120cc5`. The Mattermost package is built from the tag without an Octogee
-patch; native threading, streaming, steering, and approvals supply the chat
-behavior.
+peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with overlay head
+`96147db36cc6dc00d70f538677847287b44a4707`. The Mattermost package is built
+from the tag without an Octogee patch; native threading, streaming, steering,
+and approvals supply the chat behavior.
 
 | Patch area | v2026.8.2 assessment | Why Octogee carries it |
 | --- | --- | --- |
@@ -86,6 +86,7 @@ behavior.
 | Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. |
 | No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and event-loop starvation. |
 | Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. | Prevents stale per-agent state after replacement. |
+| Fresh-chat terminal ownership | The tag rejects `terminal.open` when a selected chat has not yet materialized its durable session row. | Materializes and revalidates the exact agent-owned session before opening its terminal. |
 
 The gateway base still verifies runtime contracts such as expected config
 behavior and tool-policy shape. Those are product checks, not a parallel

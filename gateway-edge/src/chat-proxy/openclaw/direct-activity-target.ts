@@ -128,7 +128,12 @@ function postsShareNativeThread(
   root: ActivityMattermostPost | null,
   candidate: DirectActivityTargetCandidate,
 ): root is ActivityMattermostPost {
-  if (!root || root.id !== candidate.rootPostId || root.channelId !== inbound.channelId) return false;
+  if (
+    !root
+    || root.id !== candidate.rootPostId
+    || root.channelId !== inbound.channelId
+    || root.userId !== candidate.ownerUserId
+  ) return false;
   if (root.rootId !== "") return false;
   return candidate.inboundPostId === candidate.rootPostId
     ? inbound.rootId === ""
@@ -161,9 +166,7 @@ function authorizedDirectTarget(
     && target.expectedChannelType === "D"
     && expectedMembers.length === 2
     && expectedMembers.includes(identity.coachMmUserId)
-    && expectedMembers.includes(candidate.ownerUserId)
-    && posts.root.userId
-    && expectedMembers.includes(posts.root.userId),
+    && expectedMembers.includes(candidate.ownerUserId),
   );
 }
 

@@ -26,6 +26,7 @@ function candidate(): DirectActivityTargetCandidate {
 
 function harness(overrides: {
   inboundUserId?: string;
+  rootUserId?: string;
   expectedMemberIds?: string[];
 } = {}) {
   const posts = new Map([
@@ -41,7 +42,7 @@ function harness(overrides: {
       id: ROOT_POST_ID,
       channelId: CHANNEL_ID,
       rootId: "",
-      userId: AGENT_MM_USER_ID,
+      userId: overrides.rootUserId ?? OWNER_MM_USER_ID,
       props: {},
       fileIds: [],
     }],
@@ -92,6 +93,14 @@ describe("native direct Activity target resolver", () => {
 
   it("rejects a post not authored by the owner encoded in the native direct session", async () => {
     const { deps, verifyChannel } = harness({ inboundUserId: "xxxxxxxxxxxxxxxxxxxxxxxxxx" });
+
+    await expect(resolveDirectActivityTarget(candidate(), deps)).resolves.toBeNull();
+    expect(deps.resolveDirectConversationTarget).not.toHaveBeenCalled();
+    expect(verifyChannel).not.toHaveBeenCalled();
+  });
+
+  it("rejects an Agent-authored root beneath an owner-authored inbound reply", async () => {
+    const { deps, verifyChannel } = harness({ rootUserId: AGENT_MM_USER_ID });
 
     await expect(resolveDirectActivityTarget(candidate(), deps)).resolves.toBeNull();
     expect(deps.resolveDirectConversationTarget).not.toHaveBeenCalled();
