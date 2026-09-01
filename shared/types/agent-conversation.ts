@@ -64,6 +64,7 @@ export interface AgentActivityIngressRef {
   retryOfRunId?: string;
   agentId: string;
   sessionKey: string;
+  requesterSessionKey?: string;
   origin: AgentRunRef["origin"];
   mainChannelId: string;
   mainRootPostId: string;

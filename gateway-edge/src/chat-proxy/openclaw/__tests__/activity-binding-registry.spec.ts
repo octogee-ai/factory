@@ -128,6 +128,42 @@ describe("same-channel Activity binding registry", () => {
     })).resolves.toMatchObject({ runId: "child-1", origin: "subagent" });
   });
 
+  it("resolves a DM-launched subagent through its exact native requester route", async () => {
+    const { registry, resolveConversationTarget, resolveDirectConversationTarget } = harness();
+    const requesterSessionKey =
+      `agent:${ref.agentId}:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`;
+    const childRef = {
+      ...ref,
+      runId: "direct-child-1",
+      origin: "subagent" as const,
+      sessionKey: `agent:${ref.agentId}:subagent:child-1`,
+      requesterSessionKey,
+    };
+
+    await expect(registry.resolve(childRef)).resolves.toMatchObject({
+      runId: "direct-child-1",
+      sessionKey: childRef.sessionKey,
+      requesterSessionKey,
+      mainChannelId: "channel-1",
+    });
+    expect(resolveConversationTarget).not.toHaveBeenCalled();
+    expect(resolveDirectConversationTarget).toHaveBeenCalledWith(
+      ref.agentId,
+      "channel-1",
+      OWNER_MM_USER_ID,
+    );
+  });
+
+  it("rejects requester routing on a non-subagent run", async () => {
+    const candidate = harness();
+    await expect(candidate.registry.resolve({
+      ...ref,
+      requesterSessionKey:
+        `agent:${ref.agentId}:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`,
+    })).resolves.toBeNull();
+    expect(candidate.resolveAgentIdentity).not.toHaveBeenCalled();
+  });
+
   it("verifies the exact Agent-owner roster for a direct Mattermost channel", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

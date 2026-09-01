@@ -87,6 +87,7 @@ export interface ActiveActivityRunBinding {
   origin: AgentActivityIngressRef["origin"];
   agentId: string;
   sessionKey: string;
+  requesterSessionKey?: string;
   mainChannelId: string;
   mainRootPostId: string;
   inputPostId?: string;
@@ -177,6 +178,7 @@ export function freezeActiveActivityRunBinding(
   if (binding.parentRunId !== undefined) bindingString(binding, "parentRunId");
   if (binding.retryOfRunId !== undefined) bindingString(binding, "retryOfRunId");
   if (binding.inputPostId !== undefined) bindingString(binding, "inputPostId");
+  if (binding.requesterSessionKey !== undefined) bindingString(binding, "requesterSessionKey");
   if (
     !ORIGINS.has(binding.origin) ||
     binding.conversationId !== binding.mainChannelId ||
@@ -288,6 +290,7 @@ function parseRef(value: unknown): AgentActivityIngressRef {
     "retryOfRunId",
     "agentId",
     "sessionKey",
+    "requesterSessionKey",
     "origin",
     "mainChannelId",
     "mainRootPostId",
@@ -306,6 +309,9 @@ function parseRef(value: unknown): AgentActivityIngressRef {
     ...(optionalString(ref, "retryOfRunId") ? { retryOfRunId: optionalString(ref, "retryOfRunId") } : {}),
     agentId: stringField(ref, "agentId"),
     sessionKey: stringField(ref, "sessionKey"),
+    ...(optionalString(ref, "requesterSessionKey")
+      ? { requesterSessionKey: optionalString(ref, "requesterSessionKey") }
+      : {}),
     origin: origin as AgentActivityIngressRef['origin'],
     mainChannelId: stringField(ref, "mainChannelId"),
     mainRootPostId: stringField(ref, "mainRootPostId"),
@@ -570,6 +576,7 @@ function bindingMatches(ref: AgentActivityIngressRef, binding: ActiveActivityRun
     ref.origin === binding.origin &&
     ref.agentId === binding.agentId &&
     ref.sessionKey === binding.sessionKey &&
+    ref.requesterSessionKey === binding.requesterSessionKey &&
     ref.mainChannelId === binding.mainChannelId &&
     ref.mainRootPostId === binding.mainRootPostId &&
     ref.inputPostId === binding.inputPostId

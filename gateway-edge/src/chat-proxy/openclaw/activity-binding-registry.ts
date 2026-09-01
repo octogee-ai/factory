@@ -112,36 +112,44 @@ function validLineage(ref: AgentActivityIngressRef): boolean {
   if (ref.origin === "retry") {
     return !ref.parentRunId && nonBlank(ref.retryOfRunId) && ref.retryOfRunId !== ref.runId;
   }
-  if (ref.origin === "subagent") {
-    return !ref.parentRunId && !ref.retryOfRunId;
-  }
   return !ref.parentRunId && !ref.retryOfRunId;
 }
 
-function validRoute(ref: AgentActivityIngressRef): boolean {
-  if (
-    ref.conversationId !== ref.mainChannelId ||
-    ref.turnId !== ref.mainRootPostId ||
-    !validLineage(ref)
-  ) {
-    return false;
-  }
-  if (ref.origin === "subagent") {
-    return ref.sessionKey.startsWith(`agent:${ref.agentId}:subagent:`) && nonBlank(ref.inputPostId);
-  }
-  if (ref.origin === "scheduled") {
-    return ref.sessionKey.startsWith(`agent:${ref.agentId}:`) &&
-      parseMattermostSessionRoute(ref.sessionKey) === null;
-  }
+function validSubagentRoute(ref: AgentActivityIngressRef): boolean {
+  if (!ref.sessionKey.startsWith(`agent:${ref.agentId}:subagent:`)) return false;
+  if (!nonBlank(ref.inputPostId)) return false;
+  if (!ref.requesterSessionKey) return true;
+  const requesterRoute = parseMattermostSessionRoute(ref.requesterSessionKey);
+  if (!requesterRoute || requesterRoute.peerKind !== "direct") return false;
+  return requesterRoute.agentId === ref.agentId
+    && requesterRoute.threadRootPostId === ref.mainRootPostId;
+}
+
+function validScheduledRoute(ref: AgentActivityIngressRef): boolean {
+  return ref.sessionKey.startsWith(`agent:${ref.agentId}:`)
+    && parseMattermostSessionRoute(ref.sessionKey) === null;
+}
+
+function validMattermostRoute(ref: AgentActivityIngressRef): boolean {
   const route = parseMattermostSessionRoute(ref.sessionKey);
-  if (
-    !route ||
-    route.agentId !== ref.agentId ||
-    route.threadRootPostId !== ref.mainRootPostId
-  ) {
-    return false;
-  }
+  if (!route || route.agentId !== ref.agentId) return false;
+  if (route.threadRootPostId !== ref.mainRootPostId) return false;
   return route.peerKind === "direct" || route.primaryChannelId === ref.mainChannelId;
+}
+
+function validRoute(ref: AgentActivityIngressRef): boolean {
+  if (ref.conversationId !== ref.mainChannelId) return false;
+  if (ref.turnId !== ref.mainRootPostId || !validLineage(ref)) return false;
+  if (ref.origin === "subagent") return validSubagentRoute(ref);
+  if (ref.requesterSessionKey !== undefined) return false;
+  if (ref.origin === "scheduled") return validScheduledRoute(ref);
+  return validMattermostRoute(ref);
+}
+
+function activityMattermostRoute(ref: AgentActivityIngressRef) {
+  const route = parseMattermostSessionRoute(ref.sessionKey);
+  if (route || ref.origin !== "subagent" || !ref.requesterSessionKey) return route;
+  return parseMattermostSessionRoute(ref.requesterSessionKey);
 }
 
 function authoritativeTarget(
@@ -149,7 +157,7 @@ function authoritativeTarget(
   identity: AgentIdentity,
   target: AuthorizedConversationTarget,
 ): boolean {
-  const route = parseMattermostSessionRoute(ref.sessionKey);
+  const route = activityMattermostRoute(ref);
   const directTarget = isAuthoritativeDirectTarget(route, identity, target);
   const channelTarget = isAuthoritativePrivateTarget(route, target);
   return (
@@ -196,7 +204,7 @@ export function createActivityBindingRegistry(
       if (existing) return existing;
       if (!validRoute(ref)) return null;
       const identity = await deps.resolveAgentIdentity(ref.agentId);
-      const route = parseMattermostSessionRoute(ref.sessionKey);
+      const route = activityMattermostRoute(ref);
       const target = route?.peerKind === "direct"
         ? await deps.resolveDirectConversationTarget(
             ref.agentId,
@@ -215,6 +223,7 @@ export function createActivityBindingRegistry(
         origin: ref.origin,
         agentId: ref.agentId,
         sessionKey: ref.sessionKey,
+        ...(ref.requesterSessionKey ? { requesterSessionKey: ref.requesterSessionKey } : {}),
         mainChannelId: ref.mainChannelId,
         mainRootPostId: ref.mainRootPostId,
         ...(ref.inputPostId ? { inputPostId: ref.inputPostId } : {}),

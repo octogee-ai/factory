@@ -353,7 +353,7 @@ export function createOpenClawRuntimeBroker(opts: {
       const body = await postJson(
         "/internal/openclaw/activity/direct-conversation-target",
         { agentId, conversationId, ownerUserId },
-        new Set([200, 404]),
+        new Set([200, 403, 404]),
       );
       return (body?.target as AuthorizedConversationTarget | undefined) ?? null;
     },
