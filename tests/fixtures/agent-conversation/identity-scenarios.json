@@ -80,38 +80,6 @@
         }
       ],
       "expected": { "turnId": "scheduled-root-1", "mainRootPostId": "scheduled-root-1", "origin": "scheduled" }
-    },
-    {
-      "name": "queue-to-steer",
-      "projections": [
-        {
-          "schemaVersion": 3,
-          "projectionKind": "admission",
-          "conversationId": "main-1",
-          "turnId": "turn-queued-1",
-          "mainChannelId": "main-1",
-          "inputPostId": "input-queued-1",
-          "origin": "followup",
-          "status": "queued",
-          "queuePosition": 1,
-          "attention": "routine"
-        },
-        {
-          "schemaVersion": 3,
-          "projectionKind": "run",
-          "conversationId": "main-1",
-          "turnId": "turn-active-1",
-          "runId": "run-active-1",
-          "origin": "followup",
-          "status": "running",
-          "mainChannelId": "main-1",
-          "mainRootPostId": "turn-active-1",
-          "inputPostId": "input-queued-1",
-          "activityRootPostId": "turn-active-1",
-          "attention": "routine"
-        }
-      ],
-      "expected": { "turnId": "turn-active-1", "runId": "run-active-1", "inputPostId": "input-queued-1" }
     }
   ],
   "degradationCases": [

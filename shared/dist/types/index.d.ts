@@ -59,5 +59,5 @@ export type { PlacementReceipt, PlacementReceiptKind } from './placement-receipt
 export type { DeviceIdentity, DeviceAuthPayloadV3Params, SignedDevicePayload, SignConnectDeviceParams, } from './device-identity.js';
 export type { OpenclawWireErrorCode, WireSocket, ResponseFrame } from './openclaw-wire-core.js';
 export { OpenclawWireError, isResponseFrame, waitForWsOpen, startConnectChallengeTracker, sendWsRequest, } from './openclaw-wire-core.js';
-export type { AgentRunOrigin, AgentRunStatus, AgentAttention, AgentRunRef, AgentAdmissionOrigin, AgentAdmissionStatus, AgentAdmissionRef, ConversationProjectionRef, ActivityCreateRef, AgentActivityKind, AgentActivityIngressRef, AgentActivityDetail, AgentActivityAttachment, AgentActivityCompletedItem, AgentActivityEnvelopeBaseV1, AgentActivityEnvelopeV1, } from './agent-conversation.js';
+export type { AgentRunOrigin, AgentRunStatus, AgentAttention, AgentRunRef, ActivityCreateRef, AgentActivityKind, AgentActivityIngressRef, AgentActivityDetail, AgentActivityAttachment, AgentActivityCompletedItem, AgentActivityEnvelopeBaseV1, AgentActivityEnvelopeV1, } from './agent-conversation.js';
 export { AGENT_CONVERSATION_SCHEMA_VERSION, AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION, AGENT_ACTIVITY_RESERVED_ITEM_IDS, agentActivityCanonicalKey, } from './agent-conversation.js';

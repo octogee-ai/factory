@@ -29,22 +29,6 @@ export interface AgentRunRef {
     semanticVersion?: number;
     attention: AgentAttention;
 }
-export type AgentAdmissionOrigin = Exclude<AgentRunOrigin, "subagent">;
-export type AgentAdmissionStatus = "received" | "queued" | "blocked" | "canceled" | "admitted";
-export interface AgentAdmissionRef {
-    schemaVersion: 3;
-    projectionKind: "admission";
-    conversationId: string;
-    turnId: string;
-    mainChannelId: string;
-    inputPostId: string;
-    origin: AgentAdmissionOrigin;
-    retryOfRunId?: string;
-    status: AgentAdmissionStatus;
-    queuePosition?: number;
-    attention: "routine";
-}
-export type ConversationProjectionRef = AgentRunRef | AgentAdmissionRef;
 export interface ActivityCreateRef extends AgentRunRef {
     itemId: string;
     ordinal: number;

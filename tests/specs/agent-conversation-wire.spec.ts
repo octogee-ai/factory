@@ -8,10 +8,8 @@ import {
   AGENT_CONVERSATION_SCHEMA_VERSION,
   agentActivityCanonicalKey,
   type AgentActivityEnvelopeV1,
-  type AgentAdmissionRef,
   type AgentRunRef,
   type ActivityCreateRef,
-  type ConversationProjectionRef,
 } from "../../shared/types/index.js";
 
 const FIXTURES = path.resolve(__dirname, "../fixtures/agent-conversation");
@@ -20,12 +18,12 @@ function fixture<T>(name: string): T {
   return JSON.parse(readFileSync(path.join(FIXTURES, name), "utf8")) as T;
 }
 
-function projection(value: unknown): ConversationProjectionRef {
-  return value as ConversationProjectionRef;
+function projection(value: unknown): AgentRunRef {
+  return value as AgentRunRef;
 }
 
 describe("agent conversation v3 type contract", () => {
-  it("exports one breaking run/admission projection union from the shared barrel", () => {
+  it("exports the Activity run projection from the shared barrel", () => {
     const run: AgentRunRef = {
       schemaVersion: 3,
       projectionKind: "run",
@@ -38,27 +36,9 @@ describe("agent conversation v3 type contract", () => {
       mainRootPostId: "turn-1",
       attention: "routine",
     };
-    const admission: AgentAdmissionRef = {
-      schemaVersion: 3,
-      projectionKind: "admission",
-      conversationId: "main-1",
-      turnId: "turn-2",
-      mainChannelId: "main-1",
-      inputPostId: "turn-2",
-      origin: "followup",
-      status: "queued",
-      attention: "routine",
-    };
-    const projections: ConversationProjectionRef[] = [run, admission];
 
     expect(AGENT_CONVERSATION_SCHEMA_VERSION).toBe(3);
-    expect(projections.map((value) => value.projectionKind)).toEqual(["run", "admission"]);
-  });
-
-  it("keeps admission identity honest: turn/input IDs are required and runId is impossible", () => {
-    type AdmissionHasRunId = "runId" extends keyof AgentAdmissionRef ? true : false;
-    const admissionHasRunId: AdmissionHasRunId = false;
-    expect(admissionHasRunId).toBe(false);
+    expect(run.projectionKind).toBe("run");
   });
 
   it("requires a complete item identity on every Activity create", () => {
@@ -101,10 +81,9 @@ describe("agent conversation v3 type contract", () => {
 });
 
 type PlacementFixture = {
-  primaryPosts: Array<{ id: string; channel_id: string; root_id: string; props: { octogee: unknown } }>;
   activityPosts: Array<{ id: string; channel_id: string; root_id: string; props: { octogee: Record<string, unknown> } }>;
   expected: {
-    rootAdoptions: Array<{
+    rootCreations: Array<{
       mainRootPostId: string;
       activityRootPostId: string;
       createdPostCount: number;
@@ -116,8 +95,8 @@ type PlacementFixture = {
 describe("agent conversation projection fixtures", () => {
   const placement = fixture<PlacementFixture>("projection-placement.json");
 
-  it("places same-channel Mattermost refs directly at props.octogee", () => {
-    for (const post of [...placement.primaryPosts, ...placement.activityPosts]) {
+  it("places same-channel Activity refs directly at props.octogee", () => {
+    for (const post of placement.activityPosts) {
       expect(post.props.octogee).toHaveProperty("projectionKind");
       expect(post.props.octogee).not.toHaveProperty("ref");
       const ref = projection(post.props.octogee);
@@ -125,37 +104,18 @@ describe("agent conversation projection fixtures", () => {
     }
   });
 
-  it("keys every admission by inputPostId so queued inputs never collide", () => {
-    const admissions = placement.primaryPosts.filter(
-      ({ props }) => projection(props.octogee).projectionKind === "admission",
-    );
-    expect(admissions.length).toBeGreaterThanOrEqual(2);
-    const inputPostIds = admissions.map(({ props }) => {
-      const ref = projection(props.octogee);
-      if (ref.projectionKind !== "admission") throw new Error("expected admission fixture");
-      expect(ref).not.toHaveProperty("runId");
-      expect(ref.turnId).toBeTruthy();
-      expect(ref.inputPostId).toBeTruthy();
-      return ref.inputPostId;
-    });
-    expect(new Set(inputPostIds).size).toBe(admissions.length);
-  });
-
   it("keeps conversationId and mainChannelId aliases equal in every projection", () => {
-    const values = [
-      ...placement.primaryPosts.map(({ props }) => props.octogee),
-      ...placement.activityPosts.map(({ props }) => props.octogee),
-    ];
+    const values = placement.activityPosts.map(({ props }) => props.octogee);
     for (const value of values) {
       const ref = projection(value);
       expect(ref.conversationId).toBe(ref.mainChannelId);
     }
   });
 
-  it("adopts the existing Mattermost turn root without creating or editing an Activity root", () => {
-    for (const expected of placement.expected.rootAdoptions) {
-      expect(expected.activityRootPostId).toBe(expected.mainRootPostId);
-      expect(expected.createdPostCount).toBe(0);
+  it("creates one structured Activity root as a sibling under the Mattermost turn root", () => {
+    for (const expected of placement.expected.rootCreations) {
+      expect(expected.activityRootPostId).not.toBe(expected.mainRootPostId);
+      expect(expected.createdPostCount).toBe(1);
       expect(expected.updateCount).toBe(0);
     }
   });
@@ -292,7 +252,7 @@ describe("headless conversation behavior fixtures", () => {
 type IdentityFixture = {
   cases: Array<{
     name: string;
-    projections: ConversationProjectionRef[];
+    projections: AgentRunRef[];
     expected: Record<string, unknown>;
   }>;
   degradationCases: Array<{ name: string; available: string[]; missing: string[]; expectedBehavior: string }>;
@@ -317,17 +277,6 @@ describe("identity and degraded-projection fixtures", () => {
     expect(retry.projections[0]).toMatchObject(retry.expected);
     expect(subagent.projections[0]).toMatchObject(subagent.expected);
     expect(scheduled.projections[0]).toMatchObject(scheduled.expected);
-  });
-
-  it("pins admission-to-steer without inventing or changing run identity", () => {
-    const queueToSteer = identityCase(identity, "queue-to-steer");
-    expect(queueToSteer.projections).toHaveLength(2);
-    const [queued, admitted] = queueToSteer.projections;
-    expect(queued?.projectionKind).toBe("admission");
-    expect(queued).not.toHaveProperty("runId");
-    expect(admitted?.projectionKind).toBe("run");
-    expect(admitted).toMatchObject(queueToSteer.expected);
-    expect(admitted?.inputPostId).toBe(queued?.inputPostId);
   });
 
   it("renders partial Mattermost history without timestamp joins", () => {
