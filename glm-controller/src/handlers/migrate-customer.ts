@@ -690,35 +690,19 @@ async function initializeProvisionFreshV2(
       state: "quiescing",
     },
   };
-  if (scopeChanged && state.phase !== "cutover" && state.phase !== "sourceRetired") {
+  const revalidation = await revalidateResumedProvisionFresh(execution);
+  if (revalidation) return revalidation;
+  if (
+    scopeChanged &&
+    execution.state.phase !== "cutover" &&
+    execution.state.phase !== "sourceRetired"
+  ) {
     return abortProvisionFreshV2(
       execution,
       new Error("durable provision-fresh migration input changed"),
     );
   }
-  if (
-    op.customerMigrationV2 !== undefined &&
-    (
-      state.phase === "initialized" ||
-      state.phase === "freshSourceQuiesced" ||
-      state.phase === "freshCutoverReady"
-    )
-  ) {
-    try {
-      const decision = await decideCustomerStateMigration(deps, targets);
-      if (decision.strategy !== PROVISION_FRESH) {
-        return abortProvisionFreshV2(
-          execution,
-          new Error(
-            "fenced openclaw identity no longer authorizes provision-fresh migration",
-          ),
-        );
-      }
-    } catch (error) {
-      return abortProvisionFreshV2(execution, error);
-    }
-  }
-  if (state.phase === "initialized") {
+  if (execution.state.phase === "initialized") {
     deps.log(
       `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
       "provision-fresh (durable fenced cutover)",
@@ -774,6 +758,72 @@ async function abortProvisionFreshV2(
     error: errorMessage(error),
     rolledBack: true,
   };
+}
+
+function provisionFreshPhaseNeedsRevalidation(
+  phase: CustomerMigrationV2State["phase"],
+): boolean {
+  return phase === "initialized" ||
+    phase === "freshSourceQuiesced" ||
+    phase === "freshCutoverReady";
+}
+
+async function freshCutoverOwnership(
+  execution: ProvisionFreshV2Execution,
+): Promise<"source" | "target" | OperationResult> {
+  const { deps } = execution.input;
+  const state = execution.state;
+  let currentUser: UserGatewayInfo | null;
+  try {
+    currentUser = await deps.readUser(state.uid);
+  } catch (error) {
+    return failure(v2RetryError(error), false);
+  }
+  if (currentUser === null || currentUser.slug !== state.slug) {
+    return failure(v2RetryError(
+      new Error("cannot verify fresh cutover ownership"),
+    ), false);
+  }
+  if (currentUser.currentGatewayId === state.targetGatewayId) return "target";
+  if (currentUser.currentGatewayId === state.sourceGatewayId) return "source";
+  return failure(v2RetryError(
+    new Error(
+      `fresh cutover ownership moved to unexpected gateway ` +
+      currentUser.currentGatewayId,
+    ),
+  ), false);
+}
+
+async function revalidateResumedProvisionFresh(
+  execution: ProvisionFreshV2Execution,
+): Promise<OperationResult | null> {
+  const { deps, op, targets } = execution.input;
+  const state = execution.state;
+  if (
+    op.customerMigrationV2 === undefined ||
+    !provisionFreshPhaseNeedsRevalidation(state.phase)
+  ) {
+    return null;
+  }
+  if (state.phase === "freshCutoverReady") {
+    const ownership = await freshCutoverOwnership(execution);
+    if (typeof ownership !== "string") return ownership;
+    if (ownership === "target") {
+      return advanceProvisionFreshCutoverReady(execution);
+    }
+  }
+  try {
+    const decision = await decideCustomerStateMigration(deps, targets);
+    if (decision.strategy === PROVISION_FRESH) return null;
+    return abortProvisionFreshV2(
+      execution,
+      new Error(
+        "fenced openclaw identity no longer authorizes provision-fresh migration",
+      ),
+    );
+  } catch (error) {
+    return abortProvisionFreshV2(execution, error);
+  }
 }
 
 async function provisionFreshSourceClient(
