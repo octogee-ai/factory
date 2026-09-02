@@ -217,9 +217,9 @@ describe("gateway base image", () => {
 
     expect(installed.has("ripgrep")).toBe(true);
     expect(installed.has("fd-find")).toBe(false);
-    expect(baseDockerfile).toContain("ARG FD_VERSION=10.3.0");
+    expect(baseDockerfile).toContain("ARG FD_VERSION=10.5.0");
     expect(baseDockerfile).toContain(
-      "f4be8742f936e4ef0e10016b661e4c1cd49e482e388080aa28c05d02f0559509",
+      "1fca9f8fb221f26fe37b425db4935dc8180099bdecfd8e031538bfc9396e95f8",
     );
     expect(baseDockerfile).toContain(
       'echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c -',

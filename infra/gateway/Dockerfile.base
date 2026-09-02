@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim AS gateway-core-system
 
-ARG NPM_VERSION=12.0.1
+ARG NPM_VERSION=12.0.2
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion" \
     && npm cache clean --force \
@@ -20,7 +20,7 @@ ENV HOME=/home/node
 
 FROM gateway-core-system AS gateway-system
 
-ARG FD_VERSION=10.3.0
+ARG FD_VERSION=10.5.0
 ARG CLAUDE_CODE_VERSION=2.1.251
 ARG CODEX_VERSION=0.151.0
 
@@ -31,8 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
     pandoc htop strace dnsutils net-tools fzf \
     && case "$(dpkg --print-architecture)" in \
-      amd64) FD_SHA256=f4be8742f936e4ef0e10016b661e4c1cd49e482e388080aa28c05d02f0559509 ;; \
-      arm64) FD_SHA256=35659891c839f9db2a6a5f082342b43961db36cfb08ea3b72a09f19543766a4f ;; \
+      amd64) FD_SHA256=1fca9f8fb221f26fe37b425db4935dc8180099bdecfd8e031538bfc9396e95f8 ;; \
+      arm64) FD_SHA256=a3128d8e206dd646a27f4637ca081f311df2d6f21cd87bbead7fc92cc0952192 ;; \
       *) echo "Unsupported fd architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
     && curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd_${FD_VERSION}_$(dpkg --print-architecture).deb" -o /tmp/fd.deb \

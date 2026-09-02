@@ -1,8 +1,8 @@
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
-ARG NPM_VERSION=12.0.1
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146
+ARG NPM_VERSION=12.0.2
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
@@ -19,8 +19,8 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # which the per-image build-fingerprint (.github/actions/build-image-fingerprint/)
 # can't see: two builds from an identical git tree could silently get
 # different kubectl versions, defeating fingerprint-based reuse.
-ARG HELM_VERSION=v4.2.2
-ARG KUBECTL_VERSION=v1.36.3
+ARG HELM_VERSION=v4.2.4
+ARG KUBECTL_VERSION=v1.36.4
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \

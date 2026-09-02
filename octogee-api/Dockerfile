@@ -9,7 +9,7 @@
 #
 # Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
 # dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS builder
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS builder
 WORKDIR /octogee-api
 
 # Packed internal directory dependencies must be present at their declared sibling paths.
@@ -46,9 +46,9 @@ RUN npm run build
 # Project code runs only in this deliberately narrow image. It contains the
 # fixed runner wrapper, archive validator, npm, and JSZip—no API routes, core
 # runtime, cloud SDKs, platform credentials, or production dependency tree.
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS project-runner
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS project-runner
 WORKDIR /runner
-ARG NPM_VERSION=12.0.1
+ARG NPM_VERSION=12.0.2
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 COPY octogee-api/runner/package.json octogee-api/runner/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
@@ -59,12 +59,12 @@ USER node
 ENTRYPOINT ["node", "dist/octogee-api/src/project-runner.js"]
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146
 WORKDIR /octogee-api
-ARG NPM_VERSION=12.0.1
+ARG NPM_VERSION=12.0.2
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 

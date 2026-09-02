@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
+source "$SCRIPT_DIR/lib/grafana-health.sh"
 
 SELECTOR="--environment=prod"
 IAP_ENABLED=false
@@ -63,11 +64,7 @@ for deployment in grafana gmp-frontend gmp-kube-state-metrics; do
   kubectl rollout status "deployment/$deployment" --namespace monitoring --context "$TARGET_KUBE_CONTEXT" --timeout=5m >/dev/null
   assert_release_ownership deployment "$deployment" monitoring
 done
-kubectl exec deployment/grafana --namespace monitoring --context "$TARGET_KUBE_CONTEXT" \
-  --container grafana -- sh -ceu 'test -d /var/lib/grafana && test -w /var/lib/grafana' >/dev/null || {
-  echo "Grafana cannot write its persistent data directory as its non-root runtime identity" >&2
-  exit 1
-}
+octogee_verify_grafana_health "$TARGET_KUBE_CONTEXT"
 
 for service in grafana gmp-frontend gmp-kube-state-metrics; do
   assert_release_ownership service "$service" monitoring

@@ -59,9 +59,9 @@
   "devDependencies": {
     "@octogee/test-helpers": "file:../test-helpers",
     "@types/busboy": "^1.5.4",
-    "@types/cors": "^2.8.17",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.3.0",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.11",
