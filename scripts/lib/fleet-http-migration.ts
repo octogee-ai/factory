@@ -89,6 +89,7 @@ import {
   SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS,
 } from "./openclaw-config-builders.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
+import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
@@ -120,6 +121,11 @@ flushLocalState?: (input: {
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
+unreserveSurgeTarget?: (input: {
+  migrationId: string;
+  slug: string;
+  targetPodUid: string;
+}) => Promise<SurgeOpenClawProcessGateState>;
 pauseSystemConfigWatch?: (slug: string) => Promise<string | void>;
 readSystemConfigWatchFence?: (slug: string) => Promise<string | null>;
 resumeSystemConfigWatch?: (
@@ -1583,8 +1589,12 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
 
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
+    let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
     try {
-      if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+      activation = configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
+      if (activation) {
+        await deps.reserveSurgeTarget!(activation);
+      } else if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
         await deps.reserveSurgeTarget?.({ migrationId: body.migrationId, slug: body.slug });
       }
       await stopConflictingRsyncSession(body.migrationId, port);
@@ -1643,6 +1653,11 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       res.status(200).json(response);
     } catch (err) {
       await stopRsyncSession(rsyncImportSessions.get(key)).catch(() => undefined);
+      if (activation) {
+        await deps.unreserveSurgeTarget!(activation).catch((error: unknown) => {
+          log(`[migration-rsync] failed to cancel Builder preparation migrationId=${body.migrationId} slug=${body.slug}: ${String(error)}`);
+        });
+      }
       const message = err instanceof Error ? err.message : String(err);
       log(
         `[migration-rsync] ❌ prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
@@ -1777,6 +1792,57 @@ async function validateStagedRsyncImport(
   return null;
 }
 
+function configuredBuilderActivationRequest(
+  deps: MigrationHandlerDeps,
+  body: MigrationRequestBody,
+  mode: MigrationTransferMode,
+  configTransferMode: MigrationConfigTransferMode,
+): { migrationId: string; slug: string; targetPodUid: string } | null {
+  if (mode !== "final" || configTransferMode !== ACTIVATION_MANIFEST_TRANSFER ||
+    deps.adapter.isBuilderGateway?.() !== true) return null;
+  if (deps.adapter.isConfiguredBuilderCustomer?.(body.slug) !== true) {
+    throw new Error("import does not match the configured Builder");
+  }
+  const targetPodUid = process.env.POD_UID?.trim();
+  if (!targetPodUid || !deps.reserveSurgeTarget || !deps.releaseSurgeReadiness || !deps.unreserveSurgeTarget) {
+    throw new Error("configured Builder activation requires its pod-bound process gate");
+  }
+  return { migrationId: body.migrationId, slug: body.slug, targetPodUid };
+}
+
+async function activateConfiguredBuilderImport(
+  deps: MigrationHandlerDeps,
+  request: NonNullable<ReturnType<typeof configuredBuilderActivationRequest>>,
+  signal: AbortSignal,
+): Promise<void> {
+  let cancellation: Promise<void> | null = null;
+  let cancellationFailure: Error | null = null;
+  const cancel = (): void => {
+    cancellation ??= Promise.resolve().then(() => deps.unreserveSurgeTarget!(request)).then(
+      () => undefined,
+      (error: unknown) => { cancellationFailure = error instanceof Error ? error : new Error(String(error)); },
+    );
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    await deps.releaseSurgeReadiness!({
+      migrationId: request.migrationId,
+      targetPodUid: request.targetPodUid,
+    });
+    signal.throwIfAborted();
+  } catch (error) {
+    cancel();
+    await cancellation;
+    if (cancellationFailure) {
+      throw new AggregateError([error, cancellationFailure], "Builder activation failed and could not be cancelled");
+    }
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+}
+
 async function activateFinishedRsyncImport(input: {
   deps: MigrationHandlerDeps;
   body: FinishRsyncImportRequestBody;
@@ -1787,14 +1853,20 @@ async function activateFinishedRsyncImport(input: {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
-    (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
-    const verificationPending = await activateImportedCustomerForMigration({
-      deps,
-      slug: body.slug,
-      mode: "final",
-      loadStrategy,
-      signal,
-    });
+    const activation = configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
+    let verificationPending: string | undefined;
+    if (activation) {
+      await activateConfiguredBuilderImport(deps, activation, signal);
+    } else {
+      (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
+      verificationPending = await activateImportedCustomerForMigration({
+        deps,
+        slug: body.slug,
+        mode: "final",
+        loadStrategy,
+        signal,
+      });
+    }
     deps.adapter.writeMountMarker?.(body.slug);
     deps.adapter.onMounted?.(body.slug);
     return verificationPending;
@@ -1892,7 +1964,20 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     if (!requireConfiguredBuilderSystemConfigTransfer(body.slug, configTransferMode, res)) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     await stopRsyncSession(rsyncImportSessions.get(key)).catch(() => undefined);
-    if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+    let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
+    try {
+      activation = configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
+      if (activation) {
+        const state = await deps.unreserveSurgeTarget!(activation);
+        if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-rsync] abort-import failed migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "abort-import failed", message });
+      return;
+    }
+    if (activation || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
       deps.adapter.clearMountMarker?.(body.slug);
       deps.adapter.clearCustomerMigratingIn?.(body.slug);
       deps.adapter.onUnmounted?.(body.slug);
@@ -2421,6 +2506,8 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
+      const activation = configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
+      if (activation) await deps.unreserveSurgeTarget!(activation);
       if (deps.adapter.removeImportedCustomerBySlug) {
         const result = await removeCustomerWithSystemConfigWatchPaused({
           deps,

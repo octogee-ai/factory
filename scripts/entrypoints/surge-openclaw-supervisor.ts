@@ -378,10 +378,10 @@ interface TargetSupervisorOperationDependencies {
   current: () => Promise<SurgeOpenClawProcessGateState>;
   gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>,
     "claimTargetCompletion" | "finalizeTargetCancellation" | "hold" |
-    "markHeld" | "reholdTarget" | "settleTargetCompletion"
+    "markHeld" | "reholdTarget" | "reholdReleasedTarget" | "settleTargetCompletion"
   >;
   podUid: string;
-  readiness: Pick<ReturnType<typeof createSurgeReadinessGate>, "release">;
+  readiness: Pick<ReturnType<typeof createSurgeReadinessGate>, "release" | "hold">;
   stopChild: () => Promise<void>;
 }
 
@@ -390,6 +390,7 @@ interface TargetSupervisorOperations {
   finalizeTargetCancellation: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   hold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   reholdTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  reholdReleasedTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   releaseTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
 }
 
@@ -438,6 +439,12 @@ function createTargetSupervisorOperations(
     },
     async reholdTarget(input) {
       const state = await gate.reholdTarget(withPodUid(input, podUid));
+      await readiness.hold();
+      return stopAndMarkHeld(state, input);
+    },
+    async reholdReleasedTarget(input) {
+      const state = await gate.reholdReleasedTarget(withPodUid(input, podUid));
+      await readiness.hold();
       return stopAndMarkHeld(state, input);
     },
     claimTargetCompletion: (input) => gate.claimTargetCompletion(withPodUid(input, podUid)),
@@ -638,6 +645,7 @@ export async function startSurgeOpenClawSupervisor(
     const input = requestIdentity(request);
     if (request.action === "hold") return targetOperations.hold(input);
     if (request.action === "rehold") return targetOperations.reholdTarget(input);
+    if (request.action === "rehold-released-target") return targetOperations.reholdReleasedTarget(input);
     if (request.action === "claim") return targetOperations.claimTargetCompletion(input);
     if (request.action === "finalize-cancellation") return targetOperations.finalizeTargetCancellation(input);
     if (request.action === "release-target") return targetOperations.releaseTarget(input);

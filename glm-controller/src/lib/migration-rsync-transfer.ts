@@ -141,6 +141,19 @@ function sanitizeDocId(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
+async function waitForTargetPodReady(
+  runCommand: CommandRunner,
+  namespace: string,
+  podName: string,
+): Promise<void> {
+  const result = await runCommand("kubectl", [
+    "-n", namespace, "wait", "--for=condition=Ready", `pod/${podName}`, "--timeout=60s",
+  ], { timeoutMs: 65_000 });
+  if (result.code !== 0) {
+    throw new Error(`migration target ${podName} did not become Ready: ${result.stderr || result.stdout}`);
+  }
+}
+
 function postSignedJson<Resp>(
   deps: {
     fetchImpl: typeof globalThis.fetch;
@@ -456,6 +469,7 @@ export function createRsyncMigrationTransfer(
         body: finishBody as unknown as Record<string, unknown>,
         baseUrl: targetBaseUrl,
       });
+      if (mode === "final") await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
       await markTaskSucceeded(claimed.ref, now);
       // The target committed the import and told us which post-commit step it could
       // not confirm. Aborting here would unmount work that landed and send the retry

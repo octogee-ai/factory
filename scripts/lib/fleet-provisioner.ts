@@ -1747,6 +1747,7 @@ export function createConfiguredBuilderAssignmentMatcher(
 
 export function createConfiguredBuilderReconcileAdmission(input: {
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null;
+  hasServingAssignment: () => Promise<boolean>;
   log: (message: string) => void;
 }): () => Promise<boolean> {
   let lastBlocked: string | null = null;
@@ -1754,11 +1755,14 @@ export function createConfiguredBuilderReconcileAdmission(input: {
     if (!input.processGate) return true;
     try {
       const state = await input.processGate.status();
+      let blocked = `${state.role}/${state.mode}`;
       if (state.mode === "permitted") {
-        lastBlocked = null;
-        return true;
+        if (await input.hasServingAssignment()) {
+          lastBlocked = null;
+          return true;
+        }
+        blocked = "awaiting canonical Builder assignment";
       }
-      const blocked = `${state.role}/${state.mode}`;
       if (lastBlocked !== blocked) {
         input.log(`[surge-handoff] reconcile paused while configured Builder process gate is ${blocked}`);
         lastBlocked = blocked;
@@ -2035,8 +2039,18 @@ function scheduleBuilderTargetHoldFinalization(input: {
   });
 }
 
+function releasedBuilderTargetMatches(
+  state: SurgeOpenClawProcessGateState,
+  request: BuilderSurgeTargetRequest,
+): boolean {
+  const terminal = state.terminalTarget;
+  return terminal?.migrationId === request.migrationId && terminal.slug === request.slug &&
+    terminal.targetPodUid === request.targetPodUid;
+}
+
 async function unreserveConfiguredBuilderTarget(input: {
   activeRelease: ActiveBuilderSurgeRelease | null;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
   processGate: SurgeOpenClawProcessSupervisorClient;
   request: BuilderSurgeTargetRequest;
   waitForActiveProvisioningDrain: () => Promise<void>;
@@ -2048,7 +2062,15 @@ async function unreserveConfiguredBuilderTarget(input: {
     : null;
   if (release) release.cancelled = true;
   const state = await processGate.status();
-  if (state.role === "normal") return processGate.unreserve(request);
+  if (state.role === "normal") {
+    if (!releasedBuilderTargetMatches(state, request)) return processGate.unreserve(request);
+    if (await input.configuredBuilderAssigned(request.slug)) {
+      throw new Error("cannot cancel a released Builder with a serving assignment");
+    }
+    await processGate.reholdReleasedTarget(request);
+    await waitForActiveProvisioningDrain();
+    return processGate.finalizeTargetCancellation(request);
+  }
   if (
     state.role !== "target" ||
     state.migrationId !== request.migrationId ||
@@ -2281,7 +2303,7 @@ export function createBuilderSurgeGateWiring(input: {
     async unreserveSurgeTarget(request) {
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return unreserveConfiguredBuilderTarget({
-        activeRelease,
+        activeRelease, configuredBuilderAssigned,
         processGate,
         request,
         waitForActiveProvisioningDrain,
@@ -2389,8 +2411,13 @@ export async function startFleetController(
   const builderProcessGate = adapter.isBuilderGateway?.() === true
     ? opts.surgeOpenClawProcessGate ?? createSurgeOpenClawProcessSupervisorClient(openclawDir)
     : null;
+  const configuredBuilderAssigned = createConfiguredBuilderAssignmentMatcher(opts);
   const canReconcile = createConfiguredBuilderReconcileAdmission({
     processGate: builderProcessGate,
+    hasServingAssignment: async () => {
+      const slug = configuredBuilderSlug(wrappedAdapter);
+      return slug !== null && await configuredBuilderAssigned(slug);
+    },
     log: opts.log,
   });
 
@@ -2553,7 +2580,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     log: opts.log,
     provisioning: runtime,
     waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
-    configuredBuilderAssigned: createConfiguredBuilderAssignmentMatcher(opts),
+    configuredBuilderAssigned,
   });
   const migrationDeps = {
     publicKey: opts.publicKey,
@@ -2564,6 +2591,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     flushLocalState: opts.flushLocalState,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
+    unreserveSurgeTarget: surgeGate.unreserveSurgeTarget,
   };
   registerMigrationRoutes(app, migrationDeps, {
     publicKey: opts.publicKey,

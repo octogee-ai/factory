@@ -792,8 +792,10 @@ describe("configured Builder surge release", () => {
         configuredBuilderAssigned: async () => false,
         attachConfiguredBuilderBeforeOpenClaw,
       });
+      let assigned = false;
       const reconcileAdmission = createConfiguredBuilderReconcileAdmission({
         processGate,
+        hasServingAssignment: async () => assigned,
         log: () => undefined,
       });
 
@@ -824,6 +826,8 @@ describe("configured Builder surge release", () => {
         "release-target",
       ]);
       expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledTimes(1);
+      await expect(reconcileAdmission()).resolves.toBe(false);
+      assigned = true;
       await expect(reconcileAdmission()).resolves.toBe(true);
     } finally {
       vi.unstubAllEnvs();
@@ -978,6 +982,7 @@ describe("configured Builder surge release", () => {
       } as unknown as SurgeOpenClawProcessSupervisorClient;
       const admission = createConfiguredBuilderReconcileAdmission({
         processGate,
+        hasServingAssignment: async () => true,
         log: (message) => logs.push(message),
       });
       const getMountObserved = vi.fn(() => [] as string[]);
@@ -1043,6 +1048,7 @@ describe("configured Builder surge release", () => {
   it("fails closed without repeating a Builder process-gate status error", async () => {
     const logs: string[] = [];
     const admission = createConfiguredBuilderReconcileAdmission({
+      hasServingAssignment: async () => true,
       processGate: {
         status: vi.fn(async () => {
           throw new Error("supervisor unavailable");
@@ -1678,6 +1684,50 @@ describe("configured Builder surge release", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it.each(["unassigned", "assigned", "assignment-read-failed"])(
+    "rolls back a released Builder only before canonical assignment: %s",
+    async (assignment) => {
+      const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
+      const events: string[] = [];
+      const state: SurgeOpenClawProcessGateState = {
+        version: 1, podUid: "target-pod", role: "normal", mode: "permitted", phase: "running",
+        terminalTarget: request,
+      };
+      const held: SurgeOpenClawProcessGateState = { ...state, mode: "held", phase: "held" };
+      const processGate = {
+        status: async () => state,
+        reholdReleasedTarget: vi.fn(async () => {
+          events.push("rehold");
+          return { ...held, role: "target", phase: "cancelling", ...request };
+        }),
+        finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); return held; }),
+        unreserve: vi.fn(async () => state),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter: {} as CustomerLifecycleAdapter, processGate,
+        surgeReadiness: {} as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined, log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        waitForActiveProvisioningDrain: async () => { events.push("drain"); },
+        configuredBuilderAssigned: async () => {
+          if (assignment === "assignment-read-failed") throw new Error("assignment unavailable");
+          return assignment === "assigned";
+        },
+      });
+      if (assignment === "unassigned") {
+        await expect(wiring.unreserveSurgeTarget(request)).resolves.toMatchObject({ mode: "held" });
+        expect(events).toEqual(["rehold", "drain", "finalize"]);
+        expect(processGate.reholdReleasedTarget).toHaveBeenCalledExactlyOnceWith(request);
+      } else {
+        await expect(wiring.unreserveSurgeTarget(request)).rejects.toThrow(
+          assignment === "assigned" ? "serving assignment" : "assignment unavailable",
+        );
+        expect(events).toEqual([]);
+      }
+      expect(processGate.unreserve).not.toHaveBeenCalled();
+    },
+  );
 
   it("shares an in-progress target release only with the same migration and target", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");

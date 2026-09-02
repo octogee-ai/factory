@@ -94,6 +94,10 @@ const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
   targetPodUid: "pod-123",
 };
 
+const HELD_BUILDER_GATE_STATE = {
+  version: 1, podUid: "builder-pod", role: "normal", mode: "held", phase: "held",
+} as const;
+
 const SAMPLE_PUSH: PushStateRequestBody = {
   migrationId: "mig-1",
   slug: "chris",
@@ -1133,6 +1137,36 @@ describe("createRestoreHandler", () => {
 });
 
 describe("createUnmountHandler", () => {
+  it.each([false, true])("cancels a Builder activation before rollback unmount; cancellation fails: %s", async (fails) => {
+    vi.stubEnv("POD_UID", "builder-pod");
+    const events: string[] = [];
+    const adapter = mkAdapter({
+      isBuilderGateway: () => true,
+      removeImportedCustomerBySlug: vi.fn(async () => {
+        events.push("unmount");
+        return { wasMounted: true, steps: [] };
+      }),
+    });
+    const unreserveSurgeTarget = vi.fn(async () => {
+      events.push("cancel");
+      if (fails) throw new Error("cannot cancel serving assignment");
+      return HELD_BUILDER_GATE_STATE;
+    });
+    const handler = createUnmountHandler(mkDeps({
+      adapter, unreserveSurgeTarget,
+      reserveSurgeTarget: async () => undefined, releaseSurgeReadiness: async () => undefined,
+    }));
+    const response = mkResponse();
+    await handler(mkRequest(SAMPLE_UNMOUNT, {
+      signature: signForPod(SAMPLE_UNMOUNT.migrationId, JSON.stringify(SAMPLE_UNMOUNT)),
+    }), response.res, vi.fn());
+    expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
+      migrationId: SAMPLE_UNMOUNT.migrationId, slug: "chris", targetPodUid: "builder-pod",
+    });
+    expect(response.getStatus()).toBe(fails ? 500 : 200);
+    expect(events).toEqual(fails ? ["cancel"] : ["cancel", "unmount"]);
+  });
+
   it("rejects bad signature with 401", async () => {
     const handler = createUnmountHandler(mkDeps());
     const req = mkRequest(SAMPLE_UNMOUNT, { signature: "deadbeef" });
@@ -1964,6 +1998,177 @@ describe("queued-rsync migration control handlers", () => {
       error: "configured Builder system config transfer requires the matching Builder gateway",
     });
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["ready", "startup-failed", "disconnected", "cancellation-failed"])(
+    "activates a held Barn-to-Builder target through its process gate: %s",
+    async (outcome) => {
+      vi.stubEnv("POD_UID", "builder-pod");
+      const events: string[] = [];
+      const response = mkResponse();
+      const adapter = mkAdapter({
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug) => slug === "chris",
+        prepareImportDir: vi.fn(async () => "/openclaw"),
+        activateImportedCustomer: vi.fn(async () => {
+          throw new Error("ECONNREFUSED: OpenClaw is held");
+        }),
+      });
+      const reserveSurgeTarget = vi.fn(async () => { events.push("reserve"); });
+      const unreserveSurgeTarget = vi.fn(async () => {
+        events.push("cancel");
+        if (outcome === "cancellation-failed") throw new Error("supervisor unavailable");
+        return HELD_BUILDER_GATE_STATE;
+      });
+      const releaseSurgeReadiness = vi.fn(async () => {
+        events.push("attach-permit-verify");
+        if (outcome === "startup-failed" || outcome === "cancellation-failed") throw new Error("OpenClaw startup failed");
+        if (outcome === "disconnected") response.res.emit("close");
+      });
+      const deps = mkDeps({
+        adapter, reserveSurgeTarget, releaseSurgeReadiness, unreserveSurgeTarget,
+        waitForRsyncReady: async () => undefined,
+      });
+      spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementationOnce(() => {
+        events.push("copy");
+        return mkFakeChild({ exitCode: 0 });
+      });
+      const prepare: PrepareRsyncImportRequestBody = {
+        migrationId: `builder-${outcome}`, slug: "chris", mode: "final",
+        rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "c".repeat(64),
+      };
+      const prepared = mkResponse();
+      await createPrepareRsyncImportHandler(deps)(mkRequest(prepare, {
+        signature: signForPod(prepare.migrationId, JSON.stringify(prepare)),
+      }), prepared.res, vi.fn());
+      expect(prepared.getStatus()).toBe(200);
+      const finish: FinishRsyncImportRequestBody = {
+        migrationId: prepare.migrationId, slug: "chris", mode: "final", rpcPhase: "finish-rsync-import",
+      };
+      await createFinishRsyncImportHandler(deps)(mkRequest(finish, {
+        signature: signForPod(finish.migrationId, JSON.stringify(finish)),
+      }), response.res, vi.fn());
+      expect(events.slice(0, 3)).toEqual(["reserve", "copy", "attach-permit-verify"]);
+      expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+      expect(releaseSurgeReadiness).toHaveBeenCalledWith({
+        migrationId: prepare.migrationId, targetPodUid: "builder-pod",
+      });
+      if (outcome === "ready") {
+        expect(response.getStatus()).toBe(200);
+        expect(adapter.onMounted).toHaveBeenCalledWith("chris");
+        expect(unreserveSurgeTarget).not.toHaveBeenCalled();
+      } else {
+        expect(response.getStatus()).toBe(outcome === "disconnected" ? 499 : 500);
+        expect(adapter.onMounted).not.toHaveBeenCalled();
+        expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
+          migrationId: prepare.migrationId, slug: "chris", targetPodUid: "builder-pod",
+        });
+        if (outcome === "cancellation-failed") {
+          expect(response.getBody()).toMatchObject({
+            message: "Builder activation failed and could not be cancelled",
+          });
+        }
+      }
+    },
+  );
+
+  it.each(["missing-gate", "missing-pod", "wrong-builder"])(
+    "rejects unsafe cold Builder import before transferring state: %s",
+    async (scenario) => {
+      vi.stubEnv("POD_UID", scenario === "missing-pod" ? "" : "builder-pod");
+      const adapter = mkAdapter({
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: () => scenario !== "wrong-builder",
+      });
+      const reserveSurgeTarget = vi.fn(async () => undefined);
+      const deps = mkDeps({
+        adapter, reserveSurgeTarget,
+        releaseSurgeReadiness: scenario === "missing-gate" ? undefined : async () => undefined,
+        unreserveSurgeTarget: async () => HELD_BUILDER_GATE_STATE,
+      });
+      const body: PrepareRsyncImportRequestBody = {
+        migrationId: "unsafe-builder", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+        transferUser: "migration", transferKey: "c".repeat(64),
+      };
+      const response = mkResponse();
+      await createPrepareRsyncImportHandler(deps)(mkRequest(body, {
+        signature: signForPod(body.migrationId, JSON.stringify(body)),
+      }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(500);
+      expect(reserveSurgeTarget).not.toHaveBeenCalled();
+      expect(adapter.prepareImportDir).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("cancels a cold Builder reservation when import preparation fails; cancellation fails: %s", async (fails) => {
+    vi.stubEnv("POD_UID", "builder-pod");
+    const adapter = mkAdapter({
+      isBuilderGateway: () => true,
+      prepareImportDir: vi.fn(async () => { throw new Error("cannot prepare import root"); }),
+    });
+    const reserveSurgeTarget = vi.fn(async () => undefined);
+    const unreserveSurgeTarget = vi.fn(async () => {
+      if (fails) throw new Error("supervisor unavailable");
+      return HELD_BUILDER_GATE_STATE;
+    });
+    const deps = mkDeps({
+      adapter, reserveSurgeTarget,
+      releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
+    });
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId: "prepare-failed-builder", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+      transferUser: "migration", transferKey: "c".repeat(64),
+    };
+    const response = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(reserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
+      migrationId: body.migrationId, slug: "chris", targetPodUid: "builder-pod",
+    });
+    expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
+      migrationId: body.migrationId, slug: "chris", targetPodUid: "builder-pod",
+    });
+    if (fails) expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("supervisor unavailable"));
+  });
+
+  it.each(["held", "failed", "permitted"])("cancels a prepared cold Builder import; result: %s", async (outcome) => {
+    vi.stubEnv("POD_UID", "builder-pod");
+    const adapter = mkAdapter({
+      isBuilderGateway: () => true,
+      clearMountMarker: vi.fn(),
+      clearCustomerMigratingIn: vi.fn(),
+    });
+    const unreserveSurgeTarget = vi.fn(async () => {
+      if (outcome === "failed") throw new Error("supervisor unavailable");
+      return { ...HELD_BUILDER_GATE_STATE, mode: outcome === "held" ? "held" as const : "permitted" as const };
+    });
+    const deps = mkDeps({
+      adapter, reserveSurgeTarget: async () => undefined,
+      releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
+    });
+    const body: AbortRsyncImportRequestBody = {
+      migrationId: "cancel-builder", slug: "chris", mode: "final", rpcPhase: "abort-rsync-import",
+    };
+    const response = mkResponse();
+    await createAbortRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
+      migrationId: body.migrationId, slug: "chris", targetPodUid: "builder-pod",
+    });
+    expect(response.getStatus()).toBe(outcome === "held" ? 200 : 500);
+    if (outcome !== "held") {
+      expect(adapter.onUnmounted).not.toHaveBeenCalled();
+      expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(
+        outcome === "failed" ? "supervisor unavailable" : "process is permitted",
+      ));
+    } else {
+      expect(adapter.onUnmounted).toHaveBeenCalledWith("chris");
+      expect(adapter.clearMountMarker).toHaveBeenCalledWith("chris");
+    }
   });
 
   it("createFinishRsyncImportHandler leaves expedited project convergence to reconciliation", async () => {

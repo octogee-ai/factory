@@ -421,6 +421,58 @@ describe("surge OpenClaw process supervisor", () => {
     await supervisor.stop();
   });
 
+  it("rolls back only the named released target and keeps it held across restart before retry", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const options = {
+      openclawDir, podUid: "target-pod", socketPath,
+      log: () => undefined,
+      prepareTarget: async () => undefined,
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+    };
+    let supervisor = await startSurgeOpenClawSupervisor(options);
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
+    try {
+      await client.hydrate(request);
+      await client.claimTargetCompletion(request);
+      await client.permit(request);
+      await client.releaseTarget(request);
+      for (const mismatch of [
+        { ...request, migrationId: "stale-activation" },
+        { ...request, slug: "someone-else" },
+        { ...request, targetPodUid: "old-pod" },
+      ]) {
+        await expect(client.reholdReleasedTarget(mismatch)).rejects.toThrow("released target does not match");
+      }
+      expect(children[0]!.alive).toBe(true);
+      await expect(createSurgeReadinessGate(openclawDir).released()).resolves.toBe(true);
+
+      await expect(client.reholdReleasedTarget(request)).resolves.toMatchObject({
+        role: "target", mode: "held", phase: "cancelling",
+      });
+      expect(children[0]!.alive).toBe(false);
+      await expect(createSurgeReadinessGate(openclawDir).released()).resolves.toBe(false);
+      await client.finalizeTargetCancellation(request);
+      await supervisor.stop();
+      supervisor = await startSurgeOpenClawSupervisor(options);
+      await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
+      expect(children).toHaveLength(1);
+      await expect(client.hydrate({ ...request, migrationId: "activation-2" })).resolves.toMatchObject({
+        role: "target", mode: "held", migrationId: "activation-2",
+      });
+      await expect(client.reholdReleasedTarget(request)).rejects.toThrow("released target does not match");
+    } finally {
+      await supervisor.stop();
+    }
+  });
+
   it("retries one target child exit before health and reports an exit only after the retry is healthy", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);

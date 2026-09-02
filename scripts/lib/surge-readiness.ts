@@ -7,6 +7,7 @@ const MARKER = ".surge-handoff-ready.json";
 export interface SurgeReadinessGate {
   released: () => Promise<boolean>;
   release: (input: { targetPodUid: string }) => Promise<void>;
+  hold: () => Promise<void>;
 }
 
 function markerMatchesPod(value: unknown, expectedPodUid: string | undefined): boolean {
@@ -22,6 +23,7 @@ export function createSurgeReadinessGate(
 ): SurgeReadinessGate {
   const markerPath = path.join(openclawDir, MARKER);
   return {
+    hold: () => fs.rm(markerPath, { force: true }),
     async released() {
       try {
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as unknown;

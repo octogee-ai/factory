@@ -149,6 +149,59 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  it("waits for the cold target Pod to become Ready after final import before reporting success", async () => {
+    const store: Store = {};
+    const calls: string[] = [];
+    const baseRunner = makeCommandRunner([]);
+    let finishWait!: () => void;
+    let enteredWait!: () => void;
+    const waiting = new Promise<void>((resolve) => { enteredWait = resolve; });
+    const ready = new Promise<void>((resolve) => { finishWait = resolve; });
+    const runCommand: CommandRunner = async (command, args, opts) => {
+      if (args.includes("wait")) {
+        expect(calls.at(-1)).toContain("/finish-rsync-import/gw-to");
+        expect(args).toEqual(["-n", "octogee-test", "wait", "--for=condition=Ready", "pod/gw-to-pod", "--timeout=60s"]);
+        expect(opts?.timeoutMs).toBe(65_000);
+        enteredWait();
+        await ready;
+        return { stdout: "condition met", stderr: "", code: 0 };
+      }
+      return baseRunner(command, args, opts);
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch(calls), runCommand,
+    });
+    const completion = transfer({
+      migrationId: "cold-builder", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+    });
+    await waiting;
+    expect(store["cold-builder__final"].status).toBe("running");
+    finishWait();
+    await expect(completion).resolves.toMatchObject({ imported: true });
+    expect(store["cold-builder__final"].status).toBe("succeeded");
+  });
+
+  it("fails final transfer when the activated target never becomes Ready", async () => {
+    const store: Store = {};
+    const calls: string[] = [];
+    const baseRunner = makeCommandRunner([]);
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: makeFetch(calls),
+      runCommand: (command, args, opts) => args.includes("wait")
+        ? Promise.resolve({ stdout: "", stderr: "timed out", code: 1 })
+        : baseRunner(command, args, opts),
+    });
+    await expect(transfer({
+      migrationId: "unready-builder", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+    })).rejects.toThrow("target gw-to-pod did not become Ready");
+    expect(store["unready-builder__final"].status).toBe("failed");
+    expect(calls.at(-1)).toContain("/abort-rsync-import/gw-to");
+  });
+
   it("uses a running target transport while restore convergence intentionally holds Pod readiness", async () => {
     const store: Store = {};
     const fetchCalls: string[] = [];

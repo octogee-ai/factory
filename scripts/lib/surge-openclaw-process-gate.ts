@@ -33,6 +33,7 @@ export interface SurgeOpenClawProcessGate {
   read: () => Promise<SurgeOpenClawProcessGateState | null>;
   hold: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   reholdTarget: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
+  reholdReleasedTarget: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   claimTargetCompletion: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   finalizeTargetCancellation: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   holdNormal: (input: { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
@@ -52,6 +53,7 @@ export const SURGE_OPENCLAW_PROCESS_SUPERVISOR_ACTIONS = [
   "status",
   "hold",
   "rehold",
+  "rehold-released-target",
   "claim",
   "finalize-cancellation",
   "release-target",
@@ -83,8 +85,9 @@ export function isSurgeOpenClawProcessSupervisorAction(
 
 export function surgeOpenClawProcessActionNamesMigration(
   action: SurgeOpenClawProcessSupervisorAction,
-): action is "hold" | "rehold" | "claim" | "finalize-cancellation" | "release-target" | "hydrate" | "permit" | "resume" | "unreserve" {
+): action is "hold" | "rehold" | "rehold-released-target" | "claim" | "finalize-cancellation" | "release-target" | "hydrate" | "permit" | "resume" | "unreserve" {
   return action === "hold" || action === "rehold" || action === "claim" ||
+    action === "rehold-released-target" ||
     action === "finalize-cancellation" || action === "release-target" || action === "hydrate" || action === "permit" ||
     action === "resume" || action === "unreserve";
 }
@@ -300,7 +303,7 @@ interface TargetGateOperationDependencies {
 function createTargetGateOperations(
   deps: TargetGateOperationDependencies,
 ): Pick<SurgeOpenClawProcessGate,
-  "reholdTarget" | "claimTargetCompletion" | "finalizeTargetCancellation" |
+  "reholdTarget" | "reholdReleasedTarget" | "claimTargetCompletion" | "finalizeTargetCancellation" |
   "permitTarget" | "hydrateTarget" | "unreserveTarget" | "settleTargetCompletion"
 > {
   const { current, requireMigrationOwner, write } = deps;
@@ -314,6 +317,17 @@ function createTargetGateOperations(
   };
 
   return {
+    async reholdReleasedTarget(input) {
+      assertRequest(input);
+      const state = await current(input.podUid);
+      if (state.role !== "normal" || !terminalTargetMatches(state, input)) {
+        throw new Error("surge OpenClaw process gate released target does not match this migration");
+      }
+      return write({
+        version: 1, podUid: input.podUid, role: "target", mode: "held", phase: "cancelling",
+        ...migrationIdentity(input),
+      });
+    },
     async reholdTarget(input) {
       assertRequest(input);
       const state = await current(input.podUid);
@@ -623,6 +637,7 @@ export interface SurgeOpenClawProcessSupervisorClient {
   status: () => Promise<SurgeOpenClawProcessGateState>;
   hold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   rehold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  reholdReleasedTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   claimTargetCompletion: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   finalizeTargetCancellation: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   releaseTarget: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
@@ -711,6 +726,7 @@ export function createSurgeOpenClawProcessSupervisorClient(
     status: () => call({ action: "status" }, SURGE_OPENCLAW_PROCESS_READ_TIMEOUT_MS),
     hold: (input) => call({ action: "hold", ...input }),
     rehold: (input) => call({ action: "rehold", ...input }),
+    reholdReleasedTarget: (input) => call({ action: "rehold-released-target", ...input }),
     claimTargetCompletion: (input) => call({ action: "claim", ...input }),
     finalizeTargetCancellation: (input) => call({ action: "finalize-cancellation", ...input }),
     releaseTarget: (input) => call({ action: "release-target", ...input }),
