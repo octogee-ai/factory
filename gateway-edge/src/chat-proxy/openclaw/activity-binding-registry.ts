@@ -126,8 +126,7 @@ function validSubagentRoute(ref: AgentActivityIngressRef): boolean {
   if (!ref.requesterSessionKey) return true;
   const requesterRoute = parseMattermostSessionRoute(ref.requesterSessionKey);
   if (!requesterRoute || requesterRoute.peerKind !== "direct") return false;
-  return requesterRoute.agentId === ref.agentId
-    && requesterRoute.threadRootPostId === ref.mainRootPostId;
+  return requesterRoute.threadRootPostId === ref.mainRootPostId;
 }
 
 function validScheduledRoute(ref: AgentActivityIngressRef): boolean {
@@ -159,6 +158,7 @@ function activityMattermostRoute(ref: AgentActivityIngressRef) {
 
 function authoritativeTarget(
   ref: AgentActivityIngressRef,
+  mattermostAgentId: string,
   identity: AgentIdentity,
   target: AuthorizedConversationTarget,
 ): boolean {
@@ -166,7 +166,7 @@ function authoritativeTarget(
   const directTarget = isAuthoritativeDirectTarget(route, identity, target);
   const channelTarget = isAuthoritativePrivateTarget(route, target);
   return (
-    identity.agentId === ref.agentId &&
+    identity.agentId === mattermostAgentId &&
     nonBlank(identity.coachMmUserId) &&
     nonBlank(identity.coachToken) &&
     nonBlank(identity.workspaceSlug) &&
@@ -231,16 +231,17 @@ export function createActivityBindingRegistry(
       const existing = readBinding(ref.runId);
       if (existing) return existing;
       if (!validRoute(ref)) return null;
-      const identity = await deps.resolveAgentIdentity(ref.agentId);
       const route = activityMattermostRoute(ref);
+      const mattermostAgentId = route?.peerKind === "direct" ? route.agentId : ref.agentId;
+      const identity = await deps.resolveAgentIdentity(mattermostAgentId);
       const target = route?.peerKind === "direct"
         ? await deps.resolveDirectConversationTarget(
-            ref.agentId,
+            mattermostAgentId,
             ref.conversationId,
             route.primaryChannelId,
           )
         : await deps.resolveConversationTarget(ref.agentId, ref.conversationId);
-      if (!identity || !target || !authoritativeTarget(ref, identity, target)) return null;
+      if (!identity || !target || !authoritativeTarget(ref, mattermostAgentId, identity, target)) return null;
       const channelCreateAt = await deps.verifyChannel(identity, target);
       const binding = freezeActiveActivityRunBinding({
         conversationId: ref.conversationId,

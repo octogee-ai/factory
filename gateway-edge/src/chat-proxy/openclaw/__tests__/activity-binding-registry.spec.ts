@@ -207,6 +207,81 @@ describe("same-channel Activity binding registry", () => {
     );
   });
 
+  it("uses the requester Agent account for a cross-Agent DM child binding", async () => {
+    const { registry, resolveAgentIdentity, resolveDirectConversationTarget } = harness();
+    const childAgentId = "researcher";
+    const requesterSessionKey =
+      `agent:${ref.agentId}:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`;
+    const childRef = {
+      ...ref,
+      runId: "cross-agent-child-1",
+      parentRunId: "direct-parent-1",
+      origin: "subagent" as const,
+      agentId: childAgentId,
+      sessionKey: `agent:${childAgentId}:subagent:child-1`,
+      requesterSessionKey,
+    };
+
+    await expect(registry.resolve(childRef)).resolves.toMatchObject({
+      runId: "cross-agent-child-1",
+      agentId: childAgentId,
+      sessionKey: childRef.sessionKey,
+      requesterSessionKey,
+      coachMmUserId: AGENT_MM_USER_ID,
+      coachToken: "pat-1",
+    });
+    expect(resolveAgentIdentity).toHaveBeenCalledWith(ref.agentId);
+    expect(resolveAgentIdentity).not.toHaveBeenCalledWith(childAgentId);
+    expect(resolveDirectConversationTarget).toHaveBeenCalledWith(
+      ref.agentId,
+      "channel-1",
+      OWNER_MM_USER_ID,
+    );
+  });
+
+  it("keeps the ancestor requester account through nested cross-Agent DM bindings", async () => {
+    const { registry, resolveAgentIdentity, resolveDirectConversationTarget } = harness();
+    const requesterSessionKey =
+      `agent:${ref.agentId}:mattermost:direct:${OWNER_MM_USER_ID}:thread:root-1`;
+    const childRef = (runId: string, parentRunId: string, agentId: string) => ({
+      ...ref,
+      runId,
+      parentRunId,
+      origin: "subagent" as const,
+      agentId,
+      sessionKey: `agent:${agentId}:subagent:${runId}`,
+      requesterSessionKey,
+    });
+
+    await expect(registry.resolve(childRef("child-1", "direct-parent-1", "researcher")))
+      .resolves.toMatchObject({
+        agentId: "researcher",
+        coachMmUserId: AGENT_MM_USER_ID,
+        coachToken: "pat-1",
+      });
+    await expect(registry.resolve(childRef("grandchild-1", "child-1", "writer")))
+      .resolves.toMatchObject({
+        agentId: "writer",
+        coachMmUserId: AGENT_MM_USER_ID,
+        coachToken: "pat-1",
+      });
+
+    expect(resolveAgentIdentity).toHaveBeenNthCalledWith(1, ref.agentId);
+    expect(resolveAgentIdentity).toHaveBeenNthCalledWith(2, ref.agentId);
+    expect(resolveDirectConversationTarget).toHaveBeenNthCalledWith(
+      1,
+      ref.agentId,
+      "channel-1",
+      OWNER_MM_USER_ID,
+    );
+    expect(resolveDirectConversationTarget).toHaveBeenNthCalledWith(
+      2,
+      ref.agentId,
+      "channel-1",
+      OWNER_MM_USER_ID,
+    );
+  });
+
   it("rejects requester routing on a non-subagent run", async () => {
     const candidate = harness();
     await expect(candidate.registry.resolve({
