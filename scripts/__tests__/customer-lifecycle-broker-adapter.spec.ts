@@ -1133,6 +1133,27 @@ describe("broker adapter malformed coach identity quarantine", () => {
       { remove: ["alice-coach"], removePrefixes: [] },
     );
   });
+
+  it("does not reuse a stale lifecycle owner id when the broker explicitly clears it", async () => {
+    const brokerSnapshot = aliceSnapshot({
+      mattermostUserId: null,
+      customerMmUserId: null,
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => brokerSnapshot) }),
+      rpc: mkGatewayRpc({
+        configPatchAndWaitForChange: vi.fn(async () => ({ ok: true })),
+      }),
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(
+        aliceSnapshot({ mattermostUserId: ALICE_OWNER_MM_ID }),
+        { _coachPersonalToken: "pat-1" },
+      ),
+    ).rejects.toThrow(/account fragment was empty/);
+  });
 });
 
 describe("buildBrokeredLifecycleAdapter template files", () => {

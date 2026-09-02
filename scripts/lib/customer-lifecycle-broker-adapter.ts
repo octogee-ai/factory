@@ -203,7 +203,7 @@ function brokerCustomerMattermostUserId(
   brokerSnapshot: FleetBrokerUserSnapshot | null,
   snapshot: UserSnapshot,
 ): string | null | undefined {
-  return brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId;
+  return brokerSnapshot ? brokerSnapshot.customerMmUserId : snapshot.mattermostUserId;
 }
 
 interface BuildBrokeredLifecycleAdapterOptions {
