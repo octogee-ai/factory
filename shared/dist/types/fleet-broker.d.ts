@@ -122,6 +122,10 @@ export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
 export interface FleetBrokerBuilderRuntimeStatePruneResult {
     deleted: number;
 }
+export type FleetBrokerOpenClawBootAction = "start" | "doctor";
+export interface FleetBrokerOpenClawBootClaim {
+    action: FleetBrokerOpenClawBootAction;
+}
 export interface FleetBrokerPreStopFlushStep {
     name: string;
     status: "done" | "failed" | "skipped";

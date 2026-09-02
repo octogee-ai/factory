@@ -7,6 +7,7 @@ import type {
   FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerNpmRegistryCredentials,
+  FleetBrokerOpenClawBootClaim,
   FleetBrokerPreStopFlushEvent,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
@@ -118,6 +119,8 @@ export interface FleetBrokerClient {
   builderRuntimeStatePrune(input: {
     slug: string;
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
+  claimOpenClawBoot(input: { releaseKey: string }): Promise<FleetBrokerOpenClawBootClaim>;
+  completeOpenClawBoot(input: { releaseKey: string }): Promise<void>;
 }
 
 export async function resolveGithubTokenForSlug(
@@ -176,6 +179,29 @@ function builderRuntimeStateClient(
     async builderRuntimeStatePrune(input) {
       return postJson<FleetBrokerBuilderRuntimeStatePruneResult>(
         "/internal/fleet/builder-runtime-state/prune",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+  };
+}
+
+function openClawBootClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot"> {
+  return {
+    async claimOpenClawBoot(input) {
+      return postJson<FleetBrokerOpenClawBootClaim>(
+        "/internal/fleet/openclaw-boot/claim",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async completeOpenClawBoot(input) {
+      return postNoContent(
+        "/internal/fleet/openclaw-boot/healthy",
         { gatewayId, revisionId, ...input },
         await gatewayCredentialHeaders(),
       );
@@ -368,5 +394,6 @@ export function createFleetBrokerClient(
       );
     },
     ...builderRuntimeStateClient(gatewayId, revisionId, gatewayCredentialHeaders),
+    ...openClawBootClient(gatewayId, revisionId, gatewayCredentialHeaders),
   };
 }
