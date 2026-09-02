@@ -994,6 +994,7 @@ function reconcileRecoveredRuntimeResetMarker(input: {
 }): boolean | null {
   const marker = recoveredRuntimeResetState(input.user);
   if (!marker) return null;
+  if (marker.status === "acknowledged") return false;
   const exact = [
     marker.uid === input.user.uid,
     marker.slug === input.builderSlug,
@@ -1002,7 +1003,7 @@ function reconcileRecoveredRuntimeResetMarker(input: {
     marker.operationId === input.assignment.updatedByOperationId,
     input.assignment.source === "repair",
   ].every(Boolean);
-  if (!exact || (marker.status !== "pending" && marker.status !== "acknowledged")) {
+  if (!exact || marker.status !== "pending") {
     blockPlacement(input.context, {
       uid: input.user.uid,
       code: "recovered-runtime-reset-fence",
