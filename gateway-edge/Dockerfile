@@ -34,10 +34,10 @@ RUN GODEBUG=http2client=0 CGO_ENABLED=0 go install \
 
 FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146
 WORKDIR /gateway-edge
-ARG NPM_VERSION=12.0.1
+ARG NPM_VERSION=12.0.2
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.8 --ignore-scripts --no-audit --no-fund \
+    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 # git + openssh-client are required for the Phase 6 working-tree

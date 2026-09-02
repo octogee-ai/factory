@@ -52,9 +52,10 @@ describe("monitoring setup", () => {
   it("adopts all first-party monitoring objects through one pinned Helm release", () => {
     expect(chart("Chart.yaml")).toContain("name: octogee-monitoring");
     expect(chart("Chart.yaml")).toContain("name: grafana");
-    expect(chart("Chart.yaml")).toContain('version: "10.5.15"');
+    expect(chart("Chart.yaml")).toContain('version: "13.0.1"');
+    expect(chart("Chart.yaml")).toContain('repository: "https://grafana-community.github.io/helm-charts"');
     expect(chart("Chart.lock")).toContain("grafana");
-    expect(readFileSync(resolve(root, "helm/monitoring/charts/grafana-10.5.15.tgz")).length).toBeGreaterThan(0);
+    expect(readFileSync(resolve(root, "helm/monitoring/charts/grafana-13.0.1.tgz")).length).toBeGreaterThan(0);
 
     expect(setupMonitoring).toContain('helm upgrade --install grafana "$REPO_DIR/helm/monitoring"');
     expect(setupMonitoring).toContain("--take-ownership");
@@ -341,8 +342,29 @@ describe("monitoring setup", () => {
     expect(values).toContain("replicas: 1");
     expect(values).not.toContain("replicaCount:");
     expect(values).not.toContain("commonLabels:");
-    expect(verifyMonitoring).toContain("kubectl exec deployment/grafana");
-    expect(verifyMonitoring).toContain("test -w /var/lib/grafana");
+    expect(verifyMonitoring).toContain('octogee_verify_grafana_health "$TARGET_KUBE_CONTEXT"');
+    expect(verifyMonitoring).not.toContain("kubectl exec deployment/grafana");
+  });
+
+  it("preinstalls the logging datasource with writable data and scratch volumes on distroless Grafana", () => {
+    const deployment = renderedDeployment("grafana");
+    const pod = (deployment.spec as { template: { spec: {
+      containers: Array<{ name: string; image: string; env: Array<Record<string, unknown>>;
+        securityContext: Record<string, unknown>; volumeMounts: Array<Record<string, unknown>> }>;
+      volumes: Array<Record<string, unknown>>;
+    } } }).template.spec;
+    const server = pod.containers.find((container) => container.name === "grafana")!;
+
+    expect(server.image).toBe("docker.io/grafana/grafana:13.2.1-distroless@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69");
+    expect(server.securityContext.readOnlyRootFilesystem).toBe(true);
+    expect(server.env).toContainEqual({ name: "GF_PLUGINS_PREINSTALL_SYNC", valueFrom: {
+      configMapKeyRef: { name: "grafana", key: "plugins" },
+    } });
+    expect(server.env.some((entry) => entry.name === "GF_INSTALL_PLUGINS")).toBe(false);
+    expect(server.volumeMounts).toContainEqual({ name: "tmp", mountPath: "/tmp" });
+    expect(server.volumeMounts).toContainEqual(expect.objectContaining({ name: "storage", mountPath: "/var/lib/grafana" }));
+    expect(pod.volumes).toContainEqual({ name: "tmp", emptyDir: {} });
+    expect(pod.volumes).toContainEqual({ name: "storage", persistentVolumeClaim: { claimName: "grafana" } });
   });
 
   it("places every monitoring workload without selecting a compute class", () => {

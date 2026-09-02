@@ -15,6 +15,9 @@ iap:
   oauthSecretName: grafana-iap-oauth
 
 grafana:
+  image:
+    repository: grafana/grafana
+    tag: "13.2.1-distroless@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69"
   grafana.ini:
     dashboards:
       default_home_dashboard_path: /etc/grafana/home-dashboard.json
@@ -43,7 +46,7 @@ grafana:
   initChownData:
     enabled: false
   plugins:
-    - googlecloud-logging-datasource
+    - googlecloud-logging-datasource@1.7.2
   datasources:
     datasources.yaml:
       apiVersion: 1
