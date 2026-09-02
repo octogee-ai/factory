@@ -65,6 +65,7 @@ import {
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
+import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import {
   configuredBuilderCredentialBootstrapAllowed,
   projectGatewayMutableConfigForGateway,
@@ -2068,6 +2069,21 @@ async function requireConfiguredBuilderRuntimeState(
   return { bound, slug: request.slug };
 }
 
+function openClawBootRequest(
+  bound: GatewayBinding,
+  body: unknown,
+): { releaseKey: string; podUid: string } | null {
+  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const revisionId = typeof record.revisionId === "string" ? record.revisionId : "";
+  const releaseKey = typeof record.releaseKey === "string" ? record.releaseKey.trim() : "";
+  const authenticatedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
+  if (!bound.podUid || !authenticatedRevisionId || revisionId !== authenticatedRevisionId) {
+    return null;
+  }
+  if (!releaseKey || releaseKey.length > 512) return null;
+  return { releaseKey, podUid: bound.podUid };
+}
+
 function configuredBuilderBootstrapPayload(input: {
   uid: string;
   slug: string;
@@ -2690,6 +2706,93 @@ function installGatewayOpsRoutes(
       });
       const response: FleetBrokerBuilderRuntimeStatePruneResult = { deleted };
       res.json(response);
+    });
+  });
+
+  router.post("/openclaw-boot/claim", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body);
+    if (!request) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
+      const result = await db.runTransaction(async (txn) => {
+        const runtimeSnap = await txn.get(runtimeRef);
+        if (!runtimeSnap.exists) return null;
+        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
+          | Record<string, unknown>
+          | undefined;
+        if (sentinel?.releaseKey === request.releaseKey && sentinel.state === "starting") {
+          txn.update(runtimeRef, {
+            openclawBootSentinel: {
+              releaseKey: request.releaseKey,
+              state: "doctor-attempted",
+              podUid: request.podUid,
+              updatedAt: now(),
+            },
+          });
+          return { action: "doctor" } as const;
+        }
+        if (sentinel?.releaseKey !== request.releaseKey) {
+          txn.update(runtimeRef, {
+            openclawBootSentinel: {
+              releaseKey: request.releaseKey,
+              state: "starting",
+              podUid: request.podUid,
+              updatedAt: now(),
+            },
+          });
+        } else if (
+          sentinel.state === "doctor-attempted"
+          && sentinel.podUid !== request.podUid
+        ) {
+          txn.update(runtimeRef, {
+            "openclawBootSentinel.podUid": request.podUid,
+            "openclawBootSentinel.updatedAt": now(),
+          });
+        }
+        return { action: "start" } as const;
+      });
+      if (!result) {
+        res.status(409).json({ error: "gateway_runtime_missing" });
+        return;
+      }
+      res.json(result);
+    });
+  });
+
+  router.post("/openclaw-boot/healthy", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body);
+    if (!request) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
+      const completed = await db.runTransaction(async (txn) => {
+        const runtimeSnap = await txn.get(runtimeRef);
+        if (!runtimeSnap.exists) return false;
+        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          sentinel?.releaseKey === request.releaseKey
+          && sentinel.podUid === request.podUid
+        ) {
+          txn.update(runtimeRef, { openclawBootSentinel: FieldValue.delete() });
+        }
+        return true;
+      });
+      if (!completed) {
+        res.status(409).json({ error: "gateway_runtime_missing" });
+        return;
+      }
+      res.status(204).end();
     });
   });
 }

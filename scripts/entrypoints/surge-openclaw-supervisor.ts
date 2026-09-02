@@ -13,8 +13,12 @@ import {
   type SurgeOpenClawProcessRequest,
   type SurgeOpenClawProcessSupervisorRequest,
 } from "../lib/surge-openclaw-process-gate.js";
-import { pruneMissingOpenClawAgentDatabaseRegistrations } from "../lib/openclaw-restored-state-recovery.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
+import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import {
+  createOpenClawBootWatcher,
+  type OpenClawBootWatcher,
+} from "../lib/openclaw-boot-watcher.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
@@ -35,13 +39,13 @@ export interface StartSurgeOpenClawSupervisorOptions {
   healthTimeoutMs?: number;
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
-  recoverRestoredState?: () => Promise<void>;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
   probeHealthz?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
   createServer?: typeof http.createServer;
   onUnexpectedChildExit?: () => void;
+  bootWatcher?: OpenClawBootWatcher;
 }
 
 export interface StartedSurgeOpenClawSupervisor {
@@ -273,12 +277,12 @@ interface StartPermittedOpenClawChildOptions {
   prepareTarget: () => Promise<void>;
   probeHealthz: () => Promise<boolean>;
   reapOrphanedOpenClaw: () => Promise<void>;
-  recoverRestoredState: () => Promise<void>;
   recordChildPid: (pid: number | undefined) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   spawnOpenClaw: () => SpawnedOpenClaw;
   timeoutMs: number;
   gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>, "markRunning">;
+  bootWatcher: OpenClawBootWatcher;
 }
 
 async function startPermittedOpenClawChild(
@@ -292,7 +296,7 @@ async function startPermittedOpenClawChild(
       throw new Error("surge OpenClaw process was held during target preparation");
     }
     await opts.reapOrphanedOpenClaw();
-    await opts.recoverRestoredState();
+    await opts.bootWatcher.beforeStart();
     const spawned = opts.spawnOpenClaw();
     opts.child.set(spawned);
     let healthy = false;
@@ -341,6 +345,7 @@ async function startPermittedOpenClawChild(
       throw new Error("OpenClaw exited before becoming healthy");
     }
     healthy = true;
+    await opts.bootWatcher.healthy();
     return opts.gate.markRunning({ podUid: opts.podUid, migrationId: afterPreparation.migrationId });
   }
 }
@@ -462,12 +467,12 @@ export async function startSurgeOpenClawSupervisor(
   const sleep = opts.sleep ?? defaultSleep;
   const spawnOpenClaw = opts.spawnOpenClaw ?? defaultSpawnOpenClaw;
   const prepareTarget = opts.prepareTarget ?? defaultPrepareTarget;
-  const recoverRestoredState = opts.recoverRestoredState ?? (async () => {
-    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || opts.openclawDir;
-    pruneMissingOpenClawAgentDatabaseRegistrations({ stateDir, log: opts.log });
-  });
   const timeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const stopGraceMs = opts.stopGraceMs ?? DEFAULT_STOP_GRACE_MS;
+  const bootWatcher = opts.bootWatcher ?? {
+    beforeStart: async () => {},
+    healthy: async () => {},
+  };
   const pidPath = path.join(opts.openclawDir, SURGE_OPENCLAW_PID_FILE);
   let child: SpawnedOpenClaw | null = null;
   let stopping = false;
@@ -542,12 +547,12 @@ export async function startSurgeOpenClawSupervisor(
         prepareTarget,
         probeHealthz,
         reapOrphanedOpenClaw,
-        recoverRestoredState,
         recordChildPid,
         sleep,
         spawnOpenClaw,
         timeoutMs,
         gate,
+        bootWatcher,
       });
     })();
     starting = work;
@@ -677,11 +682,25 @@ export async function startSurgeOpenClawSupervisor(
 async function main(): Promise<void> {
   const podUid = process.env.POD_UID?.trim();
   if (!podUid) throw new Error("POD_UID is required for the surge OpenClaw supervisor");
+  const gatewayId = process.env.GATEWAY_ID?.trim();
+  if (!gatewayId) throw new Error("GATEWAY_ID is required for the surge OpenClaw supervisor");
+  const revisionId = process.env.GATEWAY_REVISION_ID?.trim() || gatewayId;
+  const releaseKey = process.env.GATEWAY_IMAGE_TAG?.trim() || process.env.BUILD_SHA?.trim();
+  if (!releaseKey) {
+    throw new Error("GATEWAY_IMAGE_TAG or BUILD_SHA is required for the surge OpenClaw supervisor");
+  }
   const openclawDir = process.env.OPENCLAW_DIR?.trim() || "/home/node/.openclaw";
+  const log = (message: string) => console.error(message);
+  const bootWatcher = createOpenClawBootWatcher({
+    client: createFleetBrokerClient(gatewayId, revisionId),
+    releaseKey,
+    log,
+  });
   const supervisor = await startSurgeOpenClawSupervisor({
     openclawDir,
     podUid,
-    log: (message) => console.error(message),
+    log,
+    bootWatcher,
     onUnexpectedChildExit: () => {
       console.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
       process.exit(1);
