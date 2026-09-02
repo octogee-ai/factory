@@ -21,7 +21,7 @@ for arg in "$@"; do
     --uninstall) UNINSTALL=true ;;
     --iap) IAP_ENABLED=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test|build-week|--target=TARGET] [--bootstrap-secret|--adopt-existing-secret] [--iap] [--uninstall]"
+      echo "Usage: $0 [--env=prod|test|--target=TARGET] [--bootstrap-secret|--adopt-existing-secret] [--iap] [--uninstall]"
       exit 0
       ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;

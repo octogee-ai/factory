@@ -30,7 +30,6 @@ export function isDeploymentTargetResolverEntrypoint(
 const DEPLOYMENT_ENVIRONMENTS: DeploymentEnvironment[] = [
   "prod",
   "test",
-  "build-week",
 ];
 
 function deploymentEnvironment(value: string): DeploymentEnvironment {

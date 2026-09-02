@@ -195,11 +195,11 @@ describe("durable PVC snapshot schedule reconciliation", () => {
     expect(result.calls.some((call) => call.includes("compute disks"))).toBe(false);
   });
 
-  it("refuses frozen targets before querying Kubernetes", () => {
-    const result = runReconciler({ apply: true, target: "build-week-central" });
+  it("refuses unknown targets before querying Kubernetes", () => {
+    const result = runReconciler({ apply: true, target: "unknown-target" });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("received build-week-central");
+    expect(result.stderr).toContain("Unknown deployment target: unknown-target");
     expect(result.calls).toEqual([]);
   });
 });

@@ -20,11 +20,6 @@ case "${DEPLOYMENT_TARGET}" in
     CLUSTER_PROJECT_ID="octogee"
     NAMESPACE="octogee-test"
     ;;
-  build-week-central)
-    HOSTING_PROJECT_ID="octogee-customer-hosting-bw"
-    CLUSTER_PROJECT_ID="octogee"
-    NAMESPACE="octogee-build-week"
-    ;;
   *) echo "Unsupported deployment target: ${DEPLOYMENT_TARGET:-<missing>}" >&2; exit 2 ;;
 esac
 

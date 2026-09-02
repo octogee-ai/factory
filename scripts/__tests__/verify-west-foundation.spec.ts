@@ -65,7 +65,7 @@ const nothingFrozenContract: Contract = {
   targets: {
     "prod-central": target("active", "octogee"),
     "test-central": target("active", "octogee-test"),
-    "build-week-central": target("candidate", "octogee-build-week"),
+    "test-candidate": target("candidate", "octogee-test-candidate"),
   },
 };
 
@@ -376,7 +376,7 @@ describe("WEST foundation runtime verifier", () => {
   it("expects the query built from active PROD and TEST mappings", () => {
     expect(workloadQuery("critical")).toContain('location=~"us-central1"');
     expect(workloadQuery("critical")).not.toContain('location=~"us-central1|us-west1"');
-    expect(workloadQuery("critical")).toContain('namespace!~"octogee-build-week"');
+    expect(workloadQuery("critical")).not.toContain("namespace!~");
 
     const result = runVerifier();
 

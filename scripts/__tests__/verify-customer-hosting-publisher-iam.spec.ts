@@ -96,10 +96,13 @@ describe("customer Hosting publisher IAM verifier", () => {
     expect(result.stderr).toContain("Unexpected publisher journal IAM");
   });
 
-  it("rejects an unknown target without reading IAM", () => {
-    const result = runVerifier({ args: ["--target=staging"] });
+  it.each(["staging", "build-week-central"])(
+    "rejects unsupported target %s without reading IAM",
+    (target) => {
+      const result = runVerifier({ args: [`--target=${target}`] });
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("Unsupported deployment target");
-  });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("Unsupported deployment target");
+    },
+  );
 });

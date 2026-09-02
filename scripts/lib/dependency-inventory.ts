@@ -162,7 +162,7 @@ function firstYamlScalar(lines: string[], key: string): string | undefined {
 }
 
 const INTERNAL_ARTIFACT_REGISTRY_PREFIXES = [...new Set(
-  (["prod", "test", "build-week"] as const).flatMap((environment) =>
+  (["prod", "test"] as const).flatMap((environment) =>
     deploymentTargetsForEnvironment(environment).map(
       (target) => `${target.artifactRegistryRepository}/`,
     ),

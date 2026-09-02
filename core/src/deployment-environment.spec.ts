@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
 
 import {
-  BUILD_WEEK_ENVIRONMENT,
   deploymentEnvironmentForNamespace,
   deploymentEnvironmentForProject,
   deploymentEnvironmentSettings,
@@ -16,19 +15,6 @@ import {
 } from "./deployment-environment.js";
 
 describe("deployment environment registry", () => {
-  it("maps the isolated Build Week namespace and Firebase project", () => {
-    expect(deploymentEnvironmentForNamespace("octogee-build-week")).toBe("build-week");
-    expect(deploymentEnvironmentForProject("octogee-build-week")).toBe("build-week");
-    expect(BUILD_WEEK_ENVIRONMENT).toMatchObject({
-      namespace: "octogee-build-week",
-      firebaseProjectId: "octogee-build-week",
-      apiOrigin: "https://api-build-week.octogee.com",
-      previewOrigin: "https://preview-build-week.octogee.com",
-      gatewayValuesFile: "values.build-week.yaml",
-      pinEnvironment: "build-week",
-    });
-  });
-
   it("keeps Central prod and test mappings stable and rejects retired projects and custom namespaces", () => {
     expect(deploymentEnvironmentForNamespace("octogee")).toBe("prod");
     expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("test");
@@ -136,11 +122,11 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    candidate.targets["build-week-central"].ingress.edgeStaticIpName =
+    candidate.targets["prod-central"].ingress.edgeStaticIpName =
       candidate.targets["test-central"].ingress.edgeStaticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
-      "deployment target build-week-central ingress identity workspace-api-ip-test is already used",
+      "deployment target test-central ingress identity workspace-api-ip-test is already used by prod-central.edgeStaticIpName",
     );
   });
 
@@ -179,10 +165,10 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    candidate.targets["build-week-central"].ingress.edgeStaticIpName = staticIpName;
+    candidate.targets["prod-central"].ingress.edgeStaticIpName = staticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
-      `deployment target build-week-central ingress identity ${staticIpName} is already used`,
+      `deployment target test-central ingress identity ${staticIpName} is already used by prod-central.edgeStaticIpName`,
     );
   });
 
@@ -197,7 +183,7 @@ describe("deployment environment registry", () => {
         };
       }>;
     };
-    const ingress = candidate.targets["build-week-central"].ingress;
+    const ingress = candidate.targets["test-central"].ingress;
     ingress.mattermostStaticIpName = ingress.edgeStaticIpName;
     ingress.giteaStaticIpName = ingress.edgeStaticIpName;
     ingress.previewStaticIpName = ingress.edgeStaticIpName;
@@ -249,16 +235,6 @@ describe("deployment environment registry", () => {
     }
   });
 
-  it("freezes Build Week in central and gives it no west candidate", () => {
-    expect(deploymentTargetsForEnvironment("build-week")).toEqual([
-      expect.objectContaining({
-        targetId: "build-week-central",
-        lifecycle: "frozen",
-        region: "us-central1",
-      }),
-    ]);
-  });
-
   it("fails closed for an unknown deployment target", () => {
     expect(() => deploymentTargetSettings("prod-somewhere")).toThrow(
       "Unknown deployment target: prod-somewhere",
@@ -296,12 +272,12 @@ describe("deployment environment registry", () => {
   });
 
   it("publishes every browser origin used by CORS and redirects", () => {
-    const settings = deploymentEnvironmentSettings("build-week");
+    const settings = deploymentEnvironmentSettings("test");
     expect(publicAppOrigins()).toEqual(expect.arrayContaining([
       settings.siteOrigin,
       settings.appOrigin,
-      "https://octogee-build-week.firebaseapp.com",
-      "https://app-octogee-build-week.firebaseapp.com",
+      "https://octogee-test.firebaseapp.com",
+      "https://app-octogee-test.firebaseapp.com",
     ]));
     expect(publicAppOrigins()).toContain("https://app-octogee-test.web.app");
   });

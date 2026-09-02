@@ -19,7 +19,7 @@ for arg in "$@"; do
       ;;
     --rotate) FORCE_ROTATE=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week | --target=TARGET_ID [--rotate]"
+      echo "Usage: $0 --env=prod|test | --target=TARGET_ID [--rotate]"
       exit 0
       ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;

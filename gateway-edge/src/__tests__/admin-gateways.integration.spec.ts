@@ -171,7 +171,6 @@ describe("CENTRAL release authority wiring", () => {
     expect(centralReleaseRouteDeps("prod-central").releaseEnvironment).toBe("prod");
     expect(centralReleaseRouteDeps("prod-central").releaseAuthority).toBeDefined();
     expect(centralReleaseRouteDeps("test-west")).toEqual({ releaseEnvironment: null });
-    expect(centralReleaseRouteDeps("build-week-central")).toEqual({ releaseEnvironment: null });
   });
 });
 

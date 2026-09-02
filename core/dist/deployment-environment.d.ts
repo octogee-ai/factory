@@ -1,4 +1,4 @@
-export type DeploymentEnvironment = "prod" | "test" | "build-week";
+export type DeploymentEnvironment = "prod" | "test";
 export type ResolvedDeploymentEnvironment = DeploymentEnvironment | "unknown";
 export type DeploymentTargetLifecycle = "active" | "candidate" | "frozen";
 interface ArtifactRegistryDocument {
@@ -117,7 +117,6 @@ export interface DeploymentEnvironmentSettings {
     pinEnvironment: string;
 }
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;
-export declare const BUILD_WEEK_ENVIRONMENT: DeploymentEnvironmentSettings;
 export declare function deploymentEnvironmentSettings(environment: DeploymentEnvironment): DeploymentEnvironmentSettings;
 export declare function deploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings;
 export declare function deploymentSettingsForRuntime(input: {

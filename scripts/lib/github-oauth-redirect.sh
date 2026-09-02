@@ -54,7 +54,6 @@ github_oauth_env_file_for_target() {
   case "$target_id" in
     prod-central) printf '%s/.env\n' "$repo_dir" ;;
     test-central) printf '%s/.env.test\n' "$repo_dir" ;;
-    build-week-central) printf '%s/.env.build-week\n' "$repo_dir" ;;
     *) printf '%s/.env.%s\n' "$repo_dir" "$target_id" ;;
   esac
 }

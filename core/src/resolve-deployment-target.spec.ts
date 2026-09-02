@@ -21,7 +21,7 @@ describe("deployment target resolver", () => {
     });
   });
 
-  it("rejects retired WEST targets and permits frozen Build Week", () => {
+  it("rejects retired WEST targets", () => {
     for (const targetId of ["test-west", "prod-west"]) {
       expect(() => resolveDeploymentTargetArguments([`--target=${targetId}`])).toThrow(
         `Unknown deployment target: ${targetId}`,
@@ -31,12 +31,6 @@ describe("deployment target resolver", () => {
         "--reject-candidate-target",
       ])).toThrow(`Unknown deployment target: ${targetId}`);
     }
-
-    expect(JSON.parse(runDeploymentTargetResolver([
-      "--environment=build-week",
-      "--reject-candidate-target",
-      "--format=json",
-    ]))).toMatchObject({ target_id: "build-week-central", lifecycle: "frozen" });
   });
 
   it("requires exactly one target selector", () => {
@@ -52,6 +46,9 @@ describe("deployment target resolver", () => {
   it("rejects unknown arguments and environments", () => {
     expect(() => resolveDeploymentTargetArguments(["--environment=dev"])).toThrow(
       "Unknown deployment environment: dev",
+    );
+    expect(() => resolveDeploymentTargetArguments(["--environment=build-week"])).toThrow(
+      "Unknown deployment environment: build-week",
     );
     expect(() => resolveDeploymentTargetArguments(["--environment=prod", "--west"])).toThrow(
       "Unknown argument: --west",
@@ -95,13 +92,13 @@ describe("deployment target resolver", () => {
 
   it("supports JSON output for operator scripts", () => {
     const output = formatDeploymentTargetOutput(
-      resolveDeploymentTargetArguments(["--environment=build-week"]),
+      resolveDeploymentTargetArguments(["--environment=test"]),
       "json",
     );
 
     expect(JSON.parse(output)).toMatchObject({
-      target_id: "build-week-central",
-      lifecycle: "frozen",
+      target_id: "test-central",
+      lifecycle: "active",
       region: "us-central1",
     });
   });

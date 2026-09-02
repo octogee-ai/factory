@@ -46,12 +46,12 @@ for arg in "$@"; do
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --context=*)   KUBE_CTX="${arg#*=}" ;;
-    --help|-h)     echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
+    --help|-h)     echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--namespace=NAME]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME]"; exit 1; }
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
@@ -69,7 +69,7 @@ NS="$TARGET_NAMESPACE"
 [[ -z "$KUBE_CTX" ]] && KUBE_CTX="$TARGET_KUBE_CONTEXT"
 
 case "$ENV" in
-  prod|test|build-week) ;;
+  prod|test) ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }

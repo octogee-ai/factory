@@ -29,10 +29,10 @@ for arg in "$@"; do
     --env=*) SELECTOR="--environment=${arg#*=}" ;;
     --target=*) SELECTOR="$arg" ;;
     --apply) APPLY=true ;;
-    *) echo "Usage: $0 (--env=prod|test|build-week | --target=TARGET_ID) [--apply]" >&2; exit 1 ;;
+    *) echo "Usage: $0 (--env=prod|test | --target=TARGET_ID) [--apply]" >&2; exit 1 ;;
   esac
 done
-[[ -n "$SELECTOR" ]] || { echo "Usage: $0 (--env=prod|test|build-week | --target=TARGET_ID) [--apply]" >&2; exit 1; }
+[[ -n "$SELECTOR" ]] || { echo "Usage: $0 (--env=prod|test | --target=TARGET_ID) [--apply]" >&2; exit 1; }
 octogee_load_deployment_target "$SELECTOR"
 PROJECT="$TARGET_FIREBASE_PROJECT"
 REGION="$TARGET_REGION"

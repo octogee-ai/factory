@@ -18,7 +18,6 @@ export function isDeploymentTargetResolverEntrypoint(moduleUrl, entrypoint) {
 const DEPLOYMENT_ENVIRONMENTS = [
     "prod",
     "test",
-    "build-week",
 ];
 function deploymentEnvironment(value) {
     if (!DEPLOYMENT_ENVIRONMENTS.includes(value)) {
