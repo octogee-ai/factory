@@ -62,13 +62,14 @@
     "brace-expansion@>=2.0.0 <3.0.0": "2.1.4",
     "brace-expansion@>=5.0.0 <6.0.0": "5.0.9",
     "fast-xml-builder": "^1.1.7",
-    "fast-uri": "^3.1.5",
+    "fast-uri": "^3.1.6",
     "firebase-tools": {
       "ws": "^7.5.11"
     },
     "glob": "^13.0.0",
     "ip-address": "^10.2.1",
     "protobufjs": "^7.6.3",
+    "qs": "^6.16.0",
     "re2": "1.26.1",
     "tar": "^7.5.16",
     "tmp": "^0.2.7",
