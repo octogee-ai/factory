@@ -21,9 +21,9 @@ interface PinOpts extends PinCoords {
     env: string;
     tag: string;
 }
-/** Pin the image behind `service:tag` with a `keep-<env>-<tag>` tag so the
- *  cleanup policy retains it while a gateway references it. Idempotent. */
-export declare function ensureKeepTag(opts: PinOpts): Promise<void>;
+export declare function ensureKeepTag(opts: Omit<PinOpts, "tag"> & {
+    digest: string;
+}): Promise<void>;
 /** Release a `keep-<env>-<tag>` pin (image becomes eligible for the time-based
  *  cleanup once no env still pins it). Idempotent — 404 is already-gone. */
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;

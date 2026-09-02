@@ -12,6 +12,8 @@ vi.mock("google-auth-library", () => ({
 const COORDS = { project: "octogee", location: "us-central1", repository: "octogee" };
 const BASE =
   "https://artifactregistry.googleapis.com/v1/projects/octogee/locations/us-central1/repositories/octogee/packages";
+const DIGEST = `sha256:${"a".repeat(64)}`;
+const VERSION = `projects/octogee/locations/us-central1/repositories/octogee/packages/octogee-gateway/versions/${DIGEST}`;
 
 function mockFetch(handler: (url: string, init?: RequestInit) => { status: number; body?: unknown }) {
   return vi.fn(async (url: string, init?: RequestInit) => {
@@ -30,24 +32,23 @@ beforeEach(() => vi.unstubAllGlobals());
 afterEach(() => vi.unstubAllGlobals());
 
 describe("artifact-registry keep-tag pins", () => {
-  it("ensureKeepTag resolves the tag's version then creates keep-<env>-<tag> pointing at it", async () => {
+  it("pins the immutable digest without resolving a synthetic image tag", async () => {
     const calls: { method: string; url: string; body?: unknown }[] = [];
     const fetchMock = mockFetch((url, init) => {
       calls.push({ method: init?.method ?? "GET", url, body: init?.body && JSON.parse(init.body as string) });
       if ((init?.method ?? "GET") === "GET") {
-        return { status: 200, body: { name: `${BASE}/octogee-gateway/tags/930d163-oc2026.6.11`, version: `${BASE}/octogee-gateway/versions/sha256:abc` } };
+        return { status: 404 };
       }
       return { status: 200, body: {} };
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await ensureKeepTag({ ...COORDS, service: "octogee-gateway", env: "prod", tag: "930d163-oc2026.6.11" });
+    await ensureKeepTag({ ...COORDS, service: "octogee-gateway", env: "prod", digest: DIGEST });
 
-    const get = calls.find((c) => c.method === "GET")!;
-    expect(get.url).toContain("/packages/octogee-gateway/tags/930d163-oc2026.6.11");
+    expect(calls.some((c) => c.method === "GET")).toBe(false);
     const post = calls.find((c) => c.method === "POST")!;
-    expect(post.url).toContain("tagId=keep-prod-930d163-oc2026.6.11");
-    expect(post.body).toEqual({ version: `${BASE}/octogee-gateway/versions/sha256:abc` });
+    expect(post.url).toContain(`tagId=keep-prod-sha256-${"a".repeat(64)}`);
+    expect(post.body).toEqual({ version: VERSION });
   });
 
   it("ensureKeepTag is idempotent — a 409 ALREADY_EXISTS on create is not an error", async () => {
@@ -57,8 +58,24 @@ describe("artifact-registry keep-tag pins", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await expect(
-      ensureKeepTag({ ...COORDS, service: "octogee-gateway", env: "prod", tag: "930d163-oc2026.6.11" }),
+      ensureKeepTag({ ...COORDS, service: "octogee-gateway", env: "prod", digest: DIGEST }),
     ).resolves.toBeUndefined();
+  });
+
+  it("rejects a malformed digest before contacting Artifact Registry", async () => {
+    const fetchMock = mockFetch(() => ({ status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(ensureKeepTag({
+      ...COORDS, service: "octogee-gateway", env: "prod", digest: "sha256:bad",
+    })).rejects.toThrow("digest");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed pin creation", async () => {
+    vi.stubGlobal("fetch", mockFetch(() => ({ status: 404, body: { error: "version missing" } })));
+    await expect(ensureKeepTag({
+      ...COORDS, service: "octogee-gateway", env: "prod", digest: DIGEST,
+    })).rejects.toThrow("404");
   });
 
   it("removeKeepTag DELETEs keep-<env>-<tag>, and a 404 is treated as already-gone", async () => {

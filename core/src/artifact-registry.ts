@@ -225,23 +225,16 @@ function arFetch(url: string, method: string, token: string, body?: unknown): Pr
   return fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
-/** Pin the image behind `service:tag` with a `keep-<env>-<tag>` tag so the
- *  cleanup policy retains it while a gateway references it. Idempotent. */
-export async function ensureKeepTag(opts: PinOpts): Promise<void> {
+export async function ensureKeepTag(opts: Omit<PinOpts, "tag"> & { digest: string }): Promise<void> {
+  const digest = assertDigest(opts.digest, "retention pin digest");
   const base = `${packagesBase(opts)}/${opts.service}`;
-  const keepTag = `keep-${opts.env}-${opts.tag}`;
+  const keepTag = `keep-${opts.env}-${digest.replace(":", "-")}`;
   const token = await getWriteToken();
-  const getResp = await arFetch(`${base}/tags/${encodeURIComponent(opts.tag)}`, "GET", token);
-  if (!getResp.ok) {
-    throw new Error(`artifact-registry: cannot resolve ${opts.service}:${opts.tag} (${getResp.status})`);
-  }
-  const { version } = (await getResp.json()) as { version?: string };
-  if (!version) throw new Error(`artifact-registry: ${opts.service}:${opts.tag} has no version`);
   const postResp = await arFetch(
     `${base}/tags?tagId=${encodeURIComponent(keepTag)}`,
     "POST",
     token,
-    { version },
+    { version: versionResource(registryCoordinates(opts), opts.service, digest) },
   );
   if (!postResp.ok && postResp.status !== 409) {
     const detail = await postResp.text().catch(() => "");
