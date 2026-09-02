@@ -9,6 +9,14 @@ export interface OpenClawBootWatcher {
 
 type RunCommand = (command: string, args: readonly string[]) => Promise<void>;
 
+const CLAIM_PATH = "/internal/fleet/openclaw-boot/claim";
+const HEALTHY_PATH = "/internal/fleet/openclaw-boot/healthy";
+
+function missingBrokerRoute(error: unknown, path: string): boolean {
+  return error instanceof Error
+    && error.message.includes(`fleet-broker POST ${path} → 404`);
+}
+
 function runCommand(command: string, args: readonly string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit" });
@@ -18,9 +26,8 @@ function runCommand(command: string, args: readonly string[]): Promise<void> {
         resolve();
         return;
       }
-      reject(new Error(
-        `${command} ${args.join(" ")} failed ${signal ? `with ${signal}` : `with exit ${code}`}`,
-      ));
+      const outcome = signal ? `with ${signal}` : `with exit ${code}`;
+      reject(new Error(`${command} ${args.join(" ")} failed ${outcome}`));
     });
   });
 }
@@ -34,16 +41,28 @@ export function createOpenClawBootWatcher(input: {
   const run = input.run ?? runCommand;
   return {
     async beforeStart() {
-      const claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey });
+      let claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>;
+      try {
+        claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey });
+      } catch (error) {
+        if (!missingBrokerRoute(error, CLAIM_PATH)) throw error;
+        input.log("[openclaw-boot] boot sentinel unavailable on this platform release; starting normally");
+        return;
+      }
       if (claim.action === "start") return;
       if (claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
       input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
-      await run("openclaw", ["doctor", "--fix"]);
+      await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
     },
-    healthy() {
-      return input.client.completeOpenClawBoot({ releaseKey: input.releaseKey });
+    async healthy() {
+      try {
+        await input.client.completeOpenClawBoot({ releaseKey: input.releaseKey });
+      } catch (error) {
+        if (!missingBrokerRoute(error, HEALTHY_PATH)) throw error;
+        input.log("[openclaw-boot] boot sentinel completion unavailable on this platform release");
+      }
     },
   };
 }

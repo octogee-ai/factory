@@ -65,7 +65,6 @@ import {
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
-import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import {
   configuredBuilderCredentialBootstrapAllowed,
   projectGatewayMutableConfigForGateway,
@@ -84,6 +83,7 @@ import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
+import { createOpenClawBootSentinelStore } from "../lib/openclaw-boot-sentinel.js";
 import {
   createOwnerWorkspaceTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
@@ -2084,6 +2084,49 @@ function openClawBootRequest(
   return { releaseKey, podUid: bound.podUid };
 }
 
+function installOpenClawBootRoutes(
+  router: Router,
+  deps: ResolvedFleetBrokerRouteDeps,
+): void {
+  const store = createOpenClawBootSentinelStore(deps.db, deps.now);
+
+  router.post("/openclaw-boot/claim", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body);
+    if (!request) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      const result = await store.claim({ gatewayId: bound.gatewayId, ...request });
+      if (!result) {
+        res.status(409).json({ error: "gateway_runtime_missing" });
+        return;
+      }
+      res.json(result);
+    });
+  });
+
+  router.post("/openclaw-boot/healthy", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body);
+    if (!request) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      const completed = await store.complete({ gatewayId: bound.gatewayId, ...request });
+      if (!completed) {
+        res.status(409).json({ error: "gateway_runtime_missing" });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
+}
+
 function configuredBuilderBootstrapPayload(input: {
   uid: string;
   slug: string;
@@ -2709,92 +2752,7 @@ function installGatewayOpsRoutes(
     });
   });
 
-  router.post("/openclaw-boot/claim", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const request = openClawBootRequest(bound, req.body);
-    if (!request) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-    await runBrokered(res, async () => {
-      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
-      const result = await db.runTransaction(async (txn) => {
-        const runtimeSnap = await txn.get(runtimeRef);
-        if (!runtimeSnap.exists) return null;
-        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
-          | Record<string, unknown>
-          | undefined;
-        if (sentinel?.releaseKey === request.releaseKey && sentinel.state === "starting") {
-          txn.update(runtimeRef, {
-            openclawBootSentinel: {
-              releaseKey: request.releaseKey,
-              state: "doctor-attempted",
-              podUid: request.podUid,
-              updatedAt: now(),
-            },
-          });
-          return { action: "doctor" } as const;
-        }
-        if (sentinel?.releaseKey !== request.releaseKey) {
-          txn.update(runtimeRef, {
-            openclawBootSentinel: {
-              releaseKey: request.releaseKey,
-              state: "starting",
-              podUid: request.podUid,
-              updatedAt: now(),
-            },
-          });
-        } else if (
-          sentinel.state === "doctor-attempted"
-          && sentinel.podUid !== request.podUid
-        ) {
-          txn.update(runtimeRef, {
-            "openclawBootSentinel.podUid": request.podUid,
-            "openclawBootSentinel.updatedAt": now(),
-          });
-        }
-        return { action: "start" } as const;
-      });
-      if (!result) {
-        res.status(409).json({ error: "gateway_runtime_missing" });
-        return;
-      }
-      res.json(result);
-    });
-  });
-
-  router.post("/openclaw-boot/healthy", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const request = openClawBootRequest(bound, req.body);
-    if (!request) {
-      res.status(403).json(FORBIDDEN);
-      return;
-    }
-    await runBrokered(res, async () => {
-      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId);
-      const completed = await db.runTransaction(async (txn) => {
-        const runtimeSnap = await txn.get(runtimeRef);
-        if (!runtimeSnap.exists) return false;
-        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
-          | Record<string, unknown>
-          | undefined;
-        if (
-          sentinel?.releaseKey === request.releaseKey
-          && sentinel.podUid === request.podUid
-        ) {
-          txn.update(runtimeRef, { openclawBootSentinel: FieldValue.delete() });
-        }
-        return true;
-      });
-      if (!completed) {
-        res.status(409).json({ error: "gateway_runtime_missing" });
-        return;
-      }
-      res.status(204).end();
-    });
-  });
+  installOpenClawBootRoutes(router, deps);
 }
 
 // A chat-broker caller is validated in three layers:
