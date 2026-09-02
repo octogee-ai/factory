@@ -15,14 +15,36 @@ export async function quarantineMalformedCoachMattermostAccount(
   log: (message: string) => void,
 ): Promise<void> {
   const accountId = `${slug}-coach`;
+  const projectAccountPrefix = `${slug}-proj-`;
   const accountPath = `channels.mattermost.accounts.${accountId}`;
+  const projectAccountPathPrefix = `channels.mattermost.accounts.${projectAccountPrefix}`;
   await applyConfigPatch(
     {
-      buildPatch: () => ({
-        channels: { mattermost: { accounts: { [accountId]: null } } },
-      }),
+      buildPatch: (current) => {
+        const currentAccounts = (
+          current as { channels?: { mattermost?: { accounts?: unknown } } }
+        )?.channels?.mattermost?.accounts;
+        const projectAccountIds = currentAccounts !== null &&
+            typeof currentAccounts === "object" &&
+            !Array.isArray(currentAccounts)
+          ? Object.keys(currentAccounts).filter((id) => id.startsWith(projectAccountPrefix))
+          : [];
+        return {
+          channels: {
+            mattermost: {
+              accounts: Object.fromEntries(
+                [accountId, ...projectAccountIds].map((id) => [id, null]),
+              ),
+            },
+          },
+        };
+      },
       buildReplacePaths: (current) => customerConfigReplacePaths(current, slug)
-        .filter((path) => path === accountPath || path.startsWith(`${accountPath}.`)),
+        .filter((path) =>
+          path === accountPath ||
+          path.startsWith(`${accountPath}.`) ||
+          path.startsWith(projectAccountPathPrefix)
+        ),
       logPrefix: `[quarantine:${slug}]`,
     },
     {
@@ -34,7 +56,7 @@ export async function quarantineMalformedCoachMattermostAccount(
   );
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
     remove: [accountId],
-    removePrefixes: [],
+    removePrefixes: [projectAccountPrefix],
   });
-  log(`[quarantine:${slug}] removed malformed workspace coach account`);
+  log(`[quarantine:${slug}] removed malformed customer Mattermost accounts`);
 }

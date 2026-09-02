@@ -1088,7 +1088,7 @@ describe("broker adapter malformed coach identity quarantine", () => {
     secretMocks.updateMattermostAccountSecrets.mockClear();
   });
 
-  it("deletes only the stale workspace coach account before reporting an empty allowlist", async () => {
+  it("deletes every stale customer account before reporting an empty allowlist", async () => {
     const current = {
       channels: {
         mattermost: {
@@ -1098,16 +1098,26 @@ describe("broker adapter malformed coach identity quarantine", () => {
               groupPolicy: "allowlist",
               groupAllowFrom: ["mm-project-member"],
             },
+            "bob-coach": { groupPolicy: "open", groupAllowFrom: ["mm-bob"] },
+            "bob-proj-map": { groupPolicy: "open", groupAllowFrom: ["mm-bob"] },
           },
         },
       },
     };
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       expect(args.buildPatch(current)).toEqual({
-        channels: { mattermost: { accounts: { "alice-coach": null } } },
+        channels: {
+          mattermost: {
+            accounts: {
+              "alice-coach": null,
+              "alice-proj-orbit": null,
+            },
+          },
+        },
       });
       expect(args.buildReplacePaths?.(current)).toEqual([
         "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+        "channels.mattermost.accounts.alice-proj-orbit.groupAllowFrom",
       ]);
       return { mode: "rpc", attempts: 1 };
     });
@@ -1130,7 +1140,7 @@ describe("broker adapter malformed coach identity quarantine", () => {
     expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
     expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
       expect.any(String),
-      { remove: ["alice-coach"], removePrefixes: [] },
+      { remove: ["alice-coach"], removePrefixes: ["alice-proj-"] },
     );
   });
 

@@ -17,13 +17,13 @@ vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => ({
 
 import { quarantineMalformedCoachMattermostAccount } from "../lib/mattermost-coach-quarantine.js";
 
-describe("malformed workspace coach quarantine", () => {
+describe("malformed customer Mattermost account quarantine", () => {
   beforeEach(() => {
     mocks.applyConfigPatch.mockClear();
     mocks.updateMattermostAccountSecrets.mockClear();
   });
 
-  it("deletes only the workspace coach account before removing its credential", async () => {
+  it("deletes the customer's workspace and project accounts before removing their credentials", async () => {
     mocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const current = {
         channels: {
@@ -31,15 +31,25 @@ describe("malformed workspace coach quarantine", () => {
             accounts: {
               "alice-coach": { groupPolicy: "open", groupAllowFrom: ["guest"] },
               "alice-proj-orbit": { groupPolicy: "allowlist", groupAllowFrom: ["member"] },
+              "bob-coach": { groupPolicy: "open", groupAllowFrom: ["bob"] },
+              "bob-proj-map": { groupPolicy: "open", groupAllowFrom: ["bob"] },
             },
           },
         },
       };
       expect(args.buildPatch(current)).toEqual({
-        channels: { mattermost: { accounts: { "alice-coach": null } } },
+        channels: {
+          mattermost: {
+            accounts: {
+              "alice-coach": null,
+              "alice-proj-orbit": null,
+            },
+          },
+        },
       });
       expect(args.buildReplacePaths?.(current)).toEqual([
         "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+        "channels.mattermost.accounts.alice-proj-orbit.groupAllowFrom",
       ]);
       return { mode: "rpc", attempts: 1 };
     });
@@ -53,7 +63,7 @@ describe("malformed workspace coach quarantine", () => {
 
     expect(mocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
       expect.any(String),
-      { remove: ["alice-coach"], removePrefixes: [] },
+      { remove: ["alice-coach"], removePrefixes: ["alice-proj-"] },
     );
     expect(mocks.applyConfigPatch.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.updateMattermostAccountSecrets.mock.invocationCallOrder[0]!,
