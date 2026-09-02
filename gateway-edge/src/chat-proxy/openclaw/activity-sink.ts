@@ -39,6 +39,7 @@ const UPLOAD_RESULT_UNKNOWN = "upload-result-unknown" as const;
 export interface ActivitySinkBinding {
   mainChannelId: string;
   channelCreateAt: number;
+  coachMmUserId: string;
   attentionMention: string;
 }
 
@@ -469,7 +470,9 @@ class ActivitySinkWriter implements ActivitySink {
       !post ||
       post.id !== envelope.ref.mainRootPostId ||
       post.channelId !== binding.mainChannelId ||
-      post.rootId !== ""
+      post.rootId !== "" ||
+      !post.userId ||
+      post.userId === binding.coachMmUserId
     ) {
       throw new ActivitySinkIntegrityError("main thread root failed exact Mattermost verification");
     }

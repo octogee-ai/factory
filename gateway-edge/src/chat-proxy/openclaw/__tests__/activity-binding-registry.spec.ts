@@ -23,7 +23,7 @@ const ref: AgentActivityIngressRef = {
   semanticVersion: 1,
 };
 
-function harness() {
+function harness(maxBindings?: number) {
   const resolveAgentIdentity = vi.fn(async () => ({
     agentId: ref.agentId,
     uid: "uid-1",
@@ -52,7 +52,7 @@ function harness() {
     resolveConversationTarget,
     resolveDirectConversationTarget,
     verifyChannel: vi.fn(async () => 123),
-  });
+  }, maxBindings);
   return { registry, resolveAgentIdentity, resolveConversationTarget, resolveDirectConversationTarget };
 }
 
@@ -66,8 +66,34 @@ describe("same-channel Activity binding registry", () => {
     })).resolves.toMatchObject({
       runId: "run-1",
       mainChannelId: "channel-1",
+      coachMmUserId: AGENT_MM_USER_ID,
       coachToken: "pat-1",
     });
+  });
+
+  it("releases a finalized binding and re-resolves an exact replay from authoritative facts", async () => {
+    const { registry, resolveAgentIdentity } = harness();
+    const first = await registry.resolve(ref);
+
+    registry.releaseRun(ref.runId);
+
+    await expect(registry.resolveRun(ref.runId)).resolves.toBeNull();
+    await expect(registry.resolve(ref)).resolves.toEqual(first);
+    expect(resolveAgentIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds abandoned and concurrent run bindings with least-recently-used eviction", async () => {
+    const { registry } = harness(2);
+    const run = (runId: string): AgentActivityIngressRef => ({ ...ref, runId });
+
+    await registry.resolve(run("run-1"));
+    await registry.resolve(run("run-2"));
+    await registry.resolveRun("run-1");
+    await registry.resolve(run("run-3"));
+
+    await expect(registry.resolveRun("run-1")).resolves.not.toBeNull();
+    await expect(registry.resolveRun("run-2")).resolves.toBeNull();
+    await expect(registry.resolveRun("run-3")).resolves.not.toBeNull();
   });
 
   it("rejects an unthreaded Mattermost session even when an input post is supplied", async () => {

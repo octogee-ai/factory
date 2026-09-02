@@ -73,7 +73,7 @@ function mmClient(): ActivityMattermostClient {
   let next = 0;
   const posts = new Map<string, ActivityMattermostPost>([[
     "turn-1",
-    { id: "turn-1", channelId: "main-1", rootId: "", props: {}, fileIds: [] },
+    { id: "turn-1", channelId: "main-1", rootId: "", userId: "builder-1", props: {}, fileIds: [] },
   ]]);
   const client: ActivityMattermostClient = {
     createPost: vi.fn(async () => ({ id: `post-${++next}` })),
@@ -111,6 +111,7 @@ function mmClient(): ActivityMattermostClient {
 const binding = {
   mainChannelId: "main-1",
   channelCreateAt: 100,
+  coachMmUserId: "agent-1",
   attentionMention: "@builder",
 };
 
@@ -261,6 +262,47 @@ describe("attention-aware Activity sink", () => {
       },
       silent: true,
     }));
+  });
+
+  it("rejects a physical thread root authored by the managed Agent Mattermost account", async () => {
+    const mm = mmClient();
+    vi.mocked(mm.getPost).mockResolvedValueOnce({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      userId: binding.coachMmUserId,
+      props: {},
+      fileIds: [],
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+
+    await expect(sink.append({ envelope: envelope("turn.started"), binding }))
+      .rejects.toThrow("main thread root failed exact Mattermost verification");
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("rejects a physical thread root without a Mattermost author identity", async () => {
+    const mm = mmClient();
+    vi.mocked(mm.getPost).mockResolvedValueOnce({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      props: {},
+      fileIds: [],
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+
+    await expect(sink.append({ envelope: envelope("turn.started"), binding }))
+      .rejects.toThrow("main thread root failed exact Mattermost verification");
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 
   it("marshals exact subagent lineage as structured Mattermost props", async () => {

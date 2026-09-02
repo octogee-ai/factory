@@ -79,9 +79,28 @@ const binding = {
   inputPostId: "turn-1",
   channelDocPath: "workspaces/acme/channels/build",
   channelCreateAt: 100,
+  coachMmUserId: "agent-mm-user",
   coachToken: "coach-token",
   attentionMention: "@builder",
 };
+
+function finalizedEnvelope(): AgentActivityEnvelopeV1 {
+  const value = validEnvelope();
+  const ref = {
+    ...value.ref,
+    itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized,
+    ordinal: 2,
+  };
+  return {
+    schemaVersion: value.schemaVersion,
+    eventKey: createHash("sha256").update(agentActivityCanonicalKey(ref)).digest("hex"),
+    emittedAt: value.emittedAt,
+    ref,
+    redaction: value.redaction,
+    type: "turn.finalized",
+    outcome: "completed",
+  };
+}
 
 describe("normalized Activity intake", () => {
   it("parses every exact W1 envelope fixture without widening its v1 union", () => {
@@ -237,6 +256,65 @@ describe("normalized Activity intake", () => {
         activityRootPostId: "activity-root-1",
       },
     });
+  });
+
+  it("releases a run binding only after an acknowledged finalization commit", async () => {
+    const envelope = finalizedEnvelope();
+    const releaseRun = vi.fn();
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: [],
+      receipt: {
+        eventKey: envelope.eventKey,
+        activityRootPostId: "activity-root-1",
+      },
+    }));
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: {
+          readiness: () => "ready",
+          resolve: vi.fn(async () => binding),
+          resolveRun: vi.fn(),
+          releaseRun,
+        },
+        sinkFor: vi.fn(() => ({ append })),
+      },
+    )).resolves.toMatchObject({ status: 201, body: { postIds: [] } });
+
+    expect(releaseRun).toHaveBeenCalledOnce();
+    expect(releaseRun).toHaveBeenCalledWith(envelope.ref.runId);
+  });
+
+  it("retains a run binding when finalization acknowledgement verification fails", async () => {
+    const envelope = finalizedEnvelope();
+    const releaseRun = vi.fn();
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: {
+          readiness: () => "ready",
+          resolve: vi.fn(async () => binding),
+          resolveRun: vi.fn(),
+          releaseRun,
+        },
+        sinkFor: vi.fn(() => ({
+          append: vi.fn(async () => ({
+            outcome: "persisted" as const,
+            postIds: ["unexpected-post"],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: "unexpected-post",
+              activityRootPostId: "activity-root-1",
+            },
+          })),
+        })),
+      },
+    )).rejects.toMatchObject({ status: 503, code: "activity_integrity_failure" });
+
+    expect(releaseRun).not.toHaveBeenCalled();
   });
 
   it("returns 401 for non-loopback sockets without consulting the registry", async () => {

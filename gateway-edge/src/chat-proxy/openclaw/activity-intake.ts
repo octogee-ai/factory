@@ -93,6 +93,7 @@ export interface ActiveActivityRunBinding {
   inputPostId?: string;
   channelDocPath: string;
   channelCreateAt: number;
+  coachMmUserId: string;
   coachToken: string;
   attentionMention: string;
 }
@@ -101,6 +102,7 @@ export interface ActivityRuntimeRegistry {
   readiness(): "unsynchronized" | "ready";
   resolve(ref: AgentActivityIngressRef): Promise<ActiveActivityRunBinding | null>;
   resolveRun(runId: string): Promise<ActiveActivityRunBinding | null>;
+  releaseRun(runId: string): void;
 }
 
 export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
@@ -117,6 +119,10 @@ export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
 
   async resolveRun(runId: string): Promise<ActiveActivityRunBinding | null> {
     return this.bindings.get(runId) ?? null;
+  }
+
+  releaseRun(runId: string): void {
+    this.bindings.delete(runId);
   }
 
   beginSynchronization(): void {
@@ -170,6 +176,7 @@ export function freezeActiveActivityRunBinding(
     "mainChannelId",
     "mainRootPostId",
     "channelDocPath",
+    "coachMmUserId",
     "coachToken",
     "attentionMention",
   ] as const) {
@@ -654,6 +661,9 @@ export async function processActivityIntake(
       itemId: envelope.ref.itemId,
     });
     assertActivityAcknowledgement(result, envelope, frozenBinding);
+    if (envelope.type === "turn.finalized") {
+      deps.registry.releaseRun(envelope.ref.runId);
+    }
     try {
       deps.onPersisted?.({
         envelope,

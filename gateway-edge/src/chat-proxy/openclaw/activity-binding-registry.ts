@@ -7,6 +7,8 @@ import {
 import type { AgentIdentity, AuthorizedConversationTarget } from "./activity-runtime-types.js";
 import { parseMattermostSessionRoute } from "./mattermost-session-route.js";
 
+const DEFAULT_MAX_BINDINGS = 1_024;
+
 export interface ActivityBindingRegistryDeps {
   resolveAgentIdentity(agentId: string): Promise<AgentIdentity | null>;
   resolveConversationTarget(
@@ -165,6 +167,7 @@ function authoritativeTarget(
   const channelTarget = isAuthoritativePrivateTarget(route, target);
   return (
     identity.agentId === ref.agentId &&
+    nonBlank(identity.coachMmUserId) &&
     nonBlank(identity.coachToken) &&
     nonBlank(identity.workspaceSlug) &&
     target.primaryChannelId === ref.mainChannelId &&
@@ -198,12 +201,34 @@ function isAuthoritativePrivateTarget(
 
 export function createActivityBindingRegistry(
   deps: ActivityBindingRegistryDeps,
+  maxBindings = DEFAULT_MAX_BINDINGS,
 ): ActivityRuntimeRegistry {
+  if (!Number.isSafeInteger(maxBindings) || maxBindings < 1) {
+    throw new Error("Activity binding cache size must be a positive safe integer");
+  }
   const bindings = new Map<string, Readonly<ActiveActivityRunBinding>>();
+
+  const readBinding = (runId: string): Readonly<ActiveActivityRunBinding> | null => {
+    const binding = bindings.get(runId);
+    if (!binding) return null;
+    bindings.delete(runId);
+    bindings.set(runId, binding);
+    return binding;
+  };
+
+  const storeBinding = (binding: Readonly<ActiveActivityRunBinding>): void => {
+    bindings.set(binding.runId, binding);
+    while (bindings.size > maxBindings) {
+      const oldestRunId = bindings.keys().next().value as string | undefined;
+      if (!oldestRunId) break;
+      bindings.delete(oldestRunId);
+    }
+  };
+
   return {
     readiness: () => "ready",
     async resolve(ref) {
-      const existing = bindings.get(ref.runId);
+      const existing = readBinding(ref.runId);
       if (existing) return existing;
       if (!validRoute(ref)) return null;
       const identity = await deps.resolveAgentIdentity(ref.agentId);
@@ -232,14 +257,18 @@ export function createActivityBindingRegistry(
         ...(ref.inputPostId ? { inputPostId: ref.inputPostId } : {}),
         channelDocPath: target.channelDocPath,
         channelCreateAt,
+        coachMmUserId: identity.coachMmUserId,
         coachToken: identity.coachToken,
         attentionMention: `@${identity.workspaceSlug}`,
       });
-      bindings.set(binding.runId, binding);
+      storeBinding(binding);
       return binding;
     },
     async resolveRun(runId) {
-      return bindings.get(runId) ?? null;
+      return readBinding(runId);
+    },
+    releaseRun(runId) {
+      bindings.delete(runId);
     },
   };
 }
