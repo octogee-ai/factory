@@ -41,7 +41,7 @@ describe("Builder tool groups", () => {
       "@sparticuz/chromium": "149.0.0",
       "firebase-tools": "15.28.2",
       "npm-check-updates": "23.1.0",
-      "pnpm": "11.24.0",
+      "pnpm": "12.0.0",
       "tsx": "4.23.13",
       "typescript": "7.0.2",
     });

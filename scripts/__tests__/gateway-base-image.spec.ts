@@ -116,13 +116,14 @@ describe("gateway base image", () => {
       "@sparticuz/chromium": "149.0.0",
       "firebase-tools": "15.28.2",
       "npm-check-updates": "23.1.0",
-      "pnpm": "11.24.0",
+      "pnpm": "12.0.0",
       "tsx": "4.23.13",
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
       "@anthropic-ai/claude-code@2.1.251": true,
       "esbuild@0.28.2": true,
+      "pnpm@12.0.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     });

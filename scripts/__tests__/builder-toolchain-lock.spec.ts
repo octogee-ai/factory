@@ -45,7 +45,7 @@ const NPM_PACKAGES = {
   "@sparticuz/chromium": "149.0.0",
   "firebase-tools": "15.28.2",
   "npm-check-updates": "23.1.0",
-  "pnpm": "11.24.0",
+  "pnpm": "12.0.0",
   "tsx": "4.23.13",
   "typescript": "5.9.3",
 };
@@ -78,7 +78,7 @@ function groupsFixture(): BuilderToolGroups {
         npmPackages: {
           "firebase-tools": "15.28.2",
           "npm-check-updates": "23.1.0",
-          "pnpm": "11.24.0",
+          "pnpm": "12.0.0",
           "tsx": "4.23.13",
           "typescript": "5.9.3",
         },
@@ -124,6 +124,7 @@ function lockFixture(): Record<string, unknown> {
           version,
           resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
           integrity: "sha512-Y2FjaGVk",
+          ...(name === "pnpm" ? { hasInstallScript: true } : {}),
         }])),
       "node_modules/esbuild": {
         version: "0.28.2",
@@ -162,6 +163,7 @@ async function writePinnedInputs(home: string): Promise<{
     allowScripts: {
       "@anthropic-ai/claude-code@2.1.251": true,
       "esbuild@0.28.2": true,
+      "pnpm@12.0.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     },
@@ -322,14 +324,18 @@ describe("Builder npm toolchain lock", () => {
     expect(installDependencies).not.toHaveBeenCalled();
   });
 
-  it("requires the exact pinned Claude postinstall approval before invoking npm", async () => {
+  it.each([
+    ["@anthropic-ai/claude-code", "2.1.251"],
+    ["pnpm", "12.0.0"],
+  ])("requires the exact pinned %s install approval before invoking npm", async (name, version) => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
     const pin = await writePinnedInputs(home);
     const packageJson = JSON.parse(await fs.readFile(pin.packageJsonPath, "utf8")) as {
-      allowScripts?: Record<string, boolean>;
+      allowScripts: Record<string, boolean>;
     };
-    packageJson.allowScripts = { "@anthropic-ai/claude-code": true };
+    delete packageJson.allowScripts[`${name}@${version}`];
+    packageJson.allowScripts[name] = true;
     await fs.writeFile(pin.packageJsonPath, `${JSON.stringify(packageJson)}\n`);
     const installDependencies = vi.fn(fakeInstall);
 
