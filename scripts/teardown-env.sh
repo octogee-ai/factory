@@ -125,7 +125,7 @@ case "$ENV" in
     ;;
 esac
 case "$TARGET_ID" in
-  prod-central|test-central|build-week-central) ;;
+  prod-central|test-central) ;;
   *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
 esac
 SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"

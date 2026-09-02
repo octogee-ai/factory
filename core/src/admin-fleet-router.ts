@@ -2008,7 +2008,7 @@ const ERR_BUILDER_MIGRATION_IN_FLIGHT =
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
-  (["prod", "test", "build-week"] as const).flatMap((environment) =>
+  (["prod", "test"] as const).flatMap((environment) =>
     deploymentTargetsForEnvironment(environment).map(
       (target) => `${target.artifactRegistryRepository}/`,
     ),

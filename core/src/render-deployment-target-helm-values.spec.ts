@@ -67,7 +67,6 @@ describe("deployment target Helm values", () => {
   it.each([
     ["prod-central", "workspace-api-ip", "mattermost-ip", "gitea-ip", "preview-ip"],
     ["test-central", "workspace-api-ip-test", "mattermost-ip-test", "gitea-ip-test", "preview-ip-test"],
-    ["build-week-central", "workspace-api-ip-build-week", "mattermost-ip-build-week", "gitea-ip-build-week", "preview-ip-build-week"],
   ])(
     "renders the canonical ingress identities for %s",
     (targetId, edge, mattermost, gitea, preview) => {
@@ -83,7 +82,7 @@ describe("deployment target Helm values", () => {
     },
   );
 
-  it.each(["prod-central", "test-central", "build-week-central"])(
+  it.each(["prod-central", "test-central"])(
     "renders the exact central project runner API-server destinations for %s",
     (targetId) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
@@ -93,7 +92,7 @@ describe("deployment target Helm values", () => {
     },
   );
 
-  it.each(["prod-central", "test-central", "build-week-central"])(
+  it.each(["prod-central", "test-central"])(
     "emits no platform compute class for %s",
     (targetId) => {
       expect(renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId)))

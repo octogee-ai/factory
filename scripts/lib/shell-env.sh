@@ -101,7 +101,7 @@ configured_stripe_price_ids_value() {
 posthog_cloud_required_for_env() {
   case "$1" in
     test|prod) return 0 ;;
-    build-week|custom) return 1 ;;
+    custom) return 1 ;;
     *) return 1 ;;
   esac
 }
@@ -133,7 +133,7 @@ validate_stripe_secret_key_mode() {
   local key="$2"
   case "$env" in
     prod) [[ "$key" == sk_live_?* ]] ;;
-    test|build-week|custom) [[ "$key" == sk_test_?* ]] ;;
+    test|custom) [[ "$key" == sk_test_?* ]] ;;
     *) return 1 ;;
   esac
 }

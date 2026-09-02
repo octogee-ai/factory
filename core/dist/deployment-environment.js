@@ -2,7 +2,6 @@ import deploymentTargetsDocument from "./deployment-targets.json" with { type: "
 const DEPLOYMENT_ENVIRONMENTS = [
     "prod",
     "test",
-    "build-week",
 ];
 const TARGET_LIFECYCLES = [
     "active",
@@ -200,9 +199,8 @@ export function validateDeploymentTargetsDocument(document) {
         if (target.environment !== environment) {
             throw new Error(`Active deployment target ${targetId} belongs to ${String(target.environment)}`);
         }
-        const expectedLifecycle = environment === "build-week" ? "frozen" : "active";
-        if (target.lifecycle !== expectedLifecycle) {
-            throw new Error(`Active deployment target ${targetId} must be ${expectedLifecycle}`);
+        if (target.lifecycle !== "active") {
+            throw new Error(`Active deployment target ${targetId} must be active`);
         }
     }
 }
@@ -266,7 +264,6 @@ const ENVIRONMENTS = Object.fromEntries(DEPLOYMENT_ENVIRONMENTS.map((environment
     environment,
     TARGETS[MANIFEST.activeTargets[environment]],
 ]));
-export const BUILD_WEEK_ENVIRONMENT = ENVIRONMENTS["build-week"];
 export function deploymentEnvironmentSettings(environment) {
     return ENVIRONMENTS[environment];
 }

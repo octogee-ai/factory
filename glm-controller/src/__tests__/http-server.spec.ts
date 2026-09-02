@@ -537,17 +537,6 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.headers["vary"]).toContain("Origin");
   });
 
-  it("sets CORS headers for the isolated Build Week app", async () => {
-    const app = createHttpServer(buildDeps(store));
-    const res = await request(app)
-      .get("/healthz")
-      .set("Origin", "https://app-octogee-build-week.web.app");
-    expect(res.status).toBe(200);
-    expect(res.headers["access-control-allow-origin"]).toBe(
-      "https://app-octogee-build-week.web.app",
-    );
-  });
-
   it("answers OPTIONS preflight with 204 + CORS headers (no auth needed)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
@@ -569,11 +558,14 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.headers["access-control-allow-methods"]).toContain("PATCH");
   });
 
-  it("does not set CORS headers for disallowed origins", async () => {
+  it.each([
+    "https://evil.example.com",
+    "https://app-octogee-build-week.web.app",
+  ])("does not set CORS headers for disallowed origin %s", async (origin) => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
       .get("/healthz")
-      .set("Origin", "https://evil.example.com");
+      .set("Origin", origin);
     expect(res.status).toBe(200);
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });

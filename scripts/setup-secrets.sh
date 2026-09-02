@@ -56,11 +56,11 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --phase=*)     SECRET_SETUP_PHASE="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
-    --help|-h) echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 0 ;;
+    --help|-h) echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--phase=bootstrap|launch] [--yes]"; exit 1; }
 case "$SECRET_SETUP_PHASE" in
   bootstrap|launch) ;;
   *) echo "--phase must be bootstrap or launch"; exit 1 ;;
@@ -97,11 +97,6 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     NS_SLUG="test"
     ;;
-  build-week)
-    ENV_FILE="$REPO_DIR/.env.build-week"
-    ENV_LABEL="🟣 BUILD WEEK"
-    NS_SLUG="build_week"
-    ;;
   custom)
     # Ephemeral/feature namespaces sharing the octogee-test Firebase project.
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
@@ -118,7 +113,7 @@ case "$ENV" in
 esac
 if [[ "$ENV" != "custom" ]]; then
   case "$TARGET_ID" in
-    prod-central|test-central|build-week-central) ;;
+    prod-central|test-central) ;;
     *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
   esac
 fi
@@ -867,7 +862,7 @@ rm -f "$FLEET_PRIVATE_TMP" "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"
 # Gateway IDs by env (match helm/octogee/values.{test,prod}.yaml):
 info "gateway-auth-token (Secret Manager, per-gatewayId)"
 case "$ENV" in
-  prod|test|build-week|custom)
+  prod|test|custom)
     GATEWAY_IDS=("shared-a" "shared-b" "shared-c" "shared-d")
     ;;
 esac

@@ -63,13 +63,6 @@ function runVerifier(options: RunOptions = {}) {
           clusterName: "octogee-gateway",
           namespace: "octogee-test",
         },
-        "build-week-central": {
-          lifecycle: "frozen",
-          clusterProjectId: "octogee",
-          region: "us-central1",
-          clusterName: "octogee-gateway",
-          namespace: "octogee-build-week",
-        },
       },
     }),
   );
@@ -107,7 +100,7 @@ case "$1 $2 $3" in
     fi
     ;;
   "monitoring policies list")
-    query='max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"us-central1", cluster=~"octogee-gateway", alertstate="firing", severity="critical", namespace!~"octogee-build-week"})'
+    query='max by (alertname, severity, location, namespace, gateway_id) (ALERTS{project_id="octogee", location=~"us-central1", cluster=~"octogee-gateway", alertstate="firing", severity="critical"})'
     warning="\${query/critical/warning}"
     channels='["projects/octogee/notificationChannels/email"]'
     critical_severity=CRITICAL

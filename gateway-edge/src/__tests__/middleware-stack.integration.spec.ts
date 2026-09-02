@@ -74,11 +74,14 @@ describe('gateway-edge middleware stack', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('does not set allow-origin header for disallowed origin', async () => {
+  it.each([
+    'https://evil.example.com',
+    'https://app-octogee-build-week.web.app',
+  ])('does not set allow-origin header for disallowed origin %s', async (origin) => {
     const app = createSidecarApp();
     const res = await request(app)
       .get('/health')
-      .set('Origin', 'https://evil.example.com');
+      .set('Origin', origin);
 
     expect(res.status).toBe(200);
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
@@ -93,18 +96,6 @@ describe('gateway-edge middleware stack', () => {
 
     expect(res.status).toBe(204);
     expect(res.headers['access-control-allow-origin']).toBe('https://octogee.web.app');
-  });
-
-  it('allows the isolated Build Week app origin', async () => {
-    const app = createSidecarApp();
-    const res = await request(app)
-      .get('/health')
-      .set('Origin', 'https://app-octogee-build-week.web.app');
-
-    expect(res.status).toBe(200);
-    expect(res.headers['access-control-allow-origin']).toBe(
-      'https://app-octogee-build-week.web.app',
-    );
   });
 
   it('exposes metrics endpoint', async () => {

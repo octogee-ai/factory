@@ -39,8 +39,12 @@ describe('sanitizeReturnUrl — existing contract pins', () => {
     expect(sanitizeReturnUrl('//evil.com/x')).toBe('/dashboard');
   });
 
-  it('rejects offsite absolute URLs', () => {
-    expect(sanitizeReturnUrl('https://evil.com/phish')).toBe('/dashboard');
+  it.each([
+    'https://evil.com/phish',
+    'https://app-octogee-build-week.web.app/dashboard',
+    'https://octogee-build-week.web.app/dashboard',
+  ])('rejects offsite absolute URL %s', (url) => {
+    expect(sanitizeReturnUrl(url)).toBe('/dashboard');
   });
 
   it('rejects backslash-prefixed protocol-relative bypasses', () => {
@@ -48,14 +52,6 @@ describe('sanitizeReturnUrl — existing contract pins', () => {
     expect(sanitizeReturnUrl('/\\\\evil.com')).toBe('/dashboard');
   });
 
-  it('allows the isolated Build Week app and site origins', () => {
-    expect(sanitizeReturnUrl('https://app-octogee-build-week.web.app/@me')).toBe(
-      'https://app-octogee-build-week.web.app/@me',
-    );
-    expect(sanitizeReturnUrl('https://octogee-build-week.web.app/dashboard')).toBe(
-      'https://octogee-build-week.web.app/dashboard',
-    );
-  });
 });
 
 describe('sanitizeReturnUrl — localhost is gated out of production builds', () => {

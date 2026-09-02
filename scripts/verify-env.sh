@@ -87,14 +87,14 @@ for arg in "$@"; do
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --fix)         FIX=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
+      echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
       exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 if [[ -z "$ENV" ]]; then
-  echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
+  echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--fix]"
   exit 1
 fi
 
@@ -131,10 +131,6 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     ENV_COLOR="$YELLOW"
     ;;
-  build-week)
-    ENV_LABEL="🟣 BUILD WEEK"
-    ENV_COLOR="$BLUE"
-    ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
@@ -144,7 +140,7 @@ case "$ENV" in
     TARGET_ARG=""
     ;;
   *)
-    echo "Unknown environment: $ENV (use prod, test, build-week, or custom)"
+    echo "Unknown environment: $ENV (use prod, test, or custom)"
     exit 1 ;;
 esac
 

@@ -16,7 +16,6 @@ set -euo pipefail
 # Usage:
 #   ./scripts/setup-gitea.sh --env=test [--yes]
 #   ./scripts/setup-gitea.sh --env=prod
-#   ./scripts/setup-gitea.sh --env=build-week
 # ═══════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -50,14 +49,14 @@ for arg in "$@"; do
     --confirm-platform-migration=*) CONFIRM_PLATFORM_MIGRATION="${arg#*=}" ;;
     --yes|-y)      YES=true ;;
     --help|-h)
-      echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--migration-quiesced --confirm-platform-migration=TARGET] [--yes]"
+      echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--migration-quiesced --confirm-platform-migration=TARGET] [--yes]"
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|build-week|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 1; }
+[[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--yes]"; exit 1; }
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
@@ -89,11 +88,6 @@ case "$ENV" in
     ENV_LABEL="🟡 TEST"
     GITEA_SVC="octogee-gitea-http"
     ;;
-  build-week)
-    ENV_FILE="$REPO_DIR/.env.build-week"
-    ENV_LABEL="🟣 BUILD WEEK"
-    GITEA_SVC="octogee-gitea-http"
-    ;;
   custom)
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
@@ -108,7 +102,7 @@ case "$ENV" in
 esac
 if [[ "$ENV" != "custom" ]]; then
   case "$TARGET_ID" in
-    prod-central|test-central|build-week-central) ;;
+    prod-central|test-central) ;;
     *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
   esac
 fi

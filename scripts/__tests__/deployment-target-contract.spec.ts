@@ -65,10 +65,8 @@ describe("deployment target consumers", () => {
     expect(targets.activeTargets).toEqual({
       prod: "prod-central",
       test: "test-central",
-      "build-week": "build-week-central",
     });
     expect(Object.keys(targets.targets).sort()).toEqual([
-      "build-week-central",
       "prod-central",
       "test-central",
     ]);
@@ -175,9 +173,8 @@ describe("deployment target consumers", () => {
     const gateway = source(".github/workflows/gateway-build-operator-base.yml");
 
     expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST");
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_BUILD_WEEK");
     expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_BUILD_WEEK");
+    expect(workflow).not.toContain("BUILD_WEEK");
     expect(workflow).toContain("firebase-deployer@${{ steps.target.outputs.firebase_project_id }}.iam.gserviceaccount.com");
     expect(gateway).not.toContain("firebase-deployer@");
     expect(workflow).not.toContain("FIREBASE_DEPLOYER_KEY");
@@ -399,7 +396,7 @@ describe("deployment target consumers", () => {
     expect(workflow).toContain("reconcile-pvc-snapshot-schedules.sh");
     expect(workflow).toContain("--target=${{ steps.target.outputs.target_id }}");
     expect(workflow).toContain("--apply");
-    expect(workflow).toContain("needs.build.outputs.env != 'build-week'");
+    expect(workflow).not.toContain("needs.build.outputs.env !=");
     expect(workflow).not.toContain("steps.target.outputs.region == 'us-west1'");
   });
 
@@ -444,7 +441,7 @@ describe("deployment target consumers", () => {
     ]) {
       const contents = source(script);
       expect(contents, script).toContain(
-        "prod-central|test-central|build-week-central) ;;",
+        "prod-central|test-central) ;;",
       );
       expect(contents, script).toContain(
         '*) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;',

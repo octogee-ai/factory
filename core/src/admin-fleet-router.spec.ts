@@ -57,11 +57,17 @@ describe("resolveFleetDeploymentSettings", () => {
     });
   });
 
-  it("uses an explicit target override regardless of the active pointer", () => {
-    expect(resolveFleetDeploymentSettings("octogee-build-week", "build-week-central")).toMatchObject({
-      targetId: "build-week-central",
+  it("accepts an explicit target matching the runtime namespace", () => {
+    expect(resolveFleetDeploymentSettings("octogee", "prod-central")).toMatchObject({
+      targetId: "prod-central",
       artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
     });
+  });
+
+  it("rejects an explicit target from another runtime namespace", () => {
+    expect(() => resolveFleetDeploymentSettings("octogee-test", "prod-central")).toThrow(
+      "Deployment target prod-central belongs to namespace octogee, not octogee-test",
+    );
   });
 
   it("fails closed for a namespace outside the deployment contract", () => {

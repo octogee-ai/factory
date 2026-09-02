@@ -1240,7 +1240,7 @@ const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ERR_BUILDER_MIGRATION_IN_FLIGHT = "a migration for this customer is pending or running";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
-const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test", "build-week"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
+const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
     "octogee-gateway",
     "gateway-edge",

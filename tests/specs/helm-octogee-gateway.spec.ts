@@ -105,7 +105,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     const values = (file: string): { env?: { builderNpmProxyRegistry?: string } } =>
       parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf8")).toJS();
 
-    for (const file of ["values.yaml", "values.prod.yaml", "values.test.yaml", "values.build-week.yaml"]) {
+    for (const file of ["values.yaml", "values.prod.yaml", "values.test.yaml"]) {
       expect(values(file).env?.builderNpmProxyRegistry).toBeUndefined();
     }
   });
