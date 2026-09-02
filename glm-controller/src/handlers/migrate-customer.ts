@@ -12,6 +12,7 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
@@ -28,6 +29,7 @@ import {
 } from "@octogee/core/fleet-migration-runner";
 import {
   decideRollStateMigration,
+  openclawVersionFromGatewayImageTag,
   type RollStateMigrationDecision,
 } from "../roll-state-migration.js";
 
@@ -65,6 +67,11 @@ export interface MigrateCustomerDeps {
 
   /** The openclaw version a live gateway reports through its heartbeat. */
   readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
+
+  readGatewayReleaseArtifact: (
+    gatewayId: string,
+    release: number,
+  ) => Promise<GatewayArtifact | null>;
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
@@ -683,13 +690,19 @@ async function initializeProvisionFreshV2(
       state: "quiescing",
     },
   };
-  if (scopeChanged && state.phase !== "cutover" && state.phase !== "sourceRetired") {
+  const revalidation = await revalidateResumedProvisionFresh(execution);
+  if (revalidation) return revalidation;
+  if (
+    scopeChanged &&
+    execution.state.phase !== "cutover" &&
+    execution.state.phase !== "sourceRetired"
+  ) {
     return abortProvisionFreshV2(
       execution,
       new Error("durable provision-fresh migration input changed"),
     );
   }
-  if (state.phase === "initialized") {
+  if (execution.state.phase === "initialized") {
     deps.log(
       `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
       "provision-fresh (durable fenced cutover)",
@@ -745,6 +758,72 @@ async function abortProvisionFreshV2(
     error: errorMessage(error),
     rolledBack: true,
   };
+}
+
+function provisionFreshPhaseNeedsRevalidation(
+  phase: CustomerMigrationV2State["phase"],
+): boolean {
+  return phase === "initialized" ||
+    phase === "freshSourceQuiesced" ||
+    phase === "freshCutoverReady";
+}
+
+async function freshCutoverOwnership(
+  execution: ProvisionFreshV2Execution,
+): Promise<"source" | "target" | OperationResult> {
+  const { deps } = execution.input;
+  const state = execution.state;
+  let currentUser: UserGatewayInfo | null;
+  try {
+    currentUser = await deps.readUser(state.uid);
+  } catch (error) {
+    return failure(v2RetryError(error), false);
+  }
+  if (currentUser === null || currentUser.slug !== state.slug) {
+    return failure(v2RetryError(
+      new Error("cannot verify fresh cutover ownership"),
+    ), false);
+  }
+  if (currentUser.currentGatewayId === state.targetGatewayId) return "target";
+  if (currentUser.currentGatewayId === state.sourceGatewayId) return "source";
+  return failure(v2RetryError(
+    new Error(
+      `fresh cutover ownership moved to unexpected gateway ` +
+      currentUser.currentGatewayId,
+    ),
+  ), false);
+}
+
+async function revalidateResumedProvisionFresh(
+  execution: ProvisionFreshV2Execution,
+): Promise<OperationResult | null> {
+  const { deps, op, targets } = execution.input;
+  const state = execution.state;
+  if (
+    op.customerMigrationV2 === undefined ||
+    !provisionFreshPhaseNeedsRevalidation(state.phase)
+  ) {
+    return null;
+  }
+  if (state.phase === "freshCutoverReady") {
+    const ownership = await freshCutoverOwnership(execution);
+    if (typeof ownership !== "string") return ownership;
+    if (ownership === "target") {
+      return advanceProvisionFreshCutoverReady(execution);
+    }
+  }
+  try {
+    const decision = await decideCustomerStateMigration(deps, targets);
+    if (decision.strategy === PROVISION_FRESH) return null;
+    return abortProvisionFreshV2(
+      execution,
+      new Error(
+        "fenced openclaw identity no longer authorizes provision-fresh migration",
+      ),
+    );
+  } catch (error) {
+    return abortProvisionFreshV2(execution, error);
+  }
 }
 
 async function provisionFreshSourceClient(
@@ -1275,11 +1354,41 @@ async function decideCustomerStateMigration(
   deps: MigrateCustomerDeps,
   targets: MigrationTargets,
 ): Promise<RollStateMigrationDecision> {
-  const [sourceOpenclawVersion, targetOpenclawVersion] = await Promise.all([
+  const [sourceOpenclawVersion, targetArtifact] = await Promise.all([
     deps.readGatewayOpenclawVersion(targets.fromGatewayId),
-    deps.readGatewayOpenclawVersion(targets.toGatewayId),
+    targets.toRelease === null
+      ? Promise.resolve(null)
+      : deps.readGatewayReleaseArtifact(targets.toGatewayId, targets.toRelease),
   ]);
-  return decideRollStateMigration({ sourceOpenclawVersion, targetOpenclawVersion });
+  if (targetArtifact === null || targets.toRelease === null) {
+    throw new Error(
+      `target gateway ${targets.toGatewayId} has no valid release identity for ` +
+      `${targets.toRelease ?? "unknown"}`,
+    );
+  }
+  const decision = decideRollStateMigration({
+    sourceOpenclawVersion,
+    targetOpenclawVersion: openclawVersionFromGatewayImageTag(targetArtifact.imageTag),
+    targetOpenclawSourceSha: targetArtifact.openclawSourceSha,
+  });
+  if (
+    decision.sourceOpenclawVersion === null ||
+    decision.sourceOpenclawSourceSha === null
+  ) {
+    throw new Error(
+      `source gateway ${targets.fromGatewayId} reports no complete openclaw identity`,
+    );
+  }
+  if (
+    decision.targetOpenclawVersion === null ||
+    decision.targetOpenclawSourceSha === null
+  ) {
+    throw new Error(
+      `target gateway ${targets.toGatewayId} release ${targets.toRelease} ` +
+      "records no complete openclaw identity",
+    );
+  }
+  return decision;
 }
 
 function withStateMigration(

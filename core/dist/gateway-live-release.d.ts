@@ -19,6 +19,7 @@ export declare function configuredBuilderCredentialBootstrapAllowed(value: unkno
 export interface GatewayArtifact {
     imageRepository: string;
     imageTag: string;
+    openclawSourceSha?: string;
     profileImages?: GatewayProfileImages;
     gatewayEdgeImage?: GatewayEdgeImage;
 }

@@ -3035,6 +3035,8 @@ async function buildHandlers(
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
     readGatewayOpenclawVersion: (gatewayId) =>
       readGatewayOpenclawVersionFromFirestore(db, gatewayId),
+    readGatewayReleaseArtifact: (gatewayId, release) =>
+      readGatewayArtifact(db, gatewayId, release),
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         {

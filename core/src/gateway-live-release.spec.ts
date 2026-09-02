@@ -509,7 +509,8 @@ describe("gateway durable configuration authorization", () => {
     });
   });
 
-  it("preserves the builder package receipt when projecting a release artifact", async () => {
+  it("preserves immutable package receipts when projecting and cloning a release artifact", async () => {
+    const openclawSourceSha = "a".repeat(40);
     const profileImages = {
       builder: {
         imageRepository:
@@ -525,14 +526,28 @@ describe("gateway durable configuration authorization", () => {
           imageRepository:
             "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
           imageTag: `deadbee@sha256:${"a".repeat(64)}`,
+          openclawSourceSha,
           profileImages,
         },
       },
     };
 
-    await expect(readGatewayArtifact(database(docs) as never, "bender", 2)).resolves.toMatchObject({
+    const artifact = await readGatewayArtifact(database(docs) as never, "bender", 2);
+    expect(artifact).toEqual({
+      imageRepository:
+        "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
+      imageTag: `deadbee@sha256:${"a".repeat(64)}`,
+      openclawSourceSha,
       profileImages,
     });
+    expect(initialGatewayReleaseDocuments({
+      gatewayId: "clone",
+      config: mutableConfig(),
+      artifact: artifact!,
+      createdBy: "test",
+      now: 42,
+      desiredStatus: "running",
+    }).releaseDoc.payload).toEqual(artifact);
   });
 
   it("reads a hash-verified artifact through the retired Mac schema upgrade", async () => {
