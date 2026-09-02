@@ -28,9 +28,9 @@
 #    Published versions therefore vendor nothing — self-healing, no Dockerfile
 #    change per cycle.
 #
-# @openclaw/mattermost is deliberately NOT vendored here: the fork always
-# patches it, so it ships as its own content-addressed GCS artifact (ceremony
-# Step 7b, _OPENCLAW_MATTERMOST_FORK_SHA) on every slot including dev.
+# @openclaw/mattermost is deliberately NOT vendored here. It ships as its own
+# content-addressed GCS artifact so the exact channel runtime is independently
+# pinned and verified on every slot, including dev.
 #
 # Usage: pack-fork-tarball.sh [FORK_DIR] [OUT_DIR]
 #   FORK_DIR  fork checkout    (default: ~/workspace/openclaw/openclaw)

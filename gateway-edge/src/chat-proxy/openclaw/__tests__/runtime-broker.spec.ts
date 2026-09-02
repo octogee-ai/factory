@@ -60,6 +60,42 @@ describe("redeemOpenClawWs outcome", () => {
   });
 });
 
+describe("direct conversation target outcome", () => {
+  it.each([403, 404])("treats broker HTTP %s as an unavailable target", async (status) => {
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "default",
+      fetchImpl: vi.fn(async () => new Response(
+        JSON.stringify({ error: status === 403 ? "forbidden" : "not_found" }),
+        { headers: { "content-type": "application/json" }, status },
+      )),
+    });
+
+    await expect(broker.resolveDirectConversationTarget(
+      "octogee-bob-coach",
+      "direct-1",
+      "owner-1",
+    )).resolves.toBeNull();
+  });
+
+  it("preserves unexpected broker failures", async () => {
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "default",
+      fetchImpl: vi.fn(async () => new Response(
+        JSON.stringify({ error: "unavailable" }),
+        { headers: { "content-type": "application/json" }, status: 503 },
+      )),
+    });
+
+    await expect(broker.resolveDirectConversationTarget(
+      "octogee-bob-coach",
+      "direct-1",
+      "owner-1",
+    )).rejects.toMatchObject({ status: 503, message: "unavailable" });
+  });
+});
+
 describe("OpenClaw runtime broker env", () => {
   it("adds the sidecar capability only when resolving agent secrets", async () => {
     const calls: Array<{ path: string; credential: string | null }> = [];
@@ -87,6 +123,7 @@ describe("OpenClaw runtime broker env", () => {
 
     await broker.resolveAgentIdentity("octogee-alice-coach");
     await broker.resolveConversationTarget("octogee-alice-coach", "channel-1");
+    await broker.resolveDirectConversationTarget("octogee-alice-coach", "direct-1", "owner-1");
 
     expect(calls).toEqual([
       {
@@ -94,6 +131,7 @@ describe("OpenClaw runtime broker env", () => {
         credential: "credential-jwt",
       },
       { path: "/internal/openclaw/activity/conversation-target", credential: null },
+      { path: "/internal/openclaw/activity/direct-conversation-target", credential: null },
     ]);
   });
 
@@ -125,6 +163,7 @@ describe("OpenClaw runtime broker env", () => {
         redeemOpenClawWs: expect.any(Function),
         getUserGatewayId: expect.any(Function),
         resolveConversationTarget: expect.any(Function),
+        resolveDirectConversationTarget: expect.any(Function),
         activityWriteReceiptsFor: expect.any(Function),
       }),
     );

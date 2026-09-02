@@ -10,7 +10,6 @@ import {
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   agentActivityCanonicalKey,
   type AgentActivityAttachment,
-  type AgentActivityControlTransition,
   type AgentActivityDetail,
   type AgentActivityEnvelopeV1,
   type AgentActivityIngressRef,
@@ -21,7 +20,6 @@ import {
   ActivitySinkConflictError,
   ActivitySinkInvalidAttachmentError,
   ActivitySinkIntegrityError,
-  ActivitySinkStaleControlError,
   ActivitySinkUnavailableError,
   type ActivityAttachmentSource,
   type ActivitySink,
@@ -89,11 +87,13 @@ export interface ActiveActivityRunBinding {
   origin: AgentActivityIngressRef["origin"];
   agentId: string;
   sessionKey: string;
+  requesterSessionKey?: string;
   mainChannelId: string;
   mainRootPostId: string;
   inputPostId?: string;
   channelDocPath: string;
   channelCreateAt: number;
+  coachMmUserId: string;
   coachToken: string;
   attentionMention: string;
 }
@@ -102,6 +102,7 @@ export interface ActivityRuntimeRegistry {
   readiness(): "unsynchronized" | "ready";
   resolve(ref: AgentActivityIngressRef): Promise<ActiveActivityRunBinding | null>;
   resolveRun(runId: string): Promise<ActiveActivityRunBinding | null>;
+  releaseRun(runId: string): void;
 }
 
 export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
@@ -118,6 +119,10 @@ export class MutableActivityRuntimeRegistry implements ActivityRuntimeRegistry {
 
   async resolveRun(runId: string): Promise<ActiveActivityRunBinding | null> {
     return this.bindings.get(runId) ?? null;
+  }
+
+  releaseRun(runId: string): void {
+    this.bindings.delete(runId);
   }
 
   beginSynchronization(): void {
@@ -171,6 +176,7 @@ export function freezeActiveActivityRunBinding(
     "mainChannelId",
     "mainRootPostId",
     "channelDocPath",
+    "coachMmUserId",
     "coachToken",
     "attentionMention",
   ] as const) {
@@ -179,6 +185,7 @@ export function freezeActiveActivityRunBinding(
   if (binding.parentRunId !== undefined) bindingString(binding, "parentRunId");
   if (binding.retryOfRunId !== undefined) bindingString(binding, "retryOfRunId");
   if (binding.inputPostId !== undefined) bindingString(binding, "inputPostId");
+  if (binding.requesterSessionKey !== undefined) bindingString(binding, "requesterSessionKey");
   if (
     !ORIGINS.has(binding.origin) ||
     binding.conversationId !== binding.mainChannelId ||
@@ -290,6 +297,7 @@ function parseRef(value: unknown): AgentActivityIngressRef {
     "retryOfRunId",
     "agentId",
     "sessionKey",
+    "requesterSessionKey",
     "origin",
     "mainChannelId",
     "mainRootPostId",
@@ -308,6 +316,9 @@ function parseRef(value: unknown): AgentActivityIngressRef {
     ...(optionalString(ref, "retryOfRunId") ? { retryOfRunId: optionalString(ref, "retryOfRunId") } : {}),
     agentId: stringField(ref, "agentId"),
     sessionKey: stringField(ref, "sessionKey"),
+    ...(optionalString(ref, "requesterSessionKey")
+      ? { requesterSessionKey: optionalString(ref, "requesterSessionKey") }
+      : {}),
     origin: origin as AgentActivityIngressRef['origin'],
     mainChannelId: stringField(ref, "mainChannelId"),
     mainRootPostId: stringField(ref, "mainRootPostId"),
@@ -415,15 +426,6 @@ function assertFinalizedIdentity(ref: AgentActivityIngressRef): void {
   }
 }
 
-function assertControlIdentity(ref: AgentActivityIngressRef): void {
-  if (
-    !ref.itemId.startsWith(AGENT_ACTIVITY_RESERVED_ITEM_IDS.approvalPrefix) ||
-    ref.semanticVersion !== 2
-  ) {
-    throw new ActivityIntakeError(422, "invalid_control", false);
-  }
-}
-
 function assertCompletedIdentity(
   envelope: Extract<AgentActivityEnvelopeV1, { type: "item.completed" }>,
 ): void {
@@ -433,9 +435,7 @@ function assertCompletedIdentity(
     ref.itemId.length > AGENT_ACTIVITY_RESERVED_ITEM_IDS.approvalPrefix.length;
   if (
     item.kind === "approval" &&
-    (!approvalId ||
-      ref.semanticVersion !== 1 ||
-      item.status !== "waiting")
+    (!approvalId || ref.semanticVersion !== 1)
   ) {
     throw new ActivityIntakeError(422, "invalid_approval", false);
   }
@@ -463,31 +463,12 @@ function assertSemanticIdentity(envelope: AgentActivityEnvelopeV1): void {
     case "turn.finalized":
       assertFinalizedIdentity(envelope.ref);
       return;
-    case "control.transition":
-      assertControlIdentity(envelope.ref);
-      return;
     case "item.completed":
       assertCompletedIdentity(envelope);
   }
 }
 
-type ParsedEnvelopeBase = Omit<AgentActivityEnvelopeV1, "type" | "item" | "control" | "outcome">;
-
-function parseControl(value: unknown): AgentActivityControlTransition {
-  const control = record(value);
-  exactKeys(control, ["from", "to", "actorId"], "invalid_control");
-  if (
-    control.from !== "waiting" ||
-    (control.to !== "approved" && control.to !== "denied" && control.to !== "expired")
-  ) {
-    throw new ActivityIntakeError(422, "invalid_control", false);
-  }
-  return {
-    from: "waiting" as const,
-    to: control.to as AgentActivityControlTransition['to'],
-    actorId: stringField(control, "actorId", "invalid_control"),
-  };
-}
+type ParsedEnvelopeBase = Omit<AgentActivityEnvelopeV1, "type" | "item" | "outcome">;
 
 function parseOutcome(value: unknown): "completed" | "failed" | "stopped" {
   if (value !== "completed" && value !== "failed" && value !== "stopped") {
@@ -509,9 +490,6 @@ function parseEnvelopeVariant(
     case "item.completed":
       exactKeys(envelope, [...common, "item"], "invalid_envelope");
       return { ...base, type, item: parseItem(envelope.item) };
-    case "control.transition":
-      exactKeys(envelope, [...common, "control"], "invalid_envelope");
-      return { ...base, type, control: parseControl(envelope.control) };
     case "turn.finalized":
       exactKeys(envelope, [...common, "outcome"], "invalid_envelope");
       return { ...base, type, outcome: parseOutcome(envelope.outcome) };
@@ -603,6 +581,7 @@ function bindingMatches(ref: AgentActivityIngressRef, binding: ActiveActivityRun
     ref.origin === binding.origin &&
     ref.agentId === binding.agentId &&
     ref.sessionKey === binding.sessionKey &&
+    ref.requesterSessionKey === binding.requesterSessionKey &&
     ref.mainChannelId === binding.mainChannelId &&
     ref.mainRootPostId === binding.mainRootPostId &&
     ref.inputPostId === binding.inputPostId
@@ -611,7 +590,7 @@ function bindingMatches(ref: AgentActivityIngressRef, binding: ActiveActivityRun
 
 function mapSinkError(error: unknown): never {
   if (error instanceof ActivityIntakeError) throw error;
-  if (error instanceof ActivitySinkConflictError || error instanceof ActivitySinkStaleControlError) {
+  if (error instanceof ActivitySinkConflictError) {
     throw new ActivityIntakeError(409, "payload_conflict", false);
   }
   if (error instanceof ActivitySinkInvalidAttachmentError) {
@@ -631,15 +610,18 @@ function assertActivityAcknowledgement(
   envelope: AgentActivityEnvelopeV1,
   binding: Readonly<ActiveActivityRunBinding>,
 ): void {
+  const activityRootPostId = result.receipt.activityRootPostId;
   const receiptMatches =
     result.receipt.eventKey === envelope.eventKey &&
-    Boolean(result.receipt.activityRootPostId);
-  const turnStartedReceiptMatches = envelope.type !== "turn.started" || (
-    result.postIds.length === 0 &&
-    result.receipt.postId === binding.mainRootPostId &&
-    result.receipt.activityRootPostId === binding.mainRootPostId
+    Boolean(activityRootPostId) &&
+    activityRootPostId !== binding.mainRootPostId;
+  const postMatches = envelope.type === "turn.finalized"
+    ? result.postIds.length === 0 && result.receipt.postId === undefined
+    : result.postIds.length === 1 && result.receipt.postId === result.postIds[0];
+  const rootMatches = envelope.type !== "turn.started" || (
+    result.receipt.postId === activityRootPostId
   );
-  if (!receiptMatches || !turnStartedReceiptMatches) {
+  if (!receiptMatches || !postMatches || !rootMatches) {
     throw new ActivitySinkIntegrityError(
       "Activity acknowledgement failed exact root/channel verification",
     );
@@ -679,6 +661,9 @@ export async function processActivityIntake(
       itemId: envelope.ref.itemId,
     });
     assertActivityAcknowledgement(result, envelope, frozenBinding);
+    if (envelope.type === "turn.finalized") {
+      deps.registry.releaseRun(envelope.ref.runId);
+    }
     try {
       deps.onPersisted?.({
         envelope,
@@ -923,7 +908,6 @@ export interface ProductionActivityIntakeOptions extends ActivityIntakeHttpOptio
   mmClientFor(token: string): ActivityMattermostClient;
   leaseOwner: string;
   alerts?: Parameters<typeof createActivitySink>[0]['alerts'];
-  controls?: Parameters<typeof createActivitySink>[0]['controls'];
   log?: ActivityIntakeDeps['log'];
   onPersisted?: ActivityIntakeDeps['onPersisted'];
 }
@@ -939,7 +923,6 @@ export function createProductionActivityIntakeHandler(
         receipts: options.receiptsFor(binding),
         leaseOwner: options.leaseOwner,
         alerts: options.alerts,
-        controls: options.controls,
       }),
       log: options.log,
       onPersisted: options.onPersisted,

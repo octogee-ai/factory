@@ -59,26 +59,11 @@ describe("activity attention policy", () => {
     });
   });
 
-  it("delivers waiting approvals normally while keeping resolution edits non-notifying", () => {
+  it("delivers waiting approvals normally", () => {
     expect(activityAttentionPolicy(item("approval", "waiting"))).toEqual({
       target: "activity",
       silent: false,
       attention: "action-required",
-    });
-
-    const transition: AgentActivityEnvelopeV1 = {
-      schemaVersion: 1,
-      eventKey: "b".repeat(64),
-      emittedAt: "2026-07-11T15:01:00.000Z",
-      ref: { ...ref, itemId: "octogee:approval:approval-1", semanticVersion: 2 },
-      redaction: { policy: "octogee-v1", appliedAt: "producer" },
-      type: "control.transition",
-      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
-    };
-    expect(activityAttentionPolicy(transition)).toEqual({
-      target: "activity",
-      silent: null,
-      attention: "routine",
     });
   });
 

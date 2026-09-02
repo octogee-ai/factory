@@ -76,14 +76,14 @@ select TEST or PROD later.
 
 The current build is [OpenClaw `v2026.8.2`](https://github.com/openclaw/openclaw/releases/tag/v2026.8.2),
 peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with overlay head
-`96147db36cc6dc00d70f538677847287b44a4707`.
+`7552b8d7d62e78fc3ab7904f899988b6ce654642`. The Mattermost package is built
+from the tag without an Octogee patch; native threading, streaming, steering,
+and approvals supply the chat behavior.
 
 | Patch area | v2026.8.2 assessment | Why Octogee carries it |
 | --- | --- | --- |
 | Sandbox-backed file discovery | The tag has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open; its refreshed current-main head is `6c3ea1812a0`. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
 | Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. |
-| Run delivery facts | The tag does not expose the authoritative delivery facts Octogee consumes. | Keeps chat/run lifecycle observation grounded in the runtime result. |
-| Mattermost admission and activity | The tag lacks durable Mattermost ingress admission, live run control, delivery observation, and gateway activity snapshots. | Supplies the authoritative chat/run lifecycle used by the Octogee chat experience. |
 | No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and event-loop starvation. |
 | Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. | Prevents stale per-agent state after replacement. |
 | Fresh-chat terminal ownership | The tag rejects `terminal.open` when a selected chat has not yet materialized its durable session row. | Materializes and revalidates the exact agent-owned session before opening its terminal. |
@@ -99,8 +99,8 @@ release authority.
 needed, so a tag does not depend on a companion publish race.
 
 `pack-mattermost-tarball.sh` runs OpenClaw's plugin packer and verifies compiled
-runtime output. Mattermost stays separate because Octogee carries its channel
-integration there.
+runtime output. Mattermost stays separate so its exact native channel runtime
+is content-addressed independently from the root package.
 
 Use `pnpm build`, not `pnpm run build:docker`: the full build creates every
 compiled file needed by `npm pack`.

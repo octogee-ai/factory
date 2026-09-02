@@ -29,22 +29,6 @@ export interface AgentRunRef {
     semanticVersion?: number;
     attention: AgentAttention;
 }
-export type AgentAdmissionOrigin = Exclude<AgentRunOrigin, "subagent">;
-export type AgentAdmissionStatus = "received" | "queued" | "blocked" | "canceled" | "admitted";
-export interface AgentAdmissionRef {
-    schemaVersion: 3;
-    projectionKind: "admission";
-    conversationId: string;
-    turnId: string;
-    mainChannelId: string;
-    inputPostId: string;
-    origin: AgentAdmissionOrigin;
-    retryOfRunId?: string;
-    status: AgentAdmissionStatus;
-    queuePosition?: number;
-    attention: "routine";
-}
-export type ConversationProjectionRef = AgentRunRef | AgentAdmissionRef;
 export interface ActivityCreateRef extends AgentRunRef {
     itemId: string;
     ordinal: number;
@@ -59,6 +43,7 @@ export interface AgentActivityIngressRef {
     retryOfRunId?: string;
     agentId: string;
     sessionKey: string;
+    requesterSessionKey?: string;
     origin: AgentRunRef["origin"];
     mainChannelId: string;
     mainRootPostId: string;
@@ -85,11 +70,6 @@ export interface AgentActivityCompletedItem {
     detail?: AgentActivityDetail;
     attachment?: AgentActivityAttachment;
 }
-export interface AgentActivityControlTransition {
-    from: "waiting";
-    to: "approved" | "denied" | "expired";
-    actorId: string;
-}
 export interface AgentActivityEnvelopeBaseV1 {
     schemaVersion: 1;
     eventKey: string;
@@ -105,9 +85,6 @@ export type AgentActivityEnvelopeV1 = (AgentActivityEnvelopeBaseV1 & {
 }) | (AgentActivityEnvelopeBaseV1 & {
     type: "item.completed";
     item: AgentActivityCompletedItem;
-}) | (AgentActivityEnvelopeBaseV1 & {
-    type: "control.transition";
-    control: AgentActivityControlTransition;
 }) | (AgentActivityEnvelopeBaseV1 & {
     type: "turn.finalized";
     outcome: "completed" | "failed" | "stopped";

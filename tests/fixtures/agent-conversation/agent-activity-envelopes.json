@@ -277,35 +277,6 @@
     },
     {
       "schemaVersion": 1,
-      "eventKey": "2ba3ec8106eac2b75fc22e6c79167254f19af66f536b3eb6dd5992eea58aa7d0",
-      "emittedAt": "2026-07-11T15:09:00.000Z",
-      "ref": {
-        "conversationId": "main-1",
-        "turnId": "turn-1",
-        "runId": "run-approval-approved",
-        "agentId": "agent-1",
-        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
-        "origin": "human",
-        "mainChannelId": "main-1",
-        "mainRootPostId": "turn-1",
-        "inputPostId": "turn-1",
-        "itemId": "octogee:approval:approval-approved",
-        "ordinal": 1,
-        "semanticVersion": 2
-      },
-      "redaction": {
-        "policy": "octogee-v1",
-        "appliedAt": "producer"
-      },
-      "type": "control.transition",
-      "control": {
-        "from": "waiting",
-        "to": "approved",
-        "actorId": "mm-user-1"
-      }
-    },
-    {
-      "schemaVersion": 1,
       "eventKey": "1ad93bd6d8fe4e65e3193ab4aeb8a918927987d3408ee400444fa0a4f7acf7f0",
       "emittedAt": "2026-07-11T15:10:00.000Z",
       "ref": {
@@ -335,35 +306,6 @@
     },
     {
       "schemaVersion": 1,
-      "eventKey": "9fba80c0c1f1ae25fe6d741cdb2ff7058bc54be096820ec25595172ed715d7f1",
-      "emittedAt": "2026-07-11T15:11:00.000Z",
-      "ref": {
-        "conversationId": "main-1",
-        "turnId": "turn-1",
-        "runId": "run-approval-denied",
-        "agentId": "agent-1",
-        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
-        "origin": "human",
-        "mainChannelId": "main-1",
-        "mainRootPostId": "turn-1",
-        "inputPostId": "turn-1",
-        "itemId": "octogee:approval:approval-denied",
-        "ordinal": 1,
-        "semanticVersion": 2
-      },
-      "redaction": {
-        "policy": "octogee-v1",
-        "appliedAt": "producer"
-      },
-      "type": "control.transition",
-      "control": {
-        "from": "waiting",
-        "to": "denied",
-        "actorId": "mm-user-2"
-      }
-    },
-    {
-      "schemaVersion": 1,
       "eventKey": "349036e173c90cfb7237754c9b29a779a39a2a9a8910371f108c851a732fdc3b",
       "emittedAt": "2026-07-11T15:12:00.000Z",
       "ref": {
@@ -389,35 +331,6 @@
         "kind": "approval",
         "status": "waiting",
         "summary": "Approval awaiting expired decision."
-      }
-    },
-    {
-      "schemaVersion": 1,
-      "eventKey": "531c6fe86336fb60f7715126f76bb0956418c7c79a1c1c8b92dca7a3bc0195e6",
-      "emittedAt": "2026-07-11T15:13:00.000Z",
-      "ref": {
-        "conversationId": "main-1",
-        "turnId": "turn-1",
-        "runId": "run-approval-expired",
-        "agentId": "agent-1",
-        "sessionKey": "agent:agent-1:mattermost:channel:main-1",
-        "origin": "human",
-        "mainChannelId": "main-1",
-        "mainRootPostId": "turn-1",
-        "inputPostId": "turn-1",
-        "itemId": "octogee:approval:approval-expired",
-        "ordinal": 1,
-        "semanticVersion": 2
-      },
-      "redaction": {
-        "policy": "octogee-v1",
-        "appliedAt": "producer"
-      },
-      "type": "control.transition",
-      "control": {
-        "from": "waiting",
-        "to": "expired",
-        "actorId": "system"
       }
     },
     {

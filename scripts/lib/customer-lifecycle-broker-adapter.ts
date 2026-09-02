@@ -113,7 +113,6 @@ import {
   platformOpenAiEmbeddingsEnabled,
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
-  type MattermostAccountPolicy,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import {
@@ -204,14 +203,7 @@ function brokerCustomerMattermostUserId(
   brokerSnapshot: FleetBrokerUserSnapshot | null,
   snapshot: UserSnapshot,
 ): string | null | undefined {
-  return brokerSnapshot?.customerMmUserId ?? snapshot.mattermostUserId;
-}
-
-function brokerPlatformAdminMattermostUserId(
-  brokerSnapshot: FleetBrokerUserSnapshot | null,
-): string | null {
-  const value = brokerSnapshot?.platformAdminMmUserId;
-  return typeof value === "string" ? value : null;
+  return brokerSnapshot ? brokerSnapshot.customerMmUserId : snapshot.mattermostUserId;
 }
 
 interface BuildBrokeredLifecycleAdapterOptions {
@@ -232,17 +224,6 @@ interface BrokerCtx {
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   configRemovedForEviction: Set<string>;
-}
-
-function mattermostAccountPolicyForGateway(
-  ctx: BrokerCtx,
-  brokerSnapshot: FleetBrokerUserSnapshot | null,
-): MattermostAccountPolicy {
-  if (ctx.isBuilderGateway()) return { gatewayClass: "builder" };
-  return {
-    gatewayClass: "shared",
-    platformAdminMmUserId: brokerPlatformAdminMattermostUserId(brokerSnapshot),
-  };
 }
 
 // The roster and the departing agents' bindings are `agents.delete`'s job —
@@ -729,7 +710,6 @@ async function applyAddCustomerConfigPatch(
   }
   const identity = resolveCoachIdentity(brokerSnapshot?.coachIdentity, DEFAULT_COACH);
   const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot, callOpts?.withoutProjectIds);
-  const accountPolicy = mattermostAccountPolicyForGateway(ctx, brokerSnapshot);
   const accountsMap = buildMattermostAccounts(
     [
       {
@@ -741,7 +721,6 @@ async function applyAddCustomerConfigPatch(
       },
     ],
     new Map([[snapshot.uid, coachPat]]),
-    accountPolicy,
     (m) => ctx.log(m),
   );
   const accountId = `${snapshot.slug}-coach`;
@@ -799,7 +778,6 @@ async function applyAddCustomerConfigPatch(
     snapshot.slug,
     projectAgents,
     brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
-    accountPolicy,
   );
   const bindings = buildCustomerBindings([
     {

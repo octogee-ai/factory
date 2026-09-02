@@ -78,37 +78,28 @@
       "behavior": "queue-steer",
       "status": "covered",
       "evidence": [
-        "app/src/components/chat/ChatInput.tsx",
-        "app/src/lib/conversationSend.ts"
+        "app/src/components/chat/MessageList.tsx",
+        "app/src/components/appshell/resolveMainView.tsx"
       ],
-      "authority": "Mattermost top-level inputs and replies to the unique active run root"
+      "authority": "Mattermost top-level inputs start work and replies continue the selected physical thread"
     },
     {
-      "behavior": "durable-admission",
+      "behavior": "durable-ingress",
       "status": "covered",
       "evidence": [
-        "app/src/components/chat/AdmissionReceipt.tsx",
+        "app/src/components/chat/MessageList.tsx",
         "app/src/lib/conversationProjection.ts"
       ],
-      "authority": "Mattermost input post plus persisted admission projection"
+      "authority": "The ordinary Mattermost post is the durable input; no second admission receipt is required"
     },
     {
-      "behavior": "stored-controls",
+      "behavior": "native-controls",
       "status": "covered",
       "evidence": [
-        "app/src/components/chat/DurablePostActions.tsx",
-        "app/src/lib/mattermostAgentActions.ts"
+        "app/src/components/chat/ChatInput.tsx",
+        "app/src/components/appshell/resolveMainView.tsx"
       ],
-      "authority": "Stored Mattermost post actions invoked through Mattermost"
-    },
-    {
-      "behavior": "inline-preamble",
-      "status": "covered",
-      "evidence": [
-        "app/src/components/chat/AgentPreamble.tsx",
-        "app/src/components/chat/AgentTurn.tsx"
-      ],
-      "authority": "Paired Mattermost Activity records projected beside the final answer"
+      "authority": "OpenClaw handles ordinary thread replies, native /stop, and approvals received through Mattermost"
     },
     {
       "behavior": "tool-disclosure",
@@ -124,9 +115,9 @@
       "status": "covered",
       "evidence": [
         "app/src/hooks/useActivityChannel.ts",
-        "app/src/hooks/useConversation.ts"
+        "app/src/lib/conversationProjection.ts"
       ],
-      "authority": "Mattermost history plus server-published live-run projections"
+      "authority": "Mattermost history plus positively classified Activity posts from the active Agent account"
     }
   ],
   "rejected": [
@@ -140,11 +131,11 @@
     },
     {
       "behavior": "default-steer-across-runs",
-      "reason": "A stale client preference could target the wrong run; steering must resolve one active Mattermost root."
+      "reason": "A stale client preference could target the wrong work; steering follows the explicitly selected Mattermost thread."
     },
     {
       "behavior": "browser-owned-run-control",
-      "reason": "It would bypass stored Mattermost actions, authorization, and durable transition receipts."
+      "reason": "It would bypass OpenClaw's native Mattermost commands and approval authorization."
     },
     {
       "behavior": "history-rewind",

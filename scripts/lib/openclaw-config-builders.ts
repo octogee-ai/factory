@@ -284,35 +284,21 @@ export interface MattermostAccountEntry {
   };
 }
 
-export interface MattermostAccountPolicy {
-  gatewayClass: "shared" | "builder";
-  platformAdminMmUserId?: string | null;
-}
-
-function sharedDirectAllowFrom(policy: MattermostAccountPolicy): string[] | undefined {
-  if (policy.gatewayClass === "builder") return undefined;
-  return typeof policy.platformAdminMmUserId === "string" &&
-      MATTERMOST_ID_RE.test(policy.platformAdminMmUserId)
-    ? [policy.platformAdminMmUserId]
-    : [];
-}
-
 export function buildMattermostAccounts(
   customers: ReadonlyArray<MattermostAccountInput>,
   coachTokens: ReadonlyMap<string, string>,
-  policy: MattermostAccountPolicy = { gatewayClass: "shared" },
   warn: (msg: string) => void = () => {},
 ): Record<string, MattermostAccountEntry> {
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const c of customers) {
     const token = coachTokens.get(c.uid);
     if (!token) continue;
-    const groupAllowFrom = [c.customerMmUserId].filter(
-      (id): id is string => typeof id === "string" && id.length > 0,
-    );
-    const directAllowFrom = sharedDirectAllowFrom(policy);
-    if (groupAllowFrom.length === 0 && directAllowFrom?.length === 0) {
-      warn(`Skipping ${c.slug}-coach Mattermost account: authorized sender lists are empty`);
+    const ownerMmUserId = typeof c.customerMmUserId === "string" &&
+        MATTERMOST_ID_RE.test(c.customerMmUserId)
+      ? c.customerMmUserId
+      : null;
+    if (!ownerMmUserId) {
+      warn(`Skipping ${c.slug}-coach Mattermost account: owner Mattermost id is unavailable`);
       continue;
     }
     // Per-channel mutes are not expressible: the mattermost plugin builds its
@@ -330,11 +316,9 @@ export function buildMattermostAccounts(
     const accountId = `${c.slug}-coach`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
-      ...(directAllowFrom === undefined
-        ? {}
-        : { dmPolicy: "allowlist" as const, allowFrom: directAllowFrom }),
-      groupPolicy: "allowlist",
-      groupAllowFrom,
+      dmPolicy: "allowlist",
+      allowFrom: [ownerMmUserId],
+      groupPolicy: "open",
       ...groupsPatch,
       commands: { native: false },
     };
@@ -566,9 +550,9 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
 export function buildProjectAgentAccounts(
   slug: string,
   projectAgents: ReadonlyArray<ProjectAgentState>,
-  _ownerMmUserId?: string | null,
-  policy: MattermostAccountPolicy = { gatewayClass: "shared" },
+  ownerMmUserId?: string | null,
 ): Record<string, MattermostAccountEntry> {
+  if (typeof ownerMmUserId !== "string" || !MATTERMOST_ID_RE.test(ownerMmUserId)) return {};
   const active = activeAgentProjectIds(projectAgents);
   const accounts: Record<string, MattermostAccountEntry> = {};
   for (const p of projectAgents) {
@@ -576,7 +560,8 @@ export function buildProjectAgentAccounts(
     const accountId = `${slug}-proj-${p.projectId}`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
-      ...(policy.gatewayClass === "shared" ? { dmPolicy: "disabled" as const } : {}),
+      allowFrom: [ownerMmUserId],
+      dmPolicy: "disabled",
       groupPolicy: "open",
       commands: { native: false },
     };

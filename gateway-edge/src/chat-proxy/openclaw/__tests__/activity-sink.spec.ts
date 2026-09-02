@@ -15,7 +15,10 @@ import {
   InMemoryActivityWriteReceiptStore,
   type ActivityWriteReceiptStore,
 } from "../activity-write-receipts.js";
-import type { ActivityMattermostClient } from "../mm-client.js";
+import type {
+  ActivityMattermostClient,
+  ActivityMattermostPost,
+} from "../mm-client.js";
 
 function envelope(
   type: AgentActivityEnvelopeV1['type'],
@@ -68,13 +71,33 @@ function envelope(
 
 function mmClient(): ActivityMattermostClient {
   let next = 0;
-  return {
+  const posts = new Map<string, ActivityMattermostPost>([[
+    "turn-1",
+    { id: "turn-1", channelId: "main-1", rootId: "", userId: "builder-1", props: {}, fileIds: [] },
+  ]]);
+  const client: ActivityMattermostClient = {
     createPost: vi.fn(async () => ({ id: `post-${++next}` })),
-    editPost: vi.fn(async () => undefined),
-    deletePost: vi.fn(async () => undefined),
-    withUserToken: vi.fn(),
-    createActivityPost: vi.fn(async () => ({ id: `post-${++next}` })),
-    getPost: vi.fn(async (postId) => ({ id: postId, channelId: "main-1", rootId: "", props: {}, fileIds: [] })),
+    editPost: vi.fn(async (postId, input) => {
+      const current = posts.get(postId);
+      if (current) posts.set(postId, { ...current, ...input });
+    }),
+    deletePost: vi.fn(async (postId) => {
+      posts.delete(postId);
+    }),
+    withUserToken: vi.fn(() => client),
+    createActivityPost: vi.fn(async (input) => {
+      const id = `post-${++next}`;
+      posts.set(id, {
+        id,
+        channelId: input.channelId,
+        rootId: input.rootId ?? "",
+        message: input.message,
+        props: input.props ?? {},
+        fileIds: input.fileIds ?? [],
+      });
+      return { id };
+    }),
+    getPost: vi.fn(async (postId) => posts.get(postId) ?? null),
     listChannelPosts: vi.fn(async () => ({ posts: [], reachedEnd: true })),
     createUploadSession: vi.fn(async () => ({ id: "upload-1", fileOffset: 0 })),
     getUploadSession: vi.fn(async () => ({ id: "upload-1", fileOffset: 0 })),
@@ -82,67 +105,74 @@ function mmClient(): ActivityMattermostClient {
     getFileInfo: vi.fn(async (fileId) => ({ id: fileId, size: 8 })),
     getPostFiles: vi.fn(async () => [{ id: "file-1", size: 8 }]),
   };
+  return client;
 }
 
 const binding = {
   mainChannelId: "main-1",
   channelCreateAt: 100,
+  coachMmUserId: "agent-1",
   attentionMention: "@builder",
 };
 
 function journalProps(
   value: AgentActivityEnvelopeV1,
-  rootId?: string,
+  activityRootPostId?: string,
 ): Record<string, unknown> {
+  const kind = value.type === "turn.started"
+    ? "activity.run-root"
+    : value.type === "item.completed" && value.ref.itemId === "activity.run-complete"
+      ? "activity.run-complete"
+      : value.type === "item.completed"
+        ? `activity.${value.item.kind}`
+        : "";
+  const status = value.type === "item.completed" && value.ref.itemId === "activity.run-complete"
+    ? value.item.summary.startsWith("🛑")
+      ? "stopped"
+      : value.item.status === "completed" ? "completed" : "failed"
+    : value.type === "item.completed" && value.item.status === "waiting"
+      ? "waiting"
+      : value.type === "item.completed" && value.item.status === "failed"
+        ? "failed"
+        : "running";
   return {
     octogee: {
+      schemaVersion: 3,
+      projectionKind: "run",
+      conversationId: value.ref.conversationId,
+      turnId: value.ref.turnId,
       eventKey: value.eventKey,
       runId: value.ref.runId,
+      ...(value.ref.parentRunId ? { parentRunId: value.ref.parentRunId } : {}),
+      ...(value.ref.retryOfRunId ? { retryOfRunId: value.ref.retryOfRunId } : {}),
+      agentId: value.ref.agentId,
+      sessionKey: value.ref.sessionKey,
+      origin: value.ref.origin,
+      status,
+      mainChannelId: value.ref.mainChannelId,
+      mainRootPostId: value.ref.mainRootPostId,
+      inputPostId: value.ref.inputPostId,
       itemId: value.ref.itemId,
-      ...(rootId ? { activityRootPostId: rootId } : {}),
+      ordinal: value.ref.ordinal,
+      semanticVersion: value.ref.semanticVersion,
+      attention: "routine",
+      kind,
+      ...(activityRootPostId ? { activityRootPostId } : {}),
     },
   };
 }
 
 describe("attention-aware Activity sink", () => {
-  it("registers an approval control before Mattermost create and attaches only the committed receipt", async () => {
-    const order: string[] = [];
+  it("writes waiting approvals as ordinary native Mattermost posts", async () => {
     const mm = mmClient();
-    const prepare = vi.fn(async (input: { envelope: AgentActivityEnvelopeV1; message: string }) => {
-      order.push("control-prepare");
-      return {
-        receipt: {
-          controlId: "approval-control-1",
-          eventKey: input.envelope.eventKey,
-          controlChannelId: "main-1",
-          resourceDigest: "b".repeat(64),
-          actionDigests: { ocapprove: "c".repeat(64), ocdeny: "d".repeat(64) },
-        },
-        post: {
-          channelId: "main-1",
-          message: input.message,
-          props: { octogee: { controlId: "approval-control-1" } },
-          attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
-        },
-      };
-    });
-    const attachReceipt = vi.fn(async (receipt: { postId: string }) => {
-      order.push("control-attach");
-      expect(receipt.postId).toBe("approval-post-1");
-    });
     const sink = createActivitySink({
       mm,
       receipts: new InMemoryActivityWriteReceiptStore(),
       leaseOwner: "worker-1",
       now: () => 1_000,
-      controls: { prepare, attachReceipt },
     });
     await sink.append({ envelope: envelope("turn.started"), binding });
-    vi.mocked(mm.createActivityPost).mockImplementationOnce(async () => {
-      order.push("mattermost-create");
-      return { id: "approval-post-1" };
-    });
-    order.length = 0;
+    vi.mocked(mm.createActivityPost).mockResolvedValueOnce({ id: "approval-post-1" });
     const approval = envelope("item.completed", {
       item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
     });
@@ -153,19 +183,22 @@ describe("attention-aware Activity sink", () => {
 
     const result = await sink.append({ envelope: approval, binding });
 
-    expect(order).toEqual(["control-prepare", "mattermost-create", "control-attach"]);
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
-      envelope: approval,
-      activityRootPostId: "turn-1",
-      message: "@builder Approve deployment?",
-    }));
     expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
-      props: expect.objectContaining({
-        attachments: [{ actions: [{ id: "ocapprove" }, { id: "ocdeny" }] }],
+      channelId: "main-1",
+      rootId: "turn-1",
+      message: "@builder Approve deployment?",
+      silent: false,
+      props: {
         octogee: expect.objectContaining({
-          controlId: "approval-control-1",
-          controlResourceDigest: "b".repeat(64),
+          kind: "activity.approval",
+          attention: "action-required",
+          eventKey: approval.eventKey,
         }),
+      },
+    }));
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.not.objectContaining({
+      props: expect.objectContaining({
+        attachments: expect.anything(),
       }),
     }));
     expect(result).toMatchObject({
@@ -174,20 +207,13 @@ describe("attention-aware Activity sink", () => {
       receipt: {
         eventKey: approval.eventKey,
         postId: "approval-post-1",
-        activityRootPostId: "turn-1",
+        activityRootPostId: "post-1",
       },
     });
   });
 
-  it("adopts the existing primary turn root and writes journal detail beneath it", async () => {
+  it("creates a structured run root and writes sibling journal detail beneath the primary turn root", async () => {
     const mm = mmClient();
-    vi.mocked(mm.getPost).mockResolvedValue({
-      id: "turn-1",
-      channelId: "main-1",
-      rootId: "",
-      props: {},
-      fileIds: [],
-    });
     const sink = createActivitySink({
       mm,
       receipts: new InMemoryActivityWriteReceiptStore(),
@@ -198,37 +224,149 @@ describe("attention-aware Activity sink", () => {
 
     await expect(sink.append({ envelope: started, binding: binding })).resolves.toMatchObject({
       outcome: "persisted",
-      postIds: [],
+      postIds: ["post-1"],
       receipt: {
-        postId: "turn-1",
-        activityRootPostId: "turn-1",
+        postId: "post-1",
+        activityRootPostId: "post-1",
       },
     });
     await expect(sink.append({ envelope: started, binding: binding })).resolves.toMatchObject({
       outcome: "duplicate",
-      postIds: [],
+      postIds: ["post-1"],
     });
     expect(mm.listChannelPosts).not.toHaveBeenCalled();
     await sink.append({ envelope: envelope("item.completed"), binding: binding });
 
-    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
-    expect(mm.getPost).toHaveBeenCalledTimes(2);
-    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(2);
+    expect(mm.getPost).toHaveBeenCalledTimes(3);
+    expect(mm.createActivityPost).toHaveBeenNthCalledWith(1, expect.objectContaining({
       channelId: "main-1",
       rootId: "turn-1",
+      message: "▶️ Agent run started",
+      props: {
+        octogee: expect.objectContaining({
+          kind: "activity.run-root",
+          mainRootPostId: "turn-1",
+        }),
+      },
+      silent: true,
+    }));
+    expect(mm.createActivityPost).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      channelId: "main-1",
+      rootId: "turn-1",
+      props: {
+        octogee: expect.objectContaining({
+          kind: "activity.tool",
+          activityRootPostId: "post-1",
+        }),
+      },
       silent: true,
     }));
   });
 
-  it("posts the terminal error once beneath the primary turn root without silencing it", async () => {
+  it("rejects a physical thread root authored by the managed Agent Mattermost account", async () => {
     const mm = mmClient();
-    vi.mocked(mm.getPost).mockResolvedValue({
+    vi.mocked(mm.getPost).mockResolvedValueOnce({
+      id: "turn-1",
+      channelId: "main-1",
+      rootId: "",
+      userId: binding.coachMmUserId,
+      props: {},
+      fileIds: [],
+    });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+
+    await expect(sink.append({ envelope: envelope("turn.started"), binding }))
+      .rejects.toThrow("main thread root failed exact Mattermost verification");
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("rejects a physical thread root without a Mattermost author identity", async () => {
+    const mm = mmClient();
+    vi.mocked(mm.getPost).mockResolvedValueOnce({
       id: "turn-1",
       channelId: "main-1",
       rootId: "",
       props: {},
       fileIds: [],
     });
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+
+    await expect(sink.append({ envelope: envelope("turn.started"), binding }))
+      .rejects.toThrow("main thread root failed exact Mattermost verification");
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("marshals exact subagent lineage as structured Mattermost props", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    const started = envelope("turn.started");
+    started.ref.origin = "subagent";
+    started.ref.parentRunId = "parent-run";
+    started.ref.sessionKey = "agent:agent-1:subagent:child";
+    started.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(started.ref))
+      .digest("hex");
+
+    await sink.append({ envelope: started, binding });
+
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      message: "▶️ Agent run started",
+      props: {
+        octogee: expect.objectContaining({
+          runId: "run-1",
+          parentRunId: "parent-run",
+          origin: "subagent",
+        }),
+      },
+    }));
+    expect(vi.mocked(mm.createActivityPost).mock.calls[0]?.[0].message)
+      .not.toContain("subagent of");
+  });
+
+  it("rejects a replay whose Mattermost post has mismatched structured lineage", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+      now: () => 1_000,
+    });
+    const started = envelope("turn.started");
+    started.ref.origin = "subagent";
+    started.ref.parentRunId = "parent-run";
+    started.ref.sessionKey = "agent:agent-1:subagent:child";
+    started.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(started.ref))
+      .digest("hex");
+    await sink.append({ envelope: started, binding });
+    const props = journalProps(started);
+    const octogee = props.octogee as Record<string, unknown>;
+    await mm.editPost("post-1", {
+      message: "▶️ Agent run started",
+      props: { octogee: { ...octogee, parentRunId: "foreign-parent" } },
+    });
+
+    await expect(sink.append({ envelope: started, binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("posts the terminal error once beneath the primary turn root without silencing it", async () => {
+    const mm = mmClient();
     const sink = createActivitySink({
       mm,
       receipts: new InMemoryActivityWriteReceiptStore(),
@@ -247,7 +385,7 @@ describe("attention-aware Activity sink", () => {
     await sink.append({ envelope: terminalError, binding: binding });
     await sink.append({ envelope: terminalError, binding: binding });
 
-    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(2);
     expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
       channelId: "main-1",
       rootId: "turn-1",
@@ -256,7 +394,7 @@ describe("attention-aware Activity sink", () => {
     }));
   });
 
-  it("recovers an adopted root after verification and before receipt commit", async () => {
+  it("recovers a structured run root after verification and before receipt commit", async () => {
     const mm = mmClient();
     const delegate = new InMemoryActivityWriteReceiptStore();
     let crashCommit = true;
@@ -267,42 +405,35 @@ describe("attention-aware Activity sink", () => {
       updateAttachment: (eventKey, token, attachment, now) =>
         delegate.updateAttachment(eventKey, token, attachment, now),
       async commit(eventKey, token, now) {
-        if (crashCommit) throw new Error("crashed before adopted root commit");
+        if (crashCommit) throw new Error("crashed before structured root commit");
         await delegate.commit(eventKey, token, now);
       },
     };
     const started = envelope("turn.started");
-    vi.mocked(mm.getPost).mockResolvedValue({
-      id: "turn-1",
-      channelId: "main-1",
-      rootId: "",
-      props: {},
-      fileIds: [],
-    });
     const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
 
     await expect(first.append({ envelope: started, binding: binding })).rejects.toThrow(
-      "crashed before adopted root commit",
+      "crashed before structured root commit",
     );
     await expect(delegate.read(started.eventKey)).resolves.toMatchObject({
       state: "posted",
-      postId: "turn-1",
+      postId: "post-1",
     });
     crashCommit = false;
     const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
 
     await expect(sink.append({ envelope: started, binding: binding })).resolves.toMatchObject({
       outcome: "duplicate",
-      postIds: [],
+      postIds: ["post-1"],
     });
-    expect(mm.createActivityPost).not.toHaveBeenCalled();
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     ["deleted", null],
     ["wrong-channel", { id: "turn-1", channelId: "foreign-channel", rootId: "", props: {}, fileIds: [] }],
     ["thread-reply", { id: "turn-1", channelId: "main-1", rootId: "parent-1", props: {}, fileIds: [] }],
-  ])("rejects a %s adopted root before writing a receipt", async (_case, root) => {
+  ])("rejects a %s main root before writing a receipt", async (_case, root) => {
     const mm = mmClient();
     vi.mocked(mm.getPost).mockResolvedValue(root);
     const sink = createActivitySink({
@@ -316,16 +447,8 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 
-  it("fails a committed adopted-root replay after its Mattermost root is deleted", async () => {
+  it("fails a committed structured-root replay after its Mattermost post is deleted", async () => {
     const mm = mmClient();
-    let root: Awaited<ReturnType<ActivityMattermostClient["getPost"]>> = {
-      id: "turn-1",
-      channelId: "main-1",
-      rootId: "",
-      props: {},
-      fileIds: [],
-    };
-    vi.mocked(mm.getPost).mockImplementation(async () => root);
     const sink = createActivitySink({
       mm,
       receipts: new InMemoryActivityWriteReceiptStore(),
@@ -333,7 +456,8 @@ describe("attention-aware Activity sink", () => {
     });
     const started = envelope("turn.started");
     await sink.append({ envelope: started, binding: binding });
-    root = null;
+    await mm.deletePost("post-1");
+    vi.mocked(mm.createActivityPost).mockClear();
 
     await expect(sink.append({ envelope: started, binding: binding }))
       .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
@@ -345,6 +469,7 @@ describe("attention-aware Activity sink", () => {
     const receipts = new InMemoryActivityWriteReceiptStore();
     await createActivitySink({ mm, receipts, leaseOwner: "root-worker", now: () => 0 })
       .append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
     const completed = envelope("item.completed");
     const payloadDigest = activityPayloadDigest(completed);
     const claim = await receipts.claim({
@@ -358,7 +483,7 @@ describe("attention-aware Activity sink", () => {
     if (claim.outcome !== "claimed") throw new Error("expected claim");
     vi.mocked(mm.listChannelPosts)
       .mockResolvedValueOnce({
-        posts: [{ id: "created-before-crash", channelId: "main-1", rootId: "turn-1", props: journalProps(completed, "turn-1"), fileIds: [] }],
+        posts: [{ id: "created-before-crash", channelId: "main-1", rootId: "turn-1", props: journalProps(completed, "post-1"), fileIds: [] }],
         reachedEnd: false,
         nextBefore: "created-before-crash",
       })
@@ -381,6 +506,7 @@ describe("attention-aware Activity sink", () => {
     const receipts = new InMemoryActivityWriteReceiptStore();
     await createActivitySink({ mm, receipts, leaseOwner: "root-worker", now: () => 0 })
       .append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
     const completed = envelope("item.completed");
     await receipts.claim({
       eventKey: completed.eventKey,
@@ -404,6 +530,7 @@ describe("attention-aware Activity sink", () => {
     const receipts = new InMemoryActivityWriteReceiptStore();
     await createActivitySink({ mm, receipts, leaseOwner: "root-worker", now: () => 0 })
       .append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
     const completed = envelope("item.completed");
     await receipts.claim({
       eventKey: completed.eventKey,
@@ -439,9 +566,9 @@ describe("attention-aware Activity sink", () => {
   });
 
   it.each([
-    ["foreign-activity", "", "foreign-post"],
+    ["foreign-activity", "turn-1", "foreign-post"],
     ["main-1", "foreign-root", "foreign-post"],
-    ["main-1", "", "different-returned-post"],
+    ["main-1", "turn-1", "different-returned-post"],
   ])("rejects a recovered receipt post outside its exact channel/root/id (%s, %s, %s)", async (
     channelId,
     rootId,
@@ -460,13 +587,15 @@ describe("attention-aware Activity sink", () => {
     });
     if (claim.outcome !== "claimed") throw new Error("expected claim");
     await receipts.markPosted(started.eventKey, claim.receipt.leaseToken, "foreign-post", 0);
-    vi.mocked(mm.getPost).mockResolvedValue({
-      id: returnedPostId,
-      channelId,
-      rootId,
-      props: journalProps(started),
-      fileIds: [],
-    });
+    vi.mocked(mm.getPost).mockImplementation(async (postId) => postId === "turn-1"
+      ? { id: "turn-1", channelId: "main-1", rootId: "", props: {}, fileIds: [] }
+      : {
+          id: returnedPostId,
+          channelId,
+          rootId,
+          props: journalProps(started),
+          fileIds: [],
+        });
     const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10 });
 
     await expect(sink.append({ envelope: started, binding })).rejects.toBeInstanceOf(
@@ -497,100 +626,6 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).toHaveBeenLastCalledWith(expect.objectContaining({
       message: expect.not.stringContaining("secret-token"),
     }));
-  });
-
-  it("targets waiting approvals once and edits their first terminal decision", async () => {
-    const mm = mmClient();
-    const receipts = new InMemoryActivityWriteReceiptStore();
-    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
-    await sink.append({ envelope: envelope("turn.started"), binding });
-    const approval = envelope("item.completed", {
-      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
-    });
-    approval.ref.itemId = "octogee:approval:approval-1";
-    approval.eventKey = createHash("sha256")
-      .update(agentActivityCanonicalKey(approval.ref))
-      .digest("hex");
-    const created = await sink.append({ envelope: approval, binding });
-    const approvalPostId = created.postIds[0];
-    vi.mocked(mm.getPost).mockResolvedValue({
-      id: approvalPostId,
-      channelId: "main-1",
-      rootId: "turn-1",
-      props: journalProps(approval, "turn-1"),
-      fileIds: [],
-    });
-    const transitionRef = { ...approval.ref, semanticVersion: 2 };
-    const transition: AgentActivityEnvelopeV1 = {
-      schemaVersion: 1,
-      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
-      emittedAt: "2026-07-11T15:01:00.000Z",
-      ref: transitionRef,
-      redaction: { policy: "octogee-v1", appliedAt: "producer" },
-      type: "control.transition",
-      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
-    };
-
-    await sink.append({ envelope: transition, binding });
-    const replay = await sink.append({ envelope: transition, binding });
-
-    expect(mm.createActivityPost).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      message: "@builder Approve deployment?",
-      silent: false,
-    }));
-    expect(mm.editPost).toHaveBeenCalledTimes(1);
-    expect(replay).toMatchObject({ outcome: "duplicate", postIds: [approvalPostId] });
-  });
-
-  it.each([
-    ["id", "foreign-post"],
-    ["channelId", "foreign-channel"],
-    ["rootId", "foreign-root"],
-    ["eventKey", "f".repeat(64)],
-    ["runId", "foreign-run"],
-    ["itemId", "octogee:approval:foreign"],
-    ["activityRootPostId", "foreign-root"],
-  ])("never edits a control target with mismatched %s", async (field, value) => {
-    const mm = mmClient();
-    const receipts = new InMemoryActivityWriteReceiptStore();
-    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 1_000 });
-    await sink.append({ envelope: envelope("turn.started"), binding });
-    const approval = envelope("item.completed", {
-      item: { kind: "approval", status: "waiting", summary: "Approve deployment?" },
-    });
-    approval.ref.itemId = "octogee:approval:approval-1";
-    approval.eventKey = createHash("sha256")
-      .update(agentActivityCanonicalKey(approval.ref))
-      .digest("hex");
-    const created = await sink.append({ envelope: approval, binding });
-    const post = {
-      id: created.postIds[0],
-      channelId: "main-1",
-      rootId: "turn-1",
-      props: journalProps(approval, "turn-1"),
-      fileIds: [],
-    };
-    if (field === "id" || field === "channelId" || field === "rootId") {
-      post[field] = value;
-    } else {
-      (post.props.octogee as Record<string, unknown>)[field] = value;
-    }
-    vi.mocked(mm.getPost).mockResolvedValue(post);
-    const transitionRef = { ...approval.ref, semanticVersion: 2 };
-    const transition: AgentActivityEnvelopeV1 = {
-      schemaVersion: 1,
-      eventKey: createHash("sha256").update(agentActivityCanonicalKey(transitionRef)).digest("hex"),
-      emittedAt: "2026-07-11T15:01:00.000Z",
-      ref: transitionRef,
-      redaction: { policy: "octogee-v1", appliedAt: "producer" },
-      type: "control.transition",
-      control: { from: "waiting", to: "approved", actorId: "mm-user-1" },
-    };
-
-    await expect(sink.append({ envelope: transition, binding })).rejects.toBeInstanceOf(
-      ActivitySinkIntegrityError,
-    );
-    expect(mm.editPost).not.toHaveBeenCalled();
   });
 
   it.each(["session-created", "uploading"] as const)(
@@ -830,6 +865,7 @@ describe("attention-aware Activity sink", () => {
     vi.mocked(mm.getPostFiles).mockResolvedValue([{ id: "file-1", size: 8 }]);
     const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
     await first.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
     const completed = envelope("item.completed", {
       item: {
         kind: "tool",
@@ -854,7 +890,7 @@ describe("attention-aware Activity sink", () => {
       id: posted.postId,
       channelId: "main-1",
       rootId: "turn-1",
-      props: journalProps(completed, "turn-1"),
+      props: journalProps(completed, "post-1"),
       fileIds: ["file-1"],
     });
     const recovered = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
@@ -867,13 +903,91 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["completed", "✅ Run completed", "completed"],
+    ["failed", "❌ Run failed", "failed"],
+    ["failed", "🛑 Run stopped", "stopped"],
+  ] as const)("projects a terminal %s checkpoint with %s status", async (
+    itemStatus,
+    message,
+    projectedStatus,
+  ) => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+    const completion = envelope("item.completed", {
+      item: { kind: "checkpoint", status: itemStatus, summary: message },
+    });
+    completion.ref.itemId = "activity.run-complete";
+    completion.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(completion.ref))
+      .digest("hex");
+
+    const result = await sink.append({ envelope: completion, binding });
+
+    expect(result.receipt.activityRootPostId).toBe("post-1");
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: "main-1",
+      rootId: "turn-1",
+      message,
+      props: {
+        octogee: expect.objectContaining({
+          kind: "activity.run-complete",
+          status: projectedStatus,
+          activityRootPostId: "post-1",
+        }),
+      },
+    }));
+  });
+
   it("finalization commits an empty post list and never duplicates the final answer", async () => {
     const mm = mmClient();
     const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
     await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
     const result = await sink.append({ envelope: envelope("turn.finalized"), binding });
 
     expect(result).toMatchObject({ outcome: "persisted", postIds: [] });
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("replays an uncommitted finalization without searching for a Mattermost post", async () => {
+    const mm = mmClient();
+    const delegate = new InMemoryActivityWriteReceiptStore();
+    let crashCommit = false;
+    const receipts: ActivityWriteReceiptStore = {
+      claim: (input) => delegate.claim(input),
+      read: (eventKey) => delegate.read(eventKey),
+      markPosted: (eventKey, token, postId, now) => delegate.markPosted(eventKey, token, postId, now),
+      updateAttachment: (eventKey, token, attachment, now) =>
+        delegate.updateAttachment(eventKey, token, attachment, now),
+      async commit(eventKey, token, now) {
+        if (crashCommit) throw new Error("crashed before finalization commit");
+        await delegate.commit(eventKey, token, now);
+      },
+    };
+    const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
+    await first.append({ envelope: envelope("turn.started"), binding });
+    const finalized = envelope("turn.finalized");
+    crashCommit = true;
+    await expect(first.append({ envelope: finalized, binding })).rejects.toThrow(
+      "crashed before finalization commit",
+    );
+    crashCommit = false;
+    vi.mocked(mm.listChannelPosts).mockClear();
+    vi.mocked(mm.createActivityPost).mockClear();
+    const recovered = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
+
+    await expect(recovered.append({ envelope: finalized, binding })).resolves.toMatchObject({
+      outcome: "persisted",
+      postIds: [],
+    });
+    expect(mm.listChannelPosts).not.toHaveBeenCalled();
     expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 });

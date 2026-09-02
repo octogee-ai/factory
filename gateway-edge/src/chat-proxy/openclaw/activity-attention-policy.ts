@@ -27,9 +27,6 @@ export function assertCompatibleDeliveryOptions(options: DeliveryOptions): void 
 export function activityAttentionPolicy(
   envelope: AgentActivityEnvelopeV1,
 ): ActivityDeliveryPolicy {
-  if (envelope.type === "control.transition") {
-    return { target: "activity", silent: null, attention: "routine" };
-  }
   if (
     envelope.type === "item.completed" &&
     envelope.item.kind === "approval" &&

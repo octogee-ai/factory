@@ -435,14 +435,39 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("sets Mattermost reply behavior without the retired activity flag", () => {
-    const config: any = { channels: { mattermost: {} } };
+  it("sets native verbose threaded behavior without the retired activity flag", () => {
+    const config: any = {
+      agents: { defaults: { maxConcurrent: 4 } },
+      channels: {
+        mattermost: {
+          streaming: {
+            chunkMode: "newline",
+            preview: {},
+          },
+        },
+      },
+    };
 
     applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost).toMatchObject({
+      chatmode: "onmessage",
+      requireMention: false,
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        preview: {
+          toolProgress: true,
+          commandText: "raw",
+        },
+      },
+    });
+    expect(config.agents.defaults).toMatchObject({
+      verboseDefault: "full",
+      toolProgressDetail: "raw",
+      maxConcurrent: 4,
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
@@ -453,8 +478,21 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     applyPreBootPatches(config, {});
 
     expect(config.channels.mattermost).toMatchObject({
+      chatmode: "onmessage",
+      requireMention: false,
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
+      streaming: {
+        mode: "block",
+        preview: {
+          toolProgress: true,
+          commandText: "raw",
+        },
+      },
+    });
+    expect(config.agents.defaults).toEqual({
+      verboseDefault: "full",
+      toolProgressDetail: "raw",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
   });
@@ -1104,11 +1142,30 @@ describe("applyPreBootPatches — plugin config", () => {
 describe("applyPreBootPatches — no-change reporting", () => {
   it("returns false when nothing in the config needs touching", () => {
     const config: any = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "anthropic/claude-haiku-4-5": {},
+          },
+          verboseDefault: "full",
+          toolProgressDetail: "raw",
+        },
+      },
       tools: { profile: "coding" },
       channels: {
         mattermost: {
+          chatmode: "onmessage",
+          requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
+          streaming: {
+            mode: "block",
+            preview: {
+              toolProgress: true,
+              commandText: "raw",
+            },
+          },
           baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {

@@ -25,6 +25,11 @@ import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
 import { LegacyActivationManifestFingerprintError } from "../lib/migration-activation-manifest.js";
 
+const ALICE_OWNER_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const FRESH_OWNER_MM_ID = "ffffffffffffffffffffffffff";
+const FIRST_OWNER_MM_ID = "iiiiiiiiiiiiiiiiiiiiiiiiii";
+const TESTER_OWNER_MM_ID = "tttttttttttttttttttttttttt";
+
 const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
   applyOpenClawActivationManifest: vi.fn(),
@@ -260,8 +265,8 @@ function aliceSnapshot(
     status: "",
     agentIds: [],
     repoUrl: "",
-    mattermostUserId: "mm-alice",
-    customerMmUserId: "mm-alice",
+    mattermostUserId: ALICE_OWNER_MM_ID,
+    customerMmUserId: ALICE_OWNER_MM_ID,
     greetingPosted: false,
     channels: [],
     projects: [],
@@ -1083,7 +1088,7 @@ describe("broker adapter malformed coach identity quarantine", () => {
     secretMocks.updateMattermostAccountSecrets.mockClear();
   });
 
-  it("deletes only the stale workspace coach account before reporting an empty allowlist", async () => {
+  it("deletes every stale customer account before reporting an empty allowlist", async () => {
     const current = {
       channels: {
         mattermost: {
@@ -1093,16 +1098,26 @@ describe("broker adapter malformed coach identity quarantine", () => {
               groupPolicy: "allowlist",
               groupAllowFrom: ["mm-project-member"],
             },
+            "bob-coach": { groupPolicy: "open", groupAllowFrom: ["mm-bob"] },
+            "bob-proj-map": { groupPolicy: "open", groupAllowFrom: ["mm-bob"] },
           },
         },
       },
     };
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       expect(args.buildPatch(current)).toEqual({
-        channels: { mattermost: { accounts: { "alice-coach": null } } },
+        channels: {
+          mattermost: {
+            accounts: {
+              "alice-coach": null,
+              "alice-proj-orbit": null,
+            },
+          },
+        },
       });
       expect(args.buildReplacePaths?.(current)).toEqual([
         "channels.mattermost.accounts.alice-coach.groupAllowFrom",
+        "channels.mattermost.accounts.alice-proj-orbit.groupAllowFrom",
       ]);
       return { mode: "rpc", attempts: 1 };
     });
@@ -1125,8 +1140,29 @@ describe("broker adapter malformed coach identity quarantine", () => {
     expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
     expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
       expect.any(String),
-      { remove: ["alice-coach"], removePrefixes: [] },
+      { remove: ["alice-coach"], removePrefixes: ["alice-proj-"] },
     );
+  });
+
+  it("does not reuse a stale lifecycle owner id when the broker explicitly clears it", async () => {
+    const brokerSnapshot = aliceSnapshot({
+      mattermostUserId: null,
+      customerMmUserId: null,
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => brokerSnapshot) }),
+      rpc: mkGatewayRpc({
+        configPatchAndWaitForChange: vi.fn(async () => ({ ok: true })),
+      }),
+      log: vi.fn(),
+    });
+
+    await expect(
+      adapter.applyAddCustomerConfigPatch(
+        aliceSnapshot({ mattermostUserId: ALICE_OWNER_MM_ID }),
+        { _coachPersonalToken: "pat-1" },
+      ),
+    ).rejects.toThrow(/account fragment was empty/);
   });
 });
 
@@ -1513,8 +1549,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [
         { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
@@ -1554,12 +1590,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         patch.agents.list.find((agent) => agent.id === "octogee-alice-proj-orbit-coach"),
       ).not.toHaveProperty("tools");
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["mm-alice"],
+        dmPolicy: "allowlist",
+        allowFrom: [ALICE_OWNER_MM_ID],
+        groupPolicy: "open",
         groups: null,
       });
-      expect(patch.channels.mattermost.accounts["alice-coach"]).not.toHaveProperty("dmPolicy");
-      expect(patch.channels.mattermost.accounts["alice-coach"]).not.toHaveProperty("allowFrom");
       expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).not.toBeNull();
       return { mode: "rpc", attempts: 1, noop: true };
     });
@@ -1617,7 +1652,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
-  it("takes shared coach DM authorization only from the broker snapshot's platform admin id", async () => {
+  it("takes shared coach approval authorization from the owner's Mattermost id", async () => {
     const builderMmUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
     const platformAdminMmUserId = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
     const brokerSnapshot = {
@@ -1639,9 +1674,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
         dmPolicy: "allowlist",
-        allowFrom: [platformAdminMmUserId],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [builderMmUserId],
+        allowFrom: [builderMmUserId],
+        groupPolicy: "open",
       });
       return { mode: "rpc", attempts: 1, noop: true };
     });
@@ -1779,8 +1813,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [
         { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
@@ -1824,8 +1858,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -1893,8 +1927,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "provisioning",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -1995,8 +2029,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-fresh",
-      customerMmUserId: "mm-fresh",
+      mattermostUserId: FRESH_OWNER_MM_ID,
+      customerMmUserId: FRESH_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -2092,8 +2126,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-fresh",
-      customerMmUserId: "mm-fresh",
+      mattermostUserId: FRESH_OWNER_MM_ID,
+      customerMmUserId: FRESH_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -2371,8 +2405,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "provisioning",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-first",
-      customerMmUserId: "mm-first",
+      mattermostUserId: FIRST_OWNER_MM_ID,
+      customerMmUserId: FIRST_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -2407,8 +2441,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "provisioning",
       agentIds: [],
       repoUrl: "https://gitea.test/octogee/alice-workspace.git",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [{ scope: "coach", kind: "direct", channelId: "dm-alice" }],
       projects: [],
@@ -2446,8 +2480,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [],
       projects: [],
@@ -2736,8 +2770,8 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     const snapshot = fullSnapshot({
       coachToken: "pat-tester10",
       coachMmUserId: "mm-tester10-coach",
-      mattermostUserId: "mm-tester10",
-      customerMmUserId: "mm-tester10",
+      mattermostUserId: TESTER_OWNER_MM_ID,
+      customerMmUserId: TESTER_OWNER_MM_ID,
     });
     const rpc = mkGatewayRpc();
     patchMocks.applyConfigPatch.mockImplementationOnce(async (_args, options) => {
@@ -2849,8 +2883,8 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       status: "",
       agentIds: [],
       repoUrl: "",
-      mattermostUserId: "mm-alice",
-      customerMmUserId: "mm-alice",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
       greetingPosted: false,
       channels: [
         { scope: "workspace", kind: "general", channelId: "ws-1" },
@@ -2919,16 +2953,15 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     });
     expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).toMatchObject({
       dmPolicy: "disabled",
+      allowFrom: [ALICE_OWNER_MM_ID],
     });
-    expect(patch.channels.mattermost.accounts["alice-proj-orbit"]).not.toHaveProperty("allowFrom");
     // The plugin schema has no per-channel mute, so the coach account clears
     // `groups` rather than listing the project channel; the project channel
     // still reaches its own agent through the partitioned bindings above.
     expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
       dmPolicy: "allowlist",
-      allowFrom: [],
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-alice"],
+      allowFrom: [ALICE_OWNER_MM_ID],
+      groupPolicy: "open",
       groups: null,
     });
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();

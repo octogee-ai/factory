@@ -79,9 +79,28 @@ const binding = {
   inputPostId: "turn-1",
   channelDocPath: "workspaces/acme/channels/build",
   channelCreateAt: 100,
+  coachMmUserId: "agent-mm-user",
   coachToken: "coach-token",
   attentionMention: "@builder",
 };
+
+function finalizedEnvelope(): AgentActivityEnvelopeV1 {
+  const value = validEnvelope();
+  const ref = {
+    ...value.ref,
+    itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized,
+    ordinal: 2,
+  };
+  return {
+    schemaVersion: value.schemaVersion,
+    eventKey: createHash("sha256").update(agentActivityCanonicalKey(ref)).digest("hex"),
+    emittedAt: value.emittedAt,
+    ref,
+    redaction: value.redaction,
+    type: "turn.finalized",
+    outcome: "completed",
+  };
+}
 
 describe("normalized Activity intake", () => {
   it("parses every exact W1 envelope fixture without widening its v1 union", () => {
@@ -89,7 +108,7 @@ describe("normalized Activity intake", () => {
       path.resolve(__dirname, "../../../../../tests/fixtures/agent-conversation/agent-activity-envelopes.json"),
       "utf8",
     )) as { envelopes: unknown[] };
-    expect(fixture.envelopes.map((value) => parseActivityEnvelope(value).type)).toHaveLength(18);
+    expect(fixture.envelopes.map((value) => parseActivityEnvelope(value).type)).toHaveLength(15);
   });
 
   it("accepts only loopback requests with an exact active runtime binding", async () => {
@@ -100,7 +119,7 @@ describe("normalized Activity intake", () => {
       receipt: {
         eventKey: validEnvelope().eventKey,
         postId: "post-1",
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     }));
     const envelope = validEnvelope();
@@ -118,27 +137,27 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "persisted",
         postIds: ["post-1"],
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     });
     expect(append).toHaveBeenCalledWith({ envelope, binding, attachment: undefined });
     expect(onPersisted).toHaveBeenCalledWith({
       envelope,
       binding,
-      activityRootPostId: "turn-1",
+      activityRootPostId: "activity-root-1",
       outcome: "persisted",
     });
   });
 
-  it("accepts a same-channel turn-start receipt that adopts the input root", async () => {
+  it("accepts a same-channel turn-start receipt for a structured Activity root", async () => {
     const envelope = startedEnvelope("human");
     const append = vi.fn(async () => ({
       outcome: "persisted" as const,
-      postIds: [],
+      postIds: ["activity-root-1"],
       receipt: {
         eventKey: envelope.eventKey,
-        postId: binding.mainRootPostId,
-        activityRootPostId: binding.mainRootPostId,
+        postId: "activity-root-1",
+        activityRootPostId: "activity-root-1",
       },
     }));
 
@@ -151,10 +170,32 @@ describe("normalized Activity intake", () => {
     )).resolves.toMatchObject({
       status: 201,
       body: {
-        postIds: [],
-        activityRootPostId: binding.mainRootPostId,
+        postIds: ["activity-root-1"],
+        activityRootPostId: "activity-root-1",
       },
     });
+  });
+
+  it("rejects a turn-start acknowledgement that adopts the human Mattermost root", async () => {
+    const envelope = startedEnvelope("human");
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: { readiness: () => "ready", resolve: vi.fn(async () => binding) },
+        sinkFor: vi.fn(() => ({
+          append: async () => ({
+            outcome: "persisted" as const,
+            postIds: [binding.mainRootPostId],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: binding.mainRootPostId,
+              activityRootPostId: binding.mainRootPostId,
+            },
+          }),
+        })),
+      },
+    )).rejects.toMatchObject({ status: 503, code: "activity_integrity_failure" });
   });
 
   it("keeps a durable append successful when its observer fails", async () => {
@@ -171,7 +212,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: envelope.eventKey,
               postId: "post-1",
-              activityRootPostId: "turn-1",
+              activityRootPostId: "activity-root-1",
             },
           }),
         })),
@@ -200,7 +241,7 @@ describe("normalized Activity intake", () => {
             receipt: {
               eventKey: validEnvelope().eventKey,
               postId: "post-1",
-              activityRootPostId: "turn-1",
+              activityRootPostId: "activity-root-1",
             },
           })),
         })),
@@ -212,9 +253,68 @@ describe("normalized Activity intake", () => {
       body: {
         outcome: "duplicate",
         postIds: ["post-1"],
-        activityRootPostId: "turn-1",
+        activityRootPostId: "activity-root-1",
       },
     });
+  });
+
+  it("releases a run binding only after an acknowledged finalization commit", async () => {
+    const envelope = finalizedEnvelope();
+    const releaseRun = vi.fn();
+    const append = vi.fn(async () => ({
+      outcome: "persisted" as const,
+      postIds: [],
+      receipt: {
+        eventKey: envelope.eventKey,
+        activityRootPostId: "activity-root-1",
+      },
+    }));
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: {
+          readiness: () => "ready",
+          resolve: vi.fn(async () => binding),
+          resolveRun: vi.fn(),
+          releaseRun,
+        },
+        sinkFor: vi.fn(() => ({ append })),
+      },
+    )).resolves.toMatchObject({ status: 201, body: { postIds: [] } });
+
+    expect(releaseRun).toHaveBeenCalledOnce();
+    expect(releaseRun).toHaveBeenCalledWith(envelope.ref.runId);
+  });
+
+  it("retains a run binding when finalization acknowledgement verification fails", async () => {
+    const envelope = finalizedEnvelope();
+    const releaseRun = vi.fn();
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope },
+      {
+        registry: {
+          readiness: () => "ready",
+          resolve: vi.fn(async () => binding),
+          resolveRun: vi.fn(),
+          releaseRun,
+        },
+        sinkFor: vi.fn(() => ({
+          append: vi.fn(async () => ({
+            outcome: "persisted" as const,
+            postIds: ["unexpected-post"],
+            receipt: {
+              eventKey: envelope.eventKey,
+              postId: "unexpected-post",
+              activityRootPostId: "activity-root-1",
+            },
+          })),
+        })),
+      },
+    )).rejects.toMatchObject({ status: 503, code: "activity_integrity_failure" });
+
+    expect(releaseRun).not.toHaveBeenCalled();
   });
 
   it("returns 401 for non-loopback sockets without consulting the registry", async () => {
@@ -304,8 +404,37 @@ describe("normalized Activity intake", () => {
     }
   });
 
+  it("rejects the retired custom approval transition envelope", () => {
+    const value = validEnvelope() as unknown as Record<string, unknown>;
+    delete value.item;
+    value.type = "control.transition";
+    value.control = { from: "waiting", to: "approved", actorId: "mm-user-1" };
+
+    expect(() => parseActivityEnvelope(value)).toThrowError(
+      expect.objectContaining({ status: 422, code: "invalid_event_type" }),
+    );
+  });
+
+  it.each([
+    ["approved", "completed"],
+    ["denied", "failed"],
+  ] as const)("accepts immutable native approval %s rows", (decision, status) => {
+    const value = validEnvelope();
+    if (value.type !== "item.completed") throw new Error("expected item");
+    value.ref.itemId = `octogee:approval:tool-1:resolved-${decision}`;
+    value.item = { kind: "approval", status, summary: `Approval ${decision}` };
+    value.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(value.ref))
+      .digest("hex");
+
+    expect(parseActivityEnvelope(value)).toEqual(value);
+  });
+
   it.each([
     ["octogee:approval:approval-1", "tool", "completed", 1, "invalid_approval"],
+    ["octogee:approval:approval-1", "approval", "completed", 2, "invalid_approval"],
+    ["octogee:approval:", "approval", "waiting", 1, "invalid_approval"],
+    ["approval-1", "approval", "waiting", 1, "invalid_approval"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "tool", "failed", 1, "invalid_terminal_error"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "error", "completed", 1, "invalid_terminal_error"],
     [AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError, "error", "failed", 2, "invalid_terminal_error"],

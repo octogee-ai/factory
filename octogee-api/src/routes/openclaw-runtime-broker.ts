@@ -50,9 +50,10 @@ interface ChannelProjectionTarget {
 }
 
 interface AuthorizedConversationTarget extends ChannelProjectionTarget {
-  expectedChannelTeamId: string;
-  expectedChannelName: string;
-  expectedChannelType: "P";
+  expectedChannelTeamId: string | null;
+  expectedChannelName: string | null;
+  expectedChannelType: "P" | "D";
+  expectedMemberIds?: string[];
 }
 
 const TICKETS = "gatewayTickets";
@@ -471,6 +472,53 @@ async function resolveAuthorizedConversationTarget(
     expectedChannelTeamId,
     expectedChannelName,
     expectedChannelType: "P",
+  };
+}
+
+async function resolveAuthorizedDirectConversationTarget(
+  db: Firestore,
+  gatewayId: string,
+  agentId: string,
+  conversationId: string,
+  ownerUserId: string,
+): Promise<AuthorizedConversationTarget | null | "forbidden"> {
+  if (!MATTERMOST_ID_RE.test(conversationId) || !MATTERMOST_ID_RE.test(ownerUserId)) {
+    return "forbidden";
+  }
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind !== "coach") return "forbidden";
+  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
+  if (identity === "forbidden") return identity;
+  if (!identity || !MATTERMOST_ID_RE.test(identity.coachMmUserId)) return null;
+  if (identity.coachMmUserId === ownerUserId) return "forbidden";
+
+  const [owner, ledger] = await Promise.all([
+    db.doc(`users/${identity.uid}`).get(),
+    db.doc(`workspaces/${identity.workspaceSlug}/channels/coach-dm`).get(),
+  ]);
+  if (
+    !owner.exists
+    || readPath(owner.data() ?? {}, "mattermost.userId") !== ownerUserId
+  ) return "forbidden";
+  const ledgerData = ledger.data() ?? {};
+  if (
+    !ledger.exists
+    || !authorizedChannelContext(ledgerData, {
+      workspaceSlug: identity.workspaceSlug,
+      ownerPath: `workspaces/${identity.workspaceSlug}`,
+      channelName: "coach-dm",
+      lane: "workspace",
+    })
+  ) return null;
+
+  const expectedMemberIds = [identity.coachMmUserId, ownerUserId].sort();
+  return {
+    primaryChannelId: conversationId,
+    channelDocPath: `workspaces/${identity.workspaceSlug}/channels/coach-dm`,
+    expectedChannelTeamId: null,
+    expectedChannelName: null,
+    expectedChannelType: "D",
+    expectedMemberIds,
   };
 }
 
@@ -1160,6 +1208,27 @@ function mountActivityRoutes(
       bound.gatewayId,
       stringBody(req, "agentId"),
       stringBody(req, "conversationId"),
+    );
+    if (target === "forbidden") {
+      forbidden(res);
+      return;
+    }
+    if (!target) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ target });
+  });
+
+  router.post("/activity/direct-conversation-target", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const target = await resolveAuthorizedDirectConversationTarget(
+      db,
+      bound.gatewayId,
+      stringBody(req, "agentId"),
+      stringBody(req, "conversationId"),
+      stringBody(req, "ownerUserId"),
     );
     if (target === "forbidden") {
       forbidden(res);
