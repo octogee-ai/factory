@@ -2025,13 +2025,14 @@ function scheduleBuilderTargetHoldFinalization(input: {
   processGate: SurgeOpenClawProcessSupervisorClient;
   release: ActiveBuilderSurgeRelease;
   request: BuilderSurgeTargetRequest;
+  runCancellation: <T>(work: () => Promise<T>) => Promise<T>;
   waitForActiveProvisioningDrain: () => Promise<void>;
 }): void {
-  void (async () => {
+  void input.runCancellation(async () => {
     await input.waitForActiveProvisioningDrain();
     if (input.release.cancelled) return;
     await input.processGate.finalizeTargetCancellation(input.request);
-  })().catch((error) => {
+  }).catch((error) => {
     input.log(
       `[surge-handoff] configured Builder target cancellation could not be finalized: ` +
       `${error instanceof Error ? error.message : String(error)}`,
@@ -2157,7 +2158,7 @@ async function configuredBuilderSelfReleaseReserved(input: {
   return !slug || !(await input.configuredBuilderAssigned(slug));
 }
 
-export function createBuilderSurgeGateWiring(input: {
+interface BuilderSurgeGateWiringOptions {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
@@ -2168,7 +2169,9 @@ export function createBuilderSurgeGateWiring(input: {
   reconcileImportedWorkspace?: (slug: string) => void;
   attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
   configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
-}): BuilderSurgeGateWiring {
+}
+
+export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOptions): BuilderSurgeGateWiring {
   const {
     adapter,
     processGate,
@@ -2182,10 +2185,17 @@ export function createBuilderSurgeGateWiring(input: {
     configuredBuilderAssigned = async () => false,
   } = input;
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
-  const reholdAfterReleaseFailure = async (
+  let cancellationQueue = Promise.resolve();
+  const runCancellation = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = cancellationQueue.then(work, work);
+    cancellationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const reholdAfterReleaseFailure = (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
-  ): Promise<void> => {
+  ): Promise<void> => runCancellation(async () => {
+    if (release.cancelled) return;
     const state = await processGate!.rehold(request);
     if (state.phase === "cancelling" && !release.cancelled) {
       scheduleBuilderTargetHoldFinalization({
@@ -2193,10 +2203,11 @@ export function createBuilderSurgeGateWiring(input: {
         processGate: processGate!,
         release,
         request,
+        runCancellation,
         waitForActiveProvisioningDrain,
       });
     }
-  };
+  });
   const attachClaimedTargetWithProvisioning = (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
@@ -2302,12 +2313,12 @@ export function createBuilderSurgeGateWiring(input: {
     },
     async unreserveSurgeTarget(request) {
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
-      return unreserveConfiguredBuilderTarget({
+      return runCancellation(() => unreserveConfiguredBuilderTarget({
         activeRelease, configuredBuilderAssigned,
         processGate,
         request,
         waitForActiveProvisioningDrain,
-      });
+      }));
     },
     releaseSurgeReadiness(input) {
       if (activeRelease) {

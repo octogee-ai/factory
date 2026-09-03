@@ -2064,6 +2064,7 @@ describe("queued-rsync migration control handlers", () => {
           migrationId: prepare.migrationId, slug: "chris", targetPodUid: "builder-pod",
         });
         if (outcome === "cancellation-failed") {
+          expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("OpenClaw startup failed"));
           expect(response.getBody()).toMatchObject({
             message: "Builder activation failed and could not be cancelled",
           });

@@ -704,6 +704,7 @@ export function createSurgeOpenClawProcessSupervisorClient(
     return new Promise((resolve, reject) => {
       const req = request({
         socketPath,
+        agent: false,
         path: "/",
         method: "POST",
         headers: {

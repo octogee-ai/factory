@@ -44,6 +44,7 @@ import {
   addCustomerToGateway,
   type CustomerLifecycleAdapter,
 } from "../lib/customer-lifecycle.js";
+import { createSurgeOpenClawProcessGate } from "../lib/surge-openclaw-process-gate.js";
 import type {
   SurgeOpenClawProcessGateState,
   SurgeOpenClawProcessRequest,
@@ -1610,6 +1611,58 @@ describe("configured Builder surge release", () => {
         phase: "held",
       });
     } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("finishes explicit cancellation while failure cleanup is already finalizing", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-cancel-"));
+    tmpDirs.push(dir);
+    const gate = createSurgeOpenClawProcessGate(dir);
+    const request = { migrationId: "mig-builder", slug: "ceckert-test", targetPodUid: "target-pod" };
+    const identity = { ...request, podUid: request.targetPodUid };
+    const finish = Promise.withResolvers<void>();
+    let finalization: Promise<SurgeOpenClawProcessGateState> | undefined;
+    try {
+      await gate.ensure({ podUid: identity.podUid, readinessReleased: false });
+      await gate.hydrateTarget(identity);
+      const processGate = {
+        status: async () => {
+          const snapshot = (await gate.read())!;
+          if (snapshot.phase === "cancelling") await finalization;
+          return snapshot;
+        },
+        claimTargetCompletion: () => gate.claimTargetCompletion(identity),
+        rehold: () => gate.reholdTarget(identity),
+        finalizeTargetCancellation: () => {
+          finalization = finish.promise.then(() => gate.finalizeTargetCancellation(identity));
+          return finalization;
+        },
+        unreserve: () => gate.unreserveTarget(identity),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const { adapter } = configuredBuilderLifecycleAdapter();
+      const wiring = createBuilderSurgeGateWiring({
+        adapter, processGate,
+        surgeReadiness: {} as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined,
+        log: () => undefined,
+        provisioning: createProvisioningCounter().provisioning,
+        reconcileImportedWorkspace: () => undefined,
+        attachConfiguredBuilderBeforeOpenClaw: async () => { throw new Error("write EPIPE"); },
+      });
+
+      await expect(wiring.releaseSurgeReadiness(request)).rejects.toThrow("write EPIPE");
+      const cancelled = wiring.unreserveSurgeTarget(request);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      finish.resolve();
+
+      await expect(cancelled).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
+      await expect(gate.read()).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
+    } finally {
+      finish.resolve();
+      await finalization;
       vi.unstubAllEnvs();
     }
   });

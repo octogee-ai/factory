@@ -1,4 +1,5 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -326,6 +327,44 @@ describe("surge OpenClaw process gate", () => {
 });
 
 describe("surge OpenClaw process supervisor", () => {
+  it("permits startup after the supervisor closes an idle socket during blocked setup", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(openclawDir, "supervisor.sock");
+    const closed = new Int32Array(new SharedArrayBuffer(4));
+    const worker = new Worker(`
+      const http = require("node:http");
+      const { parentPort, workerData } = require("node:worker_threads");
+      let socket;
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => res.end(JSON.stringify({
+          version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held",
+        })));
+      });
+      server.on("connection", (connected) => { socket = connected; });
+      server.listen(workerData.socketPath, () => parentPort.postMessage("ready"));
+      parentPort.on("message", () => {
+        socket.destroy();
+        setImmediate(() => {
+          Atomics.store(workerData.closed, 0, 1);
+          Atomics.notify(workerData.closed, 0);
+        });
+      });
+    `, { eval: true, workerData: { socketPath, closed } });
+    try {
+      await once(worker, "message");
+      const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+      await client.status();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      worker.postMessage("expire-idle-connection");
+      expect(Atomics.wait(closed, 0, 0, 5_000)).not.toBe("timed-out");
+
+      await expect(client.permitNormal()).resolves.toMatchObject({ podUid: "target-pod" });
+    } finally {
+      await worker.terminate();
+    }
+  });
+
   it("owns a target child only after permit, prepares it after transfer, and returns it held on abort", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);

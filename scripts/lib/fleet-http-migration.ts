@@ -1832,6 +1832,10 @@ async function activateConfiguredBuilderImport(
     });
     signal.throwIfAborted();
   } catch (error) {
+    (deps.log ?? console.log)(
+      `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
     cancel();
     await cancellation;
     if (cancellationFailure) {
