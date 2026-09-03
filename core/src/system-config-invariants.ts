@@ -401,7 +401,7 @@ export function platformInvariantTable(
       value: isolated ? `/g/${gatewayId}/openclaw` : ABSENT,
     },
     { kind: "exact", path: "gateway.controlUi.allowInsecureAuth", value: ABSENT },
-    { kind: "exact", path: "gateway.controlUi.dangerouslyDisableDeviceAuth", value: isolated ? false : ABSENT },
+    { kind: "exact", path: "gateway.controlUi.dangerouslyDisableDeviceAuth", value: ABSENT },
     { kind: "exact", path: "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback", value: false },
     { kind: "exact", path: "logging.redactSensitive", value: ABSENT },
     {

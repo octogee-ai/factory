@@ -71,6 +71,25 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, barn)).toEqual([]);
   });
 
+  it("lets OpenClaw retire the Builder Control UI device-auth bypass", () => {
+    const config: Record<string, unknown> = {
+      gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
+    };
+
+    reconcilePlatformInvariants(config, builder);
+
+    const gateway = config.gateway as { controlUi: Record<string, unknown> };
+    expect(gateway.controlUi).not.toHaveProperty("dangerouslyDisableDeviceAuth");
+    expect(platformInvariantViolations(config, builder)).toEqual([]);
+  });
+
+  it("accepts a Builder config OpenClaw doctor already stripped the bypass from", () => {
+    const config: Record<string, unknown> = { gateway: { controlUi: {} } };
+
+    expect(platformInvariantViolations(config, builder))
+      .not.toContain("gateway.controlUi.dangerouslyDisableDeviceAuth");
+  });
+
   it("reconciles Barn auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },

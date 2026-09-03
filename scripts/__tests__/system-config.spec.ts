@@ -255,9 +255,9 @@ describe("system_config restore", () => {
     expect(seeded.gateway.controlUi).toMatchObject({
       allowedOrigins: ["https://api.octogee.com"],
       basePath: "/g/robert-xs-bd6a8f5a/openclaw",
-      dangerouslyDisableDeviceAuth: false,
     });
     expect(seeded.gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
+    expect(seeded.gateway.controlUi).not.toHaveProperty("dangerouslyDisableDeviceAuth");
   });
 
   it("seeds a Builder gateway from the slim boot template by default", async () => {
