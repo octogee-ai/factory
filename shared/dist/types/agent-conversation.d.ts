@@ -3,6 +3,7 @@ export declare const AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION: 1;
 export declare const AGENT_ACTIVITY_RESERVED_ITEM_IDS: {
     readonly runRoot: "octogee:run-root";
     readonly turnFinalized: "octogee:turn-finalized";
+    readonly answerCommit: "octogee:answer-commit";
     readonly terminalError: "octogee:terminal-error";
     readonly approvalPrefix: "octogee:approval:";
 };
@@ -80,6 +81,21 @@ export interface AgentActivityEnvelopeBaseV1 {
         appliedAt: "producer";
     };
 }
+export type AgentAnswerDeliveryOutcome = "delivered" | "partial" | "failed" | "suppressed" | "not-attempted";
+export type AgentAnswerPartKind = "text" | "media" | "voice" | "poll" | "card" | "preview" | "unknown";
+export interface AgentAnswerPart {
+    postId: string;
+    kind: AgentAnswerPartKind;
+    index: number;
+    rootPostId?: string;
+    threadId?: string;
+}
+export interface AgentAnswerCommitRecord {
+    terminalOutcome: "completed" | "failed" | "stopped";
+    deliveryOutcome: AgentAnswerDeliveryOutcome;
+    postIds: string[];
+    parts: AgentAnswerPart[];
+}
 export type AgentActivityEnvelopeV1 = (AgentActivityEnvelopeBaseV1 & {
     type: "turn.started";
 }) | (AgentActivityEnvelopeBaseV1 & {
@@ -88,6 +104,9 @@ export type AgentActivityEnvelopeV1 = (AgentActivityEnvelopeBaseV1 & {
 }) | (AgentActivityEnvelopeBaseV1 & {
     type: "turn.finalized";
     outcome: "completed" | "failed" | "stopped";
+}) | (AgentActivityEnvelopeBaseV1 & {
+    type: "answer.committed";
+    answer: AgentAnswerCommitRecord;
 });
 type AgentActivityEventKeyRef = Pick<AgentActivityIngressRef, "conversationId" | "runId" | "itemId" | "semanticVersion">;
 export declare function agentActivityCanonicalKey(ref: AgentActivityEventKeyRef): string;

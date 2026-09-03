@@ -64,6 +64,7 @@ function issue(
     sessionId: SESSION_ID,
     uid: "uid-owner",
     gatewayId: "bender",
+    workspaceSlug: "alice",
     revisionId: "bender-r7",
     brokerProfile,
     permissionSetIds,
@@ -161,6 +162,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     const redeem = vi.fn(async (input) => ({
       uid: "uid-owner",
       gatewayId: input.gatewayId,
+      workspaceSlug: "alice",
       revisionId: input.revisionId,
       brokerProfile: "native-owner" as const,
       permissionSetIds: [],
@@ -824,6 +826,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
         headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
       });
+      const browserClosed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
       let collisionObserved!: () => void;
       const collidingFrame = new Promise<void>((resolve) => { collisionObserved = resolve; });
       const terminalFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -890,9 +893,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
           payload: { accepted: true },
         }));
       } else if (terminal === "malformed-response") {
-        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
         upstreamSocket?.send(JSON.stringify({ type: "res", id: "config-write" }));
-        await closed;
+        await browserClosed;
       } else if (terminal === "late-malformed-response") {
         await expect(terminalFrame).resolves.toMatchObject({
           id: "config-write",
@@ -900,25 +902,21 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
           error: { code: "UPSTREAM_TIMEOUT" },
         });
         expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
-        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
         upstreamSocket?.send(JSON.stringify({ type: "res", id: "config-write", ok: "maybe" }));
-        await closed;
+        await browserClosed;
       } else if (terminal === "hard-timeout") {
         await expect(terminalFrame).resolves.toMatchObject({
           id: "config-write",
           ok: false,
           error: { code: "UPSTREAM_TIMEOUT" },
         });
-        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
-        await closed;
+        await browserClosed;
       } else if (terminal === "browser-close") {
-        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
         browser.close();
-        await closed;
+        await browserClosed;
       } else {
-        const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
         upstreamSocket?.close();
-        await closed;
+        await browserClosed;
       }
 
       if (terminal === "result" || terminal === "late-result") {
@@ -936,6 +934,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         await retainedMutationLease?.release();
       }
       if (browser.readyState === WebSocket.OPEN) browser.close();
+      if (browser.readyState !== WebSocket.CLOSED) await browserClosed;
       await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
     },
   );
@@ -1270,6 +1269,160 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     }));
     expect(browser.readyState).toBe(WebSocket.OPEN);
     browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
+  it("includes Mattermost discovery in the RPC deadline and aborts its work", async () => {
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+            },
+          }));
+        } else if (frame.method === "status") {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { ready: true } }));
+        }
+      });
+    });
+    let preparationSignal: AbortSignal | undefined;
+    const mattermostChat = {
+      prepare: async (
+        frame: { method: string },
+        _session: unknown,
+        signal?: AbortSignal,
+      ) => {
+        if (frame.method !== "sessions.list") return null;
+        if (!signal) throw new Error("Mattermost preparation must receive an AbortSignal");
+        preparationSignal = signal;
+        return await new Promise<never>(() => undefined);
+      },
+    };
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
+      rpcTimeoutMs: 20,
+      mattermostChat,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    let timedOutFrame: Record<string, unknown> | undefined;
+    const statusFrame = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("Mattermost preparation did not time out")), 1_000);
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.event === "connect.challenge") {
+          browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          browser.send(JSON.stringify({ type: "req", id: "sessions-slow", method: "sessions.list", params: {} }));
+        } else if (frame.id === "sessions-slow") {
+          timedOutFrame = frame;
+          browser.send(JSON.stringify({ type: "req", id: "status-after", method: "status", params: {} }));
+        } else if (frame.id === "status-after") {
+          clearTimeout(deadline);
+          resolve(frame);
+        }
+      });
+    });
+
+    expect(timedOutFrame).toMatchObject({ ok: false, error: { code: "UPSTREAM_TIMEOUT" } });
+    expect(preparationSignal?.aborted).toBe(true);
+    expect(statusFrame).toMatchObject({ ok: true, payload: { ready: true } });
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  });
+
+  it("aborts in-progress Mattermost discovery when the browser disconnects", async () => {
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+            },
+          }));
+        }
+      });
+    });
+    let preparationSignal: AbortSignal | undefined;
+    let preparationStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => { preparationStarted = resolve; });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: env(upstreamPort),
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => "gateway-secret",
+      rpcTimeoutMs: 5_000,
+      mattermostChat: {
+        prepare: async (frame, _session, signal) => {
+          if (frame.method !== "sessions.list") return null;
+          preparationSignal = signal;
+          preparationStarted();
+          return await new Promise<never>(() => undefined);
+        },
+      },
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    browser.on("message", (data) => {
+      const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (frame.event === "connect.challenge") {
+        browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+      } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+        browser.send(JSON.stringify({ type: "req", id: "sessions-disconnect", method: "sessions.list", params: {} }));
+      }
+    });
+
+    await started;
+    const closed = new Promise<void>((resolve) => browser.once("close", () => resolve()));
+    browser.close();
+    await closed;
+    await vi.waitFor(() => expect(preparationSignal?.aborted).toBe(true));
+    expect(preparationSignal?.reason).toBeInstanceOf(DOMException);
+    expect((preparationSignal?.reason as DOMException).name).toBe("AbortError");
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 

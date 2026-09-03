@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import {
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   agentActivityCanonicalKey,
+  type AgentAnswerCommitRecord,
+  type AgentAnswerPart,
+  type AgentAnswerPartKind,
   type AgentActivityEnvelopeV1,
   type AgentActivityIngressRef,
   type AgentAttention,
@@ -30,11 +33,21 @@ const ATTACHMENT_SCAN_CHUNK_BYTES = 256 * 1024;
 const ATTACHMENT_SCAN_OVERLAP_CHARS = 8 * 1024;
 const ITEM_COMPLETED = "item.completed" as const;
 const TURN_STARTED = "turn.started" as const;
+const ANSWER_COMMITTED = "answer.committed" as const;
 const ACTIVITY_RUN_ROOT_KIND = "activity.run-root" as const;
 const ACTIVITY_RUN_COMPLETE_KIND = "activity.run-complete" as const;
 const ACTIVITY_RUN_COMPLETE_ITEM_ID = "activity.run-complete" as const;
 const ACTIVITY_ITEM_KIND_PREFIX = "activity." as const;
 const UPLOAD_RESULT_UNKNOWN = "upload-result-unknown" as const;
+const ANSWER_PART_KINDS = new Set<AgentAnswerPartKind>([
+  "text", "media", "voice", "poll", "card", "preview", "unknown",
+]);
+const ANSWER_DELIVERY_OUTCOMES = new Set<AgentAnswerCommitRecord["deliveryOutcome"]>([
+  "delivered", "partial", "failed", "suppressed", "not-attempted",
+]);
+const ANSWER_TERMINAL_OUTCOMES = new Set<AgentAnswerCommitRecord["terminalOutcome"]>([
+  "completed", "failed", "stopped",
+]);
 
 export interface ActivitySinkBinding {
   mainChannelId: string;
@@ -122,6 +135,85 @@ function canonicalJson(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
+function exactRecordKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  allowed: readonly string[] = required,
+): boolean {
+  const keys = Object.keys(value);
+  const allowedKeys = new Set(allowed);
+  return required.every((key) => keys.includes(key))
+    && keys.every((key) => allowedKeys.has(key));
+}
+
+function persistedAnswerPart(value: unknown, index: number): AgentAnswerPart | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const part = value as Record<string, unknown>;
+  const valid = [
+    exactRecordKeys(part, ["postId", "kind", "index"], [
+      "postId", "kind", "index", "rootPostId", "threadId",
+    ]),
+    typeof part.postId === "string",
+    typeof part.postId === "string" && part.postId.length > 0,
+    ANSWER_PART_KINDS.has(part.kind as AgentAnswerPartKind),
+    part.index === index,
+    part.rootPostId === undefined || typeof part.rootPostId === "string" && part.rootPostId.length > 0,
+    part.threadId === undefined || typeof part.threadId === "string" && part.threadId.length > 0,
+  ].every(Boolean);
+  if (!valid) return null;
+  return {
+    postId: part.postId as string,
+    kind: part.kind as AgentAnswerPartKind,
+    index,
+    ...(typeof part.rootPostId === "string" ? { rootPostId: part.rootPostId } : {}),
+    ...(typeof part.threadId === "string" ? { threadId: part.threadId } : {}),
+  };
+}
+
+function validPersistedAnswerSequence(
+  postIds: readonly unknown[],
+  parts: readonly AgentAnswerPart[],
+): boolean {
+  return [
+    !postIds.some((postId) => typeof postId !== "string" || postId.length === 0),
+    new Set(postIds).size === postIds.length,
+    postIds.length === parts.length,
+    !postIds.some((postId, index) => postId !== parts[index]?.postId),
+  ].every(Boolean);
+}
+
+function persistedAnswerCommit(value: unknown): AgentAnswerCommitRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const answer = value as Record<string, unknown>;
+  if (
+    !exactRecordKeys(answer, ["terminalOutcome", "deliveryOutcome", "postIds", "parts"])
+    || !ANSWER_TERMINAL_OUTCOMES.has(answer.terminalOutcome as AgentAnswerCommitRecord["terminalOutcome"])
+    || !ANSWER_DELIVERY_OUTCOMES.has(answer.deliveryOutcome as AgentAnswerCommitRecord["deliveryOutcome"])
+    || !Array.isArray(answer.postIds)
+    || !Array.isArray(answer.parts)
+  ) return null;
+  const postIds = answer.postIds as unknown[];
+  const parts = (answer.parts as unknown[]).map(persistedAnswerPart);
+  if (parts.some((part) => part === null)) return null;
+  const validParts = parts as AgentAnswerPart[];
+  if (!validPersistedAnswerSequence(postIds, validParts)) return null;
+  const deliveryOutcome = answer.deliveryOutcome as AgentAnswerCommitRecord["deliveryOutcome"];
+  const requiresParts = deliveryOutcome === "delivered" || deliveryOutcome === "partial";
+  if (requiresParts ? validParts.length === 0 : validParts.length !== 0) return null;
+  return {
+    terminalOutcome: answer.terminalOutcome as AgentAnswerCommitRecord["terminalOutcome"],
+    deliveryOutcome,
+    postIds: postIds as string[],
+    parts: validParts,
+  };
+}
+
+function validMattermostRevision(post: ActivityMattermostPost): boolean {
+  return Number.isSafeInteger(post.createAt) && post.createAt! >= 0
+    && Number.isSafeInteger(post.editAt) && post.editAt! >= 0
+    && Number.isSafeInteger(post.deleteAt) && post.deleteAt! >= 0;
+}
+
 export function activityPayloadDigest(
   envelope: AgentActivityEnvelopeV1,
   attachment?: Uint8Array,
@@ -180,7 +272,34 @@ function runRootEventKey(ref: AgentActivityIngressRef): string {
   });
 }
 
+function answerCommitEventKey(ref: AgentActivityIngressRef): string {
+  return eventKeyFor({
+    ...ref,
+    itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.answerCommit,
+    semanticVersion: 1,
+  });
+}
+
+function requiresAnswerCommit(ref: AgentActivityIngressRef): boolean {
+  const [agentPrefix, agentId, provider, peerKind, channelId, ...rest] =
+    ref.sessionKey.split(":");
+  return ref.origin === "human"
+    && ref.parentRunId === undefined
+    && ref.retryOfRunId === undefined
+    && ref.requesterSessionKey === undefined
+    && typeof ref.inputPostId === "string"
+    && ref.inputPostId.length > 0
+    && agentPrefix === "agent"
+    && agentId === ref.agentId
+    && provider === "mattermost"
+    && (peerKind === "channel" || peerKind === "group")
+    && channelId === ref.conversationId
+    && ref.conversationId === ref.mainChannelId
+    && rest.length === 0;
+}
+
 function projectedRunStatus(envelope: AgentActivityEnvelopeV1): AgentRunStatus {
+  if (envelope.type === ANSWER_COMMITTED) return envelope.answer.terminalOutcome;
   if (envelope.type !== ITEM_COMPLETED) return "running";
   if (envelope.ref.itemId === ACTIVITY_RUN_COMPLETE_ITEM_ID) {
     if (envelope.item.summary.startsWith("🛑")) return "stopped";
@@ -192,6 +311,7 @@ function projectedRunStatus(envelope: AgentActivityEnvelopeV1): AgentRunStatus {
 
 function projectedActivityKind(envelope: AgentActivityEnvelopeV1): string {
   if (envelope.type === TURN_STARTED) return ACTIVITY_RUN_ROOT_KIND;
+  if (envelope.type === ANSWER_COMMITTED) return "agent.answer-commit";
   if (envelope.type === ITEM_COMPLETED && envelope.ref.itemId === ACTIVITY_RUN_COMPLETE_ITEM_ID) {
     return ACTIVITY_RUN_COMPLETE_KIND;
   }
@@ -225,7 +345,10 @@ function activityPostHasExactProps(
     semanticVersion: envelope.ref.semanticVersion,
     kind: projectedActivityKind(envelope),
   };
-  return Object.entries(expected).every(([key, value]) => props[key] === value);
+  if (envelope.type === ANSWER_COMMITTED) expected.answer = envelope.answer;
+  return Object.entries(expected).every(
+    ([key, value]) => canonicalJson(props[key]) === canonicalJson(value),
+  );
 }
 
 function activityRootPostIdMatches(
@@ -238,6 +361,137 @@ function activityRootPostIdMatches(
     return props.activityRootPostId === undefined || props.activityRootPostId === post.id;
   }
   return props.activityRootPostId === expectedActivityRootPostId;
+}
+
+function answerPartHasExpectedRunIdentity(
+  post: ActivityMattermostPost,
+  ref: AgentActivityIngressRef,
+): boolean {
+  const value = post.props.octogee;
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const props = value as Record<string, unknown>;
+  if (props.kind !== undefined || props.itemId !== undefined || props.toolCallId !== undefined) {
+    return false;
+  }
+  const expected: Record<string, unknown> = {
+    schemaVersion: 3,
+    projectionKind: "run",
+    conversationId: ref.conversationId,
+    turnId: ref.turnId,
+    runId: ref.runId,
+    agentId: ref.agentId,
+    sessionKey: ref.sessionKey,
+    origin: ref.origin,
+    mainChannelId: ref.mainChannelId,
+    mainRootPostId: ref.mainRootPostId,
+    inputPostId: ref.inputPostId,
+  };
+  return Object.entries(expected).every(
+    ([key, expectedValue]) => canonicalJson(props[key]) === canonicalJson(expectedValue),
+  );
+}
+
+function answerPartRecordMatches(input: {
+  post: ActivityMattermostPost | null;
+  part: AgentAnswerPart;
+  ref: AgentActivityIngressRef;
+  binding: ActivitySinkBinding;
+  commitCreateAt?: number;
+}): boolean {
+  const { post, part, ref, binding, commitCreateAt } = input;
+  if (!post) return false;
+  const withinCommitRevision = commitCreateAt === undefined || [
+    post.createAt! <= commitCreateAt,
+    post.editAt! <= commitCreateAt,
+  ].every(Boolean);
+  return [
+    post.id === part.postId,
+    post.userId === binding.coachMmUserId,
+    post.channelId === binding.mainChannelId,
+    post.rootId === ref.mainRootPostId,
+    validMattermostRevision(post),
+    post.deleteAt === 0,
+    withinCommitRevision,
+    part.rootPostId === undefined || part.rootPostId === post.rootId,
+    part.threadId === undefined || part.threadId === post.rootId,
+    answerPartHasExpectedRunIdentity(post, ref),
+  ].every(Boolean);
+}
+
+function committedReceiptPostId(
+  receipt: ActivityWriteReceiptV1 | null,
+  eventKey: string,
+): string | null {
+  if (!receipt) return null;
+  const valid = [
+    receipt.eventKey === eventKey,
+    receipt.state === "committed",
+    typeof receipt.postId === "string",
+    Boolean(receipt.postId),
+  ].every(Boolean);
+  return valid ? receipt.postId ?? null : null;
+}
+
+function expectedAnswerCommitProps(
+  envelope: Extract<AgentActivityEnvelopeV1, { type: "turn.finalized" }>,
+  activityRootPostId: string,
+  eventKey: string,
+): Record<string, unknown> {
+  return {
+    eventKey,
+    schemaVersion: 3,
+    projectionKind: "run",
+    conversationId: envelope.ref.conversationId,
+    turnId: envelope.ref.turnId,
+    runId: envelope.ref.runId,
+    parentRunId: envelope.ref.parentRunId,
+    retryOfRunId: envelope.ref.retryOfRunId,
+    agentId: envelope.ref.agentId,
+    sessionKey: envelope.ref.sessionKey,
+    origin: envelope.ref.origin,
+    status: envelope.outcome,
+    mainChannelId: envelope.ref.mainChannelId,
+    mainRootPostId: envelope.ref.mainRootPostId,
+    inputPostId: envelope.ref.inputPostId,
+    activityRootPostId,
+    itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.answerCommit,
+    semanticVersion: 1,
+    attention: "routine",
+    kind: "agent.answer-commit",
+  };
+}
+
+function durableAnswerCommitMatches(input: {
+  post: ActivityMattermostPost | null;
+  receiptPostId: string;
+  binding: ActivitySinkBinding;
+  envelope: Extract<AgentActivityEnvelopeV1, { type: "turn.finalized" }>;
+  props: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  answer: AgentAnswerCommitRecord | null;
+}): boolean {
+  const { post, receiptPostId, binding, envelope, props, expected, answer } = input;
+  if (!post || !answer) return false;
+  const ordinal = props.ordinal;
+  return [
+    post.id === receiptPostId,
+    post.channelId === binding.mainChannelId,
+    post.rootId === envelope.ref.mainRootPostId,
+    post.userId === binding.coachMmUserId,
+    validMattermostRevision(post),
+    post.editAt === 0,
+    post.deleteAt === 0,
+    post.message === "Answer committed",
+    post.fileIds.length === 0,
+    Object.entries(expected).every(
+      ([key, value]) => canonicalJson(props[key]) === canonicalJson(value),
+    ),
+    Number.isSafeInteger(ordinal),
+    typeof ordinal === "number" && ordinal >= 0,
+    typeof ordinal === "number" && ordinal < envelope.ref.ordinal,
+    answer.terminalOutcome === envelope.outcome,
+  ].every(Boolean);
 }
 
 function octogeeProps(
@@ -269,6 +523,7 @@ function octogeeProps(
     attention,
     kind,
     eventKey: envelope.eventKey,
+    ...(envelope.type === ANSWER_COMMITTED ? { answer: envelope.answer } : {}),
   };
 }
 
@@ -277,6 +532,7 @@ function messageFor(
   binding: ActivitySinkBinding,
 ): string {
   if (envelope.type === TURN_STARTED) return "▶️ Agent run started";
+  if (envelope.type === ANSWER_COMMITTED) return "Answer committed";
   if (envelope.type !== ITEM_COMPLETED) return "";
   if (envelope.ref.itemId === ACTIVITY_RUN_COMPLETE_ITEM_ID) return envelope.item.summary;
   const detail = envelope.item.detail?.text;
@@ -478,12 +734,33 @@ class ActivitySinkWriter implements ActivitySink {
     }
   }
 
-  private async assertMainRoot(
+  private async assertMainTurn(
     envelope: AgentActivityEnvelopeV1,
     binding: ActivitySinkBinding,
   ): Promise<void> {
-    const post = await this.runtime.deps.mm.getPost(envelope.ref.mainRootPostId);
-    this.assertMainRootPost(post, envelope, binding);
+    const root = await this.runtime.deps.mm.getPost(envelope.ref.mainRootPostId);
+    this.assertMainRootPost(root, envelope, binding);
+    if (!requiresAnswerCommit(envelope.ref)) return;
+    const inputPostId = envelope.ref.inputPostId;
+    if (!inputPostId) {
+      throw new ActivitySinkIntegrityError("main turn is missing its exact input post");
+    }
+    const input = inputPostId === root.id
+      ? root
+      : await this.runtime.deps.mm.getPost(inputPostId);
+    if (
+      !input ||
+      input.id !== inputPostId ||
+      input.channelId !== binding.mainChannelId ||
+      input.userId === binding.coachMmUserId ||
+      !input.userId ||
+      (inputPostId === root.id
+        ? input.rootId !== ""
+        : input.rootId !== envelope.ref.mainRootPostId) ||
+      (input.deleteAt !== undefined && input.deleteAt !== 0)
+    ) {
+      throw new ActivitySinkIntegrityError("main turn input failed exact Mattermost verification");
+    }
   }
 
   private async rootPostId(
@@ -524,12 +801,89 @@ class ActivitySinkWriter implements ActivitySink {
     if (
       post.channelId !== binding.mainChannelId ||
       post.rootId !== envelope.ref.mainRootPostId ||
+      (envelope.type === ANSWER_COMMITTED && post.userId !== binding.coachMmUserId) ||
       !activityPostHasExactProps(props, envelope, expectedEventKey) ||
       !activityRootPostIdMatches(post, props, envelope, expectedActivityRootPostId)
     ) {
       throw new ActivitySinkIntegrityError("Activity post failed exact channel/run/item/root verification");
     }
     return props;
+  }
+
+  private async assertAnswerPartRecords(
+    parts: readonly AgentAnswerPart[],
+    ref: AgentActivityIngressRef,
+    binding: ActivitySinkBinding,
+    commitCreateAt?: number,
+  ): Promise<void> {
+    for (const part of parts) {
+      const post = await this.runtime.deps.mm.getPost(part.postId);
+      if (!answerPartRecordMatches({ post, part, ref, binding, commitCreateAt })) {
+        throw new ActivitySinkIntegrityError(
+          `answer part ${part.postId} failed exact Mattermost verification`,
+        );
+      }
+    }
+  }
+
+  private async assertAnswerParts(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+    commitCreateAt?: number,
+  ): Promise<void> {
+    if (envelope.type !== ANSWER_COMMITTED) return;
+    await this.assertAnswerPartRecords(
+      envelope.answer.parts,
+      envelope.ref,
+      binding,
+      commitCreateAt,
+    );
+  }
+
+  private assertImmutableAnswerCommitMarker(post: ActivityMattermostPost): void {
+    if (
+      !validMattermostRevision(post) ||
+      post.editAt !== 0 ||
+      post.deleteAt !== 0 ||
+      post.message !== "Answer committed" ||
+      post.fileIds.length !== 0
+    ) {
+      throw new ActivitySinkIntegrityError("answer commit marker is not immutable");
+    }
+  }
+
+  private async assertDurableAnswerCommit(
+    envelope: AgentActivityEnvelopeV1,
+    binding: ActivitySinkBinding,
+    activityRootPostId: string,
+  ): Promise<void> {
+    if (envelope.type !== "turn.finalized" || !requiresAnswerCommit(envelope.ref)) return;
+    const eventKey = answerCommitEventKey(envelope.ref);
+    const receipt = await this.runtime.deps.receipts.read(eventKey);
+    const receiptPostId = committedReceiptPostId(receipt, eventKey);
+    if (!receiptPostId) {
+      throw new ActivitySinkUnavailableError("answer commit is not durably persisted");
+    }
+    const post = await this.runtime.deps.mm.getPost(receiptPostId);
+    const props = post ? this.activityPostProps(post) : {};
+    const committedAnswer = persistedAnswerCommit(props.answer);
+    if (!post || !committedAnswer || !durableAnswerCommitMatches({
+      post,
+      receiptPostId,
+      binding,
+      envelope,
+      props,
+      expected: expectedAnswerCommitProps(envelope, activityRootPostId, eventKey),
+      answer: committedAnswer,
+    })) {
+      throw new ActivitySinkIntegrityError("durable answer commit failed exact verification");
+    }
+    await this.assertAnswerPartRecords(
+      committedAnswer.parts,
+      envelope.ref,
+      binding,
+      post.createAt!,
+    );
   }
 
   private async assertRecoveredPostTarget(
@@ -541,6 +895,10 @@ class ActivitySinkWriter implements ActivitySink {
       throw new ActivitySinkIntegrityError("turn finalization cannot own a Mattermost post");
     }
     await this.assertActivityPostTarget(post, envelope, binding, envelope.eventKey);
+    if (envelope.type === ANSWER_COMMITTED) {
+      this.assertImmutableAnswerCommitMarker(post);
+      await this.assertAnswerParts(envelope, binding, post.createAt);
+    }
   }
 
   private async recordUnknownUpload(
@@ -831,7 +1189,9 @@ class ActivitySinkWriter implements ActivitySink {
     const { deps, now } = this.runtime;
     const { envelope, binding, attachment } = input;
     const rootId = envelope.ref.mainRootPostId;
-    const policy = activityAttentionPolicy(envelope);
+    const policy = envelope.type === ANSWER_COMMITTED
+      ? { attention: "routine" as const, silent: true }
+      : activityAttentionPolicy(envelope);
     let fileId: string | undefined;
     let attachmentState = receipt.attachment;
     if (envelope.type === ITEM_COMPLETED && envelope.item.attachment && attachment) {
@@ -855,6 +1215,13 @@ class ActivitySinkWriter implements ActivitySink {
       silent: policy.silent ?? false,
     });
     await deps.receipts.markPosted(envelope.eventKey, receipt.leaseToken, created.id, now());
+    if (envelope.type === ANSWER_COMMITTED) {
+      const marker = await deps.mm.getPost(created.id);
+      if (!marker || marker.id !== created.id) {
+        throw new ActivitySinkIntegrityError("answer commit marker is missing after creation");
+      }
+      await this.assertRecoveredPostTarget(marker, envelope, binding);
+    }
     await this.attachCreatedFile(envelope, receipt, created.id, fileId, attachmentState);
     await deps.receipts.commit(envelope.eventKey, receipt.leaseToken, now());
     return { outcome: "persisted", postIds: [created.id] };
@@ -887,7 +1254,7 @@ class ActivitySinkWriter implements ActivitySink {
     binding: ActivitySinkBinding,
   ): Promise<string | undefined> {
     if (envelope.type === TURN_STARTED) {
-      await this.assertMainRoot(envelope, binding);
+      await this.assertMainTurn(envelope, binding);
       return undefined;
     }
     return this.rootPostId(envelope);
@@ -945,7 +1312,11 @@ class ActivitySinkWriter implements ActivitySink {
     if (binding.mainChannelId !== envelope.ref.mainChannelId) {
       throw new ActivitySinkIntegrityError("Activity binding does not match the main channel");
     }
+    await this.assertAnswerParts(envelope, binding);
     const activityRootPostId = await this.resolveActivityRootPostId(envelope, binding);
+    if (activityRootPostId) {
+      await this.assertDurableAnswerCommit(envelope, binding, activityRootPostId);
+    }
     const digest = await activityPayloadDigestFromSource(envelope, attachment);
     const claim = await this.claimEvent(envelope, binding, digest);
     const bare = await this.resolveClaimResult({

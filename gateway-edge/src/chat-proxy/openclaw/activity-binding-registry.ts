@@ -1,11 +1,11 @@
 import type { AgentActivityIngressRef } from "@octogee/shared/types/agent-conversation";
+import { parseMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 import {
   freezeActiveActivityRunBinding,
   type ActiveActivityRunBinding,
   type ActivityRuntimeRegistry,
 } from "./activity-intake.js";
 import type { AgentIdentity, AuthorizedConversationTarget } from "./activity-runtime-types.js";
-import { parseMattermostSessionRoute } from "./mattermost-session-route.js";
 
 const DEFAULT_MAX_BINDINGS = 1_024;
 
@@ -137,7 +137,9 @@ function validScheduledRoute(ref: AgentActivityIngressRef): boolean {
 function validMattermostRoute(ref: AgentActivityIngressRef): boolean {
   const route = parseMattermostSessionRoute(ref.sessionKey);
   if (!route || route.agentId !== ref.agentId) return false;
-  if (route.threadRootPostId !== ref.mainRootPostId) return false;
+  if (route.threadRootPostId !== undefined && route.threadRootPostId !== ref.mainRootPostId) {
+    return false;
+  }
   return route.peerKind === "direct" || route.primaryChannelId === ref.mainChannelId;
 }
 

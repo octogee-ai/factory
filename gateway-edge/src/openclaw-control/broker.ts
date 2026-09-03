@@ -8,6 +8,7 @@ import {
 export interface OpenClawControlRedemptionResponse {
   uid: string;
   gatewayId: string;
+  workspaceSlug: string;
   revisionId: string;
   brokerProfile: OpenClawBrokerProfile;
   permissionSetIds: GatewayPermissionSetId[];
@@ -89,6 +90,7 @@ function validAccessBinding(
 function validRedemptionIdentity(item: Record<string, unknown>): boolean {
   return boundedIdentifier(item.uid, 256) &&
     boundedIdentifier(item.gatewayId, 128) &&
+    boundedIdentifier(item.workspaceSlug, 128) &&
     boundedIdentifier(item.revisionId, 128);
 }
 
@@ -146,6 +148,7 @@ export async function redeemOpenClawControlTicket(args: {
   return {
     uid: body.uid,
     gatewayId: body.gatewayId,
+    workspaceSlug: body.workspaceSlug,
     revisionId: body.revisionId,
     brokerProfile: body.brokerProfile,
     permissionSetIds: body.permissionSetIds,

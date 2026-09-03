@@ -9,10 +9,10 @@ import {
 describe("channel session native model control", () => {
   it("accepts only the earliest correlated reply from the bound Agent", () => {
     const reply = pickCorrelatedAgentReply([
-      { id: "foreign", root_id: "root", channel_id: "channel", user_id: "other", create_at: 11, message: "no" },
-      { id: "late", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 13, message: "late" },
-      { id: "early", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 12, message: "early" },
-      { id: "old", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 9, message: "old" },
+      { id: "foreign", type: "", root_id: "root", channel_id: "channel", user_id: "other", create_at: 11, message: "no" },
+      { id: "late", type: "", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 13, message: "late" },
+      { id: "early", type: "", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 12, message: "early" },
+      { id: "old", type: "", root_id: "root", channel_id: "channel", user_id: "agent", create_at: 9, message: "old" },
     ], { rootPostId: "root", channelId: "channel", agentUserId: "agent", commandCreatedAt: 10 });
     expect(reply?.id).toBe("early");
   });
@@ -40,6 +40,22 @@ describe("channel session native model control", () => {
     await expect(client.getJson(["channels", "channel", "members", "caller"])).rejects.toThrow(/size limit/);
   });
 
+  it("accepts a verbose bounded Mattermost page above the former 64 KiB cap", async () => {
+    const payload = { value: "x".repeat(70 * 1024) };
+    const client = createChannelSessionMattermostClient({
+      baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+      token: "a".repeat(32),
+      fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
+    });
+
+    await expect(client.getJson(["channels", "channel"])).resolves.toEqual(payload);
+    expect(() => createChannelSessionMattermostClient({
+      baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+      token: "a".repeat(32),
+      maxResponseBytes: 8 * 1024 * 1024 + 1,
+    })).toThrow("invalid Mattermost response size limit");
+  });
+
   it("rejects external Mattermost endpoints before fetch", () => {
     expect(() => createChannelSessionMattermostClient({ baseUrl: "https://evil.example", token: "a".repeat(32) })).toThrow(/base URL/);
   });
@@ -52,4 +68,147 @@ describe("channel session native model control", () => {
     });
     await expect(client.getJson(["users", "me"])).rejects.toBeInstanceOf(ChannelSessionMattermostError);
   });
+
+  it("propagates a caller deadline into in-flight Mattermost requests", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const client = createChannelSessionMattermostClient({
+      baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+      token: "a".repeat(32),
+      signal: controller.signal,
+      fetchImpl: vi.fn(async (_url, init) => {
+        requestSignal = init?.signal as AbortSignal;
+        return await new Promise<Response>((_resolve, reject) => {
+          requestSignal.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+        });
+      }),
+    });
+    const request = client.getJson(["users", "me"]);
+
+    controller.abort(new Error("RPC deadline expired"));
+
+    await expect(request).rejects.toThrow("RPC deadline expired");
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("reads bounded channel history in provider order with an exact cursor", async () => {
+    const channelId = "c".repeat(26);
+    const older = "o".repeat(26);
+    const first = "a".repeat(26);
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      order: [first],
+      posts: {
+        [first]: {
+          id: first,
+          type: "",
+          root_id: "",
+          channel_id: channelId,
+          user_id: "u".repeat(26),
+          create_at: 100,
+          update_at: 110,
+          edit_at: 90,
+          delete_at: 0,
+          pending_post_id: "persisted-idempotency-key",
+          message: "hello",
+          props: { octogee: { projectionKind: "run" } },
+        },
+      },
+      prev_post_id: older,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = createChannelSessionMattermostClient({
+      baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+      token: "a".repeat(32),
+      fetchImpl,
+    });
+
+    await expect(client.listChannelPosts(channelId, undefined, 1)).resolves.toEqual({
+      posts: [expect.objectContaining({
+        id: first,
+        message: "hello",
+        edit_at: 90,
+        pending_post_id: "persisted-idempotency-key",
+        file_ids: [],
+      })],
+      nextBefore: older,
+      reachedEnd: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `http://mattermost.octogee.svc.cluster.local:8065/api/v4/channels/${channelId}/posts?per_page=1`,
+      expect.objectContaining({ method: "GET", redirect: "error" }),
+    );
+  });
+
+  it.each([
+    ["edit timestamp", { edit_at: 1.5 }],
+    ["delete timestamp", { delete_at: -1 }],
+    ["file ids", { file_ids: [1] }],
+    ["post type", { type: 1 }],
+  ])("rejects an invalid optional post %s", async (_label, invalid) => {
+    const channelId = "c".repeat(26);
+    const postId = "p".repeat(26);
+    const client = createChannelSessionMattermostClient({
+      baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+      token: "a".repeat(32),
+      fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        order: [postId],
+        posts: {
+          [postId]: {
+            id: postId,
+            type: "",
+            root_id: "",
+            channel_id: channelId,
+            user_id: "u".repeat(26),
+            create_at: 100,
+            update_at: 100,
+            edit_at: 0,
+            delete_at: 0,
+            pending_post_id: "",
+            file_ids: [],
+            message: "hello",
+            props: {},
+            ...invalid,
+          },
+        },
+      }), { status: 200 })),
+    });
+
+    await expect(client.listChannelPosts(channelId)).rejects.toThrow(
+      "Mattermost channel history response was invalid",
+    );
+  });
+
+  it.each(["type", "update_at", "edit_at", "delete_at", "pending_post_id", "props"])(
+    "rejects a history post without required %s evidence",
+    async (missingField) => {
+      const channelId = "c".repeat(26);
+      const postId = "p".repeat(26);
+      const value: Record<string, unknown> = {
+        id: postId,
+        type: "",
+        root_id: "",
+        channel_id: channelId,
+        user_id: "u".repeat(26),
+        create_at: 100,
+        update_at: 100,
+        edit_at: 0,
+        delete_at: 0,
+        pending_post_id: "",
+        message: "hello",
+        props: {},
+      };
+      delete value[missingField];
+      const client = createChannelSessionMattermostClient({
+        baseUrl: "http://mattermost.octogee.svc.cluster.local:8065",
+        token: "a".repeat(32),
+        fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify({
+          order: [postId],
+          posts: { [postId]: value },
+        }), { status: 200 })),
+      });
+
+      await expect(client.listChannelPosts(channelId)).rejects.toThrow(
+        "Mattermost channel history response was invalid",
+      );
+    },
+  );
 });

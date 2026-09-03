@@ -1,11 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { parseMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 import type {
   AgentIdentity,
   AuthorizedConversationTarget,
 } from "./activity-runtime-types.js";
 import type { ActivityMattermostClient, ActivityMattermostPost } from "./mm-client.js";
-import { parseMattermostSessionRoute } from "./mattermost-session-route.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MATTERMOST_ID = /^[a-z0-9]{26}$/u;

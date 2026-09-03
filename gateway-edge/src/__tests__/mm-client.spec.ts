@@ -150,8 +150,26 @@ describe("createActivityMmClientFactory", () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       order: ["post-2", "post-1"],
       posts: {
-        "post-2": { id: "post-2", channel_id: "activity-1", root_id: "root-1", props: { octogee: { eventKey: "e2" } }, file_ids: [] },
-        "post-1": { id: "post-1", channel_id: "activity-1", root_id: "", props: {}, file_ids: [] },
+        "post-2": {
+          id: "post-2",
+          channel_id: "activity-1",
+          root_id: "root-1",
+          create_at: 2,
+          edit_at: 0,
+          delete_at: 0,
+          props: { octogee: { eventKey: "e2" } },
+          file_ids: [],
+        },
+        "post-1": {
+          id: "post-1",
+          channel_id: "activity-1",
+          root_id: "",
+          create_at: 1,
+          edit_at: 0,
+          delete_at: 0,
+          props: {},
+          file_ids: [],
+        },
       },
     }), { status: 200 }));
     const client = createActivityMmClientFactory({ baseUrl: "https://mm.test" })("bot-token");
@@ -163,8 +181,26 @@ describe("createActivityMmClientFactory", () => {
     );
     expect(page).toEqual({
       posts: [
-        { id: "post-2", channelId: "activity-1", rootId: "root-1", props: { octogee: { eventKey: "e2" } }, fileIds: [] },
-        { id: "post-1", channelId: "activity-1", rootId: "", props: {}, fileIds: [] },
+        {
+          id: "post-2",
+          channelId: "activity-1",
+          rootId: "root-1",
+          createAt: 2,
+          editAt: 0,
+          deleteAt: 0,
+          props: { octogee: { eventKey: "e2" } },
+          fileIds: [],
+        },
+        {
+          id: "post-1",
+          channelId: "activity-1",
+          rootId: "",
+          createAt: 1,
+          editAt: 0,
+          deleteAt: 0,
+          props: {},
+          fileIds: [],
+        },
       ],
       nextBefore: "post-1",
       reachedEnd: false,

@@ -23,6 +23,9 @@ export interface ActivityMattermostPost {
   id: string;
   channelId: string;
   rootId: string;
+  createAt?: number;
+  editAt?: number;
+  deleteAt?: number;
   userId?: string;
   message?: string;
   props: Record<string, unknown>;
@@ -73,6 +76,9 @@ interface MmPostResponse {
   id?: unknown;
   channel_id?: unknown;
   root_id?: unknown;
+  create_at?: unknown;
+  edit_at?: unknown;
+  delete_at?: unknown;
   user_id?: unknown;
   props?: unknown;
   file_ids?: unknown;
@@ -84,11 +90,20 @@ function safeNonNegativeInteger(value: unknown): value is number {
 }
 
 function postFromResponse(value: MmPostResponse): ActivityMattermostPost | null {
-  if (typeof value.id !== "string" || typeof value.channel_id !== "string") return null;
+  if (
+    typeof value.id !== "string" ||
+    typeof value.channel_id !== "string" ||
+    !safeNonNegativeInteger(value.create_at) ||
+    !safeNonNegativeInteger(value.edit_at) ||
+    !safeNonNegativeInteger(value.delete_at)
+  ) return null;
   return {
     id: value.id,
     channelId: value.channel_id,
     rootId: typeof value.root_id === "string" ? value.root_id : "",
+    createAt: value.create_at,
+    editAt: value.edit_at,
+    deleteAt: value.delete_at,
     ...(typeof value.user_id === "string" ? { userId: value.user_id } : {}),
     ...(typeof value.message === "string" ? { message: value.message } : {}),
     props:

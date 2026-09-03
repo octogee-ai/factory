@@ -15,8 +15,8 @@ its peeled commit, and cut the tag-specific overlay branch:
 ```bash
 cd /path/to/openclaw
 git fetch --tags origin
-git rev-parse v2026.8.2^{}
-git switch -c octogee/gateway-scaling-patches-v2026.8.2 v2026.8.2
+git rev-parse v2026.9.1^{}
+git switch -c octogee/gateway-scaling-patches-v2026.9.1 v2026.9.1
 ```
 
 Port the prior overlay oldest-first, then audit every patch against the
@@ -43,7 +43,7 @@ directory. Validate the root package and the local Mattermost package in an
 isolated npm prefix before publication.
 
 ```bash
-ARTIFACT_DIR=$(mktemp -d -t openclaw-v2026.8.2-artifacts-XXXXXX)
+ARTIFACT_DIR=$(mktemp -d -t openclaw-v2026.9.1-artifacts-XXXXXX)
 ROOT_TGZ=$(OPENCLAW_SKIP_BUILD=1 \
   bash infra/gateway/openclaw-tarball/pack-fork-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
@@ -74,19 +74,22 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The current build is [OpenClaw `v2026.8.2`](https://github.com/openclaw/openclaw/releases/tag/v2026.8.2),
-peeled to `0965053fe6b9341776df147a6934b7485c60b5ca`, with overlay head
-`7552b8d7d62e78fc3ab7904f899988b6ce654642`. The Mattermost package is built
-from the tag without an Octogee patch; native threading, streaming, steering,
-and approvals supply the chat behavior.
+The current build is [OpenClaw `v2026.9.1`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.1),
+peeled to `ad6fe23aecb9b833d68139b0ddc9f239b894d2f1`, with overlay head
+`2e2f6f595f57ce37ca7dc92b20b5a208c8817a3b`. Its root artifact is
+`openclaw-fork-2e2f6f59.tgz` at generation `1788475273529187`; its separately
+packed Mattermost runtime is `openclaw-mattermost-9b303940.tgz` at generation
+`1788475248911711`. The overlay was re-audited against upstream main through
+`8c6653a78dec`; none of the retained areas had been adopted.
 
-| Patch area | v2026.8.2 assessment | Why Octogee carries it |
+| Patch area | v2026.9.1 assessment | Why Octogee carries it / removal gate |
 | --- | --- | --- |
-| Sandbox-backed file discovery | The tag has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains open; its refreshed current-main head is `6c3ea1812a0`. | Keeps native `ls`, `find`, and `grep` available without granting `exec` or `process`. |
-| Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. |
-| No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. | Lets Ops Agent purge transient one-shot sessions without archive compression and event-loop starvation. |
-| Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. | Prevents stale per-agent state after replacement. |
-| Fresh-chat terminal ownership | The tag rejects `terminal.open` when a selected chat has not yet materialized its durable session row. | Materializes and revalidates the exact agent-owned session before opening its terminal. |
+| Sandbox-backed file discovery | The tag has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains parked at `c0ed0b9a32c9` pending the maintainers' security contract decision. | Keeps native `ls`, `find`, and `grep` without granting `exec` or `process`. Remove when upstream supplies an equivalent sandbox bridge and file-tool registration seam. |
+| Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. Remove when upstream provides both stable reuse and the authenticated write RPC. |
+| No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. [OpenClaw PR #137428](https://github.com/openclaw/openclaw/pull/137428) carries the public flag at `452e3776ef93ecc3063847bb6fe38557700170bc`. | Lets Ops Agent purge transient one-shot sessions without archive compression or event-loop starvation. Remove when the public no-archive contract lands upstream. |
+| Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. [OpenClaw PR #137424](https://github.com/openclaw/openclaw/pull/137424) carries the identity check at `e021c59be005ca879ce9e48509f19fbe965b170e`. | Prevents stale per-agent state after replacement. Remove when upstream reopens on file identity or generation change, or mandates a process restart after replacement. |
+| Fresh-chat terminal ownership | The tag rejects `terminal.open` when a selected chat has not yet materialized its durable session row. | Materializes and revalidates the exact agent-owned session before opening its terminal. Remove when upstream supports exact-owner materialization for a fresh selected chat. |
+| Durable Mattermost channel sessions | The tag keeps live state in SQLite and does not project authorized Mattermost channels through Control UI session/history/send or rebuild bounded conversational context from them. | Keeps SQLite as live execution state while making the Mattermost thread the durable transcript and recovery source. Remove when upstream exposes a pluggable durable conversation projection or equivalent channel adapter with the same authorization and run-correlation guarantees. |
 
 The gateway base still verifies runtime contracts such as expected config
 behavior and tool-policy shape. Those are product checks, not a parallel

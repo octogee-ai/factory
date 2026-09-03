@@ -12,6 +12,7 @@ export interface OpenClawControlSession {
   sessionId: string;
   uid: string;
   gatewayId: string;
+  workspaceSlug: string;
   revisionId: string;
   brokerProfile: OpenClawBrokerProfile;
   permissionSetIds: GatewayPermissionSetId[];
@@ -24,6 +25,7 @@ interface SessionPayload {
   sid: string;
   uid: string;
   gid: string;
+  wid: string;
   rid: string;
   prf: OpenClawBrokerProfile;
   ps: GatewayPermissionSetId[];
@@ -34,6 +36,8 @@ interface SessionPayload {
 interface StoredSession extends SessionPayload {
   lastActivityAt: number;
 }
+
+const SESSION_IDENTITY_FIELDS = ["sid", "uid", "gid", "wid", "rid"] as const;
 
 function encoded(value: Buffer | string): string {
   return Buffer.from(value).toString("base64url");
@@ -66,15 +70,18 @@ function sessionBinding(
     : null;
 }
 
+function hasSessionIdentity(item: Record<string, unknown>): boolean {
+  return SESSION_IDENTITY_FIELDS.every((key) =>
+    typeof item[key] === "string" && item[key].length > 0
+  );
+}
+
 function parsePayload(value: unknown): SessionPayload | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   const profile = item.prf;
   const binding = sessionBinding(profile, item.ps, item.gr);
-  return typeof item.sid === "string" && item.sid.length > 0 &&
-    typeof item.uid === "string" && item.uid.length > 0 &&
-    typeof item.gid === "string" && item.gid.length > 0 &&
-    typeof item.rid === "string" && item.rid.length > 0 &&
+  return hasSessionIdentity(item) &&
     binding !== null &&
     typeof item.abs === "number" && Number.isFinite(item.abs)
     ? item as unknown as SessionPayload
@@ -105,6 +112,7 @@ export class OpenClawControlSessionManager {
     sessionId: string;
     uid: string;
     gatewayId: string;
+    workspaceSlug: string;
     revisionId: string;
     brokerProfile: OpenClawBrokerProfile;
     permissionSetIds: GatewayPermissionSetId[];
@@ -119,6 +127,7 @@ export class OpenClawControlSessionManager {
       sid: args.sessionId,
       uid: args.uid,
       gid: args.gatewayId,
+      wid: args.workspaceSlug,
       rid: args.revisionId,
       prf: args.brokerProfile,
       ps: args.permissionSetIds,
@@ -156,6 +165,7 @@ export class OpenClawControlSessionManager {
   } | null {
     const stored = this.sessions.get(session.sessionId);
     if (!stored || stored.uid !== session.uid || stored.gid !== session.gatewayId ||
+      stored.wid !== session.workspaceSlug ||
       stored.rid !== session.revisionId || stored.prf !== session.brokerProfile ||
       stored.gr !== session.grantRevision || stored.abs !== session.absoluteExpiresAt) return null;
     const now = this.now();
@@ -175,6 +185,7 @@ export class OpenClawControlSessionManager {
   private activeStored(payload: SessionPayload): OpenClawControlSession | null {
     const stored = this.sessions.get(payload.sid);
     if (!stored || stored.uid !== payload.uid || stored.gid !== payload.gid ||
+      stored.wid !== payload.wid ||
       stored.rid !== payload.rid || stored.prf !== payload.prf || stored.gr !== payload.gr ||
       stored.ps.length !== payload.ps.length ||
       stored.ps.some((id, index) => id !== payload.ps[index]) || stored.abs !== payload.abs) return null;
@@ -191,6 +202,7 @@ export class OpenClawControlSessionManager {
       sessionId: stored.sid,
       uid: stored.uid,
       gatewayId: stored.gid,
+      workspaceSlug: stored.wid,
       revisionId: stored.rid,
       brokerProfile: stored.prf,
       permissionSetIds: [...stored.ps],
@@ -224,6 +236,7 @@ export class OpenClawControlSessionManager {
       sid: stored.sid,
       uid: stored.uid,
       gid: stored.gid,
+      wid: stored.wid,
       rid: stored.rid,
       prf: stored.prf,
       ps: stored.ps,

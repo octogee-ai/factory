@@ -1,8 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
-import { projectAgentId, workspaceCoachAgentId } from "@octogee/shared/types/identity";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
 import {
   channelSessionModelCommand,
   parseChannelSessionModelOperation,
@@ -10,13 +8,15 @@ import {
 } from "@octogee/shared/types/channel-session-models";
 import {
   ChannelSessionMattermostError,
-  createChannelSessionMattermostClient,
   parseNativeModelResult,
   pickCorrelatedAgentReply,
   type MattermostModelPost,
 } from "../lib/channel-session-model-control.js";
+import {
+  authorizeChannel,
+  type AuthorizedChannel,
+} from "../lib/channel-session-authorization.js";
 import { db, FieldValue } from "../lib/db.js";
-import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 
@@ -31,106 +31,11 @@ const channelSessionModelRateLimit = rateLimit({
   message: { error: "Too many model control requests, please try again later." },
 });
 
-interface ChannelTarget {
-  ownerUid: string;
-  workspaceSlug: string;
-  projectId?: string;
-  agentId: string;
-  agentMmUserId: string;
-}
-
-interface ChannelScope {
-  workspaceSlug: string;
-  projectId?: string;
-}
-
-type MattermostClient = ReturnType<typeof createChannelSessionMattermostClient>;
-
-interface AuthorizedChannel {
-  forbidden: false;
-  target: ChannelTarget;
-  client: MattermostClient;
-  callerMmUserId: string;
-}
-
-interface ForbiddenChannel {
-  forbidden: true;
-}
-
-function pathScope(path: string): ChannelScope | null {
-  const parts = path.split("/");
-  if (parts.length === 4 && parts[0] === "workspaces" && parts[2] === "channels") {
-    return { workspaceSlug: parts[1] };
-  }
-  if (parts.length === 6 && parts[0] === "workspaces" && parts[2] === "projects" && parts[4] === "channels") {
-    return { workspaceSlug: parts[1], projectId: parts[3] };
-  }
-  return null;
-}
-
-function activeProjectAgentMmUserId(
-  projectData: FirebaseFirestore.DocumentData | undefined,
-  credential: FirebaseFirestore.DocumentData | undefined,
-): string | null {
-  if (!projectAgentEnabled(projectData?.agent)) return null;
-  if (typeof credential?.mmUserId !== "string" || !MATTERMOST_ID.test(credential.mmUserId)) return null;
-  if (typeof credential.personalToken !== "string" || !credential.personalToken) return null;
-  return credential.mmUserId;
-}
-
-async function resolveProjectTarget(
-  scope: ChannelScope,
-  ownerUid: string,
-): Promise<ChannelTarget | null> {
-  if (!scope.projectId) return null;
-  const [project, secret] = await Promise.all([
-    db.doc(`workspaces/${scope.workspaceSlug}/projects/${scope.projectId}`).get(),
-    db.doc(`users/${ownerUid}/secrets/projectAgentMattermost-${scope.projectId}`).get(),
-  ]);
-  const agentMmUserId = activeProjectAgentMmUserId(project.data(), secret.data());
-  if (!agentMmUserId) return null;
-  return {
-    ...scope,
-    ownerUid,
-    agentId: projectAgentId(scope.workspaceSlug, scope.projectId),
-    agentMmUserId,
-  };
-}
-
-async function resolveCoachTarget(scope: ChannelScope, ownerUid: string): Promise<ChannelTarget | null> {
-  const coachSecret = await db.doc(`users/${ownerUid}/secrets/coachMattermost`).get();
-  const agentMmUserId = coachSecret.data()?.coachMmUserId;
-  if (typeof agentMmUserId !== "string" || !MATTERMOST_ID.test(agentMmUserId)) return null;
-  return { ...scope, ownerUid, agentId: workspaceCoachAgentId(scope.workspaceSlug), agentMmUserId };
-}
-
-async function resolveTarget(channelId: string): Promise<ChannelTarget | null> {
-  const channels = await db.collectionGroup("channels").where("mattermost.channelId", "==", channelId).get();
-  if (channels.docs.length !== 1) return null;
-  const scope = pathScope(channels.docs[0].ref.path);
-  if (!scope) return null;
-  const ownerUid = await resolveWorkspaceUid(scope.workspaceSlug);
-  if (!ownerUid) return null;
-  const projectTarget = await resolveProjectTarget(scope, ownerUid);
-  return projectTarget ?? resolveCoachTarget(scope, ownerUid);
-}
-
-async function callerCredentials(uid: string): Promise<{ storedUserId: string; token: string } | null> {
-  const [user, secret] = await Promise.all([
-    db.doc(`users/${uid}`).get(),
-    db.doc(`users/${uid}/secrets/mattermost`).get(),
-  ]);
-  const storedUserId = user.data()?.mattermost?.userId;
-  const token = secret.data()?.personalToken;
-  return typeof storedUserId === "string" && MATTERMOST_ID.test(storedUserId) && typeof token === "string"
-    ? { storedUserId, token }
-    : null;
-}
-
 function asPost(value: unknown): MattermostModelPost | null {
   if (!value || typeof value !== "object") return null;
   const post = value as Partial<MattermostModelPost>;
   return typeof post.id === "string" && MATTERMOST_ID.test(post.id) &&
+    post.type === "" &&
     typeof post.root_id === "string" &&
     typeof post.channel_id === "string" && MATTERMOST_ID.test(post.channel_id) &&
     typeof post.user_id === "string" && MATTERMOST_ID.test(post.user_id) &&
@@ -147,29 +52,6 @@ function threadPosts(value: unknown): MattermostModelPost[] {
     const parsed = asPost(post);
     return parsed ? [parsed] : [];
   });
-}
-
-async function authorizeChannel(
-  uid: string,
-  channelId: string,
-): Promise<AuthorizedChannel | ForbiddenChannel | null> {
-  const [target, credentials] = await Promise.all([resolveTarget(channelId), callerCredentials(uid)]);
-  if (!target || !credentials) return null;
-  const client = createChannelSessionMattermostClient({
-    baseUrl: process.env.MM_INTERNAL_URL ?? "",
-    token: credentials.token,
-  });
-  const liveUserId = await client.getCurrentUserId();
-  if (liveUserId !== credentials.storedUserId) return { forbidden: true as const };
-  try {
-    await client.getJson(["channels", channelId, "members", liveUserId]);
-  } catch (error) {
-    if (error instanceof ChannelSessionMattermostError && (error.status === 403 || error.status === 404)) {
-      return { forbidden: true as const };
-    }
-    throw error;
-  }
-  return { forbidden: false as const, target, client, callerMmUserId: liveUserId };
 }
 
 function channelIdParam(req: Request): string | null {

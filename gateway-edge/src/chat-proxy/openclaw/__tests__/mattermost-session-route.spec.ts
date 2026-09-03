@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMattermostSessionRoute } from '../mattermost-session-route.js';
+import { parseMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
 
 describe('parseMattermostSessionRoute', () => {
   it('keeps the primary Mattermost channel separate from a modern thread root', () => {

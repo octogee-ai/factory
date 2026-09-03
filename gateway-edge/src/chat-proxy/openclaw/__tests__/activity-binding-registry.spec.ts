@@ -96,14 +96,21 @@ describe("same-channel Activity binding registry", () => {
     await expect(registry.resolveRun("run-3")).resolves.not.toBeNull();
   });
 
-  it("rejects an unthreaded Mattermost session even when an input post is supplied", async () => {
+  it.each(["channel", "group"])(
+    "resolves a channel-scoped Mattermost %s session and preserves its exact input post",
+    async (peerKind) => {
     const candidate = harness();
     await expect(candidate.registry.resolve({
       ...ref,
-      sessionKey: "agent:octogee-alice-coach:mattermost:channel:channel-1",
-    })).resolves.toBeNull();
-    expect(candidate.resolveAgentIdentity).not.toHaveBeenCalled();
-  });
+      inputPostId: "reply-1",
+      sessionKey: `agent:octogee-alice-coach:mattermost:${peerKind}:channel-1`,
+    })).resolves.toMatchObject({
+      mainRootPostId: "root-1",
+      inputPostId: "reply-1",
+    });
+    expect(candidate.resolveAgentIdentity).toHaveBeenCalledOnce();
+    },
+  );
 
   it("resolves a direct session peer to the exact authorized physical Mattermost channel", async () => {
     const { registry, resolveConversationTarget, resolveDirectConversationTarget } = harness();

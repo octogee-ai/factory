@@ -89,7 +89,7 @@ function finalizedEnvelope(): AgentActivityEnvelopeV1 {
   const ref = {
     ...value.ref,
     itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized,
-    ordinal: 2,
+    ordinal: 5,
   };
   return {
     schemaVersion: value.schemaVersion,
@@ -100,6 +100,32 @@ function finalizedEnvelope(): AgentActivityEnvelopeV1 {
     type: "turn.finalized",
     outcome: "completed",
   };
+}
+
+function answerCommittedEnvelope(): AgentActivityEnvelopeV1 {
+  const value = validEnvelope();
+  const ref = {
+    ...value.ref,
+    itemId: "octogee:answer-commit",
+    ordinal: 3,
+  };
+  return {
+    schemaVersion: value.schemaVersion,
+    eventKey: createHash("sha256").update(agentActivityCanonicalKey(ref)).digest("hex"),
+    emittedAt: value.emittedAt,
+    ref,
+    redaction: value.redaction,
+    type: "answer.committed",
+    answer: {
+      terminalOutcome: "completed",
+      deliveryOutcome: "delivered",
+      postIds: ["answer-1", "answer-2"],
+      parts: [
+        { postId: "answer-1", kind: "text", index: 0, rootPostId: "turn-1" },
+        { postId: "answer-2", kind: "media", index: 1, threadId: "turn-1" },
+      ],
+    },
+  } as unknown as AgentActivityEnvelopeV1;
 }
 
 describe("normalized Activity intake", () => {
@@ -258,33 +284,56 @@ describe("normalized Activity intake", () => {
     });
   });
 
-  it("releases a run binding only after an acknowledged finalization commit", async () => {
-    const envelope = finalizedEnvelope();
+  it("keeps finalization postless and releases only after an acknowledged answer commit", async () => {
     const releaseRun = vi.fn();
-    const append = vi.fn(async () => ({
+    const finalized = finalizedEnvelope();
+    const committed = answerCommittedEnvelope();
+    const append = vi.fn(async ({ envelope }: { envelope: AgentActivityEnvelopeV1 }) => ({
       outcome: "persisted" as const,
-      postIds: [],
+      postIds: envelope.type === "turn.finalized" ? [] : ["answer-commit-1"],
       receipt: {
         eventKey: envelope.eventKey,
+        ...(envelope.type === "turn.finalized" ? {} : { postId: "answer-commit-1" }),
         activityRootPostId: "activity-root-1",
       },
     }));
+    const registry = {
+      readiness: () => "ready" as const,
+      resolve: vi.fn(async () => binding),
+      resolveRun: vi.fn(),
+      releaseRun,
+    };
 
     await expect(processActivityIntake(
-      { remoteAddress: "127.0.0.1", envelope },
+      { remoteAddress: "127.0.0.1", envelope: committed },
       {
-        registry: {
-          readiness: () => "ready",
-          resolve: vi.fn(async () => binding),
-          resolveRun: vi.fn(),
-          releaseRun,
-        },
+        registry,
         sinkFor: vi.fn(() => ({ append })),
       },
+    )).resolves.toMatchObject({ status: 201, body: { postIds: ["answer-commit-1"] } });
+
+    expect(releaseRun).not.toHaveBeenCalled();
+
+    await expect(processActivityIntake(
+      { remoteAddress: "127.0.0.1", envelope: finalized },
+      { registry, sinkFor: vi.fn(() => ({ append })) },
     )).resolves.toMatchObject({ status: 201, body: { postIds: [] } });
 
     expect(releaseRun).toHaveBeenCalledOnce();
-    expect(releaseRun).toHaveBeenCalledWith(envelope.ref.runId);
+    expect(releaseRun).toHaveBeenCalledWith(finalized.ref.runId);
+  });
+
+  it("parses only a canonical answer commit record", () => {
+    const valid = answerCommittedEnvelope();
+    expect(parseActivityEnvelope(valid)).toEqual(valid);
+
+    const invalid = structuredClone(valid) as unknown as {
+      answer: { parts: Array<{ index: number }> };
+    };
+    invalid.answer.parts[1]!.index = 0;
+    expect(() => parseActivityEnvelope(invalid)).toThrowError(
+      expect.objectContaining({ status: 422, code: "invalid_answer_commit" }),
+    );
   });
 
   it("retains a run binding when finalization acknowledgement verification fails", async () => {
