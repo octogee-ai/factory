@@ -831,6 +831,67 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
   });
 
+  it("removes the retired Mattermost file install record from restored runtime state", () => {
+    const result = runPolicyWithDir(
+      "builder",
+      { plugins: { allow: ["mattermost"], entries: { mattermost: { enabled: true } } } },
+      (dir) => {
+        const stateDir = path.join(dir, "state");
+        mkdirSync(stateDir, { recursive: true });
+        const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+        db.exec(`
+          CREATE TABLE config_machine_state (
+            state_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+          );
+        `);
+        db.prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        ).run(
+          "plugins.installedIndex",
+          JSON.stringify({
+            revision: 17,
+            index: {
+              installRecords: {
+                mattermost: {
+                  source: "npm",
+                  spec: "@openclaw/mattermost@file:./_openclaw-pack-archives/mattermost.tgz",
+                  installPath: "/retired/mattermost",
+                },
+                parallel: {
+                  source: "npm",
+                  spec: "@openclaw/parallel@2026.9.1",
+                  installPath: "/active/parallel",
+                },
+              },
+              plugins: [],
+            },
+          }),
+          17,
+        );
+        db.close();
+      },
+    );
+
+    const db = new DatabaseSync(path.join(result.dir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    const row = db.prepare(
+      "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?",
+    ).get("plugins.installedIndex") as { value_json: string; updated_at_ms: number };
+    db.close();
+    const value = JSON.parse(row.value_json);
+    expect(value.index.installRecords).not.toHaveProperty("mattermost");
+    expect(value.index.installRecords.parallel).toEqual({
+      source: "npm",
+      spec: "@openclaw/parallel@2026.9.1",
+      installPath: "/active/parallel",
+    });
+    expect(value.revision).toBeGreaterThan(17);
+    expect(row.updated_at_ms).toBe(value.revision);
+  });
+
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
     const coachId = "octogee-acme-coach";
     const projectId = "octogee-acme-proj-garden-coach";
