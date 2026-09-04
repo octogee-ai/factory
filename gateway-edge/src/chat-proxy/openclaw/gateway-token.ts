@@ -8,6 +8,7 @@ import {
   GATEWAY_ID_REQUIREMENT,
   isValidGatewayId,
 } from "@octogee/shared/types/glm";
+import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-identity";
 
 export type GatewayTokenErrorCode =
   | "empty-token"
@@ -53,7 +54,8 @@ export interface FetchGatewayAuthOptions extends FetchGatewayTokenOptions {
 
 export type GatewayOpenClawAuth =
   | { source: "device-token-file"; deviceToken: string; token?: undefined }
-  | { source: "legacy-token"; token: string; deviceToken?: undefined };
+  | { source: "legacy-token"; token: string; deviceToken?: undefined }
+  | { source: "trusted-proxy"; token?: undefined; deviceToken?: undefined };
 
 let sharedClient: SecretManagerServiceClient | null = null;
 function getClient(): SecretManagerServiceClient {
@@ -188,6 +190,9 @@ export async function fetchGatewayAuth(
   opts: FetchGatewayAuthOptions,
 ): Promise<GatewayOpenClawAuth> {
   requireValidGatewayId(opts.gatewayId);
+  if (isPerUserControlIdentity() && process.env.GATEWAY_ID === opts.gatewayId) {
+    return { source: "trusted-proxy" };
+  }
   const deviceToken = await readDeviceTokenFromFile(opts.deviceTokenPath);
   if (deviceToken) {
     return { source: "device-token-file", deviceToken };

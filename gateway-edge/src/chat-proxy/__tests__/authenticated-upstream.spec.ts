@@ -419,4 +419,44 @@ describe("openAuthenticatedUpstream", () => {
     expect(deps.fetchGatewayAuth).toHaveBeenCalledTimes(2);
     expect(deps.openUpstream).toHaveBeenCalledTimes(2);
   });
+
+  it("connects with the edge service identity and no pairing when the gateway trusts the proxy", async () => {
+    const deps = depsForTest();
+    vi.mocked(deps.fetchGatewayAuth).mockResolvedValue({ source: "trusted-proxy" });
+    vi.mocked(deps.openUpstream).mockResolvedValue(fakeSocket("proxy"));
+
+    const ws = await openAuthenticatedUpstream({
+      gatewayId: "default",
+      url: "http://127.0.0.1:18789",
+      pairingUrl: "http://127.0.0.1:18789",
+      timeoutMs: 5_000,
+    }, deps);
+
+    expect(ws).toEqual(expect.objectContaining({ label: "proxy" }));
+    expect(deps.openUpstream).toHaveBeenCalledTimes(1);
+    const params = vi.mocked(deps.openUpstream).mock.calls[0]![0];
+    expect(params.proxyIdentity?.headers).toMatchObject({
+      "x-octogee-user": "svc:gateway-edge",
+      "x-octogee-proxy": "1",
+    });
+    expect(params.token).toBeUndefined();
+    expect(params.deviceToken).toBeUndefined();
+    expect(params.bootstrapToken).toBeUndefined();
+    expect(deps.requestDevicePairBootstrapToken).not.toHaveBeenCalled();
+    expect(deps.persistGatewayDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it("retries a proxy-identity connect without clearing any device or legacy credential", async () => {
+    const deps = depsForTest();
+    vi.mocked(deps.fetchGatewayAuth).mockResolvedValue({ source: "trusted-proxy" });
+    vi.mocked(deps.openUpstream)
+      .mockRejectedValueOnce(new OpenclawWireError("auth-failed", "unauthorized"))
+      .mockResolvedValueOnce(fakeSocket("proxy-retry"));
+
+    await openAuthenticatedUpstream({ gatewayId: "default", url: "http://127.0.0.1:18789" }, deps);
+
+    expect(deps.clearGatewayDeviceToken).not.toHaveBeenCalled();
+    expect(deps.invalidateGatewayToken).not.toHaveBeenCalled();
+    expect(deps.openUpstream).toHaveBeenCalledTimes(2);
+  });
 });

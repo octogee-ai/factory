@@ -19,6 +19,7 @@ import {
   createOpenClawBootWatcher,
   type OpenClawBootWatcher,
 } from "../lib/openclaw-boot-watcher.js";
+import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-identity";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
@@ -110,10 +111,17 @@ const OPENCLAW_BINARY = "/usr/local/bin/openclaw";
 
 // Detached: OpenClaw leads its own process group so a stop can reap the whole
 // tree and a supervisor restart can reap an orphaned group by recorded pid.
+export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!isPerUserControlIdentity(env)) return { ...env };
+  const { OPENCLAW_GATEWAY_TOKEN: _podToken, ...rest } = env;
+  return rest;
+}
+
 function defaultSpawnOpenClaw(): SpawnedOpenClaw {
   return spawn(OPENCLAW_BINARY, ["gateway", "run", "--bind", "lan", "--port", "18789"], {
     stdio: "inherit",
     detached: true,
+    env: openClawProcessEnv(),
   }) as SpawnedOpenClaw;
 }
 

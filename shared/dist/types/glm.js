@@ -9,6 +9,15 @@ export function isOperatorManaged(value) {
 export const GATEWAY_PROFILES = ["standard", "builder"];
 export const GATEWAY_CLASSES = ["shared", "builder"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];
+export const GATEWAY_CONTROL_IDENTITY_MODES = ["shared-operator", "per-user"];
+export const DEFAULT_GATEWAY_CONTROL_IDENTITY = "shared-operator";
+export function isGatewayControlIdentity(value) {
+    return (typeof value === "string" &&
+        GATEWAY_CONTROL_IDENTITY_MODES.includes(value));
+}
+export function resolveGatewayControlIdentity(value) {
+    return value === "per-user" ? "per-user" : DEFAULT_GATEWAY_CONTROL_IDENTITY;
+}
 export const BUILDER_GATEWAY_LOCKED_ACCESS = {
     controlUiEnabled: false,
     reason: "runtime-trust-boundary-not-provisioned",

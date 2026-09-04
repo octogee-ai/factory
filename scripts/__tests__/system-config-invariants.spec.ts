@@ -203,4 +203,21 @@ describe("system config platform invariants", () => {
 
     expect(() => assertPlatformInvariants(candidate, builderEnv)).not.toThrow();
   });
+
+  it("reads the control identity from the pod environment and defaults it to the shared operator", () => {
+    expect(systemConfigInvariantContextFromEnv(env).controlIdentity).toBe("shared-operator");
+    expect(systemConfigInvariantContextFromEnv({
+      ...env,
+      GATEWAY_CLASS: "builder",
+      OPENCLAW_CONTROL_IDENTITY: "per-user",
+    }).controlIdentity).toBe("per-user");
+
+    const candidate = config();
+    reconcilePlatformInvariants(candidate, {
+      ...env,
+      GATEWAY_CLASS: "builder",
+      OPENCLAW_CONTROL_IDENTITY: "per-user",
+    });
+    expect((candidate.gateway as { auth: { mode: string } }).auth.mode).toBe("trusted-proxy");
+  });
 });

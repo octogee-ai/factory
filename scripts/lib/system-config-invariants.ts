@@ -8,6 +8,10 @@ import {
   type PlatformInvariant,
   type SystemConfigInvariantContext,
 } from "@octogee/core/system-config-invariants";
+import {
+  resolveControlIdentityFromEnv,
+  resolveOwnerUidFromEnv,
+} from "@octogee/shared/types/openclaw-proxy-identity";
 
 export {
   PlatformInvariantPolicyError,
@@ -24,6 +28,8 @@ export function systemConfigInvariantContextFromEnv(
     gatewayClass,
     ...(env.GATEWAY_ID ? { gatewayId: env.GATEWAY_ID } : {}),
     ...(env.API_PUBLIC_URL ? { apiOrigin: env.API_PUBLIC_URL } : {}),
+    controlIdentity: resolveControlIdentityFromEnv(env),
+    ...(resolveOwnerUidFromEnv(env) ? { ownerUid: resolveOwnerUidFromEnv(env) } : {}),
   };
 }
 

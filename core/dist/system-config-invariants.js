@@ -1,4 +1,5 @@
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { OPENCLAW_OPERATOR_ROLES, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array";
 const FORBIDDEN_ARRAY = "forbidden-array";
@@ -294,6 +295,23 @@ function customerToolInvariants() {
         { kind: "customer-agent-tool-policy", path: "agents.entries.*.tools" },
     ];
 }
+function controlIdentityInvariants(perUser, ownerUid) {
+    return [
+        { kind: "exact", path: "gateway.auth.mode", value: perUser ? "trusted-proxy" : "token" },
+        {
+            kind: "exact",
+            path: "gateway.auth.trustedProxy",
+            value: perUser ? OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy : ABSENT,
+        },
+        {
+            kind: "exact",
+            path: "gateway.auth.identityScopes",
+            value: perUser ? openClawIdentityScopes(ownerUid) : ABSENT,
+        },
+        { kind: "exact", path: "gateway.trustedProxies", value: perUser ? [...OPENCLAW_TRUSTED_PROXIES] : ABSENT },
+        { kind: "exact", path: "gateway.roles", value: perUser ? OPENCLAW_OPERATOR_ROLES : ABSENT },
+    ];
+}
 export function platformInvariantTable(context) {
     const isolated = context.gatewayClass === "builder";
     const gatewayId = context.gatewayId?.trim();
@@ -301,14 +319,16 @@ export function platformInvariantTable(context) {
     if (isolated && (!gatewayId || !apiOrigin)) {
         throw new Error("gatewayId and apiOrigin are required for isolated config invariants");
     }
+    const perUser = isolated && context.controlIdentity === "per-user";
     const base = [
         { kind: "exact", path: "discovery.mdns.mode", value: "off" },
         { kind: "exact", path: "gateway.port", value: 18789 },
         { kind: "exact", path: "gateway.mode", value: "local" },
         { kind: "exact", path: "gateway.bind", value: "lan" },
-        { kind: "exact", path: "gateway.auth.mode", value: "token" },
+        ...controlIdentityInvariants(perUser, context.ownerUid),
         { kind: "exact", path: "gateway.auth.token", value: ABSENT },
         { kind: "exact", path: "gateway.auth.password", value: ABSENT },
+        { kind: "exact", path: "gateway.auth.allowTailscale", value: ABSENT },
         {
             kind: "exact",
             path: "gateway.controlUi.allowedOrigins",

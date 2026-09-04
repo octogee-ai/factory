@@ -122,6 +122,12 @@ if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
   exit 1
 fi
 export OPENCLAW_GATEWAY_TOKEN
+# In-pod relay credential for plugins that run inside the OpenClaw process.
+# Under per-user control identity the OpenClaw process itself must not see
+# OPENCLAW_GATEWAY_TOKEN (trusted-proxy and token auth are mutually exclusive),
+# so the activity plugin reads this name instead. Always exported so the
+# plugin has one code path in both identity modes.
+export OCTOGEE_POD_RELAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
 # ── End require ────────────────────────────────────────────────────────────
 
 # GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.

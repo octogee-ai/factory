@@ -2,6 +2,11 @@ import type { WebSocket } from "ws";
 
 import type { DeviceIdentity } from "@octogee/shared/types/device-identity";
 
+import {
+  OPENCLAW_EDGE_SERVICE_IDENTITY,
+  openClawProxyIdentityHeaders,
+} from "@octogee/shared/types/openclaw-proxy-identity";
+
 import { getOpenClawDeviceIdentity } from "./device-identity.js";
 import {
   clearGatewayDeviceToken,
@@ -78,11 +83,28 @@ async function connect(
   return { ws, issuedDeviceToken };
 }
 
+function connectWithProxyIdentity(
+  opts: AuthenticatedUpstreamOptions,
+  deps: AuthenticatedUpstreamDeps,
+): Promise<WebSocket> {
+  return deps.openUpstream({
+    url: opts.url,
+    identity: deps.getIdentity(),
+    timeoutMs: opts.timeoutMs,
+    proxyIdentity: {
+      headers: openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY }),
+    },
+  });
+}
+
 export async function openUpstreamWithGatewayAuth(
   opts: AuthenticatedUpstreamOptions,
   auth: GatewayOpenClawAuth,
   deps: AuthenticatedUpstreamDeps = productionDeps,
 ): Promise<WebSocket> {
+  if (auth.source === "trusted-proxy") {
+    return connectWithProxyIdentity(opts, deps);
+  }
   if (auth.source !== "legacy-token") {
     return (await connect(opts, auth, deps, [...FULL_ACCESS_DEVICE_SCOPES])).ws;
   }
@@ -126,7 +148,7 @@ async function rotateAuth(
 ): Promise<GatewayOpenClawAuth> {
   if (stale.source === "legacy-token") {
     deps.invalidateGatewayToken(gatewayId);
-  } else {
+  } else if (stale.source === "device-token-file") {
     await deps.clearGatewayDeviceToken();
   }
   return deps.fetchGatewayAuth({

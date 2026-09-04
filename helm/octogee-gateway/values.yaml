@@ -50,6 +50,11 @@ builderAccess:
   # tenant-owned disposable Builder runtime and the app/user mirror has been
   # updated.
   controlUiEnabled: false
+  # How Control UI sessions identify to OpenClaw. "shared-operator" keeps the
+  # pod token and one operator profile; "per-user" switches the gateway to
+  # trusted-proxy auth so every Octogee user carries their own identity and
+  # role. Builder class only; ignored on shared gateways.
+  controlIdentity: shared-operator
   # Builder gateway TokenReview path. Internal gateway identity checks
   # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
   # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)

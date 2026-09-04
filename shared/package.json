@@ -202,6 +202,10 @@
       "types": "./dist/types/openclaw-wire-core.d.ts",
       "default": "./dist/types/openclaw-wire-core.js"
     },
+    "./types/openclaw-proxy-identity": {
+      "types": "./dist/types/openclaw-proxy-identity.d.ts",
+      "default": "./dist/types/openclaw-proxy-identity.js"
+    },
     "./types/post": {
       "types": "./dist/types/post.d.ts",
       "default": "./dist/types/post.js"
@@ -362,6 +366,9 @@
       ],
       "types/openclaw-wire-core": [
         "dist/types/openclaw-wire-core.d.ts"
+      ],
+      "types/openclaw-proxy-identity": [
+        "dist/types/openclaw-proxy-identity.d.ts"
       ],
       "types/post": [
         "dist/types/post.d.ts"

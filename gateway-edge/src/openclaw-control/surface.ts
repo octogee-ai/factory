@@ -18,6 +18,11 @@ import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 import { Router, type Request, type Response } from "express";
 import { WebSocket, type RawData } from "ws";
 
+import {
+  isOpenClawProxyIdentityHeader,
+  resolveControlIdentityFromEnv,
+} from "@octogee/shared/types/openclaw-proxy-identity";
+
 import { fetchGatewayToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -31,7 +36,12 @@ import {
   challengeNonce,
   rewriteTrustedOpenClawConnect,
   sanitizeOpenClawControlServerFrame,
+  type OpenClawConnectIdentity,
 } from "./connect-rewrite.js";
+import {
+  createOpenClawControlProxyIdentity,
+  type OpenClawControlProxyIdentity,
+} from "./proxy-identity.js";
 import {
   evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
@@ -237,7 +247,12 @@ function invariantContext(env: NodeJS.ProcessEnv, gatewayId: string): SystemConf
   const value = gatewayClass(env);
   return value === "shared"
     ? { gatewayClass: value }
-    : { gatewayClass: value, gatewayId, apiOrigin: apiOrigin(env) };
+    : {
+      gatewayClass: value,
+      gatewayId,
+      apiOrigin: apiOrigin(env),
+      controlIdentity: resolveControlIdentityFromEnv(env),
+    };
 }
 
 export function isOpenClawControlWsPath(pathname: string): boolean {
@@ -581,18 +596,25 @@ function rejectDashboardHttpRequest(
   return false;
 }
 
+type UpstreamAuthority =
+  | { kind: "token"; gatewayToken: string }
+  | { kind: "proxy-identity"; headers: Record<string, string> };
+
 function requestHeaders(
   req: Request,
   env: NodeJS.ProcessEnv,
-  gatewayToken: string,
+  authority: UpstreamAuthority,
 ): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
-    if (ALLOWED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
+    if (ALLOWED_REQUEST_HEADERS.has(name.toLowerCase()) && !isOpenClawProxyIdentityHeader(name)) {
+      headers[name] = value;
+    }
   }
   headers.host = openClawControlUpstreamBase(env).host;
   headers.origin = apiOrigin(env);
-  headers.authorization = `Bearer ${gatewayToken}`;
+  if (authority.kind === "token") headers.authorization = `Bearer ${authority.gatewayToken}`;
+  else Object.assign(headers, authority.headers);
   headers["accept-encoding"] = "identity";
   return headers;
 }
@@ -640,8 +662,16 @@ export interface CreateOpenClawControlHttpRouterOptions {
   authorize?: typeof authorizeOpenClawControlSession;
   authorizationCache?: OpenClawControlAuthorizationCache;
   loadGatewayToken?: typeof fetchGatewayToken;
+  proxyIdentity?: OpenClawControlProxyIdentity;
   httpTimeoutMs?: number;
   metrics?: OpenClawControlMetrics;
+}
+
+function defaultProxyIdentity(env: NodeJS.ProcessEnv): OpenClawControlProxyIdentity {
+  return createOpenClawControlProxyIdentity({
+    env,
+    upstreamBase: () => openClawControlUpstreamBase(env),
+  });
 }
 
 // eslint-disable-next-line max-lines-per-function -- launch and asset proxy routes share one session, policy, and metrics closure.
@@ -656,6 +686,7 @@ export function createOpenClawControlHttpRouter(
     authorize: authorizeBroker,
   });
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
+  const proxyIdentity = options.proxyIdentity ?? defaultProxyIdentity(env);
   const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
   const metrics = options.metrics;
   const identity = metricIdentity(env);
@@ -778,7 +809,10 @@ export function createOpenClawControlHttpRouter(
         unauthorized(req, res, frameAncestor);
         return;
       }
-      const gatewayToken = await loadGatewayToken({ gatewayId });
+      const gatewayToken = proxyIdentity.enabled ? "" : await loadGatewayToken({ gatewayId });
+      const authority: UpstreamAuthority = proxyIdentity.enabled
+        ? { kind: "proxy-identity", headers: proxyIdentity.userHeaders(session, req) }
+        : { kind: "token", gatewayToken };
       const base = openClawControlUpstreamBase(env);
       let timedOut = false;
       let settled = false;
@@ -788,7 +822,7 @@ export function createOpenClawControlHttpRouter(
         port: base.port,
         method: req.method,
         path: openClawControlUpstreamPath(req.originalUrl, gatewayId),
-        headers: requestHeaders(req, env, gatewayToken),
+        headers: requestHeaders(req, env, authority),
       }, (upstream) => {
         settled = true;
         if (upstream.statusCode === 206) {
@@ -948,6 +982,8 @@ interface BridgeControlSocketArgs {
   env: NodeJS.ProcessEnv;
   authorizationCache: OpenClawControlAuthorizationCache;
   loadGatewayToken: typeof fetchGatewayToken;
+  proxyIdentity: OpenClawControlProxyIdentity;
+  request: Pick<http.IncomingMessage, "socket">;
   limiter: OpenClawControlResourceLimiter;
   socketLease: OpenClawControlLease;
   rpcTimeoutOverrideMs?: number;
@@ -1021,8 +1057,22 @@ class OpenClawControlSocketBridge {
     this.metricsIdentity = metricIdentity(args.env);
   }
 
+  private connectIdentity(): OpenClawConnectIdentity {
+    if (!this.args.proxyIdentity.enabled) {
+      return { mode: "shared-operator", gatewayToken: this.gatewayToken };
+    }
+    return {
+      mode: "per-user",
+      device: this.args.proxyIdentity.deviceIdentity(this.activeSession),
+      scopes: this.args.proxyIdentity.connectScopes(this.activeSession),
+    };
+  }
+
   async start(): Promise<void> {
-    this.gatewayToken = await this.args.loadGatewayToken({ gatewayId: this.args.session.gatewayId });
+    const perUser = this.args.proxyIdentity.enabled;
+    this.gatewayToken = perUser
+      ? ""
+      : await this.args.loadGatewayToken({ gatewayId: this.args.session.gatewayId });
     if (this.args.browser.readyState !== WebSocket.OPEN) {
       this.args.socketLease.release();
       return;
@@ -1030,7 +1080,12 @@ class OpenClawControlSocketBridge {
     const base = openClawControlUpstreamBase(this.args.env);
     const upstreamUrl = new URL(this.args.requestPath, base);
     upstreamUrl.protocol = "ws:";
-    this.upstream = new WebSocket(upstreamUrl, { maxPayload: MAX_WS_FRAME_BYTES });
+    this.upstream = new WebSocket(upstreamUrl, {
+      maxPayload: MAX_WS_FRAME_BYTES,
+      ...(perUser
+        ? { headers: this.args.proxyIdentity.userHeaders(this.args.session, this.args.request) }
+        : {}),
+    });
     this.args.metrics?.ws(this.metricsIdentity, "open", "ok");
     this.startAuthorizationChecks();
     this.attachSocketHandlers();
@@ -1410,7 +1465,7 @@ class OpenClawControlSocketBridge {
     const rewritten = rewriteTrustedOpenClawConnect({
       frame,
       nonce: this.nonce,
-      gatewayToken: this.gatewayToken,
+      identity: this.connectIdentity(),
     });
     if (!rewritten) {
       lease.release();
@@ -1419,7 +1474,29 @@ class OpenClawControlSocketBridge {
     }
     this.connectForwarded = true;
     this.track(frame.id, "connect", "unknown", lease);
-    this.upstreamSocket().send(rewritten);
+    if (!this.args.proxyIdentity.enabled) {
+      this.upstreamSocket().send(rewritten);
+      return;
+    }
+    void this.args.proxyIdentity.syncRole(this.activeSession).then(
+      () => {
+        if (this.closing || this.upstreamSocket().readyState !== WebSocket.OPEN) return;
+        this.upstreamSocket().send(rewritten);
+      },
+      (error: unknown) => {
+        logger.error("OpenClaw Dashboard identity role sync failed", {
+          gatewayId: this.activeSession.gatewayId,
+          revisionId: this.activeSession.revisionId,
+          brokerProfile: this.activeSession.brokerProfile,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.settlePending(frame.id);
+        if (this.args.browser.readyState === WebSocket.OPEN) {
+          this.args.browser.send(openClawControlPolicyError(frame, "identity-sync-failed"));
+        }
+        this.closeBoth("identity-sync-failed");
+      },
+    );
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
@@ -1629,6 +1706,7 @@ export interface AttachOpenClawControlWsRouteOptions {
   authorize?: typeof authorizeOpenClawControlSession;
   authorizationCache?: OpenClawControlAuthorizationCache;
   loadGatewayToken?: typeof fetchGatewayToken;
+  proxyIdentity?: OpenClawControlProxyIdentity;
   resourceLimiter?: OpenClawControlResourceLimiter;
   rpcTimeoutMs?: number;
   authorizationIntervalMs?: number;
@@ -1648,6 +1726,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
     authorize: authorizeBroker,
   });
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
+  const proxyIdentity = options.proxyIdentity ?? defaultProxyIdentity(env);
   const limiter = options.resourceLimiter ?? defaultLimiter;
   const mattermostChat = options.mattermostChat ?? createMattermostControlChat();
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
@@ -1721,6 +1800,8 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         env,
         authorizationCache,
         loadGatewayToken,
+        proxyIdentity,
+        request: req,
         limiter,
         socketLease,
         rpcTimeoutOverrideMs: options.rpcTimeoutMs,

@@ -1,4 +1,4 @@
-import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayProfile, isValidGatewayId, builderGatewayServiceAccountName, } from "./glm.js";
+import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayControlIdentity, isGatewayProfile, isValidGatewayId, builderGatewayServiceAccountName, } from "./glm.js";
 import { isSizingTier } from "./sizing.js";
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1;
 const KUBERNETES_SERVICE_ACCOUNT_NAME = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u;
@@ -49,6 +49,7 @@ function isNullableBuilderAccess(value) {
         return false;
     const fields = new Set([
         "controlUiEnabled",
+        "controlIdentity",
         "kubeApiServerEgressCidrs",
         "reason",
         "verifiedAt",
@@ -56,7 +57,8 @@ function isNullableBuilderAccess(value) {
     ]);
     if (!Object.keys(value).every((field) => fields.has(field)))
         return false;
-    const validPowerAccess = isOptionalBoolean(value.controlUiEnabled);
+    const validPowerAccess = isOptionalBoolean(value.controlUiEnabled) &&
+        (value.controlIdentity === undefined || isGatewayControlIdentity(value.controlIdentity));
     const validNetworkAccess = value.kubeApiServerEgressCidrs === undefined ||
         isStringArray(value.kubeApiServerEgressCidrs);
     const validVerification = isOptionalString(value.reason) &&

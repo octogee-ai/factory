@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { OpenclawWireError, startConnectChallengeTracker, waitForWsOpen, sendWsRequest, } from "@octogee/shared/types/openclaw-wire-core";
+import { OPENCLAW_CONTROL_UI_CLIENT_ID, OPENCLAW_CONTROL_UI_CLIENT_MODE, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, isPerUserControlIdentity, openClawProxyIdentityHeaders, } from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
@@ -567,6 +568,7 @@ export function createGatewayRpc(opts = {}) {
         close: statusConnection.close,
     };
 }
+const IN_POD_SERVICE_IDENTITY = OPENCLAW_PROVISIONER_SERVICE_IDENTITY;
 function resolveGatewayAuth(opts) {
     if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {
         return { deviceToken: opts.deviceToken };
@@ -575,6 +577,9 @@ function resolveGatewayAuth(opts) {
         return { token: opts.token };
     if (!opts.allowLegacyGatewayTokenFallback)
         return {};
+    if (isPerUserControlIdentity()) {
+        return { proxyIdentity: openClawProxyIdentityHeaders({ user: IN_POD_SERVICE_IDENTITY }) };
+    }
     const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
     if (typeof fromEnv === "string" && fromEnv.length > 0)
         return { token: fromEnv };
@@ -597,6 +602,55 @@ function readTokenFromOpenClawJson(configPath) {
     return "";
 }
 const PROTOCOL_VERSION = OPENCLAW_PROTOCOL_VERSION;
+function proxyIdentityConnectParams() {
+    return {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+            id: OPENCLAW_CONTROL_UI_CLIENT_ID,
+            displayName: "octogee-provisioner",
+            version: "1.0.0",
+            platform: process.platform,
+            mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+        },
+        role: "operator",
+    };
+}
+function deviceConnectParams(params, nonce) {
+    const clientInfo = {
+        id: "gateway-client",
+        displayName: "octogee-provisioner",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "backend",
+    };
+    const device = signConnectDevice({
+        identity: params.identity,
+        clientId: clientInfo.id,
+        clientMode: clientInfo.mode,
+        role: "operator",
+        scopes: params.scopes,
+        nonce,
+        token: params.deviceToken || params.token || null,
+        platform: clientInfo.platform,
+    });
+    let auth;
+    if (params.deviceToken)
+        auth = { deviceToken: params.deviceToken };
+    else if (params.token)
+        auth = { token: params.token };
+    else
+        auth = undefined;
+    return {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: clientInfo,
+        role: "operator",
+        scopes: params.scopes,
+        device,
+        ...(auth ? { auth } : {}),
+    };
+}
 async function openAndConnect(params) {
     const t0 = Date.now();
     let wsOpenMs;
@@ -618,7 +672,9 @@ async function openAndConnect(params) {
             errorMessage: err?.message,
         });
     };
-    const ws = new WebSocket(params.url);
+    const ws = params.proxyIdentity
+        ? new WebSocket(params.url, { headers: params.proxyIdentity })
+        : new WebSocket(params.url);
     ws.on("error", () => { });
     const nonceTracker = startConnectChallengeTracker(ws);
     try {
@@ -630,44 +686,14 @@ async function openAndConnect(params) {
         const nonce = await nonceTracker.wait(params.connectTimeoutMs);
         challengeMs = Date.now() - challengeStart;
         stage = "connect";
-        const clientInfo = {
-            id: "gateway-client",
-            displayName: "octogee-provisioner",
-            version: "1.0.0",
-            platform: process.platform,
-            mode: "backend",
-        };
-        const device = signConnectDevice({
-            identity: params.identity,
-            clientId: clientInfo.id,
-            clientMode: clientInfo.mode,
-            role: "operator",
-            scopes: params.scopes,
-            nonce,
-            token: params.deviceToken || params.token || null,
-            platform: clientInfo.platform,
-        });
-        let auth;
-        if (params.deviceToken)
-            auth = { deviceToken: params.deviceToken };
-        else if (params.token)
-            auth = { token: params.token };
-        else
-            auth = undefined;
         const connectStart = Date.now();
         await sendWsRequest({
             ws,
             id: randomUUID(),
             method: "connect",
-            params: {
-                minProtocol: PROTOCOL_VERSION,
-                maxProtocol: PROTOCOL_VERSION,
-                client: clientInfo,
-                role: "operator",
-                scopes: params.scopes,
-                device,
-                ...(auth ? { auth } : {}),
-            },
+            params: params.proxyIdentity
+                ? proxyIdentityConnectParams()
+                : deviceConnectParams(params, nonce),
             timeoutMs: params.connectTimeoutMs,
             mapConnectErrors: true,
         });

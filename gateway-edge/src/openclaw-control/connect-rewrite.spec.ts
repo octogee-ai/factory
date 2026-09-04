@@ -1,4 +1,9 @@
+import * as crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  buildDeviceAuthPayloadV3,
+  generateIdentity,
+} from "@octogee/shared/types/device-identity";
 
 import {
   challengeNonce,
@@ -6,24 +11,33 @@ import {
   sanitizeOpenClawControlServerFrame,
 } from "./connect-rewrite.js";
 
+const browserConnect = {
+  type: "req",
+  id: "browser-connect",
+  method: "connect",
+  params: {
+    client: { id: "untrusted-browser", mode: "cli" },
+    role: "node",
+    scopes: ["stolen.scope"],
+    auth: { token: "browser-token" },
+    device: { id: "browser-device", signature: "browser-signature" },
+  },
+};
+
+function decodeBase64Url(value: string): Buffer {
+  return Buffer.from(
+    value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - (value.length % 4)) % 4),
+    "base64",
+  );
+}
+
 describe("trusted OpenClaw Dashboard connect rewrite", () => {
   it("replaces all browser identity and auth with the pinned loopback backend contract", () => {
     const gatewayToken = "server-gateway-token";
     const rewritten = JSON.parse(rewriteTrustedOpenClawConnect({
-      frame: {
-        type: "req",
-        id: "browser-connect",
-        method: "connect",
-        params: {
-          client: { id: "untrusted-browser", mode: "cli" },
-          role: "node",
-          scopes: ["stolen.scope"],
-          auth: { token: "browser-token" },
-          device: { id: "browser-device", signature: "browser-signature" },
-        },
-      },
+      frame: browserConnect,
       nonce: "nonce-1",
-      gatewayToken,
+      identity: { mode: "shared-operator", gatewayToken },
       platform: "linux",
     })!);
     expect(rewritten).toMatchObject({
@@ -46,6 +60,51 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
     });
     expect(JSON.stringify(rewritten)).not.toContain("browser-token");
     expect(rewritten.params).not.toHaveProperty("device");
+  });
+
+  it("presents a Control UI client with the person's own device and requested scopes when the proxy carries the identity", () => {
+    const device = generateIdentity();
+    const scopes = ["operator.read", "operator.write"];
+    const rewritten = JSON.parse(rewriteTrustedOpenClawConnect({
+      frame: browserConnect,
+      nonce: "nonce-1",
+      identity: { mode: "per-user", device, scopes },
+      platform: "linux",
+    })!);
+    expect(rewritten).toMatchObject({
+      type: "req",
+      id: "browser-connect",
+      method: "connect",
+      params: {
+        client: { id: "openclaw-control-ui", mode: "ui", platform: "linux" },
+        role: "operator",
+        scopes,
+        device: { id: device.deviceId, nonce: "nonce-1" },
+      },
+    });
+    expect(rewritten.params).not.toHaveProperty("auth");
+    expect(JSON.stringify(rewritten)).not.toContain("browser-token");
+    expect(JSON.stringify(rewritten)).not.toContain("stolen.scope");
+    expect(JSON.stringify(rewritten)).not.toContain("browser-device");
+
+    const payload = buildDeviceAuthPayloadV3({
+      deviceId: rewritten.params.device.id,
+      clientId: "openclaw-control-ui",
+      clientMode: "ui",
+      role: "operator",
+      scopes,
+      signedAtMs: rewritten.params.device.signedAt,
+      token: null,
+      nonce: "nonce-1",
+      platform: "linux",
+      deviceFamily: null,
+    });
+    expect(crypto.verify(
+      null,
+      Buffer.from(payload, "utf8"),
+      crypto.createPublicKey(device.publicKeyPem),
+      decodeBase64Url(rewritten.params.device.signature),
+    )).toBe(true);
   });
 
   it("extracts only a challenge and removes server-held credentials from every server frame", () => {

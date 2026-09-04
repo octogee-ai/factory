@@ -1,6 +1,7 @@
 import {
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
   isGatewayClass,
+  isGatewayControlIdentity,
   isGatewayProfile,
   isValidGatewayId,
   builderGatewayServiceAccountName,
@@ -101,13 +102,15 @@ function isNullableBuilderAccess(value: unknown): value is BuilderGatewayAccessS
   if (!isRecord(value)) return false;
   const fields = new Set([
     "controlUiEnabled",
+    "controlIdentity",
     "kubeApiServerEgressCidrs",
     "reason",
     "verifiedAt",
     "verifiedBy",
   ]);
   if (!Object.keys(value).every((field) => fields.has(field))) return false;
-  const validPowerAccess = isOptionalBoolean(value.controlUiEnabled);
+  const validPowerAccess = isOptionalBoolean(value.controlUiEnabled) &&
+    (value.controlIdentity === undefined || isGatewayControlIdentity(value.controlIdentity));
   const validNetworkAccess = value.kubeApiServerEgressCidrs === undefined ||
     isStringArray(value.kubeApiServerEgressCidrs);
   const validVerification = isOptionalString(value.reason) &&

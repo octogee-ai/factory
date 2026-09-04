@@ -1,6 +1,12 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
+import {
+  OPENCLAW_EDGE_SERVICE_IDENTITY,
+  isPerUserControlIdentity,
+  openClawProxyIdentityHeaders,
+} from "@octogee/shared/types/openclaw-proxy-identity";
+
 import { requireAgentMessageAuth } from "../../middleware/agent-message-auth.js";
 import { logger } from "../../middleware/logging.js";
 
@@ -34,16 +40,32 @@ function agentMessageInput(body: unknown): AgentMessageInput | null {
   return { uid, agentId, message };
 }
 
+type OpenClawCredential =
+  | { kind: "token"; gatewayToken: string }
+  | { kind: "proxy-identity" };
+
+function localOpenClawCredential(env: NodeJS.ProcessEnv = process.env): OpenClawCredential | null {
+  if (isPerUserControlIdentity(env)) return { kind: "proxy-identity" };
+  const gatewayToken = env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  return gatewayToken ? { kind: "token", gatewayToken } : null;
+}
+
+function credentialHeaders(credential: OpenClawCredential): Record<string, string> {
+  return credential.kind === "token"
+    ? { authorization: `Bearer ${credential.gatewayToken}` }
+    : openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY });
+}
+
 async function deliverAgentMessage(
   input: AgentMessageInput,
-  gatewayToken: string,
+  credential: OpenClawCredential,
 ): Promise<globalThis.Response> {
   return fetch(
     `${OPENCLAW_URL}/api/agents/${encodeURIComponent(input.agentId)}/message`,
     {
       method: "POST",
       headers: {
-        authorization: `Bearer ${gatewayToken}`,
+        ...credentialHeaders(credential),
         "content-type": "application/json",
       },
       body: JSON.stringify({ message: input.message, source: "system" }),
@@ -71,8 +93,8 @@ export function createInternalAgentMessageRouter(): Router {
           return;
         }
         agentId = input.agentId;
-        const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
-        if (!gatewayToken) {
+        const credential = localOpenClawCredential();
+        if (!credential) {
           logger.error("internal agent message delivery failed", {
             gatewayId,
             agentId: input.agentId,
@@ -81,7 +103,7 @@ export function createInternalAgentMessageRouter(): Router {
           res.status(503).json({ error: "OpenClaw message delivery unavailable" });
           return;
         }
-        const response = await deliverAgentMessage(input, gatewayToken);
+        const response = await deliverAgentMessage(input, credential);
         if (!response.ok) {
           logger.error("internal agent message delivery failed", {
             gatewayId,
