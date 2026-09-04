@@ -280,7 +280,7 @@ if [ -d /octogee/extensions ]; then
   log "Plugin extensions projected from image"
 fi
 
-# ── Restore staged OpenClaw runtime plugins into the emptyDir ───────────────
+# ── Restore staged external OpenClaw runtime plugins into the emptyDir ───────
 # `openclaw plugins install` writes under ~/.openclaw/npm, which is an emptyDir
 # at runtime (no PVC) — so the build-time install is shadowed every boot.
 # The plugin tree is staged in the base image at /opt/openclaw-runtime-deps;
