@@ -2,15 +2,30 @@ import { isValidModelRef } from "@octogee/shared/types/agent-models";
 import { containsAsciiControlCharacter } from "./text-validation.js";
 
 const INTERNAL_HOST = /^mattermost\.[a-z0-9-]+\.svc\.cluster\.local$/;
+const MATTERMOST_ID = /^[a-z0-9]{26}$/;
 const PROVIDER = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export interface MattermostModelPost {
   id: string;
+  type: string;
   root_id: string;
   channel_id: string;
   user_id: string;
   create_at: number;
   message: string;
+  update_at?: number;
+  edit_at?: number;
+  delete_at?: number;
+  pending_post_id?: string;
+  file_ids?: string[];
+  props?: Record<string, unknown>;
+}
+
+export interface MattermostChannelHistoryPage {
+  posts: MattermostModelPost[];
+  nextBefore?: string;
+  reachedEnd: boolean;
 }
 
 export interface NativeModelResult {
@@ -101,32 +116,159 @@ async function boundedText(response: Response, maxBytes: number): Promise<string
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+interface MattermostHistoryRecord {
+  order: unknown[];
+  posts: Record<string, unknown>;
+  prev_post_id?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isValidHistoryCursor(value: unknown): boolean {
+  return value === undefined ||
+    typeof value === "string" && (!value || MATTERMOST_ID.test(value));
+}
+
+function parseHistoryRecord(value: unknown, perPage: number): MattermostHistoryRecord | null {
+  if (!isRecord(value)) return null;
+  if (!Array.isArray(value.order) || value.order.length > perPage) return null;
+  if (new Set(value.order).size !== value.order.length || !isRecord(value.posts)) return null;
+  if (!isValidHistoryCursor(value.prev_post_id)) return null;
+  return {
+    order: value.order,
+    posts: value.posts,
+    ...(value.prev_post_id === undefined ? {} : { prev_post_id: value.prev_post_id }),
+  };
+}
+
+function hasValidPostIdentity(
+  post: Partial<MattermostModelPost>,
+  postId: string,
+  channelId: string,
+): boolean {
+  return post.id === postId &&
+    post.channel_id === channelId &&
+    typeof post.user_id === "string" &&
+    MATTERMOST_ID.test(post.user_id);
+}
+
+function hasValidPostContent(post: Partial<MattermostModelPost>): boolean {
+  return typeof post.type === "string" &&
+    typeof post.root_id === "string" &&
+    (!post.root_id || MATTERMOST_ID.test(post.root_id)) &&
+    typeof post.message === "string";
+}
+
+function isNonnegativeSafeInteger(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function hasValidPostTimestamps(post: Partial<MattermostModelPost>): boolean {
+  return isNonnegativeSafeInteger(post.create_at) &&
+    isNonnegativeSafeInteger(post.update_at) &&
+    isNonnegativeSafeInteger(post.edit_at) &&
+    isNonnegativeSafeInteger(post.delete_at);
+}
+
+function hasValidPostFiles(fileIds: MattermostModelPost["file_ids"]): boolean {
+  return fileIds === undefined ||
+    Array.isArray(fileIds) &&
+      fileIds.every((id) => typeof id === "string" && MATTERMOST_ID.test(id));
+}
+
+function hasValidPostMetadata(post: Partial<MattermostModelPost>): boolean {
+  return typeof post.pending_post_id === "string" &&
+    hasValidPostFiles(post.file_ids) &&
+    isRecord(post.props);
+}
+
+function parseHistoryPost(
+  postsById: Record<string, unknown>,
+  postId: unknown,
+  channelId: string,
+): MattermostModelPost {
+  if (typeof postId !== "string" || !MATTERMOST_ID.test(postId)) {
+    throw new ChannelSessionMattermostError("Mattermost channel history response was invalid");
+  }
+  const value = postsById[postId];
+  if (!isRecord(value)) {
+    throw new ChannelSessionMattermostError("Mattermost channel history response was invalid");
+  }
+  const post = value as Partial<MattermostModelPost>;
+  if (
+    !hasValidPostIdentity(post, postId, channelId) ||
+    !hasValidPostContent(post) ||
+    !hasValidPostTimestamps(post) ||
+    !hasValidPostMetadata(post)
+  ) {
+    throw new ChannelSessionMattermostError("Mattermost channel history response was invalid");
+  }
+  return {
+    ...post,
+    file_ids: post.file_ids ?? [],
+  } as MattermostModelPost;
+}
+
+function nextHistoryCursor(
+  record: MattermostHistoryRecord,
+  posts: readonly MattermostModelPost[],
+  perPage: number,
+): string | undefined {
+  if (typeof record.prev_post_id === "string" && record.prev_post_id) {
+    return record.prev_post_id;
+  }
+  return posts.length === perPage ? posts.at(-1)?.id : undefined;
+}
+
 export function createChannelSessionMattermostClient(input: {
   baseUrl: string;
   token: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  signal?: AbortSignal;
 }) {
   const baseUrl = validatedBaseUrl(input.baseUrl);
   if (input.token.length < 16 || input.token.length > 4096 || containsAsciiControlCharacter(input.token) || input.token.includes(" ")) throw new Error("invalid Mattermost token");
   const fetchImpl = input.fetchImpl ?? fetch;
   const timeoutMs = input.timeoutMs ?? 10_000;
-  const maxResponseBytes = input.maxResponseBytes ?? 64 * 1024;
-  const requestJson = async (method: "GET" | "POST", segments: readonly string[], body?: unknown): Promise<unknown> => {
-    if (!segments.length || segments.some((segment) => !segment || segment.length > 256 || containsAsciiControlCharacter(segment))) throw new Error("invalid Mattermost path");
-    const url = `${baseUrl}/api/v4/${segments.map(encodeURIComponent).join("/")}`;
+  const maxResponseBytes = input.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+  if (
+    !Number.isSafeInteger(maxResponseBytes) ||
+    maxResponseBytes < 1 ||
+    maxResponseBytes > MAX_RESPONSE_BYTES
+  ) {
+    throw new Error("invalid Mattermost response size limit");
+  }
+  const fetchJson = async (
+    url: string,
+    init: RequestInit,
+  ): Promise<unknown> => {
     let response: Response;
     try {
+      const signal = input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs);
       response = await fetchImpl(url, {
-        method,
-        headers: { authorization: `Bearer ${input.token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...init,
+        headers: {
+          authorization: `Bearer ${input.token}`,
+          accept: "application/json",
+          ...init.headers,
+        },
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch (error) {
-      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) throw error;
+      if (input.signal?.aborted) throw input.signal.reason;
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
+        throw error;
+      }
       throw new ChannelSessionMattermostError("Mattermost transport failed");
     }
     let text: string;
@@ -134,10 +276,34 @@ export function createChannelSessionMattermostClient(input: {
       text = await boundedText(response, maxResponseBytes);
     } catch (error) {
       if (error instanceof ChannelSessionMattermostError) throw error;
-      throw new ChannelSessionMattermostError("Mattermost response was invalid", response.status);
+      throw new ChannelSessionMattermostError(
+        "Mattermost response was invalid",
+        response.status,
+      );
     }
-    if (!response.ok) throw new ChannelSessionMattermostError(`Mattermost HTTP ${response.status}`, response.status);
-    try { return JSON.parse(text) as unknown; } catch { throw new ChannelSessionMattermostError("Mattermost returned malformed JSON", response.status); }
+    if (!response.ok) {
+      throw new ChannelSessionMattermostError(
+        `Mattermost HTTP ${response.status}`,
+        response.status,
+      );
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new ChannelSessionMattermostError(
+        "Mattermost returned malformed JSON",
+        response.status,
+      );
+    }
+  };
+  const requestJson = async (method: "GET" | "POST", segments: readonly string[], body?: unknown): Promise<unknown> => {
+    if (!segments.length || segments.some((segment) => !segment || segment.length > 256 || containsAsciiControlCharacter(segment))) throw new Error("invalid Mattermost path");
+    const url = `${baseUrl}/api/v4/${segments.map(encodeURIComponent).join("/")}`;
+    return fetchJson(url, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
   };
   return {
     getJson: (segments: readonly string[]) => requestJson("GET", segments),
@@ -147,6 +313,47 @@ export function createChannelSessionMattermostClient(input: {
       const id = (value as { id?: unknown } | null)?.id;
       if (typeof id !== "string") throw new ChannelSessionMattermostError("Mattermost current user response was invalid");
       return id;
+    },
+    async listChannelPosts(
+      channelId: string,
+      before?: string,
+      perPage = 100,
+    ): Promise<MattermostChannelHistoryPage> {
+      if (!MATTERMOST_ID.test(channelId)) {
+        throw new Error("invalid Mattermost channel id");
+      }
+      if (
+        before !== undefined &&
+        !MATTERMOST_ID.test(before)
+      ) {
+        throw new Error("invalid Mattermost history cursor");
+      }
+      if (!Number.isSafeInteger(perPage) || perPage < 1 || perPage > 200) {
+        throw new Error("invalid Mattermost history page size");
+      }
+      const query = new URLSearchParams({ per_page: String(perPage) });
+      if (before) query.set("before", before);
+      const value = await fetchJson(
+        `${baseUrl}/api/v4/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
+        { method: "GET" },
+      );
+      const record = parseHistoryRecord(value, perPage);
+      if (!record) {
+        throw new ChannelSessionMattermostError(
+          "Mattermost channel history response was invalid",
+        );
+      }
+      const posts = record.order.map((postId) =>
+        parseHistoryPost(record.posts, postId, channelId)
+      );
+      const nextBefore = nextHistoryCursor(record, posts, perPage);
+      return {
+        posts,
+        ...(nextBefore ? { nextBefore } : {}),
+        reachedEnd:
+          posts.length < perPage ||
+          (record.prev_post_id !== undefined && !record.prev_post_id),
+      };
     },
   };
 }

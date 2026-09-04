@@ -130,6 +130,14 @@
       "types": "./dist/types/identity.d.ts",
       "default": "./dist/types/identity.js"
     },
+    "./types/mattermost-session-route": {
+      "types": "./dist/types/mattermost-session-route.d.ts",
+      "default": "./dist/types/mattermost-session-route.js"
+    },
+    "./types/mattermost-conversation-projection": {
+      "types": "./dist/types/mattermost-conversation-projection.d.ts",
+      "default": "./dist/types/mattermost-conversation-projection.js"
+    },
     "./types/image-tag": {
       "types": "./dist/types/image-tag.d.ts",
       "default": "./dist/types/image-tag.js"
@@ -306,6 +314,12 @@
       ],
       "types/identity": [
         "dist/types/identity.d.ts"
+      ],
+      "types/mattermost-session-route": [
+        "dist/types/mattermost-session-route.d.ts"
+      ],
+      "types/mattermost-conversation-projection": [
+        "dist/types/mattermost-conversation-projection.d.ts"
       ],
       "types/image-tag": [
         "dist/types/image-tag.d.ts"

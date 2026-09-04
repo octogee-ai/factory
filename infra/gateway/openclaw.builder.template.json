@@ -67,7 +67,7 @@
           }
         }
       },
-      "verboseDefault": "full",
+      "verboseDefault": "off",
       "toolProgressDetail": "raw",
       "workspace": "/home/node/.openclaw/workspace",
       "contextPruning": {
@@ -186,11 +186,11 @@
       "replyToModeByChatType": {
         "direct": "all"
       },
+      "threadSessionScope": "channel",
       "streaming": {
-        "mode": "block",
+        "mode": "off",
         "preview": {
-          "toolProgress": true,
-          "commandText": "raw"
+          "toolProgress": false
         }
       },
       "network": {

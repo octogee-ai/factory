@@ -51,6 +51,11 @@ import {
 } from "./limits.js";
 import { OpenClawControlSessionManager, type OpenClawControlSession } from "./session.js";
 import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./metrics.js";
+import {
+  createMattermostControlChat,
+  type MattermostChatPreparation,
+  type MattermostControlChat,
+} from "./mattermost-chat.js";
 
 const MAX_WS_FRAME_BYTES = 1_048_576;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
@@ -693,6 +698,7 @@ export function createOpenClawControlHttpRouter(
         sessionId,
         uid: redeemed.uid,
         gatewayId,
+        workspaceSlug: redeemed.workspaceSlug,
         revisionId,
         brokerProfile: redeemed.brokerProfile,
         permissionSetIds: redeemed.permissionSetIds,
@@ -884,9 +890,39 @@ interface PendingRpc {
   internal: boolean;
   timeoutMs: number;
   proposed?: Record<string, unknown>;
+  responseProjector?: (frame: Record<string, unknown>) => Record<string, unknown>;
   lease: OpenClawControlLease;
   mutationLease?: SystemConfigMutationLease;
   timer: NodeJS.Timeout;
+}
+
+interface ActiveMattermostPreparation {
+  controller: AbortController;
+  releaseRequest(): void;
+  timer: NodeJS.Timeout;
+}
+
+function mattermostPreparationExpired(controller: AbortController, deadlineAt: number): boolean {
+  return controller.signal.aborted || Date.now() >= deadlineAt;
+}
+
+function browserCannotReceive(closing: boolean, browser: WebSocket): boolean {
+  return closing || browser.readyState !== WebSocket.OPEN;
+}
+
+function mattermostProjectionOptions(
+  preparation: MattermostChatPreparation | null,
+): { responseProjector?: (frame: Record<string, unknown>) => Record<string, unknown> } {
+  if (preparation?.kind !== "upstream") return {};
+  return { responseProjector: preparation.project };
+}
+
+function mattermostOutboundFrame(
+  outbound: Record<string, unknown>,
+  preparation: MattermostChatPreparation | null,
+): Record<string, unknown> {
+  if (preparation?.kind !== "upstream" || !preparation.upstreamParams) return outbound;
+  return { ...outbound, params: preparation.upstreamParams };
 }
 
 export function openClawControlRpcDeadlineMs(args: {
@@ -917,6 +953,7 @@ interface BridgeControlSocketArgs {
   rpcTimeoutOverrideMs?: number;
   authorizationIntervalMs: number;
   metrics?: OpenClawControlMetrics;
+  mattermostChat: MattermostControlChat;
   retainMutationLeaseUntilProcessReplacement: (
     lease: SystemConfigMutationLease,
     reason: string,
@@ -936,6 +973,24 @@ function browserRpcFrame(data: RawData): BrowserRpcFrame | null {
   return frame as BrowserRpcFrame;
 }
 
+async function awaitWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const aborted = () => reject(signal.reason);
+    signal.addEventListener("abort", aborted, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", aborted);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", aborted);
+        reject(error);
+      },
+    );
+  });
+}
+
 class OpenClawControlSocketBridge {
   private readonly identity: OpenClawControlResourceIdentity;
   private readonly metricsIdentity: OpenClawControlMetricIdentity;
@@ -949,6 +1004,7 @@ class OpenClawControlSocketBridge {
   private currentConfig?: OpenClawConfigSnapshot;
   private readonly pending = new Map<string, PendingRpc>();
   private readonly admittingIds = new Set<string>();
+  private readonly mattermostPreparations = new Map<string, ActiveMattermostPreparation>();
   private readonly timedOut = new Map<string, SystemConfigMutationLease | undefined>();
   private quarantineTimer?: NodeJS.Timeout;
   private authorizationTimer?: NodeJS.Timeout;
@@ -1088,6 +1144,12 @@ class OpenClawControlSocketBridge {
     if (this.authorizationTimer) clearInterval(this.authorizationTimer);
     if (this.quarantineTimer) clearTimeout(this.quarantineTimer);
     this.bufferedConnect = undefined;
+    for (const [id, preparation] of this.mattermostPreparations) {
+      this.mattermostPreparations.delete(id);
+      clearTimeout(preparation.timer);
+      preparation.controller.abort(new DOMException(reason, "AbortError"));
+      preparation.releaseRequest();
+    }
     this.admittingIds.clear();
     this.retainUncertainLeases(reason);
     if (!this.socketReleased) {
@@ -1162,6 +1224,8 @@ class OpenClawControlSocketBridge {
       internal?: boolean;
       proposed?: Record<string, unknown>;
       mutationLease?: SystemConfigMutationLease;
+      responseProjector?: (frame: Record<string, unknown>) => Record<string, unknown>;
+      timerMs?: number;
     } = {},
   ): void {
     const pendingRpc = {} as PendingRpc;
@@ -1170,7 +1234,10 @@ class OpenClawControlSocketBridge {
       method,
       overrideMs: this.args.rpcTimeoutOverrideMs,
     });
-    const timer = setTimeout(() => this.expirePending(id, method, category, pendingRpc), timeoutMs);
+    const timer = setTimeout(
+      () => this.expirePending(id, method, category, pendingRpc),
+      options.timerMs ?? timeoutMs,
+    );
     timer.unref?.();
     Object.assign(pendingRpc, {
       category,
@@ -1178,6 +1245,7 @@ class OpenClawControlSocketBridge {
       internal: options.internal ?? false,
       timeoutMs,
       proposed: options.proposed,
+      responseProjector: options.responseProjector,
       lease,
       mutationLease: options.mutationLease,
       timer,
@@ -1223,7 +1291,7 @@ class OpenClawControlSocketBridge {
     this.acceptInstalledMethods(frame);
     this.updateCurrentConfig(frame, request);
     this.refreshConfigAfterMutation(frame, request);
-    this.forwardProjectedFrame(frame, request);
+    this.forwardProjectedFrame(request?.responseProjector?.(frame) ?? frame, request);
   }
 
   private forwardProjectedFrame(
@@ -1418,14 +1486,99 @@ class OpenClawControlSocketBridge {
     decision: OpenClawControlRpcDecision,
     lease: OpenClawControlLease,
   ): Promise<void> {
+    const timeoutMs = openClawControlRpcDeadlineMs({
+      category: decision.category,
+      method: frame.method,
+      overrideMs: this.args.rpcTimeoutOverrideMs,
+    });
+    const deadlineAt = Date.now() + timeoutMs;
+    const preparationController = new AbortController();
+    let requestReleased = false;
+    const releaseRequest = (): void => {
+      if (requestReleased) return;
+      requestReleased = true;
+      lease.release();
+    };
+    const preparationTimer = setTimeout(() => {
+      preparationController.abort(new DOMException("OpenClaw Dashboard RPC timed out", "TimeoutError"));
+    }, timeoutMs);
+    preparationTimer.unref?.();
+    const preparation: ActiveMattermostPreparation = {
+      controller: preparationController,
+      releaseRequest,
+      timer: preparationTimer,
+    };
+    this.mattermostPreparations.set(frame.id, preparation);
+    const finishPreparation = (): void => {
+      if (this.mattermostPreparations.get(frame.id) !== preparation) return;
+      this.mattermostPreparations.delete(frame.id);
+      clearTimeout(preparationTimer);
+    };
+    const expireBeforeForward = (mutationLease?: SystemConfigMutationLease): void => {
+      finishPreparation();
+      releaseRequest();
+      if (mutationLease) this.releaseMutationLease(mutationLease);
+      if (this.args.browser.readyState === WebSocket.OPEN) {
+        this.args.browser.send(openClawControlTimeoutError(frame));
+        this.args.metrics?.rpc(this.metricsIdentity, decision.category, "timeout");
+      }
+    };
+    this.admittingIds.add(frame.id);
+    let mattermost;
+    try {
+      mattermost = await awaitWithAbort(
+        this.args.mattermostChat.prepare(
+          frame,
+          this.activeSession,
+          preparationController.signal,
+        ),
+        preparationController.signal,
+      );
+    } catch (error) {
+      if (mattermostPreparationExpired(preparationController, deadlineAt)) {
+        expireBeforeForward();
+        return;
+      }
+      finishPreparation();
+      releaseRequest();
+      throw error;
+    } finally {
+      this.admittingIds.delete(frame.id);
+    }
+    finishPreparation();
+    if (browserCannotReceive(this.closing, this.args.browser)) {
+      releaseRequest();
+      return;
+    }
+    if (mattermostPreparationExpired(preparationController, deadlineAt)) {
+      expireBeforeForward();
+      return;
+    }
+    if (mattermost?.kind === "response") {
+      releaseRequest();
+      this.args.browser.send(sanitizeOpenClawControlServerFrame(
+        mattermost.frame,
+        [this.gatewayToken],
+      ));
+      this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
+      return;
+    }
     const mutationLease = await this.acquireMutationLease(frame, decision, lease);
     if (mutationLease === null) return;
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      expireBeforeForward(mutationLease);
+      return;
+    }
     this.track(frame.id, frame.method, decision.category, lease, {
       proposed: decision.proposedConfig,
       mutationLease,
+      timerMs: remainingMs,
+      ...mattermostProjectionOptions(mattermost),
     });
     try {
-      this.upstreamSocket().send(JSON.stringify(decision.outbound ?? frame));
+      const outbound = decision.outbound ?? frame;
+      this.upstreamSocket().send(JSON.stringify(mattermostOutboundFrame(outbound, mattermost)));
     } catch (error) {
       this.settlePending(frame.id);
       throw error;
@@ -1480,6 +1633,7 @@ export interface AttachOpenClawControlWsRouteOptions {
   rpcTimeoutMs?: number;
   authorizationIntervalMs?: number;
   metrics?: OpenClawControlMetrics;
+  mattermostChat?: MattermostControlChat;
   retainMutationLeaseUntilProcessReplacement?: (
     lease: SystemConfigMutationLease,
     reason: string,
@@ -1495,6 +1649,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
   });
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const limiter = options.resourceLimiter ?? defaultLimiter;
+  const mattermostChat = options.mattermostChat ?? createMattermostControlChat();
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const authorizationIntervalMs = options.authorizationIntervalMs ?? DEFAULT_AUTHORIZATION_INTERVAL_MS;
   if (!Number.isSafeInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 ||
@@ -1571,6 +1726,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         rpcTimeoutOverrideMs: options.rpcTimeoutMs,
         authorizationIntervalMs,
         metrics: options.metrics,
+        mattermostChat,
         retainMutationLeaseUntilProcessReplacement:
           options.retainMutationLeaseUntilProcessReplacement ?? retainMutationLeaseUntilProcessReplacement,
       }).catch(() => {

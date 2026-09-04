@@ -169,6 +169,7 @@ describe("agent activity envelope v1 fixtures", () => {
     expect(AGENT_ACTIVITY_RESERVED_ITEM_IDS).toEqual({
       runRoot: "octogee:run-root",
       turnFinalized: "octogee:turn-finalized",
+      answerCommit: "octogee:answer-commit",
       terminalError: "octogee:terminal-error",
       approvalPrefix: "octogee:approval:",
     });
@@ -184,6 +185,7 @@ describe("agent activity envelope v1 fixtures", () => {
     const reserved = (itemId: string) =>
       itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.runRoot ||
       itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized ||
+      itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.answerCommit ||
       itemId === AGENT_ACTIVITY_RESERVED_ITEM_IDS.terminalError ||
       itemId.startsWith(AGENT_ACTIVITY_RESERVED_ITEM_IDS.approvalPrefix);
     for (const { ref } of activity.envelopes) {

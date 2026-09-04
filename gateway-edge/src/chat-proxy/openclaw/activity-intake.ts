@@ -14,6 +14,9 @@ import {
   type AgentActivityEnvelopeV1,
   type AgentActivityIngressRef,
   type AgentActivityKind,
+  type AgentAnswerCommitRecord,
+  type AgentAnswerPart,
+  type AgentAnswerPartKind,
 } from "@octogee/shared/types/agent-conversation";
 import {
   createActivitySink,
@@ -48,6 +51,22 @@ const KINDS = new Set<AgentActivityKind>([
   "fallback",
   "approval",
   "error",
+]);
+const ANSWER_PART_KINDS = new Set<AgentAnswerPartKind>([
+  "text",
+  "media",
+  "voice",
+  "poll",
+  "card",
+  "preview",
+  "unknown",
+]);
+const ANSWER_DELIVERY_OUTCOMES = new Set([
+  "delivered",
+  "partial",
+  "failed",
+  "suppressed",
+  "not-attempted",
 ]);
 const APPLICATION_TEXT_MEDIA_TYPES = new Set([
   "application/json",
@@ -407,6 +426,74 @@ function parseItem(value: unknown) {
   };
 }
 
+function parseAnswerPart(value: unknown, expectedIndex: number): AgentAnswerPart {
+  const part = record(value, "invalid_answer_commit");
+  exactKeys(
+    part,
+    ["postId", "kind", "index", "rootPostId", "threadId"],
+    "invalid_answer_commit",
+  );
+  const kind = stringField(part, "kind", "invalid_answer_commit");
+  if (!ANSWER_PART_KINDS.has(kind as AgentAnswerPartKind)) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+  }
+  const index = positiveInteger(part, "index", true);
+  if (index !== expectedIndex) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+  }
+  const rootPostId = optionalString(part, "rootPostId");
+  const threadId = optionalString(part, "threadId");
+  return {
+    postId: stringField(part, "postId", "invalid_answer_commit"),
+    kind: kind as AgentAnswerPartKind,
+    index,
+    ...(rootPostId ? { rootPostId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
+function parseAnswerCommit(value: unknown): AgentAnswerCommitRecord {
+  const answer = record(value, "invalid_answer_commit");
+  exactKeys(
+    answer,
+    ["terminalOutcome", "deliveryOutcome", "postIds", "parts"],
+    "invalid_answer_commit",
+  );
+  const terminalOutcome = parseOutcome(answer.terminalOutcome);
+  const deliveryOutcome = stringField(answer, "deliveryOutcome", "invalid_answer_commit");
+  if (!ANSWER_DELIVERY_OUTCOMES.has(deliveryOutcome)) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+  }
+  if (!Array.isArray(answer.postIds) || !Array.isArray(answer.parts)) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+  }
+  const postIds = answer.postIds.map((postId) => {
+    if (typeof postId !== "string" || !postId) {
+      throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+    }
+    return postId;
+  });
+  const parts = answer.parts.map(parseAnswerPart);
+  const hasDuplicatePostIds = new Set(postIds).size !== postIds.length;
+  const aligned = postIds.length === parts.length && parts.every(
+    (part, index) => part.postId === postIds[index],
+  );
+  const requiresPosts = deliveryOutcome === "delivered" || deliveryOutcome === "partial";
+  if (
+    hasDuplicatePostIds ||
+    !aligned ||
+    (requiresPosts ? postIds.length === 0 : postIds.length !== 0)
+  ) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
+  }
+  return {
+    terminalOutcome,
+    deliveryOutcome: deliveryOutcome as AgentAnswerCommitRecord["deliveryOutcome"],
+    postIds,
+    parts,
+  };
+}
+
 function assertStartedIdentity(ref: AgentActivityIngressRef): void {
   if (
     ref.itemId !== AGENT_ACTIVITY_RESERVED_ITEM_IDS.runRoot ||
@@ -423,6 +510,15 @@ function assertFinalizedIdentity(ref: AgentActivityIngressRef): void {
     ref.semanticVersion !== 1
   ) {
     throw new ActivityIntakeError(422, "invalid_finalization", false);
+  }
+}
+
+function assertAnswerCommitIdentity(ref: AgentActivityIngressRef): void {
+  if (
+    ref.itemId !== AGENT_ACTIVITY_RESERVED_ITEM_IDS.answerCommit ||
+    ref.semanticVersion !== 1
+  ) {
+    throw new ActivityIntakeError(422, "invalid_answer_commit", false);
   }
 }
 
@@ -463,12 +559,15 @@ function assertSemanticIdentity(envelope: AgentActivityEnvelopeV1): void {
     case "turn.finalized":
       assertFinalizedIdentity(envelope.ref);
       return;
+    case "answer.committed":
+      assertAnswerCommitIdentity(envelope.ref);
+      return;
     case "item.completed":
       assertCompletedIdentity(envelope);
   }
 }
 
-type ParsedEnvelopeBase = Omit<AgentActivityEnvelopeV1, "type" | "item" | "outcome">;
+type ParsedEnvelopeBase = Omit<AgentActivityEnvelopeV1, "type" | "item" | "outcome" | "answer">;
 
 function parseOutcome(value: unknown): "completed" | "failed" | "stopped" {
   if (value !== "completed" && value !== "failed" && value !== "stopped") {
@@ -493,6 +592,9 @@ function parseEnvelopeVariant(
     case "turn.finalized":
       exactKeys(envelope, [...common, "outcome"], "invalid_envelope");
       return { ...base, type, outcome: parseOutcome(envelope.outcome) };
+    case "answer.committed":
+      exactKeys(envelope, [...common, "answer"], "invalid_envelope");
+      return { ...base, type, answer: parseAnswerCommit(envelope.answer) };
     default:
       throw new ActivityIntakeError(422, "invalid_event_type", false);
   }

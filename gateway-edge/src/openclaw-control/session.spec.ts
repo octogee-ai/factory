@@ -17,6 +17,7 @@ describe("OpenClaw Dashboard session", () => {
       sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70",
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alice",
       revisionId: "bender-r7",
       brokerProfile: "delegated-config",
       permissionSetIds: ["trusted-helper.v1"],
@@ -35,6 +36,7 @@ describe("OpenClaw Dashboard session", () => {
     expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
       .toMatchObject({
         uid: "uid-owner",
+        workspaceSlug: "alice",
         brokerProfile: "delegated-config",
         permissionSetIds: ["trusted-helper.v1"],
         grantRevision: 4,
@@ -74,6 +76,7 @@ describe("OpenClaw Dashboard session", () => {
       sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70",
       uid: "uid-owner",
       gatewayId: "bender",
+      workspaceSlug: "alice",
       revisionId: "bender-r7",
       brokerProfile: "native-owner",
       permissionSetIds: [],

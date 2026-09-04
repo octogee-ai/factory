@@ -19,6 +19,7 @@ describe("OpenClaw Dashboard broker client", () => {
         ? new Response(JSON.stringify({
             uid: "uid-owner",
             gatewayId: "bender",
+            workspaceSlug: "alice",
             revisionId: "bender-r7",
             brokerProfile: "native-owner",
             permissionSetIds: [],
@@ -34,7 +35,11 @@ describe("OpenClaw Dashboard broker client", () => {
       revisionId: "bender-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
-    })).resolves.toMatchObject({ uid: "uid-owner", brokerProfile: "native-owner" });
+    })).resolves.toMatchObject({
+      uid: "uid-owner",
+      workspaceSlug: "alice",
+      brokerProfile: "native-owner",
+    });
     await expect(authorizeOpenClawControlSession({
       sessionId,
       gatewayId: "bender",

@@ -50,7 +50,7 @@ function envelope(
     const finalizedRef = {
       ...ref,
       itemId: AGENT_ACTIVITY_RESERVED_ITEM_IDS.turnFinalized,
-      ordinal: 2,
+      ordinal: 5,
     };
     return {
       ...base,
@@ -69,12 +69,90 @@ function envelope(
   } as AgentActivityEnvelopeV1;
 }
 
-function mmClient(): ActivityMattermostClient {
+function answerEnvelope(): AgentActivityEnvelopeV1 {
+  const base = envelope("item.completed");
+  const ref = {
+    ...base.ref,
+    itemId: "octogee:answer-commit",
+    ordinal: 3,
+  };
+  return {
+    schemaVersion: 1,
+    eventKey: createHash("sha256").update(agentActivityCanonicalKey(ref)).digest("hex"),
+    emittedAt: base.emittedAt,
+    ref,
+    redaction: base.redaction,
+    type: "answer.committed",
+    answer: {
+      terminalOutcome: "completed",
+      deliveryOutcome: "delivered",
+      postIds: ["answer-1", "answer-2"],
+      parts: [
+        { postId: "answer-1", kind: "text", index: 0, rootPostId: "turn-1" },
+        { postId: "answer-2", kind: "media", index: 1, threadId: "turn-1" },
+      ],
+    },
+  } as unknown as AgentActivityEnvelopeV1;
+}
+
+function answerRunProps(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const ref = answerEnvelope().ref;
+  return {
+    schemaVersion: 3,
+    projectionKind: "run",
+    conversationId: ref.conversationId,
+    turnId: ref.turnId,
+    runId: ref.runId,
+    agentId: ref.agentId,
+    sessionKey: ref.sessionKey,
+    origin: ref.origin,
+    mainChannelId: ref.mainChannelId,
+    mainRootPostId: ref.mainRootPostId,
+    inputPostId: ref.inputPostId,
+    ...overrides,
+  };
+}
+
+function answerPosts(): ActivityMattermostPost[] {
+  return [
+    answerPost({ id: "answer-1", message: "Done", props: { octogee: answerRunProps() } }),
+    answerPost({ id: "answer-2", message: "", fileIds: ["file-2"] }),
+  ];
+}
+
+function answerPost(
+  overrides: Partial<ActivityMattermostPost> & Pick<ActivityMattermostPost, "id">,
+): ActivityMattermostPost {
+  return {
+    channelId: "main-1",
+    rootId: "turn-1",
+    userId: "agent-1",
+    props: {},
+    fileIds: [],
+    createAt: 1,
+    editAt: 0,
+    deleteAt: 0,
+    ...overrides,
+  };
+}
+
+type TestMattermostClient = ActivityMattermostClient & {
+  patchStoredPost(postId: string, patch: Partial<ActivityMattermostPost>): void;
+};
+
+function mmClient(
+  initialPosts: ActivityMattermostPost[] = [],
+  answerCommitPatch: Partial<ActivityMattermostPost> = {},
+): TestMattermostClient {
   let next = 0;
-  const posts = new Map<string, ActivityMattermostPost>([[
-    "turn-1",
-    { id: "turn-1", channelId: "main-1", rootId: "", userId: "builder-1", props: {}, fileIds: [] },
-  ]]);
+  let timestamp = 100;
+  const posts = new Map<string, ActivityMattermostPost>([
+    [
+      "turn-1",
+      { id: "turn-1", channelId: "main-1", rootId: "", userId: "builder-1", props: {}, fileIds: [] },
+    ],
+    ...initialPosts.map((post) => [post.id, post] as [string, ActivityMattermostPost]),
+  ]);
   const client: ActivityMattermostClient = {
     createPost: vi.fn(async () => ({ id: `post-${++next}` })),
     editPost: vi.fn(async (postId, input) => {
@@ -91,9 +169,14 @@ function mmClient(): ActivityMattermostClient {
         id,
         channelId: input.channelId,
         rootId: input.rootId ?? "",
+        userId: "agent-1",
         message: input.message,
         props: input.props ?? {},
         fileIds: input.fileIds ?? [],
+        createAt: ++timestamp,
+        editAt: 0,
+        deleteAt: 0,
+        ...(input.message === "Answer committed" ? answerCommitPatch : {}),
       });
       return { id };
     }),
@@ -104,6 +187,10 @@ function mmClient(): ActivityMattermostClient {
     uploadData: vi.fn(async () => ({ outcome: "complete", fileId: "file-1" })),
     getFileInfo: vi.fn(async (fileId) => ({ id: fileId, size: 8 })),
     getPostFiles: vi.fn(async () => [{ id: "file-1", size: 8 }]),
+  } as TestMattermostClient;
+  client.patchStoredPost = (postId, patch) => {
+    const post = posts.get(postId);
+    if (post) posts.set(postId, { ...post, ...patch });
   };
   return client;
 }
@@ -163,6 +250,38 @@ function journalProps(
 }
 
 describe("attention-aware Activity sink", () => {
+  it("rejects a channel-scoped turn whose exact nested human input is missing", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+    const started = envelope("turn.started");
+    started.ref.inputPostId = "nested-input-1";
+
+    await expect(sink.append({ envelope: started, binding }))
+      .rejects.toThrow(ActivitySinkIntegrityError);
+  });
+
+  it("accepts an exact nested human input under the bound turn root", async () => {
+    const mm = mmClient([answerPost({
+      id: "nested-input-1",
+      rootId: "turn-1",
+      userId: "builder-1",
+    })]);
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+    const started = envelope("turn.started");
+    started.ref.inputPostId = "nested-input-1";
+
+    await expect(sink.append({ envelope: started, binding }))
+      .resolves.toMatchObject({ outcome: "persisted" });
+  });
+
   it("writes waiting approvals as ordinary native Mattermost posts", async () => {
     const mm = mmClient();
     const sink = createActivitySink({
@@ -946,9 +1065,10 @@ describe("attention-aware Activity sink", () => {
   });
 
   it("finalization commits an empty post list and never duplicates the final answer", async () => {
-    const mm = mmClient();
+    const mm = mmClient(answerPosts());
     const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
     await sink.append({ envelope: envelope("turn.started"), binding });
+    await sink.append({ envelope: answerEnvelope(), binding });
     vi.mocked(mm.createActivityPost).mockClear();
     const result = await sink.append({ envelope: envelope("turn.finalized"), binding });
 
@@ -956,8 +1076,201 @@ describe("attention-aware Activity sink", () => {
     expect(mm.createActivityPost).not.toHaveBeenCalled();
   });
 
-  it("replays an uncommitted finalization without searching for a Mattermost post", async () => {
+  it.each([
+    ["direct", "agent:agent-1:mattermost:direct:owner-1:thread:turn-1", "human", undefined],
+    ["subagent", "agent:agent-1:subagent:child-1", "subagent", "parent-run"],
+  ] as const)("finalizes a %s Activity run without a channel answer commit", async (
+    _kind,
+    sessionKey,
+    origin,
+    parentRunId,
+  ) => {
     const mm = mmClient();
+    const sink = createActivitySink({
+      mm,
+      receipts: new InMemoryActivityWriteReceiptStore(),
+      leaseOwner: "worker-1",
+    });
+    const started = envelope("turn.started");
+    started.ref.sessionKey = sessionKey;
+    started.ref.origin = origin;
+    delete started.ref.inputPostId;
+    if (parentRunId) started.ref.parentRunId = parentRunId;
+    started.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(started.ref))
+      .digest("hex");
+    const finalized = envelope("turn.finalized");
+    finalized.ref.sessionKey = sessionKey;
+    finalized.ref.origin = origin;
+    delete finalized.ref.inputPostId;
+    if (parentRunId) finalized.ref.parentRunId = parentRunId;
+    finalized.eventKey = createHash("sha256")
+      .update(agentActivityCanonicalKey(finalized.ref))
+      .digest("hex");
+
+    await sink.append({ envelope: started, binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+    await expect(sink.append({ envelope: finalized, binding })).resolves.toMatchObject({
+      outcome: "persisted",
+      postIds: [],
+    });
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it("verifies every answer part and persists one silent immutable commit marker", async () => {
+    const mm = mmClient(answerPosts());
+    const receipts = new InMemoryActivityWriteReceiptStore();
+    const sink = createActivitySink({ mm, receipts, leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+    const committed = answerEnvelope();
+
+    const first = await sink.append({ envelope: committed, binding });
+    const replay = await sink.append({ envelope: committed, binding });
+
+    expect(first).toMatchObject({ outcome: "persisted", postIds: ["post-2"] });
+    expect(replay).toMatchObject({ outcome: "duplicate", postIds: ["post-2"] });
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+    expect(mm.createActivityPost).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: "main-1",
+      rootId: "turn-1",
+      silent: true,
+      props: {
+        octogee: expect.objectContaining({
+          status: "completed",
+          itemId: "octogee:answer-commit",
+          kind: "agent.answer-commit",
+          answer: (committed as unknown as { answer: unknown }).answer,
+        }),
+      },
+    }));
+  });
+
+  it("rejects an answer part edited after the newly created commit marker", async () => {
+    const posts = answerPosts();
+    posts[0] = { ...posts[0]!, editAt: 10_000 };
+    const mm = mmClient(posts);
+    const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+
+    await expect(sink.append({ envelope: answerEnvelope(), binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["edited", { editAt: 1 }],
+    ["deleted", { deleteAt: 1 }],
+    ["wrong-message", { message: "Not an answer commit" }],
+    ["attached", { fileIds: ["file-1"] }],
+  ])("rejects an %s newly created answer-commit marker", async (_case, markerPatch) => {
+    const mm = mmClient(answerPosts(), markerPatch);
+    const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+
+    await expect(sink.append({ envelope: answerEnvelope(), binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+  });
+
+  it("recovers an answer commit crash after marker creation without posting twice", async () => {
+    const mm = mmClient(answerPosts());
+    const delegate = new InMemoryActivityWriteReceiptStore();
+    const committed = answerEnvelope();
+    let crashCommit = false;
+    const receipts: ActivityWriteReceiptStore = {
+      claim: (input) => delegate.claim(input),
+      read: (eventKey) => delegate.read(eventKey),
+      markPosted: (eventKey, token, postId, now) => delegate.markPosted(eventKey, token, postId, now),
+      updateAttachment: (eventKey, token, attachment, now) =>
+        delegate.updateAttachment(eventKey, token, attachment, now),
+      async commit(eventKey, token, now) {
+        if (crashCommit && eventKey === committed.eventKey) {
+          crashCommit = false;
+          throw new Error("crashed before answer commit receipt");
+        }
+        await delegate.commit(eventKey, token, now);
+      },
+    };
+    const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
+    await first.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+    crashCommit = true;
+    await expect(first.append({ envelope: committed, binding }))
+      .rejects.toThrow("crashed before answer commit receipt");
+    await expect(delegate.read(committed.eventKey)).resolves.toMatchObject({
+      state: "posted",
+      postId: "post-2",
+    });
+
+    const recovered = createActivitySink({ mm, receipts, leaseOwner: "worker-2", now: () => 10, leaseMs: 1 });
+    await expect(recovered.append({ envelope: committed, binding })).resolves.toMatchObject({
+      outcome: "duplicate",
+      postIds: ["post-2"],
+    });
+    expect(mm.createActivityPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to finalize until the answer commit marker is durably persisted", async () => {
+    const mm = mmClient();
+    const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+
+    await expect(sink.append({ envelope: envelope("turn.finalized"), binding }))
+      .rejects.toThrow("answer commit is not durably persisted");
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", null],
+    ["foreign-author", answerPost({ id: "answer-1", userId: "builder-1" })],
+    ["foreign-channel", answerPost({ id: "answer-1", channelId: "other" })],
+    ["foreign-root", answerPost({ id: "answer-1", rootId: "other" })],
+    ["missing-revision", { ...answerPost({ id: "answer-1" }), createAt: undefined }],
+    ["deleted", answerPost({ id: "answer-1", deleteAt: 2 })],
+    ["mismatched-run", answerPost({
+      id: "answer-1",
+      props: { octogee: answerRunProps({ runId: "other-run" }) },
+    })],
+    ["semantic-activity", answerPost({
+      id: "answer-1",
+      props: { octogee: answerRunProps({ itemId: "tool-1", kind: "activity.tool" }) },
+    })],
+    ["semantic-tool", answerPost({
+      id: "answer-1",
+      props: { octogee: answerRunProps({ toolCallId: "call-1" }) },
+    })],
+  ])("rejects a %s sealed answer part before writing the commit marker", async (_case, badPart) => {
+    const second = answerPost({ id: "answer-2" });
+    const mm = mmClient([...(badPart ? [badPart] : []), second] as ActivityMattermostPost[]);
+    const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    vi.mocked(mm.createActivityPost).mockClear();
+
+    await expect(sink.append({ envelope: answerEnvelope(), binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+    expect(mm.createActivityPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["answer part edit", "answer-1", { editAt: 10_000 }],
+    ["answer part deletion", "answer-1", { deleteAt: 10_000 }],
+    ["commit marker edit", "post-2", { editAt: 10_000 }],
+    ["commit marker deletion", "post-2", { deleteAt: 10_000 }],
+  ])("rejects finalization after an %s", async (_case, postId, patch) => {
+    const mm = mmClient(answerPosts());
+    const sink = createActivitySink({ mm, receipts: new InMemoryActivityWriteReceiptStore(), leaseOwner: "worker-1" });
+    await sink.append({ envelope: envelope("turn.started"), binding });
+    await sink.append({ envelope: answerEnvelope(), binding });
+    mm.patchStoredPost(postId, patch);
+
+    await expect(sink.append({ envelope: envelope("turn.finalized"), binding }))
+      .rejects.toBeInstanceOf(ActivitySinkIntegrityError);
+  });
+
+  it("replays an uncommitted finalization without searching for a Mattermost post", async () => {
+    const mm = mmClient(answerPosts());
     const delegate = new InMemoryActivityWriteReceiptStore();
     let crashCommit = false;
     const receipts: ActivityWriteReceiptStore = {
@@ -973,6 +1286,7 @@ describe("attention-aware Activity sink", () => {
     };
     const first = createActivitySink({ mm, receipts, leaseOwner: "worker-1", now: () => 0, leaseMs: 1 });
     await first.append({ envelope: envelope("turn.started"), binding });
+    await first.append({ envelope: answerEnvelope(), binding });
     const finalized = envelope("turn.finalized");
     crashCommit = true;
     await expect(first.append({ envelope: finalized, binding })).rejects.toThrow(

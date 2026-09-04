@@ -32,7 +32,7 @@ vi.mock("../middleware/logging.js", () => ({
 vi.mock("../lib/workspace-resolution.js", () => ({ resolveWorkspaceUid: async () => "owner-uid" }));
 vi.mock("../lib/db.js", () => ({
   db: {
-    collectionGroup: () => ({ where: () => ({ get: async () => ({ docs: Array.from({ length: h.channelCount }, () => ({ ref: { path: h.channelPath }, data: () => ({ mattermost: { channelId: "c".repeat(26) } }) })) }) }) }),
+    collectionGroup: () => ({ where: () => ({ limit: () => ({ get: async () => ({ docs: Array.from({ length: h.channelCount }, () => ({ ref: { path: h.channelPath }, data: () => ({ mattermost: { channelId: "c".repeat(26) } }) })) }) }) }) }),
     doc: (path: string) => ({ get: async () => snap(path) }),
     collection: () => ({ doc: () => ({ id: "audit-1", set: async (data: Record<string, unknown>) => h.auditSets.push(data), update: async (data: Record<string, unknown>) => h.auditUpdates.push(data) }) }),
   },
@@ -54,7 +54,7 @@ vi.mock("../lib/channel-session-model-control.js", async (importOriginal) => {
       postJson: async (segments: readonly string[], body: unknown) => {
         if (h.postError) throw h.postError;
         h.posts.push({ segments, body });
-        return { id: "p".repeat(26), root_id: "", channel_id: "c".repeat(26), user_id: h.postUserId, create_at: 100, message: (body as { message: string }).message };
+        return { id: "p".repeat(26), type: "", root_id: "", channel_id: "c".repeat(26), user_id: h.postUserId, create_at: 100, message: (body as { message: string }).message };
       },
     }),
   };
@@ -83,7 +83,7 @@ beforeEach(() => {
   h.auditUpdates.length = 0;
   h.logs.length = 0;
   h.threadPosts = {
-    ["r".repeat(26)]: { id: "r".repeat(26), root_id: "p".repeat(26), channel_id: "c".repeat(26), user_id: "g".repeat(26), create_at: 101, message: "Model set to platform-openrouter/z-ai/glm-5.2 for this session." },
+    ["r".repeat(26)]: { id: "r".repeat(26), type: "", root_id: "p".repeat(26), channel_id: "c".repeat(26), user_id: "g".repeat(26), create_at: 101, message: "Model set to platform-openrouter/z-ai/glm-5.2 for this session." },
   };
   h.docs = new Map([
     ["users/caller-uid", { mattermost: { userId: "a".repeat(26) } }],
@@ -121,14 +121,14 @@ describe("channel session model routes", () => {
     h.channelPath = "workspaces/alice/projects/orbit/channels/general";
     h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "scoped", enabled: false } });
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26) });
-    const coach = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
-    expect(coach.body.agentId).toBe("octogee-alice-coach");
+    const fallback = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
+    expect(fallback.body.agentId).toBe("octogee-alice-coach");
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26), personalToken: "u".repeat(32) });
     const project = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
     expect(project.body.agentId).toBe("octogee-alice-proj-orbit-coach");
   });
 
-  it("keeps an agentless project on the workspace coach despite a stale enabled flag", async () => {
+  it("uses the workspace coach for an agentless project channel", async () => {
     h.channelPath = "workspaces/alice/projects/orbit/channels/general";
     h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "agentless", enabled: true } });
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", {
@@ -137,7 +137,6 @@ describe("channel session model routes", () => {
     });
 
     const response = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
-
     expect(response.body.agentId).toBe("octogee-alice-coach");
   });
 

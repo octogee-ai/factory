@@ -435,14 +435,15 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("sets native verbose threaded behavior without the retired activity flag", () => {
+  it("sets final-only native threaded behavior without the retired activity flag", () => {
     const config: any = {
       agents: { defaults: { maxConcurrent: 4 } },
       channels: {
         mattermost: {
           streaming: {
             chunkMode: "newline",
-            preview: {},
+            preview: { toolProgress: true, commandText: "raw" },
+            progress: { maxLines: 6, toolProgress: true, commandText: "raw" },
           },
         },
       },
@@ -455,17 +456,23 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       requireMention: false,
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
+      threadSessionScope: "channel",
       streaming: {
-        mode: "block",
+        mode: "off",
         chunkMode: "newline",
         preview: {
-          toolProgress: true,
-          commandText: "raw",
+          toolProgress: false,
+        },
+        progress: {
+          maxLines: 6,
+          toolProgress: false,
         },
       },
     });
+    expect(config.channels.mattermost.streaming.preview).not.toHaveProperty("commandText");
+    expect(config.channels.mattermost.streaming.progress).not.toHaveProperty("commandText");
     expect(config.agents.defaults).toMatchObject({
-      verboseDefault: "full",
+      verboseDefault: "off",
       toolProgressDetail: "raw",
       maxConcurrent: 4,
     });
@@ -482,16 +489,16 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       requireMention: false,
       replyToMode: "all",
       replyToModeByChatType: { direct: "all" },
+      threadSessionScope: "channel",
       streaming: {
-        mode: "block",
+        mode: "off",
         preview: {
-          toolProgress: true,
-          commandText: "raw",
+          toolProgress: false,
         },
       },
     });
     expect(config.agents.defaults).toEqual({
-      verboseDefault: "full",
+      verboseDefault: "off",
       toolProgressDetail: "raw",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
@@ -528,10 +535,14 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
               replyToModeByChatType: { direct: "all" },
               threadDirectMessages: true,
               threadSessionScope: "channel",
+              streaming: { mode: "block" },
             },
             "chris-coach": {
               agentActivity: true,
               replyToMode: "first",
+              threadSessionScope: "thread",
+              streaming: { mode: "progress" },
+              botToken: { source: "file", provider: "octogee-mattermost", id: "/chris" },
             },
             malformed: "preserve",
           },
@@ -547,18 +558,29 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
-    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost).toHaveProperty("threadSessionScope", "channel");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
     expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("streaming");
     expect(config.channels.mattermost.accounts["chris-coach"]).toMatchObject({
       replyToMode: "first",
     });
     expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty(
       "agentActivity",
     );
+    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty(
+      "threadSessionScope",
+    );
+    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty("streaming");
+    expect(config.channels.mattermost.accounts["chris-coach"].botToken).toEqual({
+      source: "file",
+      provider: "octogee-mattermost",
+      id: "/chris",
+    });
     expect(config.channels.mattermost.accounts.malformed).toBe("preserve");
+    expect(applyPreBootPatches(config, {})).toBe(false);
   });
 });
 
@@ -1148,7 +1170,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
             "anthropic/claude-sonnet-4-6": {},
             "anthropic/claude-haiku-4-5": {},
           },
-          verboseDefault: "full",
+          verboseDefault: "off",
           toolProgressDetail: "raw",
         },
       },
@@ -1159,11 +1181,11 @@ describe("applyPreBootPatches — no-change reporting", () => {
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
+          threadSessionScope: "channel",
           streaming: {
-            mode: "block",
+            mode: "off",
             preview: {
-              toolProgress: true,
-              commandText: "raw",
+              toolProgress: false,
             },
           },
           baseUrl: "${MM_URL}",

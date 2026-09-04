@@ -3,6 +3,7 @@ export const AGENT_ACTIVITY_ENVELOPE_SCHEMA_VERSION = 1;
 export const AGENT_ACTIVITY_RESERVED_ITEM_IDS = {
     runRoot: "octogee:run-root",
     turnFinalized: "octogee:turn-finalized",
+    answerCommit: "octogee:answer-commit",
     terminalError: "octogee:terminal-error",
     approvalPrefix: "octogee:approval:",
 };

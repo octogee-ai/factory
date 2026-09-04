@@ -535,6 +535,10 @@ export type {
   AgentActivityCompletedItem,
   AgentActivityEnvelopeBaseV1,
   AgentActivityEnvelopeV1,
+  AgentAnswerDeliveryOutcome,
+  AgentAnswerPartKind,
+  AgentAnswerPart,
+  AgentAnswerCommitRecord,
 } from './agent-conversation.js';
 export {
   AGENT_CONVERSATION_SCHEMA_VERSION,
@@ -542,3 +546,20 @@ export {
   AGENT_ACTIVITY_RESERVED_ITEM_IDS,
   agentActivityCanonicalKey,
 } from './agent-conversation.js';
+
+export type {
+  MattermostConversationHistoryStatus,
+  MattermostProjectionPost,
+  MattermostProjectionActivityPost,
+  AnswerDeliveryOutcome,
+  MattermostAnswerPartKind,
+  MattermostAnswerPart,
+  MattermostAnswerCommitRecord,
+  MattermostAnswerCommitProps,
+  ProjectedCommittedAnswer,
+  ConversationRecoveryGapCode,
+  ConversationRecoveryGap,
+  ConversationRecoveryCoverage,
+  MattermostConversationRecordsInput,
+  MattermostConversationRecordsProjection,
+} from './mattermost-conversation-projection.js';
