@@ -26,14 +26,14 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
                 others: string;
             };
             agents: string;
-            scopes: ("operator.admin" | "operator.read" | "operator.write" | "operator.approvals" | "operator.questions" | "operator.pairing")[];
+            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
         };
         owner: {
             sessions: {
                 others: string;
             };
             agents: string;
-            scopes: ("operator.admin" | "operator.read" | "operator.write" | "operator.approvals" | "operator.questions" | "operator.pairing")[];
+            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
         };
         "co-owner": {
             sessions: {
