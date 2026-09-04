@@ -226,6 +226,8 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
+            - name: GATEWAY_OWNER_UID
+              value: {{ .Values.ownerUid | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
             {{- if and (eq .Release.Namespace "octogee-test") (contains "-main." $gatewayImageTag) }}
@@ -453,6 +455,8 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_BUILDER_SLUG
               value: {{ .Values.builderSlug | quote }}
+            - name: GATEWAY_OWNER_UID
+              value: {{ .Values.ownerUid | quote }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS

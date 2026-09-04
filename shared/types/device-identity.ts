@@ -39,8 +39,7 @@ export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
   return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
 }
 
-export function generateIdentity(): DeviceIdentity {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+function identityFromKeyPair(publicKey: crypto.KeyObject, privateKey: crypto.KeyObject): DeviceIdentity {
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }) as string;
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
   return {
@@ -48,6 +47,30 @@ export function generateIdentity(): DeviceIdentity {
     publicKeyPem,
     privateKeyPem,
   };
+}
+
+export function generateIdentity(): DeviceIdentity {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  return identityFromKeyPair(publicKey, privateKey);
+}
+
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+
+export function deriveDeviceIdentity(params: {
+  secret: string | Buffer;
+  subject: string;
+}): DeviceIdentity {
+  if (params.secret.length === 0) {
+    throw new Error("device identity derivation requires a non-empty secret");
+  }
+  if (!params.subject.trim()) throw new Error("device identity derivation requires a subject");
+  const seed = crypto.createHmac("sha256", params.secret).update(params.subject).digest();
+  const privateKey = crypto.createPrivateKey({
+    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
+    format: "der",
+    type: "pkcs8",
+  });
+  return identityFromKeyPair(crypto.createPublicKey(privateKey), privateKey);
 }
 
 export interface DeviceAuthPayloadV3Params {

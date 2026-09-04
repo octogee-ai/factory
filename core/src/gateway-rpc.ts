@@ -14,9 +14,9 @@ import {
 import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
   OPENCLAW_CONTROL_UI_CLIENT_MODE,
+  OPENCLAW_PROVISIONER_SERVICE_IDENTITY,
   isPerUserControlIdentity,
   openClawProxyIdentityHeaders,
-  serviceProxyIdentity,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import {
@@ -1002,7 +1002,7 @@ interface GatewayRpcAuth {
   proxyIdentity?: Record<string, string>;
 }
 
-const IN_POD_SERVICE_IDENTITY = serviceProxyIdentity("octogee-provisioner");
+const IN_POD_SERVICE_IDENTITY = OPENCLAW_PROVISIONER_SERVICE_IDENTITY;
 
 function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
   if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {

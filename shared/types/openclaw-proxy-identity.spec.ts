@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
 
+import { deriveDeviceIdentity, generateIdentity } from "./device-identity";
 import {
+  OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES,
   OPENCLAW_EDGE_SERVICE_IDENTITY,
+  OPENCLAW_FULL_OPERATOR_SCOPES,
   OPENCLAW_OPERATOR_ROLES,
+  OPENCLAW_PROVISIONER_SERVICE_IDENTITY,
   OPENCLAW_PROXY_ATTESTATION_HEADER,
   OPENCLAW_PROXY_USER_HEADER,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isOpenClawProxyIdentityHeader,
   isPerUserControlIdentity,
+  openClawDeviceRequestScopes,
+  openClawDeviceSubject,
+  openClawIdentityScopes,
   openClawProxyIdentityHeaders,
   openClawRoleForBrokerProfile,
   resolveControlIdentityFromEnv,
+  resolveOwnerUidFromEnv,
   serviceProxyIdentity,
 } from "./openclaw-proxy-identity";
 
@@ -20,6 +28,8 @@ describe("OpenClaw proxy identity contract", () => {
     expect(resolveControlIdentityFromEnv({ OPENCLAW_CONTROL_IDENTITY: "per-user" })).toBe("per-user");
     expect(resolveControlIdentityFromEnv({ OPENCLAW_CONTROL_IDENTITY: " per-user " })).toBe("per-user");
     expect(isPerUserControlIdentity({ OPENCLAW_CONTROL_IDENTITY: "trusted-proxy" })).toBe(false);
+    expect(resolveOwnerUidFromEnv({ GATEWAY_OWNER_UID: " uid-owner " })).toBe("uid-owner");
+    expect(resolveOwnerUidFromEnv({})).toBeUndefined();
   });
 
   it("mints the user and attestation headers the gateway is configured to trust", () => {
@@ -41,18 +51,68 @@ describe("OpenClaw proxy identity contract", () => {
 
   it("names services with a fixed prefix the grant lookup can never collide with", () => {
     expect(serviceProxyIdentity("gateway-edge")).toBe(OPENCLAW_EDGE_SERVICE_IDENTITY);
+    expect(serviceProxyIdentity("octogee-provisioner")).toBe(OPENCLAW_PROVISIONER_SERVICE_IDENTITY);
     expect(() => serviceProxyIdentity("Gateway Edge")).toThrow(/invalid service identity name/);
   });
 
-  it("maps every broker profile onto a configured operator role", () => {
+  it("grants full authority to the service identities and the owner, and nothing to anyone else", () => {
+    const scopes = openClawIdentityScopes("uid-owner");
+    expect(scopes[OPENCLAW_EDGE_SERVICE_IDENTITY]).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(scopes[OPENCLAW_PROVISIONER_SERVICE_IDENTITY]).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(scopes["uid-owner"]).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(Object.keys(scopes)).toHaveLength(3);
+    expect(Object.keys(openClawIdentityScopes(undefined))).toHaveLength(2);
+    expect(Object.keys(openClawIdentityScopes("  "))).toHaveLength(2);
+  });
+
+  it("auto-approves every other person's device without admin authority", () => {
+    expect(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy.deviceAutoApprove).toEqual({
+      enabled: true,
+      scopes: [...OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES],
+    });
+    expect(OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES).not.toContain("operator.admin");
+  });
+
+  it("keeps the default role a ceiling that never strangles a granted scope", () => {
+    expect(OPENCLAW_OPERATOR_ROLES.default).toBe("member");
+    expect(OPENCLAW_OPERATOR_ROLES.definitions.member.scopes).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(OPENCLAW_OPERATOR_ROLES.definitions.member.sessions.others).toBe("none");
+    expect(Object.keys(OPENCLAW_OPERATOR_ROLES.definitions).sort()).toEqual(
+      ["co-owner", "member", "owner", "service", "trusted-helper", "viewer"],
+    );
+  });
+
+  it("maps every broker profile onto a role and requests only auto-approvable device scopes", () => {
     expect(openClawRoleForBrokerProfile("native-owner")).toBe("owner");
     expect(openClawRoleForBrokerProfile("native-co-owner")).toBe("co-owner");
     expect(openClawRoleForBrokerProfile("delegated-config")).toBe("trusted-helper");
     expect(openClawRoleForBrokerProfile("delegated-read")).toBe("viewer");
-    for (const role of ["owner", "co-owner", "trusted-helper", "viewer", "service", "guest"]) {
-      expect(OPENCLAW_OPERATOR_ROLES.definitions).toHaveProperty(role);
-    }
-    expect(OPENCLAW_OPERATOR_ROLES.default).toBe("guest");
+    expect(openClawDeviceRequestScopes("owner")).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.questions",
+    ]);
+    expect(openClawDeviceRequestScopes("trusted-helper")).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+    ]);
+    expect(openClawDeviceRequestScopes("viewer")).toEqual(["operator.read"]);
+  });
+
+  it("derives one stable device per gateway and person from the pod secret", () => {
+    const subject = openClawDeviceSubject("bender", "uid-alice");
+    const first = deriveDeviceIdentity({ secret: "pod-secret", subject });
+    const again = deriveDeviceIdentity({ secret: "pod-secret", subject });
+    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob") });
+    const otherSecret = deriveDeviceIdentity({ secret: "rotated", subject });
+    expect(again).toEqual(first);
+    expect(otherPerson.deviceId).not.toBe(first.deviceId);
+    expect(otherSecret.deviceId).not.toBe(first.deviceId);
+    expect(first.deviceId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(first.deviceId).not.toBe(generateIdentity().deviceId);
+    expect(() => deriveDeviceIdentity({ secret: "", subject })).toThrow(/non-empty secret/);
   });
 
   it("identifies inbound identity headers case-insensitively so proxies strip them", () => {

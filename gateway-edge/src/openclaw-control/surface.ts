@@ -1058,9 +1058,14 @@ class OpenClawControlSocketBridge {
   }
 
   private connectIdentity(): OpenClawConnectIdentity {
-    return this.args.proxyIdentity.enabled
-      ? { mode: "per-user" }
-      : { mode: "shared-operator", gatewayToken: this.gatewayToken };
+    if (!this.args.proxyIdentity.enabled) {
+      return { mode: "shared-operator", gatewayToken: this.gatewayToken };
+    }
+    return {
+      mode: "per-user",
+      device: this.args.proxyIdentity.deviceIdentity(this.activeSession),
+      scopes: this.args.proxyIdentity.connectScopes(this.activeSession),
+    };
   }
 
   async start(): Promise<void> {

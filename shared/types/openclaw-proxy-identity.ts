@@ -4,6 +4,7 @@ import {
 } from "./glm.js";
 
 export const OPENCLAW_CONTROL_IDENTITY_ENV = "OPENCLAW_CONTROL_IDENTITY";
+export const OPENCLAW_OWNER_UID_ENV = "GATEWAY_OWNER_UID";
 
 export const OPENCLAW_PROXY_USER_HEADER = "x-octogee-user";
 export const OPENCLAW_PROXY_ATTESTATION_HEADER = "x-octogee-proxy";
@@ -14,8 +15,32 @@ export const OPENCLAW_CONTROL_UI_CLIENT_MODE = "ui";
 
 export const OPENCLAW_SERVICE_IDENTITY_PREFIX = "svc:";
 export const OPENCLAW_EDGE_SERVICE_IDENTITY = `${OPENCLAW_SERVICE_IDENTITY_PREFIX}gateway-edge`;
+export const OPENCLAW_PROVISIONER_SERVICE_IDENTITY = `${OPENCLAW_SERVICE_IDENTITY_PREFIX}octogee-provisioner`;
 
 export const OPENCLAW_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+
+const OPERATOR_ADMIN = "operator.admin";
+const OPERATOR_READ = "operator.read";
+const OPERATOR_WRITE = "operator.write";
+const OPERATOR_APPROVALS = "operator.approvals";
+const OPERATOR_QUESTIONS = "operator.questions";
+const OPERATOR_PAIRING = "operator.pairing";
+
+export const OPENCLAW_FULL_OPERATOR_SCOPES = [
+  OPERATOR_ADMIN,
+  OPERATOR_READ,
+  OPERATOR_WRITE,
+  OPERATOR_APPROVALS,
+  OPERATOR_QUESTIONS,
+  OPERATOR_PAIRING,
+] as const;
+
+export const OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES = [
+  OPERATOR_READ,
+  OPERATOR_WRITE,
+  OPERATOR_APPROVALS,
+  OPERATOR_QUESTIONS,
+] as const;
 
 export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
   mode: "trusted-proxy",
@@ -23,47 +48,60 @@ export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
     userHeader: OPENCLAW_PROXY_USER_HEADER,
     requiredHeaders: [OPENCLAW_PROXY_ATTESTATION_HEADER],
     allowLoopback: true,
+    deviceAutoApprove: Object.freeze({
+      enabled: true,
+      scopes: [...OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES],
+    }),
   }),
 });
 
+export function openClawIdentityScopes(ownerUid?: string | null): Record<string, string[]> {
+  const owner = ownerUid?.trim();
+  return {
+    [OPENCLAW_EDGE_SERVICE_IDENTITY]: [...OPENCLAW_FULL_OPERATOR_SCOPES],
+    [OPENCLAW_PROVISIONER_SERVICE_IDENTITY]: [...OPENCLAW_FULL_OPERATOR_SCOPES],
+    ...(owner ? { [owner]: [...OPENCLAW_FULL_OPERATOR_SCOPES] } : {}),
+  };
+}
+
 export const OPENCLAW_OPERATOR_ROLE_NAMES = [
+  "member",
   "service",
   "owner",
   "co-owner",
   "trusted-helper",
   "viewer",
-  "guest",
 ] as const;
 export type OpenClawOperatorRole = (typeof OPENCLAW_OPERATOR_ROLE_NAMES)[number];
 
-const FULL_OPERATOR_SCOPES = [
-  "operator.admin",
-  "operator.read",
-  "operator.write",
-  "operator.approvals",
-  "operator.questions",
-  "operator.pairing",
-] as const;
-
 export const OPENCLAW_OPERATOR_ROLES = Object.freeze({
-  default: "guest",
+  default: "member",
   definitions: Object.freeze({
-    service: { sessions: { others: "write" }, agents: "*", scopes: [...FULL_OPERATOR_SCOPES] },
-    owner: { sessions: { others: "write" }, agents: "*", scopes: [...FULL_OPERATOR_SCOPES] },
+    member: { sessions: { others: "none" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
+    service: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
+    owner: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
     "co-owner": {
       sessions: { others: "write" },
       agents: "*",
-      scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+      scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS, OPERATOR_QUESTIONS],
     },
     "trusted-helper": {
       sessions: { others: "view" },
       agents: "*",
-      scopes: ["operator.read", "operator.write", "operator.approvals"],
+      scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS],
     },
-    viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
-    guest: { sessions: { others: "none" }, agents: [], scopes: ["operator.read"], sandbox: "required" },
+    viewer: { sessions: { others: "view" }, agents: "*", scopes: [OPERATOR_READ] },
   }),
 });
+
+export function openClawRoleScopes(role: OpenClawOperatorRole): string[] {
+  return [...OPENCLAW_OPERATOR_ROLES.definitions[role].scopes];
+}
+
+export function openClawDeviceRequestScopes(role: OpenClawOperatorRole): string[] {
+  const approvable = new Set<string>(OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES);
+  return openClawRoleScopes(role).filter((scope) => approvable.has(scope));
+}
 
 export type OpenClawBrokerProfileLike =
   | "native-owner"
@@ -92,12 +130,21 @@ export function isPerUserControlIdentity(env: NodeJS.ProcessEnv = process.env): 
   return resolveControlIdentityFromEnv(env) === "per-user";
 }
 
+export function resolveOwnerUidFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env[OPENCLAW_OWNER_UID_ENV]?.trim();
+  return value ? value : undefined;
+}
+
 export function serviceProxyIdentity(name: string): string {
   const trimmed = name.trim();
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(trimmed)) {
     throw new Error(`invalid service identity name: ${JSON.stringify(name)}`);
   }
   return `${OPENCLAW_SERVICE_IDENTITY_PREFIX}${trimmed}`;
+}
+
+export function openClawDeviceSubject(gatewayId: string, uid: string): string {
+  return `octogee-openclaw-device:v1:${gatewayId}:${uid}`;
 }
 
 export interface OpenClawProxyIdentity {

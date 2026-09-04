@@ -10,6 +10,8 @@ import {
   OPENCLAW_TRUSTED_PROXIES,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isPerUserControlIdentity,
+  openClawIdentityScopes,
+  resolveOwnerUidFromEnv,
 } from "../../shared/dist/types/openclaw-proxy-identity.js";
 
 export const CUSTOMER_CODE_DENIED_TOOLS = [
@@ -1529,10 +1531,10 @@ function applyControlIdentityPolicy(config, env) {
     config.gateway.auth ??= {};
     const auth = config.gateway.auth;
     delete auth.token;
-    delete auth.identityScopes;
     delete auth.allowTailscale;
     auth.mode = OPENCLAW_TRUSTED_PROXY_AUTH.mode;
     auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
+    auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
     config.gateway.roles = structuredClone(OPENCLAW_OPERATOR_ROLES);
     return;

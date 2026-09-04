@@ -1,4 +1,5 @@
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
+import { signConnectDevice, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
   OPENCLAW_CONTROL_UI_CLIENT_MODE,
@@ -15,7 +16,7 @@ const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
 
 export type OpenClawConnectIdentity =
   | { mode: "shared-operator"; gatewayToken: string }
-  | { mode: "per-user" };
+  | { mode: "per-user"; device: DeviceIdentity; scopes: string[] };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -32,20 +33,34 @@ export function challengeNonce(frame: unknown): string | null {
     : null;
 }
 
-function connectClient(identity: OpenClawConnectIdentity, platform: string): Record<string, string> {
+function connectAuthority(
+  identity: OpenClawConnectIdentity,
+  nonce: string,
+  platform: string,
+): Record<string, unknown> {
   const shared = { displayName: "octogee-control-ui", version: "1.0.0", platform };
-  return identity.mode === "per-user"
-    ? { id: OPENCLAW_CONTROL_UI_CLIENT_ID, mode: OPENCLAW_CONTROL_UI_CLIENT_MODE, ...shared }
-    : { id: "gateway-client", mode: "backend", ...shared };
-}
-
-function connectAuthority(identity: OpenClawConnectIdentity): Record<string, unknown> {
-  return identity.mode === "per-user"
-    ? {}
-    : {
+  if (identity.mode === "shared-operator") {
+    return {
+      client: { id: "gateway-client", mode: "backend", ...shared },
       scopes: [...OPERATOR_BUILDER_DASHBOARD_SCOPES],
       auth: { token: identity.gatewayToken },
     };
+  }
+  const client = { id: OPENCLAW_CONTROL_UI_CLIENT_ID, mode: OPENCLAW_CONTROL_UI_CLIENT_MODE, ...shared };
+  return {
+    client,
+    scopes: [...identity.scopes],
+    device: signConnectDevice({
+      identity: identity.device,
+      clientId: client.id,
+      clientMode: client.mode,
+      role: "operator",
+      scopes: identity.scopes,
+      nonce,
+      token: null,
+      platform,
+    }),
+  };
 }
 
 export function rewriteTrustedOpenClawConnect(args: {
@@ -64,9 +79,8 @@ export function rewriteTrustedOpenClawConnect(args: {
     params: {
       minProtocol: OPENCLAW_PROTOCOL_VERSION,
       maxProtocol: OPENCLAW_PROTOCOL_VERSION,
-      client: connectClient(args.identity, args.platform ?? process.platform),
       role: "operator",
-      ...connectAuthority(args.identity),
+      ...connectAuthority(args.identity, args.nonce, args.platform ?? process.platform),
     },
   });
 }

@@ -90,8 +90,8 @@ describe("system config platform invariants", () => {
       .not.toContain("gateway.controlUi.dangerouslyDisableDeviceAuth");
   });
 
-  it("switches a per-user Builder gateway to trusted-proxy auth with the platform role table", () => {
-    const perUser = { ...builder, controlIdentity: "per-user" as const };
+  it("switches a per-user Builder gateway to trusted-proxy auth with grants for services and the owner", () => {
+    const perUser = { ...builder, controlIdentity: "per-user" as const, ownerUid: "uid-owner" };
     const config: Record<string, unknown> = {
       gateway: { auth: { mode: "token", token: "leaked", identityScopes: { "x@y": ["operator.admin"] } } },
     };
@@ -99,24 +99,43 @@ describe("system config platform invariants", () => {
     reconcilePlatformInvariants(config, perUser);
 
     const gateway = config.gateway as {
-      auth: Record<string, unknown>;
+      auth: Record<string, unknown> & { identityScopes: Record<string, string[]> };
       trustedProxies: string[];
-      roles: { default: string; definitions: Record<string, unknown> };
+      roles: { default: string; definitions: Record<string, { scopes: string[] }> };
     };
     expect(gateway.auth.mode).toBe("trusted-proxy");
     expect(gateway.auth).not.toHaveProperty("token");
-    expect(gateway.auth).not.toHaveProperty("identityScopes");
     expect(gateway.auth.trustedProxy).toEqual({
       userHeader: "x-octogee-user",
       requiredHeaders: ["x-octogee-proxy"],
       allowLoopback: true,
+      deviceAutoApprove: {
+        enabled: true,
+        scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+      },
     });
+    expect(Object.keys(gateway.auth.identityScopes).sort()).toEqual(
+      ["svc:gateway-edge", "svc:octogee-provisioner", "uid-owner"],
+    );
+    expect(gateway.auth.identityScopes["svc:gateway-edge"]).toContain("operator.admin");
+    expect(gateway.auth.identityScopes).not.toHaveProperty("x@y");
     expect(gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
-    expect(gateway.roles.default).toBe("guest");
+    expect(gateway.roles.default).toBe("member");
+    expect(gateway.roles.definitions.member.scopes).toContain("operator.admin");
     expect(Object.keys(gateway.roles.definitions).sort()).toEqual(
-      ["co-owner", "guest", "owner", "service", "trusted-helper", "viewer"],
+      ["co-owner", "member", "owner", "service", "trusted-helper", "viewer"],
     );
     expect(platformInvariantViolations(config, perUser)).toEqual([]);
+  });
+
+  it("grants only the service identities when the owner uid is unknown", () => {
+    const perUser = { ...builder, controlIdentity: "per-user" as const };
+    const config: Record<string, unknown> = {};
+
+    reconcilePlatformInvariants(config, perUser);
+
+    const auth = (config.gateway as { auth: { identityScopes: Record<string, string[]> } }).auth;
+    expect(Object.keys(auth.identityScopes).sort()).toEqual(["svc:gateway-edge", "svc:octogee-provisioner"]);
   });
 
   it("keeps the shared operator identity on token auth and strips any trusted-proxy residue", () => {

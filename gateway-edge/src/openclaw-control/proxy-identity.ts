@@ -3,6 +3,7 @@ import type http from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
 import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
+import { deriveDeviceIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import {
   sendWsRequest,
@@ -14,6 +15,8 @@ import {
   OPENCLAW_CONTROL_UI_CLIENT_MODE,
   OPENCLAW_EDGE_SERVICE_IDENTITY,
   isPerUserControlIdentity,
+  openClawDeviceRequestScopes,
+  openClawDeviceSubject,
   openClawProxyIdentityHeaders,
   openClawRoleForBrokerProfile,
   type OpenClawOperatorRole,
@@ -26,6 +29,7 @@ const DEFAULT_ROLE_SYNC_TIMEOUT_MS = 10_000;
 
 export interface OpenClawControlProxyIdentitySession {
   uid: string;
+  gatewayId: string;
   brokerProfile: OpenClawBrokerProfile;
 }
 
@@ -33,6 +37,8 @@ export interface OpenClawControlProxyIdentity {
   enabled: boolean;
   userHeaders(session: OpenClawControlProxyIdentitySession, req: Pick<http.IncomingMessage, "socket">): Record<string, string>;
   serviceHeaders(): Record<string, string>;
+  deviceIdentity(session: OpenClawControlProxyIdentitySession): DeviceIdentity;
+  connectScopes(session: OpenClawControlProxyIdentitySession): string[];
   syncRole(session: OpenClawControlProxyIdentitySession): Promise<void>;
 }
 
@@ -115,6 +121,12 @@ function profileFor(profiles: OpenClawProfileListItem[], uid: string): OpenClawP
   return profiles.find((profile) => profile.emails.some((email) => email === subject));
 }
 
+function deviceSecret(env: NodeJS.ProcessEnv): string {
+  const secret = env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!secret) throw new Error("OPENCLAW_GATEWAY_TOKEN is required to derive per-user OpenClaw devices");
+  return secret;
+}
+
 export function createOpenClawControlProxyIdentity(
   options: CreateOpenClawControlProxyIdentityOptions,
 ): OpenClawControlProxyIdentity {
@@ -123,6 +135,9 @@ export function createOpenClawControlProxyIdentity(
   const timeoutMs = options.timeoutMs ?? DEFAULT_ROLE_SYNC_TIMEOUT_MS;
   const fallbackAddress = options.podAddress ?? podClientAddress;
   const openSocket = options.openSocket ?? openProxyIdentitySocket;
+
+  const roleFor = (session: OpenClawControlProxyIdentitySession): OpenClawOperatorRole =>
+    openClawRoleForBrokerProfile(session.brokerProfile);
 
   const serviceHeaders = (): Record<string, string> =>
     openClawProxyIdentityHeaders({
@@ -146,7 +161,7 @@ export function createOpenClawControlProxyIdentity(
   };
 
   const syncRole = async (session: OpenClawControlProxyIdentitySession): Promise<void> => {
-    const desired: OpenClawOperatorRole = openClawRoleForBrokerProfile(session.brokerProfile);
+    const desired = roleFor(session);
     const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
     const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
     try {
@@ -178,6 +193,12 @@ export function createOpenClawControlProxyIdentity(
         clientAddress: openClawControlClientAddress(req, fallbackAddress),
       }),
     serviceHeaders,
+    deviceIdentity: (session) =>
+      deriveDeviceIdentity({
+        secret: deviceSecret(env),
+        subject: openClawDeviceSubject(session.gatewayId, session.uid),
+      }),
+    connectScopes: (session) => openClawDeviceRequestScopes(roleFor(session)),
     syncRole,
   };
 }

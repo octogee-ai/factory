@@ -308,6 +308,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       expect(containerBlock(perUser, container)).toMatch(
         /name:\s*OPENCLAW_CONTROL_IDENTITY[\s\S]*?value:\s*"per-user"/,
       );
+      expect(containerBlock(perUser, container)).toMatch(
+        /name:\s*GATEWAY_OWNER_UID[\s\S]*?value:\s*"uid-ceckert"/,
+      );
     }
 
     const defaulted = findDoc(helmTemplate("octogee-gw-bender", {

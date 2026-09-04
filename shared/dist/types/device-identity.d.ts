@@ -5,6 +5,10 @@ export interface DeviceIdentity {
 }
 export declare function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string;
 export declare function generateIdentity(): DeviceIdentity;
+export declare function deriveDeviceIdentity(params: {
+    secret: string | Buffer;
+    subject: string;
+}): DeviceIdentity;
 export interface DeviceAuthPayloadV3Params {
     deviceId: string;
     clientId: string;

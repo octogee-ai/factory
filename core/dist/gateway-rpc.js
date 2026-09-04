@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { OpenclawWireError, startConnectChallengeTracker, waitForWsOpen, sendWsRequest, } from "@octogee/shared/types/openclaw-wire-core";
-import { OPENCLAW_CONTROL_UI_CLIENT_ID, OPENCLAW_CONTROL_UI_CLIENT_MODE, isPerUserControlIdentity, openClawProxyIdentityHeaders, serviceProxyIdentity, } from "@octogee/shared/types/openclaw-proxy-identity";
+import { OPENCLAW_CONTROL_UI_CLIENT_ID, OPENCLAW_CONTROL_UI_CLIENT_MODE, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, isPerUserControlIdentity, openClawProxyIdentityHeaders, } from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
@@ -568,7 +568,7 @@ export function createGatewayRpc(opts = {}) {
         close: statusConnection.close,
     };
 }
-const IN_POD_SERVICE_IDENTITY = serviceProxyIdentity("octogee-provisioner");
+const IN_POD_SERVICE_IDENTITY = OPENCLAW_PROVISIONER_SERVICE_IDENTITY;
 function resolveGatewayAuth(opts) {
     if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {
         return { deviceToken: opts.deviceToken };

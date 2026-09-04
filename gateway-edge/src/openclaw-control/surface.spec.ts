@@ -15,6 +15,7 @@ import type {
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
+import { generateIdentity } from "@octogee/shared/types/device-identity";
 
 import {
   attachOpenClawControlWsRoute,
@@ -1845,6 +1846,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const perUserEnv = { ...env(upstreamPort), OPENCLAW_CONTROL_IDENTITY: "per-user" };
     const manager = sessions();
     const syncOrder: string[] = [];
+    const personDevice = generateIdentity();
     const proxyIdentity = {
       enabled: true,
       userHeaders: (session: { uid: string }) => ({
@@ -1854,6 +1856,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         "x-forwarded-proto": "https",
       }),
       serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge", "x-octogee-proxy": "1" }),
+      deviceIdentity: () => personDevice,
+      connectScopes: () => ["operator.read", "operator.write", "operator.approvals"],
       syncRole: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
         syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
       }),
@@ -1933,7 +1937,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       role: "operator",
     });
     expect(connect?.params).not.toHaveProperty("auth");
-    expect(connect?.params).not.toHaveProperty("scopes");
+    expect(connect?.params).toMatchObject({
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+      device: { id: personDevice.deviceId, nonce: "per-user-nonce" },
+    });
+    expect(JSON.stringify(upstreamFrames)).not.toContain("operator.admin");
     expect(JSON.stringify(upstreamFrames)).not.toContain("browser-token");
     expect(JSON.stringify(upstreamFrames)).not.toContain("forged-uid");
     expect(JSON.stringify(upgradeHeaders)).not.toContain("forged-uid");

@@ -1569,12 +1569,12 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
 
-  it("switches a per-user Builder gateway to trusted-proxy auth with the platform role table", () => {
+  it("switches a per-user Builder gateway to trusted-proxy auth with grants for services and the owner", () => {
     const { config: out } = runPolicyWithDir(
       "builder",
       { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
       undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user" },
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "uid-owner" },
     );
     expect(out.gateway.auth).toEqual({
       mode: "trusted-proxy",
@@ -1582,13 +1582,22 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         userHeader: "x-octogee-user",
         requiredHeaders: ["x-octogee-proxy"],
         allowLoopback: true,
+        deviceAutoApprove: {
+          enabled: true,
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+        },
+      },
+      identityScopes: {
+        "svc:gateway-edge": expect.arrayContaining(["operator.admin"]),
+        "svc:octogee-provisioner": expect.arrayContaining(["operator.admin"]),
+        "uid-owner": expect.arrayContaining(["operator.admin"]),
       },
       rateLimit: { maxAttempts: 10 },
     });
     expect(out.gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
-    expect(out.gateway.roles.default).toBe("guest");
-    expect(out.gateway.roles.definitions.service.scopes).toContain("operator.admin");
-    expect(out.gateway.roles.definitions.guest.sandbox).toBe("required");
+    expect(out.gateway.roles.default).toBe("member");
+    expect(out.gateway.roles.definitions.member.scopes).toContain("operator.admin");
+    expect(out.gateway.roles.definitions.viewer.scopes).toEqual(["operator.read"]);
   });
 
   it("returns a Builder gateway to token auth when the control identity is not per-user", () => {
