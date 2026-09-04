@@ -649,6 +649,49 @@ function objectValue(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
+const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";
+const RETIRED_MATTERMOST_FILE_SPEC_PREFIX = "@openclaw/mattermost@file:";
+
+function removeRetiredMattermostInstallRecord(openclawDir) {
+  const dbPath = path.join(openclawDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) return false;
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("PRAGMA busy_timeout = 30000;");
+    const table = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_machine_state'",
+    ).get();
+    if (!table) return false;
+    const row = db.prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+    ).get(INSTALLED_PLUGIN_INDEX_STATE_KEY);
+    if (typeof row?.value_json !== "string") return false;
+    const value = JSON.parse(row.value_json);
+    const index = objectValue(value?.index);
+    const installRecords = objectValue(index?.installRecords);
+    const record = objectValue(installRecords?.mattermost);
+    if (
+      record?.source !== "npm" ||
+      typeof record.spec !== "string" ||
+      !record.spec.startsWith(RETIRED_MATTERMOST_FILE_SPEC_PREFIX)
+    ) {
+      return false;
+    }
+    delete installRecords.mattermost;
+    const revision = Math.max(
+      Date.now(),
+      Number.isSafeInteger(value.revision) ? value.revision + 1 : 1,
+    );
+    value.revision = revision;
+    db.prepare(
+      "UPDATE config_machine_state SET value_json = ?, updated_at_ms = ? WHERE state_key = ?",
+    ).run(JSON.stringify(value), revision, INSTALLED_PLUGIN_INDEX_STATE_KEY);
+    return true;
+  } finally {
+    db.close();
+  }
+}
+
 function isDirectAgentRuntimeId(value) {
   return typeof value === "string" && value.trim().length > 0 && value !== "openclaw";
 }
@@ -1515,9 +1558,11 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
     );
   }
   const gatewayClass = resolveGatewayClass(env);
+  const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
+  const retiredMattermostInstallRecordRemoved =
+    removeRetiredMattermostInstallRecord(openclawDir);
   const before = JSON.stringify(config);
   if (gatewayClass === "shared") {
-    const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
     projectCustomerPlugins(config);
     projectCustomerSecretProviders(config, openclawDir);
     projectCustomerSpawnNamespaces(config);
@@ -1534,10 +1579,15 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
     );
     applyCustomerPolicy(config);
   } else if (gatewayClass === "builder") {
-    applyBuilderPolicy(config, env.OPENCLAW_DIR ?? path.dirname(configPath));
+    applyBuilderPolicy(config, openclawDir);
   }
   if (JSON.stringify(config) === before) {
-    return { applied: false, reason: "already-set", gatewayClass };
+    return {
+      applied: retiredMattermostInstallRecordRemoved,
+      reason: retiredMattermostInstallRecordRemoved ? "retired-mattermost-install" : "already-set",
+      ...(retiredMattermostInstallRecordRemoved ? { path: configPath } : {}),
+      gatewayClass,
+    };
   }
   atomicWriteJson(configPath, config);
   return { applied: true, path: configPath, gatewayClass };
