@@ -85,20 +85,29 @@ RUN set -e; \
       openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
     fi \
       || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    openclaw plugins install "npm-pack:/tmp/openclaw-mattermost-fork.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: local @openclaw/mattermost install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    MATTERMOST_STAGE="$(mktemp -d)"; \
+    tar -xzf /tmp/openclaw-mattermost-fork.tgz -C "$MATTERMOST_STAGE"; \
+    MATTERMOST_PACKAGE="$MATTERMOST_STAGE/package"; \
+    test -f "$MATTERMOST_PACKAGE/dist/index.js"; \
+    node -e 'const pkg = require(process.argv[1]); const version = process.argv[2]; if (pkg.name !== "@openclaw/mattermost" || pkg.version !== version) process.exit(1);' "$MATTERMOST_PACKAGE/package.json" "$OPENCLAW_CORE_VERSION"; \
+    MATTERMOST_BUNDLED_DIR="$OPENCLAW_ROOT/dist/extensions/mattermost"; \
+    rm -rf "$MATTERMOST_BUNDLED_DIR"; \
+    mkdir -p "$(dirname "$MATTERMOST_BUNDLED_DIR")"; \
+    cp -a "$MATTERMOST_PACKAGE" "$MATTERMOST_BUNDLED_DIR"; \
+    rm -rf "$MATTERMOST_STAGE"; \
     rm -f /tmp/oc-plugin.log /tmp/openclaw-mattermost-fork.tgz; \
     find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
     mkdir -p /opt/openclaw-runtime-deps; \
     cp -a /home/node/.openclaw/npm /opt/openclaw-runtime-deps/npm; \
     chown -R node:node /opt/openclaw-runtime-deps; \
-    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
+    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
     find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .
 
 FROM gateway-core-system AS gateway-core-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
     && openclaw --version
@@ -133,12 +142,13 @@ RUN set -e; \
     test -n "$CODEX_PACKAGE"; \
     INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
     test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"; \
-    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
+    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
     find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .
 
 FROM gateway-system AS gateway-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
     && openclaw --version

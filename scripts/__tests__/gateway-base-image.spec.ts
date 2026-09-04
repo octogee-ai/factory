@@ -300,12 +300,15 @@ describe("gateway base image", () => {
       "COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw",
     );
     expect(runtimeStage).toContain(
+      "COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost",
+    );
+    expect(runtimeStage).toContain(
       "COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps",
     );
     expect(runtimeStage).not.toContain("openclaw-tarball/");
     expect(runtimeStage).not.toContain("/home/node/.openclaw");
     expect(cloudbuild).toContain('test -d /opt/openclaw-runtime-deps/npm');
-    expect(cloudbuild).toContain('node_modules/@openclaw/mattermost');
+    expect(cloudbuild).toContain('openclaw/dist/extensions/mattermost/package.json');
     expect(cloudbuild).toContain('node_modules/@openclaw/parallel-plugin');
     expect(cloudbuild).toContain('node_modules/@openclaw/codex');
   });

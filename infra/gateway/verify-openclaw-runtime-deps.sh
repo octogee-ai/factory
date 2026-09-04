@@ -2,6 +2,7 @@
 set -euo pipefail
 
 runtime_root="${OPENCLAW_RUNTIME_DEPS_ROOT:-/opt/openclaw-runtime-deps/npm}"
+bundled_root="${OPENCLAW_BUNDLED_PLUGIN_ROOT:-$(npm root -g)/openclaw/dist/extensions}"
 required_csv="${1:-mattermost,parallel-plugin,codex}"
 
 if [ ! -d "$runtime_root" ]; then
@@ -17,8 +18,11 @@ for package_name in "${required_packages[@]}"; do
   fi
   package_json="$(find "$runtime_root" -type f -path "*/node_modules/@openclaw/$package_name/package.json" -print -quit)"
   if [ -z "$package_json" ]; then
-    echo "FATAL: @openclaw/$package_name is absent from $runtime_root" >&2
-    exit 1
+    package_json="$bundled_root/$package_name/package.json"
+    if [ ! -f "$package_json" ]; then
+      echo "FATAL: @openclaw/$package_name is absent from $runtime_root and $bundled_root" >&2
+      exit 1
+    fi
   fi
 done
 
