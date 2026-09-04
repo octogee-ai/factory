@@ -1,4 +1,8 @@
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
+import {
+  OPENCLAW_CONTROL_UI_CLIENT_ID,
+  OPENCLAW_CONTROL_UI_CLIENT_MODE,
+} from "@octogee/shared/types/openclaw-proxy-identity";
 
 const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
   "operator.admin",
@@ -8,6 +12,10 @@ const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
   "operator.questions",
   "operator.pairing",
 ] as const;
+
+export type OpenClawConnectIdentity =
+  | { mode: "shared-operator"; gatewayToken: string }
+  | { mode: "per-user" };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -24,10 +32,26 @@ export function challengeNonce(frame: unknown): string | null {
     : null;
 }
 
+function connectClient(identity: OpenClawConnectIdentity, platform: string): Record<string, string> {
+  const shared = { displayName: "octogee-control-ui", version: "1.0.0", platform };
+  return identity.mode === "per-user"
+    ? { id: OPENCLAW_CONTROL_UI_CLIENT_ID, mode: OPENCLAW_CONTROL_UI_CLIENT_MODE, ...shared }
+    : { id: "gateway-client", mode: "backend", ...shared };
+}
+
+function connectAuthority(identity: OpenClawConnectIdentity): Record<string, unknown> {
+  return identity.mode === "per-user"
+    ? {}
+    : {
+      scopes: [...OPERATOR_BUILDER_DASHBOARD_SCOPES],
+      auth: { token: identity.gatewayToken },
+    };
+}
+
 export function rewriteTrustedOpenClawConnect(args: {
   frame: unknown;
   nonce: string;
-  gatewayToken: string;
+  identity: OpenClawConnectIdentity;
   platform?: string;
 }): string | null {
   const request = record(args.frame);
@@ -40,16 +64,9 @@ export function rewriteTrustedOpenClawConnect(args: {
     params: {
       minProtocol: OPENCLAW_PROTOCOL_VERSION,
       maxProtocol: OPENCLAW_PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        displayName: "octogee-control-ui",
-        version: "1.0.0",
-        platform: args.platform ?? process.platform,
-        mode: "backend",
-      },
+      client: connectClient(args.identity, args.platform ?? process.platform),
       role: "operator",
-      scopes: [...OPERATOR_BUILDER_DASHBOARD_SCOPES],
-      auth: { token: args.gatewayToken },
+      ...connectAuthority(args.identity),
     },
   });
 }

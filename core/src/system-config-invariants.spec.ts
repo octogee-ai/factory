@@ -90,6 +90,62 @@ describe("system config platform invariants", () => {
       .not.toContain("gateway.controlUi.dangerouslyDisableDeviceAuth");
   });
 
+  it("switches a per-user Builder gateway to trusted-proxy auth with the platform role table", () => {
+    const perUser = { ...builder, controlIdentity: "per-user" as const };
+    const config: Record<string, unknown> = {
+      gateway: { auth: { mode: "token", token: "leaked", identityScopes: { "x@y": ["operator.admin"] } } },
+    };
+
+    reconcilePlatformInvariants(config, perUser);
+
+    const gateway = config.gateway as {
+      auth: Record<string, unknown>;
+      trustedProxies: string[];
+      roles: { default: string; definitions: Record<string, unknown> };
+    };
+    expect(gateway.auth.mode).toBe("trusted-proxy");
+    expect(gateway.auth).not.toHaveProperty("token");
+    expect(gateway.auth).not.toHaveProperty("identityScopes");
+    expect(gateway.auth.trustedProxy).toEqual({
+      userHeader: "x-octogee-user",
+      requiredHeaders: ["x-octogee-proxy"],
+      allowLoopback: true,
+    });
+    expect(gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
+    expect(gateway.roles.default).toBe("guest");
+    expect(Object.keys(gateway.roles.definitions).sort()).toEqual(
+      ["co-owner", "guest", "owner", "service", "trusted-helper", "viewer"],
+    );
+    expect(platformInvariantViolations(config, perUser)).toEqual([]);
+  });
+
+  it("keeps the shared operator identity on token auth and strips any trusted-proxy residue", () => {
+    const config: Record<string, unknown> = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-octogee-user" } },
+        trustedProxies: ["127.0.0.1"],
+        roles: { default: "guest", definitions: {} },
+      },
+    };
+
+    reconcilePlatformInvariants(config, builder);
+
+    const gateway = config.gateway as Record<string, unknown>;
+    expect((gateway.auth as Record<string, unknown>).mode).toBe("token");
+    expect(gateway.auth).not.toHaveProperty("trustedProxy");
+    expect(gateway).not.toHaveProperty("trustedProxies");
+    expect(gateway).not.toHaveProperty("roles");
+    expect(platformInvariantViolations(config, builder)).toEqual([]);
+  });
+
+  it("never lets a shared gateway adopt per-user identity", () => {
+    const config: Record<string, unknown> = { gateway: { auth: { mode: "trusted-proxy" } } };
+
+    reconcilePlatformInvariants(config, { ...barn, controlIdentity: "per-user" });
+
+    expect((config.gateway as { auth: { mode: string } }).auth.mode).toBe("token");
+  });
+
   it("reconciles Barn auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },

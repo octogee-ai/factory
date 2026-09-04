@@ -294,6 +294,43 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     );
   });
 
+  it("threads the Builder control identity to both containers and pins shared gateways to the operator identity", () => {
+    const perUser = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      ownerUid: "uid-ceckert",
+      builderSlug: "ceckert",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      "builderAccess.controlUiEnabled": "true",
+      "builderAccess.controlIdentity": "per-user",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    for (const container of ["gateway", "gateway-edge"]) {
+      expect(containerBlock(perUser, container)).toMatch(
+        /name:\s*OPENCLAW_CONTROL_IDENTITY[\s\S]*?value:\s*"per-user"/,
+      );
+    }
+
+    const defaulted = findDoc(helmTemplate("octogee-gw-bender", {
+      gatewayId: "bender",
+      ownerUid: "uid-ceckert",
+      builderSlug: "ceckert",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+    }), "Deployment", "octogee-gateway-bender") ?? "";
+    expect(containerBlock(defaulted, "gateway")).toMatch(
+      /name:\s*OPENCLAW_CONTROL_IDENTITY[\s\S]*?value:\s*"shared-operator"/,
+    );
+
+    const shared = findDoc(helmTemplate("octogee-gw-shared", {
+      gatewayId: "shared",
+      gatewayClass: "shared",
+      "builderAccess.controlIdentity": "per-user",
+    }), "Deployment", "octogee-gateway-shared") ?? "";
+    expect(containerBlock(shared, "gateway")).toMatch(
+      /name:\s*OPENCLAW_CONTROL_IDENTITY[\s\S]*?value:\s*"shared-operator"/,
+    );
+  });
+
   it("standard profile references the gateway-scoped KSA but never renders a ServiceAccount (Cowboy owns it)", () => {
     // KSA creation moved OUT of the chart to Cowboy: a gateway-scoped KSA
     // (octogee-gw-<gatewayId>) is created once and referenced by each revision

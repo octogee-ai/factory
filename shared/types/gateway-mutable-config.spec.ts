@@ -95,6 +95,19 @@ describe("gateway mutable config", () => {
     })).toBe(false);
   });
 
+  it("accepts a per-user control identity and rejects any other identity mode", () => {
+    expect(isGatewayMutableConfig(validConfig({
+      builderAccess: { controlUiEnabled: true, controlIdentity: "per-user" },
+    }))).toBe(true);
+    expect(isGatewayMutableConfig(validConfig({
+      builderAccess: { controlUiEnabled: true, controlIdentity: "shared-operator" },
+    }))).toBe(true);
+    expect(isGatewayMutableConfig({
+      ...validConfig(),
+      builderAccess: { controlUiEnabled: true, controlIdentity: "trusted-proxy" },
+    })).toBe(false);
+  });
+
   it("rejects network authority embedded in mutable Builder access", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),

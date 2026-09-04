@@ -127,6 +127,11 @@
       "type": "object",
       "properties": {
         "controlUiEnabled": { "type": "boolean" },
+        "controlIdentity": {
+          "type": "string",
+          "enum": ["shared-operator", "per-user"],
+          "description": "How Control UI sessions identify to OpenClaw: one shared operator (token auth) or each Octogee user (trusted-proxy auth). Builder class only."
+        },
         "kubeApiServerEgressCidrs": {
           "type": "array",
           "description": "Builder gateway TokenReview carve-out: explicit Kubernetes API server endpoint /32 CIDR(s) from the default/kubernetes EndpointSlice. Default empty/off.",

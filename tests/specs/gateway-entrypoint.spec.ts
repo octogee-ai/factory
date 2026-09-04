@@ -311,3 +311,28 @@ describe("scripts/entrypoints/fleet-controller.ts — db-less local persistence 
     expect(fleetController).toMatch(/recordSystemConfigStatus/);
   });
 });
+
+describe("per-user control identity — pod token stays out of the OpenClaw process", () => {
+  const supervisor = readFileSync(
+    path.join(repoRoot, "scripts/entrypoints/surge-openclaw-supervisor.ts"),
+    "utf8",
+  );
+
+  it("exports the in-pod relay credential under its own name before OpenClaw starts", () => {
+    const relayExport = entrypoint.indexOf('export OCTOGEE_POD_RELAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"');
+    const openClawStart = entrypoint.indexOf("openclaw gateway run");
+    expect(relayExport).toBeGreaterThan(-1);
+    expect(relayExport).toBeLessThan(openClawStart);
+  });
+
+  it("spawns the Builder OpenClaw process through the identity-aware environment filter", () => {
+    expect(supervisor).toMatch(/env:\s*openClawProcessEnv\(\)/);
+    expect(supervisor).toMatch(/OPENCLAW_GATEWAY_TOKEN: _podToken/);
+  });
+
+  it("threads the control identity to both gateway containers from one chart value", () => {
+    expect(gatewayDeployment).toMatch(/\$controlIdentity := ternary/);
+    expect(gatewayDeployment.match(/name:\s*OPENCLAW_CONTROL_IDENTITY/g)).toHaveLength(2);
+    expect(gatewayValues).toMatch(/controlIdentity:\s*shared-operator/);
+  });
+});

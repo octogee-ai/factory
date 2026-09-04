@@ -85,8 +85,24 @@ export interface GatewayServiceAccountSpec {
   annotations?: Record<string, string>;
 }
 
+export const GATEWAY_CONTROL_IDENTITY_MODES = ["shared-operator", "per-user"] as const;
+export type GatewayControlIdentity = (typeof GATEWAY_CONTROL_IDENTITY_MODES)[number];
+export const DEFAULT_GATEWAY_CONTROL_IDENTITY: GatewayControlIdentity = "shared-operator";
+
+export function isGatewayControlIdentity(value: unknown): value is GatewayControlIdentity {
+  return (
+    typeof value === "string" &&
+    (GATEWAY_CONTROL_IDENTITY_MODES as readonly string[]).includes(value)
+  );
+}
+
+export function resolveGatewayControlIdentity(value: unknown): GatewayControlIdentity {
+  return value === "per-user" ? "per-user" : DEFAULT_GATEWAY_CONTROL_IDENTITY;
+}
+
 export interface BuilderGatewayAccessSpec {
   controlUiEnabled?: boolean;
+  controlIdentity?: GatewayControlIdentity;
   kubeApiServerEgressCidrs?: string[];
   reason?: string;
   verifiedAt?: number;

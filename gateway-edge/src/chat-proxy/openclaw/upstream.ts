@@ -12,6 +12,10 @@ import {
   signConnectDevice,
   type DeviceIdentity,
 } from "@octogee/shared/types/device-identity";
+import {
+  OPENCLAW_CONTROL_UI_CLIENT_ID,
+  OPENCLAW_CONTROL_UI_CLIENT_MODE,
+} from "@octogee/shared/types/openclaw-proxy-identity";
 
 export {
   OpenclawWireError,
@@ -31,11 +35,16 @@ const DEFAULT_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
+export interface OpenUpstreamProxyIdentity {
+  headers: Record<string, string>;
+}
+
 export interface OpenUpstreamParams {
   url: string;
   token?: string;
   bootstrapToken?: string;
   deviceToken?: string;
+  proxyIdentity?: OpenUpstreamProxyIdentity;
   identity: DeviceIdentity;
   scopes?: string[];
   timeoutMs?: number;
@@ -219,11 +228,58 @@ async function emitDeviceToken(
   });
 }
 
+function proxyIdentityConnectParams(): Record<string, unknown> {
+  return {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: {
+      id: OPENCLAW_CONTROL_UI_CLIENT_ID,
+      displayName: "octogee-chat-proxy",
+      version: "1.0.0",
+      platform: process.platform,
+      mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+    },
+    role: "operator",
+  };
+}
+
+function deviceConnectParams(params: OpenUpstreamParams, nonce: string, scopes: string[]): Record<string, unknown> {
+  const clientInfo = {
+    id: "gateway-client" as const,
+    displayName: "octogee-chat-proxy" as const,
+    version: "1.0.0" as const,
+    platform: process.platform,
+    mode: "backend" as const,
+  };
+  const device = signConnectDevice({
+    identity: params.identity,
+    clientId: clientInfo.id,
+    clientMode: clientInfo.mode,
+    role: "operator",
+    scopes,
+    nonce,
+    token: tokenForDeviceSignature(params),
+    platform: clientInfo.platform,
+  });
+  const auth = authForParams(params);
+  return {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: clientInfo,
+    role: "operator",
+    scopes,
+    device,
+    ...(auth ? { auth } : {}),
+  };
+}
+
 export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocket> {
   const scopes = params.scopes ?? [...DEFAULT_OPERATOR_SCOPES];
   const timeoutMs = params.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const wsUrl = params.url.replace(/^http/, "ws");
-  const ws = new WebSocket(wsUrl);
+  const ws = params.proxyIdentity
+    ? new WebSocket(wsUrl, { headers: params.proxyIdentity.headers })
+    : new WebSocket(wsUrl);
 
   ws.on("error", () => {});
 
@@ -233,38 +289,13 @@ export async function openUpstream(params: OpenUpstreamParams): Promise<WebSocke
     await waitForWsOpen(ws, timeoutMs);
     const nonce = await nonceTracker.wait(timeoutMs);
 
-    const clientInfo = {
-      id: "gateway-client" as const,
-      displayName: "octogee-chat-proxy" as const,
-      version: "1.0.0" as const,
-      platform: process.platform,
-      mode: "backend" as const,
-    };
-    const device = signConnectDevice({
-      identity: params.identity,
-      clientId: clientInfo.id,
-      clientMode: clientInfo.mode,
-      role: "operator",
-      scopes,
-      nonce,
-      token: tokenForDeviceSignature(params),
-      platform: clientInfo.platform,
-    });
-    const auth = authForParams(params);
-
     const helloOk = await sendWsRequest({
       ws,
       id: randomUUID(),
       method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: clientInfo,
-        role: "operator",
-        scopes,
-        device,
-        ...(auth ? { auth } : {}),
-      },
+      params: params.proxyIdentity
+        ? proxyIdentityConnectParams()
+        : deviceConnectParams(params, nonce, scopes),
       timeoutMs,
       mapConnectErrors: true,
     });

@@ -1568,4 +1568,55 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
+
+  it("switches a per-user Builder gateway to trusted-proxy auth with the platform role table", () => {
+    const { config: out } = runPolicyWithDir(
+      "builder",
+      { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
+      undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user" },
+    );
+    expect(out.gateway.auth).toEqual({
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-octogee-user",
+        requiredHeaders: ["x-octogee-proxy"],
+        allowLoopback: true,
+      },
+      rateLimit: { maxAttempts: 10 },
+    });
+    expect(out.gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
+    expect(out.gateway.roles.default).toBe("guest");
+    expect(out.gateway.roles.definitions.service.scopes).toContain("operator.admin");
+    expect(out.gateway.roles.definitions.guest.sandbox).toBe("required");
+  });
+
+  it("returns a Builder gateway to token auth when the control identity is not per-user", () => {
+    const { config: out } = runPolicyWithDir(
+      "builder",
+      {
+        gateway: {
+          auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-octogee-user" } },
+          trustedProxies: ["127.0.0.1"],
+          roles: { default: "guest", definitions: {} },
+        },
+      },
+      undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "shared-operator" },
+    );
+    expect(out.gateway.auth).toEqual({ mode: "token" });
+    expect(out.gateway).not.toHaveProperty("trustedProxies");
+    expect(out.gateway).not.toHaveProperty("roles");
+  });
+
+  it("ignores the control identity on shared gateways", () => {
+    const { config: out } = runPolicyWithDir(
+      "shared",
+      { gateway: { auth: { mode: "token" } } },
+      undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user" },
+    );
+    expect(out.gateway.auth.mode).toBe("token");
+    expect(out.gateway).not.toHaveProperty("roles");
+  });
 });

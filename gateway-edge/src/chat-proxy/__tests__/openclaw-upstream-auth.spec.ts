@@ -40,17 +40,18 @@ function verifyConnectSignature(params: any, identity: ReturnType<typeof generat
 }
 
 async function withMockGateway<T>(
-  fn: (url: string, captured: { params: any; setupParams: any }) => Promise<T>,
+  fn: (url: string, captured: { params: any; setupParams: any; upgradeHeaders: any }) => Promise<T>,
   opts: {
     helloAuth?: Record<string, unknown>;
     setupResult?: (url: string) => Record<string, unknown>;
   } = {},
 ): Promise<T> {
   const wss = new WebSocketServer({ port: 0 });
-  const captured = { params: null as any, setupParams: null as any };
+  const captured = { params: null as any, setupParams: null as any, upgradeHeaders: null as any };
   let gatewayUrl = "";
 
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, req) => {
+    captured.upgradeHeaders = req.headers;
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "nonce-1" } }));
     ws.on("message", (raw) => {
       const frame = JSON.parse(raw.toString());
@@ -228,5 +229,28 @@ describe("openUpstream OpenClaw auth", () => {
         scopes: ["operator.admin"],
       },
     ]);
+  });
+
+  it("carries a proxy identity on the upgrade and connects as a Control UI client with no self-declared authority", async () => {
+    const identity = generateIdentity();
+    await withMockGateway(async (url, captured) => {
+      const ws = await openUpstream({
+        url,
+        identity,
+        timeoutMs: 30_000,
+        proxyIdentity: {
+          headers: { "x-octogee-user": "svc:gateway-edge", "x-octogee-proxy": "1" },
+        },
+      });
+      ws.close();
+
+      expect(captured.upgradeHeaders["x-octogee-user"]).toBe("svc:gateway-edge");
+      expect(captured.upgradeHeaders["x-octogee-proxy"]).toBe("1");
+      expect(captured.params?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
+      expect(captured.params?.role).toBe("operator");
+      expect(captured.params).not.toHaveProperty("auth");
+      expect(captured.params).not.toHaveProperty("device");
+      expect(captured.params).not.toHaveProperty("scopes");
+    });
   });
 });

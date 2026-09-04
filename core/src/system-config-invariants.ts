@@ -1,4 +1,9 @@
 import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
+import {
+  OPENCLAW_OPERATOR_ROLES,
+  OPENCLAW_TRUSTED_PROXIES,
+  OPENCLAW_TRUSTED_PROXY_AUTH,
+} from "@octogee/shared/types/openclaw-proxy-identity";
 
 type JsonObject = Record<string, unknown>;
 
@@ -8,10 +13,13 @@ const FORBIDDEN_ARRAY = "forbidden-array" as const;
 
 export type GatewayConfigClass = "shared" | "builder";
 
+export type GatewayControlIdentityMode = "shared-operator" | "per-user";
+
 export interface SystemConfigInvariantContext {
   gatewayClass: GatewayConfigClass;
   gatewayId?: string;
   apiOrigin?: string;
+  controlIdentity?: GatewayControlIdentityMode;
 }
 
 type ExactInvariant = {
@@ -380,14 +388,24 @@ export function platformInvariantTable(
   if (isolated && (!gatewayId || !apiOrigin)) {
     throw new Error("gatewayId and apiOrigin are required for isolated config invariants");
   }
+  const perUser = isolated && context.controlIdentity === "per-user";
   const base: PlatformInvariant[] = [
     { kind: "exact", path: "discovery.mdns.mode", value: "off" },
     { kind: "exact", path: "gateway.port", value: 18789 },
     { kind: "exact", path: "gateway.mode", value: "local" },
     { kind: "exact", path: "gateway.bind", value: "lan" },
-    { kind: "exact", path: "gateway.auth.mode", value: "token" },
+    { kind: "exact", path: "gateway.auth.mode", value: perUser ? "trusted-proxy" : "token" },
     { kind: "exact", path: "gateway.auth.token", value: ABSENT },
     { kind: "exact", path: "gateway.auth.password", value: ABSENT },
+    {
+      kind: "exact",
+      path: "gateway.auth.trustedProxy",
+      value: perUser ? OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy : ABSENT,
+    },
+    { kind: "exact", path: "gateway.auth.identityScopes", value: ABSENT },
+    { kind: "exact", path: "gateway.auth.allowTailscale", value: ABSENT },
+    { kind: "exact", path: "gateway.trustedProxies", value: perUser ? [...OPENCLAW_TRUSTED_PROXIES] : ABSENT },
+    { kind: "exact", path: "gateway.roles", value: perUser ? OPENCLAW_OPERATOR_ROLES : ABSENT },
     {
       kind: "exact",
       path: "gateway.controlUi.allowedOrigins",

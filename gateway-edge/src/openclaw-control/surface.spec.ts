@@ -1803,4 +1803,139 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     browser.close();
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
+
+  it("carries each person's identity to OpenClaw and settles their role before forwarding connect", async () => {
+    const upstreamFrames: Array<Record<string, unknown>> = [];
+    const upgradeHeaders: Array<Record<string, unknown>> = [];
+    const assetHeaders: Array<Record<string, unknown>> = [];
+    const upstream = http.createServer((req, res) => {
+      assetHeaders.push(req.headers);
+      res.setHeader("content-type", "text/plain");
+      res.end("asset");
+    });
+    const upstreamWs = new WebSocketServer({ noServer: true });
+    upstream.on("upgrade", (req, socket, head) => {
+      upgradeHeaders.push(req.headers);
+      upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
+    });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "per-user-nonce" },
+      }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        upstreamFrames.push(frame);
+        if (frame.method === "connect") {
+          ws.send(JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              auth: { role: "operator", scopes: ["operator.read"] },
+              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+            },
+          }));
+        }
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const perUserEnv = { ...env(upstreamPort), OPENCLAW_CONTROL_IDENTITY: "per-user" };
+    const manager = sessions();
+    const syncOrder: string[] = [];
+    const proxyIdentity = {
+      enabled: true,
+      userHeaders: (session: { uid: string }) => ({
+        "x-octogee-user": session.uid,
+        "x-octogee-proxy": "1",
+        "x-forwarded-for": "10.9.8.7",
+        "x-forwarded-proto": "https",
+      }),
+      serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge", "x-octogee-proxy": "1" }),
+      syncRole: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
+        syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
+      }),
+    };
+    const edge = http.createServer(appWith({
+      env: perUserEnv,
+      sessions: manager,
+      loadGatewayToken: async () => {
+        throw new Error("per-user must not load the pod token");
+      },
+      ...({ proxyIdentity } as object),
+    }));
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({
+      router,
+      env: perUserEnv,
+      sessions: manager,
+      authorize: async () => true,
+      loadGatewayToken: async () => {
+        throw new Error("per-user must not load the pod token");
+      },
+      proxyIdentity,
+      resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
+      rpcTimeoutMs: 100,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+
+    const asset = await request(edge)
+      .get("/api/g/bender/openclaw/assets/app.js")
+      .set("cookie", issue(manager, "delegated-config"))
+      .set("x-octogee-user", "forged-uid")
+      .set("x-octogee-proxy", "1");
+    expect(asset.status).toBe(200);
+    expect(assetHeaders[0]).toMatchObject({ "x-octogee-user": "uid-owner", "x-octogee-proxy": "1" });
+    expect(assetHeaders[0]).not.toHaveProperty("authorization");
+
+    const browserFrames: Array<Record<string, unknown>> = [];
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: {
+        cookie: issue(manager, "delegated-config"),
+        origin: "https://api.octogee.com",
+        "x-octogee-user": "forged-uid",
+        "x-octogee-proxy": "1",
+      },
+    });
+    await new Promise<void>((resolve, reject) => {
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        browserFrames.push(frame);
+        if (frame.event === "connect.challenge") {
+          syncOrder.push("browser-connect");
+          browser.send(JSON.stringify({
+            type: "req",
+            id: "connect-per-user",
+            method: "connect",
+            params: { auth: { token: "browser-token" }, scopes: ["operator.admin"] },
+          }));
+        } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
+          resolve();
+        }
+      });
+    });
+    browser.close();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+
+    expect(upgradeHeaders[0]).toMatchObject({
+      "x-octogee-user": "uid-owner",
+      "x-octogee-proxy": "1",
+      "x-forwarded-for": "10.9.8.7",
+    });
+    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config"]);
+    const connect = upstreamFrames.find((frame) => frame.method === "connect");
+    expect(connect?.params).toMatchObject({
+      client: expect.objectContaining({ id: "openclaw-control-ui", mode: "ui" }),
+      role: "operator",
+    });
+    expect(connect?.params).not.toHaveProperty("auth");
+    expect(connect?.params).not.toHaveProperty("scopes");
+    expect(JSON.stringify(upstreamFrames)).not.toContain("browser-token");
+    expect(JSON.stringify(upstreamFrames)).not.toContain("forged-uid");
+    expect(JSON.stringify(upgradeHeaders)).not.toContain("forged-uid");
+  });
 });

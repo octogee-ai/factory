@@ -11,6 +11,8 @@ import {
   resolveGatewayImageProfile,
   resolveUserGatewayControlState,
   isGatewayClassControlUiAccessEnabled,
+  isGatewayControlIdentity,
+  resolveGatewayControlIdentity,
   isOperatorManaged,
   resolveManagedBy,
   resolveOperationOrigin,
@@ -323,5 +325,21 @@ describe("operation audit record discriminator", () => {
       outcome: "completed",
       completedAt: 3,
     })).toBe(false);
+  });
+});
+
+describe("gateway control identity", () => {
+  it("defaults every absent or unknown value to the shared operator identity", () => {
+    expect(resolveGatewayControlIdentity(undefined)).toBe("shared-operator");
+    expect(resolveGatewayControlIdentity(null)).toBe("shared-operator");
+    expect(resolveGatewayControlIdentity("trusted-proxy")).toBe("shared-operator");
+    expect(resolveGatewayControlIdentity("per-user")).toBe("per-user");
+  });
+
+  it("recognizes only the two declared modes", () => {
+    expect(isGatewayControlIdentity("shared-operator")).toBe(true);
+    expect(isGatewayControlIdentity("per-user")).toBe(true);
+    expect(isGatewayControlIdentity("Per-User")).toBe(false);
+    expect(isGatewayControlIdentity(true)).toBe(false);
   });
 });

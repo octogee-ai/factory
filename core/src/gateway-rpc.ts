@@ -11,6 +11,13 @@ import {
   waitForWsOpen,
   sendWsRequest,
 } from "@octogee/shared/types/openclaw-wire-core";
+import {
+  OPENCLAW_CONTROL_UI_CLIENT_ID,
+  OPENCLAW_CONTROL_UI_CLIENT_MODE,
+  isPerUserControlIdentity,
+  openClawProxyIdentityHeaders,
+  serviceProxyIdentity,
+} from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -992,7 +999,10 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 interface GatewayRpcAuth {
   token?: string;
   deviceToken?: string;
+  proxyIdentity?: Record<string, string>;
 }
+
+const IN_POD_SERVICE_IDENTITY = serviceProxyIdentity("octogee-provisioner");
 
 function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
   if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {
@@ -1000,6 +1010,9 @@ function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
   }
   if (typeof opts.token === "string" && opts.token.length > 0) return { token: opts.token };
   if (!opts.allowLegacyGatewayTokenFallback) return {};
+  if (isPerUserControlIdentity()) {
+    return { proxyIdentity: openClawProxyIdentityHeaders({ user: IN_POD_SERVICE_IDENTITY }) };
+  }
   const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof fromEnv === "string" && fromEnv.length > 0) return { token: fromEnv };
   const fromFile = readTokenFromOpenClawJson(opts.openclawConfigPath);
@@ -1028,10 +1041,59 @@ interface OpenAndConnectParams {
   url: string;
   token?: string;
   deviceToken?: string;
+  proxyIdentity?: Record<string, string>;
   connectTimeoutMs: number;
   identity: DeviceIdentity;
   scopes: string[];
   onConnectTrace?: (trace: ConnectTrace) => void;
+}
+
+function proxyIdentityConnectParams(): Record<string, unknown> {
+  return {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: {
+      id: OPENCLAW_CONTROL_UI_CLIENT_ID,
+      displayName: "octogee-provisioner",
+      version: "1.0.0",
+      platform: process.platform,
+      mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+    },
+    role: "operator",
+  };
+}
+
+function deviceConnectParams(params: OpenAndConnectParams, nonce: string): Record<string, unknown> {
+  const clientInfo = {
+    id: "gateway-client" as const,
+    displayName: "octogee-provisioner" as const,
+    version: "1.0.0" as const,
+    platform: process.platform,
+    mode: "backend" as const,
+  };
+  const device = signConnectDevice({
+    identity: params.identity,
+    clientId: clientInfo.id,
+    clientMode: clientInfo.mode,
+    role: "operator",
+    scopes: params.scopes,
+    nonce,
+    token: params.deviceToken || params.token || null,
+    platform: clientInfo.platform,
+  });
+  let auth: { deviceToken: string } | { token: string } | undefined;
+  if (params.deviceToken) auth = { deviceToken: params.deviceToken };
+  else if (params.token) auth = { token: params.token };
+  else auth = undefined;
+  return {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: clientInfo,
+    role: "operator",
+    scopes: params.scopes,
+    device,
+    ...(auth ? { auth } : {}),
+  };
 }
 
 async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> {
@@ -1056,7 +1118,9 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
     });
   };
 
-  const ws = new WebSocket(params.url);
+  const ws = params.proxyIdentity
+    ? new WebSocket(params.url, { headers: params.proxyIdentity })
+    : new WebSocket(params.url);
 
   ws.on("error", () => {});
 
@@ -1073,41 +1137,14 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
     challengeMs = Date.now() - challengeStart;
 
     stage = "connect";
-    const clientInfo = {
-      id: "gateway-client" as const,
-      displayName: "octogee-provisioner" as const,
-      version: "1.0.0" as const,
-      platform: process.platform,
-      mode: "backend" as const,
-    };
-    const device = signConnectDevice({
-      identity: params.identity,
-      clientId: clientInfo.id,
-      clientMode: clientInfo.mode,
-      role: "operator",
-      scopes: params.scopes,
-      nonce,
-      token: params.deviceToken || params.token || null,
-      platform: clientInfo.platform,
-    });
-    let auth: { deviceToken: string } | { token: string } | undefined;
-    if (params.deviceToken) auth = { deviceToken: params.deviceToken };
-    else if (params.token) auth = { token: params.token };
-    else auth = undefined;
     const connectStart = Date.now();
     await sendWsRequest({
       ws,
       id: randomUUID(),
       method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: clientInfo,
-        role: "operator",
-        scopes: params.scopes,
-        device,
-        ...(auth ? { auth } : {}),
-      },
+      params: params.proxyIdentity
+        ? proxyIdentityConnectParams()
+        : deviceConnectParams(params, nonce),
       timeoutMs: params.connectTimeoutMs,
       mapConnectErrors: true,
     });

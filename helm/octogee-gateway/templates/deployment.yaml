@@ -13,6 +13,7 @@
 {{- fail "octogee-gateway: ownerUid and builderSlug are required for owner-bound disposable gateways" -}}
 {{- end -}}
 {{- $builderControlUiEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.controlUiEnabled | default false) -}}
+{{- $controlIdentity := ternary (.Values.builderAccess.controlIdentity | default "shared-operator") "shared-operator" (eq $gatewayClass "builder") -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
 {{- end -}}
@@ -191,6 +192,8 @@ spec:
             - name: OPENCLAW_DASHBOARD_BRIDGE_REQUIRED
               value: "true"
             {{- end }}
+            - name: OPENCLAW_CONTROL_IDENTITY
+              value: {{ $controlIdentity | quote }}
             - name: NPM_CONFIG_CACHE
               value: "/home/node/.npm-cache"
             - name: CUSTOMERS_DIR
@@ -430,6 +433,8 @@ spec:
               value: "/var/run/octogee/openclaw-device-auth/token"
             - name: OPENCLAW_CONFIG
               value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
+            - name: OPENCLAW_CONTROL_IDENTITY
+              value: {{ $controlIdentity | quote }}
             {{- if $builderControlUiEnabled }}
             - name: OPENCLAW_DIR
               value: "/home/node/.openclaw"

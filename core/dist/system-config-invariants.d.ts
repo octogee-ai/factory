@@ -3,10 +3,12 @@ declare const ABSENT: unique symbol;
 declare const REQUIRED_ARRAY: "required-array";
 declare const FORBIDDEN_ARRAY: "forbidden-array";
 export type GatewayConfigClass = "shared" | "builder";
+export type GatewayControlIdentityMode = "shared-operator" | "per-user";
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
     gatewayId?: string;
     apiOrigin?: string;
+    controlIdentity?: GatewayControlIdentityMode;
 }
 type ExactInvariant = {
     kind: "exact";

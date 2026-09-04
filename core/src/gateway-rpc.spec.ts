@@ -39,6 +39,7 @@ interface MockServerHandle {
   setRejectAllAsAuth: (enabled: boolean) => void;
   
   callCount: (method: string) => number;
+  lastUpgradeHeaders: () => Record<string, unknown> | null;
   disconnectClients: () => Promise<void>;
   close: () => Promise<void>;
 }
@@ -50,7 +51,10 @@ async function startMockGateway(): Promise<MockServerHandle> {
   let connectHandler: ((params: unknown) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } }) | null = null;
   let rejectAuth = false;
 
-  wss.on("connection", (ws: WebSocket) => {
+  let lastUpgradeHeaders: Record<string, unknown> | null = null;
+
+  wss.on("connection", (ws: WebSocket, req) => {
+    lastUpgradeHeaders = { ...req.headers };
 
 const nonce = crypto.randomBytes(12).toString("hex");
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce } }));
@@ -130,6 +134,7 @@ const nonce = crypto.randomBytes(12).toString("hex");
     port,
     url: `ws://127.0.0.1:${port}`,
     setHandler: (method, handler) => handlers.set(method, handler),
+    lastUpgradeHeaders: () => lastUpgradeHeaders,
     setConnectHandler: (handler) => {
       connectHandler = handler;
     },
@@ -1545,6 +1550,59 @@ describe("token resolution", () => {
     }
 
 expect(captured?.auth).toBeUndefined();
+  });
+
+  it("connects with the in-pod service identity and no token when the gateway trusts the proxy", async () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { auth: { mode: "trusted-proxy", token: "must-not-be-read" } } }),
+    );
+    process.env.OPENCLAW_GATEWAY_TOKEN = "must-not-be-sent";
+    process.env.OPENCLAW_CONTROL_IDENTITY = "per-user";
+
+    const srv = await startMockGateway();
+    let captured: any = null;
+    srv.setConnectHandler((params) => {
+      captured = params;
+      return {
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          server: { version: "test", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        },
+      };
+    });
+    srv.setHandler("channels.status", () => ({ ok: true, payload: {} }));
+
+    const rpc = createGatewayRpc({
+      url: srv.url,
+      openclawConfigPath: configPath,
+      allowLegacyGatewayTokenFallback: true,
+      connectTimeoutMs: 500,
+      callTimeoutMs: 500,
+      identity: makeTestIdentity(),
+    });
+    try {
+      await rpc.isGatewayUp(500);
+    } finally {
+      delete process.env.OPENCLAW_CONTROL_IDENTITY;
+      await rpc.close();
+      await srv.close();
+    }
+
+    expect(srv.lastUpgradeHeaders()).toMatchObject({
+      "x-octogee-user": "svc:octogee-provisioner",
+      "x-octogee-proxy": "1",
+    });
+    expect(captured?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
+    expect(captured?.auth).toBeUndefined();
+    expect(captured?.device).toBeUndefined();
+    expect(captured?.scopes).toBeUndefined();
   });
 
   it("silently tolerates a missing/malformed openclaw.json when legacy fallback is enabled", async () => {

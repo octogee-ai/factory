@@ -5,6 +5,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
+import {
+  OPENCLAW_OPERATOR_ROLES,
+  OPENCLAW_TRUSTED_PROXIES,
+  OPENCLAW_TRUSTED_PROXY_AUTH,
+  isPerUserControlIdentity,
+} from "../../shared/dist/types/openclaw-proxy-identity.js";
 
 export const CUSTOMER_CODE_DENIED_TOOLS = [
   "exec",
@@ -1511,9 +1517,36 @@ function projectBuilderSecretProviders(config, openclawDir) {
 // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
 // and the codex BYOSUB plugin stay at the Builder's discretion; the platform
 // keeps only its plugin configuration boundary and tenant-scoped secret providers.
-function applyBuilderPolicy(config, openclawDir) {
+function applyBuilderPolicy(config, openclawDir, env) {
   preserveBuilderPluginConfiguration(config);
   projectBuilderSecretProviders(config, openclawDir);
+  applyControlIdentityPolicy(config, env);
+}
+
+function applyControlIdentityPolicy(config, env) {
+  if (isPerUserControlIdentity(env)) {
+    config.gateway ??= {};
+    config.gateway.auth ??= {};
+    const auth = config.gateway.auth;
+    delete auth.token;
+    delete auth.identityScopes;
+    delete auth.allowTailscale;
+    auth.mode = OPENCLAW_TRUSTED_PROXY_AUTH.mode;
+    auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
+    config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
+    config.gateway.roles = structuredClone(OPENCLAW_OPERATOR_ROLES);
+    return;
+  }
+  const gateway = config.gateway;
+  if (!gateway || typeof gateway !== "object") return;
+  const auth = gateway.auth;
+  const trustedProxyResidue = auth?.mode === "trusted-proxy" || auth?.trustedProxy !== undefined;
+  if (trustedProxyResidue) {
+    auth.mode = "token";
+    delete auth.trustedProxy;
+  }
+  delete gateway.trustedProxies;
+  delete gateway.roles;
 }
 
 function resolveGatewayClass(env) {
@@ -1579,7 +1612,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
     );
     applyCustomerPolicy(config);
   } else if (gatewayClass === "builder") {
-    applyBuilderPolicy(config, openclawDir);
+    applyBuilderPolicy(config, openclawDir, env);
   }
   if (JSON.stringify(config) === before) {
     return {
