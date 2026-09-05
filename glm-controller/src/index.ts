@@ -2277,7 +2277,6 @@ function startControllerBackgroundTasks({
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       now: () => Date.now(),
       log,
-      allowLegacyBuilderReturnCompatibilityRecovery: ENVIRONMENT_SETTINGS.name === "test",
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
