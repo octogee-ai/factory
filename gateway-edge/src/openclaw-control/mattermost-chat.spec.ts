@@ -1141,6 +1141,24 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     });
     expect(listWorkspaceChannels).not.toHaveBeenCalled();
   });
+  it("subscribes without an unadapted snapshot so startup reads the authorized channel roster", async () => {
+    const adapter = createMattermostControlChat();
+    const prepared = await adapter.prepare({ type: "req", id: "subscribe-member", method: "sessions.subscribe",
+      params: { ownerFirst: true, limit: 60 } },
+    { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    if (prepared?.kind !== "upstream") throw new Error("expected upstream subscription");
+    expect(prepared.upstreamParams).toEqual({});
+    expect(prepared.project({ type: "res", id: "subscribe-member", ok: true,
+      payload: { subscribed: true, list: { sessions: [{ key: "private-upstream-session" }] } } }))
+      .toEqual({ type: "res", id: "subscribe-member", ok: true, payload: { subscribed: true } });
+    const failed = { type: "res", id: "subscribe-member", ok: false, error: { code: "UNAVAILABLE" } };
+    expect(prepared.project(failed)).toEqual(failed);
+    await expect(adapter.prepare({ type: "req", id: "subscribe-invalid", method: "sessions.subscribe",
+      params: { limit: 0 } }, session())).resolves.toMatchObject({
+      kind: "response", frame: { ok: false, error: { code: "INVALID_REQUEST" } },
+    });
+  });
+
   it("includes authorized channels absent from a Team member's private store with owner-first ordering", async () => {
     const adapter = createMattermostControlChat({
       authorize: vi.fn(async (_uid: string, id: string) => id === deniedChannelId

@@ -1421,6 +1421,23 @@ function projectUpstreamHistory(
   return { ...frame, payload: projected };
 }
 
+function prepareSessionSubscription(frame: OpenClawControlRequestFrame): MattermostChatPreparation {
+  if (!sessionsListParams(frame.params)) {
+    return rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost session subscription request");
+  }
+  return {
+    kind: "upstream",
+    upstreamParams: {},
+    project: (upstream) => {
+      const payload = record(upstream.payload);
+      if (upstream.type !== "res" || upstream.ok !== true || !payload) return upstream;
+      const projected = { ...payload };
+      delete projected.list;
+      return { ...upstream, payload: projected };
+    },
+  };
+}
+
 async function prepareSessionsList(
   frame: OpenClawControlRequestFrame,
   session: OpenClawControlSession,
@@ -1605,8 +1622,9 @@ export function createMattermostControlChat(options: {
       const broker = createBrokeredMattermostAccess(session);
       const authorize = options.authorize ?? broker.authorize;
       const listWorkspaceChannels = options.listWorkspaceChannels ?? broker.listWorkspaceChannels;
-      if (!["sessions.list", "chat.history", "chat.startup", "chat.send"].includes(frame.method)) return null;
+      if (!["sessions.subscribe", "sessions.list", "chat.history", "chat.startup", "chat.send"].includes(frame.method)) return null;
       try {
+        if (frame.method === "sessions.subscribe") return prepareSessionSubscription(frame);
         if (frame.method === "sessions.list") {
           return await prepareSessionsList(
             frame,
