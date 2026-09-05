@@ -113,11 +113,11 @@ describe("OpenClaw proxy identity contract", () => {
     expect(openClawDeviceRequestScopes("viewer")).toEqual(["operator.read"]);
   });
 
-  it("derives one stable device per gateway and person from the pod secret", () => {
-    const subject = openClawDeviceSubject("bender", "uid-alice");
+  it("derives one stable device per gateway, person and role from the pod secret", () => {
+    const subject = openClawDeviceSubject("bender", "uid-alice", "team-member");
     const first = deriveDeviceIdentity({ secret: "pod-secret", subject });
     const again = deriveDeviceIdentity({ secret: "pod-secret", subject });
-    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob") });
+    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob", "team-member") });
     const otherSecret = deriveDeviceIdentity({ secret: "rotated", subject });
     expect(again).toEqual(first);
     expect(otherPerson.deviceId).not.toBe(first.deviceId);

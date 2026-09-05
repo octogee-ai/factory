@@ -195,7 +195,7 @@ export function createOpenClawControlProxyIdentity(
     deviceIdentity: (session) =>
       deriveDeviceIdentity({
         secret: deviceSecret(env),
-        subject: openClawDeviceSubject(session.gatewayId, session.uid),
+        subject: openClawDeviceSubject(session.gatewayId, session.uid, roleFor(session)),
       }),
     connectScopes: (session) => openClawDeviceRequestScopes(roleFor(session)),
     syncRole,

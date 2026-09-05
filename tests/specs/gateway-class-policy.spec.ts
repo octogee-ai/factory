@@ -1574,7 +1574,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "builder",
       { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
       undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "uid-owner" },
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "uid-owner", GATEWAY_BUILDER_SLUG: "team-workspace" },
     );
     expect(out.gateway.auth).toEqual({
       mode: "trusted-proxy",
@@ -1598,6 +1598,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.gateway.roles.default).toBe("member");
     expect(out.gateway.roles.definitions.member.scopes).toContain("operator.admin");
     expect(out.gateway.roles.definitions.viewer.scopes).toEqual(["operator.read"]);
+    expect(out.gateway.roles.definitions["team-member"].agents).toEqual(["octogee-team-workspace-coach"]);
   });
 
   it("returns a Builder gateway to token auth when the control identity is not per-user", () => {

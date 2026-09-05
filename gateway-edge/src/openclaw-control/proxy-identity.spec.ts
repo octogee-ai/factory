@@ -159,13 +159,17 @@ describe("OpenClaw control proxy identity", () => {
     expect(gateway.profiles[0]!.role).toBeNull();
   });
 
-  it("derives one stable device per person and requests only their role's auto-approvable scopes", () => {
+  it("binds devices to each person and role while preserving Team identity during support elevation", () => {
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_GATEWAY_TOKEN: "pod-secret" },
       upstreamBase: () => new URL("http://127.0.0.1:18789"),
     });
     const first = identity.deviceIdentity(helper);
     expect(identity.deviceIdentity(helper)).toEqual(first);
+    const member = { ...helper, brokerProfile: "native-member" as const };
+    expect(identity.deviceIdentity(member).deviceId).not.toBe(first.deviceId);
+    expect(identity.deviceIdentity({ ...member, brokerProfile: "native-member-helper" })).toEqual(identity.deviceIdentity(member));
+    expect(identity.deviceIdentity({ ...helper, brokerProfile: "delegated-read" }).deviceId).not.toBe(first.deviceId);
     expect(identity.deviceIdentity({ ...helper, uid: "uid-other" }).deviceId).not.toBe(first.deviceId);
     expect(identity.deviceIdentity({ ...helper, gatewayId: "other-gateway" }).deviceId).not.toBe(first.deviceId);
     expect(identity.connectScopes(helper)).toEqual(["operator.read", "operator.write", "operator.approvals"]);

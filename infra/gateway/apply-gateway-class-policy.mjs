@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
 import {
-  OPENCLAW_OPERATOR_ROLES,
+  openClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isPerUserControlIdentity,
@@ -1536,7 +1536,7 @@ function applyControlIdentityPolicy(config, env) {
     auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
     auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
-    config.gateway.roles = structuredClone(OPENCLAW_OPERATOR_ROLES);
+    config.gateway.roles = openClawOperatorRoles(env.GATEWAY_BUILDER_SLUG);
     return;
   }
   const gateway = config.gateway;

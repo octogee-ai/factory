@@ -123,8 +123,8 @@ export function serviceProxyIdentity(name) {
     }
     return `${OPENCLAW_SERVICE_IDENTITY_PREFIX}${trimmed}`;
 }
-export function openClawDeviceSubject(gatewayId, uid) {
-    return `octogee-openclaw-device:v1:${gatewayId}:${uid}`;
+export function openClawDeviceSubject(gatewayId, uid, role) {
+    return `octogee-openclaw-device:v2:${gatewayId}:${uid}:${role}`;
 }
 export function openClawProxyOrigin(env = process.env) {
     const error = "per-user proxy authentication requires API_PUBLIC_URL to be an HTTP(S) origin";

@@ -90,7 +90,7 @@ export declare function resolveControlIdentityFromEnv(env?: NodeJS.ProcessEnv): 
 export declare function isPerUserControlIdentity(env?: NodeJS.ProcessEnv): boolean;
 export declare function resolveOwnerUidFromEnv(env?: NodeJS.ProcessEnv): string | undefined;
 export declare function serviceProxyIdentity(name: string): string;
-export declare function openClawDeviceSubject(gatewayId: string, uid: string): string;
+export declare function openClawDeviceSubject(gatewayId: string, uid: string, role: OpenClawOperatorRole): string;
 export declare function openClawProxyOrigin(env?: NodeJS.ProcessEnv): string;
 export interface OpenClawProxyIdentity {
     user: string;

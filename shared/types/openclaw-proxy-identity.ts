@@ -158,8 +158,8 @@ export function serviceProxyIdentity(name: string): string {
   return `${OPENCLAW_SERVICE_IDENTITY_PREFIX}${trimmed}`;
 }
 
-export function openClawDeviceSubject(gatewayId: string, uid: string): string {
-  return `octogee-openclaw-device:v1:${gatewayId}:${uid}`;
+export function openClawDeviceSubject(gatewayId: string, uid: string, role: OpenClawOperatorRole): string {
+  return `octogee-openclaw-device:v2:${gatewayId}:${uid}:${role}`;
 }
 
 export function openClawProxyOrigin(env: NodeJS.ProcessEnv = process.env): string {
