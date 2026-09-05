@@ -394,7 +394,6 @@ export interface SurgePodTransportOptions {
   fetch?: typeof globalThis.fetch;
   request?: typeof http.request;
   randomKey?: () => string;
-  allowLegacyConfiguredBuilderConvergence?: boolean;
   log: (message: string) => void;
 }
 
@@ -598,92 +597,9 @@ interface SurgeTransferRuntime {
   control: SurgeControlCall;
   randomKey: () => string;
   log: (message: string) => void;
-  allowLegacyConfiguredBuilderConvergence: boolean;
 }
 
 type SurgeTransferInput = Parameters<SurgeCustomerHandoffDeps["transfer"]>[0];
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function hasNonNegativeDuration(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-const LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS = [
-  ["session-quiesce", "skipped"],
-  ["workspace-git", "failed"],
-  ["blob-sync", "skipped"],
-  ["system-config", "done"],
-  ["gitea-key-release", "skipped"],
-] as const;
-
-function legacyConfiguredBuilderConvergenceResponse(
-  error: unknown,
-  input: Pick<SurgeTransferInput, "operationId" | "slug" | "expectedSystemConfigCommit">,
-): Record<string, unknown> | null {
-  if (!(error instanceof SurgePodControlError) || !input.expectedSystemConfigCommit) return null;
-  const response = record(error.body);
-  if (!response) return null;
-  const expected = [
-    error.status === 500,
-    response.migrationId === input.operationId,
-    response.slug === input.slug,
-    response.ok === false,
-    hasNonNegativeDuration(response.durationMs),
-    response.systemConfigCommit === input.expectedSystemConfigCommit,
-  ];
-  return expected.every(Boolean) ? response : null;
-}
-
-function legacyConfiguredBuilderConvergenceSteps(
-  value: unknown,
-): Map<string, Record<string, unknown>> | null {
-  if (!Array.isArray(value) || value.length !== LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.length) {
-    return null;
-  }
-  const steps = new Map<string, Record<string, unknown>>();
-  for (const candidate of value) {
-    const step = record(candidate);
-    if (
-      !step ||
-      typeof step.name !== "string" ||
-      typeof step.status !== "string" ||
-      !hasNonNegativeDuration(step.durationMs) ||
-      steps.has(step.name)
-    ) {
-      return null;
-    }
-    steps.set(step.name, step);
-  }
-  return steps.size === LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.length ? steps : null;
-}
-
-function legacyConfiguredBuilderConvergenceStepsMatch(
-  steps: ReadonlyMap<string, Record<string, unknown>>,
-  slug: string,
-): boolean {
-  return LEGACY_CONFIGURED_BUILDER_CONVERGENCE_STEPS.every(([name, status]) => {
-    const step = steps.get(name);
-    const expectedError = name === "workspace-git"
-      ? `[git-sync] durable flush failed: ${slug}: git metadata is missing`
-      : undefined;
-    return step?.status === status && step?.error === expectedError;
-  });
-}
-
-function isLegacyConfiguredBuilderConvergenceResponse(
-  error: unknown,
-  input: Pick<SurgeTransferInput, "operationId" | "slug" | "expectedSystemConfigCommit">,
-): boolean {
-  const response = legacyConfiguredBuilderConvergenceResponse(error, input);
-  if (!response) return false;
-  const steps = legacyConfiguredBuilderConvergenceSteps(response.steps);
-  return steps !== null && legacyConfiguredBuilderConvergenceStepsMatch(steps, input.slug);
-}
 
 async function abortTargetImport(
   runtime: SurgeTransferRuntime,
@@ -790,17 +706,8 @@ async function transferCustomerState(
         },
       });
     } catch (error) {
-      if (
-        !runtime.allowLegacyConfiguredBuilderConvergence ||
-        !isLegacyConfiguredBuilderConvergenceResponse(error, input)
-      ) {
-        await abortTargetImport(runtime, input, "final");
-        throw error;
-      }
-      runtime.log(
-        `[surge-handoff] target config converged before import; continuing to materialize missing workspace ` +
-        `pod=${targetPod.name} slug=${slug} gateway=${gatewayId} commit=${expectedSystemConfigCommit}`,
-      );
+      await abortTargetImport(runtime, input, "final");
+      throw error;
     }
   }
   await transferMode(runtime, input, "final");
@@ -969,7 +876,6 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       control,
       randomKey,
       log: opts.log,
-      allowLegacyConfiguredBuilderConvergence: opts.allowLegacyConfiguredBuilderConvergence === true,
     }, input),
     async discardTargetCustomer({ gatewayId, slug, operationId, targetPod }) {
       const unmount = () => control(

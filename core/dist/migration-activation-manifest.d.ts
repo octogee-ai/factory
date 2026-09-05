@@ -21,8 +21,6 @@ export interface MigrationActivationManifest {
     bindings: unknown[];
     projectAgents: MigrationActivationManifestProjectAgent[];
 }
-export declare class LegacyActivationManifestFingerprintError extends Error {
-}
 export declare function activationManifestTarPath(slug: string): string;
 export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts: {
     appliedFingerprint: string;
@@ -40,9 +38,7 @@ export declare function writeActivationManifest(rootDir: string, manifest: Migra
     cwd: string;
     path: string;
 }>;
-export declare function readActivationManifest(openclawDir: string, slug: string, opts?: {
-    legacyAppliedFingerprint?: string;
-}): Promise<MigrationActivationManifest>;
+export declare function readActivationManifest(openclawDir: string, slug: string): Promise<MigrationActivationManifest>;
 export declare function removeActivationManifest(openclawDir: string, slug: string): Promise<void>;
 export declare function applyOpenClawActivationManifest(manifest: MigrationActivationManifest, opts: {
     rpc: GatewayRpcClient;

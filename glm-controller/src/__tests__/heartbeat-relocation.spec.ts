@@ -198,46 +198,30 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
   });
 });
 
-describe("readHeartbeatLiveness — reader prefers glmGateways heartbeat, falls back to legacy", () => {
-  it("reads lastHeartbeatAt + version from the heartbeat sub-document", () => {
-    const out = readHeartbeatLiveness(
-      { heartbeat: { lastHeartbeatAt: 1234, version: "abc" } },
-      { lastHeartbeatAt: 1, version: "stale" },
-    );
-    expect(out).toEqual({ lastHeartbeatAt: 1234, version: "abc" });
+describe("readHeartbeatLiveness", () => {
+  it("reads lastHeartbeatAt and version from runtime telemetry", () => {
+    expect(readHeartbeatLiveness({ heartbeat: { lastHeartbeatAt: 1234, version: "abc" } }))
+      .toEqual({ lastHeartbeatAt: 1234, version: "abc" });
   });
 
-  it("falls back to the legacy flat doc when no heartbeat sub-document exists", () => {
-    const out = readHeartbeatLiveness(undefined, { lastHeartbeatAt: 55, version: "leg" });
-    expect(out).toEqual({ lastHeartbeatAt: 55, version: "leg" });
+  it("coerces a Firestore Timestamp heartbeat value", () => {
+    expect(readHeartbeatLiveness({ heartbeat: { lastHeartbeatAt: { toMillis: () => 9999 } } }))
+      .toEqual({ lastHeartbeatAt: 9999, version: null });
   });
 
-  it("coerces a Firestore Timestamp (toMillis) heartbeat value", () => {
-    const out = readHeartbeatLiveness(
-      { heartbeat: { lastHeartbeatAt: { toMillis: () => 9999 } } },
-      undefined,
-    );
-    expect(out?.lastHeartbeatAt).toBe(9999);
-  });
-
-  it("returns null when neither location carries a heartbeat", () => {
-    expect(readHeartbeatLiveness(undefined, undefined)).toBeNull();
-    expect(readHeartbeatLiveness({ heartbeat: {} }, undefined)).toBeNull();
+  it("returns null without runtime heartbeat telemetry", () => {
+    expect(readHeartbeatLiveness(undefined)).toBeNull();
+    expect(readHeartbeatLiveness({ heartbeat: {} })).toBeNull();
   });
 });
 
-describe("readMountedCustomers — reader prefers glmGateways heartbeat, falls back to legacy", () => {
-  it("reads the mounted set from the heartbeat sub-document", () => {
-    expect(
-      readMountedCustomers({ heartbeat: { mountedCustomers: ["x", "y"] } }, { mountedCustomers: ["z"] }),
-    ).toEqual(["x", "y"]);
+describe("readMountedCustomers", () => {
+  it("reads the mounted set from runtime telemetry", () => {
+    expect(readMountedCustomers({ heartbeat: { mountedCustomers: ["x", "y"] } }))
+      .toEqual(["x", "y"]);
   });
 
-  it("falls back to the legacy flat doc", () => {
-    expect(readMountedCustomers(undefined, { mountedCustomers: ["z"] })).toEqual(["z"]);
-  });
-
-  it("returns [] when neither location has a mounted set", () => {
-    expect(readMountedCustomers(undefined, undefined)).toEqual([]);
+  it("returns an empty set without runtime mounted customers", () => {
+    expect(readMountedCustomers(undefined)).toEqual([]);
   });
 });

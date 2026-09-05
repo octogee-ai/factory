@@ -2,7 +2,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
   buildBrokeredLifecycleAdapter,
@@ -23,7 +23,26 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
-import { LegacyActivationManifestFingerprintError } from "../lib/migration-activation-manifest.js";
+
+const testRuntime = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const originalDir = process.env.OPENCLAW_DIR;
+  const originalAgentsDir = process.env.OPENCLAW_AGENTS_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "octogee-broker-test-"));
+  process.env.OPENCLAW_DIR = dir;
+  process.env.OPENCLAW_AGENTS_DIR = join(dir, "agents");
+  return { dir, originalDir, originalAgentsDir };
+});
+
+afterAll(async () => {
+  if (testRuntime.originalDir === undefined) delete process.env.OPENCLAW_DIR;
+  else process.env.OPENCLAW_DIR = testRuntime.originalDir;
+  if (testRuntime.originalAgentsDir === undefined) delete process.env.OPENCLAW_AGENTS_DIR;
+  else process.env.OPENCLAW_AGENTS_DIR = testRuntime.originalAgentsDir;
+  await fs.rm(testRuntime.dir, { recursive: true, force: true });
+});
 
 const ALICE_OWNER_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const FRESH_OWNER_MM_ID = "ffffffffffffffffffffffffff";
@@ -89,7 +108,6 @@ vi.mock("../lib/migration-activation-manifest.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-manifest.js")>();
   return {
     ...actual,
-    LegacyActivationManifestFingerprintError: actual.LegacyActivationManifestFingerprintError,
     readActivationManifest: mocks.readActivationManifest,
     applyOpenClawActivationManifest: mocks.applyOpenClawActivationManifest,
     removeActivationManifest: mocks.removeActivationManifest,
@@ -389,7 +407,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     });
 
     expect(mocks.readActivationManifest).toHaveBeenCalledWith(
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       "tester10",
     );
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledWith(
@@ -404,12 +422,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!,
     );
     expect(mocks.removeActivationManifest).toHaveBeenCalledWith(
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       "tester10",
     );
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(
       rpc,
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       expect.any(Function),
       { restartAccountIds: [], restartConfiguredPending: false },
     );
@@ -726,7 +744,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(
       rpc,
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       expect.any(Function),
       { restartAccountIds: ["tester10-coach"], restartConfiguredPending: false },
     );
@@ -754,7 +772,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(
       rpc,
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       expect.any(Function),
       { restartAccountIds: [], restartConfiguredPending: true },
     );
@@ -845,7 +863,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       );
       expect(routingActivationMocks.activateAfterPatch).toHaveBeenCalledWith(
         rpc,
-        expect.stringContaining(".openclaw"),
+        testRuntime.dir,
         expect.any(Function),
         {
           accountIds: desiredAccountIds,
@@ -862,7 +880,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       );
       expect(routingActivationMocks.activate).toHaveBeenCalledWith(
         rpc,
-        expect.stringContaining(".openclaw"),
+        testRuntime.dir,
         expect.any(Function),
         { restartAccountIds: desiredAccountIds },
       );
@@ -916,7 +934,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       });
 
       expect(routingActivationMocks.mark).toHaveBeenCalledWith(
-        expect.stringContaining(".openclaw"),
+        testRuntime.dir,
         "[import:tester10] account-level Mattermost binding changed",
         ["tester10-coach"],
         { "tester10-coach": 0 },
@@ -929,64 +947,24 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     }
   });
 
-  it("binds a previous-release manifest to the target's current desired fingerprint", async () => {
-    const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-tester10",
-      slug: "tester10",
-      tier: "trial",
-      gatewayId: "shared-a",
-      status: "complete",
-      agentIds: [],
-      repoUrl: "",
-      mattermostUserId: null,
-      customerMmUserId: null,
-      greetingPosted: false,
-      channels: [],
-      projects: [],
-      ownerName: "Tester",
-      coachToken: null,
-      coachMmUserId: null,
-    };
-    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
-    const rpc = {
-      channelsStatus: vi.fn(async () => ({
-        channelAccounts: {
-          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
-        },
-      })),
-      configGet: vi.fn(async () => configSnapshot({})),
-      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
-    } as unknown as GatewayRpcClient;
-    mocks.readActivationManifest
-      .mockRejectedValueOnce(new LegacyActivationManifestFingerprintError("legacy"))
-      .mockResolvedValueOnce({
-        slug: "tester10",
-        appliedFingerprint: "desired-fingerprint",
-        agentId: "octogee-tester10-coach",
-        projectAgents: [],
-      });
-    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
-
-    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
-      appliedFingerprint: "desired-fingerprint",
+  it("propagates manifest import errors without synthesizing an applied fingerprint", async () => {
+    const client = mkClient();
+    const failure = new Error("activation manifest version/slug mismatch");
+    mocks.readActivationManifest.mockRejectedValueOnce(failure);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client,
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
     });
 
-    expect(mocks.readActivationManifest).toHaveBeenNthCalledWith(
-      1,
-      expect.stringContaining(".openclaw"),
+    await expect(adapter.activateImportedCustomer("tester10")).rejects.toBe(failure);
+
+    expect(mocks.readActivationManifest).toHaveBeenCalledExactlyOnceWith(
+      testRuntime.dir,
       "tester10",
     );
-    expect(mocks.readActivationManifest).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining(".openclaw"),
-      "tester10",
-      {
-        legacyAppliedFingerprint: snapshotConfigFingerprint({
-          ...snapshot,
-          projectCheckoutScope: "workspace-only",
-        }),
-      },
-    );
+    expect(client.userSnapshot).not.toHaveBeenCalled();
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
   });
 
   it("fails before mutating config when the activation manifest is absent", async () => {
@@ -1289,7 +1267,7 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
       expect.any(Function),
     );
     expect(routingActivationMocks.discardForCustomers).toHaveBeenCalledWith(
-      expect.stringContaining(".openclaw"),
+      testRuntime.dir,
       ["alice"],
     );
     expect(routingActivationMocks.stopStale.mock.invocationCallOrder[0]).toBeLessThan(

@@ -1,14 +1,3 @@
-// Heartbeat/readiness telemetry relocation (GATEWAY-RELEASES-SPEC cutover step 2).
-//
-// The live heartbeat/readiness telemetry now lives at `glmGateways/{id}.heartbeat`
-// (keyed by the current instance id until revision docs exist). This is the
-// collision fix that frees `gateways/{id}` to become the desired-doc collection.
-//
-// During expand, writers dual-write the legacy `gateways/{id}` flat doc so
-// out-of-lane readers (octogee-api broker, gateway-edge billing) keep working
-// until PR4/PR5 migrate them; readers here prefer the new location and fall back
-// to the legacy flat doc.
-
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "@octogee/shared/types/fleet-controller";
 
@@ -112,13 +101,10 @@ function heartbeatSubDoc(glmData: Record<string, unknown> | undefined): Record<s
   return hb && typeof hb === "object" && !Array.isArray(hb) ? (hb as Record<string, unknown>) : undefined;
 }
 
-// Reads lastHeartbeatAt (+ version) preferring glmGateways/{id}.heartbeat and
-// falling back to the legacy flat gateways/{id} doc during expand.
 export function readHeartbeatLiveness(
   glmData: Record<string, unknown> | undefined,
-  legacyData: Record<string, unknown> | undefined,
 ): { lastHeartbeatAt: number; version?: string | null } | null {
-  const source = heartbeatSubDoc(glmData) ?? legacyData;
+  const source = heartbeatSubDoc(glmData);
   if (!source) return null;
   const ms = coerceMillis(source.lastHeartbeatAt);
   if (ms == null) return null;
@@ -128,13 +114,10 @@ export function readHeartbeatLiveness(
   };
 }
 
-// Reads the mounted-customer set preferring glmGateways/{id}.heartbeat and
-// falling back to the legacy flat gateways/{id} doc during expand.
 export function readMountedCustomers(
   glmData: Record<string, unknown> | undefined,
-  legacyData: Record<string, unknown> | undefined,
 ): string[] {
-  const source = heartbeatSubDoc(glmData) ?? legacyData;
+  const source = heartbeatSubDoc(glmData);
   const raw = source?.mountedCustomers;
   return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string") : [];
 }

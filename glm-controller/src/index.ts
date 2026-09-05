@@ -548,7 +548,7 @@ async function readGatewayHeartbeatFromFirestore(
   if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
     return null;
   }
-  return readHeartbeatLiveness(runtime as unknown as Record<string, unknown>, undefined);
+  return readHeartbeatLiveness(runtime as unknown as Record<string, unknown>);
 }
 
 async function readReleasePayloadFromFirestore(
@@ -2357,7 +2357,6 @@ function buildSurgeHandoffDeps(input: {
     ...createSurgePodTransport({
       privateKey,
       log,
-      allowLegacyConfiguredBuilderConvergence: ENVIRONMENT_SETTINGS.name === "test",
     }),
     listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
     readAssignments: async (gatewayId) => {
@@ -3224,7 +3223,7 @@ async function buildHandlers(
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       const runtime = snap.exists ? snap.data() : undefined;
       if (!isGatewayRuntimeDoc(runtime)) return [];
-      return readMountedCustomers(runtime as unknown as Record<string, unknown>, undefined);
+      return readMountedCustomers(runtime as unknown as Record<string, unknown>);
     },
     helmUninstallGateway: async (gatewayId) => {
       await helm.removeInstance({ namespace: NAMESPACE, gatewayId });
