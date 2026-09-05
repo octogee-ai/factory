@@ -97,7 +97,6 @@ const ROLLED_BACK_STATUS = "rolled-back";
 const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 const NO_ACCEPTING_SHARED_GATEWAY = "no-accepting-shared-gateway";
 const CONTINUOUS_PLACEMENT_POLICY_SOURCE = "continuous-placement-policy";
-const BUILDER_RETURN_COMPATIBILITY_RECOVERY_KIND = "legacy-scoped-rpc-signature";
 const LIVE_LEASE_STATUSES = new Set([
   "requested",
   "provisioning",
@@ -130,15 +129,6 @@ export interface PlacementPolicyMigration {
   source: "continuous-placement-policy" | "builder-activation-lease";
   status: "pending" | "running" | "succeeded" | "failed" | "rolled-back";
   error?: string;
-  builderReturnCompatibilityRecovery?: BuilderReturnCompatibilityRecoveryMarker | null;
-}
-
-interface BuilderReturnCompatibilityRecoveryMarker {
-  phase: "awaiting-source-roll" | "rearmed";
-  sourceRelease: number;
-  acceptedAt: number;
-  attempts: number;
-  error: string;
 }
 
 export type PlacementPolicyKubernetesStatus = "ready" | "not-ready" | "missing" | "unknown";
@@ -221,12 +211,6 @@ export interface EnqueuePlacementMigrationInput {
   toGatewayId: string;
   source: "continuous-placement-policy" | "builder-activation-lease";
   operationId: string;
-  rearmTerminalBuilderReturn?: {
-    phase: "record" | "rearm";
-    leaseId: string;
-    generation: number;
-    sourceRelease: number;
-  };
 }
 
 export interface AllocateDisposableGatewayInput {
@@ -315,7 +299,6 @@ export interface AssignInitialPlacementInput {
 export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
-  allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
@@ -1811,14 +1794,6 @@ async function reconcileReturnMigrationOnTarget(
     returnOperation?.status === "failed" ||
     returnOperation?.status === ROLLED_BACK_STATUS
   ) {
-    if (returnOperation.status === "failed") {
-      const recovered = await reconcileLegacyBuilderReturnCompatibility(
-        input,
-        operationId,
-        returnOperation,
-      );
-      if (recovered) return true;
-    }
     blockTerminalReturnOperation(context, user.uid, lease, returnOperation);
     return true;
   }
@@ -1865,14 +1840,6 @@ async function reconcileReturnMigrationOnTarget(
   return true;
 }
 
-function legacyBuilderReturnSignatureFailure(
-  operation: PlacementPolicyMigration,
-  sourceGatewayId: string,
-): boolean {
-  return operation.error ===
-    `/push-rsync-state/${sourceGatewayId}: 401 {"error":"invalid signature"}`;
-}
-
 function blockTerminalReturnOperation(
   context: PlacementPolicyReconcileContext,
   uid: string,
@@ -1885,157 +1852,6 @@ function blockTerminalReturnOperation(
     code: "return-operation-failed",
     reason: `return operation ended with ${operation.status}: ${operation.error ?? "unknown error"}`,
   });
-}
-
-function legacyBuilderReturnCompatibilityEligible(
-  input: ActivationTargetContext,
-  operationId: string,
-  operation: PlacementPolicyMigration,
-): boolean {
-  const { context, user, builderSlug, lease } = input;
-  const targetGatewayId = lease.targetGatewayId!;
-  return [
-    context.deps.allowLegacyBuilderReturnCompatibilityRecovery === true,
-    activationMigrationMatches(operation, {
-      id: operationId,
-      uid: user.uid,
-      builderSlug,
-      fromGatewayId: targetGatewayId,
-      toGatewayId: operation.toGatewayId,
-    }),
-    legacyBuilderReturnSignatureFailure(operation, targetGatewayId),
-  ].every(Boolean);
-}
-
-type BuilderReturnCompatibilityPlan =
-  | { kind: "block"; code: string; reason: string }
-  | { kind: "enqueue"; phase: "record" | "rearm"; sourceRelease: number };
-
-function builderReturnCompatibilityPlan(input: {
-  context: PlacementPolicyReconcileContext;
-  builderSlug: string;
-  lease: BuilderActivationLease;
-  source: PlacementPolicyGateway;
-  operation: PlacementPolicyMigration;
-}): BuilderReturnCompatibilityPlan | null {
-  const recoveryFence = builderReturnCompatibilityRecoveryFence(input);
-  if ("reason" in recoveryFence) {
-    return {
-      kind: "block",
-      code: "return-compatibility-recovery-waiting",
-      reason: recoveryFence.reason,
-    };
-  }
-  const marker = input.operation.builderReturnCompatibilityRecovery;
-  if (marker === null) {
-    return {
-      kind: "block",
-      code: "return-compatibility-recovery-fence",
-      reason: "the compatibility recovery marker is malformed",
-    };
-  }
-  if (marker?.phase === "rearmed") return null;
-  const phase = marker === undefined ? "record" : "rearm";
-  const sourceRelease = marker?.sourceRelease ?? recoveryFence.sourceRelease;
-  if (phase === "rearm" && recoveryFence.sourceRelease <= sourceRelease) {
-    return {
-      kind: "block",
-      code: "return-compatibility-recovery-awaiting-source-roll",
-      reason: `source ${input.source.gatewayId} has not converged past release ${sourceRelease}`,
-    };
-  }
-  return { kind: "enqueue", phase, sourceRelease };
-}
-
-async function reconcileLegacyBuilderReturnCompatibility(
-  input: ActivationTargetContext,
-  operationId: string,
-  operation: PlacementPolicyMigration,
-): Promise<boolean> {
-  if (!legacyBuilderReturnCompatibilityEligible(input, operationId, operation)) return false;
-  const { context, user, builderSlug, lease } = input;
-  const plan = builderReturnCompatibilityPlan({
-    context,
-    builderSlug,
-    lease,
-    source: input.target,
-    operation,
-  });
-  if (plan === null) return false;
-  if (plan.kind === "block") {
-    blockPlacement(context, { uid: user.uid, lease, code: plan.code, reason: plan.reason });
-    return true;
-  }
-  try {
-    await context.deps.enqueueMigration({
-      uid: user.uid,
-      builderSlug,
-      fromGatewayId: lease.targetGatewayId!,
-      toGatewayId: operation.toGatewayId,
-      source: BUILDER_ACTIVATION_LEASE_SOURCE,
-      operationId,
-      rearmTerminalBuilderReturn: {
-        phase: plan.phase,
-        leaseId: lease.leaseId,
-        generation: lease.generation,
-        sourceRelease: plan.sourceRelease,
-      },
-    });
-  } catch (error) {
-    blockPlacement(context, {
-      uid: user.uid,
-      lease,
-      code: "return-compatibility-recovery-fence",
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    return true;
-  }
-  if (plan.phase === "record") {
-    context.deps.log(
-      `[placement-policy] accepted legacy signature recovery uid=${user.uid} ` +
-      `operation=${operationId} sourceRelease=${plan.sourceRelease}; awaiting a newer source release`,
-    );
-    return true;
-  }
-  projectSharedGatewayPlacement(context, operation.toGatewayId);
-  context.result.enqueued += 1;
-  return true;
-}
-
-function builderReturnCompatibilityRecoveryFence(input: {
-  context: PlacementPolicyReconcileContext;
-  builderSlug: string;
-  lease: BuilderActivationLease;
-  source: PlacementPolicyGateway;
-  operation: PlacementPolicyMigration;
-}): { sourceRelease: number } | { reason: string } {
-  const { context, builderSlug, lease, source, operation } = input;
-  if (!source.ready) {
-    return { reason: `source ${source.gatewayId} is not ready after the failed signature handoff` };
-  }
-  if (
-    !isPositiveRelease(source.liveRelease) ||
-    source.latestRelease !== source.liveRelease ||
-    source.desiredRelease !== source.liveRelease
-  ) {
-    return { reason: `source ${source.gatewayId} has not converged a release after the failed handoff` };
-  }
-  const assignment = context.assignments.get(placementAssignmentKey(source.gatewayId, operation.uid));
-  if (!assignment || assignment.slug !== builderSlug || assignment.state !== "serving") {
-    return { reason: `source assignment ${source.gatewayId}/${operation.uid} is not restored to serving` };
-  }
-  const target = context.gateways.get(operation.toGatewayId);
-  if (!target || !isSharedPoolGateway(context, operation.toGatewayId) || !target.ready) {
-    return { reason: `target ${operation.toGatewayId} is not a ready configured shared gateway` };
-  }
-  if (
-    lease.status !== "returning" ||
-    lease.raw.returnOperationId !== operation.id ||
-    lease.targetGatewayId !== source.gatewayId
-  ) {
-    return { reason: "return lease no longer names this exact operation and source" };
-  }
-  return { sourceRelease: source.liveRelease };
 }
 
 async function completeReturnedLease(
@@ -2658,9 +2474,6 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   const toGatewayId = nonEmptyString(input.toGatewayId);
   const source = placementMigrationSource(input.source);
   const status = placementMigrationStatus(data.status);
-  const builderReturnCompatibilityRecovery = builderReturnCompatibilityRecoveryMarker(
-    data.builderReturnCompatibilityRecovery,
-  );
   if (!uid || !builderSlug || !fromGatewayId || !toGatewayId || !source || !status) return null;
   return {
     id: doc.id,
@@ -2671,9 +2484,6 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
     source,
     status,
     ...(typeof data.error === "string" ? { error: data.error } : {}),
-    ...(builderReturnCompatibilityRecovery !== undefined
-      ? { builderReturnCompatibilityRecovery }
-      : {}),
   };
 }
 
@@ -2684,7 +2494,6 @@ interface FirestorePlacementPolicyInput {
   idleMs: number;
   now(): number;
   log(message: string): void;
-  allowLegacyBuilderReturnCompatibilityRecovery?: boolean;
   ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
   readGatewayPodDiagnostics(input: {
     namespace: string;
@@ -3362,289 +3171,6 @@ function operatorFenceRearm(
   };
 }
 
-type BuilderReturnCompatibilityRecovery =
-  | {
-      phase: "record";
-      sourceRelease: number;
-      attempts: number;
-      error: string;
-    }
-  | {
-      phase: "rearm";
-      sourceRelease: number;
-      acceptedAt: number;
-      attempts: number;
-      error: string;
-    };
-
-function failedOperationStepsMatch(value: unknown, error: string): boolean {
-  if (!Array.isArray(value) || value.length !== 1) return false;
-  const step = record(value[0]);
-  return step?.name === "keys-sync-state" &&
-    step.status === "failed" &&
-    step.error === error;
-}
-
-function builderReturnCompatibilityRecoveryMarker(
-  value: unknown,
-): BuilderReturnCompatibilityRecoveryMarker | null | undefined {
-  if (value === undefined) return undefined;
-  const marker = record(value);
-  const sourceRelease = positiveInteger(marker?.sourceRelease);
-  const acceptedAt = millis(marker?.acceptedAt);
-  const attempts = positiveInteger(marker?.attempts);
-  if (
-    !marker ||
-    marker.kind !== BUILDER_RETURN_COMPATIBILITY_RECOVERY_KIND ||
-    (marker.phase !== "awaiting-source-roll" && marker.phase !== "rearmed") ||
-    sourceRelease === null ||
-    acceptedAt === null ||
-    acceptedAt < 0 ||
-    attempts === null ||
-    typeof marker.error !== "string"
-  ) {
-    return null;
-  }
-  return {
-    phase: marker.phase,
-    sourceRelease,
-    acceptedAt,
-    attempts,
-    error: marker.error,
-  };
-}
-
-type BuilderReturnCompatibilityRecoveryRequest = NonNullable<
-  EnqueuePlacementMigrationInput["rearmTerminalBuilderReturn"]
->;
-
-function builderReturnCompatibilityRequestMatches(
-  request: EnqueuePlacementMigrationInput,
-  recovery: BuilderReturnCompatibilityRecoveryRequest,
-): boolean {
-  return [
-    positiveInteger(recovery.sourceRelease) !== null,
-    request.source === BUILDER_ACTIVATION_LEASE_SOURCE,
-    request.operationId === `builder-return-${request.fromGatewayId}`,
-  ].every(Boolean);
-}
-
-function legacyBuilderReturnFailedOperationMatches(input: {
-  data: Record<string, unknown>;
-  error: string;
-  attempts: number;
-}): boolean {
-  const { data, error, attempts } = input;
-  return [
-    data.kind === MIGRATE_CUSTOMER_KIND,
-    data.status === "failed",
-    data.origin === "automatic",
-    data.createdBy === PLACEMENT_POLICY_ACTOR,
-    data.error === error,
-    failedOperationStepsMatch(data.steps, error),
-    data.rolledBack === false,
-    data.customerMigrationV2 === undefined,
-    data.output === undefined,
-    millis(data.completedAt) !== null,
-    attempts > 0,
-  ].every(Boolean);
-}
-
-function awaitingBuilderReturnCompatibilityRecovery(
-  marker: BuilderReturnCompatibilityRecoveryMarker | null | undefined,
-  recovery: BuilderReturnCompatibilityRecoveryRequest,
-  attempts: number,
-  error: string,
-): BuilderReturnCompatibilityRecoveryMarker | null {
-  if (!marker || marker.phase !== "awaiting-source-roll") return null;
-  return [
-    marker.sourceRelease === recovery.sourceRelease,
-    marker.attempts === attempts,
-    marker.error === error,
-  ].every(Boolean) ? marker : null;
-}
-
-function builderReturnCompatibilityRecovery(
-  data: Record<string, unknown>,
-  request: EnqueuePlacementMigrationInput,
-): BuilderReturnCompatibilityRecovery | null {
-  const recovery = request.rearmTerminalBuilderReturn;
-  const error = `/push-rsync-state/${request.fromGatewayId}: 401 {"error":"invalid signature"}`;
-  const attempts = positiveInteger(data.attempts);
-  if (!recovery || !builderReturnCompatibilityRequestMatches(request, recovery)) return null;
-  if (attempts === null) return null;
-  if (!legacyBuilderReturnFailedOperationMatches({ data, error, attempts })) return null;
-  const marker = builderReturnCompatibilityRecoveryMarker(data.builderReturnCompatibilityRecovery);
-  if (recovery.phase === "record") {
-    if (marker !== undefined) return null;
-    return { phase: "record", sourceRelease: recovery.sourceRelease, attempts, error };
-  }
-  const awaiting = awaitingBuilderReturnCompatibilityRecovery(marker, recovery, attempts, error);
-  if (!awaiting) return null;
-  return {
-    phase: "rearm",
-    sourceRelease: recovery.sourceRelease,
-    acceptedAt: awaiting.acceptedAt,
-    attempts,
-    error,
-  };
-}
-
-function recoveryLeaseMatchesBuilderReturn(
-  userData: Record<string, unknown> | undefined,
-  request: EnqueuePlacementMigrationInput,
-): boolean {
-  const recovery = request.rearmTerminalBuilderReturn;
-  const openclaw = record(record(userData?.provisioning)?.openclaw);
-  const lease = record(openclaw?.activationLease);
-  if (!recovery || !openclaw || !lease) return false;
-  return [
-    !isOperatorManaged(openclaw.managedBy),
-    openclaw.slug === request.builderSlug,
-    currentGatewayId(userData ?? {}) === request.fromGatewayId,
-    lease.leaseId === recovery.leaseId,
-    lease.generation === recovery.generation,
-    lease.status === "returning",
-    lease.targetGatewayId === request.fromGatewayId,
-    lease.returnOperationId === request.operationId,
-  ].every(Boolean);
-}
-
-function recoverySourceMatchesBuilderReturn(
-  root: ReturnType<typeof projectGatewayDesiredRootForGateway>,
-  request: EnqueuePlacementMigrationInput,
-): boolean {
-  const recovery = request.rearmTerminalBuilderReturn;
-  const allocation = root?.allocation;
-  return recovery !== undefined &&
-    root?.gatewayClass === "builder" &&
-    root.ownerUid === request.uid &&
-    root.builderSlug === request.builderSlug &&
-    root.desiredStatus === "running" &&
-    !isOperatorManaged(root.managedBy) &&
-    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
-    allocation.claimedByUid === request.uid &&
-    allocation.leaseId === recovery.leaseId &&
-    allocation.generation === recovery.generation;
-}
-
-function recoveryTargetMatchesBuilderReturn(
-  root: ReturnType<typeof projectGatewayDesiredRootForGateway>,
-  sharedGatewayIds: readonly string[],
-  request: EnqueuePlacementMigrationInput,
-): boolean {
-  return root?.gatewayClass === "shared" &&
-    root.ownerUid === null &&
-    root.desiredStatus === "running" &&
-    !isOperatorManaged(root.managedBy) &&
-    sharedGatewayIds.includes(request.toGatewayId);
-}
-
-function recoveryAssignmentMatchesBuilderReturn(
-  assignment: Record<string, unknown> | undefined,
-  request: EnqueuePlacementMigrationInput,
-): boolean {
-  return assignment?.uid === request.uid &&
-    assignment.slug === request.builderSlug &&
-    assignment.gatewayId === request.fromGatewayId &&
-    assignment.state === "serving" &&
-    nonNegativeInteger(assignment.epoch) !== null;
-}
-
-function recoveryRuntimeMatchesRoot(input: {
-  root: ReturnType<typeof projectGatewayDesiredRootForGateway>;
-  runtime: Record<string, unknown> | undefined;
-  gatewayId: string;
-  now: number;
-}): boolean {
-  const { root, runtime, gatewayId, now } = input;
-  const heartbeatAt = isGatewayRuntimeDoc(runtime)
-    ? millis(runtime.heartbeat.lastHeartbeatAt)
-    : null;
-  return root !== null &&
-    isPositiveRelease(root.latestRelease) &&
-    isPositiveRelease(root.desiredRelease) &&
-    isPositiveRelease(root.liveRelease) &&
-    root.latestRelease === root.desiredRelease &&
-    root.liveRelease === root.desiredRelease &&
-    isGatewayRuntimeDoc(runtime) &&
-    runtime.gatewayId === gatewayId &&
-    runtime.release === root.liveRelease &&
-    runtime.lifecycle === "serving" &&
-    runtime.heartbeat.status === "ready" &&
-    heartbeatAt !== null &&
-    heartbeatAt <= now &&
-    now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
-}
-
-function recoverySourceReleaseMatchesPhase(
-  root: ReturnType<typeof projectGatewayDesiredRootForGateway>,
-  request: EnqueuePlacementMigrationInput,
-): boolean {
-  const recovery = request.rearmTerminalBuilderReturn;
-  if (!recovery || root === null || root.liveRelease === null) return false;
-  return recovery.phase === "record"
-    ? root.liveRelease === recovery.sourceRelease
-    : root.liveRelease > recovery.sourceRelease;
-}
-
-async function assertBuilderReturnCompatibilityRecoveryAllowed(input: {
-  firestore: FirestorePlacementPolicyInput;
-  transaction: Transaction;
-  request: EnqueuePlacementMigrationInput;
-  now: number;
-}): Promise<void> {
-  const { firestore, transaction, request, now } = input;
-  const [configSnapshot, userSnapshot, sourceSnapshot, targetSnapshot, assignmentSnapshot,
-    sourceRuntimeSnapshot, targetRuntimeSnapshot] = await Promise.all([
-    transaction.get(firestore.db.doc(ORCHESTRATOR_CONFIG_DOC_PATH)),
-    transaction.get(firestore.db.collection("users").doc(request.uid)),
-    transaction.get(firestore.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
-    transaction.get(firestore.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
-    transaction.get(firestore.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)
-      .collection("assignments").doc(request.uid)),
-    transaction.get(firestore.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
-    transaction.get(firestore.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.toGatewayId)),
-  ]);
-  const pool = parseSharedGatewayPoolConfig(configSnapshot.data());
-  const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-  const sourceRoot = projectGatewayDesiredRootForGateway(
-    sourceSnapshot.data(),
-    request.fromGatewayId,
-  );
-  const targetRoot = projectGatewayDesiredRootForGateway(
-    targetSnapshot.data(),
-    request.toGatewayId,
-  );
-  const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-  const sourceRuntime = sourceRuntimeSnapshot.data() as Record<string, unknown> | undefined;
-  const targetRuntime = targetRuntimeSnapshot.data() as Record<string, unknown> | undefined;
-  if (
-    pool === null ||
-    !recoveryLeaseMatchesBuilderReturn(userData, request) ||
-    !recoverySourceMatchesBuilderReturn(sourceRoot, request) ||
-    !recoveryTargetMatchesBuilderReturn(targetRoot, pool.sharedGatewayIds, request) ||
-    !recoveryAssignmentMatchesBuilderReturn(assignment, request) ||
-    !recoverySourceReleaseMatchesPhase(sourceRoot, request) ||
-    !recoveryRuntimeMatchesRoot({
-      root: sourceRoot,
-      runtime: sourceRuntime,
-      gatewayId: request.fromGatewayId,
-      now,
-    }) ||
-    !recoveryRuntimeMatchesRoot({
-      root: targetRoot,
-      runtime: targetRuntime,
-      gatewayId: request.toGatewayId,
-      now,
-    })
-  ) {
-    throw new GatewayRetirementConflictError(
-      `builder return ${request.operationId} compatibility recovery fence changed`,
-    );
-  }
-}
-
 function isAutomaticRolledBackPlacement(
   data: Record<string, unknown>,
   request: EnqueuePlacementMigrationInput,
@@ -3695,65 +3221,22 @@ function placementMigrationIsNonTerminal(data: Record<string, unknown>): boolean
 
 interface TerminalPlacementRearmDecision {
   operatorFence: ReturnType<typeof operatorFenceRearm>;
-  builderReturnRecovery: BuilderReturnCompatibilityRecovery | null;
 }
 
 function terminalPlacementRearmDecision(
-  input: FirestorePlacementPolicyInput,
   data: Record<string, unknown>,
   request: EnqueuePlacementMigrationInput,
 ): TerminalPlacementRearmDecision | null {
   const operatorFence = operatorFenceRearm(data, request);
-  const builderReturnRecovery = input.allowLegacyBuilderReturnCompatibilityRecovery === true
-    ? builderReturnCompatibilityRecovery(data, request)
-    : null;
   const canRearm = [
     operatorFence,
     rolledBackTransientPlacementCanRearm(data, request),
-    builderReturnRecovery,
   ].some(Boolean);
-  return canRearm ? { operatorFence, builderReturnRecovery } : null;
-}
-
-function recordBuilderReturnCompatibilityRecovery(
-  transaction: Transaction,
-  ref: FirebaseFirestore.DocumentReference,
-  recovery: Extract<BuilderReturnCompatibilityRecovery, { phase: "record" }>,
-  now: number,
-): void {
-  transaction.update(ref, {
-    builderReturnCompatibilityRecovery: {
-      kind: BUILDER_RETURN_COMPATIBILITY_RECOVERY_KIND,
-      phase: "awaiting-source-roll",
-      acceptedAt: now,
-      sourceRelease: recovery.sourceRelease,
-      attempts: recovery.attempts,
-      error: recovery.error,
-    },
-  });
-}
-
-function rearmedBuilderReturnCompatibilityRecovery(
-  recovery: BuilderReturnCompatibilityRecovery | null,
-  now: number,
-): Record<string, unknown> {
-  if (!recovery || recovery.phase !== "rearm") return {};
-  return {
-    builderReturnCompatibilityRecovery: {
-      kind: BUILDER_RETURN_COMPATIBILITY_RECOVERY_KIND,
-      phase: "rearmed",
-      acceptedAt: recovery.acceptedAt,
-      rearmedAt: now,
-      sourceRelease: recovery.sourceRelease,
-      attempts: recovery.attempts,
-      error: recovery.error,
-    },
-  };
+  return canRearm ? { operatorFence } : null;
 }
 
 function rearmedPlacementMigrationPatch(
   decision: TerminalPlacementRearmDecision,
-  now: number,
 ): Record<string, unknown> {
   return {
     status: "pending",
@@ -3768,7 +3251,6 @@ function rearmedPlacementMigrationPatch(
     waitingOn: FieldValue.delete(),
     nextAttemptAt: FieldValue.delete(),
     ...(decision.operatorFence ?? {}),
-    ...rearmedBuilderReturnCompatibilityRecovery(decision.builderReturnRecovery, now),
   };
 }
 
@@ -3777,10 +3259,9 @@ async function applyTerminalPlacementRearm(input: {
   transaction: Transaction;
   ref: FirebaseFirestore.DocumentReference;
   request: EnqueuePlacementMigrationInput;
-  now: number;
   decision: TerminalPlacementRearmDecision;
 }): Promise<void> {
-  const { firestore, transaction, ref, request, now, decision } = input;
+  const { firestore, transaction, ref, request, decision } = input;
   await assertAutomaticPlacementMutationAllowed({
     db: firestore.db,
     transaction,
@@ -3788,20 +3269,7 @@ async function applyTerminalPlacementRearm(input: {
     gatewayIds: [request.fromGatewayId, request.toGatewayId],
     action: `migration ${ref.id}`,
   });
-  const recovery = decision.builderReturnRecovery;
-  if (recovery) {
-    await assertBuilderReturnCompatibilityRecoveryAllowed({
-      firestore,
-      transaction,
-      request,
-      now,
-    });
-    if (recovery.phase === "record") {
-      recordBuilderReturnCompatibilityRecovery(transaction, ref, recovery, now);
-      return;
-    }
-  }
-  transaction.update(ref, rearmedPlacementMigrationPatch(decision, now));
+  transaction.update(ref, rearmedPlacementMigrationPatch(decision));
 }
 
 export async function enqueuePlacementMigration(
@@ -3847,9 +3315,9 @@ export async function enqueuePlacementMigration(
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }
     if (placementMigrationIsNonTerminal(data)) return;
-    const decision = terminalPlacementRearmDecision(input, data, request);
+    const decision = terminalPlacementRearmDecision(data, request);
     if (!decision) throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
-    await applyTerminalPlacementRearm({ firestore: input, transaction, ref, request, now, decision });
+    await applyTerminalPlacementRearm({ firestore: input, transaction, ref, request, decision });
   });
   return ref.id;
 }
@@ -4454,8 +3922,6 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   return {
     now: input.now,
     log: input.log,
-    allowLegacyBuilderReturnCompatibilityRecovery:
-      input.allowLegacyBuilderReturnCompatibilityRecovery === true,
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
