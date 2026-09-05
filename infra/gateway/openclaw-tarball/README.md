@@ -83,12 +83,19 @@ with [overlay head `c423a5b51be2890274f22f4b9603dbb66ec8cac9`](https://github.co
 The package version is `2026.9.2`; this is a locked branch snapshot, not a
 claim to have built a GA tag.
 
-Publication is pending Google Cloud reauthentication. Do not merge this recut
-until both write-once objects are uploaded and their generations recorded here:
-`openclaw-fork-c423a5b5.tgz` (SHA-256 `14abc71e4dddb86285b9d8221475d58557dd07fa5e42a841faaff3827260055b`)
-and `openclaw-mattermost-d0351cb4.tgz` (SHA-256 `d0351cb46e697bae9aad3d22a4e9a7ac5437abf05764f4e81b89adec94b81cbb`).
+Its write-once artifacts are `openclaw-fork-c423a5b5.tgz` at generation
+`1788632584904766` (SHA-256 `14abc71e4dddb86285b9d8221475d58557dd07fa5e42a841faaff3827260055b`)
+and `openclaw-mattermost-d0351cb4.tgz` at generation `1788632588002265`
+(SHA-256 `d0351cb46e697bae9aad3d22a4e9a7ac5437abf05764f4e81b89adec94b81cbb`).
 Both artifacts passed isolated npm installation and runtime entry checks;
 the installed root reports the exact overlay commit above.
+
+While this recut was being validated, upstream main adopted native sandbox
+directory listing in [PR #136110](https://github.com/openclaw/openclaw/pull/136110).
+That change is absent from the locked release snapshot. The contributor
+discovery PR can now reuse upstream's `ls` and `readDirectory` seam; the
+corresponding release-overlay code can be removed when its base includes that
+implementation and the remaining authority and search contracts are verified.
 
 | Patch area | release/2026.9.2 assessment | Why Octogee carries it / removal gate |
 | --- | --- | --- |
