@@ -67,7 +67,8 @@ export function registryHostOf(imageRef: string): string {
 }
 
 export function registryAuthHeader(registryHost: string, accessToken: string): string {
-  return Buffer.from(JSON.stringify({ username: "oauth2accesstoken", password: accessToken, serveraddress: registryHost })).toString("base64url");
+  return Buffer.from(JSON.stringify({ username: "oauth2accesstoken", password: accessToken, serveraddress: registryHost }))
+    .toString("base64").replaceAll("+", "-").replaceAll("/", "_");
 }
 
 export function imagePullPath(imageRef: string): string {

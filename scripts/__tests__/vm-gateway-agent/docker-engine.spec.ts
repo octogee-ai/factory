@@ -47,9 +47,11 @@ describe("image references", () => {
     expect(imagePullPath("localhost:5000/x")).toBe("/images/create?fromImage=localhost%3A5000%2Fx&tag=latest");
   });
 
-  it("encodes the oauth2accesstoken registry credential", () => {
-    const decoded = JSON.parse(Buffer.from(registryAuthHeader("us-central1-docker.pkg.dev", "ya29.x"), "base64url").toString());
-    expect(decoded).toEqual({ username: "oauth2accesstoken", password: "ya29.x", serveraddress: "us-central1-docker.pkg.dev" });
+  it.each(["ya29.x", "ya29.xy", "ya29.xyz", "token>with?symbols"])("encodes a padded URL-safe Docker registry credential for %s", (token) => {
+    const encoded = registryAuthHeader("us-central1-docker.pkg.dev", token);
+    expect(encoded).toMatch(/^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}==|[A-Za-z0-9_-]{3}=)?$/);
+    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString());
+    expect(decoded).toEqual({ username: "oauth2accesstoken", password: token, serveraddress: "us-central1-docker.pkg.dev" });
   });
 });
 
