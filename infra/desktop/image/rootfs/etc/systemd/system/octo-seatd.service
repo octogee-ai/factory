@@ -1,0 +1,13 @@
+[Unit]
+Description=seatd for the Octogee computer session (no VT)
+After=systemd-modules-load.service
+Before=octo-desktop.service
+
+[Service]
+Environment=SEATD_VTBOUND=0
+ExecStart=/usr/bin/seatd -u octo -l info
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

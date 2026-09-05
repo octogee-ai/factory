@@ -7,6 +7,9 @@ import {
   isValidGatewayId,
   isValidNewGatewayId,
   builderGatewayServiceAccountName,
+  gatewayVmInstanceName,
+  isGatewayRuntime,
+  resolveGatewayRuntime,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveUserGatewayControlState,
@@ -341,5 +344,35 @@ describe("gateway control identity", () => {
     expect(isGatewayControlIdentity("per-user")).toBe(true);
     expect(isGatewayControlIdentity("Per-User")).toBe(false);
     expect(isGatewayControlIdentity(true)).toBe(false);
+  });
+});
+
+describe("gateway runtime + VM naming", () => {
+  it("defaults an unknown runtime to cluster and accepts gce-vm", () => {
+    expect(resolveGatewayRuntime(undefined)).toBe("cluster");
+    expect(resolveGatewayRuntime("nope")).toBe("cluster");
+    expect(resolveGatewayRuntime("gce-vm")).toBe("gce-vm");
+    expect(isGatewayRuntime("cluster")).toBe(true);
+    expect(isGatewayRuntime("local")).toBe(false);
+  });
+
+  it("derives a GCE instance name from the gateway id", () => {
+    expect(gatewayVmInstanceName("b-mama-3-abc-hobby")).toBe("octogee-gw-b-mama-3-abc-hobby");
+    expect(gatewayVmInstanceName("Shared_A")).toBe("octogee-gw-shared-a");
+    expect(gatewayVmInstanceName("  x  ")).toBe("octogee-gw-x");
+  });
+
+  it("keeps long ids within the 63-character GCE limit with a stable hash suffix", () => {
+    const longId = `b-${"mountain-mama-".repeat(6)}7-lease-pro`;
+    const name = gatewayVmInstanceName(longId);
+    expect(name.length).toBeLessThanOrEqual(63);
+    expect(name).toMatch(/^octogee-gw-[a-z0-9-]+-[0-9a-f]{8}$/);
+    expect(gatewayVmInstanceName(longId)).toBe(name);
+    expect(gatewayVmInstanceName(`${longId}-x`)).not.toBe(name);
+  });
+
+  it("refuses an id with nothing to name", () => {
+    expect(() => gatewayVmInstanceName("")).toThrow(/empty/);
+    expect(() => gatewayVmInstanceName("___")).toThrow(/no usable characters/);
   });
 });

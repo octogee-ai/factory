@@ -24,8 +24,10 @@ if [[ -z "${AQ_DRM_DEVICES:-}" ]]; then unset AQ_DRM_DEVICES; fi
 mkdir -p "$HOME/.local/state/octo-desktop"
 
 hypr_config="$HOME/.config/hypr/hyprland.lua"
-if [[ -f "$hypr_config" ]] && ! grep -Fq 'octo-desktop.hypr.headless' "$hypr_config"; then
-  printf '\nrequire("octo-desktop.hypr.headless")\n' >> "$hypr_config"
+policy="octo-desktop.hypr.${OCTO_DISPLAY:-headless}"
+if [[ -f "$hypr_config" ]] && ! grep -Fq "$policy" "$hypr_config"; then
+  sed -i '/^require("octo-desktop\.hypr\./d' "$hypr_config"
+  printf '\nrequire("%s")\n' "$policy" >> "$hypr_config"
 fi
 
 exec dbus-run-session -- /usr/local/bin/octo-desktop-run

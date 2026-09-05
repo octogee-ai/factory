@@ -72,6 +72,75 @@ export interface GatewayDesiredState {
 
   modelBrokerLimits?: GatewayModelBrokerLimits;
 
+  runtime?: GatewayRuntime;
+
+  vmSpec?: GatewayVmSpec;
+
+  vm?: GatewayVmState | null;
+}
+
+export const GATEWAY_RUNTIMES = ["cluster", "gce-vm"] as const;
+export type GatewayRuntime = (typeof GATEWAY_RUNTIMES)[number];
+
+export function isGatewayRuntime(value: unknown): value is GatewayRuntime {
+  return typeof value === "string" && (GATEWAY_RUNTIMES as readonly string[]).includes(value);
+}
+
+export function resolveGatewayRuntime(value: unknown): GatewayRuntime {
+  return isGatewayRuntime(value) ? value : "cluster";
+}
+
+export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"] as const;
+export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)[number];
+
+export interface GatewayVmSpec {
+  zone: string;
+  machineType: string;
+  imageFamily: string;
+  imageProject?: string;
+  diskSizeGb: number;
+  provisioningModel: GatewayVmProvisioningModel;
+  serviceAccountEmail: string;
+  subnetwork: string;
+}
+
+export interface GatewayVmState {
+  instanceName: string;
+  zone: string;
+  instanceId: string | null;
+  internalIp: string | null;
+  status: string | null;
+  provisioningModel: GatewayVmProvisioningModel | null;
+  updatedAt: number;
+}
+
+export const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
+const GCE_INSTANCE_NAME_MAX = 63;
+const GATEWAY_VM_NAME_HASH_LENGTH = 8;
+
+function fnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+export function gatewayVmInstanceName(gatewayId: string): string {
+  const trimmed = gatewayId.trim();
+  if (!trimmed) throw new Error("gatewayVmInstanceName: gatewayId is empty");
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!normalized) throw new Error(`gatewayVmInstanceName: gatewayId ${JSON.stringify(gatewayId)} has no usable characters`);
+  const full = `${GATEWAY_VM_INSTANCE_PREFIX}${normalized}`;
+  if (full.length <= GCE_INSTANCE_NAME_MAX) return full;
+  const suffix = fnv1a32Hex(trimmed).slice(0, GATEWAY_VM_NAME_HASH_LENGTH);
+  const budget = GCE_INSTANCE_NAME_MAX - GATEWAY_VM_INSTANCE_PREFIX.length - suffix.length - 1;
+  return `${GATEWAY_VM_INSTANCE_PREFIX}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
 }
 
 export interface GatewayModelBrokerLimits {
@@ -230,6 +299,7 @@ export function resolveUserGatewayControlState(
 
 export type OperationKind =
   | "add-gateway"
+  | "gateway-vm"
   | "migrate-customer"
   | "retire-gateway"
   | "restart-gateway"

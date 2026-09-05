@@ -9,6 +9,43 @@ export function isOperatorManaged(value) {
 export const GATEWAY_PROFILES = ["standard", "builder"];
 export const GATEWAY_CLASSES = ["shared", "builder"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];
+export const GATEWAY_RUNTIMES = ["cluster", "gce-vm"];
+export function isGatewayRuntime(value) {
+    return typeof value === "string" && GATEWAY_RUNTIMES.includes(value);
+}
+export function resolveGatewayRuntime(value) {
+    return isGatewayRuntime(value) ? value : "cluster";
+}
+export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"];
+export const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
+const GCE_INSTANCE_NAME_MAX = 63;
+const GATEWAY_VM_NAME_HASH_LENGTH = 8;
+function fnv1a32Hex(input) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < input.length; index += 1) {
+        hash ^= input.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
+}
+export function gatewayVmInstanceName(gatewayId) {
+    const trimmed = gatewayId.trim();
+    if (!trimmed)
+        throw new Error("gatewayVmInstanceName: gatewayId is empty");
+    const normalized = trimmed
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "");
+    if (!normalized)
+        throw new Error(`gatewayVmInstanceName: gatewayId ${JSON.stringify(gatewayId)} has no usable characters`);
+    const full = `${GATEWAY_VM_INSTANCE_PREFIX}${normalized}`;
+    if (full.length <= GCE_INSTANCE_NAME_MAX)
+        return full;
+    const suffix = fnv1a32Hex(trimmed).slice(0, GATEWAY_VM_NAME_HASH_LENGTH);
+    const budget = GCE_INSTANCE_NAME_MAX - GATEWAY_VM_INSTANCE_PREFIX.length - suffix.length - 1;
+    return `${GATEWAY_VM_INSTANCE_PREFIX}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
+}
 export const GATEWAY_CONTROL_IDENTITY_MODES = ["shared-operator", "per-user"];
 export const DEFAULT_GATEWAY_CONTROL_IDENTITY = "shared-operator";
 export function isGatewayControlIdentity(value) {

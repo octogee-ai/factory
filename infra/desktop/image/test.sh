@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT=""
+ZONE="us-west1-b"
+IMAGE=""
+FAMILY="octogee-computer"
+MACHINE="n2-standard-4"
+NAME="octogee-computer-test-$(date -u +%H%M%S)"
+KEEP=0
+STOP_START=0
+
+usage() {
+  cat <<EOF
+usage: $0 --project <gcp-project> [--zone $ZONE] [--image <name> | --family $FAMILY]
+          [--machine-type $MACHINE] [--stop-start] [--keep]
+
+Boots a VM from the image, waits for SSH (key delivered through instance
+metadata), checks the desktop session, drives Chromium through the control API,
+optionally stops and starts the VM to prove the home persists, prints a results
+block, and deletes the VM.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project) PROJECT="$2"; shift 2 ;;
+    --zone) ZONE="$2"; shift 2 ;;
+    --image) IMAGE="$2"; shift 2 ;;
+    --family) FAMILY="$2"; shift 2 ;;
+    --machine-type) MACHINE="$2"; shift 2 ;;
+    --stop-start) STOP_START=1; shift ;;
+    --keep) KEEP=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+[[ -n "$PROJECT" ]] || { usage >&2; exit 2; }
+
+work="$(mktemp -d)"
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) [test]" "$*"; }
+cleanup() {
+  if [[ "$KEEP" == 1 ]]; then log "keeping $NAME"; else
+    gcloud compute instances delete "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null 2>&1 || true
+    log "deleted $NAME"
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+ssh-keygen -q -t ed25519 -N "" -C "octogee-computer-test" -f "$work/key"
+printf 'octo:%s\n' "$(cat "$work/key.pub")" > "$work/ssh-keys"
+vssh() { ssh -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 "octo@$IP" "$@"; }
+wait_ssh() {
+  local deadline=$(( $(date +%s) + $1 ))
+  while (( $(date +%s) < deadline )); do vssh true 2>/dev/null && return 0; sleep 3; done
+  echo "ssh did not answer within $1 s; serial tail:" >&2
+  gcloud compute instances get-serial-port-output "$NAME" --zone "$ZONE" --project "$PROJECT" 2>/dev/null | tail -20 >&2
+  return 1
+}
+
+image_args=(--image-family "$FAMILY" --image-project "$PROJECT")
+[[ -n "$IMAGE" ]] && image_args=(--image "$IMAGE" --image-project "$PROJECT")
+t_create=$(date +%s)
+gcloud compute instances create "$NAME" --project "$PROJECT" --zone "$ZONE" --machine-type "$MACHINE" \
+  "${image_args[@]}" --boot-disk-type pd-ssd \
+  --metadata-from-file ssh-keys="$work/ssh-keys" \
+  --labels purpose=octogee-computer-test --format='value(name)' >/dev/null
+IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+wait_ssh 300
+t_ssh=$(date +%s)
+log "ssh up after $((t_ssh - t_create)) s at $IP"
+
+image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
+boot="$(vssh 'systemd-analyze 2>/dev/null | head -1')"
+modules="$(vssh 'lsmod | grep -c -E "^vkms|^vgem"')"
+units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docker.service | tr "\n" " "')"
+for _ in $(seq 1 60); do
+  health="$(vssh 'curl -fsS -m 3 http://127.0.0.1:7777/health' 2>/dev/null || true)"
+  [[ "$health" == *chromium* ]] && break
+  sleep 2
+done
+[[ "$health" == *chromium* ]] || { echo "desktop never reported a chromium client; health=$health" >&2; vssh 'journalctl -u octo-desktop --no-pager | tail -30; tail -20 ~/.local/state/octo-desktop/*.log' >&2 || true; exit 1; }
+t_desktop=$(date +%s)
+
+vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
+title_before="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
+vssh 'post() { curl -fsS -X POST "http://127.0.0.1:7777/$1" -H "content-type: application/json" -d "$2" >/dev/null; }; post click "{\"x\":960,\"y\":540}"; post key "{\"keys\":\"ctrl+l\"}"; post type "{\"text\":\"https://example.com/\"}"; post key "{\"keys\":\"Return\"}"'
+input_verified=no
+for _ in $(seq 1 40); do
+  title_after="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
+  [[ "$title_after" == *"Example Domain"* ]] && { input_verified=yes; break; }
+  sleep 0.5
+done
+
+persist=skipped
+if [[ "$STOP_START" == 1 ]]; then
+  vssh "echo persist-$(date +%s) > ~/persist-marker"
+  marker="$(vssh 'cat ~/persist-marker')"
+  gcloud compute instances stop "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
+  t_start=$(date +%s)
+  gcloud compute instances start "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
+  IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+  wait_ssh 300
+  t_back=$(date +%s)
+  after="$(vssh 'cat ~/persist-marker 2>/dev/null; ls ~/.config/chromium/Default/Cookies >/dev/null 2>&1 && echo profile-present')"
+  if [[ "$after" == *"$marker"* && "$after" == *profile-present* ]]; then persist="yes ($((t_back - t_start)) s start to ssh)"; else persist="NO: $after"; fi
+fi
+
+cat <<RESULT
+
+## Image test $(date -u +%Y-%m-%dT%H:%MZ): ${image_id} on ${MACHINE}
+
+| Metric | Value |
+| --- | --- |
+| Create to SSH | $((t_ssh - t_create)) s |
+| Create to desktop healthy (Chromium mapped) | $((t_desktop - t_create)) s |
+| Guest boot (systemd-analyze) | ${boot} |
+| vkms + vgem loaded | ${modules}/2 |
+| Units (seatd, desktop, docker) | ${units} |
+| Input verified (typed URL changed window title) | ${input_verified} ("${title_before}" → "${title_after:-}") |
+| Home survives stop/start | ${persist} |
+| Screenshot | ${work}/screenshot.png (deleted with the workdir unless --keep) |
+RESULT
+if [[ "$KEEP" == 1 ]]; then
+  cp "$work/screenshot.png" "./octogee-computer-test-screenshot.png"
+  cp "$work/key" "./octogee-computer-test-key" && chmod 0600 "./octogee-computer-test-key"
+  cat <<KEEP
+Kept $NAME at $IP. Screenshot: ./octogee-computer-test-screenshot.png. Key: ./octogee-computer-test-key
+
+Take over the desktop:
+  ssh -i ./octogee-computer-test-key -o StrictHostKeyChecking=no -N -L 6080:127.0.0.1:6080 octo@$IP
+  open http://localhost:6080/vnc.html?autoconnect=true
+
+Delete when done:
+  gcloud compute instances delete $NAME --zone $ZONE --project $PROJECT --quiet
+KEEP
+fi
+[[ "$input_verified" == yes ]]

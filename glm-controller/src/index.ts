@@ -19,6 +19,8 @@ import {
   type HelmInstancesMap,
   type OperationAuditRecord,
   type Operation,
+  type GatewayVmSpec,
+  type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -157,6 +159,8 @@ import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
+import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
+import { createGatewayVmClient } from "./lib/compute-vm.js";
 import {
   createRolloutHandler,
   planDesiredReleaseActivation,
@@ -3400,8 +3404,41 @@ async function buildHandlers(
     pollIntervalMs: 5_000,
   });
 
+  const gatewayVm = createGatewayVmHandler({
+    vm: createGatewayVmClient({
+      projectId: requireEnv("GOOGLE_CLOUD_PROJECT", "gateway VM allocation must target this env's GCP project"),
+      log: logFn,
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      now: () => Date.now(),
+      request: async ({ url, method, body }) => {
+        const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+        const client = await auth.getClient();
+        const res = await client.request<unknown>({ url, method, ...(body === undefined ? {} : { data: body }) });
+        return { status: res.status, data: res.data };
+      },
+    }),
+    readGateway: async (gatewayId) => {
+      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+      if (!snap.exists) return null;
+      const data = snap.data() as Record<string, unknown>;
+      return {
+        runtime: data.runtime,
+        vmSpec: (data.vmSpec as GatewayVmSpec | undefined) ?? null,
+        vm: (data.vm as GatewayVmState | undefined) ?? null,
+        ownerUid: typeof data.ownerUid === "string" ? data.ownerUid : null,
+      };
+    },
+    writeVmState: async (gatewayId, vm) => {
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ vm });
+    },
+    environment: NAMESPACE,
+    now: () => Date.now(),
+    log: logFn,
+  });
+
   return {
     "add-gateway": addGateway,
+    "gateway-vm": gatewayVm,
     [MIGRATE_CUSTOMER_KIND]: migrateCustomer,
     "retire-gateway": retireGateway,
     "restart-gateway": restartGateway,

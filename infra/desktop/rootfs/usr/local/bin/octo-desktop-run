@@ -3,12 +3,14 @@ set -euo pipefail
 
 log_dir="$HOME/.local/state/octo-desktop"
 compositor="${OCTO_COMPOSITOR:-hyprland}"
+display="${OCTO_DISPLAY:-headless}"
 output="${OCTO_OUTPUT_NAME:-OCTOGEE}"
 resolution="${OCTO_RESOLUTION:-1920x1080}"
 refresh="${OCTO_REFRESH:-30}"
 vnc_port="${OCTO_VNC_PORT:-5900}"
 novnc_port="${OCTO_NOVNC_PORT:-6080}"
 control_port="${OCTO_CONTROL_PORT:-7777}"
+bind="${OCTO_BIND:-0.0.0.0}"
 
 stamp() { printf '%s %s\n' "$(date +%s.%N)" "$*" | tee -a "$log_dir/timeline.log"; }
 
@@ -61,7 +63,10 @@ start_hyprland() {
   done
   hyprctl -j version >/dev/null 2>&1 || { stamp "ERROR hyprctl never became available"; tail -20 "$log_dir/hyprland.log" >&2; exit 1; }
   stamp "hyprland ready"
-  if ! hyprctl -j monitors all | jq -e --arg n "$output" '.[] | select(.name == $n)' >/dev/null; then
+  if [[ "$display" == drm ]]; then
+    output="$(hyprctl -j monitors all | jq -r '.[0].name')"
+    [[ -n "$output" && "$output" != null ]] || { stamp "ERROR no DRM output for OCTO_DISPLAY=drm"; exit 1; }
+  elif ! hyprctl -j monitors all | jq -e --arg n "$output" '.[] | select(.name == $n)' >/dev/null; then
     hyprctl output create headless "$output"
   fi
   hyprctl eval "hl.monitor({ output = \"${output}\", mode = \"${resolution}@${refresh}\", position = \"0x0\", scale = 1 })" || true
@@ -83,7 +88,7 @@ start_labwc() {
   stamp "labwc ready"
 }
 
-stamp "session start (compositor=${compositor})"
+stamp "session start (compositor=${compositor}, display=${display})"
 case "$compositor" in
   hyprland) start_hyprland ;;
   labwc) start_labwc ;;
@@ -93,15 +98,15 @@ export WAYLAND_DISPLAY="$(wayland_socket)"
 export OCTO_OUTPUT_NAME="$output" OCTO_COMPOSITOR="$compositor"
 stamp "output ${output} configured ${resolution}@${refresh}"
 
-wayvnc --output="$output" 0.0.0.0 "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
+wayvnc --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
 children+=($!)
 stamp "wayvnc listening on ${vnc_port}"
 
-websockify --web /opt/novnc "0.0.0.0:${novnc_port}" "127.0.0.1:${vnc_port}" >"$log_dir/websockify.log" 2>&1 &
+websockify --web /opt/novnc "${bind}:${novnc_port}" "127.0.0.1:${vnc_port}" >"$log_dir/websockify.log" 2>&1 &
 children+=($!)
 stamp "novnc + websockify on ${novnc_port} (open /vnc.html?autoconnect=true)"
 
-python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
+OCTO_BIND="$bind" python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
 children+=($!)
 stamp "control api on ${control_port}"
 

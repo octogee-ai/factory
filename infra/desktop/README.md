@@ -151,7 +151,9 @@ guest was installed unattended from the ISO with a `cidata` drive.
 
 The installed disk (`omarchy.qcow2`), OVMF vars, the QEMU driver script, the
 guest test script, logs and screenshots are preserved at
-`gs://octogee-test-agent-computer-spike/` for the GCE image import.
+`gs://octogee-test-agent-computer-spike/` for the GCE image import. The
+reproducible build that replaced this manual path lives in
+[`image/`](image/README.md).
 
 The Apple Silicon row is under x86_64 emulation; the GCE row is native and is
 the number to plan with (a 4 CPU / 4 GiB container on an 8 vCPU host that was

@@ -1,0 +1,27 @@
+[Unit]
+Description=Octogee computer desktop session (Hyprland, wayvnc, noVNC, control API, Chromium)
+After=octo-seatd.service network-online.target
+Wants=octo-seatd.service network-online.target
+
+[Service]
+User=octo
+Group=octo
+Environment=HOME=/home/octo
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=OCTO_COMPOSITOR=hyprland
+Environment=OCTO_DISPLAY=drm
+Environment=OCTO_RESOLUTION=1920x1080
+Environment=OCTO_REFRESH=60
+Environment=OCTO_BIND=127.0.0.1
+Environment=OCTO_HOME_URL=https://octogee.com
+ExecStartPre=+/usr/bin/install -d -o octo -g octo -m 0700 /run/user/1000
+ExecStart=/usr/local/bin/octo-desktop-session
+StandardOutput=journal+console
+StandardError=journal
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

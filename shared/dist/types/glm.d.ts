@@ -47,7 +47,37 @@ export interface GatewayDesiredState {
     builderSlug?: string;
     sizingTier?: SizingTier;
     modelBrokerLimits?: GatewayModelBrokerLimits;
+    runtime?: GatewayRuntime;
+    vmSpec?: GatewayVmSpec;
+    vm?: GatewayVmState | null;
 }
+export declare const GATEWAY_RUNTIMES: readonly ["cluster", "gce-vm"];
+export type GatewayRuntime = (typeof GATEWAY_RUNTIMES)[number];
+export declare function isGatewayRuntime(value: unknown): value is GatewayRuntime;
+export declare function resolveGatewayRuntime(value: unknown): GatewayRuntime;
+export declare const GATEWAY_VM_PROVISIONING_MODELS: readonly ["SPOT", "STANDARD"];
+export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)[number];
+export interface GatewayVmSpec {
+    zone: string;
+    machineType: string;
+    imageFamily: string;
+    imageProject?: string;
+    diskSizeGb: number;
+    provisioningModel: GatewayVmProvisioningModel;
+    serviceAccountEmail: string;
+    subnetwork: string;
+}
+export interface GatewayVmState {
+    instanceName: string;
+    zone: string;
+    instanceId: string | null;
+    internalIp: string | null;
+    status: string | null;
+    provisioningModel: GatewayVmProvisioningModel | null;
+    updatedAt: number;
+}
+export declare const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
+export declare function gatewayVmInstanceName(gatewayId: string): string;
 export interface GatewayModelBrokerLimits {
     spendWindowUsd?: number | null;
     spendWeekUsd?: number | null;
@@ -94,7 +124,7 @@ export declare function resolveUserGatewayControlState(data: {
     gatewayProfile: GatewayProfile;
     controlUiEnabled: boolean;
 };
-export type OperationKind = "add-gateway" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "scale-shared-member" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
+export type OperationKind = "add-gateway" | "gateway-vm" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "scale-shared-member" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
 export declare const OPERATION_ORIGINS: readonly ["automatic", "operator"];
 export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];

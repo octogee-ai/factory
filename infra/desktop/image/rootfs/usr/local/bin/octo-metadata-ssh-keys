@@ -1,0 +1,40 @@
+#!/usr/bin/bash
+set -euo pipefail
+user=octo
+home=/home/$user
+metadata=http://metadata.google.internal/computeMetadata/v1
+
+for _ in $(seq 1 45); do
+  curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$metadata/instance/id" >/dev/null 2>&1 && break
+  sleep 2
+done
+if ! curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$metadata/instance/id" >/dev/null 2>&1; then
+  echo "metadata server unreachable after 90 s; leaving authorized_keys unchanged"
+  exit 0
+fi
+
+keys=""
+body_file="$(mktemp)"
+trap 'rm -f "$body_file"' EXIT
+for path in instance/attributes/ssh-keys project/attributes/ssh-keys; do
+  code="$(curl -sS -m 5 -o "$body_file" -w '%{http_code}' -H 'Metadata-Flavor: Google' "$metadata/$path" || echo 000)"
+  case "$code" in
+    200) keys+="$(cat "$body_file")"$'\n' ;;
+    404) ;;
+    *) echo "metadata $path returned HTTP $code; failing so the timer retries"; exit 1 ;;
+  esac
+done
+selected="$(printf '%s' "$keys" | awk -F: -v u="$user" '$1 == u { sub(/^[^:]*:/, ""); print }' | sed '/^$/d' | sort -u)"
+if [[ -z "$selected" ]]; then
+  echo "no metadata ssh-keys for $user; leaving authorized_keys unchanged"
+  exit 0
+fi
+install -d -m 0700 -o "$user" -g "$user" "$home/.ssh"
+if [[ -f "$home/.ssh/authorized_keys" ]] && [[ "$(cat "$home/.ssh/authorized_keys")" == "$selected" ]]; then
+  exit 0
+fi
+printf '%s\n' "$selected" > "$home/.ssh/authorized_keys.metadata"
+chown "$user:$user" "$home/.ssh/authorized_keys.metadata"
+chmod 0600 "$home/.ssh/authorized_keys.metadata"
+mv "$home/.ssh/authorized_keys.metadata" "$home/.ssh/authorized_keys"
+echo "installed $(printf '%s\n' "$selected" | wc -l) key(s) for $user from metadata"
