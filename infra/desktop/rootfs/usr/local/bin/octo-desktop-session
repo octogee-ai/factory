@@ -1,0 +1,31 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+export HOME=/home/octo
+export USER=octo
+export LOGNAME=octo
+export XDG_RUNTIME_DIR=/run/user/1000
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_DESKTOP=Hyprland
+export XDG_SEAT=seat0
+export XDG_VTNR=0
+export OMARCHY_PATH=/usr/share/omarchy
+export PATH="/usr/local/bin/octo-shims:${PATH}"
+export LIBSEAT_BACKEND=seatd
+export SEATD_SOCK=/run/seatd.sock
+
+export LIBGL_ALWAYS_SOFTWARE=1
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export AQ_NO_MODIFIERS=1
+export HYPRLAND_NO_RT=1
+if [[ -z "${AQ_DRM_DEVICES:-}" ]]; then unset AQ_DRM_DEVICES; fi
+
+mkdir -p "$HOME/.local/state/octo-desktop"
+
+hypr_config="$HOME/.config/hypr/hyprland.lua"
+if [[ -f "$hypr_config" ]] && ! grep -Fq 'octo-desktop.hypr.headless' "$hypr_config"; then
+  printf '\nrequire("octo-desktop.hypr.headless")\n' >> "$hypr_config"
+fi
+
+exec dbus-run-session -- /usr/local/bin/octo-desktop-run

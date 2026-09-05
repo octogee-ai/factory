@@ -1,0 +1,6 @@
+services:
+  desktop:
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      AQ_DRM_DEVICES: ${AQ_DRM_DEVICES:-}

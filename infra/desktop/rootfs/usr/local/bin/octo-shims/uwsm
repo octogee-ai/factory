@@ -1,0 +1,8 @@
+#!/usr/bin/bash
+if [[ "${1:-}" == "app" ]]; then
+  shift
+  while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+  [[ "${1:-}" == "--" ]] && shift
+  exec "$@"
+fi
+exit 0

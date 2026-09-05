@@ -1,0 +1,116 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+log_dir="$HOME/.local/state/octo-desktop"
+compositor="${OCTO_COMPOSITOR:-hyprland}"
+output="${OCTO_OUTPUT_NAME:-OCTOGEE}"
+resolution="${OCTO_RESOLUTION:-1920x1080}"
+refresh="${OCTO_REFRESH:-30}"
+vnc_port="${OCTO_VNC_PORT:-5900}"
+novnc_port="${OCTO_NOVNC_PORT:-6080}"
+control_port="${OCTO_CONTROL_PORT:-7777}"
+
+stamp() { printf '%s %s\n' "$(date +%s.%N)" "$*" | tee -a "$log_dir/timeline.log"; }
+
+children=()
+shutdown() {
+  stamp "shutdown requested"
+  for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
+  wait || true
+  exit 0
+}
+trap shutdown TERM INT
+
+wayland_socket() {
+  ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | head -n1
+}
+
+wait_for_socket_or_exit() {
+  local pid="$1" name="$2"
+  for _ in $(seq 1 600); do
+    [[ -n "$(wayland_socket)" ]] && return 0
+    if ! kill -0 "$pid" 2>/dev/null; then
+      stamp "ERROR ${name} exited before creating a Wayland socket"
+      tail -20 "$log_dir/${name}.log" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  stamp "ERROR ${name} never created a Wayland socket"
+  exit 1
+}
+
+start_hyprland() {
+  Hyprland >"$log_dir/hyprland.log" 2>&1 &
+  local pid=$!
+  children+=("$pid")
+  local sig
+  for _ in $(seq 1 600); do
+    for sig in "$XDG_RUNTIME_DIR"/hypr/*; do
+      [[ -d "$sig" ]] && export HYPRLAND_INSTANCE_SIGNATURE="${sig##*/}"
+    done
+    if hyprctl -j version >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      stamp "ERROR Hyprland exited before hyprctl became available"
+      local crash
+      crash="$(ls -t "$HOME"/.cache/hyprland/hyprlandCrashReport*.txt 2>/dev/null | head -n1)"
+      [[ -n "$crash" ]] && grep -h -E "aquamarine|ERR|CRIT" "$crash" | tail -20 >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  hyprctl -j version >/dev/null 2>&1 || { stamp "ERROR hyprctl never became available"; tail -20 "$log_dir/hyprland.log" >&2; exit 1; }
+  stamp "hyprland ready"
+  if ! hyprctl -j monitors all | jq -e --arg n "$output" '.[] | select(.name == $n)' >/dev/null; then
+    hyprctl output create headless "$output"
+  fi
+  hyprctl eval "hl.monitor({ output = \"${output}\", mode = \"${resolution}@${refresh}\", position = \"0x0\", scale = 1 })" || true
+  hyprctl keyword decoration:blur:enabled false >/dev/null || true
+  hyprctl keyword decoration:shadow:enabled false >/dev/null || true
+  hyprctl keyword animations:enabled false >/dev/null || true
+  hyprctl keyword misc:vfr true >/dev/null || true
+}
+
+start_labwc() {
+  output="HEADLESS-1"
+  export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+  labwc >"$log_dir/labwc.log" 2>&1 &
+  local pid=$!
+  children+=("$pid")
+  wait_for_socket_or_exit "$pid" labwc
+  export WAYLAND_DISPLAY="$(wayland_socket)"
+  wlr-randr --output "$output" --custom-mode "$resolution" >/dev/null
+  stamp "labwc ready"
+}
+
+stamp "session start (compositor=${compositor})"
+case "$compositor" in
+  hyprland) start_hyprland ;;
+  labwc) start_labwc ;;
+  *) stamp "ERROR unknown OCTO_COMPOSITOR=${compositor}"; exit 2 ;;
+esac
+export WAYLAND_DISPLAY="$(wayland_socket)"
+export OCTO_OUTPUT_NAME="$output" OCTO_COMPOSITOR="$compositor"
+stamp "output ${output} configured ${resolution}@${refresh}"
+
+wayvnc --output="$output" 0.0.0.0 "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
+children+=($!)
+stamp "wayvnc listening on ${vnc_port}"
+
+websockify --web /opt/novnc "0.0.0.0:${novnc_port}" "127.0.0.1:${vnc_port}" >"$log_dir/websockify.log" 2>&1 &
+children+=($!)
+stamp "novnc + websockify on ${novnc_port} (open /vnc.html?autoconnect=true)"
+
+python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
+children+=($!)
+stamp "control api on ${control_port}"
+
+chromium --ozone-platform=wayland --disable-gpu --no-sandbox --no-first-run \
+  --start-maximized --password-store=basic "${OCTO_HOME_URL:-https://octogee.com}" \
+  >"$log_dir/chromium.log" 2>&1 &
+children+=($!)
+stamp "chromium launched"
+
+wait -n || true
+stamp "a child exited; shutting down"
+shutdown
