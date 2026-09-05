@@ -1009,7 +1009,16 @@ function projectDelegatedConnectChallenge(
   const payload = record(frame.payload);
   return frame.type === "event" && frame.event === "connect.challenge" &&
     boundedString(payload?.nonce, 512)
-    ? { type: "event", event: "connect.challenge", payload: { nonce: payload.nonce } }
+    ? {
+      type: "event",
+      event: "connect.challenge",
+      payload: {
+        nonce: payload.nonce,
+        ...(typeof payload.ts === "number" && Number.isSafeInteger(payload.ts) && payload.ts > 0
+          ? { ts: payload.ts }
+          : {}),
+      },
+    }
     : null;
 }
 

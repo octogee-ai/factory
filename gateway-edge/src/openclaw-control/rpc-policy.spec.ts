@@ -624,6 +624,30 @@ describe("OpenClaw Dashboard RPC policy", () => {
     expect(JSON.stringify(projected)).not.toMatch(/owner-secret|attacker|future/u);
   });
 
+  it.each(["delegated-config", "delegated-read"] as const)("preserves the gateway challenge timestamp for %s without exposing extra fields", (profile) => {
+    expect(projectOpenClawServerFrameForProfile({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "challenge-nonce", ts: 1_700_000_000_123, secret: "owner-secret" },
+    }, undefined, profile)).toEqual({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "challenge-nonce", ts: 1_700_000_000_123 },
+    });
+  });
+
+  it.each([undefined, "1700000000123", { secret: "owner-secret" }, -1, Infinity])("does not invent or expose malformed challenge timestamps (%j)", (ts) => {
+    expect(projectOpenClawServerFrameForProfile({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "challenge-nonce", ts },
+    }, undefined, "delegated-config")).toEqual({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "challenge-nonce" },
+    });
+  });
+
   it("drops unsolicited delegated frames and strips matched mutation responses", () => {
     const pushed = {
       type: "event",
