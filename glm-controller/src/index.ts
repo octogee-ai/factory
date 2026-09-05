@@ -1,3 +1,4 @@
+import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import {
@@ -384,7 +385,7 @@ const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
 );
 const DISPOSABLE_GATEWAY_IDLE_MS = parseNonNegativeInt(
   process.env.DISPOSABLE_GATEWAY_IDLE_MS,
-  30 * 60 * 1000,
+  DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,

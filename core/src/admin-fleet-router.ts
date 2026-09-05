@@ -40,6 +40,10 @@ import {
   deploymentSettingsForRuntime,
   deploymentTargetsForEnvironment,
 } from "./deployment-environment.js";
+import {
+  DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS,
+  type PlatformRuntimeConfig,
+} from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
@@ -4362,6 +4366,18 @@ async function retryActivationLeaseReturn(
   return { kind: "retried" };
 }
 
+async function readPlatformRuntimeConfig(db: Firestore): Promise<PlatformRuntimeConfig> {
+  const snapshot = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+  const stored = snapshot.data()?.disposableGatewayIdleMs;
+  if (stored === undefined) {
+    return { disposableGatewayIdleMs: DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
+  }
+  if (typeof stored !== "number" || !Number.isSafeInteger(stored) || stored < 0) {
+    throw new Error("config/orchestrator.disposableGatewayIdleMs must be a nonnegative safe integer");
+  }
+  return { disposableGatewayIdleMs: stored };
+}
+
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -4399,6 +4415,42 @@ export function addAdminFleetRoutes(
       : {}),
     });
   }
+
+  router.get("/platform-runtime-config", async (_req, res, next) => {
+    try {
+      res.json(await readPlatformRuntimeConfig(db));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/platform-runtime-config", async (req, res, next) => {
+    try {
+      const body: unknown = req.body;
+      if (!isPlainRecord(body) || Object.keys(body).length !== 1 ||
+        typeof body.disposableGatewayIdleMs !== "number" ||
+        !Number.isSafeInteger(body.disposableGatewayIdleMs) || body.disposableGatewayIdleMs < 0) {
+        res.status(400).json({ error: "disposableGatewayIdleMs must be the only field and a nonnegative safe integer" });
+        return;
+      }
+      const config: PlatformRuntimeConfig = { disposableGatewayIdleMs: body.disposableGatewayIdleMs };
+      const previous = await readPlatformRuntimeConfig(db);
+      await runAdminFleetMutation({
+        req,
+        what: "set platform gateway idle return duration",
+        why: ADMIN_FLEET_REQUEST_REASON,
+        target: { configPath: FLEET_RUNTIME_CONFIG_DOC_PATH },
+        preActionStatus: { ...previous },
+        mutation: { ...config },
+        action: async () => {
+          await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(config, { merge: true });
+        },
+      });
+      res.json(config);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   async function handleActiveCustomerDeletion(input: {
     req: Request;

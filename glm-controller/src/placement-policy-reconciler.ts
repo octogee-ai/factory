@@ -2555,9 +2555,11 @@ async function readTerminalLeaseOperationSnapshots(
 }
 
 function placementPolicyIdleMs(value: unknown, fallbackIdleMs: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : fallbackIdleMs;
+  if (value === undefined) return fallbackIdleMs;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("config/orchestrator.disposableGatewayIdleMs must be a nonnegative safe integer");
+  }
+  return value;
 }
 
 // Must stay a reconcile tick inside GATEWAY_UNREACHABLE_AFTER_MS.
