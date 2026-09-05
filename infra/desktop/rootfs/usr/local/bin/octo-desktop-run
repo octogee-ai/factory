@@ -93,6 +93,9 @@ start_labwc() {
   stamp "labwc ready"
 }
 
+mkdir -p "$HOME/.local/state/omarchy/indicators"
+touch "$HOME/.local/state/omarchy/indicators/stay-awake"
+
 stamp "session start (compositor=${compositor}, display=${display})"
 case "$compositor" in
   hyprland) start_hyprland ;;

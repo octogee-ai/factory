@@ -1,5 +1,9 @@
 # Octogee computer image
 
+Managed desktop sessions enable Omarchy's persistent stay-awake indicator
+before starting the compositor. Cowboy owns parking; the passwordless desktop
+must remain available to the Agent and authenticated viewers while running.
+
 Reproducible build of the Builder gateway VM image: stock Omarchy from the
 pinned ISO, installed unattended, plus the desktop session, `vkms` + `vgem`
 for a display-less GCE guest, Docker for the gateway container, and a

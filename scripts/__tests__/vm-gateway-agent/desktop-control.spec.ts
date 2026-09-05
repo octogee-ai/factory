@@ -35,3 +35,10 @@ it("quiesces desktop and user applications and recovers lifecycle failures", asy
     stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
   });
 });
+
+it("keeps fresh and restored managed desktops awake before the compositor starts", async () => {
+  const script = resolve(__dirname, "../../../infra/desktop/image/test_idle.py");
+  await expect(promisify(execFile)("python3", [script])).resolves.toMatchObject({
+    stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
+  });
+});
