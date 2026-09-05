@@ -165,10 +165,6 @@
       "types": "./dist/gateway-device-identity.d.ts",
       "default": "./dist/gateway-device-identity.js"
     },
-    "./gateway-release-projection": {
-      "types": "./dist/gateway-release-projection.d.ts",
-      "default": "./dist/gateway-release-projection.js"
-    },
     "./gateway-retirement-claim": {
       "types": "./dist/gateway-retirement-claim.d.ts",
       "default": "./dist/gateway-retirement-claim.js"
