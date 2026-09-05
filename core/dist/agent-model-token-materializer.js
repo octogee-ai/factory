@@ -5,6 +5,7 @@ import { AGENTS_DIR } from "./config.js";
 import { OpenClawSecretsApplyError, applyOpenClawSecretsPlan, authProfileApiKeyTarget, buildOpenClawSecretsPlan, } from "./openclaw-secrets-apply.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import { parseAgentId } from "@octogee/shared/types/identity";
+export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
 // Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
 // token (the secret-resolver fetches it via POST /internal/byok/agent-model-token);

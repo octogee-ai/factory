@@ -1,26 +1,29 @@
-# OpenClaw tagged build
+# OpenClaw current build
 
-Octogee builds its gateway from a released OpenClaw tag plus the small Octogee
-overlay. `current.json` selects the two write-once GCS artifacts for the
-current tag; the build resolves their exact generations and derives a new
+Octogee builds its gateway from a released OpenClaw tag, or an explicitly
+selected release-branch snapshot, plus the Octogee overlay. `current.json`
+selects the two write-once GCS artifacts; the build resolves their exact generations and derives a new
 immutable `octogee-gateway-base:inputs-…` tag. No step here deploys TEST or
 PROD.
 
-## Refresh a released tag
+## Refresh a tag or selected release branch
 
 Start from a clean OpenClaw checkout with `origin` pointing at
-`openclaw/openclaw` and `ceckert` at the Octogee fork. Fetch the tag, verify
-its peeled commit, and cut the tag-specific overlay branch:
+`openclaw/openclaw` and `ceckert` at the Octogee fork. Fetch the selected ref,
+lock its full commit at the start, and cut the matching overlay branch. For a
+tag, verify its peeled commit. For a release branch, record the locked snapshot
+honestly; a package version alone does not make it a GA release:
 
 ```bash
 cd /path/to/openclaw
-git fetch --tags origin
-git rev-parse v2026.9.1^{}
-git switch -c octogee/gateway-scaling-patches-v2026.9.1 v2026.9.1
+git fetch origin release/2026.9.2
+UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)
+git switch -c octogee/gateway-scaling-patches-release-2026.9.2 "$UPSTREAM_SHA"
 ```
 
 Port the prior overlay oldest-first, then audit every patch against the
-released tag. Drop behavior OpenClaw now provides. When upstream has split a
+locked commit. Drop behavior OpenClaw now provides and capabilities Octogee no
+longer needs. When upstream has split a
 patched file, move only the required hook to its new owner; do not restore
 deleted upstream wiring. Build and test the affected behavior before packing:
 
@@ -43,7 +46,7 @@ directory. Validate the root package and the local Mattermost package in an
 isolated npm prefix before publication.
 
 ```bash
-ARTIFACT_DIR=$(mktemp -d -t openclaw-v2026.9.1-artifacts-XXXXXX)
+ARTIFACT_DIR=$(mktemp -d -t openclaw-current-artifacts-XXXXXX)
 ROOT_TGZ=$(OPENCLAW_SKIP_BUILD=1 \
   bash infra/gateway/openclaw-tarball/pack-fork-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
@@ -62,7 +65,7 @@ gcloud storage cp --if-generation-match=0 "$MATTERMOST_TGZ" \
 ```
 
 The write-once precondition is required. Never replace a release object or
-reuse the retired `*-main.tgz` objects. Set `upstreamTag`, `openclawObject`,
+reuse the retired `*-main.tgz` objects. Set `upstreamRef`, `openclawObject`,
 and `mattermostObject` in `current.json`, and mirror the two object names in
 `cloudbuild-base.yaml`; the focused base-reuse test proves that mirror. Push
 the overlay branch with `--force-with-lease`.
@@ -74,22 +77,28 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The current build is [OpenClaw `v2026.9.1`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.1),
-peeled to `ad6fe23aecb9b833d68139b0ddc9f239b894d2f1`, with overlay head
-`2e2f6f595f57ce37ca7dc92b20b5a208c8817a3b`. Its root artifact is
-`openclaw-fork-2e2f6f59.tgz` at generation `1788475273529187`; its separately
-packed Mattermost runtime is `openclaw-mattermost-9b303940.tgz` at generation
-`1788475248911711`. The overlay was re-audited against upstream main through
-`8c6653a78dec`; none of the retained areas had been adopted.
+The selected build is the operator-requested `release/2026.9.2` snapshot,
+locked to [upstream commit `3928bad9badfcb6c7d140530435e806fb8092190`](https://github.com/openclaw/openclaw/commit/3928bad9badfcb6c7d140530435e806fb8092190),
+with [overlay head `c423a5b51be2890274f22f4b9603dbb66ec8cac9`](https://github.com/ceckert/openclaw/commit/c423a5b51be2890274f22f4b9603dbb66ec8cac9).
+The package version is `2026.9.2`; this is a locked branch snapshot, not a
+claim to have built a GA tag.
 
-| Patch area | v2026.9.1 assessment | Why Octogee carries it / removal gate |
+Publication is pending Google Cloud reauthentication. Do not merge this recut
+until both write-once objects are uploaded and their generations recorded here:
+`openclaw-fork-c423a5b5.tgz` (SHA-256 `14abc71e4dddb86285b9d8221475d58557dd07fa5e42a841faaff3827260055b`)
+and `openclaw-mattermost-d0351cb4.tgz` (SHA-256 `d0351cb46e697bae9aad3d22a4e9a7ac5437abf05764f4e81b89adec94b81cbb`).
+Both artifacts passed isolated npm installation and runtime entry checks;
+the installed root reports the exact overlay commit above.
+
+| Patch area | release/2026.9.2 assessment | Why Octogee carries it / removal gate |
 | --- | --- | --- |
-| Sandbox-backed file discovery | The tag has no native shell-free discovery surface. [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899) remains parked at `c0ed0b9a32c9` pending the maintainers' security contract decision. | Keeps native `ls`, `find`, and `grep` without granting `exec` or `process`. Remove when upstream supplies an equivalent sandbox bridge and file-tool registration seam. |
-| Secret handling | The tag has neither unchanged resolved-SecretRef reuse nor the authenticated `secrets.apply` RPC. | Avoids unnecessary secret-provider work and supports Octogee configuration writes. Remove when upstream provides both stable reuse and the authenticated write RPC. |
-| No-archive session deletion | The tag has an internal purge primitive, but public `sessions.delete` cannot request it. [OpenClaw PR #137428](https://github.com/openclaw/openclaw/pull/137428) carries the public flag at `452e3776ef93ecc3063847bb6fe38557700170bc`. | Lets Ops Agent purge transient one-shot sessions without archive compression or event-loop starvation. Remove when the public no-archive contract lands upstream. |
-| Recreated agent databases | The tag does not revalidate a recreated agent database before reuse. [OpenClaw PR #137424](https://github.com/openclaw/openclaw/pull/137424) carries the identity check at `e021c59be005ca879ce9e48509f19fbe965b170e`. | Prevents stale per-agent state after replacement. Remove when upstream reopens on file identity or generation change, or mandates a process restart after replacement. |
-| Fresh-chat terminal ownership | The tag rejects `terminal.open` when a selected chat has not yet materialized its durable session row. | Materializes and revalidates the exact agent-owned session before opening its terminal. Remove when upstream supports exact-owner materialization for a fresh selected chat. |
-| Durable Mattermost channel sessions | The tag keeps live state in SQLite and does not project authorized Mattermost channels through Control UI session/history/send or rebuild bounded conversational context from them. | Keeps SQLite as live execution state while making the Mattermost thread the durable transcript and recovery source. Remove when upstream exposes a pluggable durable conversation projection or equivalent channel adapter with the same authorization and run-correlation guarantees. |
+| Sandbox-backed file discovery | Retained from [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899), including inherited ignore rules, traversal exclusions, cancellation, and worker authority checks. The locked release has no equivalent native registration. | Required by Octogee's restricted filesystem-only configurations, not every full-power Builder. Remove when upstream provides sandbox-backed `ls`, `find`, and `grep` without requiring `exec` or `process`. |
+| Resolved-secret reuse | Dropped. Cross-write caching was an optional performance optimization, not an Octogee correctness requirement. | Accept upstream's normal resolution cost and keep the resolver available. There is no custom stale-value lifecycle to maintain. |
+| Custom `secrets.apply` RPC | Dropped. Upstream's existing batched `secrets apply` CLI uses the same apply engine; the old bootstrap-latency rationale did not hold in fresh measurements. | Octogee uses the asynchronous standard CLI and the existing reload path. No upstream RPC addition is required. |
+| No-archive session deletion | Dropped. Standard upstream deletion archives transcripts using bounded worker-backed cleanup. [OpenClaw PR #137428](https://github.com/openclaw/openclaw/pull/137428) stays closed. | Ops Agent keeps per-request isolation and accepts archive retention. Durable scoped Ops conversations would be a separate product change, not a reason to retain this flag. |
+| Recreated agent databases | Dropped. Upstream adopted lifecycle invalidation and schema revalidation through [OpenClaw PR #137424](https://github.com/openclaw/openclaw/pull/137424). | Upstream's recreation and gateway product tests cover the requirement without our filesystem-identity polling. |
+| Fresh-chat terminal ownership | Dropped by operator choice. Keep upstream's native terminal and session lifecycle; no custom terminal materialization hook remains. | Mattermost-backed sessions may already supply an existing owner row. We do not claim all never-materialized native chats can open a terminal before their first message. This convenience is not a reason to carry another gateway patch. |
+| Durable Mattermost channel sessions | Retained: channel-scoped sessions, queued delivery observation, sealed answer commits, and bounded recovery. Recovery uses delivered-answer timestamps, rejects noncausal references, distinguishes metadata-only rows from live SQLite state, and orders interleaved threads chronologically before retaining the newest entries. Each multipart answer remains one entry. | Octogee's channel-backed conversations consume this behavior. Channel scope requires threaded room replies; unthreaded configurations fail when the enabled account resolves. Keep Octogee's transcript metadata downstream; contribute generic delivery/adapter seams only when independently justified. Remove corresponding pieces as upstream adopts equivalent contracts. |
 
 The gateway base still verifies runtime contracts such as expected config
 behavior and tool-policy shape. Those are product checks, not a parallel

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
-import { OpenclawWireError } from "./gateway-rpc.js";
+import { OpenClawSecretsApplyError, type OpenClawSecretsPlan } from "./openclaw-secrets-apply.js";
 import {
   agentModelTokenSecretId,
   OPENAI_BROKER_PROVIDER_ID,
@@ -34,18 +34,9 @@ const ALL_SURFACES = { openRouter: true, openAi: true };
  *  idempotency read sees what openclaw would have persisted. */
 function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
   const plans: unknown[] = [];
-  const apply = vi.fn(async ({ plan }: {
-    plan: {
-      targets: Array<{
-        path: string;
-        agentId: string;
-        authProfileProvider: string;
-        ref: { id: string };
-      }>;
-    };
-  }) => {
+  const apply = vi.fn(async (plan: OpenClawSecretsPlan) => {
     plans.push(plan);
-    if (opts.fail) throw new OpenclawWireError("connect-failed", "gateway is not running");
+    if (opts.fail) throw new OpenClawSecretsApplyError("secret provider unavailable", 1);
     for (const target of plan.targets) {
       const agentDir = path.join(agentsDir, target.agentId, "agent");
       const store = (readAuthProfileStore(agentDir) ?? {}) as Record<string, unknown>;
@@ -61,7 +52,7 @@ function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
     }
     return { mode: "write", changed: true };
   });
-  return { plans, secretsApply: { rpc: { secretsApply: apply } }, apply };
+  return { plans, secretsApply: { apply }, apply };
 }
 
 describe("platform broker profile targets", () => {
@@ -392,7 +383,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("hands every profile to openclaw's secrets.apply RPC and writes both catalogs itself", async () => {
+  it("hands every profile to openclaw's secrets apply and writes both catalogs itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
     const { plans, secretsApply, apply } = fakeSecretsApply(agentsDir);
 
@@ -449,11 +440,9 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
     const logs: string[] = [];
     const secretsApply = {
-      rpc: {
-        secretsApply: vi.fn(async () => {
+      apply: vi.fn(async () => {
           throw new Error("apply bug");
-        }),
-      },
+      }),
     };
 
     const result = await materializeBrokerProfilesForAgents(agentIds, {
@@ -476,7 +465,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
   it("never writes the auth-profile store itself", async () => {
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
     const secretsApply = {
-      rpc: { secretsApply: vi.fn(async () => ({ mode: "write", changed: true })) },
+      apply: vi.fn(async () => ({ mode: "write", changed: true })),
     };
 
     await materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir, secretsApply });
@@ -577,10 +566,6 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
   });
 });
 
-// The pre-boot sweep runs BEFORE openclaw exists, so nothing can accept the plan.
-// The catalog is pure JSON and must land anyway — gating it on the profile write
-// leaves models.providers["platform-openrouter"] absent and every agent turn
-// fails "Unknown model: platform-openrouter/...".
 describe("model-readiness before openclaw can accept the plan", () => {
   const openRouter = {
     baseUrl: "http://llm-broker.octogee.svc.cluster.local:3010/v1",
@@ -625,10 +610,10 @@ describe("model-readiness before openclaw can accept the plan", () => {
     expect(result.deferred).toEqual(["octogee-alice-coach"]);
     // the catalog DID land — only the profiles deferred
     expect(result.materialized).toBe(1);
-    expect(result.deferralReason).toContain("gateway is not running");
+    expect(result.deferralReason).toContain("secret provider unavailable");
     // The reason must NOT be logged here: this sweep is level-triggered, and a
     // per-agent line would reprint every tick forever.
-    expect(logs.join("\n")).not.toContain("gateway is not running");
+    expect(logs.join("\n")).not.toContain("secret provider unavailable");
   });
 
   it("applies the profiles on a retry once openclaw can accept them", async () => {

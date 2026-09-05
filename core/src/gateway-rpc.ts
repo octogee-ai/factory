@@ -79,13 +79,6 @@ export interface SecretsReloadResult {
   ok?: boolean;
 }
 
-export interface SecretsApplyRpcResult {
-  mode?: string;
-  changed?: boolean;
-  changedFiles?: string[];
-  warningCount?: number;
-}
-
 function parseSecretsReloadPayload(payload: unknown): SecretsReloadResult {
   if (!payload || typeof payload !== "object") {
     throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
@@ -104,20 +97,6 @@ function parseSecretsReloadPayload(payload: unknown): SecretsReloadResult {
     );
   }
   return p as SecretsReloadResult;
-}
-
-function parseSecretsApplyPayload(payload: unknown): SecretsApplyRpcResult {
-  if (!payload || typeof payload !== "object") {
-    throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
-  }
-  const p = payload as { changed?: unknown };
-  if (p.changed !== undefined && typeof p.changed !== "boolean") {
-    throw new OpenclawWireError(
-      INVALID_RESPONSE,
-      `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`,
-    );
-  }
-  return payload as SecretsApplyRpcResult;
 }
 
 export interface GatewayRestartRequestResult {
@@ -291,7 +270,6 @@ export interface GatewayRpcClient {
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
-  secretsApply(params: { plan: object; dryRun?: boolean }): Promise<SecretsApplyRpcResult>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string }): Promise<GatewaySessionsListResult>;
   sessionsReset(params: {
@@ -961,16 +939,6 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async secretsReload() {
       return parseSecretsReloadPayload(await call("secrets.reload", {}));
-    },
-
-    async secretsApply(params) {
-      return parseSecretsApplyPayload(
-        await call("secrets.apply", {
-          plan: params.plan,
-          allowExec: true,
-          ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
-        }),
-      );
     },
 
     async isGatewayUp(timeoutMs) {

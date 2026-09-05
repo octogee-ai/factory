@@ -1,15 +1,10 @@
-import { OpenclawWireError, createGatewayRpc, type GatewayRpcClient } from "./gateway-rpc.js";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 
-/**
- * Writes auth-profile secrets through openclaw's own `secrets.apply` gateway
- * RPC, the only sanctioned writer of an agent's auth_profile_store.
- *
- * We used to spawn `openclaw secrets apply` per plan. The CLI bootstrap cost
- * ~60s per agent, its spawnSync blocked the provisioner's event loop (starving
- * the pod's readiness probe), and it timed out under provisioning bursts. The
- * gateway runs the same apply engine in-process; a refused or unreachable
- * apply is still a deferral the level-triggered sweep retries.
- */
+const execFileAsync = promisify(execFile);
 
 const SECRET_RESOLVER_PROVIDER = "gcp-secret-manager";
 
@@ -73,35 +68,50 @@ export function buildOpenClawSecretsPlan(
 }
 
 export interface ApplyOpenClawSecretsPlanOptions {
-  rpc?: Pick<GatewayRpcClient, "secretsApply" | "close">;
+  apply?: (plan: OpenClawSecretsPlan) => Promise<unknown>;
 }
 
-/** Applies a plan through the gateway RPC. Throws OpenClawSecretsApplyError on
- *  any transport or gateway refusal — the caller decides whether that is fatal
- *  or a deferral for the next sweep. */
+function cliResult(stdout: string): { mode?: unknown; changed?: unknown; error?: { message?: unknown } } {
+  try {
+    const result: unknown = JSON.parse(stdout);
+    if (result && typeof result === "object") return result;
+  } catch {
+    throw new OpenClawSecretsApplyError("openclaw secrets apply returned invalid JSON", null);
+  }
+  throw new OpenClawSecretsApplyError("openclaw secrets apply returned an invalid result", null);
+}
+
+async function applyWithCli(plan: OpenClawSecretsPlan): Promise<void> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "octogee-secrets-plan-"));
+  try {
+    const filename = path.join(dir, "plan.json");
+    await writeFile(filename, JSON.stringify(plan), { mode: 0o600 });
+    const { stdout } = await execFileAsync(
+      "openclaw",
+      ["secrets", "apply", "--from", filename, "--allow-exec", "--json"],
+      { timeout: 60_000, maxBuffer: 1024 * 1024, encoding: "utf8" },
+    );
+    const result = cliResult(stdout);
+    if (result.mode !== "write" || typeof result.changed !== "boolean") {
+      throw new OpenClawSecretsApplyError("openclaw secrets apply did not acknowledge a write", null);
+    }
+  } catch (error) {
+    if (error instanceof OpenClawSecretsApplyError) throw error;
+    const failure = error as { stdout?: string; code?: string | number };
+    const result = failure.stdout ? cliResult(failure.stdout) : undefined;
+    const detail = typeof result?.error?.message === "string"
+      ? result.error.message
+      : `command failed (${failure.code ?? "terminated"})`;
+    throw new OpenClawSecretsApplyError(`openclaw secrets apply refused: ${detail}`, typeof failure.code === "number" ? failure.code : null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export async function applyOpenClawSecretsPlan(
   plan: OpenClawSecretsPlan,
   opts: ApplyOpenClawSecretsPlanOptions = {},
 ): Promise<void> {
   if (plan.targets.length === 0) return;
-  const rpc =
-    opts.rpc ??
-    createGatewayRpc({
-      allowLegacyGatewayTokenFallback: true,
-      connectTimeoutMs: 10_000,
-      callTimeoutMs: 60_000,
-    });
-  try {
-    await rpc.secretsApply({ plan });
-  } catch (error) {
-    if (error instanceof OpenclawWireError) {
-      throw new OpenClawSecretsApplyError(
-        `openclaw secrets.apply refused: ${error.message}`,
-        null,
-      );
-    }
-    throw error;
-  } finally {
-    if (!opts.rpc) await rpc.close?.();
-  }
+  await (opts.apply ?? applyWithCli)(plan);
 }

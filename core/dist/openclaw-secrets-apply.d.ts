@@ -1,4 +1,3 @@
-import { type GatewayRpcClient } from "./gateway-rpc.js";
 export interface AuthProfileApiKeyTarget {
     type: "auth-profiles.api_key.key";
     path: string;
@@ -30,9 +29,6 @@ export declare function authProfileApiKeyTarget(input: {
 }): AuthProfileApiKeyTarget;
 export declare function buildOpenClawSecretsPlan(targets: readonly AuthProfileApiKeyTarget[], now?: () => Date): OpenClawSecretsPlan;
 export interface ApplyOpenClawSecretsPlanOptions {
-    rpc?: Pick<GatewayRpcClient, "secretsApply" | "close">;
+    apply?: (plan: OpenClawSecretsPlan) => Promise<unknown>;
 }
-/** Applies a plan through the gateway RPC. Throws OpenClawSecretsApplyError on
- *  any transport or gateway refusal — the caller decides whether that is fatal
- *  or a deferral for the next sweep. */
 export declare function applyOpenClawSecretsPlan(plan: OpenClawSecretsPlan, opts?: ApplyOpenClawSecretsPlanOptions): Promise<void>;
